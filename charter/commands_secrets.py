@@ -24,18 +24,38 @@ from .secrets import base, registry
 # --------------------------------------------------------------------------- #
 # vault management                                                             #
 # --------------------------------------------------------------------------- #
+def _portable_file(p) -> str:
+    """A vault ``file`` as it should be STORED: relative to the control-plane root when it
+    lives inside it, otherwise absolute and untouched (issue #21).
+
+    The registry used to record one developer's home directory, so a team that commits its
+    reference vaults — they hold ``op://`` URIs, never values — found the vault files
+    present on a fresh clone and the index that locates them useless, and had to script
+    `charter vault add` calls to rebuild state already in git.
+
+    Absolute survives deliberately: a vault kept outside the plane has no portable form,
+    and rewriting it would silently re-point it at somewhere inside.
+    """
+    from pathlib import Path
+    p = Path(p).expanduser()
+    try:
+        return str(p.resolve().relative_to(Path(config.ROOT).resolve()))
+    except (ValueError, OSError):
+        return str(p)
+
+
 def cmd_vault_add(args) -> int:
     cfg: dict = {}
     if args.provider == "plain-file":
-        cfg["file"] = args.file or str(config.VAULTS_DIR / f"{args.name}.json")
+        cfg["file"] = _portable_file(args.file or config.VAULTS_DIR / f"{args.name}.json")
     elif args.provider == "reference":
         # A reference vault stores URIs, not values, but it still needs somewhere to
         # keep them. Defaulting this (it used to apply only to plain-file) is why
         # `vault add x --provider reference` registered and then warned that it had no
         # file configured — technically correct and useless as a first experience.
-        cfg["file"] = args.file or str(config.VAULTS_DIR / f"{args.name}.json")
+        cfg["file"] = _portable_file(args.file or config.VAULTS_DIR / f"{args.name}.json")
     elif args.file:
-        cfg["file"] = args.file
+        cfg["file"] = _portable_file(args.file)
     if args.provider == "1password":
         if not getattr(args, "op_vault", None):
             util.err("--op-vault is required for a 1password vault: which 1Password "

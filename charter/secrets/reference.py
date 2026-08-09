@@ -73,10 +73,7 @@ class ReferenceProvider(VaultProvider):
 
     @property
     def path(self) -> Path:
-        p = self.config.get("file")
-        if not p:
-            raise VaultError(f"vault '{self.name}' has no 'file' configured")
-        return Path(p).expanduser()
+        return self.file_path      # shared resolution — see VaultProvider.file_path
 
     def _load(self) -> dict:
         p = self.path

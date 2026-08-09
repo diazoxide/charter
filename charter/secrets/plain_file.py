@@ -16,6 +16,21 @@ from pathlib import Path
 from .base import SecretNotFound, VaultError, VaultProvider
 
 
+def _short(p: Path) -> str:
+    """A path as it should be SHOWN — relative to the plane when it lives inside it.
+
+    `charter vault list` printed the absolute path in its STATUS column, which is noise
+    and leaks one developer's local layout into terminal output other people see (issue
+    #21's aside). Inside the plane the relative form is both shorter and the same string
+    everyone else would see.
+    """
+    from .. import config as _config
+    try:
+        return str(Path(p).resolve().relative_to(Path(_config.ROOT).resolve()))
+    except (ValueError, OSError):
+        return str(p)
+
+
 class PlainFileProvider(VaultProvider):
     id = "plain-file"
     label = "Plain file (JSON, 0600)"
@@ -23,10 +38,7 @@ class PlainFileProvider(VaultProvider):
 
     @property
     def path(self) -> Path:
-        p = self.config.get("file")
-        if not p:
-            raise VaultError(f"vault '{self.name}' has no 'file' configured")
-        return Path(p).expanduser()
+        return self.file_path      # shared resolution — see VaultProvider.file_path
 
     def _load(self) -> dict:
         p = self.path
@@ -129,12 +141,11 @@ class PlainFileProvider(VaultProvider):
         return sorted(self._load().keys())
 
     def health(self) -> tuple[bool, str]:
-        p = self.config.get("file")
-        if not p:
+        if not self.config.get("file"):
             return False, "no 'file' configured"
-        pp = Path(p).expanduser()
+        pp = self.file_path
         if not pp.exists():
-            return True, f"not created yet ({pp})"
+            return True, f"not created yet ({_short(pp)})"
         try:
             count = len(self._load())
         except VaultError as e:

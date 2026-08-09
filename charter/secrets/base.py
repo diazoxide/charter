@@ -40,6 +40,31 @@ class VaultProvider(ABC):
         self.name = name
         self.config = config or {}
 
+    @property
+    def file_path(self):
+        """Absolute path of this vault's ``file``, resolving a RELATIVE one against the
+        control-plane root. Raises when the provider needs a file and none is configured.
+
+        A relative value is how the registry becomes portable (issue #21). Reference
+        vaults hold ``op://`` URIs rather than values, so a team commits them and expects
+        a fresh clone to inherit the wiring — but the registry that finds them hard-coded
+        one developer's home directory, so the committed vault files were invisible on any
+        other machine until someone re-registered them by hand.
+
+        Absolute stays valid and untouched, for a vault deliberately kept outside the
+        plane. Resolution lives here rather than in each provider because `plain-file` and
+        `reference` had byte-identical `path` properties, and two implementations of "where
+        is this file" is how one of them quietly keeps resolving the old way.
+        """
+        from pathlib import Path
+        from .. import config as _config
+
+        p = self.config.get("file")
+        if not p:
+            raise VaultError(f"vault '{self.name}' has no 'file' configured")
+        p = Path(p).expanduser()
+        return p if p.is_absolute() else (_config.ROOT / p)
+
     @abstractmethod
     def get(self, key: str) -> str:
         """Return the secret value, or raise :class:`SecretNotFound`."""

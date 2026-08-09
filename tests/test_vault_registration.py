@@ -89,5 +89,64 @@ class RegisteringOverAnExistingName(PersonaIso):
         self.assertIn("fresh", registry.vaults())
 
 
+class TheRegistryIsPortable(PersonaIso):
+    """Issue #21. The registry recorded one developer's home directory, so a team that
+    commits its reference vaults — they hold `op://` URIs, never values — found the vault
+    files present on a fresh clone and the index that locates them useless, and scripted
+    `charter vault add` calls to rebuild state already in git."""
+
+    def _add(self, name: str, provider: str = "plain-file", file=None):
+        with redirect_stderr(io.StringIO()):
+            return commands_secrets.cmd_vault_add(
+                _args(name, provider, file=str(file) if file else None))
+
+    def test_a_managed_path_is_stored_relative_to_the_plane(self):
+        self._add("devops")
+        self.assertEqual(registry.vaults()["devops"]["config"]["file"],
+                         ".charter/vaults/devops.json")
+
+    def test_a_path_given_inside_the_plane_is_relativised_too(self):
+        self._add("team", file=self.tmp / "secrets" / "team.json")
+        self.assertEqual(registry.vaults()["team"]["config"]["file"],
+                         "secrets/team.json")
+
+    def test_a_path_outside_the_plane_stays_absolute(self):
+        """A vault deliberately kept outside has no portable form, and rewriting it would
+        silently re-point it at somewhere inside."""
+        outside = self.tmp.parent / "elsewhere.json"
+        self._add("ext", file=outside)
+        self.assertEqual(registry.vaults()["ext"]["config"]["file"], str(outside))
+
+    def test_a_relative_entry_resolves_against_the_plane_root(self):
+        """The half that makes the stored form usable — and the half that makes the same
+        registry work on a machine whose checkout lives somewhere else."""
+        registry.add_vault("devops", "plain-file", {"file": ".charter/vaults/devops.json"})
+        prov = registry.provider_for("devops")
+        self.assertEqual(prov.path, self.tmp / ".charter" / "vaults" / "devops.json")
+
+    def test_an_absolute_entry_still_resolves_unchanged(self):
+        """Registries written before this keep working — no migration, no rewrite."""
+        abs_path = self.tmp / "legacy.json"
+        registry.add_vault("legacy", "plain-file", {"file": str(abs_path)})
+        self.assertEqual(registry.provider_for("legacy").path, abs_path)
+
+    def test_status_does_not_leak_the_local_layout(self):
+        """#21's aside: `vault list` printed the absolute path in its STATUS column, which
+        is noise and puts one developer's directory layout into output others may read."""
+        self._add("devops")
+        ok, detail = registry.provider_for("devops").health()
+        self.assertTrue(ok)
+        self.assertIn("not created yet", detail)
+        self.assertNotIn(str(self.tmp), detail)
+
+    def test_both_providers_resolve_the_same_way(self):
+        """`plain-file` and `reference` had byte-identical `path` properties; they now
+        share one, so neither can quietly keep resolving the old way."""
+        registry.add_vault("a", "plain-file", {"file": "x/a.json"})
+        registry.add_vault("b", "reference", {"file": "x/b.json"})
+        self.assertEqual(registry.provider_for("a").path, self.tmp / "x" / "a.json")
+        self.assertEqual(registry.provider_for("b").path, self.tmp / "x" / "b.json")
+
+
 if __name__ == "__main__":
     unittest.main()
