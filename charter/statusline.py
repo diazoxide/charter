@@ -502,7 +502,7 @@ def _current(payload: dict) -> tuple[str | None, str] | None:
     return None
 
 
-def _tree_cells(lead: str, label: str, d, states, branches, gl) -> tui.Row:
+def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None) -> tui.Row:
     """One table row — ``<lead><label>`` in the name column, then branch+markers, CI, change.
 
     Shared by repo rows and nested worktree rows so the two cannot drift: a worktree's row
@@ -513,12 +513,17 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl) -> tui.Row:
     The name cell's width is the same total whatever the lead costs — `tui.Cell` pads and
     truncates to it — so a longer lead spends its columns out of the label, never out of
     the branch column's starting position.
+
+    *branch* overrides the looked-up branch text — pass ``""`` to print the markers alone.
+    The markers are never part of that override: dirty and ahead/behind are true of the
+    tree whatever its branch is called, so they survive an emptied branch cell.
     """
     name = tui.Cell(f"{lead}{label}", 2 + 3 + _NAME_W)
 
     # branch + markers: truncate the *branch* so the markers always survive
     marks_plain, marks_col, is_dirty = _markers(states.get(d, {}))
-    br = tui.truncate(branches.get(d, "?"), max(1, _BRANCH_W - tui.width(marks_plain)))
+    text = branches.get(d, "?") if branch is None else branch
+    br = tui.truncate(text, max(1, _BRANCH_W - tui.width(marks_plain)))
     branch = tui.Cell(f"{_YELLOW if is_dirty else _DIM}{br}{_R}{marks_col}", _BRANCH_W)
 
     info = gl.get(d, {})
@@ -634,9 +639,17 @@ def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
                 # exact bug `_TREE_WT` was introduced to prevent — see its definition.
                 mark = _TREE_WT if j == len(kids) - 1 else _TREE_MID
                 emph_w = f"{_BOLD}{_UNDER}" if w.name == cur_repo else ""
+                # `charter worktree add <repo> <piece>` names the branch after the piece,
+                # so by default these two columns print the same word twice and the branch
+                # cell spends `_BRANCH_W` restating the name beside it. Empty it when they
+                # agree (the dirty/ahead/behind markers still render — they are true of the
+                # tree, not of its name), so the column comes to mean "this piece is NOT on
+                # the branch you would assume" — the only case worth 34 columns.
+                wb = branches.get(w, "?")
                 rows.append(_tree_cells(f"  {_DIM}{_TREE_PIPE}{mark}{_R}",
                                         f"{emph_w}{_DIM}{w.name}{_R}",
-                                        w, states, branches, gl))
+                                        w, states, branches, gl,
+                                        branch="" if wb == w.name else wb))
         # ONE summary line per repo, newest piece first — a fixed cost no matter how many
         # worktrees exist, so the footer can't grow with them (the ⑂N badge above carries
         # the true total, and overflow truncates with … rather than dropping pieces

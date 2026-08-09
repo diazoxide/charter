@@ -150,6 +150,22 @@ rewriting git's own `gitdir` pointer, and `git worktree move` is the command tha
 correctly. `charter doctor` finds any that are still inside the codebase and prints that
 command with the paths filled in.
 
+### Working inside a worktree
+
+`charter.toml` is a tracked file, so an embedded plane checks a copy of it into every
+worktree — which means each worktree *looks* like its own control plane. It is not: a
+worktree is a view of a repo, not a repo.
+
+So the plane's identity follows the **main working tree**. Standing anywhere inside a
+worktree, `charter` resolves the plane to the repo the worktree belongs to, and personas,
+the vault, workspaces and memory all stay attached to it. Without that they resolved into
+the worktree itself — a directory `git worktree remove` deletes, taking any memory written
+there with it — and the status line rendered `repos 0`, because a linked worktree's `.git`
+is a file rather than a directory.
+
+`$CHARTER_ROOT` is never redirected, so pointing it at a worktree is the escape hatch if
+you genuinely want a plane of its own there.
+
 ### Nested planes
 
 `charter` takes the **innermost** `charter.toml` above your working directory. That is the

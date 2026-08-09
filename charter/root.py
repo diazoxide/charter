@@ -49,8 +49,65 @@ def find_root(start: Path | None = None) -> Path:
     cur = (start or Path.cwd()).resolve()
     for d in (cur, *cur.parents):
         if (d / MARKER).is_file():      # is_file, not exists: a directory is not a marker
-            return d
+            return _plane_of(d)
     raise ControlPlaneNotFound(_explain(f"in {cur} or any parent"))
+
+
+def main_worktree_of(tree: Path) -> Path | None:
+    """The MAIN working tree behind *tree*, when *tree* is a linked worktree — else ``None``.
+
+    A linked worktree's ``.git`` is a file reading ``gitdir: <main>/.git/worktrees/<name>``,
+    so the main tree is the directory holding that ``.git``. Pure path arithmetic: no
+    subprocess, because this sits on the import path of every single charter command.
+
+    ``None`` for the main tree itself (``.git`` is a directory), for a non-repo, and for a
+    gitdir with no ``.git`` component — a worktree of a BARE repo (``/srv/repo.git/
+    worktrees/x``) has no working tree to redirect to, so the caller must keep what it had.
+    """
+    g = Path(tree) / ".git"
+    try:
+        if g.is_dir():
+            return None                       # already the main tree
+        txt = g.read_text().strip()
+    except OSError:
+        return None
+    if not txt.startswith("gitdir:"):
+        return None
+    p = Path(txt[len("gitdir:"):].strip())
+    if not p.is_absolute():
+        p = Path(tree) / p
+    try:
+        p = p.resolve()
+    except (OSError, RuntimeError):
+        return None
+    for anc in p.parents:
+        if anc.name == ".git":
+            return anc.parent
+    return None
+
+
+def _plane_of(marked: Path) -> Path:
+    """The plane a found marker really belongs to.
+
+    A worktree is a *view of a repo*, not a repo — but ``charter.toml`` is a tracked file,
+    so in an **embedded** plane every worktree gets its own copy checked out and therefore
+    looks like its own control plane. Standing in one, charter used to resolve the plane to
+    the worktree: the status line went blank (``root_tree`` requires ``.git`` to be a
+    DIRECTORY, and a linked worktree's is a file), and personas, the vault and every
+    written memory resolved into a directory ``git worktree remove`` deletes. Worktrees are
+    how you are meant to work in an embedded plane, so that landed on the main path.
+
+    Identity therefore follows the main working tree. The marker must be present there too
+    — if it is not, this is not one plane seen from two directories and the found marker
+    stands.
+
+    ``$CHARTER_ROOT`` never reaches here: an explicit root wins outright, including when it
+    names a worktree, which is the escape hatch for anyone who genuinely wants one.
+    """
+    main = main_worktree_of(marked)
+    if main is not None and main != marked and (main / MARKER).is_file():
+        return main
+    return marked
 
 
 def find_root_or_cwd(start: Path | None = None) -> Path:

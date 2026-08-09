@@ -282,10 +282,27 @@ class WorktreeRows(MonorepoIso):
         self.assertNotIn("└─", child)
 
     def test_dirty_state_of_a_worktree_reaches_its_own_row(self):
+        """The marker survives an emptied branch cell: dirty is true of the tree, not of
+        what its branch is called."""
         wt = self.add_worktree("statusline")
         (wt / "README.md").write_text("changed\n")
         row = [ln for ln in self.render() if re.search(r"─ statusline\b", ln)][0]
-        self.assertIn("statusline*", row)
+        self.assertIn("*", row.split("statusline", 1)[1])
+
+    def test_a_branch_matching_the_piece_name_is_not_printed_twice(self):
+        """`worktree add <repo> <piece>` names the branch after the piece, so the default
+        row said the same word in two columns and spent _BRANCH_W doing it."""
+        self.add_worktree("statusline")
+        row = [ln for ln in self.render() if re.search(r"─ statusline\b", ln)][0]
+        self.assertEqual(row.count("statusline"), 1, row)
+
+    def test_a_branch_that_differs_from_the_piece_name_is_shown(self):
+        """Which is the case the column is now FOR: this piece is not on the branch you
+        would assume from its name."""
+        wt = self.add_worktree("statusline")
+        git(wt, "checkout", "-q", "-b", "feat/renamed")
+        row = [ln for ln in self.render() if re.search(r"─ statusline\b", ln)][0]
+        self.assertIn("feat/renamed", row)
 
     def test_cwd_inside_a_worktree_is_not_reported_as_the_root_tree(self):
         """A worktree lives under `workspaces/`, so `_current` resolves it there and must

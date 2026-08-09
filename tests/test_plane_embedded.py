@@ -209,6 +209,77 @@ class InitDecidesTheShape(PersonaIso):
         self.assertEqual(instance.drift(self.tmp), [])
 
 
+class PlaneIdentityFollowsTheMainTree(MonorepoIso):
+    """`charter.toml` is a TRACKED file, so an embedded plane checks a copy of it into
+    every worktree — and each one then looked like its own control plane.
+
+    Standing in one, charter resolved the plane to the worktree: the status line went
+    blank (`root_tree` requires `.git` to be a DIRECTORY and a linked worktree's is a
+    file), and personas, the vault and every written memory resolved into a directory
+    `git worktree remove` deletes. Worktrees are how you are meant to work in an embedded
+    plane, so this was the main path, not an edge.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter import root as _root
+        self._root_mod = _root
+        # COMMIT charter.toml before branching off. That it is a tracked file is the whole
+        # premise: an untracked one is simply absent from the worktree and there is no bug
+        # to reproduce. `MonorepoIso` writes it after its initial commit, which is fine for
+        # every other fixture and exactly wrong for this one.
+        git(self.tmp, "add", "charter.toml")
+        git(self.tmp, "-c", "commit.gpgsign=false", "commit", "-qm", "charter.toml")
+        self.wt = self.add_worktree("piece-a")
+
+    def test_the_fixture_really_is_a_linked_worktree(self):
+        """Everything below is meaningless if `.git` here is a directory."""
+        self.assertFalse((self.wt / ".git").is_dir())
+        self.assertTrue((self.wt / "charter.toml").is_file(),
+                        "charter.toml was not checked out into the worktree")
+
+    def test_the_plane_resolves_to_the_trunk_not_the_worktree(self):
+        self.assertEqual(self._root_mod.find_root(self.wt), self.tmp.resolve())
+
+    def test_a_path_deep_inside_the_worktree_resolves_the_same(self):
+        deep = self.wt / "a" / "b"
+        deep.mkdir(parents=True)
+        self.assertEqual(self._root_mod.find_root(deep), self.tmp.resolve())
+
+    def test_the_trunk_still_resolves_to_itself(self):
+        self.assertEqual(self._root_mod.find_root(self.tmp), self.tmp.resolve())
+
+    def test_main_worktree_of_reads_the_gitdir_pointer(self):
+        self.assertEqual(self._root_mod.main_worktree_of(self.wt), self.tmp.resolve())
+
+    def test_main_worktree_of_says_none_for_a_main_tree(self):
+        self.assertIsNone(self._root_mod.main_worktree_of(self.tmp))
+
+    def test_main_worktree_of_says_none_for_a_non_repo(self):
+        plain = self.tmp / "not-a-repo"
+        plain.mkdir()
+        self.assertIsNone(self._root_mod.main_worktree_of(plain))
+
+    def test_a_worktree_whose_trunk_has_no_marker_keeps_its_own(self):
+        """Then this is not one plane seen from two directories — the found marker is the
+        only evidence there is, and redirecting would point at something that is not a
+        plane at all."""
+        (self.tmp / "charter.toml").unlink()
+        self.assertEqual(self._root_mod.find_root(self.wt), self.wt.resolve())
+
+    def test_an_explicit_charter_root_is_never_redirected(self):
+        """The escape hatch for anyone who genuinely wants a per-worktree plane."""
+        old = os.environ.get("CHARTER_ROOT")
+        os.environ["CHARTER_ROOT"] = str(self.wt)
+        try:
+            self.assertEqual(self._root_mod.find_root(self.tmp), self.wt.resolve())
+        finally:
+            if old is None:
+                os.environ.pop("CHARTER_ROOT", None)
+            else:
+                os.environ["CHARTER_ROOT"] = old
+
+
 class NestedPlanesAreVisible(PersonaIso):
     """`find_root` takes the innermost marker — the git/cargo/npm contract, and correct.
     But the embedded shape puts `charter.toml` into ordinary product repos, and a fleet
