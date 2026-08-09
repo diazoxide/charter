@@ -118,16 +118,21 @@ class TestPluginManifest(unittest.TestCase):
                 self.assertNotIn("timeout", hook)
 
     def test_timed_hooks_keep_their_original_timeout(self):
-        """Losing a timeout can hang session start on a stuck subprocess."""
-        expected = {
-            "charter workspace _reconcile >/dev/null 2>&1": 5,
-            "charter hook sessionstart --plugin-version 0.1.0": 5,
-            "charter hook userpromptsubmit --plugin-version 0.1.0": 5,
-            "charter hook pretooluse --plugin-version 0.1.0": 10,
-            "charter hook posttooluse --plugin-version 0.1.0": 5,
-            "charter hook posttooluse-dispatch --plugin-version 0.1.0": 5,
-            "charter workspace _autosave >/dev/null 2>&1": 15,
-        }
+        """Losing a timeout can hang session start on a stuck subprocess.
+
+        Engine commands are keyed by their handler name and the version is interpolated,
+        not typed. Spelling the whole command out froze `--plugin-version 0.1.0` into a
+        test about *timeouts*, so a legitimate version bump failed here for a reason that
+        has nothing to do with what this asserts — and the fix looked like editing a
+        version string in a test, which is how a stale one gets waved through.
+        """
+        engine = {"sessionstart": 5, "userpromptsubmit": 5, "pretooluse": 10,
+                  "posttooluse": 5, "posttooluse-dispatch": 5}
+        expected = {f"charter hook {name} --plugin-version {__version__}": t
+                    for name, t in engine.items()}
+        expected["charter workspace _reconcile >/dev/null 2>&1"] = 5
+        expected["charter workspace _autosave >/dev/null 2>&1"] = 15
+
         by_cmd = {hook["command"]: hook for _, hook in _flat_hooks()}
         for cmd, timeout in expected.items():
             self.assertIn(cmd, by_cmd)
@@ -184,6 +189,47 @@ class TestMarketplaceManifest(unittest.TestCase):
         m = self._marketplace()
         self.assertTrue(m.get("description"))
         self.assertTrue(m["plugins"][0].get("description"))
+
+
+class TestVersionsMoveInLockstep(unittest.TestCase):
+    """The two artifacts carry two version numbers, and `hooks.MIN_PLUGIN_VERSION` is
+    simply `charter.__version__` — so the plugin's numbers are only meaningful while
+    somebody keeps them equal.
+
+    Nobody did. The CLI reached 0.13.1 while `plugin.json` and all six `--plugin-version`
+    flags still said 0.1.0, and the comment above `MIN_PLUGIN_VERSION` went on claiming
+    the two were "bumped in lockstep". Nothing caught it because the only test that looked
+    at those flags checked that they were PRESENT, never what they said — and the skew
+    guard is deliberately one-directional (it fires when the plugin is NEWER than the CLI),
+    so a plugin frozen years behind stays silent forever.
+
+    A release now touches four files: pyproject.toml, charter/__init__.py,
+    .claude-plugin/plugin.json, and every `--plugin-version` in hooks/hooks.json. These
+    tests name all four, so forgetting one fails here instead of shipping.
+    """
+
+    def test_plugin_manifest_matches_the_cli(self):
+        m = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+        self.assertEqual(
+            m["version"], __version__,
+            f".claude-plugin/plugin.json says {m['version']}, the CLI is {__version__} — "
+            f"a release bumps pyproject.toml, charter/__init__.py, plugin.json and "
+            f"hooks/hooks.json together.")
+
+    def test_every_hook_command_passes_the_cli_version(self):
+        """The value the running hook actually hands to `skew_message`. A stale one here
+        is worse than a stale manifest: this is what the guard compares against."""
+        engine_cmds = [hook["command"] for _, hook in _flat_hooks()
+                       if "charter hook " in hook["command"]]
+        self.assertTrue(engine_cmds, "manifest declares no engine hooks — did they move?")
+        for c in engine_cmds:
+            self.assertIn(f"--plugin-version {__version__}", c,
+                          f"stale --plugin-version in hooks/hooks.json: {c!r}")
+
+    def test_the_shipped_plugin_version_is_silent_against_its_own_cli(self):
+        """The end-to-end statement: install both from this commit and no hook shouts."""
+        m = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+        self.assertIsNone(hooks.skew_message(m["version"]))
 
 
 class TestVersionSkew(unittest.TestCase):

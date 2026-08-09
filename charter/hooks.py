@@ -1177,6 +1177,13 @@ def userpromptsubmit() -> int:
 #: into every command). Both artifacts are bumped in lockstep, so today this equals
 #: `charter.__version__`; kept as its own name rather than a scattered comparison against
 #: `__version__` so the "what does this CLI expect the plugin to be" question has one seam.
+#:
+#: "In lockstep" was an aspiration, not a fact: the CLI reached 0.13.1 while both plugin
+#: artifacts still said 0.1.0. Nothing noticed, because the skew guard below is
+#: one-directional by design (it speaks only when the plugin is NEWER) and the tests that
+#: read those flags only checked they existed. `tests/test_plugin.py`'s
+#: TestVersionsMoveInLockstep now pins all four files to this value, so the claim above is
+#: enforced rather than merely written down.
 MIN_PLUGIN_VERSION = __version__
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")

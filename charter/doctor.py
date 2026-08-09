@@ -528,7 +528,16 @@ def check_plugin_skew() -> Result:
     if msg:
         return Result("plugin", WARN,
                       detail=f"v{plugin_version} (CLI v{hooks.MIN_PLUGIN_VERSION})", hint=msg)
-    return Result("plugin", OK, detail=f"v{plugin_version} matches the installed CLI")
+    # `skew_message` is one-directional — silent for an equal OR older plugin — so "matches"
+    # was printed for a plugin many versions behind. It stays OK (an older plugin wires
+    # fewer hooks, which is benign, unlike a newer one dispatching handlers this CLI lacks)
+    # but it must not claim agreement it hasn't checked. A charter that reported "v0.1.0
+    # matches the installed CLI" against a v0.13.1 CLI is how the drift stayed invisible.
+    if plugin_version == hooks.MIN_PLUGIN_VERSION:
+        return Result("plugin", OK, detail=f"v{plugin_version} matches the installed CLI")
+    return Result("plugin", OK,
+                  detail=f"v{plugin_version} (CLI v{hooks.MIN_PLUGIN_VERSION}) — older "
+                         f"plugin, supported; upgrade it for the newest hooks")
 
 
 def run_all() -> list[Result]:
