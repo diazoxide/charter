@@ -1,0 +1,7 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "charter statusline",
+    "padding": 0
+  }
+}

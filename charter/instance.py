@@ -168,6 +168,44 @@ def share_of(cfg: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# plane SHAPE — which of charter's two deployments this control plane is.      #
+#                                                                              #
+#   fleet     the plane is its own thing; a workspace holds many CLONES, each  #
+#             with its own worktrees. The original and the default.            #
+#   embedded  charter installed INSIDE the one codebase it serves (which may   #
+#             itself be a backend/frontend monorepo). Nothing to clone: the    #
+#             tree you edit is the plane's own root, and a workspace holds     #
+#             worktrees of it rather than clones.                              #
+#                                                                              #
+# DECLARED, never inferred, and the distinction matters: a fleet plane's root  #
+# is a git repo too — its personas carry committed memory and docs/control-    #
+# plane.md ships `exclude = ["this-control-plane"]` precisely because the      #
+# plane's own repo lives on the forge. So `ROOT/.git` cannot tell the two      #
+# apart. Every filesystem signal that might ("no clones anywhere", "empty      #
+# inventory") reads a FRESH FLEET PLANE — before its first `discover` or       #
+# `clone` — as embedded, which is the worst possible moment to guess wrong.    #
+#                                                                              #
+# What separates them is intent, and `charter init` is where intent exists:    #
+# running it inside an existing repo IS the choice. So init writes it down.    #
+# --------------------------------------------------------------------------- #
+
+#: The deployments a control plane can declare. `fleet` first — it is the default.
+SHAPES = ("fleet", "embedded")
+
+
+def shape_of(cfg: dict) -> str:
+    """This control plane's shape, defaulting to ``fleet``.
+
+    An unrecognised value falls back to ``fleet`` for the same reason
+    :func:`share_of` falls back to ``local``: a typo must fail toward the behaviour that
+    changes nothing. ``fleet`` is what every existing control plane already does, so a
+    misspelled shape costs a feature rather than rearranging a working status line.
+    """
+    v = (cfg.get("plane") or {}).get("shape")
+    return v if v in SHAPES else "fleet"
+
+
+# --------------------------------------------------------------------------- #
 # control-plane SCHEMA — the same stamp/detect/heal pattern `workspace.py`'s   #
 # STRUCTURE_VERSION already proves, one level up: a control plane (not just a  #
 # single workspace) can lack layout a newer charter expects (personas/,        #

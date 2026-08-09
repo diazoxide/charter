@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, doctor, inventory, render, util, workspace
+from . import config, doctor, inventory, render, util, workspace, worktree
 from . import root as _root
 from .forge import ForgeError
 from .forge.gitlab import GitLabForge
@@ -558,12 +558,20 @@ def cmd_gl_refresh(args) -> int:
     from . import glstate
 
     ws = workspace.resolve(getattr(args, "workspace", None))
-    dirs = workspace.clones(ws)
+    # `repo_trees`, not `clones`: the status line draws the plane's own root tree as a
+    # repo row, and this is what fills that row's CI and change columns. A monorepo plane
+    # has NO clones, so the old list was empty and this command returned early — the one
+    # shape where every repo it should refresh is the one it skipped.
+    dirs = workspace.repo_trees(ws)
+    # Worktrees carry their own branch, so they carry their own pipeline and their own
+    # open change; the status line gives them full rows when a workspace holds a single
+    # repo. Refreshed here so those columns have something to show.
+    dirs += [w for d in dirs for w in worktree.dirs_for(ws, d.name)]
     if not dirs:
-        util.info(f"No clones in workspace '{ws}'.")
+        util.info(f"No repos in workspace '{ws}'.")
         return 0
     cache = glstate.refresh(dirs)
-    util.ok(f"Refreshed forge state for {len(dirs)} repo(s) in '{ws}'.")
+    util.ok(f"Refreshed forge state for {len(dirs)} tree(s) in '{ws}'.")
     for d in dirs:
         ent = cache.get(str(d), {})
         bits = []

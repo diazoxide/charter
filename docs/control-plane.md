@@ -26,6 +26,10 @@ share = "local"
 # problem reading an OLDER schema. Omit it and 1 is assumed.
 schema = 1
 
+# Which of charter's two deployments this plane is. See "Fleet and embedded" below.
+[plane]
+shape = "fleet"                  # "fleet" | "embedded". Default: "fleet".
+
 # One [[forge]] block per code-hosting forge this control plane tracks. A single-forge
 # control plane (the common case) declares exactly one; see "Mixed-forge" below for more
 # than one. Each block is independent — its own owner, host, and excludes.
@@ -58,6 +62,46 @@ personal **user** account). `charter` accepts either key name in a `[[forge]]` b
 `group` and `owner` mean the same thing — so you can use whichever reads naturally for
 the forge in question. If a block sets both, `group` wins. `charter init --owner <name>`
 always writes the field as `owner`, since it works for either forge kind.
+
+## Fleet and embedded: `[plane].shape`
+
+charter is deployed two ways, and a plane declares which one it is.
+
+**`fleet`** (the default, and the original) — the control plane is its own directory. A
+workspace holds many **clones**, one per repo the task touches, each of which can carry
+worktrees. This is what the rest of this document assumes.
+
+**`embedded`** — charter installed *inside* the single codebase it serves, which may
+itself be a monorepo of backend, frontend and the rest. There is nothing to clone: the
+tree you edit is the plane's own root, and a workspace holds **worktrees** of it rather
+than clones. Teams reach for this when there is one repo, not a fleet, and they still
+want personas, memory and a vault.
+
+```toml
+[plane]
+shape = "embedded"
+```
+
+The status line follows the declaration. An embedded plane shows its own repo as the
+first row — branch, dirty state, CI, open change — with each worktree on its own row
+beneath it. A fleet plane shows the workspace's clones, exactly as before.
+
+### Why this is declared rather than detected
+
+A fleet plane's root is *also* a git repo in the normal case: its personas carry
+committed memory, and the `exclude` example above exists precisely because the plane's
+own repo lives on the forge. So the presence of `.git` cannot separate the two shapes —
+in one it means "the repo I work in", in the other "the plane itself, which I do not".
+
+Every filesystem signal that might substitute has the same defect in a worse place.
+"No clones anywhere" and "empty inventory" both describe a *fresh fleet plane*, before
+its first `discover` or `clone` — the moment a new user can least afford charter to
+guess. What separates the shapes is intent, and `charter init` is where the intent
+exists: running it inside a repo you already work in is the choice. So it is written
+down, once, instead of re-derived forever.
+
+An unrecognised value falls back to `fleet`, on the same principle as `[memory].share`
+falling back to `local`: a typo should cost a feature, not rearrange something that works.
 
 ## A self-hosted example
 

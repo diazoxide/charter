@@ -18,7 +18,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from . import config
+from . import config, util
 
 DISPLAY_TTL = 7200    # show a cached value for up to 2h
 REFRESH_TTL = 300     # try to refresh entries older than 5 min
@@ -180,13 +180,19 @@ def _remote_url(d: Path) -> str | None:
 
 
 def _branch(d: Path) -> str:
+    """The tree's branch, clone or linked worktree alike.
+
+    Shares :func:`charter.util.branch_of` with the status line deliberately: this value
+    is written into the cache entry and the status line compares its own reading against
+    it (:func:`read_for` drops any entry whose ``branch`` differs). Two implementations
+    of "what branch is this" is exactly the kind of drift that shows up as a CI column
+    that silently never renders — as it did for worktrees, which only this side could
+    read.
+    """
     try:
-        txt = (d / ".git" / "HEAD").read_text().strip()
+        return util.branch_of(d)
     except Exception:
         return "?"
-    if txt.startswith("ref:"):
-        return txt.split("/", 2)[-1] or "?"
-    return txt[:7] if txt else "?"
 
 
 def _remote_path(d: Path):

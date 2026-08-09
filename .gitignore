@@ -15,3 +15,12 @@ dist/
 
 # SDD scratch (review packages, task briefs) — never publish
 .superpowers/
+
+# added by `charter init`
+/workspaces/*/*
+!/workspaces/.gitkeep
+
+# Per-developer Claude Code settings. charter dogfoods itself, so this is where the
+# working-tree status line lives (`python3 -m charter statusline`) — the committed
+# settings.json keeps `charter statusline`, which is what an actual user runs.
+/.claude/settings.local.json

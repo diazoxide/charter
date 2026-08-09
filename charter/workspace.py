@@ -269,6 +269,48 @@ def clones(name: str) -> list[Path]:
     return sorted(d for d in wd.iterdir() if is_clone(d))
 
 
+def root_tree() -> Path | None:
+    """The codebase an **embedded** plane serves — its own root — or ``None``.
+
+    In the embedded shape (`charter init` run inside the repo you already work in) there
+    is nothing to clone: ``workspaces/`` holds no repos and the tree you edit IS the root.
+    It belongs to no single workspace — it is in all of them, since there is physically
+    one of it — which is what separates it from everything :func:`clones` returns.
+
+    Two conditions, and the shape check is the load-bearing one. A **fleet** plane's root
+    is very often a git repo as well (personas carry committed memory; docs/control-
+    plane.md ships ``exclude = ["this-control-plane"]`` because the plane's own repo lives
+    on the forge) — but there it is the plane, not a repo you work in, and listing it
+    beside the workspace's real clones would be wrong. ``ROOT/.git`` cannot tell those
+    apart, so :func:`charter.instance.shape_of` is asked instead.
+
+    The ``is_clone`` half still matters: an embedded plane whose ``.git`` has been removed
+    has no tree to offer, and a *worktree* of one (``.git`` is a file) is not the trunk.
+    """
+    try:
+        if config.PLANE_SHAPE != "embedded":
+            return None
+        return config.ROOT if is_clone(config.ROOT) else None
+    except OSError:
+        return None
+
+
+def repo_trees(ws: str) -> list[Path]:
+    """Every repo this workspace works in: the plane's root tree first, then its clones.
+
+    The one list anything asking "which repos am I on?" should use — the status line's
+    rows and `gl-refresh`'s fetch targets both come from here, so a repo can never be
+    drawn without its forge state having been fetched, or fetched without being drawn.
+    Splitting that decision in two is what left the root tree with a permanently empty
+    CI column: it was rendered from one list and refreshed from another.
+
+    A fleet workspace's answer is unchanged (its clones, plus the plane's own repo, which
+    has a branch like any other). A monorepo workspace's answer is just the root tree.
+    """
+    rt = root_tree()
+    return ([rt] if rt is not None else []) + clones(ws)
+
+
 def legacy_flat_clones() -> list[Path]:
     """Git repos sitting directly under ``workspaces/`` (pre-workspace layout)."""
     _ensure_layout()

@@ -46,6 +46,11 @@ DEFAULT_WORKSPACE = _instance.default_workspace_of(_cfg, DEFAULT_WORKSPACE_FALLB
 #: How far a written memory travels — see charter.instance.SHARE_MODES.
 MEMORY_SHARE = _instance.share_of(_cfg)
 
+#: Which deployment this plane is — ``fleet`` (many clones per workspace) or ``embedded``
+#: (charter installed inside the single codebase it serves). See charter.instance.SHAPES
+#: for why this is declared rather than sniffed off the filesystem.
+PLANE_SHAPE = _instance.shape_of(_cfg)
+
 #: Per-task workspaces live here: ``workspaces/<workspace>/<repo>`` (on-demand repo
 #: clones) plus the workspace's own ``memory/`` and ``refs/``. Gitignored — a
 #: workspace is a private, per-developer, per-task environment. (Renamed from the

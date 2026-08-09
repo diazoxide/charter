@@ -13,10 +13,22 @@ from . import config, util, workspace, worktree
 
 
 def clone_for(ws: str, repo: str) -> Path | None:
+    """The tree named *repo* that this workspace can cut worktrees from.
+
+    The plane's own root tree is checked too, and it is the whole point in a **monorepo**
+    control plane: there, `workspaces/` holds no clones at all, so without this every
+    `charter worktree` command would answer "isn't cloned in workspace X" about the one
+    repo that is unmistakably present — the one you are standing in.
+
+    Clones win a name collision. A workspace's own clone of `foo` is the tree the user
+    selected by cloning it *into this workspace*; the root tree is ambient. Preferring
+    the ambient one would silently cut the worktree off the wrong repo.
+    """
     for d in workspace.clones(ws):
         if d.name == repo:
             return d
-    return None
+    rt = workspace.root_tree()
+    return rt if (rt is not None and rt.name == repo) else None
 
 
 def _resolve(args) -> tuple[str, Path | None]:

@@ -300,6 +300,47 @@ def _clone_dirs(ws: str) -> list[Path]:
     return workspace.clones(ws)
 
 
+def _repo_trees(ws: str) -> list[Path]:
+    """Every repo the workspace works in — the plane's root tree, then its clones.
+
+    Same list `charter gl-refresh` fetches forge state for, by construction (both call
+    :func:`charter.workspace.repo_trees`), so a row can never be drawn for a repo whose
+    CI was never fetched.
+    """
+    from . import workspace
+    try:
+        return workspace.repo_trees(ws)
+    except Exception:
+        return _clone_dirs(ws)
+
+
+def _root_tree() -> Path | None:
+    """The control plane's own repo, when the plane's root is itself a git clone.
+
+    A **monorepo** control plane is `charter init` run inside the repo you already work
+    in: there is nothing to clone, `workspaces/` stays empty, and the tree you are
+    editing IS the root. Without this the status line renders `repos 0/0` in a repo with
+    a live branch, uncommitted work and an open PR — the one shape where every column it
+    draws has an answer and it showed none.
+
+    Not a new concept, and deliberately so: :func:`charter.gitpolicy.repos` has always
+    meant "the control plane itself plus every repo clone". This is the status line
+    agreeing with git policy about what counts as a repo, rather than a second opinion.
+
+    A *fleet* plane whose root happens to be a git repo (the common case — control planes
+    get committed) gets the same row, which is right: it has a branch and a dirty state
+    you care about, and it is the one repo `charter clone` will never produce. It stays
+    excluded from the *inventory* (``exclude`` in charter.toml) because that lists clone
+    targets, and cloning yourself into your own workspace is the thing to prevent — a
+    different question from whether the tree is here, which it demonstrably is.
+    """
+    from . import workspace
+    try:
+        return workspace.root_tree()
+    except Exception:
+        return None
+
+
 def _available() -> int:
     try:
         return json.loads(config.INVENTORY.read_text()).get("count", 0)
@@ -315,14 +356,16 @@ def _vaults() -> int:
 
 
 def _branch(repo_dir: Path) -> str:
-    """Current branch read straight from .git/HEAD (no git subprocess)."""
+    """Current branch read straight from HEAD (no git subprocess).
+
+    Handles a clone and a linked worktree alike — see :func:`charter.util.branch_of`,
+    which is where the two ``.git`` layouts are reconciled.
+    """
+    from . import util
     try:
-        txt = (repo_dir / ".git" / "HEAD").read_text().strip()
+        return util.branch_of(repo_dir)
     except Exception:
         return "?"
-    if txt.startswith("ref:"):
-        return txt.split("/", 2)[-1] or "?"  # refs/heads/<branch> (keeps slashes)
-    return txt[:7] if txt else "?"           # detached HEAD → short sha
 
 
 _STATE_TTL = 5.0  # seconds a cached repo-state is trusted before re-checking
@@ -405,20 +448,99 @@ def _markers(state: dict) -> tuple[str, str, bool]:
     return plain, coloured, dirty
 
 
-def _current(payload: dict) -> tuple[str, str] | None:
-    """(workspace, repo) that the session's cwd is inside, if any."""
+def _current(payload: dict) -> tuple[str | None, str] | None:
+    """``(workspace, repo)`` that the session's cwd is inside, if any.
+
+    The workspace is ``None`` when the cwd is inside the plane's own root tree
+    (:func:`_root_tree`), which belongs to no single workspace — it is in all of them.
+    A caller comparing against the active workspace must read ``None`` as "matches
+    whichever workspace is active".
+
+    ``workspaces/`` is checked first and, once the cwd is known to be under it, this
+    returns without consulting the root tree even when there is no repo component (e.g.
+    the cwd is ``workspaces/<ws>`` itself). ``WORKSPACES_DIR`` lives *under* ``ROOT``, so
+    falling through would report the root tree as current while you stand in a workspace.
+    """
     ws = payload.get("workspace") or {}
     cwd = ws.get("current_dir") or payload.get("cwd") or ""
     if not cwd:
         return None
     try:
-        parts = Path(cwd).resolve().relative_to(config.WORKSPACES_DIR.resolve()).parts
+        here = Path(cwd).resolve()
     except Exception:
         return None
-    return (parts[0], parts[1]) if len(parts) >= 2 else None
+    try:
+        parts = here.relative_to(config.WORKSPACES_DIR.resolve()).parts
+    except Exception:
+        parts = None
+    if parts is not None:
+        return (parts[0], parts[1]) if len(parts) >= 2 else None
+
+    rt = _root_tree()
+    if rt is not None:
+        try:
+            here.relative_to(rt.resolve())
+            return (None, rt.name)
+        except Exception:
+            pass
+    return None
 
 
-def _repo_rows(dirs, active, cur, states, branches, gl) -> list[tui.Node]:
+def _tree_cells(lead: str, label: str, d, states, branches, gl) -> tui.Row:
+    """One table row — ``<lead><label>`` in the name column, then branch+markers, CI, change.
+
+    Shared by repo rows and nested worktree rows so the two cannot drift: a worktree's row
+    is the *same four cells* as its repo's, differing only in the lead glyphs. Building
+    them twice is precisely how a nested row ends up a column off from the one above it,
+    which this layout has already paid for more than once.
+
+    The name cell's width is the same total whatever the lead costs — `tui.Cell` pads and
+    truncates to it — so a longer lead spends its columns out of the label, never out of
+    the branch column's starting position.
+    """
+    name = tui.Cell(f"{lead}{label}", 2 + 3 + _NAME_W)
+
+    # branch + markers: truncate the *branch* so the markers always survive
+    marks_plain, marks_col, is_dirty = _markers(states.get(d, {}))
+    br = tui.truncate(branches.get(d, "?"), max(1, _BRANCH_W - tui.width(marks_plain)))
+    branch = tui.Cell(f"{_YELLOW if is_dirty else _DIM}{br}{_R}{marks_col}", _BRANCH_W)
+
+    info = gl.get(d, {})
+    ci = tui.Cell(_ci_part(info.get("ci")), _CI_W)
+    change = info.get("change")
+    sigil = info.get("sigil") or "!"   # old caches (pre-forge-protocol) carry no sigil
+    mr_cell = tui.Cell(f"{_GREEN}{sigil}{change}{_R}" if change else "", _MR_W)
+
+    return tui.Row(name, branch, ci, mr_cell, gap=_GAP)
+
+
+def _detail_worktrees(ws: str, dirs) -> list[Path]:
+    """The worktrees to draw as full rows, or ``[]`` to keep the one-line summary.
+
+    With exactly ONE repo — the monorepo shape, and equally a fleet workspace holding a
+    single clone — `_MAX_REPO_LINES` leaves about a dozen rows unspent while the compact
+    summary crams every piece onto one line as bare names: no branch, no dirty flag, no
+    CI, no change. There is nothing to compress, so spend the rows. At two or more repos
+    the summary is still the right trade, because a repo must never lose its row to
+    another repo's worktrees.
+
+    ONE predicate, whose result is passed to everything that needs it. `render` scans
+    these directories for branch/dirty/CI and `_repo_rows` draws them; deciding it
+    separately in each is how a row gets drawn for a directory nobody scanned, which
+    renders as `?` in the branch column and blanks everywhere else — strictly worse than
+    the summary line it replaced.
+    """
+    if len(dirs) != 1:
+        return []
+    try:
+        from . import worktree as _wt
+        return _wt.dirs_for(ws, dirs[0].name)[: _MAX_REPO_LINES - 1]
+    except Exception:
+        return []
+
+
+def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
+               detail_wts=()) -> list[tui.Node]:
     """One table row per clone, nested under the workspace like a tree:
 
         ├─ <repo>   <branch><markers>   <ci>   <sigil><change>
@@ -434,10 +556,19 @@ def _repo_rows(dirs, active, cur, states, branches, gl) -> list[tui.Node]:
     over worktree rows (every repo gets its own row before any repo's worktrees get
     nested rows), so a repo is never dropped just because an earlier repo's worktrees
     ate the budget.
+
+    *root_dir* — the plane's own tree (:func:`_root_tree`), when it is in *dirs*. It is
+    drawn in the plane's own colour (the cyan of `⬢ <workspace>` two rows up) rather than
+    from `_PALETTE`, so "this repo IS the control plane" is carried by the one channel
+    that costs no columns. Every other repo distinction here is already colour, and a new
+    glyph in the name cell would have to earn its width against `_NAME_W` — see the
+    header comments in `render` for what a mis-measured glyph does to this layout.
     """
     if not dirs:
         return []
-    cur_repo = cur[1] if (cur and cur[0] == active) else None
+    # `cur[0] is None` = the cwd is in the root tree, which is a member of EVERY
+    # workspace, so it is current whichever one is active.
+    cur_repo = cur[1] if (cur and (cur[0] is None or cur[0] == active)) else None
     n = len(dirs)
     capped = n > _MAX_REPO_LINES
     show = dirs[: _MAX_REPO_LINES - 1] if capped else dirs
@@ -446,39 +577,50 @@ def _repo_rows(dirs, active, cur, states, branches, gl) -> list[tui.Node]:
     wt_budget = _MAX_REPO_LINES - len(show) - (1 if capped else 0)
 
     rows: list[tui.Node] = []
+    clone_i = 0            # palette index — counts CLONES only, so a repo keeps its
+                           # colour whether or not a root row sits above it
     for i, d in enumerate(show):
-        is_last = (not capped) and (i == len(show) - 1)
-        tree = _TREE_END if is_last else _TREE_MID
-        color = _PALETTE[i % len(_PALETTE)]
+        if root_dir is not None and d == root_dir:
+            color = _CYAN
+        else:
+            color = _PALETTE[clone_i % len(_PALETTE)]
+            clone_i += 1
         emph = f"{_BOLD}{_UNDER}" if d.name == cur_repo else ""
 
-        # worktrees: a ⑂N badge here, the newest few nested below (see after the row)
+        # worktrees: a ⑂N badge here, plus either full nested rows (`_detail_worktrees`)
+        # or the one-line summary below.
         try:
             from . import worktree as _wt
             wts = _wt.dirs_for(active, d.name)
         except Exception:
             wts = []
-        badge = f"{_DIM} ⑂{len(wts)}{_R}" if wts else ""
+        kids = list(detail_wts) if (len(show) == 1 and detail_wts) else []
+        kids = kids[:wt_budget]
+        # The badge is a count of what you CANNOT see. With every piece drawn as its own
+        # row below, `⑂2` above two visible rows is just noise restating them.
+        badge = f"{_DIM} ⑂{len(wts)}{_R}" if len(kids) < len(wts) else ""
+
+        # A repo with rows nested beneath it is not where the tree ends, so it keeps `├─`.
+        is_last = (not capped) and (i == len(show) - 1) and not kids
+        tree = _TREE_END if is_last else _TREE_MID
 
         # indent + tree + name (padding lands outside the style, not underlined)
-        name = tui.Cell(f"  {_DIM}{tree}{_R}{emph}{color}{d.name}{_R}{badge}",
-                        2 + 3 + _NAME_W)
+        rows.append(_tree_cells(f"  {_DIM}{tree}{_R}",
+                                f"{emph}{color}{d.name}{_R}{badge}",
+                                d, states, branches, gl))
 
-        # branch + markers: truncate the *branch* so the markers always survive
-        marks_plain, marks_col, is_dirty = _markers(states.get(d, {}))
-        br = tui.truncate(branches.get(d, "?"),
-                          max(1, _BRANCH_W - tui.width(marks_plain)))
-        branch_color = _YELLOW if is_dirty else _DIM
-        branch = tui.Cell(f"{branch_color}{br}{_R}{marks_col}", _BRANCH_W)
-
-        info = gl.get(d, {})
-        ci = tui.Cell(_ci_part(info.get("ci")), _CI_W)
-        change = info.get("change")
-        sigil = info.get("sigil") or "!"  # old caches (pre-forge-protocol) carry no sigil
-        mr_cell = tui.Cell(f"{_GREEN}{sigil}{change}{_R}" if change else "", _MR_W)
-
-        rows.append(tui.Row(name, branch, ci, mr_cell, gap=_GAP))
-
+        if kids:
+            wt_budget -= len(kids)
+            for j, w in enumerate(kids):
+                # `╰─` for the last child, NOT `└─`. `render`'s "the tree keeps going"
+                # rewrite searches backwards for the last `└─` to turn into `├─`; a child
+                # sharing that marker gets rewritten instead of its repo. That is the
+                # exact bug `_TREE_WT` was introduced to prevent — see its definition.
+                mark = _TREE_WT if j == len(kids) - 1 else _TREE_MID
+                emph_w = f"{_BOLD}{_UNDER}" if w.name == cur_repo else ""
+                rows.append(_tree_cells(f"  {_DIM}{_TREE_PIPE}{mark}{_R}",
+                                        f"{emph_w}{_DIM}{w.name}{_R}",
+                                        w, states, branches, gl))
         # ONE summary line per repo, newest piece first — a fixed cost no matter how many
         # worktrees exist, so the footer can't grow with them (the ⑂N badge above carries
         # the true total, and overflow truncates with … rather than dropping pieces
@@ -486,7 +628,7 @@ def _repo_rows(dirs, active, cur, states, branches, gl) -> list[tui.Node]:
         # whitespace-only prefix to column 0 — the same trap the persona column works
         # around below — which would drop this line to the left margin and stop it
         # reading as a child of its repo.
-        if wts and wt_budget > 0:
+        elif wts and wt_budget > 0:
             wt_budget -= 1
             lead = f"  {_DIM}{_TREE_PIPE}{_R} {_DIM}{_TREE_WT}{_R}"
             pieces = tui.truncate(" · ".join(w.name for w in wts),
@@ -838,7 +980,12 @@ def render(payload: dict | None = None) -> str:
     try:
         active, src = _active(payload.get("session_id"))
         nws = _count_workspaces()
-        dirs = _clone_dirs(active)
+        # The plane's own tree leads, then the active workspace's clones. A monorepo
+        # plane has only the former, a fleet plane usually only the latter, and both
+        # shapes render through the exact same rows — the monorepo is not a special
+        # case here, just a workspace whose clone list happens to be empty.
+        root_dir = _root_tree()
+        dirs = _repo_trees(active)
         avail = _available()
         nv = _vaults()
         cur = _current(payload)
@@ -848,11 +995,15 @@ def render(payload: dict | None = None) -> str:
         # Everything below lays out inside the frame, so it gets the pane minus the
         # box's own chrome ("| " each side). `_boxed` re-widens to `frame_w` at the end.
         width = max(24, frame_w - 4)
-        states = _repo_states(dirs)
-        branches = {d: _branch(d) for d in dirs}
+        # Worktrees drawn as full rows need the same per-directory data their repo does,
+        # so they are scanned alongside it — a row can only show what `scan` gathered.
+        detail_wts = _detail_worktrees(active, dirs)
+        scan = [*dirs, *detail_wts]
+        states = _repo_states(scan)
+        branches = {d: _branch(d) for d in scan}
         from . import glstate
-        gl = glstate.read_for(dirs, branches)
-        glstate.maybe_spawn(dirs, active)
+        gl = glstate.read_for(scan, branches)
+        glstate.maybe_spawn(scan, active)
 
         pin = f"{_YELLOW}*{_R}" if src == "$CHARTER_WORKSPACE" else ""
         # Reinit tip sits right after the name so it survives truncation on narrow panes.
@@ -868,7 +1019,9 @@ def render(payload: dict | None = None) -> str:
         ]))
 
         sid = payload.get("session_id")
-        repo_lines = [r.render(_LEFT_W)[0] for r in _repo_rows(dirs, active, cur, states, branches, gl)]
+        repo_lines = [r.render(_LEFT_W)[0]
+                      for r in _repo_rows(dirs, active, cur, states, branches, gl,
+                                          root_dir, detail_wts)]
         chips = _persona_chips(sid)
     except Exception:
         return f"{_CYAN}⬢{_R} charter"
@@ -897,7 +1050,12 @@ def render(payload: dict | None = None) -> str:
         #
         # So: labels only up here. Decoration lives on the content rows, where a
         # sibling would expose it.
-        left_head = f"{_DIM}{_HEAD_PAD}repos{_R} {len(dirs)}{_DIM}/{avail}{_R}"
+        # `/<avail>` is "of this many in the inventory", so it is only printed when there
+        # IS an inventory. A monorepo plane never runs `discover` — its one repo is
+        # already here — and rendering `repos 1/0` there states the opposite of the truth.
+        # A fleet plane before its first `discover` gets the same honest bare count.
+        left_head = f"{_DIM}{_HEAD_PAD}repos{_R} {len(dirs)}" + (
+            f"{_DIM}/{avail}{_R}" if avail else "")
         header = f"{_DIM}{_HEAD_PAD}personas{_R} {len(chips)}" + (
             f"{_DIM} · vaults{_R} {nv}" if nv else "") + (
             f"{_DIM} · shared{_R}{shared_badge}" if shared_badge else "")

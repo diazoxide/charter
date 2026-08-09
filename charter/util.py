@@ -8,6 +8,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import urllib.parse
+from pathlib import Path
 from typing import Sequence
 
 _USE_COLOR = sys.stderr.isatty()
@@ -70,3 +71,53 @@ def run(
 def urlenc(s: str) -> str:
     """URL-encode a path segment (e.g. a group path with slashes)."""
     return urllib.parse.quote(s, safe="")
+
+
+def git_dir(tree: Path) -> Path | None:
+    """The git directory backing *tree*, or ``None`` when *tree* is not a working tree.
+
+    Git stores this two different ways and both are normal. A **clone**'s ``.git`` is a
+    directory holding HEAD. A linked **worktree**'s ``.git`` is a FILE containing
+    ``gitdir: <path>``, and its HEAD — along with everything else that is per-worktree —
+    lives at that path instead. ``workspace.is_clone`` relies on exactly this difference
+    to tell the two apart without bookkeeping.
+
+    Readers that handled only the directory form reported the worktree's branch as ``?``,
+    which is the entire branch column of a monorepo control plane, where every tree below
+    the root is a worktree.
+    """
+    g = Path(tree) / ".git"
+    try:
+        if g.is_dir():
+            return g
+        txt = g.read_text().strip()
+    except OSError:
+        return None
+    if not txt.startswith("gitdir:"):
+        return None
+    p = Path(txt[len("gitdir:"):].strip())
+    # `git worktree add` writes an absolute path, but the file format permits a relative
+    # one (and `git worktree repair` can produce it) — resolve it against the tree.
+    return p if p.is_absolute() else (Path(tree) / p)
+
+
+def branch_of(tree: Path) -> str:
+    """Current branch of a working tree, read straight from HEAD — **no subprocess**.
+
+    ``?`` when unreadable, a short sha when detached, and the full ref name otherwise
+    (branch names legitimately contain slashes, so only ``refs/heads/`` is stripped).
+
+    Filesystem-only on purpose: the status line renders on every turn and calls this once
+    per tree, so a `git` fork here would be paid over and over for something two `read`s
+    answer exactly.
+    """
+    gd = git_dir(tree)
+    if gd is None:
+        return "?"
+    try:
+        txt = (gd / "HEAD").read_text().strip()
+    except OSError:
+        return "?"
+    if txt.startswith("ref:"):
+        return txt.split("/", 2)[-1] or "?"   # refs/heads/<branch> — keeps slashes
+    return txt[:7] if txt else "?"            # detached HEAD → short sha
