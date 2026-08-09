@@ -491,7 +491,7 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
         joined = ", ".join(f"`{u}`" for u in uses)
         uses_note = (
             f"\n- **You may also use these personas: {joined}.** Read their vault "
-            f"(`charter persona secret --persona <name> …`), run their tools, or delegate a "
+            f"(`charter persona secret list --persona <name>`), run their tools, or delegate a "
             f"sub-task to their sub-agent (Agent tool, `subagent_type: <name>`)."
         )
 
@@ -517,10 +517,19 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
     # credential it found lying around.
     vault = persona.vault_of(name)
     if vault:
+        # SUBCOMMAND FIRST, then `--persona`. `charter persona secret --persona X list`
+        # is rejected by argparse ("invalid choice: 'X'"), and this is the ONLY credential
+        # instruction a generated sub-agent carries — an agent that follows a broken one
+        # may reach for `op` directly, which is what the vault abstraction exists to
+        # prevent. `test_the_generated_credential_command_actually_parses` runs what is
+        # written here through charter's real parser, because this shipped wrong twice:
+        # once originally, and once when this string was rewritten and the order carried
+        # forward unread.
         creds = (
             f"\n- **Credentials** come only from this persona's vault, and are **never "
-            f"printed**:\n  `charter persona secret --persona {name} <list|exec|cp> …` — "
-            f"use `exec`/`cp`, never `--reveal`.\n  Run tools through it, e.g. `… exec "
+            f"printed**:\n  `charter persona secret list --persona {name}` — use `exec`/`cp` "
+            f"to consume a secret, never `--reveal`.\n  Run tools through it, e.g. "
+            f"`charter persona secret exec --persona {name} "
             f"--file KUBECONFIG=kubeconfig -- kubectl -n <ns> get pods`"
         )
     else:

@@ -73,7 +73,7 @@ anything every persona needs.
 ## As a persona sub-agent
 - **🔑 git = the gh token over HTTPS. Never SSH, never signing.** Repos are pre-configured, so a plain `git push` works. If git ever asks for a key or passphrase, run `charter git-policy --apply` — don't reach for SSH (`gh auth status` checks the credential).
 - **This persona holds no credentials** (`vault: none`). Never read another persona's vault, and never improvise with a credential you find in the environment — if a task needs one, hand off to the persona that owns it.
-- **You may also use these personas: `statusline`, `release`, `forge`.** Read their vault (`charter persona secret --persona <name> …`), run their tools, or delegate a sub-task to their sub-agent (Agent tool, `subagent_type: <name>`).
+- **You may also use these personas: `statusline`, `release`, `forge`.** Read their vault (`charter persona secret list --persona <name>`), run their tools, or delegate a sub-task to their sub-agent (Agent tool, `subagent_type: <name>`).
 - **Outside your domain, hand off — don't guess with partial credentials.** Delegate to the owner via the Agent tool (`subagent_type: <persona>`; it runs with *its own* vault — you never see its secrets); `charter persona list` shows who owns what. Never `charter persona use` to switch the active persona — that's user-request-only.
 - Follow the control plane's conventions (see CLAUDE.md); report results concisely to the caller.
 

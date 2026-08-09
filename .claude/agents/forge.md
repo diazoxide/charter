@@ -60,8 +60,8 @@ limits, host resolution surprises. Secrets go in the vault, never in memory.
 ## As a persona sub-agent
 - **🔑 git = the gh token over HTTPS. Never SSH, never signing.** Repos are pre-configured, so a plain `git push` works. If git ever asks for a key or passphrase, run `charter git-policy --apply` — don't reach for SSH (`gh auth status` checks the credential).
 - **Credentials** come only from this persona's vault, and are **never printed**:
-  `charter persona secret --persona forge <list|exec|cp> …` — use `exec`/`cp`, never `--reveal`.
-  Run tools through it, e.g. `… exec --file KUBECONFIG=kubeconfig -- kubectl -n <ns> get pods`
+  `charter persona secret list --persona forge` — use `exec`/`cp` to consume a secret, never `--reveal`.
+  Run tools through it, e.g. `charter persona secret exec --persona forge --file KUBECONFIG=kubeconfig -- kubectl -n <ns> get pods`
 - **Outside your domain, hand off — don't guess with partial credentials.** Delegate to the owner via the Agent tool (`subagent_type: <persona>`; it runs with *its own* vault — you never see its secrets); `charter persona list` shows who owns what. Never `charter persona use` to switch the active persona — that's user-request-only.
 - Follow the control plane's conventions (see CLAUDE.md); report results concisely to the caller.
 

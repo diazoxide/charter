@@ -236,6 +236,51 @@ class SyncAgentsRefusesDrafts(PersonaIso):
         self.assertIn("holds no credentials", body.lower())
         self.assertNotIn("--persona tui <list|exec|cp>", body)
 
+    def test_the_generated_credential_command_actually_parses(self):
+        """Issue #18. Every `charter …` command in a generated sub-agent is run through
+        charter's REAL parser, because the broken form (`secret --persona X list`, which
+        argparse rejects with "invalid choice: 'X'") is a perfectly plausible string and a
+        string-match test passes it happily. It shipped twice: once originally, and once
+        when the surrounding block was rewritten and the order carried forward unread.
+
+        This is the only credential instruction those agents carry, so an agent following
+        a broken one hits an argparse error and may reach for `op` directly — which is
+        precisely what the vault abstraction exists to prevent.
+        """
+        import re as _re
+        import shlex
+        from charter import cli
+
+        self.make_persona("ops", role="Ops", vault="ops", **{"delegate-when": "x"})
+        self.make_persona("dev", role="Dev", vault="dev", uses="ops",
+                          **{"delegate-when": "y"})
+        parser = cli.build_parser()
+
+        checked = 0
+        for name in ("ops", "dev"):
+            r = persona.resolve(name)
+            body = commands_persona._render_agent(name, r["meta"], r.get("charter") or "")
+            # Scoped to `persona secret`, the credential path this is about. A sweep over
+            # every backticked command would also catch prose that CITES a command rather
+            # than instructing one — the body says "Never `charter persona use` to switch
+            # the active persona", a deliberate fragment — and telling citation from
+            # instruction is guesswork this test should not be doing.
+            for cmd in _re.findall(r"`(charter persona secret [^`]+)`", body):
+                cmd = cmd.replace("…", "").strip()
+                if "<" in cmd:                      # a placeholder, not a real invocation
+                    cmd = _re.sub(r"<[^>]+>", "PLACEHOLDER", cmd)
+                argv = shlex.split(cmd)[1:]         # drop the `charter` program name
+                if not argv:
+                    continue
+                try:
+                    parser.parse_args(argv)
+                except SystemExit:
+                    self.fail(f"generated agent for '{name}' carries an invocation charter "
+                              f"itself rejects: {cmd}")
+                checked += 1
+        self.assertGreater(checked, 0, "no charter commands found to check — did the "
+                                       "generated body stop carrying them?")
+
     def test_a_hand_written_agent_is_never_removed(self):
         """Generated files are charter's to manage; hand-written ones are not."""
         self.make_persona("wip", role="WIP", vault="wip", draft="true")
