@@ -74,6 +74,45 @@ charter persona secret set API_TOKEN --stdin        # resolves the active person
 charter persona secret exec --env TOKEN=API_TOKEN -- some-cli
 ```
 
+### Where a registration is recorded: two files, one view
+
+| File | Committed? | Holds |
+| --- | --- | --- |
+| `vaults.json` (plane root) | **yes** | what is the same on every machine: provider, persona, `op-vault`, and a `file` relative to the plane |
+| `.charter/vaults.json` | no (0600) | this developer's own vaults, plus per-machine overrides — which wins on conflict |
+
+Reads see them merged, **field by field**, so you can pin an `account` on a vault the team
+declares without restating its provider and file (restating them is how a local copy
+silently drifts from the shared one).
+
+`charter vault add` writes the **local** file unless you pass `--share`:
+
+```
+charter vault add team --provider reference --file secrets/team.json --share
+```
+
+Local-by-default is deliberate, and it is the same posture as `[memory].share` — which
+defaults to `local` so a control plane never publishes by accident. It matters more here:
+a registry names which personas hold credentials and where their files live, which is a
+useful map even without the values.
+
+`--account` never travels, even with `--share`. It is the one field that genuinely differs
+per machine, so it is split off and written locally.
+
+This is what makes committed vault files usable. A **reference** vault holds `op://` URIs
+rather than values, so teams commit them — but before this the *index* that located them
+recorded one developer's home directory, so a fresh clone found the vault files present
+and unreachable, and had to re-register them by hand. Now `git clone` is enough:
+
+```
+$ charter vault list          # on a machine with no .charter/ at all
+VAULT     PROVIDER    PERSONA  SCOPE   STATUS
+team      reference   —        shared  1 reference(s) via op
+```
+
+The `SCOPE` column answers the two questions a two-file registry invites: *why can't my
+teammate see this vault*, and *why is this vault in git*.
+
 ### Registering over a name that already exists
 
 `charter vault add` **refuses** a name that is already registered, naming the provider in

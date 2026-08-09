@@ -18,7 +18,7 @@ import unittest
 from contextlib import redirect_stderr
 from types import SimpleNamespace
 
-from charter import commands_secrets
+from charter import commands_secrets, config
 from charter.secrets import base, registry
 from tests._isolation import PersonaIso
 
@@ -146,6 +146,100 @@ class TheRegistryIsPortable(PersonaIso):
         registry.add_vault("b", "reference", {"file": "x/b.json"})
         self.assertEqual(registry.provider_for("a").path, self.tmp / "x" / "a.json")
         self.assertEqual(registry.provider_for("b").path, self.tmp / "x" / "b.json")
+
+
+class SharedAndLocalHalves(PersonaIso):
+    """#21's remaining half: the registry that *locates* committed vaults must travel too.
+
+    `vaults.json` at the plane root is committed; `.charter/vaults.json` stays local and
+    wins on conflict. The split is per FIELD and it is small — going through them, only
+    `account` (which 1Password account this developer signed into) genuinely differs
+    between machines.
+    """
+
+    def _add(self, name, provider="plain-file", share=False, **kw):
+        with redirect_stderr(io.StringIO()):
+            a = _args(name, provider, **kw)
+            a.share = share
+            return commands_secrets.cmd_vault_add(a)
+
+    def test_registering_is_local_by_default(self):
+        """Matching `[memory].share`, which defaults to local so a plane never publishes
+        by accident. A registry names which personas hold credentials and where their
+        files live — a map worth having even without the values."""
+        self._add("mine")
+        self.assertIn("mine", registry.load_local()["vaults"])
+        self.assertNotIn("mine", registry.load_shared()["vaults"])
+
+    def test_share_writes_the_committed_half(self):
+        self._add("team", "reference", share=True)
+        self.assertIn("team", registry.load_shared()["vaults"])
+        self.assertNotIn("team", registry.load_local()["vaults"])
+
+    def test_a_shared_vault_resolves_with_no_local_file_at_all(self):
+        """The fresh-clone case: git carried `vaults.json` and the vault file, nothing
+        else. Before this, the vault files arrived and the index that found them didn't."""
+        self._add("team", "reference", share=True)
+        config.VAULTS_REGISTRY.unlink(missing_ok=True)
+        self.assertIn("team", registry.vaults())
+        self.assertEqual(registry.provider_for("team").path,
+                         self.tmp / ".charter" / "vaults" / "team.json")
+
+    def test_the_account_pin_never_travels(self):
+        """It is the one genuinely per-developer field, so it is split off even when the
+        rest of the entry is published."""
+        self._add("ops", "1password", share=True, op_vault="Engineering")
+        registry.add_vault("ops", "1password",
+                           {"op-vault": "Engineering", "account": "me@corp.com"},
+                           force=True, share=True)
+        self.assertNotIn("account", registry.load_shared()["vaults"]["ops"]["config"])
+        self.assertEqual(
+            registry.load_local()["vaults"]["ops"]["config"]["account"], "me@corp.com")
+
+    def test_the_merged_view_carries_both(self):
+        registry.add_vault("ops", "1password",
+                           {"op-vault": "Engineering", "account": "me@corp.com"},
+                           share=True)
+        cfg = registry.vaults()["ops"]["config"]
+        self.assertEqual(cfg["op-vault"], "Engineering")
+        self.assertEqual(cfg["account"], "me@corp.com")
+
+    def test_local_overrides_shared_field_by_field(self):
+        """Per field, not per vault: pinning `account` must not require restating the
+        provider and file, which is how a local copy silently drifts from the shared one."""
+        registry.add_vault("t", "reference", {"file": "a/t.json"}, persona="qa", share=True)
+        local = registry.load_local()
+        local["vaults"]["t"] = {"config": {"account": "me"}}
+        registry.save_registry(local)
+        got = registry.vaults()["t"]
+        self.assertEqual(got["persona"], "qa")               # from shared
+        self.assertEqual(got["config"]["file"], "a/t.json")  # from shared
+        self.assertEqual(got["config"]["account"], "me")     # from local
+
+    def test_scope_is_reported(self):
+        registry.add_vault("s", "reference", {"file": "s.json"}, share=True)
+        registry.add_vault("l", "plain-file", {"file": "l.json"})
+        self.assertEqual(registry.scope_of("s"), "shared")
+        self.assertEqual(registry.scope_of("l"), "local")
+
+    def test_removing_clears_both_halves(self):
+        """Removing one and leaving the other is how a vault comes back from the dead
+        after the user watched charter say it was gone."""
+        registry.add_vault("t", "reference", {"file": "t.json"}, share=True)
+        registry.add_vault("t", "reference", {"file": "t.json"}, force=True)
+        self.assertEqual(registry.scope_of("t"), "both")
+        registry.remove_vault("t")
+        self.assertNotIn("t", registry.vaults())
+        self.assertEqual(registry.scope_of("t"), "local")   # i.e. present in neither file
+
+    def test_the_shared_file_is_world_readable_and_the_local_one_is_not(self):
+        """The committed half carries no values by construction; the local half holds
+        per-developer paths and account pins and keeps 0600."""
+        import stat as _stat
+        registry.add_vault("s", "reference", {"file": "s.json"}, share=True)
+        registry.add_vault("l", "plain-file", {"file": "l.json"})
+        self.assertEqual(_stat.S_IMODE(config.SHARED_VAULTS.stat().st_mode), 0o644)
+        self.assertEqual(_stat.S_IMODE(config.VAULTS_REGISTRY.stat().st_mode), 0o600)
 
 
 if __name__ == "__main__":

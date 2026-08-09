@@ -66,9 +66,11 @@ def cmd_vault_add(args) -> int:
         if getattr(args, "account", None):
             cfg["account"] = args.account
     force = getattr(args, "force", False)
+    share = getattr(args, "share", False)
     replaced = registry.vaults().get(args.name) if force else None
     try:
-        registry.add_vault(args.name, args.provider, cfg, persona=args.persona, force=force)
+        registry.add_vault(args.name, args.provider, cfg, persona=args.persona,
+                           force=force, share=share)
     except base.VaultError as e:
         util.err(str(e))
         return 1
@@ -81,7 +83,11 @@ def cmd_vault_add(args) -> int:
                   f"(provider: {replaced.get('provider', '?')}). Its secrets were NOT "
                   f"migrated." + (f" They remain at {old_where}." if old_where else ""))
     tag = f", persona: {args.persona}" if args.persona else ""
-    util.ok(f"Vault '{args.name}' registered (provider: {args.provider}{tag}).")
+    where = "shared — commit vaults.json" if share else "local only"
+    util.ok(f"Vault '{args.name}' registered (provider: {args.provider}{tag}) [{where}].")
+    if not share:
+        util.info(f"  Teammates won't see it. Publish the wiring (never the secrets) with: "
+                  f"charter vault add {args.name} --provider {args.provider} --share")
     prov = registry.provider_for(args.name)
     ok, detail = prov.health()
     (util.info if ok else util.warn)(f"  {detail}")
@@ -107,16 +113,20 @@ def cmd_vault_list(args) -> int:
         util.info("No vaults configured. Add one: "
                   "charter vault add <name> --provider plain-file --file <path>")
         return 0
-    fmt = "{:<18} {:<16} {:<12} {}"
-    print(fmt.format("VAULT", "PROVIDER", "PERSONA", "STATUS"))
-    print(fmt.format("-" * 18, "-" * 16, "-" * 12, "-" * 28))
+    # SCOPE earns a column because a two-file registry invites exactly two questions —
+    # "why can't my teammate see this vault" and "why is this vault in git" — and both are
+    # answered by where it is registered.
+    fmt = "{:<18} {:<16} {:<12} {:<7} {}"
+    print(fmt.format("VAULT", "PROVIDER", "PERSONA", "SCOPE", "STATUS"))
+    print(fmt.format("-" * 18, "-" * 16, "-" * 12, "-" * 7, "-" * 28))
     for name in sorted(vs):
         try:
             ok, detail = registry.provider_for(name, doc).health()
         except base.VaultError as e:
             detail = str(e)
         persona = vs[name].get("persona") or "—"
-        print(fmt.format(name, vs[name].get("provider", "?"), persona, detail))
+        print(fmt.format(name, vs[name].get("provider", "?"), persona,
+                         registry.scope_of(name), detail))
     return 0
 
 

@@ -30,7 +30,8 @@ _PATCH = ("ROOT", "PERSONAS_DIR", "PERSONA_STATE_DIR", "STATE_DIR", "ACTIVE_PERS
           # instead of by `vault add`. `DOCS_DIR` lets a doc-generating test write into the
           # real `docs/`. See `EveryRootDerivedPathIsIsolated`, which now fails if another
           # one is ever added to config.py without landing here.
-          "VAULTS_REGISTRY", "VAULTS_DIR", "ACTIVE_WORKSPACE_FILE", "DOCS_DIR")
+          "VAULTS_REGISTRY", "VAULTS_DIR", "ACTIVE_WORKSPACE_FILE", "DOCS_DIR",
+          "SHARED_VAULTS")
 
 
 class PersonaIso(unittest.TestCase):
@@ -61,6 +62,7 @@ class PersonaIso(unittest.TestCase):
         config.VAULTS_DIR = config.STATE_DIR / "vaults"
         config.ACTIVE_WORKSPACE_FILE = config.STATE_DIR / "active-workspace"
         config.DOCS_DIR = config.ROOT / "docs"
+        config.SHARED_VAULTS = config.ROOT / "vaults.json"
         # Task 1's fix round found a test that wrote a fake inventory/repos.json into the
         # REAL checkout because this tuple omitted INVENTORY — every other well-known path
         # was redirected into the tmp tree, but inventory.load()/save() kept resolving

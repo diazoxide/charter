@@ -353,6 +353,12 @@ def _add_vault_parser(sub) -> None:
     add.add_argument("--account", help="1Password account to pin to (provider: 1password); "
                                        "needed when signed into more than one.")
     add.add_argument("--persona", help="Tag this vault for a persona (e.g. devops, qa).")
+    add.add_argument("--share", action="store_true",
+                     help="Record it in the COMMITTED registry (vaults.json at the plane "
+                          "root) so teammates inherit the wiring. Default is local-only: a "
+                          "registry names which personas hold credentials and where their "
+                          "files are, so it is never published by accident. The 1Password "
+                          "--account pin always stays local.")
     add.add_argument("--force", action="store_true",
                      help="Replace an existing registration of this name. Does NOT migrate "
                           "its secrets — the old vault's file is left where it is, with "

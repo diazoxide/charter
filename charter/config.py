@@ -94,6 +94,17 @@ def worktrees_root_for(root: "Path", shape: str, cfg: dict) -> "Path | None":
 #: Root for worktrees, or ``None`` for the per-workspace ``.worktrees/`` default.
 WORKTREES_ROOT = worktrees_root_for(ROOT, PLANE_SHAPE, _cfg)
 
+#: The SHARED half of the vault registry — committed, beside personas/ and inventory/.
+#: Holds what is identical on every machine: provider, persona, op-vault, and a `file`
+#: relative to the plane. Never a secret, and never the per-developer `account` (that
+#: stays in `.charter/vaults.json`, which keeps overriding this one).
+#:
+#: A separate file rather than a section of charter.toml because `vault add` WRITES it:
+#: charter.toml is hand-maintained, tomllib cannot write TOML, and `instance.
+#: set_locked_version` already has to edit that file as raw text to keep the comments
+#: people put in it. Machine-written config belongs somewhere a machine may rewrite whole.
+SHARED_VAULTS = ROOT / "vaults.json"
+
 #: Per-task workspaces live here: ``workspaces/<workspace>/<repo>`` (on-demand repo
 #: clones) plus the workspace's own ``memory/`` and ``refs/``. Gitignored — a
 #: workspace is a private, per-developer, per-task environment. (Renamed from the
