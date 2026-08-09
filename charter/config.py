@@ -51,6 +51,49 @@ MEMORY_SHARE = _instance.share_of(_cfg)
 #: for why this is declared rather than sniffed off the filesystem.
 PLANE_SHAPE = _instance.shape_of(_cfg)
 
+
+def worktrees_root_for(root: "Path", shape: str, cfg: dict) -> "Path | None":
+    """Where worktrees live, or ``None`` to keep them per-workspace under ``.worktrees/``.
+
+    ``$CHARTER_WORKTREES`` → ``[plane] worktrees`` → the shape's default. Relative values
+    resolve against ROOT, so ``"../charter.worktrees"`` reads as written.
+
+    The defaults differ because the shapes do. A **fleet** plane keeps the original
+    layout: ``workspaces/<ws>/.worktrees/`` is already outside every clone, which was the
+    whole point of that path. An **embedded** plane's clone IS the plane root, so the same
+    path lands the worktrees inside the codebase and every root-level glob — pytest, jest,
+    nx, tsc, an IDE indexer — sees the source several times over. There the default is a
+    SIBLING of the repo: outside the tree, but adjacent to it rather than hidden away in a
+    home directory, so it is findable with ``cd ..`` and obvious in a path.
+
+    Only the worktrees move. ``workspaces/<ws>/memory/`` and ``refs/`` stay put — they are
+    a few KB of text, and ``charter workspace live`` exists specifically to un-ignore them
+    so a team can commit them. Relocating those would break sharing to fix a problem they
+    do not have.
+
+    Takes *root*/*shape*/*cfg* rather than reading the module globals so the test harness
+    can re-derive it against a temp ROOT the way it already does for GROUP, EXCLUDE and
+    the rest. When this read the globals directly it defaulted to the REAL repo's sibling
+    in every test — which is outside the tmp tree, so the suite wrote worktrees into the
+    developer's checkout directory and accumulated them across cases.
+    """
+    declared = os.environ.get("CHARTER_WORKTREES") or _instance.worktrees_of(cfg)
+    if declared:
+        p = Path(declared).expanduser()
+        p = p if p.is_absolute() else (root / p)
+    elif shape == "embedded":
+        p = root.parent / f"{root.name}.worktrees"
+    else:
+        return None
+    try:
+        return p.resolve()
+    except (OSError, RuntimeError):
+        return p       # unresolvable (symlink loop, vanished parent) — still usable
+
+
+#: Root for worktrees, or ``None`` for the per-workspace ``.worktrees/`` default.
+WORKTREES_ROOT = worktrees_root_for(ROOT, PLANE_SHAPE, _cfg)
+
 #: Per-task workspaces live here: ``workspaces/<workspace>/<repo>`` (on-demand repo
 #: clones) plus the workspace's own ``memory/`` and ``refs/``. Gitignored — a
 #: workspace is a private, per-developer, per-task environment. (Renamed from the

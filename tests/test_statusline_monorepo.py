@@ -68,7 +68,18 @@ class MonorepoIso(PersonaIso):
         init_repo(self.tmp)
         (self.tmp / "charter.toml").write_text('schema = 1\n\n[plane]\nshape = "embedded"\n')
         config.HAS_CONTROL_PLANE = True
-        config.PLANE_SHAPE = "embedded"
+        self.declare_shape("embedded")
+
+    def declare_shape(self, shape: str) -> None:
+        """Set the shape AND everything derived from it. `PersonaIso.setUp` already ran
+        against a tmp dir with no charter.toml, so it resolved a fleet plane's paths —
+        `WORKTREES_ROOT` in particular, which is `None` for fleet and a sibling of ROOT for
+        embedded. Setting `PLANE_SHAPE` alone leaves the two disagreeing, and the fixture
+        then silently tests the layout it was written to prove had changed."""
+        from charter import instance
+        config.PLANE_SHAPE = shape
+        config.WORKTREES_ROOT = config.worktrees_root_for(
+            config.ROOT, shape, instance.load(config.ROOT))
 
     def render(self, cwd: Path | None = None, width: int = 200) -> list[str]:
         """Content lines, ANSI and frame stripped — these tests are about which rows
@@ -143,7 +154,7 @@ class FleetPlaneIsUnchanged(MonorepoIso):
 
     def setUp(self) -> None:
         super().setUp()
-        config.PLANE_SHAPE = "fleet"
+        self.declare_shape("fleet")
 
     def test_a_git_root_alone_does_not_make_a_trunk(self):
         self.assertTrue((self.tmp / ".git").is_dir(), "fixture lost its repo")

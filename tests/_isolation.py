@@ -22,7 +22,7 @@ from charter import config, instance, persona, root
 _PATCH = ("ROOT", "PERSONAS_DIR", "PERSONA_STATE_DIR", "STATE_DIR", "ACTIVE_PERSONA_FILE",
           "WORKSPACES_DIR", "SESSIONS_DIR", "TERMINALS_DIR", "HAS_CONTROL_PLANE",
           "CONFIG_ERROR", "GROUP", "EXCLUDE", "DEFAULT_WORKSPACE", "INVENTORY",
-          "MEMORY_SHARE", "PLANE_SHAPE")
+          "MEMORY_SHARE", "PLANE_SHAPE", "WORKTREES_ROOT")
 
 
 class PersonaIso(unittest.TestCase):
@@ -76,10 +76,24 @@ class PersonaIso(unittest.TestCase):
         config.DEFAULT_WORKSPACE = instance.default_workspace_of(_cfg, config.DEFAULT_WORKSPACE_FALLBACK)
         config.MEMORY_SHARE = instance.share_of(_cfg)
         config.PLANE_SHAPE = instance.shape_of(_cfg)
+        # Re-derived through config's own resolver, not reimplemented here — an embedded
+        # plane's worktree root is a SIBLING of ROOT, so a stale value points outside the
+        # tmp tree entirely. Left unpatched it resolved against the real checkout, and the
+        # suite wrote worktrees into the developer's projects directory and carried them
+        # from one test to the next (a `⑂2` assertion failing with `⑂6`).
+        config.WORKTREES_ROOT = config.worktrees_root_for(
+            config.ROOT, config.PLANE_SHAPE, _cfg)
         config.PERSONAS_DIR.mkdir(parents=True, exist_ok=True)
         self.addCleanup(self._restore)
 
     def _restore(self) -> None:
+        # An embedded plane's worktree root is a SIBLING of ROOT, so it survives the
+        # rmtree below. Removed by name-prefix rather than by "is it outside tmp" — the
+        # only path this ever creates is `<tmp>.worktrees`, and anything else sharing the
+        # temp directory is not ours to delete.
+        wt = getattr(config, "WORKTREES_ROOT", None)
+        if wt is not None and Path(wt).name == f"{self.tmp.name}.worktrees":
+            shutil.rmtree(wt, ignore_errors=True)
         for k, v in self._orig.items():
             setattr(config, k, v)
         shutil.rmtree(self.tmp, ignore_errors=True)

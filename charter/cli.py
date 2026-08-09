@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--owner", help="Group/org/user that owns the repos "
                                      "(GitLab group or GitHub org/user).")
     ini.add_argument("--host", help="Self-hosted forge host (default: the forge's own public host).")
+    ini.add_argument("--shape", choices=["fleet", "embedded"],
+                     help="fleet: the plane is its own directory and workspaces hold "
+                          "clones. embedded: charter serves the codebase it sits inside, "
+                          "and workspaces hold worktrees of it. Default: embedded when "
+                          "run inside an existing git repo, otherwise fleet.")
     ini.set_defaults(func=commands.cmd_init)
 
     doc_check = sub.add_parser(

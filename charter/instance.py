@@ -205,6 +205,28 @@ def shape_of(cfg: dict) -> str:
     return v if v in SHAPES else "fleet"
 
 
+def worktrees_of(cfg: dict) -> str | None:
+    """Where this plane keeps worktrees, or ``None`` for the shape's default.
+
+    A relative value is resolved against the control-plane root (see
+    ``config.WORKTREES_ROOT``), so `"../charter.worktrees"` means what it looks like.
+
+    Exists because of a problem only the **embedded** shape has. Worktrees default to
+    ``workspaces/<ws>/.worktrees/`` — deliberately OUTSIDE every clone, so that (in
+    ``worktree.py``'s own words) "nx/jest/maven never recurse into them". In an embedded
+    plane the clone IS the plane root, so that path is *inside* the codebase and the rule
+    inverts: a repo with two worktrees now answers a root-level glob with three copies of
+    itself. Measured in charter's own checkout at the time this was written: 214 test
+    files discoverable from the root, 142 of them duplicates.
+
+    ``.gitignore`` hides that from git and from nothing else — pytest, jest, nx, tsc and
+    every IDE indexer glob the working tree directly. A dot-directory fixes pytest (whose
+    ``norecursedirs`` skips ``.*``) and not jest. Only leaving the tree fixes all of them.
+    """
+    v = (cfg.get("plane") or {}).get("worktrees")
+    return v.strip() if isinstance(v, str) and v.strip() else None
+
+
 # --------------------------------------------------------------------------- #
 # control-plane SCHEMA — the same stamp/detect/heal pattern `workspace.py`'s   #
 # STRUCTURE_VERSION already proves, one level up: a control plane (not just a  #
@@ -220,6 +242,23 @@ def shape_of(cfg: dict) -> str:
 BASELINE_DIRS = ("personas", "inventory", "workspaces")
 
 
+def baseline_dirs_for(shape: str) -> tuple[str, ...]:
+    """:data:`BASELINE_DIRS` filtered to what a plane of this *shape* actually uses.
+
+    An **embedded** plane has no ``inventory/``. The inventory lists a forge owner's repos
+    so ``clone`` has targets to choose from, and an embedded plane clones nothing — its one
+    repo is the plane. Creating it regardless leaves an empty directory sitting in
+    someone's application repo that no command will ever write to, and then ``drift``
+    reports it missing forever once they delete it.
+
+    ``personas/`` stays in both: shared role identities and their committed memory are
+    exactly what a team installs charter into their codebase to get.
+    """
+    if shape == "embedded":
+        return tuple(d for d in BASELINE_DIRS if d != "inventory")
+    return BASELINE_DIRS
+
+
 def drift(root: Path) -> list[str]:
     """Human-readable descriptions of what this control plane is missing.
 
@@ -231,9 +270,17 @@ def drift(root: Path) -> list[str]:
     a file or other non-directory (FINDING C1 — ``reinit`` will *refuse*, because
     deleting or renaming a user's file to make room would break the additive rule).
     ``is_dir()`` alone can't tell these apart, so this also checks ``exists()``.
+
+    Scoped to the plane's own shape, so an embedded plane is not told forever that it is
+    missing the ``inventory/`` it has no use for. An unreadable charter.toml falls back to
+    the full set — the same fail-toward-fleet rule :func:`shape_of` uses.
     """
+    try:
+        shape = shape_of(load(Path(root)))
+    except Exception:
+        shape = "fleet"
     out = []
-    for d in BASELINE_DIRS:
+    for d in baseline_dirs_for(shape):
         p = Path(root) / d
         if p.is_dir():
             continue

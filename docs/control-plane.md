@@ -29,6 +29,11 @@ schema = 1
 # Which of charter's two deployments this plane is. See "Fleet and embedded" below.
 [plane]
 shape = "fleet"                  # "fleet" | "embedded". Default: "fleet".
+worktrees = "../plane.worktrees" # Where worktrees live. A relative path resolves against
+                                  # this file's directory; $CHARTER_WORKTREES overrides it.
+                                  # Default: fleet keeps them per-workspace under
+                                  # workspaces/<ws>/.worktrees/; embedded puts them in a
+                                  # SIBLING of the repo — see "Where worktrees live" below.
 
 # One [[forge]] block per code-hosting forge this control plane tracks. A single-forge
 # control plane (the common case) declares exactly one; see "Mixed-forge" below for more
@@ -102,6 +107,61 @@ down, once, instead of re-derived forever.
 
 An unrecognised value falls back to `fleet`, on the same principle as `[memory].share`
 falling back to `local`: a typo should cost a feature, not rearrange something that works.
+
+`charter init` decides it for you, because init is the only moment it is decidable: run
+inside a directory that is already a git repo, it writes `shape = "embedded"` and says so;
+run anywhere else, it writes nothing and you get a fleet plane. Afterwards the evidence is
+gone — a fleet plane's root becomes a git repo too — which is exactly why it is recorded
+rather than re-derived. `charter init --shape fleet|embedded` overrides the detection.
+
+An embedded plane gets no `inventory/` directory: the inventory lists a forge owner's
+repos so `clone` has targets, and an embedded plane clones nothing. `doctor` and
+`reinit` both know this, so neither reports its absence as drift.
+
+### Where worktrees live
+
+Worktrees normally sit at `workspaces/<ws>/.worktrees/<repo>/<piece>` — deliberately
+**outside every clone**, so that nx, jest and maven never recurse into them and a
+`git clean -xfd` inside a clone cannot destroy live work.
+
+That path assumes the clone and the control plane are different directories. In an
+embedded plane they are the same directory, so the identical rule now requires leaving the
+plane as well — otherwise a worktree is a complete second copy of the codebase sitting
+inside the tree that every root-level glob walks. This is not hypothetical: charter's own
+checkout, with two worktrees, answered a root-level test glob with 214 files of which 142
+were duplicates. `.gitignore` hides that from git and from nothing else — pytest, jest,
+nx, tsc and every IDE indexer read the working tree directly.
+
+So an embedded plane defaults its worktrees to a **sibling of the repo**, `<root>.worktrees/`,
+keeping the layout below it identical:
+
+```
+my-app/                                 the plane, and the codebase
+my-app.worktrees/<workspace>/my-app/<piece>
+```
+
+Set `[plane].worktrees` (or `$CHARTER_WORKTREES`) to put them somewhere else. Only the
+worktrees move — `workspaces/<ws>/memory/` and `refs/` stay inside the plane, because they
+are a few KB of text and `charter workspace live` exists precisely to un-ignore them so a
+team can commit them.
+
+Worktrees created before this are **not** relocated automatically: moving one means
+rewriting git's own `gitdir` pointer, and `git worktree move` is the command that does it
+correctly. `charter doctor` finds any that are still inside the codebase and prints that
+command with the paths filled in.
+
+### Nested planes
+
+`charter` takes the **innermost** `charter.toml` above your working directory. That is the
+right rule — it is the one git, cargo and npm use — but the embedded shape puts a
+`charter.toml` into ordinary product repos, and a fleet plane clones product repos into its
+workspaces. So `cd`-ing into `workspaces/<ws>/<repo>` can land you in a *different* control
+plane: different personas, a different vault, and memories written somewhere you did not
+choose.
+
+The rule does not change; charter just stops being quiet about it. When the active plane
+sits inside another plane's `workspaces/`, the status line carries a warning naming both
+planes and the `$CHARTER_ROOT` export that pins you to the outer one.
 
 ## A self-hosted example
 

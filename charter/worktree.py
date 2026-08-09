@@ -10,19 +10,66 @@ Worktrees live at ``workspaces/<ws>/.worktrees/<repo>/<piece>``: OUTSIDE every c
 nx/jest/maven never recurse into them and ``mvn clean`` / ``git clean -xfd`` inside the
 clone cannot destroy live work. ``workspaces/`` is gitignored, so none of it can reach the
 control plane's history.
+
+That path assumes the clone and the control plane are different directories. In an
+**embedded** plane they are the same one, and "outside every clone" then requires leaving
+the plane too — so there the root moves to a sibling of the repo (``config.WORKTREES_ROOT``,
+overridable via ``[plane] worktrees``) and the layout below it is unchanged:
+``<root>/<ws>/<repo>/<piece>``. Same rule, followed to where it leads.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import util, workspace
+from . import config, util, workspace
 
-#: Directory under a workspace holding every clone's worktrees.
+#: Directory under a workspace holding every clone's worktrees (the in-plane layout).
 DIR_NAME = ".worktrees"
 
 
 def root(ws: str) -> Path:
-    return workspace.workspace_dir(ws) / DIR_NAME
+    """This workspace's worktree root — relocated (embedded) or in-plane (fleet)."""
+    ext = config.WORKTREES_ROOT
+    return (ext / ws) if ext is not None else (workspace.workspace_dir(ws) / DIR_NAME)
+
+
+def locate(path: Path) -> tuple[str, str, str] | None:
+    """``(workspace, repo, piece)`` when *path* is inside a worktree, else ``None``.
+
+    Path arithmetic, not git: the layout is ``<root>/<ws>/<repo>/<piece>`` in both forms,
+    and this is called on every status-line render — see :func:`dirs_for` on why nothing
+    here may fork a subprocess.
+
+    Both roots are tried because both can be live at once: a plane that has just declared
+    ``[plane] worktrees`` still has yesterday's worktrees in ``workspaces/``, and the
+    status line should keep pointing at whichever one you are actually standing in.
+    """
+    try:
+        here = Path(path).resolve()
+    except (OSError, RuntimeError):
+        return None
+
+    candidates = []
+    if config.WORKTREES_ROOT is not None:
+        candidates.append((config.WORKTREES_ROOT, ()))
+    # In-plane: `workspaces/<ws>/.worktrees/<repo>/<piece>` — one extra component, and it
+    # sits AFTER the workspace name, so it is matched positionally rather than stripped.
+    candidates.append((config.WORKSPACES_DIR, (DIR_NAME,)))
+
+    for base, infix in candidates:
+        try:
+            parts = here.relative_to(Path(base).resolve()).parts
+        except (ValueError, OSError, RuntimeError):
+            continue
+        need = 3 + len(infix)
+        if len(parts) < need:
+            continue
+        ws, rest = parts[0], parts[1:]
+        if infix and tuple(rest[: len(infix)]) != infix:
+            continue
+        rest = rest[len(infix):]
+        return (ws, rest[0], rest[1])
+    return None
 
 
 def path_for(ws: str, repo: str, piece: str) -> Path:

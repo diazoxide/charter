@@ -605,10 +605,20 @@ def _toml_str(s: str) -> str:
     return json.dumps(s)
 
 
-def _render_charter_toml(forge_kind: str, owner: str, host: str | None) -> str:
+def _render_charter_toml(forge_kind: str, owner: str, host: str | None,
+                         shape: str = "fleet") -> str:
     from . import instance as _instance
 
-    lines = [f"schema = {_instance.SCHEMA}", "", "[[forge]]", f"kind = {_toml_str(forge_kind)}"]
+    lines = [f"schema = {_instance.SCHEMA}"]
+    # Written only when it is not the default, so a fleet plane's charter.toml stays the
+    # same minimal file it has always been and nobody has to learn a key they don't need.
+    if shape == "embedded":
+        lines += ["",
+                  "# charter is installed inside the one codebase it serves. Nothing to",
+                  "# clone: the tree you edit is this directory, and a workspace holds",
+                  "# worktrees of it. See docs/control-plane.md.",
+                  "[plane]", 'shape = "embedded"']
+    lines += ["", "[[forge]]", f"kind = {_toml_str(forge_kind)}"]
     if owner:
         lines.append(f"owner = {_toml_str(owner)}")
     if host:
@@ -770,19 +780,40 @@ def cmd_init(args) -> int:
     owner = getattr(args, "owner", None) or ""
     host = getattr(args, "host", None)
 
+    # THE moment the fleet/embedded distinction is decidable. `charter init` run inside a
+    # directory that is already a git repo means the user chose to install charter into a
+    # codebase they work in — the embedded shape — and running it in an empty or non-repo
+    # directory means the plane is its own thing. Afterwards nothing can tell: a fleet
+    # plane's root is a git repo too (its personas carry committed memory), so `ROOT/.git`
+    # stops being evidence the moment init has finished. So decide here, write it down,
+    # and never sniff for it again. `--shape` overrides for scripted setups.
+    shape = getattr(args, "shape", None)
+    if shape and shape not in _instance.SHAPES:
+        util.err(f"unknown --shape {shape!r} — known shapes: "
+                 f"{', '.join(_instance.SHAPES)}")
+        return 1
+    detected = (root / ".git").is_dir()
+    shape = shape or ("embedded" if detected else "fleet")
+
     created, present, blocked = [], [], []
 
     toml_path = root / _root.MARKER
     if toml_path.exists():
         present.append(_root.MARKER)
+        shape = _instance.shape_of(_instance.load(root))   # existing file decides
     else:
-        toml_path.write_text(_render_charter_toml(forge_kind, owner, host))
+        toml_path.write_text(_render_charter_toml(forge_kind, owner, host, shape))
         created.append(_root.MARKER)
-        if not owner:
+        if shape == "embedded":
+            util.info(f"{root.name} is already a git repo, so this plane is EMBEDDED: "
+                      f"charter serves this codebase, there is nothing to clone, and "
+                      f"worktrees live outside the tree. Re-run with --shape fleet if "
+                      f"you meant a plane that clones other repos.")
+        elif not owner:
             util.warn(f"No --owner given — {_root.MARKER}'s [[forge]] block has no "
                       f"owner/group set. Add one before `charter discover`.")
 
-    d_created, d_present, d_blocked = _create_baseline_dirs(root)
+    d_created, d_present, d_blocked = _create_baseline_dirs(root, shape)
     created += d_created
     present += d_present
     blocked += d_blocked
@@ -843,8 +874,9 @@ def cmd_init(args) -> int:
 # the heal half; `doctor`'s "schema" check is where the drift is visible       #
 # without running this first.                                                  #
 # --------------------------------------------------------------------------- #
-def _create_baseline_dirs(root: Path) -> tuple[list[str], list[str], list[tuple[str, Path]]]:
-    """Create any ``instance.BASELINE_DIRS`` absent under ``root``; never touch a
+def _create_baseline_dirs(root: Path,
+                          shape: str = "fleet") -> tuple[list[str], list[str], list[tuple[str, Path]]]:
+    """Create any ``instance.baseline_dirs_for(shape)`` absent under ``root``; never touch a
     directory that's already there. Shared by ``cmd_init`` (a fresh control plane) and
     ``cmd_reinit`` (healing an existing one) so both follow the exact same additive
     discipline instead of two dialects of the same rule.
@@ -858,7 +890,7 @@ def _create_baseline_dirs(root: Path) -> tuple[list[str], list[str], list[tuple[
     from . import instance as _instance
 
     created, present, blocked = [], [], []
-    for d in _instance.BASELINE_DIRS:
+    for d in _instance.baseline_dirs_for(shape):
         p = root / d
         if p.is_dir():
             present.append(f"{d}/")
@@ -882,7 +914,13 @@ def cmd_reinit(args) -> int:
         return 1
     from . import instance as _instance
 
-    created, present, blocked = _create_baseline_dirs(config.ROOT)
+    # Read from the plane on disk, NOT `config.PLANE_SHAPE`. Both are "the shape", but the
+    # global is an import-time snapshot of whatever ROOT was then, and `instance.drift` —
+    # the detect half this command heals — reads the file every time. When those two
+    # disagree, `doctor` reports drift that `reinit` then declines to fix, which is a loop
+    # with no way out from the outside. Same source, same answer, always.
+    shape = _instance.shape_of(_instance.load(config.ROOT))
+    created, present, blocked = _create_baseline_dirs(config.ROOT, shape)
 
     if blocked:
         for d, p in blocked:

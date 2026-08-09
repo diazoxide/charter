@@ -456,10 +456,17 @@ def _current(payload: dict) -> tuple[str | None, str] | None:
     A caller comparing against the active workspace must read ``None`` as "matches
     whichever workspace is active".
 
-    ``workspaces/`` is checked first and, once the cwd is known to be under it, this
-    returns without consulting the root tree even when there is no repo component (e.g.
-    the cwd is ``workspaces/<ws>`` itself). ``WORKSPACES_DIR`` lives *under* ``ROOT``, so
-    falling through would report the root tree as current while you stand in a workspace.
+    Worktrees are resolved FIRST, and to their *piece* name, which is what the nested rows
+    are labelled with. This never worked in either layout: an in-plane worktree sits at
+    ``workspaces/<ws>/.worktrees/<repo>/<piece>``, so the plain workspace arithmetic below
+    read its repo as the literal ``.worktrees`` and matched no row, leaving the cwd
+    unmarked. In an embedded plane the worktrees are the rows you move between, so an
+    unmarked one is the whole feature missing.
+
+    ``workspaces/`` is checked next and, once the cwd is known to be under it, this returns
+    without consulting the root tree even when there is no repo component (e.g. the cwd is
+    ``workspaces/<ws>`` itself). ``WORKSPACES_DIR`` lives *under* ``ROOT``, so falling
+    through would report the root tree as current while you stand in a workspace.
     """
     ws = payload.get("workspace") or {}
     cwd = ws.get("current_dir") or payload.get("cwd") or ""
@@ -469,6 +476,15 @@ def _current(payload: dict) -> tuple[str | None, str] | None:
         here = Path(cwd).resolve()
     except Exception:
         return None
+
+    try:
+        from . import worktree as _wt
+        loc = _wt.locate(here)
+    except Exception:
+        loc = None
+    if loc:
+        return (loc[0], loc[2])          # (workspace, piece)
+
     try:
         parts = here.relative_to(config.WORKSPACES_DIR.resolve()).parts
     except Exception:
@@ -859,9 +875,47 @@ def _alerts(active: str) -> list[str]:
         if stale:
             out.append(f"{_YELLOW}⚠{_R} {_DIM}reinit{_R} {len(stale)} {_DIM}ws · "
                        f"charter ws reinit --all{_R}")
+        outer = _nested_under()
+        if outer is not None:
+            out.append(f"{_RED}⚠{_R} {_DIM}nested plane{_R} — {_DIM}memory and vault go to"
+                       f"{_R} {config.ROOT.name}{_DIM}, not{_R} {outer.name}"
+                       f"{_DIM} · export CHARTER_ROOT={outer}{_R}")
     except Exception:
         pass
     return out
+
+
+def _nested_under() -> Path | None:
+    """The OUTER control plane whose ``workspaces/`` contains this one, if any.
+
+    ``root.find_root`` takes the innermost ``charter.toml`` — the git/cargo/npm contract,
+    and the right one. But the embedded shape puts a ``charter.toml`` into ordinary
+    product repos, and a fleet plane clones product repos into its workspaces. So `cd`
+    into ``workspaces/<ws>/<repo>`` and the active plane silently becomes a different one:
+    different personas, a different vault, and a memory write landing somewhere the user
+    did not choose. Nothing said so.
+
+    Only walks upward comparing paths — no config is parsed for the ancestors beyond the
+    marker's presence, because this runs on every render.
+    """
+    try:
+        here = config.ROOT.resolve()
+    except (OSError, RuntimeError):
+        return None
+    for anc in here.parents:
+        if not (anc / _root_marker()).is_file():
+            continue
+        try:                       # only a plane whose WORKSPACES holds us is the trap:
+            here.relative_to(anc / "workspaces")   # a plain parent directory is not
+        except ValueError:
+            continue
+        return anc
+    return None
+
+
+def _root_marker() -> str:
+    from . import root as _r
+    return _r.MARKER
 
 
 def _session_strip(payload: dict, sid: str | None) -> str:
