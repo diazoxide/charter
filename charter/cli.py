@@ -353,6 +353,14 @@ def _add_vault_parser(sub) -> None:
     add.add_argument("--account", help="1Password account to pin to (provider: 1password); "
                                        "needed when signed into more than one.")
     add.add_argument("--persona", help="Tag this vault for a persona (e.g. devops, qa).")
+    add.add_argument("--env", action="append", metavar="TARGET=SOURCE", default=[],
+                     help="Bind the identity this vault is read through: TARGET is the "
+                          "variable the CLI reads, SOURCE the one this machine carries it "
+                          "in (e.g. OP_SERVICE_ACCOUNT_TOKEN=OP_ACME_DEVOPS_TOKEN). Only "
+                          "NAMES are stored, never values. Repeatable.")
+    add.add_argument("--token-env", metavar="SOURCE",
+                     help="Shorthand for --env OP_SERVICE_ACCOUNT_TOKEN=SOURCE, the "
+                          "1Password service-account case.")
     add.add_argument("--share", action="store_true",
                      help="Record it in the COMMITTED registry (vaults.json at the plane "
                           "root) so teammates inherit the wiring. Default is local-only: a "

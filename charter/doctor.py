@@ -281,14 +281,33 @@ def check_vaults() -> Result:
         return Result("vaults", WARN, hint=str(e))
     if not vs:
         return Result("vaults", OK, detail="none configured")
-    bad = []
+    bad, no_identity = [], []
     for name in vs:
         try:
-            healthy, _ = registry.provider_for(name).health()
-        except base.VaultError:
+            prov = registry.provider_for(name)
+            # A vault that declares the identity it is read through, whose variable is
+            # not set, is broken in a way `health()` cannot see: `op` answers with "no
+            # items" or a permission error, so it reads as an empty or misconfigured
+            # vault rather than as a missing credential. Separated from `bad` because
+            # the fix is `export`, not anything about the vault.
+            prov.env_overlay()
+            healthy, _ = prov.health()
+        except base.VaultError as e:
+            if "is unset" in str(e):
+                no_identity.append(name)
+                continue
             healthy = False
         if not healthy:
             bad.append(name)
+    if no_identity:
+        srcs = []
+        for n in no_identity:
+            srcs += [f"${s}" for s in (vs[n].get("config", {}).get("env") or {}).values()]
+        return Result("vaults", WARN, detail=f"{len(vs)} configured",
+                      hint=f"identity variable unset for: {', '.join(no_identity)} — "
+                           f"export {', '.join(sorted(set(srcs)))} (charter will not fall "
+                           f"back to an ambient token; that would read the vault as "
+                           f"someone else)")
     if bad:
         return Result("vaults", WARN, detail=f"{len(vs)} configured",
                       hint="unhealthy: " + ", ".join(bad))

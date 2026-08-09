@@ -74,6 +74,50 @@ charter persona secret set API_TOKEN --stdin        # resolves the active person
 charter persona secret exec --env TOKEN=API_TOKEN -- some-cli
 ```
 
+### Binding the identity a vault is read through
+
+`op` authenticates from a single global `OP_SERVICE_ACCOUNT_TOKEN`, but least-privilege
+setups issue **one service account per scope**, so the tokens are named per persona. A
+vault can declare which one it is read through:
+
+```
+charter vault add devops --provider reference --file secrets/devops.json \
+  --token-env OP_ACME_DEVOPS_SERVICE_ACCOUNT_TOKEN --share
+```
+
+charter sets `OP_SERVICE_ACCOUNT_TOKEN` from that variable for the duration of that
+vault's `op` call, and for nothing else. Only **names** are stored — never a value — so
+the registry stays inert if it leaks and the binding is reviewable in git:
+
+```json
+"config": { "env": { "OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_DEVOPS_SERVICE_ACCOUNT_TOKEN" } }
+```
+
+`--token-env` is shorthand. The general form names both sides, because reference vaults
+resolve `vault://` as well as `op://` and HashiCorp reads a different variable entirely:
+
+```
+charter vault add infra --provider reference --env VAULT_TOKEN=ACME_VAULT_TOKEN
+```
+
+**A declared variable that is unset is an error, not a fallback.** charter will not reach
+for an ambient `OP_SERVICE_ACCOUNT_TOKEN`: that reads the vault under an identity it never
+declared, and 1Password answers with "no items" or a permission error — so the failure
+arrives disguised as an empty vault rather than as the wrong credential. Vaults that
+declare nothing are untouched, so single-account setups see no change.
+
+`charter vault list` and `charter doctor` report a missing identity as its own state,
+separate from an unhealthy vault, because the fix is an `export` rather than anything
+about the vault:
+
+```
+→ identity variable unset for: devops — export $OP_ACME_DEVOPS_SERVICE_ACCOUNT_TOKEN
+  (charter will not fall back to an ambient token; that would read the vault as someone else)
+```
+
+A read that fails anyway names the identity in play, so a permission error points at the
+credential rather than reading as an empty vault.
+
 ### Where a registration is recorded: two files, one view
 
 | File | Committed? | Holds |

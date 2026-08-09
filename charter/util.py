@@ -5,6 +5,7 @@ Everything here is stdlib-only so the CLI runs with a bare ``python3``.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import urllib.parse
@@ -48,18 +49,29 @@ class ProcError(RuntimeError):
 
 def run(
     cmd: Sequence[str], cwd=None, check: bool = True, capture: bool = True,
-    input: str | None = None,
+    input: str | None = None, env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd``. Raises :class:`ProcError` on failure when ``check``.
 
     ``input`` is written to the child's stdin. That is how a secret reaches a CLI
     without ever appearing in argv — where `ps` and the shell's history can see it.
+
+    ``env`` is an OVERLAY on this process's environment, not a replacement: the child
+    still needs PATH, HOME and the rest to find and run the CLI at all. It exists so a
+    vault can carry the credential a CLI reads (``OP_SERVICE_ACCOUNT_TOKEN``,
+    ``VAULT_TOKEN``) for the duration of one call, without charter ever setting it on
+    itself — a mutated `os.environ` would outlive the call and silently apply to the next
+    vault, which is the identity confusion the whole feature exists to prevent.
     """
+    child_env = None
+    if env:
+        child_env = {**os.environ, **{k: v for k, v in env.items() if v is not None}}
     proc = subprocess.run(
         list(cmd),
         cwd=cwd,
         text=True,
         input=input,
+        env=child_env,
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
     )

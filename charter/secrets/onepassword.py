@@ -90,10 +90,9 @@ class OnePasswordProvider(VaultProvider):
             raise VaultError(
                 "the 1Password CLI ('op') is not on PATH. Install it and sign in "
                 "(https://developer.1password.com/docs/cli/), then retry.")
-        return self.runner(argv, input=stdin, check=False)
+        return self.runner(argv, input=stdin, check=False, env=self.env_overlay())
 
-    @staticmethod
-    def _fail(what: str, proc, write: bool = False) -> VaultError:
+    def _fail(self, what: str, proc, write: bool = False) -> VaultError:
         """Errors never carry the process output.
 
         ``op``'s stderr can echo the assignment it was given, and on a read path its
@@ -111,7 +110,7 @@ class OnePasswordProvider(VaultProvider):
                 if write else
                 "Check that `op` is signed in (`op whoami`) and the vault exists.")
         return VaultError(
-            f"{what} failed (op exit {proc.returncode}). {hint} "
+            f"{what} failed (op exit {proc.returncode}){self.identity_note()}. {hint} "
             "(op output withheld — it can contain the secret.)")
 
     # --- CRUD -------------------------------------------------------------- #

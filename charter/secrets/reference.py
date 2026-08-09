@@ -135,10 +135,11 @@ class ReferenceProvider(VaultProvider):
         if not shutil.which(cli):
             raise VaultError(f"'{key}' needs the '{cli}' CLI to resolve {uri} — it is not "
                              f"on PATH. Install it and authenticate, then retry.")
-        proc = self.runner(argv, check=False)
+        proc = self.runner(argv, check=False, env=self.env_overlay())
         if proc.returncode != 0:
             raise VaultError(
-                f"resolving '{key}' via {cli} failed (exit {proc.returncode}) for {uri}. "
+                f"resolving '{key}' via {cli} failed (exit {proc.returncode}) for {uri}"
+                f"{self.identity_note()}. "
                 f"Check that you are authenticated to {cli} and the reference exists. "
                 "(Resolver output withheld — it can contain the secret.)")
         value = proc.stdout or ""

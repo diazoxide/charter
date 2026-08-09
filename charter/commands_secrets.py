@@ -44,6 +44,37 @@ def _portable_file(p) -> str:
         return str(p)
 
 
+#: A POSIX-ish environment variable name. Validated at registration because the failure
+#: it prevents surfaces much later and in disguise: a typo'd source name is simply unset,
+#: and an unset source is (deliberately) a hard error at read time about a credential.
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _env_bindings(args) -> dict | None:
+    """``{TARGET: SOURCE}`` from ``--env``/``--token-env``, or None if none were given.
+
+    ``--token-env X`` is sugar for ``--env OP_SERVICE_ACCOUNT_TOKEN=X``. The general form
+    exists because reference vaults already resolve two schemes — `op://` and `vault://` —
+    so a binding that could only ever mean "the 1Password token" would be wrong on arrival
+    for half of what charter ships.
+    """
+    pairs: dict = {}
+    token_env = getattr(args, "token_env", None)
+    if token_env:
+        pairs["OP_SERVICE_ACCOUNT_TOKEN"] = token_env
+    for raw in getattr(args, "env", None) or []:
+        target, sep, source = raw.partition("=")
+        if not sep:
+            raise ValueError(f"--env expects TARGET=SOURCE, got {raw!r}")
+        pairs[target.strip()] = source.strip()
+    for target, source in pairs.items():
+        for label, v in (("target", target), ("source", source)):
+            if not _ENV_NAME.match(v or ""):
+                raise ValueError(f"--env {label} {v!r} is not a valid environment "
+                                 f"variable name")
+    return pairs or None
+
+
 def cmd_vault_add(args) -> int:
     cfg: dict = {}
     if args.provider == "plain-file":
@@ -65,6 +96,14 @@ def cmd_vault_add(args) -> int:
         cfg["op-vault"] = args.op_vault
         if getattr(args, "account", None):
             cfg["account"] = args.account
+    try:
+        env_map = _env_bindings(args)
+    except ValueError as e:
+        util.err(str(e))
+        return 1
+    if env_map:
+        cfg["env"] = env_map
+
     force = getattr(args, "force", False)
     share = getattr(args, "share", False)
     replaced = registry.vaults().get(args.name) if force else None
@@ -121,9 +160,14 @@ def cmd_vault_list(args) -> int:
     print(fmt.format("-" * 18, "-" * 16, "-" * 12, "-" * 7, "-" * 28))
     for name in sorted(vs):
         try:
-            ok, detail = registry.provider_for(name, doc).health()
+            prov = registry.provider_for(name, doc)
+            # `env_overlay` raises when a declared identity's variable is unset, which is
+            # exactly the state a listing should show rather than let a later read
+            # discover. It reads as "no secrets" everywhere else.
+            prov.env_overlay()
+            ok, detail = prov.health()
         except base.VaultError as e:
-            detail = str(e)
+            detail = str(e).split("\n")[0]
         persona = vs[name].get("persona") or "—"
         print(fmt.format(name, vs[name].get("provider", "?"), persona,
                          registry.scope_of(name), detail))
