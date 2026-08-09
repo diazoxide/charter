@@ -91,6 +91,14 @@ class RecordingTheBinding(PersonaIso):
 class UsingTheBinding(PersonaIso):
     def setUp(self) -> None:
         super().setUp()
+        # `reference` refuses to resolve when the CLI is absent from PATH, so without this
+        # these tests pass on a laptop with `op` installed and fail on a bare CI runner —
+        # which is exactly what happened. Same stub `test_secret_reference.py` uses.
+        from charter.secrets import reference
+        self._which = reference.shutil.which
+        reference.shutil.which = lambda c: f"/usr/local/bin/{c}"
+        self.addCleanup(lambda: setattr(reference.shutil, "which", self._which))
+
         (self.tmp / "d.json").write_text('{"API": "op://Eng/api/token"}')
         registry.add_vault("devops", "reference",
                            {"file": "d.json", "env": {_TARGET: _SRC}})
