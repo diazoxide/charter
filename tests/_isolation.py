@@ -22,7 +22,15 @@ from charter import config, instance, persona, root
 _PATCH = ("ROOT", "PERSONAS_DIR", "PERSONA_STATE_DIR", "STATE_DIR", "ACTIVE_PERSONA_FILE",
           "WORKSPACES_DIR", "SESSIONS_DIR", "TERMINALS_DIR", "HAS_CONTROL_PLANE",
           "CONFIG_ERROR", "GROUP", "EXCLUDE", "DEFAULT_WORKSPACE", "INVENTORY",
-          "MEMORY_SHARE", "PLANE_SHAPE", "WORKTREES_ROOT")
+          "MEMORY_SHARE", "PLANE_SHAPE", "WORKTREES_ROOT",
+          # Every one of these was missing, and each is a path a test can WRITE to in the
+          # developer's real checkout. `VAULTS_REGISTRY` is the worst: the suite replaced a
+          # real registry with its own fixture data, orphaning every vault registered on
+          # the machine — the exact harm issue #22 describes, delivered by the test suite
+          # instead of by `vault add`. `DOCS_DIR` lets a doc-generating test write into the
+          # real `docs/`. See `EveryRootDerivedPathIsIsolated`, which now fails if another
+          # one is ever added to config.py without landing here.
+          "VAULTS_REGISTRY", "VAULTS_DIR", "ACTIVE_WORKSPACE_FILE", "DOCS_DIR")
 
 
 class PersonaIso(unittest.TestCase):
@@ -48,6 +56,11 @@ class PersonaIso(unittest.TestCase):
         config.WORKSPACES_DIR = self.tmp / "workspaces"
         config.SESSIONS_DIR = config.STATE_DIR / "sessions"
         config.TERMINALS_DIR = config.STATE_DIR / "terminals"
+        # Derived exactly as config.py derives them, against the temp ROOT.
+        config.VAULTS_REGISTRY = config.STATE_DIR / "vaults.json"
+        config.VAULTS_DIR = config.STATE_DIR / "vaults"
+        config.ACTIVE_WORKSPACE_FILE = config.STATE_DIR / "active-workspace"
+        config.DOCS_DIR = config.ROOT / "docs"
         # Task 1's fix round found a test that wrote a fake inventory/repos.json into the
         # REAL checkout because this tuple omitted INVENTORY — every other well-known path
         # was redirected into the tmp tree, but inventory.load()/save() kept resolving

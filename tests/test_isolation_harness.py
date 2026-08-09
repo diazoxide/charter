@@ -86,5 +86,58 @@ class TestIsolationHarnessInventory(unittest.TestCase):
             self.assertEqual(config.INVENTORY, original)  # restored on cleanup
 
 
+class EveryRootDerivedPathIsIsolated(PersonaIso):
+    """The class of bug, closed — rather than one more test per attribute.
+
+    Every case above pins ONE attribute, which is exactly why four went missing at once:
+    `VAULTS_REGISTRY`, `VAULTS_DIR`, `ACTIVE_WORKSPACE_FILE` and `DOCS_DIR` were all
+    derived from `STATE_DIR`/`ROOT` at import and none was patched, so the suite wrote
+    into the developer's real checkout. The registry was the sharp one — a run replaced a
+    real `vaults.json` with fixture data, orphaning every vault registered on that
+    machine, which is issue #22's harm arriving by a different road.
+
+    Enumerating `config` instead of listing names means a constant added later is covered
+    the day it appears, without anyone remembering this file exists.
+    """
+
+    @staticmethod
+    def _under(p: Path, base: Path) -> bool:
+        try:
+            p.relative_to(base)
+            return True
+        except ValueError:
+            return False
+
+    def _path_constants(self) -> list[tuple[str, Path]]:
+        out = []
+        for name in sorted(dir(config)):
+            if name.startswith("_") or name != name.upper():
+                continue
+            val = getattr(config, name)
+            if isinstance(val, Path):
+                out.append((name, val))
+        return out
+
+    def test_no_config_path_escapes_the_sandbox(self):
+        """`relative_to(tmp)`, not "differs from the real value" — an embedded plane's
+        worktree root is a SIBLING of ROOT, so a leaked one is outside the real plane too
+        and a not-equal check would wave it through."""
+        sandbox = [self.tmp.resolve(),
+                   (self.tmp.parent / f"{self.tmp.name}.worktrees").resolve()]
+        escaped = [f"{n} → {v}" for n, v in self._path_constants()
+                   if not any(self._under(Path(v).resolve(), s) for s in sandbox)]
+        self.assertEqual(escaped, [], "config paths still pointing outside the test "
+                                      "sandbox — a test writing to one of these edits the "
+                                      "developer's real checkout: " + "; ".join(escaped))
+
+    def test_every_path_constant_is_named_in_the_patch_tuple(self):
+        """Belt and braces: a constant could coincidentally resolve inside the sandbox
+        while still being ambient. `_PATCH` is also what `_restore` reads, so a name
+        missing here is a value never put back after the test."""
+        missing = [n for n, _ in self._path_constants() if n not in _PATCH]
+        self.assertEqual(missing, [], f"config path constants absent from _PATCH (add "
+                                      f"them there AND derive them in setUp): {missing}")
+
+
 if __name__ == "__main__":
     unittest.main()
