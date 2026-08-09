@@ -320,8 +320,16 @@ def _resolve_vault(args) -> str | None:
         return None
     vault = persona.vault_of(name)
     if not vault:
-        util.err(f"persona '{name}' has no vault. Add `vault:` to its file, or "
-                 f"`charter vault add <v> --persona {name}`.")
+        # Two different situations, and conflating them sends the user to fix the wrong
+        # thing: one persona was never given a vault, the other says it holds no
+        # credentials at all — for which the answer is a different persona, not a vault.
+        if persona.declares_no_vault(name):
+            util.err(f"persona '{name}' declares `vault: {persona.NO_VAULT}` — it holds no "
+                     f"credentials by design. Use a persona that owns this secret, or "
+                     f"replace that line with a real vault name.")
+        else:
+            util.err(f"persona '{name}' has no vault. Add `vault:` to its file, or "
+                     f"`charter vault add <v> --persona {name}`.")
         return None
     if vault not in registry.vaults():
         util.err(f"persona '{name}' vault '{vault}' isn't set up on this machine. "
@@ -375,8 +383,20 @@ def _agent_description(name: str, meta: dict) -> str:
     role = meta.get("role") or name
     when = (meta.get("delegate-when") or "").strip()
     tools = meta.get("tools")
-    tail = (f" Runs {tools} and pulls credentials from the '{name}' vault."
-            if tools else f" Pulls credentials from the '{name}' vault.")
+    # The vault the persona actually uses, which is NOT always its name — `vault:` may
+    # point elsewhere, or say `none` for a persona that holds no credentials at all.
+    # Describing a vault that does not exist is worse than saying nothing: this string is
+    # what the router reads when choosing an agent, and it would advertise a capability
+    # the sub-agent cannot use.
+    vault = persona.vault_of(name)
+    if tools and vault:
+        tail = f" Runs {tools} and pulls credentials from the '{vault}' vault."
+    elif tools:
+        tail = f" Runs {tools}. Holds no credentials of its own."
+    elif vault:
+        tail = f" Pulls credentials from the '{vault}' vault."
+    else:
+        tail = " Holds no credentials of its own."
     # `isolation` is a parameter of the Agent TOOL, chosen by the caller at dispatch
     # time — there is no agent-side way to declare it (confirmed against the shipped
     # Claude Code schema). A persona that writes code therefore cannot isolate itself;
@@ -490,6 +510,26 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
         f"what. Never `charter persona use` to switch the active persona — that's user-request-only."
     )
 
+    # A persona declaring `vault: none` has nothing to open, so the "run tools through
+    # your vault" instruction is a dead end — it names a command that errors, in a system
+    # prompt nobody proofreads. The one rule that must survive is the prohibition: not
+    # having a vault is exactly when a sub-agent might be tempted to improvise with a
+    # credential it found lying around.
+    vault = persona.vault_of(name)
+    if vault:
+        creds = (
+            f"\n- **Credentials** come only from this persona's vault, and are **never "
+            f"printed**:\n  `charter persona secret --persona {name} <list|exec|cp> …` — "
+            f"use `exec`/`cp`, never `--reveal`.\n  Run tools through it, e.g. `… exec "
+            f"--file KUBECONFIG=kubeconfig -- kubectl -n <ns> get pods`"
+        )
+    else:
+        creds = (
+            f"\n- **This persona holds no credentials** (`vault: {persona.NO_VAULT}`). Never "
+            f"read another persona's vault, and never improvise with a credential you find "
+            f"in the environment — if a task needs one, hand off to the persona that owns it."
+        )
+
     try:
         rel = persona.def_path(name).relative_to(config.ROOT)
     except ValueError:
@@ -512,10 +552,7 @@ isolated context. Adopt the charter below as your role.
 {charter}
 
 ## As a persona sub-agent
-- {_credential_rule()}
-- **Credentials** come only from this persona's vault, and are **never printed**:
-  `charter persona secret --persona {name} <list|exec|cp> …` — use `exec`/`cp`, never `--reveal`.
-  Run tools through it, e.g. `… exec --file KUBECONFIG=kubeconfig -- kubectl -n <ns> get pods`{uses_note}{memory_note}{handoff}
+- {_credential_rule()}{creds}{uses_note}{memory_note}{handoff}
 - Follow the control plane's conventions (see CLAUDE.md); report results concisely to the caller.
 {mem}
 """

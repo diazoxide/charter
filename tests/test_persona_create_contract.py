@@ -16,7 +16,9 @@ is not (it is not), and the honest gap between them is `draft: true`.
 
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stderr
 from types import SimpleNamespace
 
 from charter import commands_persona, config, persona
@@ -163,6 +165,76 @@ class SyncAgentsRefusesDrafts(PersonaIso):
         self.make_persona("done", role="D", vault="done", **{"delegate-when": "x"})
         msgs = [m for _lvl, m in commands_persona._agent_sync_issues("done")]
         self.assertTrue(any("sync-agents" in m for m in msgs), msgs)
+
+    def test_a_persona_may_declare_that_it_holds_no_credentials(self):
+        """`lint` warned on any persona without a vault, but plenty legitimately have no
+        credentials — a status-line or release persona touches nothing secret, or leans on
+        a tool's own auth. The warning fired forever on personas that were entirely
+        correct, and a lint with a permanent false positive is one people scroll past."""
+        self.make_persona("tui", role="TUI", vault=persona.NO_VAULT,
+                          **{"delegate-when": "layout"})
+        msgs = [m for _lvl, m in persona.lint("tui")]
+        self.assertFalse([m for m in msgs if "no vault" in m], msgs)
+
+    def test_silence_about_a_vault_still_warns(self):
+        """The case the warning was written for: an author who never considered it. Only
+        an explicit declaration is believed — the same declared-not-inferred rule
+        `[plane] shape` follows."""
+        self.make_persona("quiet", role="Q", **{"delegate-when": "x"})
+        msgs = [m for _lvl, m in persona.lint("quiet")]
+        self.assertTrue([m for m in msgs if "no vault" in m], msgs)
+
+    def test_the_sentinel_is_not_offered_as_a_vault_to_open(self):
+        """Returning it would send every caller looking for a vault literally named
+        `none`; they cannot tell the two apart and should not have to."""
+        self.make_persona("tui", role="TUI", vault=persona.NO_VAULT,
+                          **{"delegate-when": "layout"})
+        self.assertIsNone(persona.vault_of("tui"))
+        self.assertTrue(persona.declares_no_vault("tui"))
+
+    def test_a_real_vault_name_is_unaffected(self):
+        self.make_persona("ops", role="O", vault="ops", **{"delegate-when": "x"})
+        self.assertEqual(persona.vault_of("ops"), "ops")
+        self.assertFalse(persona.declares_no_vault("ops"))
+
+    def test_asking_for_a_secret_says_which_of_the_two_situations_it_is(self):
+        """"No vault" and "no credentials by design" send the user to fix different
+        things — the second wants a different persona, not a vault."""
+        self.make_persona("tui", role="TUI", vault=persona.NO_VAULT,
+                          **{"delegate-when": "layout"})
+        persona.set_active("tui")
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertIsNone(commands_persona._resolve_vault(SimpleNamespace(persona="tui")))
+        self.assertIn("no credentials by design", err.getvalue())
+
+    def test_the_generated_agent_does_not_advertise_a_vault_it_has_none_of(self):
+        """This string is what the router reads when choosing an agent, so a vault named
+        here is a capability claim. Claiming one the sub-agent cannot open is worse than
+        saying nothing."""
+        self.make_persona("tui", role="TUI", vault=persona.NO_VAULT,
+                          **{"delegate-when": "layout"})
+        desc = commands_persona._agent_description("tui", persona.resolve("tui")["meta"])
+        self.assertNotIn("vault", desc)
+        self.assertIn("no credentials", desc)
+
+    def test_the_generated_agent_names_the_actual_vault_not_the_persona(self):
+        """These differ whenever `vault:` points elsewhere, and the description used the
+        persona's own name unconditionally — so a persona on a shared vault was told to
+        open one that does not exist."""
+        self.make_persona("ops", role="Ops", vault="platform", **{"delegate-when": "x"})
+        desc = commands_persona._agent_description("ops", persona.resolve("ops")["meta"])
+        self.assertIn("'platform' vault", desc)
+
+    def test_a_credential_free_sub_agent_still_gets_the_prohibition(self):
+        """Having no vault is exactly when a sub-agent might improvise with a credential
+        it found lying around — so the rule that must survive is the ban, not the how-to."""
+        self.make_persona("tui", role="TUI", vault=persona.NO_VAULT,
+                          **{"delegate-when": "layout"})
+        r = persona.resolve("tui")
+        body = commands_persona._render_agent("tui", r["meta"], r.get("charter") or "")
+        self.assertIn("holds no credentials", body.lower())
+        self.assertNotIn("--persona tui <list|exec|cp>", body)
 
     def test_a_hand_written_agent_is_never_removed(self):
         """Generated files are charter's to manage; hand-written ones are not."""

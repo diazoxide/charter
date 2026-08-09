@@ -80,7 +80,7 @@ structure for `charter` to route on:
 | Key | Meaning |
 | --- | --- |
 | `role` | Human-readable role, shown in listings and injected as session context. |
-| `vault` | Which vault (`docs/secrets.md`) this persona's secrets live in. |
+| `vault` | Which vault (`docs/secrets.md`) this persona's secrets live in. Use the reserved value `none` to say it holds no credentials at all — `lint` then stops asking for one, and `charter persona secret` says so rather than hunting for a vault. A vault may therefore not be *named* `none`. Saying nothing still warns: the warning is for the author who never considered it, and only an explicit declaration is believed. |
 | `delegate-when` | The trigger phrase for auto-routing — what a request has to look like for another agent (or the default `steward` persona) to hand work to this one. Also becomes the generated sub-agent's description. |
 | `tools` | Commands auto-approved (no permission prompt) while this persona is active — the `PreToolUse` tool-gate reads this. |
 | `agent-tools` | Narrows the *generated sub-agent's* tool access specifically (omit to inherit everything). |

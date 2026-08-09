@@ -478,8 +478,9 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     issues: list[tuple[str, str]] = []
     if not meta.get("role"):
         issues.append(("warn", "no role"))
-    if not vault_of(name):
-        issues.append(("warn", "no vault named"))
+    if not vault_of(name) and not declares_no_vault(name):
+        issues.append(("warn", f"no vault named — add `vault:` or `vault: {NO_VAULT}` "
+                               f"if this persona holds no credentials"))
     if not (meta.get("delegate-when") or "").strip():
         issues.append(("warn", "no delegate-when → weak auto-routing"))
     if is_draft(name):
@@ -514,12 +515,44 @@ def _inherits_cycle(name: str) -> str | None:
     return None
 
 
+#: Reserved ``vault:`` value meaning "this persona deliberately holds no credentials".
+#: A vault may therefore not be named ``none``.
+NO_VAULT = "none"
+
+
+def declares_no_vault(name: str) -> bool:
+    """True when the persona's ``vault:`` is the reserved :data:`NO_VAULT` value.
+
+    Charter's model assumes a persona has a scoped vault, and `lint` warned whenever one
+    had none. But plenty legitimately hold no credentials — a status-line or release
+    persona touches nothing secret, or leans on a tool's own auth (`gh`) — so the warning
+    fired forever on personas that were entirely correct. A lint with a permanent false
+    positive is a lint people learn to scroll past, which costs more than the warning
+    ever bought.
+
+    Declared rather than inferred, the same rule `[plane] shape` follows: "no secrets" is
+    an intent, not something readable off disk. That keeps the warning meaningful for the
+    case it was written for — a persona whose author simply never thought about it — while
+    letting one say so and be believed.
+    """
+    r = resolve(name)
+    return bool(r) and (r["meta"].get("vault") or "").strip() == NO_VAULT
+
+
 def vault_of(name: str) -> str | None:
     """The vault a persona uses: its ``vault:`` field (inherited if unset), else a
-    vault tagged with it."""
+    vault tagged with it.
+
+    ``None`` for a persona that declares :data:`NO_VAULT` — there is no vault to open, and
+    returning the sentinel would send callers looking for one literally named ``none``.
+    Use :func:`declares_no_vault` to tell "none, deliberately" from "none, unexamined";
+    every caller that merely opens a vault wants this function and cannot tell the
+    difference, which is the point.
+    """
     r = resolve(name)
     if r and r["meta"].get("vault"):
-        return r["meta"]["vault"]
+        v = r["meta"]["vault"].strip()
+        return None if v == NO_VAULT else (v or None)
     try:
         from .secrets import registry
         tagged = registry.vaults_for_persona(name)
