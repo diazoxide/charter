@@ -45,11 +45,21 @@ def cmd_vault_add(args) -> int:
         cfg["op-vault"] = args.op_vault
         if getattr(args, "account", None):
             cfg["account"] = args.account
+    force = getattr(args, "force", False)
+    replaced = registry.vaults().get(args.name) if force else None
     try:
-        registry.add_vault(args.name, args.provider, cfg, persona=args.persona)
+        registry.add_vault(args.name, args.provider, cfg, persona=args.persona, force=force)
     except base.VaultError as e:
         util.err(str(e))
         return 1
+    if replaced is not None:
+        # Say what was let go of, and where it still is. `--force` does not migrate, so
+        # the old file survives on disk with nothing pointing at it — the user needs its
+        # path to recover anything from it.
+        old_where = (replaced.get("config") or {}).get("file")
+        util.warn(f"Replaced the previous '{args.name}' registration "
+                  f"(provider: {replaced.get('provider', '?')}). Its secrets were NOT "
+                  f"migrated." + (f" They remain at {old_where}." if old_where else ""))
     tag = f", persona: {args.persona}" if args.persona else ""
     util.ok(f"Vault '{args.name}' registered (provider: {args.provider}{tag}).")
     prov = registry.provider_for(args.name)

@@ -353,6 +353,10 @@ def _add_vault_parser(sub) -> None:
     add.add_argument("--account", help="1Password account to pin to (provider: 1password); "
                                        "needed when signed into more than one.")
     add.add_argument("--persona", help="Tag this vault for a persona (e.g. devops, qa).")
+    add.add_argument("--force", action="store_true",
+                     help="Replace an existing registration of this name. Does NOT migrate "
+                          "its secrets — the old vault's file is left where it is, with "
+                          "nothing pointing at it.")
     add.set_defaults(func=commands_secrets.cmd_vault_add)
 
     lst = vsub.add_parser("list", help="List configured vaults (names/status only, never values).")

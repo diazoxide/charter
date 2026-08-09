@@ -70,12 +70,44 @@ def provider_for(name: str, doc: dict | None = None) -> VaultProvider:
     return cls(name, vc.get("config", {}))
 
 
-def add_vault(name: str, provider: str, cfg: dict, persona: str | None = None) -> None:
+def add_vault(name: str, provider: str, cfg: dict, persona: str | None = None,
+              force: bool = False) -> None:
+    """Register a vault. Refuses to replace an existing registration unless *force*.
+
+    Registering over a name that already exists used to overwrite it in place — different
+    provider, no prompt, exit 0 (issue #22). The registration is the ONLY pointer to a
+    plain-file vault's secrets, so replacing it does not migrate anything: it strands the
+    file on disk with nothing referring to it, and `charter secret get` then reports the
+    key as missing rather than as unreachable. Observed during a real migration, where
+    three vaults were re-registered onto 1Password and accepted silently.
+
+    That also broke the rule the rest of charter states and follows — additive: never
+    delete or rename a user's thing to make room; name the blocker and refuse. `init`,
+    `reinit` and `_create_baseline_dirs` all work this way.
+
+    ``force`` is the deliberate override, the same idiom `charter persona create --force`
+    already uses. It still does not migrate: moving secrets between providers is its own
+    operation and must be typed on purpose, not ride along inside `add`.
+    """
     if provider not in PROVIDERS:
         raise VaultError(
             f"unknown provider '{provider}'. Available: {', '.join(sorted(PROVIDERS))}"
         )
     doc = load_registry()
+    existing = doc["vaults"].get(name)
+    if existing is not None and not force:
+        old = existing.get("provider", "?")
+        where = (existing.get("config") or {}).get("file")
+        detail = f" ({where})" if where else ""
+        raise VaultError(
+            f"vault '{name}' is already registered with provider '{old}'{detail}. "
+            f"charter will not replace it: the registration is the only pointer to that "
+            f"vault's secrets, so replacing it strands them with nothing referring to "
+            f"them.\n"
+            f"  keep both:     charter vault add <other-name> --provider {provider} …\n"
+            f"  inspect it:    charter vault list\n"
+            f"  replace anyway: re-run with --force (this does NOT migrate secrets)"
+        )
     doc["vaults"][name] = {"provider": provider, "persona": persona, "config": cfg}
     save_registry(doc)
 

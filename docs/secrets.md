@@ -74,6 +74,27 @@ charter persona secret set API_TOKEN --stdin        # resolves the active person
 charter persona secret exec --env TOKEN=API_TOKEN -- some-cli
 ```
 
+### Registering over a name that already exists
+
+`charter vault add` **refuses** a name that is already registered, naming the provider in
+the way and where its secrets live:
+
+```
+✗ vault 'devops' is already registered with provider 'plain-file' (.charter/vaults/devops.json).
+  charter will not replace it: the registration is the only pointer to that vault's
+  secrets, so replacing it strands them with nothing referring to them.
+```
+
+That pointer is the whole reason. A plain-file vault's secrets are found *only* through
+its registration, so overwriting it does not move anything — the file stays on disk with
+nothing referring to it, and `charter secret get` then reports the key as missing rather
+than as unreachable. Same additive rule `charter init` and `reinit` follow: name the
+blocker, refuse, never delete or rename to make room.
+
+`--force` overrides it, warns, and tells you where the old vault's file remains. It does
+**not** migrate secrets — moving them between providers is a deliberate operation, not
+something that rides along inside `add`.
+
 ## Provider status
 
 | Provider | id | Status |
