@@ -5,6 +5,7 @@ drifted: the install command, the config keys, and the two framings that protect
 (the vault is not a password manager; memory defaults to local)."""
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -61,6 +62,54 @@ class TestConfigDocs(unittest.TestCase):
         body = (ROOT / "docs" / "control-plane.md").read_text()
         self.assertGreaterEqual(len(re.findall(r"\[\[forge\]\]", body)), 2,
                                 "a mixed-forge example is the non-obvious case")
+
+
+class TestPasteInInstall(unittest.TestCase):
+    """The README carries a prompt users paste into Claude Code to install charter.
+
+    Prose that drifts merely reads oddly; a prompt that drifts *fails*, in someone else's
+    session, on their first contact with the project. Every command in it is therefore
+    checked against the thing it names — the distribution on PyPI, and the plugin id built
+    from the two manifests — rather than trusted to stay true.
+    """
+
+    def _paste_block(self) -> str:
+        blocks = re.findall(r"```\n(.*?)```", README, re.S)
+        found = [b for b in blocks if "Install charter" in b]
+        self.assertTrue(found, "the paste-in install prompt is gone from the README")
+        return found[0]
+
+    def test_it_installs_the_distribution_that_actually_exists(self):
+        """`charter` is not installable — PyPI would not allow the name, so the
+        distribution carries a suffix. A prompt saying otherwise installs nothing."""
+        import tomllib
+        pkg = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["name"]
+        self.assertIn(pkg, self._paste_block())
+
+    def test_the_plugin_id_matches_both_manifests(self):
+        """`plugin@marketplace`, built from `.claude-plugin/plugin.json` and
+        `marketplace.json`. Rename either and the prompt keeps looking right while
+        installing nothing — the same silent-rot shape as the version drift."""
+        plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["name"]
+        market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())["name"]
+        self.assertIn(f"claude plugin install {plugin}@{market}", self._paste_block())
+
+    def test_it_adds_the_marketplace_before_installing_from_it(self):
+        block = self._paste_block()
+        self.assertLess(block.index("marketplace add"), block.index("plugin install"),
+                        "installing from a marketplace that has not been added fails")
+
+    def test_it_does_not_tell_an_agent_to_run_init(self):
+        """`charter init` inside an existing git repo makes THAT repo a control plane.
+        An install prompt pasted from an unrelated project would quietly convert it, so
+        the prompt must stop before anything that writes to the working directory."""
+        block = self._paste_block()
+        self.assertIn("Do NOT run `charter init`", block)
+
+    def test_it_tells_the_user_to_restart(self):
+        """Hooks load on the next session, so an install that looks complete and does
+        nothing is the default experience without this line."""
+        self.assertIn("restart", self._paste_block().lower())
 
 
 if __name__ == "__main__":
