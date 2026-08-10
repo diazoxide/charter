@@ -33,8 +33,12 @@ class TestReactiveCommitHonoursPosture(unittest.TestCase):
 
     def _record(self, share):
         from charter import commands
-        with mock.patch.object(commands.config, "MEMORY_SHARE", share), \
-             mock.patch.object(commands, "commit_push") as cp:
+        # Patched on `planegit`, which is where both the reactive recorder and the one
+        # committer now live. `commands` re-exports them, but a re-export is a NAME —
+        # patching it cannot intercept a call made inside the defining module.
+        from charter import planegit
+        with mock.patch.object(planegit.config, "MEMORY_SHARE", share), \
+             mock.patch.object(planegit, "commit_push") as cp:
             commands.commit_memory_reactive(["personas/p/memory/m.md"], "t")
         return cp
 

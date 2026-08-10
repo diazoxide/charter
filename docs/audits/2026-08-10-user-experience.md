@@ -29,6 +29,8 @@ the thing that otherwise gets re-proposed every six months.
 | 2.5 `workspace use <typo>` created and locked it | fixed — refused with a did-you-mean; `--create` to make one |
 | 2.6 permanent `⚠ reinit` chip on new workspaces | fixed — `ensure` scaffolds |
 | 2.11 SessionStart rewrote a tracked README.md | fixed — left to `charter docs` |
+| 3.1 a second committer pushing over SSH | fixed — `charter/planegit.py` is the one committer |
+| (not in the audit) two sessions in one window shared a workspace | fixed — `WINDOWID` is not a pane id |
 | everything else | open |
 
 Numbers in sections 2 and 3 that were not adversarially re-checked are flagged in

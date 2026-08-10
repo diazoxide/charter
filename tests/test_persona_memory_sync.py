@@ -67,3 +67,76 @@ class TestMemorySync(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EveryPlaneCommitOffersTheForgeToken(unittest.TestCase):
+    """charter's headline rule is one credential: each repo's own forge's token over
+    HTTPS, never SSH. `commands.commit_push` obeyed it; `cmd_persona_memory_sync` had
+    grown a second committer that ran `git push origin HEAD` — over SSH — on the ONE
+    memory path the SessionStart hook explicitly tells an agent to use. It reported
+    "Committed locally, but push failed (check git auth)" while `gh auth status` was fine,
+    because the token was never offered.
+
+    `tests/test_persona_memory_sync.py` only ever passed `no_push=True`, so the push argv
+    — the only place the difference was visible — was never exercised. This asserts the
+    argv, which is what the two implementations disagreed about.
+    """
+
+    def test_memory_sync_delegates_to_the_one_committer(self):
+        from unittest import mock
+        from charter import commands_persona, planegit
+        with mock.patch.object(commands_persona, "_pending_memory",
+                               return_value=["personas/p/memory/m.md"]), \
+             mock.patch.object(planegit, "commit_push", return_value=0) as cp, \
+             mock.patch("charter.hooks._secret_kind", return_value=None):
+            rc = commands_persona.cmd_persona_memory_sync(_Args(no_push=False))
+        self.assertEqual(rc, 0)
+        cp.assert_called_once()
+        self.assertEqual(cp.call_args.args[1][:2], ["add", "--"])
+
+    def test_every_push_offers_the_forge_token(self):
+        """The invariant, asserted on the ARGV rather than by grepping for the word.
+
+        A grep for `"push"` outside planegit flags `SHARE_MODES = (…, "push")` and every
+        `no_push=` kwarg, and would still miss a new `[*flags, "push", …]`. What actually
+        matters is that whatever git is asked to do carries `-c credential.helper=<forge>`
+        — that is the whole of charter's one-credential rule at the point of use.
+        """
+        import subprocess
+        from unittest import mock
+        from charter import planegit
+
+        seen = []
+
+        diffs = []
+
+        def fake_run(cmd, **kw):
+            seen.append(list(cmd))
+            rc = 0
+            if "diff" in cmd and "--quiet" in cmd:
+                # `commit_push` asks twice: once before committing (non-zero = something
+                # staged, so proceed) and once after (non-zero would mean the commit
+                # failed). A stub that answers the same both times never reaches the push.
+                diffs.append(1)
+                rc = 1 if len(diffs) == 1 else 0
+            return subprocess.CompletedProcess(cmd, rc, stdout="main\n", stderr="")
+
+        class _Forge:
+            cli = "gh"
+            def credential_helper(self):
+                return "!gh auth git-credential"
+
+        from charter import gitpolicy
+        with mock.patch.object(planegit.util, "run", side_effect=fake_run), \
+             mock.patch.object(gitpolicy, "forge_for", return_value=_Forge()), \
+             mock.patch.object(planegit, "_origin_https",
+                               return_value="https://github.com/demo/p.git"):
+            planegit.commit_push(Path("/tmp/x"), ["add", "-A"], "m")
+
+        pushes = [c for c in seen if "push" in c]
+        self.assertTrue(pushes, "commit_push never pushed — the assertion would be vacuous")
+        for argv in pushes:
+            self.assertIn("credential.helper", " ".join(argv),
+                          f"a push without the forge token: {argv}")
+            self.assertFalse([a for a in argv if a.startswith("git@")],
+                             f"an SSH remote reached a push: {argv}")

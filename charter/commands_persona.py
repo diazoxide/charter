@@ -737,8 +737,15 @@ def _pending_memory(root) -> list[str]:
 def cmd_persona_memory_sync(args) -> int:
     """Commit (and push) all pending persona memory/refs in one safe step — the counterpart
     to `remember`: durable knowledge gets shared instead of sitting uncommitted. Refuses if a
-    file looks like it holds a secret (those belong in the vault, never in memory)."""
-    import subprocess
+    file looks like it holds a secret (those belong in the vault, never in memory).
+
+    Delegates to :func:`charter.planegit.commit_push`. It used to have its own committer,
+    which had drifted to `git push origin HEAD` — over SSH, in violation of charter's
+    headline one-credential rule, on the one memory path the SessionStart hook explicitly
+    tells an agent to use. It reported "Committed locally, but push failed (check git
+    auth)" while `gh auth status` was perfectly happy, because the token was never offered.
+    """
+    from . import planegit
     from .hooks import _secret_kind
 
     root = config.ROOT
@@ -747,6 +754,8 @@ def cmd_persona_memory_sync(args) -> int:
         util.ok("No uncommitted persona memory/refs — nothing to sync.")
         return 0
 
+    # Kept ahead of `commit_push`'s own identical guard: this one runs BEFORE staging, so
+    # a refusal leaves the index untouched, and it can name persona memory specifically.
     flagged = []
     for p in changed:
         try:
@@ -762,36 +771,12 @@ def cmd_persona_memory_sync(args) -> int:
         util.info("Secrets live only in the vault (`charter persona secret set`). Remove it, then retry.")
         return 1
 
-    def git(*a):
-        return subprocess.run(["git", "-C", str(root), *a],
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
-    git("add", "--", *changed)
     touched = sorted({p.split("/")[1] for p in changed if p.startswith("personas/")})
-    body = (f"personas: sync memory/refs ({', '.join(touched)})\n\n"
-            f"{len(changed)} persona memory/ref file(s) committed so the team's personas share "
-            f"the knowledge. Synced via `charter persona memory-sync`.\n\n"
-            f"Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n")
-    cache = config.STATE_DIR / "cache"
-    cache.mkdir(parents=True, exist_ok=True)
-    mf = cache / "memsync-msg.txt"
-    mf.write_text(body)
-    git("commit", "-q", "-F", str(mf))
-    if git("diff", "--cached", "--quiet").returncode != 0:  # signing failed → staged remains
-        git("commit", "--no-gpg-sign", "-q", "-F", str(mf))
-    util.ok(f"Committed {len(changed)} memory/ref file(s) for: {', '.join(touched)}.")
-
-    if args.no_push:
-        util.info("Skipped push (--no-push).")
-        return 0
-    p = git("push", "origin", "HEAD")
-    if p.returncode == 0:
-        util.ok("Pushed to origin.")
-    else:
-        util.warn("Committed locally, but push failed (check git auth). Tail:")
-        for line in p.stdout.splitlines()[-3:]:
-            util.warn("  " + line)
-    return 0
+    msg = (f"personas: sync memory/refs ({', '.join(touched)})\n\n"
+           f"{len(changed)} persona memory/ref file(s) committed so the team's personas "
+           f"share the knowledge. Synced via `charter persona memory-sync`.")
+    return planegit.commit_push(root, ["add", "--", *changed], msg,
+                                no_push=getattr(args, "no_push", False))
 
 
 def cmd_persona_dedupe(args) -> int:
