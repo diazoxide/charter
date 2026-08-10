@@ -27,7 +27,28 @@ class TestLeakGuard(PersonaIso):  # A
         self.assertIsNone(run_hook(hooks.pretooluse, {"tool_input": {"command": "ls .charter/vaults/"}}))
 
 
-class TestCloneGuard(PersonaIso):  # B — a nudge ('ask'), not a hard block
+class InAControlPlane(PersonaIso):
+    """A tmp plane that actually IS one.
+
+    `pretooluse` gates the single-credential and clone-commit guards on
+    `config.HAS_CONTROL_PLANE`: the plugin installs per user or per project but the handler
+    ran everywhere, so `git clone git@…`, `git commit -S` and `ssh -T git@github.com` were
+    denied in every unrelated repo on the machine, explaining a control plane that did not
+    exist there. These classes assert the guards FIRE, which is in-plane behaviour, so the
+    fixture has to be in a plane. `PersonaIso` alone is a bare tmp dir — the out-of-plane
+    case — which `TestGuardsAreScopedToAPlane` covers deliberately.
+
+    `_leak_reason` is not gated and needs no plane: not printing a secret into the
+    transcript is a safety invariant, not a policy a plane happens to hold.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.tmp / "charter.toml").write_text("schema = 1\n")
+        config.HAS_CONTROL_PLANE = True
+
+
+class TestCloneGuard(InAControlPlane):  # B — a nudge ('ask'), not a hard block
     def test_cd_into_clone_commit_asks(self):
         r = run_hook(hooks.pretooluse, {"tool_input": {"command": "cd workspaces/default/x && git commit -m y"},
                                         "cwd": str(self.tmp)})
@@ -228,7 +249,7 @@ class TestCommitmentGate(PersonaIso):  # F — ask before you build
                                     "session_id": "sess-2"}))
 
 
-class TestSshGuardCoversEveryForge(PersonaIso):
+class TestSshGuardCoversEveryForge(InAControlPlane):
     """The guard denied SSH for gitlab.com only. Under two forges that is worse than no
     guard — it holds for one host and silently lapses for the other, while still LOOKING
     present. Every configured forge host must be covered."""
@@ -332,6 +353,46 @@ class TestSshGuardCoversEveryForge(PersonaIso):
             '[[forge]]\nkind = "gitlab"\nhost = "git.internal"\ngroup = "acme"\n\n'
             '[[forge]]\nkind = "bitbucket-typo"\nhost = "bad.example.com"\nowner = "x"\n')
         self.assertEqual(self._deny("git clone git@git.internal:acme/api.git"), "deny")
+
+
+class TestGuardsAreScopedToAPlane(PersonaIso):
+    """Outside a control plane, charter has no opinion about your git.
+
+    The plugin is installed per user or per project, but `pretooluse` ran everywhere. So
+    installing charter to try it made `git clone git@github.com:…`, `git commit -S` and
+    `ssh -T git@github.com` fail in every unrelated repo on the machine, with a message
+    about a control plane that does not exist there — and README.md pre-empted the
+    confusion with "that is the rule working, not a bug", which is true inside a plane and
+    indefensible outside one.
+
+    `PersonaIso`'s tmp dir has no `charter.toml`, so these run in the out-of-plane case by
+    construction.
+    """
+
+    def _decide(self, cmd, cwd=None):
+        r = run_hook(hooks.pretooluse,
+                     {"tool_input": {"command": cmd}, "cwd": cwd or str(self.tmp)})
+        return (r or {}).get("hookSpecificOutput", {}).get("permissionDecision")
+
+    def test_ssh_git_is_not_denied_without_a_plane(self):
+        self.assertIsNone(self._decide("git clone git@github.com:acme/app.git"))
+
+    def test_signing_is_not_denied_without_a_plane(self):
+        self.assertIsNone(self._decide("git commit -S -m 'signed'"))
+
+    def test_the_clone_commit_nudge_is_silent_without_a_plane(self):
+        self.assertIsNone(self._decide("cd workspaces/default/x && git commit -m y"))
+
+    def test_the_same_command_is_denied_once_a_plane_exists(self):
+        """The other half of the claim: this is scoping, not removal."""
+        (self.tmp / "charter.toml").write_text("schema = 1\n")
+        config.HAS_CONTROL_PLANE = True
+        self.assertEqual(self._decide("git clone git@github.com:acme/app.git"), "deny")
+
+    def test_a_secret_leak_is_still_denied_without_a_plane(self):
+        """Not gated, and must never be: keeping a credential out of the transcript is a
+        safety invariant, not a policy a plane happens to hold."""
+        self.assertEqual(self._decide("charter secret get devops API_TOKEN --reveal"), "deny")
 
 
 if __name__ == "__main__":

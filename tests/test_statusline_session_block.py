@@ -80,6 +80,15 @@ class NeverBreaksTheStatusLine(unittest.TestCase):
         self._spawn = update.maybe_spawn
         update.maybe_spawn = lambda: None
         self.addCleanup(lambda: setattr(update, "maybe_spawn", self._spawn))
+        # Also redirect STATE_DIR: these render against the REAL plane on purpose,
+        # and the render path now writes a vault-health cache under it. A test that
+        # writes into the developer's own `.charter/` is the bug this suite fixed
+        # once already (see `EveryRootDerivedPathIsIsolated`).
+        import tempfile as _tf, shutil as _sh
+        _state, _tmp = config.STATE_DIR, Path(_tf.mkdtemp(prefix="sl-state-"))
+        config.STATE_DIR = _tmp / ".charter"
+        self.addCleanup(lambda: (setattr(config, "STATE_DIR", _state),
+                                 _sh.rmtree(_tmp, ignore_errors=True)))
 
     def test_a_broken_control_plane_yields_no_lines(self):
         orig = config.ROOT

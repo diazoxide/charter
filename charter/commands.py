@@ -1005,6 +1005,17 @@ def cmd_recall(args) -> int:
                         workspace_name=getattr(args, "workspace", None), scopes=scopes)
     if not results:
         q = getattr(args, "query", None)
+        # "No memories match X" and "none of X was searchable" are different answers, and
+        # printing the first when it is really the second reports an empty corpus. A query
+        # of only stopwords or single characters searches for nothing at all.
+        if q:
+            from . import memstore as _ms
+            if not _ms._terms(q):
+                dropped = ", ".join(repr(t) for t in _ms.dropped_terms(q)) or repr(q)
+                util.info(f"Nothing searchable in {q!r} — {dropped} "
+                          f"{'is' if len(_ms.dropped_terms(q)) == 1 else 'are'} too short "
+                          f"or too common to rank. Try a distinctive word.")
+                return 0
         util.info(f"No memories {'match ' + repr(q) if q else 'yet'} across {', '.join(scopes)}.")
         return 0
     width = max((len(s) for s, _p, _t, _sc in results), default=8)

@@ -155,23 +155,61 @@ def entries(mem_dir: Path) -> list[tuple[Path, str, str]]:
     return out
 
 
+#: Words carrying no signal, dropped so they cannot outvote the term that mattered.
+#: Scoring is raw `count()` with no IDF, so before this "for" in a long memory could beat
+#: a single exact hit on the one word the user actually searched for.
+_STOPWORDS = frozenset("""
+a an the and or but if then than that this these those of in on at to for from by with
+without as is are was were be been being it its it's do does did done have has had
+you your we our i my me they them their he she his her not no yes so such can could
+should would will shall may might must about into over under again more most some any
+""".split())
+
+
 def _terms(s: str) -> list[str]:
-    return [t for t in re.split(r"\W+", (s or "").lower()) if len(t) > 2]
+    """Query tokens worth scoring.
+
+    The length floor is **2**, not 3. At 3 it silently discarded every two-character
+    token, so `recall "S3"`, `"CI"`, `"db"`, `"PR"`, `"TZ"` and `"v2"` each returned a
+    confident "No memories match" against a corpus that contained them — and search is
+    the only route to memories beyond the ten titles the session briefing lists, so a
+    false negative here is indistinguishable from the fact not existing.
+
+    Single characters stay out: they match nearly everything and rank nothing.
+    """
+    return [t for t in re.split(r"\W+", (s or "").lower())
+            if len(t) >= 2 and t not in _STOPWORDS]
+
+
+def dropped_terms(s: str) -> list[str]:
+    """Tokens in *s* that :func:`_terms` discarded. Lets a caller tell "nothing matched"
+    from "nothing was searched for" — printing the first when it is really the second is
+    how a query like `recall "in CI"` reported an empty corpus."""
+    raw = [t for t in re.split(r"\W+", (s or "").lower()) if t]
+    return [t for t in raw if len(t) < 2 or t in _STOPWORDS]
 
 
 def search(dirs, query: str, limit: int = 8) -> list[tuple[Path, str, int]]:
     """Keyword-rank memories across one or more *dirs* against *query* (stdlib, no
-    vectors). Title hits weigh 3×. Returns [(path, title, score)] best-first."""
+    vectors). Title hits weigh 3×. Returns [(path, title, score)] best-first.
+
+    Terms match on a word BOUNDARY (``\\bterm``) rather than as bare substrings, so
+    "version" no longer scores inside "conversion" and a short token like "db" no longer
+    hits every "dbname" in the corpus. Prefixes still count — "version" matches
+    "versioned" — which is the cheap half of stemming without the maintenance of the
+    other half.
+    """
     terms = _terms(query)
     if not terms:
         return []
+    pats = [(t, re.compile(rf"\b{re.escape(t)}\w*")) for t in terms]
     ents = []
     for d in dirs:
         ents += entries(d)
     scored = []
     for p, title, text in ents:
         low, tl = text.lower(), title.lower()
-        score = sum(3 * tl.count(t) + low.count(t) for t in terms)
+        score = sum(3 * len(pat.findall(tl)) + len(pat.findall(low)) for _t, pat in pats)
         if score:
             scored.append((score, str(p), p, title))
     scored.sort(key=lambda x: (-x[0], x[1]))

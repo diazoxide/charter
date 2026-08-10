@@ -109,7 +109,7 @@ class NeverExpensive(PersonaIso):
         statusline._persona_chips()      # must not raise
 
 
-class VaultDot(unittest.TestCase):
+class VaultDot(PersonaIso):
     """Three states, not two. `plain-file.health()` returns ``ok=True`` with the detail
     "not created yet (<path>)" for a vault that is registered but has no file — so
     reading only ``ok`` painted a green ✓ on a vault that does not exist, while
@@ -117,7 +117,13 @@ class VaultDot(unittest.TestCase):
     """
 
     def _dot(self, ok, detail, registered=True):
+        # `_vault_dot` reads through `_vault_health`, which memoises per process and
+        # caches to STATE_DIR with a TTL — so every case here would otherwise get the
+        # FIRST case's answer, and (before this class was isolated) write it into the
+        # developer's real `.charter/cache/`.
         from charter.secrets import registry
+        statusline._vault_memo.clear()
+        self.addCleanup(statusline._vault_memo.clear)
         vaults, provider_for = registry.vaults, registry.provider_for
         registry.vaults = lambda: ({"v": {}} if registered else {})
         registry.provider_for = lambda _n: type("P", (), {"health": lambda _s: (ok, detail)})()

@@ -13,7 +13,8 @@ import re
 import unittest
 from pathlib import Path
 
-from charter import statusline
+from charter import config, statusline
+from tests._isolation import PersonaIso, isolate_state_dir
 
 
 def _plain(parts):
@@ -32,6 +33,7 @@ def _payload(pct=None, read=None, write=None, usage=True):
 
 class ContextGaugeCase(unittest.TestCase):
     def setUp(self):
+        isolate_state_dir(self)
         # `test_gauge_appears_in_the_rendered_summary` calls `statusline.render`, which
         # persists usage under `config.SESSIONS_DIR` — isolate it so the suite never
         # writes into this repo's own `.charter/sessions/`.
@@ -102,6 +104,7 @@ class CacheTrendHintCase(unittest.TestCase):
     streak. One cold turn is normal (model switch, /compact, session warm-up)."""
 
     def setUp(self):
+        isolate_state_dir(self)
         import shutil, tempfile
         from pathlib import Path
         from charter import config
@@ -243,3 +246,64 @@ class RepoRowSigilCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VaultHealthIsCachedOffTheRenderPath(PersonaIso):
+    """A `1password` or `reference` vault's `health()` shells out to `op`, and both call
+    sites ran it once per persona chip with no cache — on a status line that renders every
+    turn. Profiled at 96% of render time; with a ~250ms `op` round trip a ten-persona
+    roster measured ~3s of wall clock per turn, and with 1Password's desktop integration
+    each call is a chance to raise an unprompted biometric prompt. The payoff on screen is
+    one character."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        isolate_state_dir(self)
+        statusline._vault_memo.clear()
+        self.addCleanup(statusline._vault_memo.clear)
+        from charter.secrets import registry
+        registry.add_vault("v1", "plain-file", {"file": "a.json"})
+        registry.add_vault("v2", "plain-file", {"file": "b.json"})
+        self.calls = []
+
+        class _Prov:
+            id = "fake"
+            def __init__(s, name): s.name = name
+            def health(s):
+                self.calls.append(s.name)
+                return True, "2 secret(s)"
+
+        # NOT `self._orig` — PersonaIso uses that name for its config snapshot.
+        real_provider_for = registry.provider_for
+        registry.provider_for = lambda n, doc=None: _Prov(n)
+        self.addCleanup(lambda: setattr(registry, "provider_for", real_provider_for))
+
+    def test_repeated_reads_of_one_vault_cost_one_check(self):
+        for _ in range(5):
+            statusline._vault_health("v1")
+        self.assertEqual(self.calls, ["v1"])
+
+    def test_a_second_render_reads_the_cache_from_disk(self):
+        """The memo dies with the process — the status line is a fresh process per turn,
+        so the disk TTL is the half that actually removes the per-turn cost."""
+        statusline._vault_health("v1")
+        statusline._vault_memo.clear()          # simulate the next render's process
+        statusline._vault_health("v1")
+        self.assertEqual(self.calls, ["v1"])
+
+    def test_distinct_vaults_are_cached_separately(self):
+        statusline._vault_health("v1")
+        statusline._vault_health("v2")
+        statusline._vault_health("v1")
+        self.assertEqual(self.calls, ["v1", "v2"])
+
+    def test_a_stale_entry_is_re_checked(self):
+        import json as _json, time as _time
+        statusline._vault_health("v1")
+        statusline._vault_memo.clear()
+        f = config.STATE_DIR / "cache" / "vaulthealth.json"
+        doc = _json.loads(f.read_text())
+        doc["v1"]["ts"] = _time.time() - statusline._VAULT_TTL - 1
+        f.write_text(_json.dumps(doc))
+        statusline._vault_health("v1")
+        self.assertEqual(self.calls, ["v1", "v1"])

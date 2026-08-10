@@ -702,12 +702,63 @@ def _persona_line() -> str | None:
         return None
 
 
+#: How long a vault's health is trusted before re-checking. Long, because the answer
+#: almost never changes (a vault becomes healthy once, when you create it) and the fresh
+#: answer is one `charter vault list` away — while the stale one costs a subprocess.
+_VAULT_TTL = 60.0
+
+#: Within a single render, several personas commonly name the same vault. Memoised here
+#: so the disk cache is read once per vault per process rather than once per chip.
+_vault_memo: dict = {}
+
+
+def _vault_health(vault: str) -> tuple[bool, str]:
+    """``(ok, detail)`` for a vault, cached on disk with a short TTL.
+
+    A `1password` or `reference` vault's ``health()`` shells out to ``op``. This is the
+    status line, which renders on EVERY turn, and both call sites below ran it once per
+    persona chip with no cache — profiled at 96% of render time, and with a realistic
+    ~250ms `op` round trip a ten-persona roster measured ~3s of wall clock per turn. With
+    1Password's desktop integration each of those calls is also a chance to raise an
+    unprompted biometric prompt. The payoff on screen is one character.
+
+    Same cache shape as :func:`_repo_states` — ``STATE_DIR/cache``, a timestamp per key,
+    written best-effort — so there is one idiom here for "expensive truth, cheaply
+    re-read", not two.
+    """
+    if vault in _vault_memo:
+        return _vault_memo[vault]
+
+    from .secrets import registry
+    cache_file = config.STATE_DIR / "cache" / "vaulthealth.json"
+    try:
+        cache = json.loads(cache_file.read_text())
+    except Exception:
+        cache = {}
+    now = time.time()
+    ent = cache.get(vault)
+    if ent and (now - ent.get("ts", 0)) < _VAULT_TTL:
+        got = (bool(ent.get("ok")), ent.get("detail") or "")
+        _vault_memo[vault] = got
+        return got
+
+    ok, detail = registry.provider_for(vault).health()
+    cache[vault] = {"ok": bool(ok), "detail": detail or "", "ts": now}
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(cache))
+    except Exception:
+        pass
+    _vault_memo[vault] = (ok, detail)
+    return ok, detail
+
+
 def _vault_glyph(vault: str) -> str:
     try:
         from .secrets import registry
         if vault not in registry.vaults():
             return f" {_YELLOW}(set up){_R}"
-        ok, _ = registry.provider_for(vault).health()
+        ok, _ = _vault_health(vault)
         return f" {_GREEN}✓{_R}" if ok else f" {_YELLOW}!{_R}"
     except Exception:
         return ""
@@ -732,7 +783,7 @@ def _vault_dot(vault: str | None) -> str:
         from .secrets import registry
         if not vault or vault not in registry.vaults():
             return f" {_DIM}·{_R}"
-        ok, detail = registry.provider_for(vault).health()
+        ok, detail = _vault_health(vault)
         if not ok:
             return f" {_YELLOW}!{_R}"
         if "not created yet" in (detail or ""):

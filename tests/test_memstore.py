@@ -82,5 +82,69 @@ class MemstoreCase(unittest.TestCase):
         self.assertFalse(memstore.forget(self.d, "nope"))
 
 
+class SearchFindsShortAndDistinctiveTerms(unittest.TestCase):
+    """`_terms` discarded every token of two characters or fewer.
+
+    So `recall "S3"`, `"CI"`, `"db"`, `"PR"`, `"TZ"`, `"v2"` each returned a confident
+    "No memories match" against a corpus that contained them. That matters more than it
+    looks: the session briefing lists ten titles and tells the agent to *search* for the
+    rest, so search is the only route to everything else, and a false negative there is
+    indistinguishable from the fact not existing.
+    """
+
+    def setUp(self) -> None:
+        self.d = Path(tempfile.mkdtemp(prefix="memsearch-"))
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+
+    def _write(self, name: str, title: str, body: str = "") -> None:
+        (self.d / f"{name}.md").write_text(f"# {title}\n\n{body}\n")
+
+    def test_a_two_character_term_is_searchable(self):
+        self._write("a", "artifacts live in S3", "the bucket is versioned")
+        self._write("b", "unrelated note", "nothing to see")
+        hits = memstore.search([self.d], "S3")
+        self.assertEqual([t for _p, t, _s in hits], ["artifacts live in S3"])
+
+    def test_the_other_short_terms_the_report_named(self):
+        self._write("ci", "CI runs on push", "")
+        self._write("db", "db migrations are manual", "")
+        self._write("pr", "PR titles carry the issue id", "")
+        for q, expected in (("CI", "CI runs on push"),
+                            ("db", "db migrations are manual"),
+                            ("PR", "PR titles carry the issue id")):
+            with self.subTest(q=q):
+                hits = memstore.search([self.d], q)
+                self.assertTrue(hits, f"{q!r} found nothing")
+                self.assertEqual(hits[0][1], expected)
+
+    def test_a_single_character_is_still_dropped(self):
+        """It matches nearly everything and ranks nothing."""
+        self.assertEqual(memstore._terms("a x"), [])
+
+    def test_stopwords_cannot_outvote_the_word_that_mattered(self):
+        """Scoring is raw count with no IDF, so before this a long memory full of "for"
+        could beat a single exact hit on the term actually searched for."""
+        self._write("noise", "planning notes", "for " * 60)
+        self._write("real", "the kubeconfig lives in the devops vault", "")
+        hits = memstore.search([self.d], "for kubeconfig")
+        self.assertEqual(hits[0][1], "the kubeconfig lives in the devops vault")
+
+    def test_terms_match_on_a_word_boundary(self):
+        """"version" no longer scores inside "conversion" — the cheap half of stemming."""
+        self._write("con", "conversion funnel metrics", "")
+        self._write("ver", "version pinning policy", "")
+        hits = memstore.search([self.d], "version")
+        self.assertEqual([t for _p, t, _s in hits], ["version pinning policy"])
+
+    def test_a_prefix_still_matches(self):
+        self._write("v", "the schema is versioned per release", "")
+        self.assertTrue(memstore.search([self.d], "version"))
+
+    def test_dropped_terms_distinguishes_nothing_matched_from_nothing_searched(self):
+        self.assertEqual(memstore._terms("in the of"), [])
+        self.assertEqual(set(memstore.dropped_terms("in the of")), {"in", "the", "of"})
+        self.assertEqual(memstore.dropped_terms("in the kubeconfig"), ["in", "the"])
+
+
 if __name__ == "__main__":
     unittest.main()

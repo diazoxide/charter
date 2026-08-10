@@ -134,3 +134,24 @@ def run_hook(fn, payload: dict):
         sys.stdin = old
     out = buf.getvalue().strip()
     return json.loads(out) if out else None
+
+
+def isolate_state_dir(case) -> Path:
+    """Point ``config.STATE_DIR`` at a throwaway dir for one test case, restoring after.
+
+    For tests that deliberately run against the REAL control plane — proving `render()`
+    never crashes in a real environment, say — while still not writing into the
+    developer's own `.charter/`. `STATE_DIR` holds per-developer caches and session
+    pointers, so redirecting it changes nothing the test is asserting about the plane.
+
+    The render path writes a cache per turn (`repostate.json`, `glstate.json`, and now
+    `vaulthealth.json`), so any unisolated test calling `statusline.render` has been
+    quietly writing there. `PersonaIso` covers the tests that want a fake plane; this
+    covers the ones that want the real one.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="charter-state-"))
+    orig = config.STATE_DIR
+    config.STATE_DIR = tmp / ".charter"
+    case.addCleanup(lambda: (setattr(config, "STATE_DIR", orig),
+                             shutil.rmtree(tmp, ignore_errors=True)))
+    return config.STATE_DIR

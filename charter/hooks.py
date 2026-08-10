@@ -430,8 +430,19 @@ def pretooluse() -> int:
         _deny("PreToolUse", leak)
         _trace("deny", sid, reason=leak[:70], cmd=head)
         return 0
-    # A2: golden rule — one credential (glab token over HTTPS); no SSH, no signing.
-    cred = _single_credential_reason(cmd)
+    # A2: golden rule — one credential (each forge's token over HTTPS); no SSH, no signing.
+    #
+    # Gated on there being a control plane at all. The plugin is installed per USER or per
+    # project, but this handler ran everywhere: install charter to try it, and `git clone
+    # git@github.com:…`, `git commit -S` and `ssh -T git@github.com` were denied in every
+    # unrelated repo on the machine, explaining a control plane that does not exist there.
+    # README.md even pre-empts the confusion — "that is the rule working, not a bug" —
+    # which is true inside a plane and indefensible outside one.
+    #
+    # `_leak_reason` above stays unconditional on purpose: not printing a secret into the
+    # transcript is a safety invariant, not a policy this plane happens to hold.
+    from . import config as _cfg
+    cred = _single_credential_reason(cmd) if _cfg.HAS_CONTROL_PLANE else None
     if cred:
         _deny("PreToolUse", cred)
         _trace("deny", sid, reason="single-credential", cmd=head)
@@ -439,7 +450,9 @@ def pretooluse() -> int:
     # B: committing inside a clone → ASK, not deny. A repo-rooted session is usually better
     # (the repo's own hooks/conventions apply), but it's a preference, not a safety rule —
     # the clone is its own git repo, so the control plane's is untouched either way.
-    clone = _clone_commit_reason(cmd, cwd)
+    # Same gate: "you are committing inside a clone rather than at the plane" is advice
+    # about a plane, so it has nothing to say where there is none.
+    clone = _clone_commit_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
     if clone:
         _ask("PreToolUse", clone)
         _trace("ask", sid, reason=clone[:70], cmd=head)

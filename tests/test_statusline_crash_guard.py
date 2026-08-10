@@ -26,6 +26,13 @@ class RenderNeverCrashesCase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="edm-renderguard-"))
         self._orig = config.SESSIONS_DIR
         config.SESSIONS_DIR = self.tmp / "sessions"
+        # Also redirect STATE_DIR: these render against the REAL plane on purpose,
+        # and the render path now writes a vault-health cache under it. A test that
+        # writes into the developer's own `.charter/` is the bug this suite fixed
+        # once already (see `EveryRootDerivedPathIsIsolated`).
+        _state = config.STATE_DIR
+        config.STATE_DIR = self.tmp / ".charter"
+        self.addCleanup(lambda: setattr(config, "STATE_DIR", _state))
         self.addCleanup(lambda: (setattr(config, "SESSIONS_DIR", self._orig),
                                  shutil.rmtree(self.tmp, ignore_errors=True)))
 
