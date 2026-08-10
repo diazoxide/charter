@@ -559,17 +559,26 @@ class AnEmptySecretIsRefused(PersonaIso):
             rc = commands_secrets.cmd_secret_set(args)
         return rc, err.getvalue()
 
-    def test_no_source_with_a_non_tty_stdin_is_refused(self):
+    def test_an_empty_non_tty_stdin_is_refused(self):
         with mock.patch.object(sys, "stdin", io.StringIO("")):
             rc, err = self._set()
         self.assertEqual(rc, 1)
-        self.assertIn("refusing to guess", err)
+        self.assertIn("empty value", err)
 
-    def test_the_refusal_names_all_three_ways_to_supply_a_value(self):
+    def test_the_refusal_explains_where_the_nothing_came_from(self):
         with mock.patch.object(sys, "stdin", io.StringIO("")):
             _rc, err = self._set()
-        for flag in ("--stdin", "--from-file", "--value"):
-            self.assertIn(flag, err)
+        self.assertIn("Nothing arrived on stdin", err)
+
+    def test_an_ordinary_pipe_still_works_without_a_flag(self):
+        """`… | charter secret set <vault> <key>` predates `--stdin` and is how people
+        actually do this. Requiring the flag was the first fix here, and it broke every
+        working pipeline to stop a mistake the empty check already catches."""
+        with mock.patch.object(sys, "stdin", io.StringIO("s3cret")):
+            rc, _ = self._set()
+        self.assertEqual(rc, 0)
+        from charter.secrets import registry
+        self.assertEqual(registry.provider_for("dev").get("API_TOKEN"), "s3cret")
 
     def test_an_explicit_empty_stdin_is_still_refused(self):
         """`--stdin` says where the value comes from, not that empty is intended."""

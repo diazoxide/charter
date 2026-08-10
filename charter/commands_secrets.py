@@ -250,15 +250,15 @@ def _provider(name: str):
 def _read_value(args) -> str:
     """Obtain a secret value without exposing it on the command line.
 
-    A non-tty stdin is NOT on its own a request to read a secret from it. An agent's Bash
-    tool, a CI step and `< /dev/null` all present one, so `charter secret set devops
-    API_TOKEN` typed without a value read EOF, stored ``""``, and exited 0 — after which
-    `get` says the key is present, `vault list` counts it and `doctor` calls the vault
-    healthy. The failure surfaces hours later as a 401 from something unrelated.
+    A non-tty stdin is still read — `… | charter secret set <vault> <key>` is the ordinary
+    way to do this and predates `--stdin`. What is refused is the RESULT being empty (see
+    `cmd_secret_set`), which is the actual failure: an agent's Bash tool, a CI step and
+    `< /dev/null` all present a non-tty stdin with nothing behind it, so the read returned
+    "" and overwrote the credential.
 
-    So an explicit source is required whenever stdin is not a terminal: one of `--stdin`,
-    `--from-file` or `--value`. With a terminal, the interactive prompt still applies and
-    needs no flag.
+    Requiring an explicit `--stdin` for every pipe was the first fix here and it was worse
+    than the bug in one direction: it broke every working pipeline to stop a mistake the
+    empty check already catches. Narrow the refusal to the thing that is wrong.
     """
     if args.from_file:
         return Path(args.from_file).expanduser().read_text()
@@ -266,18 +266,9 @@ def _read_value(args) -> str:
         util.warn("Value passed via --value is visible in shell history / process list; "
                   "prefer --stdin or --from-file.")
         return args.value
-    if args.stdin:
+    if args.stdin or not sys.stdin.isatty():
         data = sys.stdin.read()
         return data[:-1] if data.endswith("\n") else data  # strip one trailing newline
-    if not sys.stdin.isatty():
-        raise base.VaultError(
-            "no value given, and stdin is not a terminal — refusing to guess.\n"
-            "  An agent's shell, a CI step and `< /dev/null` all look like this, and\n"
-            "  reading EOF here would overwrite the secret with an empty string.\n"
-            "  Say where the value comes from:\n"
-            "    … | charter secret set <vault> <key> --stdin\n"
-            "    charter secret set <vault> <key> --from-file <path>\n"
-            "    charter secret set <vault> <key> --value <value>   (visible in history)")
     import getpass
     return getpass.getpass(f"Value for '{args.key}' (hidden): ")
 
@@ -292,9 +283,12 @@ def cmd_secret_set(args) -> int:
         # it, `doctor` says healthy. A warning is not enough for something that can only be
         # detected later, by a 401.
         if value == "" and not getattr(args, "allow_empty", False):
+            how = ("" if sys.stdin.isatty() else
+                   "\n  Nothing arrived on stdin. An agent's shell, a CI step and "
+                   "`< /dev/null` all\n  look like a pipe with no data behind them.")
             raise base.VaultError(
                 f"refusing to store an empty value for '{args.key}' — it would read as a "
-                f"present, healthy secret everywhere charter looks.\n"
+                f"present, healthy secret everywhere charter looks.{how}\n"
                 f"  If that is genuinely what you want: --allow-empty")
         prov.set(args.key, value)
     except base.VaultError as e:
