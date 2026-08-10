@@ -35,6 +35,20 @@ def err(msg: str) -> None:
     print(_c("31", "✗") + " " + msg, file=sys.stderr)
 
 
+class ProcTimeout(RuntimeError):
+    """A subprocess outlived its ``timeout``.
+
+    Its own class rather than letting `subprocess.TimeoutExpired` escape, because the
+    thing a caller wants to say is "this check timed out" — `doctor` renders it as a WARN
+    naming the seconds, instead of the traceback `cli.main` would otherwise print (it
+    catches only `KeyboardInterrupt`).
+    """
+
+    def __init__(self, cmd, seconds: float) -> None:
+        self.cmd, self.seconds = list(cmd), seconds
+        super().__init__(f"timed out after {seconds:g}s: {' '.join(self.cmd)}")
+
+
 class ProcError(RuntimeError):
     """A subprocess exited non-zero while ``check=True``."""
 
@@ -49,12 +63,19 @@ class ProcError(RuntimeError):
 
 def run(
     cmd: Sequence[str], cwd=None, check: bool = True, capture: bool = True,
-    input: str | None = None, env: dict | None = None,
+    input: str | None = None, env: dict | None = None, timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd``. Raises :class:`ProcError` on failure when ``check``.
 
     ``input`` is written to the child's stdin. That is how a secret reaches a CLI
     without ever appearing in argv — where `ps` and the shell's history can see it.
+
+    ``timeout`` bounds the child in seconds, raising :class:`ProcTimeout` — a *charter*
+    error, so a caller can render it rather than let `subprocess.TimeoutExpired` reach the
+    user as a traceback. Without it, six call sites bypassed this function entirely just
+    to pass their own literal, and every un-timeouted path (`gh api`, `glab api`, every
+    doctor check) could hang indefinitely: a 1Password session needing re-auth stalled the
+    SessionStart preflight for its whole 20s budget.
 
     ``env`` is an OVERLAY on this process's environment, not a replacement: the child
     still needs PATH, HOME and the rest to find and run the CLI at all. It exists so a
@@ -66,15 +87,19 @@ def run(
     child_env = None
     if env:
         child_env = {**os.environ, **{k: v for k, v in env.items() if v is not None}}
-    proc = subprocess.run(
-        list(cmd),
-        cwd=cwd,
-        text=True,
-        input=input,
-        env=child_env,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-    )
+    try:
+        proc = subprocess.run(
+            list(cmd),
+            cwd=cwd,
+            text=True,
+            input=input,
+            env=child_env,
+            timeout=timeout,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+    except subprocess.TimeoutExpired:
+        raise ProcTimeout(cmd, timeout) from None
     if check and proc.returncode != 0:
         raise ProcError(cmd, proc.returncode, proc.stderr if capture else "")
     return proc

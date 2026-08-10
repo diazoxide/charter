@@ -15,6 +15,7 @@ from . import (
     hooks,
     statusline,
     toolgate,
+    util,
 )
 from .forge.registry import KINDS as _FORGE_KINDS
 from .secrets.registry import PROVIDERS
@@ -720,3 +721,10 @@ def main(argv=None) -> int:
         return args.func(args) or 0
     except KeyboardInterrupt:
         return 130
+    except util.ProcTimeout as e:
+        # A child that outlived its budget is a condition, not a bug. Only
+        # KeyboardInterrupt was caught here, so a timeout reached the user as a traceback
+        # from inside charter — which reads as charter crashing rather than as the tool it
+        # called failing to answer.
+        util.err(str(e))
+        return 1

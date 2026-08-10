@@ -31,6 +31,7 @@ the thing that otherwise gets re-proposed every six months.
 | 2.11 SessionStart rewrote a tracked README.md | fixed — left to `charter docs` |
 | 3.1 a second committer pushing over SSH | fixed — `charter/planegit.py` is the one committer |
 | (not in the audit) two sessions in one window shared a workspace | fixed — `WINDOWID` is not a pane id |
+| 3.4 no timeout on `util.run`; doctor printed nothing on a stall | fixed — `ProcTimeout`, per-check budgets, streamed results |
 | everything else | open |
 
 Numbers in sections 2 and 3 that were not adversarially re-checked are flagged in

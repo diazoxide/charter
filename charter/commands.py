@@ -792,18 +792,23 @@ def cmd_reinit(args) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_doctor(args) -> int:
     """Preflight the environment. Exit non-zero if any hard requirement fails."""
-    results = doctor.run_all()
-
     if getattr(args, "json", False):
+        results = doctor.run_all()
         print(json.dumps(
             [{"name": r.name, "status": r.status, "detail": r.detail, "hint": r.hint}
              for r in results],
             indent=2,
         ))
     else:
+        # Printed as each check lands, not collected first. A preflight killed by its
+        # SessionStart hook timeout used to emit nothing at all — not even the checks that
+        # had already passed — so a hang looked identical to a crash. Now the last line
+        # printed names where it stopped.
         print("charter preflight:\n")
-        for r in results:
-            print(r.render())
+        results = []
+        for r in doctor.iter_all():
+            results.append(r)
+            print(r.render(), flush=True)
         print()
 
     failed = [r for r in results if r.status == doctor.FAIL]

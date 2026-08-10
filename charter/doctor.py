@@ -142,7 +142,13 @@ def check_forge_auth(forge=None) -> Result:
     cli = forge.cli
     if not shutil.which(cli):
         return Result(f"{cli} auth", FAIL, hint=f"Install {cli} first, then run: {cli} auth login.")
-    proc = util.run([cli, "auth", "status", "--hostname", forge.host], check=False)
+    try:
+        proc = util.run([cli, "auth", "status", "--hostname", forge.host], check=False,
+                        timeout=CHECK_TIMEOUT)
+    except util.ProcTimeout as e:
+        return Result(f"{cli} auth", WARN, detail=f"timed out after {e.seconds:g}s",
+                      hint=f"`{cli} auth status` did not answer — the forge may be "
+                           f"unreachable, or a credential helper is waiting on input.")
     blob = (proc.stdout or "") + (proc.stderr or "")
     if "Logged in" in blob:
         summary = next(
@@ -292,7 +298,7 @@ def check_vaults() -> Result:
         return Result("vaults", WARN, hint=str(e))
     if not vs:
         return Result("vaults", OK, detail="none configured")
-    bad, no_identity = [], []
+    bad, no_identity, timed_out = [], [], []
     for name in vs:
         try:
             prov = registry.provider_for(name)
@@ -303,6 +309,11 @@ def check_vaults() -> Result:
             # the fix is `export`, not anything about the vault.
             prov.env_overlay()
             healthy, _ = prov.health()
+        except util.ProcTimeout:
+            # `op` reaching a desktop app that is waiting on a biometric prompt looks
+            # exactly like a hang. Naming it beats inheriting the caller's whole budget.
+            timed_out.append(name)
+            continue
         except base.VaultError as e:
             if "is unset" in str(e):
                 no_identity.append(name)
@@ -310,6 +321,11 @@ def check_vaults() -> Result:
             healthy = False
         if not healthy:
             bad.append(name)
+    if timed_out:
+        return Result("vaults", WARN, detail=f"{len(vs)} configured",
+                      hint=f"timed out reading: {', '.join(timed_out)} — the provider CLI "
+                           f"did not answer within {CHECK_TIMEOUT:g}s (1Password waiting on "
+                           f"a biometric prompt looks exactly like this).")
     if no_identity:
         srcs = []
         for n in no_identity:
@@ -576,7 +592,27 @@ def check_plugin_skew() -> Result:
                          f"plugin, supported; upgrade it for the newest hooks")
 
 
-def run_all() -> list[Result]:
+#: Seconds a single preflight check may take before it is reported as timed out rather
+#: than waited on. `gh api`, `glab api` and `op` all reach the network or a desktop app; a
+#: 1Password session needing re-auth stalled the whole SessionStart preflight for its 20s
+#: budget and then printed NOTHING, because results were collected before any were shown.
+CHECK_TIMEOUT = 5.0
+
+
+def iter_all():
+    """Yield each :class:`Result` as it completes.
+
+    A generator rather than a list because `cmd_doctor` collected everything before
+    printing a single line: a preflight killed by its hook timeout emitted no diagnosis at
+    all, not even the checks that had already passed. Streaming turns a mystery stall into
+    "got as far as `vaults`, then stopped" — which names the culprit without charter
+    having to guess at it.
+    """
+    for r in _checks():
+        yield r
+
+
+def _checks():
     """Order: cheap/local checks first, network checks last. The forge cli/auth pair is
     NOT fixed (it used to be exactly one hardcoded GitLab pair) — it's one pair PER
     FORGE this control plane actually declares (`declared_or_default_forges`), so a
@@ -591,3 +627,9 @@ def run_all() -> list[Result]:
                 check_memory_indexes(), check_personas(), check_embedded_worktrees(),
                 check_plugin_skew()]
     return results
+
+
+def run_all() -> list[Result]:
+    """Every check, collected. Kept for callers that want them all at once (`--json`,
+    tests); `iter_all` is what an interactive preflight should use."""
+    return list(iter_all())

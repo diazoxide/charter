@@ -127,3 +127,49 @@ class MemoryIndexDocstringIsHonest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
+    """A 1Password session needing re-auth stalled the SessionStart preflight for its whole
+    20s budget and then printed NOTHING — `cmd_doctor` collected every Result before
+    showing a line, so a hang and a crash looked identical. Six call sites also bypassed
+    `util.run` entirely just to pass their own timeout literal."""
+
+    def test_run_raises_a_charter_error_not_subprocess_timeoutexpired(self):
+        """`cli.main` catches `KeyboardInterrupt` and nothing else, so a bare
+        `TimeoutExpired` reached the user as a traceback from inside charter."""
+        from charter import util
+        with self.assertRaises(util.ProcTimeout) as e:
+            util.run(["sleep", "5"], timeout=0.2)
+        self.assertEqual(e.exception.seconds, 0.2)
+        self.assertIn("timed out", str(e.exception))
+
+    def test_a_command_without_a_timeout_is_unbounded_as_before(self):
+        from charter import util
+        self.assertEqual(util.run(["true"], check=False).returncode, 0)
+
+    def test_doctor_yields_results_one_at_a_time(self):
+        """The streaming half: what makes a killed preflight say where it stopped."""
+        from charter import doctor
+        it = doctor.iter_all()
+        first = next(it)
+        self.assertIsInstance(first, doctor.Result)
+        self.assertTrue(first.name)
+
+    def test_run_all_still_returns_them_all(self):
+        from charter import doctor
+        self.assertEqual(len(doctor.run_all()), len(list(doctor.iter_all())))
+
+    def test_a_timed_out_vault_is_its_own_state(self):
+        """Not "unhealthy" — the vault is fine, the provider CLI did not answer, and the
+        fix is unrelated to the vault."""
+        import os
+        from unittest import mock
+        from charter import doctor, util
+        from charter.secrets import registry
+        with mock.patch.object(registry, "vaults", return_value={"ops": {}}), \
+             mock.patch.object(registry, "provider_for",
+                               side_effect=util.ProcTimeout(["op"], 5.0)):
+            res = doctor.check_vaults()
+        self.assertEqual(res.status, doctor.WARN)
+        self.assertIn("timed out", res.hint)
