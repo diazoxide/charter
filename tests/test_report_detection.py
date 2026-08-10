@@ -10,7 +10,9 @@ docs/adr/0003 for why publishing is a separate, human-gated step.
 """
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stderr
 from unittest import mock
 
 from charter import cli, report, util
@@ -70,6 +72,26 @@ class TestUncaughtExceptionsAreRecorded(PersonaIso):
                     cli.main(["doctor"])
         self.assertEqual(len(report.pending()), 1)
         self.assertEqual(report.pending()[0]["occurrences"], 3)
+
+
+class TestARepeatOfSomethingAlreadyFiled(PersonaIso):
+    def test_it_points_at_the_existing_issue_instead_of_re_drafting(self):
+        """The whole reason a sent report is kept rather than deleted: local dedupe at
+        zero API cost. Telling the Reporter it was 'drafted, nothing sent' when they
+        already filed it would send them round the loop a second time."""
+        with mock.patch("charter.commands.cmd_doctor", side_effect=ValueError("boom")):
+            with self.assertRaises(ValueError):
+                cli.main(["doctor"])
+        rid = report.pending()[0]["id"]
+        report.mark_sent(rid, "https://github.com/diazoxide/charter/issues/7")
+
+        err = io.StringIO()
+        with redirect_stderr(err):
+            with mock.patch("charter.commands.cmd_doctor", side_effect=ValueError("boom")):
+                with self.assertRaises(ValueError):
+                    cli.main(["doctor"])
+        self.assertIn("issues/7", err.getvalue())
+        self.assertNotIn("nothing sent", err.getvalue())
 
 
 class TestDetectionNeverBreaksTheCli(PersonaIso):

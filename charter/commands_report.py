@@ -11,7 +11,7 @@ approval could not be a y/n prompt; it is a second command instead.
 
 from __future__ import annotations
 
-from . import report, util
+from . import __version__, report, util
 
 
 def _draft(kind: str, text: str) -> int:
@@ -46,3 +46,162 @@ def cmd_report_bug(args) -> int:
 def cmd_report_gap(args) -> int:
     """Draft a **gap** — charter cannot do something it should."""
     return _draft("gap", getattr(args, "text", None))
+
+
+def cmd_report_consent(args) -> int:
+    """Record, once, that this human agrees to publish under their own GitHub identity.
+
+    Its own command rather than a flag on `send`: ADR 0003 rejects flags that collapse
+    approval into the sending call, because a flag an agent can pass is a flag it will
+    pass every time. A one-off command has a single, auditable purpose.
+    """
+    report.grant_consent()
+    util.ok(f"Consent recorded → {report.consent_path()}")
+    util.info("`charter report send` may now open issues on "
+              f"{report.upstream_repo()} as you. Delete that file to withdraw.")
+    return 0
+
+
+def cmd_report_send(args) -> int:
+    """Publish a drafted report. **This is the consent step** — the only command here
+    that touches the network."""
+    rid = getattr(args, "id", None)
+    rec = report.load(rid) if rid else None
+    if not rec:
+        util.err(f"no drafted report '{rid}'. List them: charter report list")
+        return 1
+
+    if rec.get("issue_url"):
+        util.info(f"Already reported → {rec['issue_url']}")
+        return 0
+
+    if not report.has_consent():
+        util.err("publishing sends this to a PUBLIC tracker under your own GitHub "
+                 "identity, and that has not been agreed yet.")
+        util.info("Read the draft first:  charter report show " + rid)
+        util.info("Then agree once with:  charter report consent")
+        return 1
+
+    _warn_if_stale()
+
+    # Before any network call, deliberately. A dry run is the offline affordance — it is
+    # how this feature was developed without spamming a real tracker — so it must not
+    # depend on `gh`, and a duplicate must not short-circuit it before it has shown the
+    # Reporter the payload they asked to see.
+    if getattr(args, "dry_run", False):
+        util.ok("dry run — nothing sent, no network touched. This would open:")
+        print(f"  {report.upstream_repo()}: {report.title(rec)}")
+        print(report.issue_body(rec))
+        return 0
+
+    try:
+        if not report.gh_available():
+            # Not an error: a GitLab-only Reporter has no `gh` identity, and a broken or
+            # rate-limited `gh` should never lose the report either.
+            util.warn("no usable `gh` — open this prefilled issue instead:")
+            print(report.fallback_url(rec))
+            return 0
+
+        if not getattr(args, "new", False):
+            dups = report.search_duplicates(rec)
+            if dups:
+                return _report_duplicates(dups, rid)
+
+        url = report.create_issue(rec)
+    except report.ReportingError as e:
+        # Loud, never swallowed: a silent failure here means the Reporter believes they
+        # reported something they did not (docs/adr/0002).
+        util.err(f"could not open the issue: {e}")
+        util.info("Your draft is safe. Retry, or use: charter report send "
+                  f"{rid} --dry-run to see exactly what it would send.")
+        return 1
+
+    report.mark_sent(rid, url)
+    util.ok(f"Reported → {url}")
+    return 0
+
+
+def cmd_report_list(args) -> int:
+    """Every report on this machine — drafts awaiting approval, and what was already sent."""
+    recs = report.all_reports()
+    if not recs:
+        util.info("No reports drafted. charter records one automatically when it crashes; "
+                  "describe one yourself with: charter report bug|gap \"<what>\"")
+        return 0
+    for r in recs:
+        state = r["issue_url"] if r.get("issue_url") else "not sent"
+        hits = f" ×{r['occurrences']}" if r.get("occurrences", 1) > 1 else ""
+        print(f"  {r['id']}  {r.get('kind', '?'):4}{hits:5}  {report.title(r)}\n      {state}")
+    return 0
+
+
+def cmd_report_show(args) -> int:
+    """Print one report exactly as it would be published."""
+    rec = report.load(getattr(args, "id", None))
+    if not rec:
+        util.err(f"no report '{getattr(args, 'id', None)}'. List them: charter report list")
+        return 1
+    print(report.render(rec))
+    if rec.get("issue_url"):
+        util.info(f"Already reported → {rec['issue_url']}")
+    else:
+        util.info(f"Not sent. Send it with: charter report send {rec['id']}")
+    return 0
+
+
+def cmd_report_comment(args) -> int:
+    """Add this Reporter's details to an existing upstream issue.
+
+    The default answer to a confirmed duplicate: a repeat carries a second environment
+    where the problem reproduces, which is the most useful thing about it — dropping it
+    silently is the one outcome that wastes it.
+    """
+    rid = getattr(args, "id", None)
+    rec = report.load(rid) if rid else None
+    if not rec:
+        util.err(f"no drafted report '{rid}'. List them: charter report list")
+        return 1
+    if not report.has_consent():
+        util.err("commenting publishes under your own GitHub identity, which has not "
+                 "been agreed yet. Agree once with: charter report consent")
+        return 1
+
+    issue = str(getattr(args, "on", "") or "").lstrip("#")
+    try:
+        report.comment_on(issue, rec)
+    except report.ReportingError as e:
+        util.err(f"could not comment on #{issue}: {e}")
+        return 1
+
+    url = f"https://github.com/{report.upstream_repo()}/issues/{issue}"
+    report.mark_sent(rid, url)
+    util.ok(f"Added your details to → {url}")
+    return 0
+
+
+def _report_duplicates(dups: list[dict], rid: str) -> int:
+    """Stop and hand the candidates to whoever can judge them.
+
+    Not a verdict: a keyword score cannot tell "clone fails on a private repo" from
+    "clone fails on a submodule". And not a silent drop — a duplicate carries a second
+    environment where the bug reproduces, which is the most useful thing about it.
+    """
+    util.warn("this may already be reported:")
+    for d in dups:
+        print(f"  #{d.get('number')}  {d.get('title')}\n      {d.get('url')}")
+    util.info(f"Add your details to one:  charter report comment {rid} --on <number>")
+    util.info(f"Or file anyway:           charter report send {rid} --new")
+    return 2
+
+
+def _warn_if_stale() -> None:
+    """Warn, never block. A bug that survives on an old charter is still worth having, and
+    "upgrade first, then report" is a reliable way to never get the report at all."""
+    try:
+        from . import update
+        latest = update.newer_than(__version__)
+        if latest:
+            util.warn(f"you are on charter {__version__}; {latest} is out — this may "
+                      "already be fixed. Reporting anyway is fine.")
+    except Exception:  # noqa: BLE001 - a staleness check must never block a report
+        pass

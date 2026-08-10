@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from charter import config, instance, persona, root
 
@@ -82,6 +84,33 @@ def run_hook(fn, payload: dict):
         sys.stdin = old
     out = buf.getvalue().strip()
     return json.loads(out) if out else None
+
+
+class ReportIso(PersonaIso):
+    """`PersonaIso` plus the two isolations upstream reporting needs.
+
+    1. **Consent home.** Reporting consent is stored per-*human*, outside the plane, so
+       `PersonaIso` alone does not isolate it — without this a test would read (or write!)
+       the developer's real consent. Redirected via ``$CHARTER_CONFIG_HOME`` and
+       deliberately NOT ``$XDG_CONFIG_HOME``: **`gh` keeps its own auth under
+       XDG_CONFIG_HOME**, so hijacking that logs `gh` out mid-test and silently pushes
+       `send` down its no-`gh` fallback path instead of the branch under test.
+
+    2. **`gh` availability.** Stubbed true, so no test depends on whether whoever is
+       running the suite happens to be logged in — the flakiness `test_forge_github.py`
+       exists to avoid. A test covering the *unavailable* path re-patches it false.
+
+    Nothing here stubs :func:`charter.report.gh` itself; each test does that, so a test
+    that forgets cannot silently reach the network — it fails on a real `gh` call instead.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        home = Path(tempfile.mkdtemp(prefix="charter-consent-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        self.enterContext(mock.patch.dict(os.environ, {"CHARTER_CONFIG_HOME": str(home)}))
+        self.enterContext(mock.patch("charter.report.gh_available", return_value=True))
+        self.consent_home = home
 
 
 def isolate_state_dir(case) -> Path:

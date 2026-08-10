@@ -6,6 +6,8 @@ and a Reporter who walks away from a crash loop must not come back to a full dis
 """
 from __future__ import annotations
 
+import json
+import time
 import unittest
 
 from charter import config, report
@@ -100,6 +102,42 @@ class TestCrashLoopCollapse(PersonaIso):
             report.record_bug(_distinct(i), subcommand=f"cmd{i}")
         self.assertEqual(report.load(self._same_bug())["occurrences"], 2)
         self.assertEqual(first, self._same_bug())
+
+
+class TestDraftsAgeOut(PersonaIso):
+    """A draft nobody approved in a month is one nobody is going to. Pruned on write
+    rather than from a hook, so a CLI-only install with no plugin still gets it."""
+
+    def _age(self, rid, days):
+        rec = report.load(rid)
+        rec["first_seen"] = time.time() - days * 86400
+        (config.REPORTS_DIR / f"{rid}.json").write_text(json.dumps(rec))
+
+    def test_an_old_unsent_draft_is_dropped(self):
+        rid = report.record_bug(_caught(ValueError("boom")), subcommand="clone")
+        self._age(rid, report.MAX_DRAFT_AGE_DAYS + 1)
+        report.prune()
+        self.assertIsNone(report.load(rid))
+
+    def test_a_recent_draft_survives(self):
+        rid = report.record_bug(_caught(ValueError("boom")), subcommand="clone")
+        self._age(rid, report.MAX_DRAFT_AGE_DAYS - 1)
+        report.prune()
+        self.assertIsNotNone(report.load(rid))
+
+    def test_a_sent_report_is_never_aged_out(self):
+        """It is what a later identical crash points at, so it outlives every timer."""
+        rid = report.record_bug(_caught(ValueError("boom")), subcommand="clone")
+        report.mark_sent(rid, "https://github.com/diazoxide/charter/issues/7")
+        self._age(rid, report.MAX_DRAFT_AGE_DAYS * 10)
+        report.prune()
+        self.assertIsNotNone(report.load(rid))
+
+    def test_an_old_draft_does_not_consume_a_slot_in_the_cap(self):
+        rid = report.record_bug(_caught(ValueError("boom")), subcommand="clone")
+        self._age(rid, report.MAX_DRAFT_AGE_DAYS + 1)
+        for i in range(report.MAX_PENDING):
+            self.assertIsNotNone(report.record_bug(_distinct(i), subcommand=f"cmd{i}"))
 
 
 class TestPendingListing(PersonaIso):

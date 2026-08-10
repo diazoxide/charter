@@ -208,6 +208,37 @@ def _add_report_parser(sub) -> None:
     gap.add_argument("text", help="What is missing, in your own words.")
     gap.set_defaults(func=commands_report.cmd_report_gap)
 
+    ls = rsub.add_parser("list", help="Reports drafted on this machine, and what was sent.")
+    ls.set_defaults(func=commands_report.cmd_report_list)
+
+    sh = rsub.add_parser("show", help="Print one report exactly as it would be published.")
+    sh.add_argument("id")
+    sh.set_defaults(func=commands_report.cmd_report_show)
+
+    # Its own command, not a flag on `send`: a flag an agent can pass is a flag it will
+    # pass every time, where a one-off command has a single auditable purpose (ADR 0003).
+    cs = rsub.add_parser("consent",
+                         help="Agree, once, that reports may be published under your own "
+                              "GitHub identity. Nothing sends until you do.")
+    cs.set_defaults(func=commands_report.cmd_report_consent)
+
+    sd = rsub.add_parser("send",
+                         help="Publish a drafted report. THIS is the approval step — the "
+                              "only reporting command that touches the network.")
+    sd.add_argument("id")
+    sd.add_argument("--new", action="store_true",
+                    help="File even though charter found a possible duplicate.")
+    sd.add_argument("--dry-run", action="store_true",
+                    help="Show exactly what would be published, and send nothing.")
+    sd.set_defaults(func=commands_report.cmd_report_send)
+
+    cm = rsub.add_parser("comment",
+                         help="Add your details to an existing upstream issue — the right "
+                              "answer to a duplicate, since it keeps your reproduction.")
+    cm.add_argument("id")
+    cm.add_argument("--on", required=True, help="Upstream issue number to comment on.")
+    cm.set_defaults(func=commands_report.cmd_report_comment)
+
 
 def _add_workspace_parser(sub) -> None:
     w = sub.add_parser("workspace", aliases=["ws"],
@@ -727,6 +758,38 @@ def _split_exec_command(argv: list[str]) -> tuple[list[str], list[str] | None]:
     return argv, None
 
 
+def _subcommand_names(parser: argparse.ArgumentParser) -> set[str]:
+    """Every top-level subcommand the parser accepts.
+
+    Reads the subparsers action directly. ``_SubParsersAction`` is nominally private but
+    has been stable for the life of argparse, and the alternative — keeping a hand-written
+    list of command names in sync with :func:`build_parser` — is the kind of duplication
+    that goes wrong silently.
+    """
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    return set()
+
+
+def _hint_gap_if_unknown_command(parser: argparse.ArgumentParser, argv: list[str]) -> None:
+    """Offer gap reporting when someone reached for a command charter does not have.
+
+    This is the *only* mechanical signal charter gets that a capability is missing. The
+    reporting feature is advertised on failure and nowhere else — which costs no prompt
+    budget and is perfectly targeted — but a gap prints nothing on its own, so without this
+    it would have no delivery mechanism at all.
+
+    Narrow on purpose. A bad flag or a missing argument is a typo, not a missing
+    capability, and offering to open an upstream issue every time someone mistypes would
+    turn the prompt into noise — which is how a feature like this gets switched off.
+    """
+    if not argv or argv[0].startswith("-") or argv[0] in _subcommand_names(parser):
+        return
+    util.err(f"↳ charter has no `{argv[0]}` command. If that is something charter should "
+             f'do, say so: charter report gap "<what you were trying to do>"')
+
+
 def _record_crash(exc: BaseException, subcommand: str) -> None:
     """Draft a report for a crash, locally. Never raises.
 
@@ -740,9 +803,16 @@ def _record_crash(exc: BaseException, subcommand: str) -> None:
     try:
         from . import report
         rid = report.record_bug(exc, subcommand)
-        if rid:
+        if not rid:
+            return
+        rec = report.load(rid) or {}
+        if rec.get("issue_url"):
+            # Already filed from this machine. Pointing at the existing issue is the whole
+            # reason a sent report is kept rather than deleted — local dedupe, no API call.
+            util.err(f"↳ this is a charter bug you already reported → {rec['issue_url']}")
+        else:
             util.err(f"↳ this is a charter bug, drafted locally as {rid} — nothing sent. "
-                     f"Review and report it: charter report --help")
+                     f"Review it: charter report show {rid}")
     except Exception:  # noqa: BLE001 - see the docstring; this must never win over `exc`
         pass
 
@@ -751,7 +821,14 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv = _hoist_persona_memory(argv)
     argv, exec_command = _split_exec_command(argv)
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit:
+        # `parse_args` exits from inside itself, above the crash handler below — so the
+        # gap signal needs catching here rather than a third `except` down there.
+        _hint_gap_if_unknown_command(parser, argv)
+        raise
     if exec_command is not None:
         args.command = exec_command
     try:

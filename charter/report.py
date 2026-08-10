@@ -23,17 +23,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import re
+import time
 import traceback
 from pathlib import Path
 
-from . import __version__, config
+from . import __version__, config, util
 
 #: Ceiling on **distinct** pending reports. A broken config makes every invocation fail,
 #: and a Reporter who walks away should not return to a full disk. Repeats of a report
 #: already on disk are unaffected — they collapse onto it, which is the whole point.
 MAX_PENDING = 25
+
+#: How long an **unsent** draft survives. A report nobody approved in a month is one
+#: nobody is going to; sent reports are never aged out, since they are what a later
+#: identical crash points at.
+MAX_DRAFT_AGE_DAYS = 30
 
 #: The installed charter package. A frame is ours if it lives under here — resolved, so a
 #: symlinked install (``uv tool install`` makes several) still matches its own frames.
@@ -214,10 +221,33 @@ def pending() -> list[dict]:
     return [r for r in _all() if not r.get("issue_url")]
 
 
+def all_reports() -> list[dict]:
+    """Every report on this machine, sent or not."""
+    return _all()
+
+
 def _write(rec: dict) -> str:
     config.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     _path(rec["id"]).write_text(json.dumps(rec, indent=2))
     return rec["id"]
+
+
+def prune() -> int:
+    """Drop unsent drafts older than :data:`MAX_DRAFT_AGE_DAYS`. Returns how many went.
+
+    Only *unsent* ones: a sent report is kept forever, because it is what lets a later
+    identical crash point at the existing upstream issue.
+
+    Runs on write rather than from a hook, so it works on a CLI-only install with no
+    plugin — the same reason crash detection lives in `cli.main` rather than in a hook.
+    """
+    cutoff = time.time() - (MAX_DRAFT_AGE_DAYS * 86400)
+    gone = 0
+    for r in pending():
+        if r.get("first_seen", 0) < cutoff:
+            _path(r["id"]).unlink(missing_ok=True)
+            gone += 1
+    return gone
 
 
 def _record(rid: str, kind: str, payload: dict) -> str | None:
@@ -229,18 +259,24 @@ def _record(rid: str, kind: str, payload: dict) -> str | None:
     existing = load(rid)
     if existing:
         existing["occurrences"] = existing.get("occurrences", 1) + 1
+        existing["last_seen"] = time.time()
         return _write(existing)
+
+    prune()
 
     # Checked only for a genuinely new report, so a crash loop sitting at the cap keeps
     # counting the very bug that is looping.
     if len(pending()) >= MAX_PENDING:
         return None
 
+    now = time.time()
     return _write({
         "id": rid,
         "kind": kind,
         "payload": payload,
         "occurrences": 1,
+        "first_seen": now,
+        "last_seen": now,
         "issue_url": None,
     })
 
@@ -301,6 +337,139 @@ def render(rec: dict) -> str:
         f"charter {p.get('charter_version')} · Python {p.get('python_version')} "
         f"· {p.get('os')}")
     return "\n".join(lines)
+
+
+# --- consent ------------------------------------------------------------------------
+
+class ReportingError(RuntimeError):
+    """A reporting operation failed in a way the Reporter must be told about.
+
+    Deliberately loud. The forge adapter's ``_api`` is documented as best-effort and
+    returns None on any failure so the status line can never crash — correct there, and
+    catastrophic here: applied to publishing, "swallow it and return None" means the
+    Reporter's report vanishes while they are told it worked (docs/adr/0002).
+    """
+
+
+def consent_path() -> Path:
+    """Where consent-to-publish is remembered — under the **human's** config home.
+
+    Not STATE_DIR: that is per control plane, so a Reporter with several planes would be
+    asked repeatedly until the safeguard became a reflex. Not charter.toml: that is
+    committed, and would enrol a whole team on one person's say-so (docs/adr/0003).
+
+    ``$CHARTER_CONFIG_HOME`` overrides it. That exists rather than relying on
+    ``$XDG_CONFIG_HOME`` alone for a concrete reason: **`gh` keeps its own auth under
+    XDG_CONFIG_HOME**, so anything redirecting that variable to isolate charter's consent
+    also logs `gh` out — which silently turns a publish into the no-`gh` fallback path.
+    """
+    base = (os.environ.get("CHARTER_CONFIG_HOME")
+            or os.environ.get("XDG_CONFIG_HOME")
+            or (Path.home() / ".config"))
+    return Path(base) / "charter" / "reporting-consent"
+
+
+def has_consent() -> bool:
+    return consent_path().exists()
+
+
+def grant_consent() -> None:
+    p = consent_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        "The Reporter agreed that `charter report send` may open issues on the upstream "
+        "tracker under their own GitHub identity. Delete this file to withdraw.\n")
+
+
+# --- the forge ----------------------------------------------------------------------
+# The ONLY network boundary in reporting, and the only place charter writes to a forge.
+# Concentrated into one function on purpose: it is the single seam tests stub, which is
+# what lets the whole feature be developed and verified without touching a real tracker.
+
+#: Where reports go. Configuration rather than a constant so a fork can point its users at
+#: its own tracker, and an internal deployment can keep reports off a public one.
+DEFAULT_UPSTREAM = "diazoxide/charter"
+
+
+def upstream_repo() -> str:
+    return os.environ.get("CHARTER_UPSTREAM_REPO") or DEFAULT_UPSTREAM
+
+
+def gh(args: list[str]) -> str:
+    """Run one `gh` command and return its stdout. Raises :class:`ReportingError`.
+
+    A flat call rather than a `Forge` method (docs/adr/0002): reporting always targets one
+    specific repo on github.com, so it is not polymorphic over the Reporter's forges, and
+    putting ``create_issue`` on that protocol would imply a GitLab implementation nobody
+    will ever need.
+    """
+    p = util.run(["gh", *args], check=False)
+    if p.returncode != 0:
+        raise ReportingError((p.stderr or p.stdout or "gh failed").strip())
+    return (p.stdout or "").strip()
+
+
+def gh_available() -> bool:
+    """Whether this Reporter can publish directly. False for a GitLab-only Reporter, and
+    whenever `gh` is missing, logged out, or rate-limited — all of which fall back to the
+    prefilled URL rather than losing the report."""
+    p = util.run(["gh", "auth", "status"], check=False)
+    return p.returncode == 0
+
+
+def title(rec: dict) -> str:
+    """The upstream issue title. Crashes lead with exception type and subcommand so
+    duplicates collide visually in the issue list."""
+    p = rec["payload"]
+    if p.get("exception_type"):
+        return f"{p['exception_type']} in `charter {p.get('subcommand', '?')}`"
+    first = (p.get("text") or "").strip().splitlines()[0]
+    return first[:72] + ("…" if len(first) > 72 else "")
+
+
+def search_duplicates(rec: dict) -> list[dict]:
+    """Candidate upstream issues that may already cover *rec*.
+
+    Returns candidates for a human or the reporting agent to **judge** — deliberately not
+    a verdict. A keyword score cannot separate "clone fails on a private repo" from "clone
+    fails on a submodule", which is a distinction that needs the issue read.
+    """
+    out = gh(["issue", "list", "--repo", upstream_repo(), "--search", title(rec),
+              "--state", "all", "--limit", "5", "--json", "number,title,url"])
+    try:
+        return json.loads(out) if out else []
+    except ValueError:
+        return []
+
+
+def issue_body(rec: dict) -> str:
+    return render(rec)
+
+
+def create_issue(rec: dict) -> str:
+    """Open the upstream issue and return its URL."""
+    return gh(["issue", "create", "--repo", upstream_repo(),
+               "--title", title(rec), "--body", issue_body(rec),
+               "--label", "via-charter-report", "--label", rec.get("kind", "bug")])
+
+
+def comment_on(issue: str, rec: dict) -> str:
+    """Add this Reporter's reproduction to an existing upstream issue.
+
+    The default on a confirmed duplicate: silently dropping a repeat throws away the most
+    valuable thing it carries — a second environment where the bug reproduces.
+    """
+    return gh(["issue", "comment", issue, "--repo", upstream_repo(), "--body", issue_body(rec)])
+
+
+def fallback_url(rec: dict) -> str:
+    """A prefilled `issues/new` link, for a Reporter with no usable `gh`.
+
+    charter supports GitLab forges, so "no GitHub identity" is a real population rather
+    than an edge case — and this doubles as the escape hatch when `gh` is broken.
+    """
+    return (f"https://github.com/{upstream_repo()}/issues/new"
+            f"?title={util.urlenc(title(rec))}&body={util.urlenc(issue_body(rec))}")
 
 
 def mark_sent(report_id: str, issue_url: str) -> None:
