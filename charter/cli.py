@@ -9,6 +9,7 @@ from . import (
     __version__,
     commands,
     commands_persona,
+    commands_report,
     commands_secrets,
     commands_workspace,
     commands_worktree,
@@ -188,8 +189,24 @@ def build_parser() -> argparse.ArgumentParser:
     _add_vault_parser(sub)
     _add_secret_parser(sub)
     _add_persona_parser(sub)
+    _add_report_parser(sub)
 
     return p
+
+
+def _add_report_parser(sub) -> None:
+    r = sub.add_parser("report",
+                       help="Report a charter bug or missing capability upstream (drafts "
+                            "locally; nothing is published without a second command).")
+    rsub = r.add_subparsers(dest="report_cmd", required=True)
+
+    bug = rsub.add_parser("bug", help="Charter did something wrong.")
+    bug.add_argument("text", help="What went wrong, in your own words.")
+    bug.set_defaults(func=commands_report.cmd_report_bug)
+
+    gap = rsub.add_parser("gap", help="Charter cannot do something it should.")
+    gap.add_argument("text", help="What is missing, in your own words.")
+    gap.set_defaults(func=commands_report.cmd_report_gap)
 
 
 def _add_workspace_parser(sub) -> None:
@@ -710,6 +727,26 @@ def _split_exec_command(argv: list[str]) -> tuple[list[str], list[str] | None]:
     return argv, None
 
 
+def _record_crash(exc: BaseException, subcommand: str) -> None:
+    """Draft a report for a crash, locally. Never raises.
+
+    Wrapped defensively because a bug in the bug reporter is the worst possible thing to
+    surface in place of the real error: whatever happens here, the caller re-raises the
+    original exception and the developer still sees what actually broke.
+
+    Nothing is published. This only writes to the Reporter's own disk, which is what lets
+    detection default to on without charter reading as telemetry (docs/adr/0003).
+    """
+    try:
+        from . import report
+        rid = report.record_bug(exc, subcommand)
+        if rid:
+            util.err(f"↳ this is a charter bug, drafted locally as {rid} — nothing sent. "
+                     f"Review and report it: charter report --help")
+    except Exception:  # noqa: BLE001 - see the docstring; this must never win over `exc`
+        pass
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv = _hoist_persona_memory(argv)
@@ -728,3 +765,12 @@ def main(argv=None) -> int:
         # called failing to answer.
         util.err(str(e))
         return 1
+    except Exception as e:
+        # Anything reaching here IS a charter bug — the two clauses above are exactly the
+        # conditions, and that distinction predates this feature. charter is the only thing
+        # that reliably observes its own crash (no hook does: PostToolUse matches only
+        # Write|Edit|MultiEdit and Task|Agent, and PreToolUse runs *before* the command),
+        # and it already holds the exception, the subcommand and the version that a hook
+        # would have to reconstruct from a string.
+        _record_crash(e, argv[0] if argv else "?")
+        raise  # Recording is not handling. The developer still gets their traceback.

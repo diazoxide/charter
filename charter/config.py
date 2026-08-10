@@ -294,6 +294,12 @@ def derive(root: Path) -> dict:
     #: ``$CHARTER_PERSONA`` and by a command's ``--persona``. Gitignored (in STATE_DIR).
     d["ACTIVE_PERSONA_FILE"] = state / "active-persona"
 
+    #: Drafted upstream **reports** — charter's own bugs and gaps, awaiting the Reporter's
+    #: approval before anything is published (see charter/report.py, docs/adr/0003).
+    #: Under STATE_DIR because it is per-developer and gitignored: a draft may quote an
+    #: exception message that has not been redacted yet, so it must never be committable.
+    d["REPORTS_DIR"] = state / "reports"
+
     return d
 
 
