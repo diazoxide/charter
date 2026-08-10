@@ -32,7 +32,8 @@ the thing that otherwise gets re-proposed every six months.
 | 3.1 a second committer pushing over SSH | fixed — `charter/planegit.py` is the one committer |
 | (not in the audit) two sessions in one window shared a workspace | fixed — `WINDOWID` is not a pane id |
 | 3.4 no timeout on `util.run`; doctor printed nothing on a stall | fixed — `ProcTimeout`, per-check budgets, streamed results |
-| everything else | open |
+| 3.5 three `_session_id`s; the shared bucket never collected | fixed — `charter/session.py`; GC no longer protects it |
+| everything else | open (3.2 guards.py, 3.3 config derive seam) |
 
 Numbers in sections 2 and 3 that were not adversarially re-checked are flagged in
 "Evidence caveats" at the end. Two of the report's own claims are discounted there.

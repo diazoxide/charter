@@ -85,7 +85,9 @@ def refs_dir(name: str, shared: bool = False) -> Path:
 
 
 def _session_id(session: str | None = None) -> str:
-    return (session or os.environ.get("CLAUDE_CODE_SESSION_ID") or "nosession").strip() or "nosession"
+    """This session's bucket name — see :mod:`charter.session`, which owns the question."""
+    from . import session as _session
+    return _session.bucket(session)
 
 
 def ephemeral_dir(name: str, shared: bool = False, session: str | None = None) -> Path:
@@ -748,11 +750,18 @@ def gc_ephemeral(current: str | None = None, max_age_hours: float = 6.0) -> int:
     root = config.PERSONA_STATE_DIR / "ephemeral"
     if not root.exists():
         return 0
-    cur = _session_id(current)
+    # `current()`, not `_session_id()`. The latter falls back to the shared NO_SESSION
+    # bucket, so when the GC itself ran without a session id — which is most of the time,
+    # since it runs from a hook — that bucket compared equal to "the live session" and was
+    # skipped every single time. Ephemeral scratch from every id-less session accumulated
+    # there forever, which is the opposite of ephemeral. There is nothing to preserve when
+    # there is no current session, so nothing is exempt.
+    from . import session as _session
+    cur = _session.current(current)
     now = time.time()
     removed = 0
     for sd in root.iterdir():
-        if not sd.is_dir() or sd.name == cur:
+        if not sd.is_dir() or (cur is not None and sd.name == cur):
             continue
         try:
             newest = max([sd.stat().st_mtime] + [p.stat().st_mtime for p in sd.rglob("*")])

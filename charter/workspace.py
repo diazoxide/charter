@@ -48,13 +48,9 @@ def _ensure_layout() -> None:
 
 
 def _session_id(explicit: str | None = None) -> str | None:
-    """The current Claude session id: an explicit one (e.g. from the status-line
-    payload) or ``$CLAUDE_CODE_SESSION_ID`` (present for Bash tool commands)."""
-    sid = explicit or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if not sid:
-        return None
-    sid = re.sub(r"[^A-Za-z0-9._-]", "", sid.strip())
-    return sid or None
+    """This session's id, or ``None`` — see :mod:`charter.session`, which owns it."""
+    from . import session as _session
+    return _session.current(explicit)
 
 
 def _session_file(sid: str) -> Path:
