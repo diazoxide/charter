@@ -16,7 +16,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-from . import config, gitpolicy, util, workspace
+from . import config, gitpolicy, util, workspace, worktree
 from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory_reactive,
                        commit_push)
 
@@ -73,6 +73,27 @@ def cmd_workspace_create(args) -> int:
     live = getattr(args, "live", False)
     if live:
         workspace.set_live(args.name, True)
+
+    # Embedded: give the workspace the working tree that MAKES it a workspace. A fleet
+    # workspace gets its trees from `charter clone`; here there is nothing to clone, so
+    # the only way to isolate is a worktree of the one repo — and leaving that to the user
+    # is what made every embedded workspace share one checkout.
+    tree_path = None
+    if (config.PLANE_SHAPE == "embedded"
+            and args.name != config.DEFAULT_WORKSPACE
+            and workspace.own_tree(args.name) is None):
+        rt = workspace.root_tree()
+        if rt is not None:
+            branch = getattr(args, "branch", None) or args.name
+            tree_path = worktree.path_for(args.name, rt.name, args.name)
+            tree_path.parent.mkdir(parents=True, exist_ok=True)
+            add = ["worktree", "add", str(tree_path)]
+            add += (["-b", branch] if not worktree.branch_exists(rt, branch) else [branch])
+            proc = util.run(["git", "-C", str(rt), *add], check=False)
+            if proc.returncode != 0:
+                util.err(f"could not create this workspace's working tree:\n"
+                         f"{(proc.stderr or '').strip()}")
+                return 1
     mode = ("LIVE — charter + manifest + memory committed + shared + auto-saved" if live
             else "LOCAL — private (nothing committed); `charter workspace live` to share")
     util.ok(f"Workspace '{args.name}' ready ({mode}) → {wd.relative_to(config.ROOT)}/")
@@ -93,9 +114,19 @@ def cmd_workspace_create(args) -> int:
         util.ok(f"Active workspace set to '{args.name}'{_scope_note(scope)} — 🔒 locked for this session.")
         _warn_env_override(args.name)
 
+    if tree_path is not None:
+        # The path is the point: charter cannot cd your shell, so selecting the workspace
+        # is an instruction rather than an action — the same shape `worktree add` already
+        # has. Being INSIDE this directory is what makes it the active workspace
+        # (`workspace.from_path`), so no pointer has to agree with anything.
+        rel = tree_path if not str(tree_path).startswith(str(config.ROOT)) else tree_path
+        util.ok(f"Working tree → {rel}")
+        util.info(f"  enter:  cd {rel} && claude")
+        util.info(f"  Being in that directory IS this workspace — no pointer needed.")
+
     if args.repos:
         return cmd_clone(SimpleNamespace(repos=args.repos, workspace=args.name))
-    if not args.use:
+    if not args.use and tree_path is None:
         util.info(f"Select it with: charter workspace use {args.name}  "
                   f"(or --workspace {args.name} per command)")
     return 0
@@ -110,8 +141,29 @@ def cmd_workspace_use(args) -> int:
     # `use fature-x` created `fature-x`, took the session lock, and the correction then
     # hit `✗ Workspace is 🔒 locked to 'fature-x' for this session`. Creating is now
     # deliberate (`--create`), and an unknown name is a question rather than an action.
+    # In an embedded plane a workspace IS a working tree, so one without a tree isolates
+    # nothing — selecting it would put this session on the same files as every other
+    # workspace, which is the promise `workspace` exists to keep. Refused rather than
+    # warned: this is charter's own command, so it can decline without breaking any work,
+    # and a warning would leave the default path wrong.
+    if (config.PLANE_SHAPE == "embedded"
+            and args.name != config.DEFAULT_WORKSPACE
+            and args.name in workspace.list_workspaces()
+            and workspace.own_tree(args.name) is None):
+        util.err(f"workspace '{args.name}' has no working tree of its own, so selecting it "
+                 f"would leave you on the same files as every other workspace.")
+        util.info(f"  Give it one: charter workspace create {args.name}")
+        util.info(f"  (In an embedded plane a workspace is a worktree of this repo; "
+                  f"'{config.DEFAULT_WORKSPACE}' is the repo itself.)")
+        return 1
+
+    # `default` is always selectable, whether or not its directory exists yet — it is
+    # documented as "the always-present workspace used when none is selected", and
+    # `ensure` creates it on demand. The unknown-name guard below refused it in a plane
+    # that had never made one, which is every fresh plane.
     existing = workspace.list_workspaces()
-    if args.name not in existing and not getattr(args, "create", False):
+    if (args.name not in existing and args.name != config.DEFAULT_WORKSPACE
+            and not getattr(args, "create", False)):
         import difflib
         close = difflib.get_close_matches(args.name, existing, n=3, cutoff=0.6)
         util.err(f"no workspace named '{args.name}'.")

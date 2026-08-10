@@ -150,6 +150,56 @@ rewriting git's own `gitdir` pointer, and `git worktree move` is the command tha
 correctly. `charter doctor` finds any that are still inside the codebase and prints that
 command with the paths filled in.
 
+### What a workspace is, in each shape
+
+A workspace is **a set of working trees** — one task's code, kept apart from every other
+task's. How it gets those trees is the only thing that differs:
+
+| | fleet | embedded |
+| --- | --- | --- |
+| a workspace's trees | clones, via `charter clone` | a **worktree** of the one repo |
+| `default` | its own clones like any other | **the repo itself** |
+| creating one | `workspace create` then `clone` | `workspace create` materialises the tree |
+
+In an embedded plane there is nothing to clone apart, so a workspace that materialised
+nothing isolated nothing: every workspace resolved to the same root tree, and `ws use
+alpha` then `ws use beta` changed the memory namespace while leaving you on exactly the
+same files. Two agents in two workspaces edited the same branch.
+
+So `charter workspace create feature-x` now creates the tree that makes it a workspace:
+
+```
+$ charter workspace create feature-x
+✓ Workspace 'feature-x' ready (LOCAL …) → workspaces/feature-x/
+✓ Working tree → ../app.worktrees/feature-x/app/feature-x
+  enter:  cd ../app.worktrees/feature-x/app/feature-x && claude
+  Being in that directory IS this workspace — no pointer needed.
+```
+
+Its branch is the workspace name unless you pass `--branch`.
+
+`default` deliberately stays the repo itself, so a solo user's path is `charter init`, work
+in your repo — charter starts materialising trees only when you ask for a *second*
+concurrent thing.
+
+**Selecting a workspace with no tree is refused**, because it would put you on the same
+files as every other workspace — the thing workspaces exist to prevent. `charter workspace
+create <name>` gives it one.
+
+### The directory you are in decides the workspace
+
+A workspace's trees live at paths that name it — `workspaces/<ws>/<repo>/` for a fleet
+clone, `<worktrees-root>/<ws>/<repo>/<piece>/` for a worktree — so **being inside one is
+the answer**, ahead of any pointer:
+
+```
+--workspace → $CHARTER_WORKSPACE → the tree you are standing in → session → terminal → default
+```
+
+You cannot be in two directories at once, which is precisely the property the pointers
+lacked: a session that had never chosen anything could inherit another session's choice.
+`charter workspace current` reports `via cwd` when the directory decided it.
+
 ### Working inside a worktree
 
 `charter.toml` is a tracked file, so an embedded plane checks a copy of it into every

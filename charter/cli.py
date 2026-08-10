@@ -216,6 +216,10 @@ def _add_workspace_parser(sub) -> None:
     cr.add_argument("--vision", "--about", dest="vision",
                     help="The goal/idea for this workspace — seeds its living charter "
                          "(workspaces/<name>/workspace.md). Ask the developer if you don't know it.")
+    cr.add_argument("--branch", help="Branch for this workspace's working tree (embedded "
+                                     "planes only; default: the workspace name). In an "
+                                     "embedded plane a workspace IS a worktree of the "
+                                     "repo, since there is nothing to clone apart.")
     cr.add_argument("repos", nargs="*", help="Repos to clone into it immediately.")
     cr.set_defaults(func=commands_workspace.cmd_workspace_create)
 

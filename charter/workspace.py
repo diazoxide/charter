@@ -130,6 +130,13 @@ def is_git_repo(path: Path) -> bool:
     return (path / ".git").exists()
 
 
+def is_tree(path: Path) -> bool:
+    """A working tree of either provenance — a clone (``.git`` is a directory) or a
+    linked worktree (``.git`` is a file). :func:`is_clone` deliberately excludes the
+    second; this is for callers that only need "is there a checkout here"."""
+    return (Path(path) / ".git").exists()
+
+
 def is_clone(path: Path) -> bool:
     """A real clone, not a worktree. Git itself draws the line: a clone's ``.git`` is a
     DIRECTORY, a linked worktree's ``.git`` is a FILE pointing at the shared gitdir. So a
@@ -141,15 +148,50 @@ def workspace_dir(name: str) -> Path:
     return config.WORKSPACES_DIR / name
 
 
+def from_path(path=None) -> str | None:
+    """The workspace whose working tree *path* is inside, or ``None``.
+
+    A workspace's trees live at known places — `workspaces/<ws>/<repo>/…` for a fleet
+    clone, `<worktrees-root>/<ws>/<repo>/<piece>/…` for a worktree — so standing in one
+    IS the answer to "which workspace am I in", and it is an answer no pointer can
+    contradict. You cannot be in two directories at once, which is exactly the property
+    the pointers lacked: a session that had never chosen anything inherited another
+    session's choice through a shared terminal key.
+    """
+    from . import worktree
+    try:
+        here = Path(path or os.getcwd()).resolve()
+    except (OSError, RuntimeError):
+        return None
+
+    loc = worktree.locate(here)          # (workspace, repo, piece) — handles both roots
+    if loc:
+        return loc[0]
+    try:
+        parts = here.relative_to(Path(config.WORKSPACES_DIR).resolve()).parts
+    except (ValueError, OSError, RuntimeError):
+        return None
+    # `workspaces/<ws>` alone is the container, not a tree — only a repo inside it counts.
+    return parts[0] if len(parts) >= 2 else None
+
+
 def resolve(explicit: str | None = None, session_id: str | None = None) -> str:
-    """Active workspace by precedence: ``--workspace`` → ``$CHARTER_WORKSPACE`` →
-    per-session pointer (Claude session id) → per-terminal pointer (survives reopen)
-    → ``default``. No shared/global pointer, so one pane never affects another."""
+    """Active workspace by precedence: ``--workspace`` → ``$CHARTER_WORKSPACE`` → **the
+    tree you are standing in** → per-session pointer → per-terminal pointer → ``default``.
+
+    The cwd sits above the pointers because it cannot be wrong: a workspace's trees live
+    at paths that name the workspace, so being inside one is not a hint about which
+    workspace is active, it is the fact. The pointers remain for the case with no tree to
+    stand in — a shell at the plane root.
+    """
     if explicit:
         return explicit
     env = os.environ.get("CHARTER_WORKSPACE")
     if env:
         return env.strip()
+    here = from_path()
+    if here:
+        return here
     sid = _session_id(session_id)
     if sid:
         val = _read(_session_file(sid))
@@ -169,6 +211,9 @@ def source(explicit: str | None = None, session_id: str | None = None) -> str:
         return "--workspace"
     if os.environ.get("CHARTER_WORKSPACE"):
         return "$CHARTER_WORKSPACE"
+    if from_path():
+        return "cwd"      # must mirror `resolve`'s order, or the status line explains
+                          # the active workspace by naming a source that did not decide it
     sid = _session_id(session_id)
     if sid and _read(_session_file(sid)):
         return "session"
@@ -320,8 +365,42 @@ def root_tree() -> Path | None:
         return None
 
 
+def own_tree(ws: str) -> Path | None:
+    """The working tree that belongs to *ws* alone, in an **embedded** plane.
+
+    Embedded means the codebase cannot be cloned apart, so a workspace that materialises
+    nothing isolates nothing: `ws use alpha` then `ws use beta` changed the memory
+    namespace and not one file being edited, while charter promised "never mix
+    workspaces". Two agents in two workspaces were editing the same files on the same
+    branch.
+
+    So in an embedded plane a workspace **is** a working tree:
+
+    - ``default`` owns the root tree. A solo user's experience stays `charter init` and
+      work in your repo — charter starts materialising trees only when you ask for a
+      SECOND concurrent thing, so the simplest case is never the strangest one.
+    - every other workspace owns the worktree whose piece name equals the workspace name,
+      i.e. ``<worktrees-root>/<ws>/<repo>/<ws>``. Reusing the existing piece layout rather
+      than inventing a level: `worktree.dirs_for` keeps listing it, and a workspace's own
+      tree is simply its first piece.
+
+    ``None`` when the workspace has no tree yet — the state `workspace use` refuses.
+    Always ``None`` in a fleet plane, where a workspace holds clones instead.
+    """
+    if config.PLANE_SHAPE != "embedded":
+        return None
+    rt = root_tree()
+    if rt is None:
+        return None
+    if ws == config.DEFAULT_WORKSPACE:
+        return rt
+    from . import worktree
+    p = worktree.path_for(ws, rt.name, ws)
+    return p if is_tree(p) else None
+
+
 def repo_trees(ws: str) -> list[Path]:
-    """Every repo this workspace works in: the plane's root tree first, then its clones.
+    """Every repo this workspace works in.
 
     The one list anything asking "which repos am I on?" should use — the status line's
     rows and `gl-refresh`'s fetch targets both come from here, so a repo can never be
@@ -329,9 +408,18 @@ def repo_trees(ws: str) -> list[Path]:
     Splitting that decision in two is what left the root tree with a permanently empty
     CI column: it was rendered from one list and refreshed from another.
 
-    A fleet workspace's answer is unchanged (its clones, plus the plane's own repo, which
-    has a branch like any other). A monorepo workspace's answer is just the root tree.
+    Fleet: the plane's own repo (it has a branch like any other) plus this workspace's
+    clones. Embedded: this workspace's OWN tree — the root for `default`, its worktree
+    otherwise. Returning the root for every embedded workspace is what made them all look
+    like the same workspace, because they were.
     """
+    if config.PLANE_SHAPE == "embedded":
+        # The workspace's OWN tree stands where the shared root used to — every embedded
+        # workspace returning the same root is what made them all one workspace. Clones
+        # still count: nothing stops `charter clone` in an embedded plane, and a hybrid
+        # (the codebase plus a vendored dependency) is a reasonable thing to have.
+        own = own_tree(ws)
+        return ([own] if own is not None else []) + clones(ws)
     rt = root_tree()
     return ([rt] if rt is not None else []) + clones(ws)
 
