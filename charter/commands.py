@@ -564,11 +564,17 @@ def cmd_status(args) -> int:
 
 
 def _status_for_workspace(ws: str, inv_by_name: dict, active: str) -> None:
-    clones = {d.name: d for d in workspace.clones(ws)}
+    # `repo_trees` includes an embedded plane's own repo, which has no clone and never
+    # will — listing only `clones` reported it as an empty workspace and then advised
+    # `charter clone`, in a shape with nothing to clone.
+    clones = {d.name: d for d in workspace.repo_trees(ws)}
     marker = " (active)" if ws == active else ""
-    print(f"— workspace: {ws}{marker} · {len(clones)} cloned —")
+    print(f"— workspace: {ws}{marker} · {len(clones)} repo(s) —")
     if not clones:
-        print(f"  (empty; `charter clone <repo> --workspace {ws}` to populate)\n")
+        hint = (f"`charter worktree add <repo> <piece>` to start a piece"
+                if config.PLANE_SHAPE == "embedded"
+                else f"`charter clone <repo> --workspace {ws}` to populate")
+        print(f"  (empty; {hint})\n")
         return
     fmt = "  {:<38} {:<12} {}"
     print(fmt.format("REPO", "STACK", "BRANCH / NOTE"))

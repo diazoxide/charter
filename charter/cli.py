@@ -406,6 +406,10 @@ def _sa_set(p):
     p.add_argument("--stdin", action="store_true", help="Read the value from stdin.")
     p.add_argument("--from-file", help="Read the value verbatim from a file.")
     p.add_argument("--value", help="Inline value (discouraged: visible in shell history).")
+    p.add_argument("--allow-empty", action="store_true", dest="allow_empty",
+                   help="Permit storing an empty value. Refused by default: an empty "
+                        "secret reads as present and healthy everywhere charter looks, so "
+                        "the mistake only surfaces later as a 401.")
 
 
 def _sa_get(p):

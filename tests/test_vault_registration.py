@@ -244,3 +244,53 @@ class SharedAndLocalHalves(PersonaIso):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlaintextMustNotLandInGit(PersonaIso):
+    """A plain-file vault holds PLAINTEXT. The default sits under `.charter/`, which
+    `charter init` gitignores — but `--file` accepts any path, and a vault pointed at one
+    git tracks commits the credentials on the next `charter save`. Nothing said so:
+    `doctor` reported "all healthy", because from the vault's point of view it was.
+
+    The PATH is refused, not `--share`: a team that provisions the file out of band has a
+    legitimate use for a shared pointer, and the unignored path is the actual defect — it
+    also catches the far more common case where `--share` was never passed at all.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(self.tmp)], check=True, capture_output=True)
+        (self.tmp / ".gitignore").write_text("/.charter/\n")
+
+    def _add(self, name, provider="plain-file", file=None):
+        with redirect_stderr(io.StringIO()) as err:
+            rc = commands_secrets.cmd_vault_add(
+                _args(name, provider, file=str(file) if file else None))
+        return rc, err.getvalue()
+
+    def test_a_tracked_path_is_refused(self):
+        rc, err = self._add("leaky", file=self.tmp / "cfg" / "leaky.json")
+        self.assertEqual(rc, 1)
+        self.assertIn("NOT gitignored", err)
+        self.assertNotIn("leaky", registry.vaults())
+
+    def test_the_gitignored_default_is_fine(self):
+        rc, _ = self._add("ok")
+        self.assertEqual(rc, 0)
+        self.assertIn("ok", registry.vaults())
+
+    def test_a_path_outside_the_plane_is_not_our_business(self):
+        rc, _ = self._add("ext", file=self.tmp.parent / "outside.json")
+        self.assertEqual(rc, 0)
+
+    def test_a_reference_vault_there_is_allowed(self):
+        """It stores op:// URIs rather than values, and committing those is the point."""
+        rc, _ = self._add("refs", provider="reference", file=self.tmp / "cfg" / "refs.json")
+        self.assertEqual(rc, 0)
+
+    def test_a_plane_that_is_not_a_repo_has_nothing_to_leak_into(self):
+        import shutil as _sh
+        _sh.rmtree(self.tmp / ".git")
+        rc, _ = self._add("anywhere", file=self.tmp / "cfg" / "v.json")
+        self.assertEqual(rc, 0)

@@ -117,7 +117,11 @@ def cmd_worktree_list(args) -> int:
             return 1
         targets = [clone]
     else:
-        targets = workspace.clones(ws)
+        # `repo_trees`, not `clones` — its own docstring calls it "the one list
+        # anything asking 'which repos am I on?' should use", and `gl-refresh`
+        # already uses it. An embedded plane has NO clones, so this said "No
+        # worktrees" while the status line one line above was drawing them.
+        targets = workspace.repo_trees(ws)
 
     total = 0
     for clone in targets:

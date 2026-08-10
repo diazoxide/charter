@@ -75,6 +75,35 @@ def _env_bindings(args) -> dict | None:
     return pairs or None
 
 
+def _unignored_plaintext(configured: str):
+    """The path, if a plain-file vault would store plaintext somewhere git tracks.
+
+    ``None`` when it is outside the plane (git here has no say), when the plane is not a
+    git repo, or when git already ignores it. Asks `git check-ignore` rather than reading
+    `.gitignore`, so nested ignore files, negations and global excludes all count — the
+    question is only ever "would git take this file", and git is the authority on that.
+    """
+    from pathlib import Path as _P
+    p = _P(configured).expanduser()
+    if not p.is_absolute():
+        p = _P(config.ROOT) / p
+    try:
+        p.resolve().relative_to(_P(config.ROOT).resolve())
+    except (ValueError, OSError):
+        return None                                   # outside the plane
+    if util.run(["git", "-C", str(config.ROOT), "rev-parse", "--git-dir"],
+                check=False).returncode != 0:
+        return None                                   # not a repo; nothing to commit to
+    ignored = util.run(["git", "-C", str(config.ROOT), "check-ignore", "-q", str(p)],
+                       check=False).returncode == 0
+    if ignored:
+        return None
+    try:
+        return str(p.resolve().relative_to(_P(config.ROOT).resolve()))
+    except (ValueError, OSError):
+        return str(p)
+
+
 def cmd_vault_add(args) -> int:
     cfg: dict = {}
     if args.provider == "plain-file":
@@ -87,6 +116,27 @@ def cmd_vault_add(args) -> int:
         cfg["file"] = _portable_file(args.file or config.VAULTS_DIR / f"{args.name}.json")
     elif args.file:
         cfg["file"] = _portable_file(args.file)
+    # A plain-file vault holds PLAINTEXT. The default lives under `.charter/`, which
+    # `charter init` gitignores — but `--file` accepts any path, and a vault pointed at
+    # one git tracks commits the credentials on the next `charter save`. Nothing said so:
+    # `doctor` reported "all healthy", because from the vault's point of view it was.
+    #
+    # Refusing the PATH rather than refusing `--share` (which would be the obvious guess)
+    # is deliberate: a team that provisions the file out of band has a legitimate use for
+    # a shared pointer, and the unignored path is the actual defect — it also catches the
+    # far more common case where `--share` was never passed at all.
+    if args.provider == "plain-file" and cfg.get("file"):
+        unignored = _unignored_plaintext(cfg["file"])
+        if unignored:
+            util.err(f"'{unignored}' is inside the control plane and NOT gitignored — a "
+                     f"plain-file vault stores plaintext, so the next `charter save` would "
+                     f"commit these credentials.")
+            util.info("  Keep it out of git (add it to .gitignore, or use the default "
+                      f"under {config.VAULTS_DIR.name}/), or point --file outside the plane.")
+            util.info("  A `reference` vault stores op:// URIs rather than values and IS "
+                      "safe to commit: --provider reference")
+            return 1
+
     if args.provider == "1password":
         if not getattr(args, "op_vault", None):
             util.err("--op-vault is required for a 1password vault: which 1Password "
@@ -198,16 +248,36 @@ def _provider(name: str):
 
 
 def _read_value(args) -> str:
-    """Obtain a secret value without exposing it on the command line."""
+    """Obtain a secret value without exposing it on the command line.
+
+    A non-tty stdin is NOT on its own a request to read a secret from it. An agent's Bash
+    tool, a CI step and `< /dev/null` all present one, so `charter secret set devops
+    API_TOKEN` typed without a value read EOF, stored ``""``, and exited 0 — after which
+    `get` says the key is present, `vault list` counts it and `doctor` calls the vault
+    healthy. The failure surfaces hours later as a 401 from something unrelated.
+
+    So an explicit source is required whenever stdin is not a terminal: one of `--stdin`,
+    `--from-file` or `--value`. With a terminal, the interactive prompt still applies and
+    needs no flag.
+    """
     if args.from_file:
         return Path(args.from_file).expanduser().read_text()
     if args.value is not None:
         util.warn("Value passed via --value is visible in shell history / process list; "
                   "prefer --stdin or --from-file.")
         return args.value
-    if args.stdin or not sys.stdin.isatty():
+    if args.stdin:
         data = sys.stdin.read()
         return data[:-1] if data.endswith("\n") else data  # strip one trailing newline
+    if not sys.stdin.isatty():
+        raise base.VaultError(
+            "no value given, and stdin is not a terminal — refusing to guess.\n"
+            "  An agent's shell, a CI step and `< /dev/null` all look like this, and\n"
+            "  reading EOF here would overwrite the secret with an empty string.\n"
+            "  Say where the value comes from:\n"
+            "    … | charter secret set <vault> <key> --stdin\n"
+            "    charter secret set <vault> <key> --from-file <path>\n"
+            "    charter secret set <vault> <key> --value <value>   (visible in history)")
     import getpass
     return getpass.getpass(f"Value for '{args.key}' (hidden): ")
 
@@ -216,8 +286,16 @@ def cmd_secret_set(args) -> int:
     try:
         prov = _provider(args.vault)
         value = _read_value(args)
-        if value == "":
-            util.warn("Storing an empty value.")
+        # An empty value is almost always an accident — a command substitution that
+        # produced nothing, a file that was not there — and storing it is indistinguishable
+        # afterwards from storing a real secret: `get` reports present, `vault list` counts
+        # it, `doctor` says healthy. A warning is not enough for something that can only be
+        # detected later, by a 401.
+        if value == "" and not getattr(args, "allow_empty", False):
+            raise base.VaultError(
+                f"refusing to store an empty value for '{args.key}' — it would read as a "
+                f"present, healthy secret everywhere charter looks.\n"
+                f"  If that is genuinely what you want: --allow-empty")
         prov.set(args.key, value)
     except base.VaultError as e:
         util.err(str(e))

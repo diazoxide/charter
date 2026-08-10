@@ -22,6 +22,9 @@ the thing that otherwise gets re-proposed every six months.
 | 2.3 leak guard substring-matched prose | fixed — inspects argv; `--rev` abbreviation closed |
 | 1.3 `charter save` claimed success in a non-git plane | fixed — refuses, and a failed commit is a failure |
 | 1.4 repo table dropped rows alphabetically | fixed — ranked selection, stable display order |
+| 1.6 `secret set` stored `""` on empty stdin, exit 0 | fixed — refuses; `--allow-empty` is the override |
+| 1.5 plaintext vault could land in git | fixed — an unignored path is refused at `vault add` |
+| 1.8 `worktree list`/`status` blind to the root tree | fixed — both use `repo_trees` |
 | everything else | open |
 
 Numbers in sections 2 and 3 that were not adversarially re-checked are flagged in

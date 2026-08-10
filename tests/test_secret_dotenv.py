@@ -21,11 +21,14 @@ import io
 import json
 import os
 import tempfile
+import sys
+from unittest import mock
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 
+from tests._isolation import PersonaIso
 from charter import commands_secrets
 
 _GOLDEN_FIXTURE = Path(__file__).parent / "fixtures" / "dotenv_golden.json"
@@ -530,3 +533,66 @@ class DotenvExec(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnEmptySecretIsRefused(PersonaIso):
+    """`charter secret set devops API_TOKEN` typed without a value read EOF, stored `""`
+    and exited 0. Afterwards `get` says the key is present, `vault list` counts it and
+    `doctor` calls the vault healthy — the failure surfaces hours later as a 401 from
+    something unrelated.
+
+    A non-tty stdin is not on its own a request to read a secret from it: an agent's Bash
+    tool, a CI step and `< /dev/null` all present one.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.secrets import registry
+        registry.add_vault("dev", "plain-file", {"file": "dev.json"})
+
+    def _set(self, **kw):
+        args = SimpleNamespace(vault="dev", key="API_TOKEN", stdin=kw.pop("stdin", False),
+                               from_file=kw.pop("from_file", None),
+                               value=kw.pop("value", None),
+                               allow_empty=kw.pop("allow_empty", False))
+        with redirect_stderr(io.StringIO()) as err:
+            rc = commands_secrets.cmd_secret_set(args)
+        return rc, err.getvalue()
+
+    def test_no_source_with_a_non_tty_stdin_is_refused(self):
+        with mock.patch.object(sys, "stdin", io.StringIO("")):
+            rc, err = self._set()
+        self.assertEqual(rc, 1)
+        self.assertIn("refusing to guess", err)
+
+    def test_the_refusal_names_all_three_ways_to_supply_a_value(self):
+        with mock.patch.object(sys, "stdin", io.StringIO("")):
+            _rc, err = self._set()
+        for flag in ("--stdin", "--from-file", "--value"):
+            self.assertIn(flag, err)
+
+    def test_an_explicit_empty_stdin_is_still_refused(self):
+        """`--stdin` says where the value comes from, not that empty is intended."""
+        with mock.patch.object(sys, "stdin", io.StringIO("")):
+            rc, err = self._set(stdin=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("empty", err)
+
+    def test_allow_empty_is_the_deliberate_override(self):
+        with mock.patch.object(sys, "stdin", io.StringIO("")):
+            rc, _ = self._set(stdin=True, allow_empty=True)
+        self.assertEqual(rc, 0)
+
+    def test_a_real_value_still_stores(self):
+        with mock.patch.object(sys, "stdin", io.StringIO("s3cret\n")):
+            rc, _ = self._set(stdin=True)
+        self.assertEqual(rc, 0)
+
+    def test_an_existing_secret_survives_a_refused_overwrite(self):
+        """The damage was never the error — it was the silent replacement."""
+        from charter.secrets import registry
+        with mock.patch.object(sys, "stdin", io.StringIO("real-token\n")):
+            self._set(stdin=True)
+        with mock.patch.object(sys, "stdin", io.StringIO("")):
+            self._set()
+        self.assertEqual(registry.provider_for("dev").get("API_TOKEN"), "real-token")
