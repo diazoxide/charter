@@ -367,6 +367,21 @@ def commit_push(root, add_cmd: list, message: str | None,
     if add_cmd and add_cmd[0] == "git":
         raise ValueError(f"commit_push(add_cmd=…) takes git's arguments, not a command "
                          f"line — drop the leading 'git' from {add_cmd!r}")
+
+    # A plane is not always a git repo: `charter init` in a fresh directory does not run
+    # `git init`, and that is exactly the README's 60-second path. Every git call below
+    # runs with check=False (this is reached from hooks and background paths that must
+    # never break a turn), so without this the add failed silently, `diff --cached
+    # --quiet` returned 128 rather than 0 so the "Nothing to save" branch was skipped,
+    # the commit failed too, and `rev-parse --short HEAD` came back empty — printing
+    # `✓ Committed : charter save: 0 file(s)` and exiting 0. The personas and memory
+    # charter had just told the user to commit had no history at all.
+    if _git(["rev-parse", "--git-dir"], cwd=root).returncode != 0:
+        util.err(f"{root} is not a git repository, so there is nothing to commit to.")
+        util.info("  charter init does not create one. Run: git init && git remote add "
+                  "origin <url>  — personas and memory are meant to be committed and shared.")
+        return 1
+
     _git(add_cmd, cwd=root)
     if _git(["diff", "--cached", "--quiet"], cwd=root).returncode == 0:
         util.info("Nothing to save — the control-plane working tree is clean.")
@@ -397,6 +412,14 @@ def commit_push(root, add_cmd: list, message: str | None,
     _git([*signcfg, "commit", "-q", "-m", msg], cwd=root)
     if _git(["diff", "--cached", "--quiet"], cwd=root).returncode != 0:  # signed commit failed
         _git(["commit", "--no-gpg-sign", "-q", "-m", msg], cwd=root)
+    # Still staged after both attempts = nothing was committed. Reporting success here is
+    # how a failed commit became `✓ Committed :` with an empty sha — the sha was empty
+    # precisely BECAUSE there was no commit, and that was the only visible symptom.
+    if _git(["diff", "--cached", "--quiet"], cwd=root).returncode != 0:
+        util.err(f"git commit failed — {len(staged)} file(s) are staged but not committed.")
+        util.info("  Run `git -C {} status` to see why; charter has left them staged."
+                  .format(root))
+        return 1
     short = _git(["rev-parse", "--short", "HEAD"], cwd=root).stdout.strip()
     util.ok(f"Committed {short}: {msg}  ({len(staged)} file(s))")
 

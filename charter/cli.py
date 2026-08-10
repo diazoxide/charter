@@ -20,8 +20,27 @@ from .forge.registry import KINDS as _FORGE_KINDS
 from .secrets.registry import PROVIDERS
 
 
+class _NoAbbrev(argparse.ArgumentParser):
+    """An ArgumentParser that refuses prefix abbreviations, for the whole command tree.
+
+    argparse expands any unambiguous prefix by default, so `charter secret get X Y --rev`
+    ran as `--reveal` — and the PreToolUse leak guard, which looks for the flag the user
+    would have to type, saw nothing to deny. A guard that a three-character abbreviation
+    walks past is not a guard.
+
+    Applied by making the ROOT parser this class: `add_subparsers` defaults its
+    `parser_class` to `type(self)`, so every subcommand and sub-subcommand inherits it
+    without each one having to remember. Setting `allow_abbrev=False` on the root alone
+    would have covered only the top level, which is the level with nothing to protect.
+    """
+
+    def __init__(self, *a, **kw):
+        kw.setdefault("allow_abbrev", False)
+        super().__init__(*a, **kw)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = _NoAbbrev(
         prog="charter",
         description="charter — discover, clone, and track org repos on demand.",
     )

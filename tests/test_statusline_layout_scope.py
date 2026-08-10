@@ -448,3 +448,76 @@ class Framed(PersonaIso):
             starts.add(m.start())
         self.assertEqual(len(starts), 1,
                          f"right-column text starts at differing columns: {sorted(starts)}")
+
+
+class OverflowKeepsTheReposWithSomethingToSay(unittest.TestCase):
+    """The cap was a bare positional slice, so with the list in directory order the rows
+    went to whatever sorted first. Observed with 18 clones: thirteen rows of clean
+    `aaa-svc-NN` on main, while `…(+5 more)` swallowed every dirty repo, the only off-main
+    branch and both failing pipelines — the table was showing the repos with nothing to
+    say. The repo you were standing in could be hidden too, so the bold you-are-here
+    marker attached to nothing on screen."""
+
+    def setUp(self):
+        from pathlib import Path
+        self.dirs = [Path(f"/w/aaa-{i:02d}") for i in range(1, 16)] + [
+            Path("/w/zzz-dirty"), Path("/w/zzz-ahead"), Path("/w/mmm-ci")]
+        self.states = {d: {"dirty": False, "ahead": 0, "behind": 0} for d in self.dirs}
+        self.gl = {d: {} for d in self.dirs}
+        self.states[Path("/w/zzz-dirty")] = {"dirty": True, "ahead": 0, "behind": 0}
+        self.states[Path("/w/zzz-ahead")] = {"dirty": False, "ahead": 2, "behind": 0}
+        self.gl[Path("/w/mmm-ci")] = {"ci": "failed", "change": 412, "sigil": "#"}
+
+    def _pick(self, cur=None, root=None):
+        budget = statusline._MAX_REPO_LINES - 1
+        return [d.name for d in
+                statusline._pick_rows(self.dirs, budget, cur, root, self.states, self.gl)]
+
+    def test_a_dirty_repo_survives_the_cap(self):
+        self.assertIn("zzz-dirty", self._pick())
+
+    def test_an_unpushed_repo_survives_the_cap(self):
+        self.assertIn("zzz-ahead", self._pick())
+
+    def test_a_failing_pipeline_survives_the_cap(self):
+        self.assertIn("mmm-ci", self._pick())
+
+    def test_the_repo_you_are_standing_in_always_survives(self):
+        """Otherwise the bold you-are-here marker attaches to nothing on screen."""
+        self.assertIn("aaa-09", self._pick(cur="aaa-09"))
+
+    def test_display_order_is_not_the_ranking(self):
+        """Ranking decides WHICH rows; it must not decide where they sit. A row that
+        moves as its state changes stops being a place you can look — you would re-read
+        the table every turn to find the repo you were just in."""
+        names = self._pick()
+        order = [d.name for d in self.dirs]
+        self.assertEqual(names, sorted(names, key=order.index))
+
+    def test_nothing_is_dropped_when_it_fits(self):
+        from pathlib import Path
+        few = [Path("/w/a"), Path("/w/b")]
+        st = {d: {} for d in few}
+        self.assertEqual(statusline._pick_rows(few, 13, None, None, st, {}),
+                         few)
+
+    def test_a_repo_keeps_its_colour_when_a_neighbour_enters_the_cap(self):
+        from pathlib import Path
+        """Palette was indexed by position among the SHOWN rows, so a repo changed colour
+        whenever a neighbour entered or left — which, with ranked selection, happens the
+        moment anything goes dirty."""
+        rows_a = statusline._repo_rows(self.dirs, "ws", None, self.states,
+                                       {d: "main" for d in self.dirs}, self.gl)
+        self.states[Path("/w/aaa-14")] = {"dirty": True, "ahead": 0, "behind": 0}
+        rows_b = statusline._repo_rows(self.dirs, "ws", None, self.states,
+                                       {d: "main" for d in self.dirs}, self.gl)
+
+        def colour_of(rows, name):
+            for r in rows:
+                line = r.render(statusline._LEFT_W)[0]
+                if re.search(rf"\b{name}\b", _plain(line)):
+                    m = re.search(r"\x1b\[(\d+)m" + r"[^\x1b]*" + name, line)
+                    return m.group(1) if m else None
+            return None
+
+        self.assertEqual(colour_of(rows_a, "aaa-02"), colour_of(rows_b, "aaa-02"))

@@ -535,6 +535,42 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None) -> 
     return tui.Row(name, branch, ci, mr_cell, gap=_GAP)
 
 
+def _pick_rows(dirs, budget: int, cur_repo, root_dir, states, gl) -> list[Path]:
+    """Which repos get a row when there are more repos than rows.
+
+    The cap was a bare positional slice, so with the list in directory order the rows went
+    to whatever sorted first and `…(+N more)` swallowed the rest. Observed with 18 clones:
+    thirteen rows of clean `aaa-svc-NN` on main, and the hidden five held every dirty
+    repo, the only off-main branch and both failing pipelines. The table was showing the
+    repos with nothing to say. Worse, the repo you were standing in could be among the
+    hidden, so the bold you-are-here marker attached to nothing on screen.
+
+    Selection is ranked; **display order is not**. The chosen set is re-sorted back into
+    the original order before drawing, because a row that moves as its state changes stops
+    being a place you can look — you would re-read the whole table every turn to find the
+    repo you were just in. Same reason `_repo_rows` colours by position in the FULL list
+    rather than by position among the shown: a repo keeps its colour and its row whether
+    or not its neighbour went dirty.
+    """
+    order = {d: i for i, d in enumerate(dirs)}
+
+    def rank(d):
+        st = states.get(d) or {}
+        info = gl.get(d) or {}
+        return (
+            0 if d.name == cur_repo else 1,        # where you are, always
+            0 if d == root_dir else 1,             # the plane's own tree
+            0 if st.get("dirty") else 1,
+            0 if (st.get("ahead") or st.get("behind")) else 1,
+            0 if info.get("ci") in ("failed", "running") else 1,
+            0 if info.get("change") else 1,
+            order[d],                              # stable: original order breaks ties
+        )
+
+    chosen = sorted(dirs, key=rank)[:budget]
+    return sorted(chosen, key=lambda d: order[d])
+
+
 def _detail_worktrees(ws: str, dirs) -> list[Path]:
     """The worktrees to draw as full rows, or ``[]`` to keep the one-line summary.
 
@@ -592,20 +628,28 @@ def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
     cur_repo = cur[1] if (cur and (cur[0] is None or cur[0] == active)) else None
     n = len(dirs)
     capped = n > _MAX_REPO_LINES
-    show = dirs[: _MAX_REPO_LINES - 1] if capped else dirs
+    show = _pick_rows(dirs, _MAX_REPO_LINES - 1, cur_repo, root_dir, states, gl) if capped else dirs
     # What's left of the total-row budget after every shown repo gets its own row (and,
     # if capped, the trailing "…(+N more)" line) — spent on nested worktree rows below.
     wt_budget = _MAX_REPO_LINES - len(show) - (1 if capped else 0)
 
+    # Palette index by position in the FULL list, not among the shown. Counting within
+    # `show` meant a repo changed colour whenever a neighbour entered or left the cap —
+    # and with ranked selection that happens the moment anything goes dirty, so the one
+    # channel carrying "this row is that repo" would churn turn to turn.
+    palette_ix, _k = {}, 0
+    for d in dirs:
+        if root_dir is not None and d == root_dir:
+            continue
+        palette_ix[d] = _k
+        _k += 1
+
     rows: list[tui.Node] = []
-    clone_i = 0            # palette index — counts CLONES only, so a repo keeps its
-                           # colour whether or not a root row sits above it
     for i, d in enumerate(show):
         if root_dir is not None and d == root_dir:
             color = _CYAN
         else:
-            color = _PALETTE[clone_i % len(_PALETTE)]
-            clone_i += 1
+            color = _PALETTE[palette_ix.get(d, i) % len(_PALETTE)]
         emph = f"{_BOLD}{_UNDER}" if d.name == cur_repo else ""
 
         # worktrees: a ⑂N badge here, plus either full nested rows (`_detail_worktrees`)
@@ -665,7 +709,18 @@ def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
             rows.append(tui.Text(f"{lead}{_DIM}{pieces}{_R}"))
 
     if capped:
-        rows.append(tui.Text(f"  {_DIM}{_TREE_END}…(+{n - len(show)} more){_R}"))
+        # Say whether the hidden ones matter. Selection is ranked, so anything with a
+        # dirty tree, an unpushed commit, a failing pipeline or an open change is already
+        # on screen — which makes "all clean" a claim the code can actually back, and
+        # turns the overflow line from a worry into an answer.
+        hidden = [d for d in dirs if d not in set(show)]
+        quiet = not any((states.get(d) or {}).get("dirty")
+                        or (states.get(d) or {}).get("ahead")
+                        or (states.get(d) or {}).get("behind")
+                        or (gl.get(d) or {}).get("ci") in ("failed", "running")
+                        or (gl.get(d) or {}).get("change") for d in hidden)
+        note = ", all clean" if quiet else ""
+        rows.append(tui.Text(f"  {_DIM}{_TREE_END}…(+{len(hidden)} more{note}){_R}"))
     return rows
 
 

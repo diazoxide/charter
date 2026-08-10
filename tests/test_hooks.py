@@ -397,3 +397,53 @@ class TestGuardsAreScopedToAPlane(PersonaIso):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLeakGuardInspectsInvocationsNotProse(PersonaIso):
+    """Both patterns were substring scans over the whole command line, so a command that
+    merely MENTIONED the words was hard-denied with a reason misdescribing what it did.
+    The sibling SSH guard already solved this and its docstring says why — "a commit
+    message may legitimately *mention* an SSH URL"."""
+
+    def test_a_commit_message_mentioning_the_flag_is_allowed(self):
+        self.assertIsNone(hooks._leak_reason(
+            'git commit -m "docs: document the --reveal flag"'))
+
+    def test_searching_the_source_for_the_flag_is_allowed(self):
+        self.assertIsNone(hooks._leak_reason("rg -n -- --reveal charter/"))
+
+    def test_reading_the_registry_is_allowed(self):
+        """`.charter/vaults.json` is the registry — provider config and paths, never
+        values. Only `.charter/vaults/` holds secrets."""
+        self.assertIsNone(hooks._leak_reason('grep -rn "vaults" .charter/vaults.json'))
+
+    def test_the_real_thing_is_still_denied(self):
+        for cmd in ("charter secret get devops API --reveal",
+                    "python3 -m charter secret get d k --reveal",
+                    "cat .charter/vaults/devops.json",
+                    "edm persona secret get k --reveal"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(hooks._leak_reason(cmd), cmd)
+
+    def test_a_second_segment_is_inspected_too(self):
+        self.assertIsNotNone(hooks._leak_reason("echo hi && charter secret get d k --reveal"))
+
+    def test_the_flag_must_belong_to_charter(self):
+        """A non-charter program's `--reveal` reveals nothing of ours."""
+        self.assertIsNone(hooks._leak_reason("some-other-tool --reveal"))
+
+
+class TestAbbreviationsCannotWalkPastTheGuard(unittest.TestCase):
+    """argparse expands any unambiguous prefix, so `--rev` ran as `--reveal` while the
+    guard — which looks for the flag a user would have to type — saw nothing to deny."""
+
+    def test_reveal_cannot_be_abbreviated(self):
+        from charter import cli
+        p = cli.build_parser()
+        with self.assertRaises(SystemExit):
+            p.parse_args(["secret", "get", "v", "k", "--rev"])
+
+    def test_the_full_flag_still_parses(self):
+        from charter import cli
+        ns = cli.build_parser().parse_args(["secret", "get", "v", "k", "--reveal"])
+        self.assertTrue(ns.reveal)

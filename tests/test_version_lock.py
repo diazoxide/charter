@@ -11,10 +11,13 @@ during development this feature really did downgrade the running charter.
 
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests._isolation import PersonaIso
 from charter import commands, config, hooks, instance
 
 
@@ -187,3 +190,36 @@ class CommitPushTakesGitsArgumentsNotACommandLine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommitPushRefusesToClaimSuccessItDidNotHave(PersonaIso):
+    """`charter save` printed `✓ Committed : charter save: 0 file(s)` and exited 0 in a
+    plane that is not a git repo — which `charter init` in a fresh directory produces, and
+    which is exactly the README's 60-second path. Every git call here runs `check=False`
+    (this is reached from hooks and background paths that must never break a turn), so the
+    add failed silently, `diff --cached --quiet` returned 128 rather than 0 so the
+    "Nothing to save" branch was skipped, the commit failed too, and `rev-parse` came back
+    empty. The personas and memory charter had just told the user to commit had no
+    history."""
+
+    def test_a_plane_that_is_not_a_repo_is_refused(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = commands.commit_push(self.tmp, ["add", "-A"], "m")
+        self.assertEqual(rc, 1)
+        self.assertIn("not a git repository", err.getvalue())
+
+    def test_the_refusal_says_what_to_do(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            commands.commit_push(self.tmp, ["add", "-A"], "m")
+        self.assertIn("git init", err.getvalue())
+
+    def test_a_real_repo_with_nothing_staged_still_reports_nothing_to_save(self):
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(self.tmp)], check=True, capture_output=True)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = commands.commit_push(self.tmp, ["add", "-A"], "m")
+        self.assertEqual(rc, 0)
+        self.assertIn("Nothing to save", err.getvalue())

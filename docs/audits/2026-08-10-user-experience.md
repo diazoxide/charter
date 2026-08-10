@@ -19,6 +19,9 @@ the thing that otherwise gets re-proposed every six months.
 | 2.1 `op` called once per persona per render | fixed — TTL cache off the render path |
 | 2.2 credential guard fired outside any plane | fixed — gated on `HAS_CONTROL_PLANE` |
 | 1.7 `recall` dropped tokens of ≤2 characters | fixed — floor of 2, stopwords, word-boundary matching |
+| 2.3 leak guard substring-matched prose | fixed — inspects argv; `--rev` abbreviation closed |
+| 1.3 `charter save` claimed success in a non-git plane | fixed — refuses, and a failed commit is a failure |
+| 1.4 repo table dropped rows alphabetically | fixed — ranked selection, stable display order |
 | everything else | open |
 
 Numbers in sections 2 and 3 that were not adversarially re-checked are flagged in

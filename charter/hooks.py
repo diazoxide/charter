@@ -85,18 +85,65 @@ def _secret_kind(text: str) -> str | None:
 # --------------------------------------------------------------------------- #
 # A: secret-leak guard — deny commands that would print a secret value          #
 # --------------------------------------------------------------------------- #
-_READERS = r"cat|less|more|head|tail|bat|nl|tac|xxd|od|strings|grep|rg|ag|awk|sed"
-_REVEAL_RE = re.compile(r"(?:^|\s)--reveal(?:[\s=]|$)")
-_VAULT_READ_RE = re.compile(rf"\b(?:{_READERS})\b[^|;&]*\.charter/(?:vaults|browser|active-)", re.IGNORECASE)
+_READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg ag awk "
+                     "sed".split())
+#: The vault FILES — note the trailing slash. `.charter/vaults.json` is the registry and
+#: holds provider config and paths, never values, so `grep -rn vaults .charter/vaults.json`
+#: is an ordinary read and was being hard-denied.
+_VAULT_PATH_RE = re.compile(r"\.charter/(?:vaults/|browser|active-)")
+
+
+#: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost
+#: of an extra alternative is one string, while the cost of dropping it is a silent
+#: denial that stops happening on a machine where the old binary is still installed.
+#: `config._LEGACY_ENV_VARS` keeps the same posture for the renamed env vars.
+_CHARTER_PROGS = ("charter", "edm")
+
+
+def _is_charter(prog: str, args: list[str]) -> bool:
+    """True when this invocation is charter itself, including `python3 -m charter`."""
+    base = os.path.basename(prog)
+    if base in _CHARTER_PROGS:
+        return True
+    if base.startswith("python") and "-m" in args:
+        i = args.index("-m")
+        return i + 1 < len(args) and args[i + 1] in _CHARTER_PROGS
+    return False
 
 
 def _leak_reason(cmd: str) -> str | None:
-    if _REVEAL_RE.search(cmd):
-        return ("would reveal a secret value into the conversation (--reveal). "
-                "Use `charter … secret exec`/`cp` — never --reveal for an agent")
-    if _VAULT_READ_RE.search(cmd):
-        return ("reads a vault/secret file directly (would print plaintext). "
-                "Use `charter … secret exec`/`cp` instead of catting `.charter/`")
+    """Deny a command that would print a secret into the transcript.
+
+    Inspects real INVOCATIONS, not the raw string. Both patterns used to be substring
+    scans over the whole command line, so a command that merely *mentioned* the words was
+    hard-denied with a reason that misdescribed what it had done:
+
+        git commit -m "docs: document the --reveal flag"
+        rg -n -- --reveal charter/
+        grep -rn "vaults" .charter/vaults.json
+
+    The sibling SSH guard already solved exactly this, and its docstring says why — "a
+    commit message may legitimately *mention* an SSH URL". `_segments` + `_invocation`
+    give shlex-accurate argv, so a quoted commit message stays ONE token and can never be
+    read as a flag.
+
+    Deliberately not consulting the vault registry for paths outside `.charter/`: this
+    runs on every Bash tool call, and a registry read per invocation is a real cost. A
+    vault registered elsewhere is therefore still unguarded here — a separate finding,
+    not something to half-fix on the hot path.
+    """
+    for seg in _segments(cmd):
+        prog, _env, args = _invocation(seg)
+        if not prog:
+            continue
+        if _is_charter(prog, args) and any(
+                a == "--reveal" or a.startswith("--reveal=") for a in args):
+            return ("would reveal a secret value into the conversation (--reveal). "
+                    "Use `charter … secret exec`/`cp` — never --reveal for an agent")
+        if os.path.basename(prog).lower() in _READERS and any(
+                _VAULT_PATH_RE.search(a) for a in args):
+            return ("reads a vault/secret file directly (would print plaintext). "
+                    "Use `charter … secret exec`/`cp` instead of catting `.charter/`")
     return None
 
 
