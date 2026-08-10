@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import config, util, workspace, worktree
+from . import root as _root
 
 
 def clone_for(ws: str, repo: str) -> Path | None:
@@ -89,6 +90,18 @@ def cmd_worktree_add(args) -> int:
     util.ok(f"{args.repo} · {args.piece} → {_rel(path)}")
     util.info(f"  base:   {base}{' (detached)' if detached else ''}")
     util.info(f"  branch: {args.branch or args.piece}")
+
+    # `root.find_root` now resolves a plane-less worktree back to its main tree, so this
+    # is an invariant assertion rather than the fix — kept because it catches the same
+    # failure one step earlier, right beside the `enter:` line the user is about to run,
+    # and because an untracked charter.toml is worth knowing about on its own: nobody
+    # else on the team has the plane at all.
+    if not (path / _root.MARKER).is_file() and (config.ROOT / _root.MARKER).is_file():
+        util.warn(f"  {_root.MARKER} is not committed, so it is absent from this worktree. "
+                  f"charter resolves the plane from the repo it was cut from, but "
+                  f"teammates cloning this repo get no control plane — commit it: "
+                  f"git add {_root.MARKER}")
+
     util.info(f"  enter:  cd {_rel(path)} && claude    "
               "(or hand this path to EnterWorktree)")
     return 0

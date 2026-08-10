@@ -56,11 +56,34 @@ class TestDoctorSurfacesPartialForgeFailure(unittest.TestCase):
         result = doctor.check_control_plane_config()
         self.assertEqual(result.status, doctor.OK)
 
-    def test_no_charter_toml_at_all_still_reports_ok(self):
+    def test_no_charter_toml_at_all_is_a_warning_not_a_green_check(self):
+        """Overturns `test_no_charter_toml_at_all_still_reports_ok`, which pinned the
+        opposite.
+
+        Every other check reports green against a plane that does not exist — `personas:
+        none defined`, `vaults: none configured`, `schema: no control plane found`, all
+        OK — because each is truthfully describing nothing. So a session with no personas,
+        no vault, and memory being written into a scratch directory rendered as a
+        completely healthy plane. This row is the only one positioned to say otherwise,
+        and it was saying `ok` too.
+
+        WARN, not FAIL, deliberately: `cmd_doctor` exits 1 only on FAIL, and doctor runs
+        from the SessionStart hook — a FAIL here would print a blocker banner in every
+        session opened outside a plane, which is a normal thing to do.
+        """
         self._set(has_control_plane=False)
         result = doctor.check_control_plane_config()
-        self.assertEqual(result.status, doctor.OK)
+        self.assertEqual(result.status, doctor.WARN)
         self.assertIn("no control plane", result.detail)
+        self.assertTrue(result.hint, "a warning the user cannot act on is worse than none")
+
+    def test_a_healthy_plane_names_which_plane_is_bound(self):
+        """Nothing printed WHICH plane was bound, so a stale $CHARTER_ROOT, a nested
+        plane and a rootless cwd were indistinguishable from a correct setup."""
+        self._set()
+        result = doctor.check_control_plane_config()
+        self.assertEqual(result.status, doctor.OK)
+        self.assertIn(str(config.ROOT), result.detail)
 
     def test_whole_file_parse_failure_still_wins_as_fail_not_the_new_warn_path(self):
         """A truly malformed charter.toml (CONFIG_ERROR set at import time) must still

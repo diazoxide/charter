@@ -231,8 +231,19 @@ def check_control_plane_config() -> Result:
             hint=f"{shown} — those hosts are NOT covered by the one-credential guard or "
                  f"git-policy until fixed (other declared/default hosts still are).",
         )
-    return Result("charter.toml", OK, detail="parsed cleanly" if _config.HAS_CONTROL_PLANE
-                  else "no control plane found")
+    if not _config.HAS_CONTROL_PLANE:
+        # NOT ok. Every check below reports green against a plane that does not exist —
+        # `personas: none defined`, `vaults: none configured` — so a session with no
+        # personas, no vault and memory written into a scratch directory reads as a
+        # healthy one. This row is the only place that can say otherwise, and saying it
+        # in the OK column is what made the worktree failure invisible.
+        return Result("charter.toml", WARN, detail=f"no control plane found (cwd: {_config.ROOT})",
+                      hint="`charter init` here, or cd into a plane, or set $CHARTER_ROOT. "
+                           "Every check below is reporting on a plane that does not exist.")
+    # Name the plane unconditionally. Nothing else printed WHICH plane is bound, so a
+    # stale $CHARTER_ROOT, a nested plane and a rootless cwd all looked identical to a
+    # correct setup.
+    return Result("charter.toml", OK, detail=f"parsed cleanly ({_config.ROOT})")
 
 
 def check_control_plane_schema() -> Result:

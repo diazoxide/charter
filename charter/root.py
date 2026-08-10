@@ -50,6 +50,30 @@ def find_root(start: Path | None = None) -> Path:
     for d in (cur, *cur.parents):
         if (d / MARKER).is_file():      # is_file, not exists: a directory is not a marker
             return _plane_of(d)
+
+    # Nothing above us. Before giving up, ask whether we are standing in a linked
+    # WORKTREE whose plane lives in the repo it was cut from.
+    #
+    # `_plane_of` handles the case where the worktree HAS a `charter.toml` — it redirects
+    # to the main tree. It cannot fire here, because the walk above found no marker to
+    # redirect from, and in the documented embedded flow there is none to find: `charter
+    # init` writes `charter.toml` and never stages it, so a worktree cut from `main` does
+    # not contain it. A worktree branched before the plane was committed has the same
+    # shape. Following charter's own `enter:` line then landed a session in a plane-less
+    # directory — no personas, no vault, memory written where `git worktree remove
+    # --force` deletes it — while `doctor` reported everything green.
+    #
+    # Walking the main tree's PARENTS too is deliberate: a worktree of a fleet clone sits
+    # at `workspaces/<ws>/<repo>/…`, so its plane is above the clone, not at it.
+    for d in (cur, *cur.parents):
+        main = main_worktree_of(d)
+        if main is None:
+            continue
+        for m in (main, *main.parents):
+            if (m / MARKER).is_file():
+                return _plane_of(m)
+        break                            # its main tree has no plane either — stop here
+
     raise ControlPlaneNotFound(_explain(f"in {cur} or any parent"))
 
 

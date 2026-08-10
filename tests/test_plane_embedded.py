@@ -280,6 +280,63 @@ class PlaneIdentityFollowsTheMainTree(MonorepoIso):
                 os.environ["CHARTER_ROOT"] = old
 
 
+class AWorktreeWithoutTheMarkerStillFindsItsPlane(MonorepoIso):
+    """The gap `PlaneIdentityFollowsTheMainTree` left open, and the one that actually
+    fires in charter's own documented flow.
+
+    That class redirects a worktree that HAS a checked-out `charter.toml` to its main
+    tree. But `charter init` writes `charter.toml` and never stages it, so a worktree cut
+    from `main` does not contain one — and with no marker anywhere above, the walk found
+    nothing to redirect FROM and fell back to the cwd. Following charter's own `enter:`
+    line then opened a session whose plane was the worktree: no personas, no vault, and
+    memory written into a directory `git worktree remove --force` deletes. `doctor`
+    reported it green.
+
+    A worktree branched before the plane was committed has exactly the same shape, so
+    committing `charter.toml` fixes today's case and not tomorrow's.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter import root as _root
+        self._root_mod = _root
+        # charter.toml deliberately NOT committed — that is the whole premise.
+        self.wt = self.add_worktree("task1")
+
+    def test_the_fixture_has_no_marker(self):
+        self.assertFalse((self.wt / "charter.toml").exists(),
+                         "fixture committed the marker; there is no bug to reproduce")
+
+    def test_the_plane_resolves_to_the_repo_the_worktree_was_cut_from(self):
+        self.assertEqual(self._root_mod.find_root(self.wt), self.tmp.resolve())
+
+    def test_a_path_deep_inside_it_resolves_too(self):
+        deep = self.wt / "src" / "pkg"
+        deep.mkdir(parents=True)
+        self.assertEqual(self._root_mod.find_root(deep), self.tmp.resolve())
+
+    def test_a_plain_directory_with_no_plane_anywhere_still_raises(self):
+        """The fallback must not start inventing planes for ordinary directories."""
+        plain = self.tmp.parent / f"{self.tmp.name}-elsewhere"
+        plain.mkdir(exist_ok=True)
+        self.addCleanup(lambda: plain.rmdir())
+        with self.assertRaises(self._root_mod.ControlPlaneNotFound):
+            self._root_mod.find_root(plain)
+
+    def test_a_worktree_whose_repo_has_no_plane_still_raises(self):
+        """Being in a worktree is not itself evidence of a plane."""
+        (self.tmp / "charter.toml").unlink()
+        with self.assertRaises(self._root_mod.ControlPlaneNotFound):
+            self._root_mod.find_root(self.wt)
+
+    def test_doctor_no_longer_calls_a_missing_plane_healthy(self):
+        from charter import config as _config, doctor
+        old = _config.HAS_CONTROL_PLANE
+        _config.HAS_CONTROL_PLANE = False
+        self.addCleanup(lambda: setattr(_config, "HAS_CONTROL_PLANE", old))
+        self.assertEqual(doctor.check_control_plane_config().status, doctor.WARN)
+
+
 class NestedPlanesAreVisible(PersonaIso):
     """`find_root` takes the innermost marker — the git/cargo/npm contract, and correct.
     But the embedded shape puts `charter.toml` into ordinary product repos, and a fleet

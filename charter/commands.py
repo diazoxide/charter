@@ -356,7 +356,17 @@ def commit_push(root, add_cmd: list, message: str | None,
     """Stage (``add_cmd``) → secret-scan staged memory/refs → commit → push via the
     control plane's OWN FORGE's token (`gitpolicy.forge_for`; rebase-retry on non-ff).
     Shared by `charter save` and `charter workspace save` so the secret-guard + no-SSH
-    push path is identical everywhere, on whichever forge the control plane lives on."""
+    push path is identical everywhere, on whichever forge the control plane lives on.
+
+    ``add_cmd`` is git's ARGUMENTS, not a command line — `_git` supplies `git` itself.
+    One caller passed `["git", "add", …]`, so it ran `git git add`, which fails; the
+    staged-nothing check below then took the "Nothing to save" branch and returned 0, and
+    the caller printed `✓ committed + pushed`. `charter version bump --push` had therefore
+    never committed anything. Asserting the shape here rather than fixing the one caller,
+    because the failure was invisible at every layer above it."""
+    if add_cmd and add_cmd[0] == "git":
+        raise ValueError(f"commit_push(add_cmd=…) takes git's arguments, not a command "
+                         f"line — drop the leading 'git' from {add_cmd!r}")
     _git(add_cmd, cwd=root)
     if _git(["diff", "--cached", "--quiet"], cwd=root).returncode == 0:
         util.info("Nothing to save — the control-plane working tree is clean.")
@@ -1171,7 +1181,7 @@ def cmd_version_bump(args) -> int:
     util.ok(f"pinned this control plane to charter {target}.")
     rel = "charter.toml"
     if getattr(args, "push", False):
-        rc = commit_push(config.ROOT, ["git", "add", rel], f"charter: pin to {target}")
+        rc = commit_push(config.ROOT, ["add", "--", rel], f"charter: pin to {target}")
         if rc != 0:
             util.warn("lock written, but commit/push failed — commit charter.toml yourself.")
             return rc

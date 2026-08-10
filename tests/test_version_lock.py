@@ -154,5 +154,36 @@ class SyncCommand(unittest.TestCase):
         self.assertNotIn("upgrade", commands._sync_cmd("1.2.3"))
 
 
+class CommitPushTakesGitsArgumentsNotACommandLine(unittest.TestCase):
+    """`charter version bump --push` had never committed anything.
+
+    It passed `["git", "add", rel]` to `commit_push`, whose `_git` helper supplies `git`
+    itself — so the command run was `git git add charter.toml`. That fails; the staged-
+    nothing check immediately below then took the "Nothing to save" branch and returned
+    0; and the caller printed `✓ committed + pushed — teammates conform on their next
+    session`. Seven other callers pass `["add", …]`, so the mistake was invisible by
+    comparison and invisible at runtime.
+
+    Asserted as a shape rather than fixed only at the one caller, because nothing between
+    the wrong argv and the success message could tell the difference.
+    """
+
+    def test_a_leading_git_is_refused(self):
+        with self.assertRaises(ValueError) as e:
+            commands.commit_push(Path("/tmp"), ["git", "add", "charter.toml"], "m")
+        self.assertIn("drop the leading 'git'", str(e.exception))
+
+    def test_every_caller_in_the_tree_passes_bare_arguments(self):
+        """The regression test for the fix itself: grep the callers, not the behaviour."""
+        import re
+        root = Path(__file__).resolve().parents[1] / "charter"
+        bad = []
+        for f in root.rglob("*.py"):
+            for m in re.finditer(r"commit_push\(\s*[^,]+,\s*\[([^\]]*)\]", f.read_text()):
+                if m.group(1).strip().startswith(('"git"', "'git'")):
+                    bad.append(f"{f.name}: {m.group(0)[:60]}")
+        self.assertEqual(bad, [], f"commit_push called with a command line, not arguments: {bad}")
+
+
 if __name__ == "__main__":
     unittest.main()
