@@ -321,7 +321,18 @@ def legacy_flat_clones() -> list[Path]:
 
 
 def ensure(name: str) -> Path:
-    """Create the workspace directory if needed; return its path."""
+    """Create the workspace directory **and its baseline structure**; return its path.
+
+    `scaffold` used to be called only by create/live/restore/fork, so a workspace born via
+    `charter clone` or `charter workspace use` got a bare directory — and then the status
+    line showed `⚠ reinit` on every turn, phrased as post-upgrade drift, for a workspace
+    that had just been created correctly. The README's own quickstart ends that way.
+
+    Scaffolding here rather than at each call site because "the directory exists" and "the
+    directory is a workspace" were two different states with nothing keeping them in step;
+    `needs_reinit` is meant to detect a plane left behind by an older charter, not one
+    charter made a moment ago.
+    """
     if not valid_name(name):
         raise ValueError(
             f"invalid workspace name '{name}' "
@@ -330,6 +341,10 @@ def ensure(name: str) -> Path:
     _ensure_layout()
     wd = workspace_dir(name)
     wd.mkdir(parents=True, exist_ok=True)
+    try:
+        scaffold(name)
+    except Exception:
+        pass          # best-effort: a workspace you can use beats one that failed to exist
     return wd
 
 

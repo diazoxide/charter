@@ -6,6 +6,7 @@ installed, which is the failure this guard exists to prevent."""
 from __future__ import annotations
 
 import json
+import sys
 import unittest
 from pathlib import Path
 
@@ -252,3 +253,60 @@ class TestVersionSkew(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSkewReachesTheUser(unittest.TestCase):
+    """`README.md` promises "a plugin newer than the CLI says so loudly at session start".
+    It did not. `dispatch` printed to stderr and returned 0, and Claude Code routes a
+    zero-exit hook's stderr to the debug log only — so neither the user nor the model ever
+    saw it. The second surface was no better: `check_plugin_skew` returned WARN, and
+    `cmd_doctor` exits 0 on WARN, so the `||` in hooks.json never fired either."""
+
+    def _dispatch(self, name, version):
+        import io as _io, json as _json
+        from contextlib import redirect_stdout
+        from tests._isolation import run_hook  # noqa: F401  (stdin plumbing)
+        buf = _io.StringIO()
+        old = sys.stdin
+        sys.stdin = _io.StringIO("{}")
+        try:
+            with redirect_stdout(buf):
+                hooks.dispatch(name, version)
+        finally:
+            sys.stdin = old
+        out = buf.getvalue().strip()
+        return _json.loads(out) if out else None
+
+    def test_session_start_surfaces_it_as_a_system_message(self):
+        got = self._dispatch("sessionstart", "99.0.0")
+        self.assertIsNotNone(got, "dispatch emitted nothing")
+        self.assertIn("systemMessage", got)
+        self.assertIn("version skew", got["systemMessage"])
+
+    def test_a_matching_version_says_nothing(self):
+        got = self._dispatch("sessionstart", __version__)
+        self.assertFalse((got or {}).get("systemMessage"))
+
+    def test_pretooluse_does_not_repeat_it_on_every_bash_call(self):
+        """Emitting there would print the same warning dozens of times a session, which is
+        how a guard stops working even once it is finally visible."""
+        got = self._dispatch("pretooluse", "99.0.0")
+        self.assertFalse((got or {}).get("systemMessage"))
+
+    def test_doctor_treats_skew_as_a_blocker(self):
+        """`cmd_doctor` exits 1 only on FAIL, and that exit code is what makes the
+        SessionStart wrapper print anything at all."""
+        import os
+        from charter import doctor
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_ROOT": str(ROOT)}):
+            res = doctor.check_plugin_skew()
+        self.assertEqual(res.status, doctor.OK)   # this repo is in lockstep
+
+    def test_a_newer_plugin_is_a_fail_not_a_warn(self):
+        from charter import doctor
+        from unittest import mock
+        with mock.patch.object(hooks, "MIN_PLUGIN_VERSION", "0.0.1"), \
+             mock.patch.dict(__import__("os").environ, {"CLAUDE_PLUGIN_ROOT": str(ROOT)}):
+            res = doctor.check_plugin_skew()
+        self.assertEqual(res.status, doctor.FAIL)

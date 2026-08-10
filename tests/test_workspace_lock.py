@@ -16,7 +16,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -154,21 +154,23 @@ class TestCommandLayer(WorkspaceLockBase):
         return rc, buf.getvalue()
 
     def test_use_locks_then_refuses_switch(self):
-        rc, _ = self._run(commands.cmd_workspace_use, name="alpha", force=False)
+        # `--create`: `use` no longer invents a workspace from a name. A typo used to be
+        # created AND session-locked, so the correction hit "locked to 'fature-x'".
+        rc, _ = self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
         self.assertEqual(rc, 0)
         self.assertEqual(workspace.is_locked(), "alpha")
-        rc, out = self._run(commands.cmd_workspace_use, name="beta", force=False)
+        rc, out = self._run(commands.cmd_workspace_use, name="beta", force=False, create=True)
         self.assertEqual(rc, 2)  # refused (message goes to stderr)
         self.assertEqual(workspace.is_locked(), "alpha")
 
     def test_use_force_switches(self):
-        self._run(commands.cmd_workspace_use, name="alpha", force=False)
-        rc, _ = self._run(commands.cmd_workspace_use, name="beta", force=True)
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, _ = self._run(commands.cmd_workspace_use, name="beta", force=True, create=True)
         self.assertEqual(rc, 0)
         self.assertEqual(workspace.is_locked(), "beta")
 
     def test_create_use_respects_lock(self):
-        self._run(commands.cmd_workspace_use, name="alpha", force=False)
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
         rc, out = self._run(commands.cmd_workspace_create, name="beta", use=True, force=False, repos=[])
         self.assertEqual(rc, 2)
         # the workspace is still created even though the switch was refused
@@ -182,3 +184,58 @@ from charter import commands_workspace as commands  # noqa: E402
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UseDoesNotInventAWorkspaceFromATypo(WorkspaceLockBase):
+    """`use` validated the name's SHAPE, then created it and took the session lock. So
+    `charter workspace use fature-x` made `fature-x`, locked to it, and the correction hit
+    `✗ Workspace is 🔒 locked to 'fature-x' for this session` — a one-way door out of a
+    single mistyped character."""
+
+    def _run(self, **kw):
+        buf, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            rc = commands.cmd_workspace_use(SimpleNamespace(force=False, create=False, **kw))
+        return rc, err.getvalue()
+
+    def test_an_unknown_name_is_refused(self):
+        rc, err = self._run(name="fature-x")
+        self.assertEqual(rc, 1)
+        self.assertIn("no workspace named", err)
+
+    def test_it_does_not_create_the_typo(self):
+        self._run(name="fature-x")
+        self.assertFalse((config.WORKSPACES_DIR / "fature-x").exists())
+
+    def test_it_does_not_take_the_session_lock(self):
+        """The half that made it unrecoverable."""
+        self._run(name="fature-x")
+        self.assertIsNone(workspace.is_locked())
+
+    def test_it_suggests_the_name_you_meant(self):
+        workspace.ensure("feature-x")
+        _rc, err = self._run(name="fature-x")
+        self.assertIn("feature-x", err)
+
+    def test_create_is_the_deliberate_path(self):
+        buf, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            rc = commands.cmd_workspace_use(
+                SimpleNamespace(name="brand-new", force=False, create=True))
+        self.assertEqual(rc, 0)
+        self.assertTrue((config.WORKSPACES_DIR / "brand-new").exists())
+
+
+class EnsureScaffoldsSoNothingAsksForReinit(WorkspaceLockBase):
+    """`scaffold` ran only from create/live/restore/fork, so a workspace born via
+    `charter clone` or `workspace use` got a bare directory — and the status line then
+    showed `⚠ reinit` every turn, phrased as post-upgrade drift, for a workspace charter
+    had just made correctly. The README's own quickstart ended that way."""
+
+    def test_a_freshly_ensured_workspace_does_not_need_reinit(self):
+        workspace.ensure("fresh")
+        self.assertFalse(workspace.needs_reinit("fresh"))
+
+    def test_it_has_its_baseline_structure(self):
+        workspace.ensure("fresh")
+        self.assertTrue((config.WORKSPACES_DIR / "fresh" / "memory").is_dir())

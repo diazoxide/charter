@@ -41,7 +41,18 @@ def _read_stdin() -> dict:
         return {}
 
 
+#: Messages to surface to the USER on this hook's output. `systemMessage` is a top-level
+#: hook-output field that renders at exit 0 without blocking — which matters because the
+#: only alternatives are stderr (a zero-exit hook's stderr reaches the debug log and
+#: nobody else) and exit 2, which on `UserPromptSubmit` erases the prompt the user just
+#: typed. Folded into whatever the handler already emits, so stdout stays one JSON object.
+_pending_system: list[str] = []
+
+
 def _emit(obj: dict) -> None:
+    if _pending_system:
+        obj = {**obj, "systemMessage": "\n".join(_pending_system)}
+        _pending_system.clear()
     print(json.dumps(obj))
 
 
@@ -693,14 +704,15 @@ def sessionstart() -> int:
         if mem:
             parts.append(mem)
 
-        # Keep the README's generated roster block current — once per session, not per
-        # dispatch (the tally moves constantly; the README shouldn't). Silent + best-effort:
-        # it only rewrites when the rendered block actually differs.
-        try:
-            from .commands import refresh_readme_personas
-            refresh_readme_personas()
-        except Exception:
-            pass
+        # NOT refreshing the README's roster block here, deliberately. It splices per-
+        # persona DISPATCH COUNTS into a committed file, so opening a session dirtied the
+        # working tree — and `_uncommitted_memory_nudge` below then complained about the
+        # uncommitted file charter had just written. On a shared plane it produces
+        # recurring conflicts in a block marked "do not edit by hand", because the counts
+        # differ per developer and change on every dispatch.
+        #
+        # It belongs where the marker already points: `charter docs` / `make docs`, run
+        # deliberately, by someone about to commit the result.
 
         if parts:
             _emit({"hookSpecificOutput": {
@@ -1305,13 +1317,33 @@ def dispatch(name: str, plugin_version: str | None) -> int:
     directly the way the umbrella's inline `python3 -c "from edm.hooks import …"` does).
 
     Runs the skew check first — the one place this module speaks up rather than
-    swallowing — then the named handler, unchanged."""
+    swallowing — then the named handler, unchanged.
+
+    The skew message used to go to stderr and stop there: Claude Code routes a zero-exit
+    hook's stderr to the debug log, so neither the user nor the model ever saw it, while
+    README.md promised "a plugin newer than the CLI says so loudly at session start". It
+    now rides out as `systemMessage`, which renders at exit 0 and blocks nothing.
+
+    Surfaced on **sessionstart only**, and that is the gate. `pretooluse` fires on every
+    Bash call, so emitting there would print the same warning dozens of times a session
+    and teach people to scroll past it — which is how the guard stops working even when it
+    is finally visible. Once, at the start, is what the README already promised. Other
+    hooks keep the stderr line for the debug log.
+    """
     msg = skew_message(plugin_version)
     if msg:
-        print(msg, file=sys.stderr)
+        if name == "sessionstart":
+            _pending_system.append(msg)
+        else:
+            print(msg, file=sys.stderr)
     fn = _HANDLERS.get(name)
     if fn is None:
         print(f"charter hook: unknown hook '{name}' (known: {', '.join(sorted(_HANDLERS))})",
               file=sys.stderr)
         return 1
-    return fn()
+    rc = fn()
+    # A handler that emitted nothing would swallow the message with it — sessionstart
+    # stays silent when there is no persona, no memory and no news to inject.
+    if _pending_system:
+        _emit({})
+    return rc

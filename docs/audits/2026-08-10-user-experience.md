@@ -25,6 +25,10 @@ the thing that otherwise gets re-proposed every six months.
 | 1.6 `secret set` stored `""` on empty stdin, exit 0 | fixed — refuses; `--allow-empty` is the override |
 | 1.5 plaintext vault could land in git | fixed — an unignored path is refused at `vault add` |
 | 1.8 `worktree list`/`status` blind to the root tree | fixed — both use `repo_trees` |
+| 1.9 version-skew warning reached nobody | fixed — `systemMessage` at session start; doctor FAILs |
+| 2.5 `workspace use <typo>` created and locked it | fixed — refused with a did-you-mean; `--create` to make one |
+| 2.6 permanent `⚠ reinit` chip on new workspaces | fixed — `ensure` scaffolds |
+| 2.11 SessionStart rewrote a tracked README.md | fixed — left to `charter docs` |
 | everything else | open |
 
 Numbers in sections 2 and 3 that were not adversarially re-checked are flagged in

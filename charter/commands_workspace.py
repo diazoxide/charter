@@ -105,6 +105,23 @@ def cmd_workspace_use(args) -> int:
     if not workspace.valid_name(args.name):
         util.err(f"invalid workspace name '{args.name}'")
         return 1
+
+    # A typo used to be a one-way door: the name was only validated for SHAPE, so
+    # `use fature-x` created `fature-x`, took the session lock, and the correction then
+    # hit `✗ Workspace is 🔒 locked to 'fature-x' for this session`. Creating is now
+    # deliberate (`--create`), and an unknown name is a question rather than an action.
+    existing = workspace.list_workspaces()
+    if args.name not in existing and not getattr(args, "create", False):
+        import difflib
+        close = difflib.get_close_matches(args.name, existing, n=3, cutoff=0.6)
+        util.err(f"no workspace named '{args.name}'.")
+        if close:
+            util.info(f"  Did you mean: {', '.join(close)}?")
+        elif existing:
+            util.info(f"  Existing: {', '.join(sorted(existing))}")
+        util.info(f"  Create it: charter workspace use {args.name} --create")
+        return 1
+
     workspace.ensure(args.name)
     scope = workspace.set_active(args.name, force=getattr(args, "force", False))
     if scope == "locked":

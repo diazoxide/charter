@@ -556,7 +556,13 @@ def check_plugin_skew() -> Result:
                       hint=f"expected a readable plugin.json at {manifest}")
     msg = hooks.skew_message(plugin_version)
     if msg:
-        return Result("plugin", WARN,
+        # FAIL, not WARN. A plugin NEWER than the CLI can dispatch `charter hook <name>`
+        # for a handler this CLI does not have, so the hook simply does not run — the
+        # guard looks installed and is not. `cmd_doctor` exits 1 only on FAIL, and that
+        # exit code is what makes the SessionStart wrapper (`out=$(charter doctor) ||
+        # printf …`) print anything at all; at WARN the message reached nobody through
+        # either surface.
+        return Result("plugin", FAIL,
                       detail=f"v{plugin_version} (CLI v{hooks.MIN_PLUGIN_VERSION})", hint=msg)
     # `skew_message` is one-directional — silent for an equal OR older plugin — so "matches"
     # was printed for a plugin many versions behind. It stays OK (an older plugin wires

@@ -230,6 +230,10 @@ def _add_workspace_parser(sub) -> None:
     use.add_argument("name")
     use.add_argument("--force", action="store_true",
                      help="Override the session lock and switch to another workspace mid-session.")
+    use.add_argument("--create", action="store_true",
+                     help="Create the workspace if it does not exist. Without this an "
+                          "unknown name is an error with a did-you-mean — a typo used to "
+                          "be created AND session-locked, so the correction was refused.")
     use.set_defaults(func=commands_workspace.cmd_workspace_use)
 
     unl = wsub.add_parser("unlock",
