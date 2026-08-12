@@ -98,8 +98,8 @@ class MonorepoIso(PersonaIso):
                 os.environ["COLUMNS"] = old
         out = []
         for ln in raw:
-            if not ln.strip() or set(ln.strip()) <= set("┌─┐└┘"):
-                continue
+            if not ln.strip() or set(ln.strip()) <= set("┌─┐└┘├┤"):
+                continue                  # top/bottom border, or a zone divider
             if ln.startswith("│ ") and ln.rstrip().endswith("│"):
                 ln = ln[2:].rstrip()[:-1].rstrip()
             out.append(ln)

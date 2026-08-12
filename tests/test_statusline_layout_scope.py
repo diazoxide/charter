@@ -48,8 +48,8 @@ def _lines(payload=None, width=200):
     the box, not the box."""
     out = []
     for ln in _raw(payload, width):
-        if not ln.strip() or set(ln.strip()) <= set("┌─┐└┘"):
-            continue                      # top/bottom rule
+        if not ln.strip() or set(ln.strip()) <= set("┌─┐└┘├┤"):
+            continue                      # top/bottom border, or a zone divider
         if ln.startswith("│ ") and ln.rstrip().endswith("│"):
             ln = ln[2:].rstrip()[:-1].rstrip()
         out.append(ln)
@@ -225,6 +225,11 @@ class Framed(PersonaIso):
     def test_every_content_row_is_bounded_on_both_sides(self):
         rows = [ln for ln in _raw(_USAGE) if ln.strip()][1:-1]
         for ln in rows:
+            if set(ln.strip()) <= set("├─┤"):
+                # A zone divider is bounded too — it joins the side borders with tees
+                # instead of carrying content between them.
+                self.assertTrue(ln.startswith("├") and ln.endswith("┤"), ln)
+                continue
             self.assertTrue(ln.startswith("│"), ln)
             self.assertTrue(ln.endswith("│"), ln)
 
@@ -393,6 +398,11 @@ class Framed(PersonaIso):
     def test_every_content_row_is_bounded_on_both_sides(self):
         rows = [ln for ln in _raw(_USAGE) if ln.strip()][1:-1]
         for ln in rows:
+            if set(ln.strip()) <= set("├─┤"):
+                # A zone divider is bounded too — it joins the side borders with tees
+                # instead of carrying content between them.
+                self.assertTrue(ln.startswith("├") and ln.endswith("┤"), ln)
+                continue
             self.assertTrue(ln.startswith("│"), ln)
             self.assertTrue(ln.endswith("│"), ln)
 

@@ -87,6 +87,11 @@ _RIGHT_MIN_W = 36  # a persona column narrower than this is not worth showing
 # EVERY row against the edge, which turned one truncated word into a column of `…` down
 # the whole status line.
 _SAFETY = 4
+#: Marks a body line as a horizontal rule for :func:`_boxed` to draw as ``├───┤``.
+#: A sentinel rather than a pre-drawn string because only `_boxed` knows the frame's
+#: final width — and because a rule has to survive `tui.truncate` without being cropped
+#: into a shorter line. NUL cannot occur in real content, so it can never collide.
+_RULE_LINE = "\x00charter-rule\x00"
 _BRAND_GAP = 3  # min blank columns between content and the right-aligned brand
 # Extra headroom the brand demands beyond `width`. A real session cropped the brand to
 # `⬢ charter 0.10…` — impossible from `_with_brand`, which fits-or-drops — so the pane
@@ -1099,17 +1104,48 @@ def _boxed(body: str, width: int) -> str:
     try:
         inner = width - 4                      # "│ " + content + " │"
         if inner < 20:
-            return body
+            # Unframed: a rule has no side borders to join, so it is dropped rather than
+            # printed. The sentinel must never reach a terminal.
+            return "\n".join(ln for ln in body.split("\n") if ln != _RULE_LINE)
         top = f"{_DIM}┌{'─' * (width - 2)}┐{_R}"
         bot = f"{_DIM}└{'─' * (width - 2)}┘{_R}"
+        rule = f"{_DIM}├{'─' * (width - 2)}┤{_R}"
         out = [top]
         for ln in body.split("\n"):
+            if ln == _RULE_LINE:
+                # Drawn here, not in layout, so it is always exactly as wide as the top
+                # and bottom borders — a rule that disagreed with them would be the most
+                # visible possible defect.
+                out.append(rule)
+                continue
             ln = tui.truncate(ln, inner)
             out.append(f"{_DIM}│{_R} {ln}{' ' * max(0, inner - tui.width(ln))} {_DIM}│{_R}")
         out.append(bot)
         return "\n".join(out)
     except Exception:
         return body
+
+
+def _zone_rules(body: str, has_strip: bool) -> str:
+    """Insert the zone dividers: one under the workspace line, one above the strip.
+
+    Applied to the finished body rather than threaded through the layout branches, which
+    works because every branch lays out the same two anchors — the workspace summary is
+    always the first line, and the session strip, when there is one, is always the last.
+    Splicing here keeps a divider out of `_columns`, where it would be padded and
+    truncated as though it were content.
+
+    No divider above a strip that does not exist: an empty session (or one just past
+    `/compact`) renders no strip, and a rule there would separate the tree from nothing
+    but the bottom border.
+    """
+    lines = body.split("\n")
+    if len(lines) < 2:
+        return body                     # nothing to divide
+    out = [lines[0], _RULE_LINE, *lines[1:]]
+    if has_strip:
+        out.insert(len(out) - 1, _RULE_LINE)
+    return "\n".join(out)
 
 
 def _with_brand(body: str, width: int) -> str:
@@ -1132,6 +1168,10 @@ def _with_brand(body: str, width: int) -> str:
         if not lines:
             return body
         last = lines[-1]
+        if last == _RULE_LINE:
+            # Defensive: `_zone_rules` never leaves a divider last, but welding the brand
+            # onto one would produce a line that is part box-drawing and part text.
+            return body
         used, need = tui.width(last), tui.width(brand)
         if used + need + _BRAND_GAP + _BRAND_MARGIN > width:
             return body                      # no room: content wins
@@ -1269,6 +1309,9 @@ def render(payload: dict | None = None) -> str:
         else:
             body = _columns([summary, left_head, *repo_lines,
                              *alerts, *([strip] if strip else [])], None, width)
+        # After layout, before the frame: the dividers are furniture, and letting them
+        # through `_columns` would have them padded and cropped as content.
+        body = _zone_rules(body, has_strip=bool(strip))
     except Exception:
         # Never crash the status line if layout fails — plain truncated stack.
         plain = [summary, *repo_lines]

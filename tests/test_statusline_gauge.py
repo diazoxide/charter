@@ -86,8 +86,9 @@ class ContextGaugeCase(unittest.TestCase):
         out = statusline.render({"session_id": "t", **_payload(pct=42, read=900, write=100)})
         lines = [re.sub(r"\033\[[0-9;]*m", "", l) for l in out.splitlines() if l.strip()]
         # The status line is framed; the first and last rows are the box's own rules,
-        # and every other row is bounded by the frame's own verticals.
-        lines = [l.strip("│ ") for l in lines if set(l) - set("┌─┐└┘")]
+        # the zone dividers join its sides with tees, and every other row is bounded by
+        # the frame's own verticals.
+        lines = [l.strip("│ ") for l in lines if set(l) - set("┌─┐└┘├┤")]
         self.assertIn("ctx 42%", lines[-1])
         self.assertIn("⚡90%", lines[-1])
         self.assertNotIn("ctx", lines[0])
