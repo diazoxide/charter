@@ -199,183 +199,6 @@ class BrandFits(unittest.TestCase):
                         self.assertLessEqual(statusline.tui.width(_plain(line)), w)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class Framed(PersonaIso):
-    """The box, and the alignment guarantee it makes visible.
-
-    Everything up to a row's last alignment point is ASCII — the frame, the tree, the
-    column divider, and the chip bullets — because `tui.width` only knows what the
-    Unicode tables claim and a terminal that disagrees shifts that row alone. Decoration
-    is fine after nothing on the row still has to line up.
-    """
-
-    def setUp(self) -> None:
-        super().setUp()
-        for n in ("alpha", "beta", "gamma"):
-            self.make_persona(n, role=n.title(), vault=n, **{"delegate-when": f"{n} work"})
-
-    def test_it_has_a_top_and_bottom_rule(self):
-        rows = [ln for ln in _raw(_USAGE) if ln.strip()]
-        self.assertTrue(set(rows[0]) <= set("┌─┐"), rows[0])
-        self.assertTrue(set(rows[-1]) <= set("└─┘"), rows[-1])
-
-    def test_every_content_row_is_bounded_on_both_sides(self):
-        rows = [ln for ln in _raw(_USAGE) if ln.strip()][1:-1]
-        for ln in rows:
-            if set(ln.strip()) <= set("├─┤"):
-                # A zone divider is bounded too — it joins the side borders with tees
-                # instead of carrying content between them.
-                self.assertTrue(ln.startswith("├") and ln.endswith("┤"), ln)
-                continue
-            self.assertTrue(ln.startswith("│"), ln)
-            self.assertTrue(ln.endswith("│"), ln)
-
-    def test_every_row_is_exactly_the_same_width(self):
-        """The point of the right edge: a row that renders wider than counted pushes
-        its own `|` out, so drift is visible instead of mysterious."""
-        widths = {statusline.tui.width(ln) for ln in _raw(_USAGE) if ln.strip()}
-        self.assertEqual(len(widths), 1, f"ragged frame: {sorted(widths)}")
-
-    def test_the_frame_never_exceeds_the_pane(self):
-        for w in (40, 80, 131, 160, 200, 240):
-            with self.subTest(width=w):
-                for ln in _raw(_USAGE, width=w):
-                    self.assertLessEqual(statusline.tui.width(ln), w)
-
-    def test_a_pane_too_narrow_to_frame_still_renders(self):
-        out = _raw(_USAGE, width=24)
-        self.assertTrue(any(ln.strip() for ln in out))
-
-    def test_the_divider_sits_in_the_same_column_on_every_row(self):
-        """The divider and frame may be box-drawing precisely because every row carries
-        exactly one of each, so a terminal that draws them wide shifts every row
-        identically and the columns stay true. (The left column's tree pipe is also
-        `│`, which is why this checks position rather than counting occurrences.)"""
-        cols = {ln.find("│", 40) for ln in _lines(_USAGE) if ln.find("│", 40) > 0}
-        self.assertEqual(len(cols), 1, f"divider wanders between columns: {sorted(cols)}")
-
-    def test_every_marker_is_east_asian_neutral(self):
-        """The guarantee behind the whole layout, and the thing that actually broke.
-
-        A column header's marker and a chip's bullet decide where the text after them
-        begins. If they can disagree about their own width, the header's title drifts
-        from the names below it — which is what `◈` (header) against `◆`/`○` (chips)
-        did: all three are East-Asian **Ambiguous**, and a font drew one of them two
-        cells wide.
-
-        Neutral is the property that removes the argument: the tables give it exactly
-        one cell everywhere. Assert the property, not the specific characters, so a
-        future redesign can pick different glyphs and still be safe.
-        """
-        import unicodedata as ud
-        for name, ch in (("header", statusline._MARK_HEAD),
-                         ("active", statusline._MARK_ACTIVE),
-                         ("idle", statusline._MARK_IDLE)):
-            with self.subTest(marker=name):
-                self.assertIn(ud.east_asian_width(ch), ("N", "Na"),
-                              f"{name} marker {ch!r} (U+{ord(ch):04X}) is East-Asian "
-                              f"{ud.east_asian_width(ch)} — a font may draw it two cells "
-                              f"and shift the text after it")
-
-    def test_the_header_marker_is_the_same_width_as_a_chip_bullet(self):
-        """Header and chips must occupy the same prefix, or their text disagrees."""
-        w = statusline.tui.width
-        self.assertEqual(w(statusline._MARK_HEAD), w(statusline._MARK_ACTIVE))
-        self.assertEqual(w(statusline._MARK_HEAD), w(statusline._MARK_IDLE))
-
-    def test_the_two_column_headers_share_one_row(self):
-        ls = _lines()
-        self.assertEqual([i for i, ln in enumerate(ls) if "repos" in ln],
-                         [i for i, ln in enumerate(ls) if "personas" in ln])
-
-    def test_session_gauges_live_on_the_last_content_line(self):
-        ls = [ln for ln in _lines(_USAGE) if ln.strip()]
-        self.assertIn("ctx", ls[-1])
-        self.assertIn("⚡", ls[-1])
-
-    def test_the_brand_sits_at_the_end_of_the_session_strip(self):
-        ls = [ln for ln in _lines(_USAGE) if ln.strip()]
-        self.assertIn("charter", ls[-1])
-        self.assertIn("ctx", ls[-1], "brand must share the strip, not float on a chip row")
-
-    def test_no_session_news_inside_the_repo_column(self):
-        """`⛊ N denied` used to render under the repo tree, as if it were repo news."""
-        ls = _lines(_USAGE)
-        head = next(i for i, ln in enumerate(ls) if "repos" in ln)
-        last = max(i for i, ln in enumerate(ls) if ln.strip())
-        for ln in ls[head:last]:
-            left = ln.split("│", 1)[0] if "│" in ln[40:] else ln
-            for token in ("denied", "recorded", "dispatched", "ctx", "⚡"):
-                self.assertNotIn(token, left, f"session news leaked into the repo column: {ln}")
-
-
-class DegradesCleanly(PersonaIso):
-    def setUp(self) -> None:
-        super().setUp()
-        self.make_persona("alpha", role="A", vault="a", **{"delegate-when": "x"})
-
-    def test_a_narrow_pane_still_renders_every_zone(self):
-        for w in (24, 40, 80, 100, 131, 200):
-            with self.subTest(width=w):
-                out = _lines(_USAGE, width=w)
-                self.assertTrue(any(ln.strip() for ln in out))
-                for ln in out:
-                    self.assertLessEqual(statusline.tui.width(ln), w)
-
-    def test_the_strip_is_absent_when_there_is_nothing_to_say(self):
-        """No usage yet (fresh session / just compacted) and no news — the strip must
-        not render an empty row just to hold the brand."""
-        ls = [ln for ln in _lines({}) if ln.strip()]
-        self.assertFalse(any(ln.startswith("ctx") for ln in ls))
-
-    def test_it_never_raises_on_a_broken_payload(self):
-        for bad in ({"context_window": None}, {"context_window": {"used_percentage": "x"}},
-                    {"session_id": 12}):
-            with self.subTest(payload=bad):
-                statusline.render(bad)
-
-
-class BrandFits(unittest.TestCase):
-    """The brand must be present-and-correct or absent — never truncated.
-
-    A real session rendered `⬢ charter 0.10…`: `_with_brand` fits-or-drops and never
-    truncates, so the crop came from outside — the pane gave one column less than
-    `COLUMNS` promised. The fit check now keeps a margin, so an off-by-one in the
-    reserve (or in a terminal's idea of how wide `⬢` is) drops the brand instead of
-    shearing it.
-    """
-
-    def test_the_brand_is_never_partially_rendered(self):
-        for w in range(24, 220):
-            with self.subTest(width=w):
-                out = _plain(statusline._with_brand("x" * 10, w))
-                if "charter" in out:
-                    self.assertNotIn("…", out.split("charter")[1])
-
-    def test_it_keeps_a_margin_beyond_the_declared_width(self):
-        """Exactly-fits must NOT render: that is the case a one-column shortfall eats."""
-        brand_w = statusline.tui.width(_plain(statusline._brand()))
-        body = "x" * 10
-        exact = 10 + statusline._BRAND_GAP + brand_w
-        self.assertNotIn("charter", _plain(statusline._with_brand(body, exact)))
-        self.assertIn("charter", _plain(statusline._with_brand(body, exact + statusline._BRAND_MARGIN)))
-
-    def test_it_still_never_exceeds_the_width(self):
-        for w in (24, 40, 80, 120, 200):
-            for used in (0, 5, 20):
-                with self.subTest(width=w, used=used):
-                    out = statusline._with_brand("x" * used, w)
-                    for line in out.split("\n"):
-                        self.assertLessEqual(statusline.tui.width(_plain(line)), w)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Framed(PersonaIso):
     """The box, and the alignment guarantee it makes visible.
 
@@ -460,6 +283,61 @@ class Framed(PersonaIso):
                          f"right-column text starts at differing columns: {sorted(starts)}")
 
 
+    def test_every_marker_is_east_asian_neutral(self):
+        """The guarantee behind the whole layout, and the thing that actually broke.
+
+        A column header's marker and a chip's bullet decide where the text after them
+        begins. If they can disagree about their own width, the header's title drifts
+        from the names below it — which is what `◈` (header) against `◆`/`○` (chips)
+        did: all three are East-Asian **Ambiguous**, and a font drew one of them two
+        cells wide.
+
+        Neutral is the property that removes the argument: the tables give it exactly
+        one cell everywhere. Assert the property, not the specific characters, so a
+        future redesign can pick different glyphs and still be safe.
+        """
+        import unicodedata as ud
+        for name, ch in (("header", statusline._MARK_HEAD),
+                         ("active", statusline._MARK_ACTIVE),
+                         ("idle", statusline._MARK_IDLE)):
+            with self.subTest(marker=name):
+                self.assertIn(ud.east_asian_width(ch), ("N", "Na"),
+                              f"{name} marker {ch!r} (U+{ord(ch):04X}) is East-Asian "
+                              f"{ud.east_asian_width(ch)} — a font may draw it two cells "
+                              f"and shift the text after it")
+
+    def test_the_header_marker_is_the_same_width_as_a_chip_bullet(self):
+        """Header and chips must occupy the same prefix, or their text disagrees."""
+        w = statusline.tui.width
+        self.assertEqual(w(statusline._MARK_HEAD), w(statusline._MARK_ACTIVE))
+        self.assertEqual(w(statusline._MARK_HEAD), w(statusline._MARK_IDLE))
+
+    def test_the_two_column_headers_share_one_row(self):
+        ls = _lines()
+        self.assertEqual([i for i, ln in enumerate(ls) if "repos" in ln],
+                         [i for i, ln in enumerate(ls) if "personas" in ln])
+
+    def test_session_gauges_live_on_the_last_content_line(self):
+        ls = [ln for ln in _lines(_USAGE) if ln.strip()]
+        self.assertIn("ctx", ls[-1])
+        self.assertIn("⚡", ls[-1])
+
+    def test_the_brand_sits_at_the_end_of_the_session_strip(self):
+        ls = [ln for ln in _lines(_USAGE) if ln.strip()]
+        self.assertIn("charter", ls[-1])
+        self.assertIn("ctx", ls[-1], "brand must share the strip, not float on a chip row")
+
+    def test_no_session_news_inside_the_repo_column(self):
+        """`⛊ N denied` used to render under the repo tree, as if it were repo news."""
+        ls = _lines(_USAGE)
+        head = next(i for i, ln in enumerate(ls) if "repos" in ln)
+        last = max(i for i, ln in enumerate(ls) if ln.strip())
+        for ln in ls[head:last]:
+            left = ln.split("│", 1)[0] if "│" in ln[40:] else ln
+            for token in ("denied", "recorded", "dispatched", "ctx", "⚡"):
+                self.assertNotIn(token, left, f"session news leaked into the repo column: {ln}")
+
+
 class OverflowKeepsTheReposWithSomethingToSay(unittest.TestCase):
     """The cap was a bare positional slice, so with the list in directory order the rows
     went to whatever sorted first. Observed with 18 clones: thirteen rows of clean
@@ -531,3 +409,7 @@ class OverflowKeepsTheReposWithSomethingToSay(unittest.TestCase):
             return None
 
         self.assertEqual(colour_of(rows_a, "aaa-02"), colour_of(rows_b, "aaa-02"))
+
+
+if __name__ == "__main__":
+    unittest.main()
