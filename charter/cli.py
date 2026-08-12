@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import (
@@ -858,6 +859,29 @@ def main(argv=None) -> int:
         return args.func(args) or 0
     except KeyboardInterrupt:
         return 130
+    except BrokenPipeError:
+        # `charter … | head` is ordinary shell usage: the reader stopped, so the next write
+        # fails. A condition, not a bug — charter did nothing wrong, so this joins the two
+        # clauses below rather than falling through to the crash reporter, which used to
+        # file a report every time somebody piped output into `head`.
+        #
+        # Redirecting at the fd level is what stops the interpreter trying to flush the
+        # dead pipe again on the way out; without it the process exits 120 (a failed
+        # shutdown flush) whatever is returned here.
+        #
+        # BOTH streams, and stderr is the one that actually matters: charter's progress
+        # output goes there via util.ok/info, so under the usual `charter … 2>&1 | head`
+        # it is stderr that hits the closed pipe. Redirecting only stdout left the exit
+        # code at 120 with the report correctly suppressed — half a fix that looked whole.
+        #
+        # Guarded because a captured stream has no fileno: under test the redirect is
+        # skipped, and there is no real pipe there to suppress anyway.
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                os.dup2(os.open(os.devnull, os.O_WRONLY), stream.fileno())
+            except Exception:  # noqa: BLE001 - a best-effort tidy-up, never the story
+                pass
+        return 141  # 128 + SIGPIPE, matching the 128 + SIGINT returned below
     except util.ProcTimeout as e:
         # A child that outlived its budget is a condition, not a bug. Only
         # KeyboardInterrupt was caught here, so a timeout reached the user as a traceback
