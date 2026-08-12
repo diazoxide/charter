@@ -19,6 +19,20 @@ dist/
 # added by `charter init`
 /workspaces/*/*
 !/workspaces/.gitkeep
+# >>> charter live workspaces (managed by `charter workspace live`) >>>
+!/workspaces/todos/workspace.json
+!/workspaces/todos/workspace.md
+!/workspaces/todos/memory
+!/workspaces/todos/memory/**
+!/workspaces/todos/todos
+!/workspaces/todos/todos/**
+!/workspaces/user-reporting/workspace.json
+!/workspaces/user-reporting/workspace.md
+!/workspaces/user-reporting/memory
+!/workspaces/user-reporting/memory/**
+!/workspaces/user-reporting/todos
+!/workspaces/user-reporting/todos/**
+# <<< charter live workspaces <<<
 
 # Per-developer Claude Code settings. charter dogfoods itself, so this is where the
 # working-tree status line lives (`python3 -m charter statusline`) — the committed
