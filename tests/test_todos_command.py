@@ -1,8 +1,9 @@
-"""`charter workspace todo` — recording and reading a workspace's intent.
+"""`charter workspace todo` — recording, reading and closing a workspace's intent.
 
 Follows the shape `workspace remember` already established: the verb with text records,
 the verb bare lists. A literal `todo list` subcommand would be indistinguishable from
-recording a todo whose text is "list".
+recording a todo whose text is "list"; `done`/`forget` escape that trap only because they
+take a slug after them, which recording never does.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ def _args(**kw):
     kw.setdefault("text", None)
     kw.setdefault("workspace", None)
     kw.setdefault("query", None)
+    kw.setdefault("slug", None)
     return SimpleNamespace(**kw)
 
 
@@ -144,6 +146,168 @@ class TestScoping(TodoCommandCase):
         with redirect_stdout(buf):
             commands_workspace.cmd_workspace_todo(_args(workspace="beta"))
         self.assertNotIn("alpha work", buf.getvalue())
+
+
+class ClosingCase(TodoCommandCase):
+    """A todo is closed by slug — the handle the list already prints beside each one."""
+
+    def record(self, text: str) -> str:
+        """Record one todo and return the slug that addresses it.
+
+        By difference, not by position: todos recorded in the same second sort
+        alphabetically among themselves, so "the last one listed" is not "the one just
+        added" — which made a test close the wrong todo and still pass its own assertion.
+        """
+        before = {t["slug"] for t in todos.open_todos("alpha")}
+        self.run_todo(text=text)
+        new = [t["slug"] for t in todos.open_todos("alpha") if t["slug"] not in before]
+        self.assertEqual(len(new), 1, "the todo under test was not recorded")
+        return new[0]
+
+    def journal(self, name: str = "alpha") -> str:
+        return "\n".join(p.read_text() for p in workspace.memories(name))
+
+
+class TestFinishingATodo(ClosingCase):
+    """`done` — finished, so the list drops it and the journal keeps the trace.
+
+    The trace is the load-bearing half. An agent may close its own todos, so without a
+    record in the journal it could create and tick off work unobserved and the list would
+    always read as finished — which is worse than having no list.
+    """
+
+    def test_a_finished_todo_leaves_the_list(self):
+        slug = self.record("prove the live gh path")
+        rc, _ = self.run_todo_all(text="done", slug=slug)
+        self.assertEqual(rc, 0)
+        self.assertEqual(todos.open_todos("alpha"), [])
+
+    def test_finishing_writes_a_journal_entry_naming_the_todo(self):
+        self.assertEqual(self.journal(), "")  # nothing in the journal to mistake for the trace
+        slug = self.record("prove the live gh path")
+        self.run_todo_all(text="done", slug=slug)
+        self.assertIn("prove the live gh path", self.journal())
+
+    def test_finishing_reports_what_it_closed(self):
+        """The slug is a truncated stamp+title; echoing the todo back is how the developer
+        confirms the right one went, not the one recorded in the same second."""
+        slug = self.record("prove the live gh path")
+        _, out = self.run_todo_all(text="done", slug=slug)
+        self.assertIn("prove the live gh path", out)
+
+    def test_a_finished_todo_leaves_no_file_behind(self):
+        """Closing DELETES. The journal is already the permanent record of what happened,
+        so a kept-but-marked todo would build a second one that every later read has to
+        filter past."""
+        slug = self.record("prove the live gh path")
+        self.run_todo_all(text="done", slug=slug)
+        left = [p.name for p in todos.todos_dir("alpha").glob("*.md") if p.name != "MEMORY.md"]
+        self.assertEqual(left, [])
+
+    def test_a_finished_todo_leaves_the_index(self):
+        slug = self.record("prove the live gh path")
+        self.run_todo_all(text="done", slug=slug)
+        self.assertNotIn(slug, todos.index("alpha").read_text())
+
+    def test_the_closing_verb_is_not_itself_recorded_as_a_todo(self):
+        """`todo done <slug>` must never fall through to the recording path — a todo
+        called "done" is the one entry nobody could act on."""
+        slug = self.record("prove the live gh path")
+        self.run_todo_all(text="done", slug=slug)
+        self.assertNotIn("done", [t["title"] for t in todos.open_todos("alpha")])
+
+    def test_finishing_leaves_the_other_todos_alone(self):
+        keep = self.record("keep this one")
+        slug = self.record("close this one")
+        self.run_todo_all(text="done", slug=slug)
+        self.assertEqual([t["slug"] for t in todos.open_todos("alpha")], [keep])
+
+
+class TestAbandoningATodo(ClosingCase):
+    """`forget` — given up on, so it goes silently: nothing happened worth journalling."""
+
+    def test_an_abandoned_todo_leaves_the_list(self):
+        slug = self.record("prove the live gh path")
+        rc, _ = self.run_todo_all(text="forget", slug=slug)
+        self.assertEqual(rc, 0)
+        self.assertEqual(todos.open_todos("alpha"), [])
+
+    def test_abandoning_writes_no_journal_entry(self):
+        """The distinction from `done` is the entire point of having two verbs: a journal
+        full of work that was never done is a journal nobody trusts."""
+        slug = self.record("prove the live gh path")
+        self.run_todo_all(text="forget", slug=slug)
+        self.assertNotIn("prove the live gh path", self.journal())
+
+    def test_abandoning_leaves_no_file_behind(self):
+        slug = self.record("prove the live gh path")
+        self.run_todo_all(text="forget", slug=slug)
+        left = [p.name for p in todos.todos_dir("alpha").glob("*.md") if p.name != "MEMORY.md"]
+        self.assertEqual(left, [])
+
+
+class TestClosingWhatIsNotThere(ClosingCase):
+    def test_an_unknown_slug_fails(self):
+        self.record("prove the live gh path")
+        rc, _ = self.run_todo_all(text="done", slug="no-such-todo")
+        self.assertNotEqual(rc, 0)
+
+    def test_an_unknown_slug_says_how_to_list_the_real_ones(self):
+        """Slugs are typed by hand from a listing, so a typo is the normal failure — and
+        the answer to "what are the real ones?" is one command away."""
+        self.record("prove the live gh path")
+        _, out = self.run_todo_all(text="done", slug="no-such-todo")
+        self.assertIn("charter ws todo", out)
+
+    def test_an_unknown_slug_closes_nothing(self):
+        self.record("prove the live gh path")
+        self.run_todo_all(text="done", slug="no-such-todo")
+        self.assertEqual(len(todos.open_todos("alpha")), 1)
+
+    def test_an_unknown_slug_writes_no_journal_entry(self):
+        """A trace of finishing something that was never there is a lie in the one record
+        the list's trustworthiness rests on."""
+        self.record("prove the live gh path")
+        self.run_todo_all(text="done", slug="no-such-todo")
+        self.assertEqual(self.journal(), "")
+
+    def test_abandoning_an_unknown_slug_fails(self):
+        self.record("prove the live gh path")
+        rc, _ = self.run_todo_all(text="forget", slug="no-such-todo")
+        self.assertNotEqual(rc, 0)
+
+    def test_a_closing_verb_without_a_slug_asks_for_one(self):
+        """`todo done` with nothing after it is a forgotten argument, not a request to
+        record a todo whose text is "done" — recording it would be a silent wrong action."""
+        rc, out = self.run_todo_all(text="done")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(todos.open_todos("alpha"), [])
+        self.assertIn("slug", out)
+
+
+class TestClosingIsWorkspaceScoped(ClosingCase):
+    """A todo belongs to exactly one workspace, and so does the command that closes it —
+    otherwise one task could quietly tick off another's work."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.ensure("beta")
+
+    def _close(self, ws: str, verb: str, slug: str) -> int:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            return commands_workspace.cmd_workspace_todo(
+                _args(workspace=ws, text=verb, slug=slug))
+
+    def test_done_cannot_reach_another_workspaces_todo(self):
+        slug = self.record("alpha work")
+        self.assertNotEqual(self._close("beta", "done", slug), 0)
+        self.assertEqual(len(todos.open_todos("alpha")), 1)
+
+    def test_forget_cannot_reach_another_workspaces_todo(self):
+        slug = self.record("alpha work")
+        self.assertNotEqual(self._close("beta", "forget", slug), 0)
+        self.assertEqual(len(todos.open_todos("alpha")), 1)
 
 
 if __name__ == "__main__":

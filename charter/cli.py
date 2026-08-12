@@ -346,7 +346,19 @@ def _add_workspace_parser(sub) -> None:
                               "journal (what happened).")
     # Text optional, exactly like `remember`: the bare verb lists. A `list` SUBCOMMAND
     # would be indistinguishable from recording a todo whose text is "list".
-    td.add_argument("text", nargs="?", help="The todo; omit to list this workspace's todos.")
+    #
+    # `done`/`forget` are read as verbs rather than as todo text, which the same argument
+    # would seem to forbid — except that each takes a SLUG after it, and recording never
+    # has a second positional. So the two are told apart by the shape of the call, not by
+    # the word: `todo "forget the labels"` is one argument and records; `todo forget
+    # 20260101-120000-labels` is two and closes. Real subparsers can't do this — argparse
+    # matches the leading positional against `text` before any subcommand gets a look.
+    td.add_argument("text", nargs="?",
+                    help="The todo — or `done`/`forget` with a slug after it; omit to list.")
+    td.add_argument("slug", nargs="?",
+                    help="With `done` (finished — journalled) or `forget` (abandoned — "
+                         "silent): which todo to close. Closing deletes it; the journal is "
+                         "already the record of what happened.")
     td.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
     td.add_argument("--query", "-q", help="Search the todos instead of listing them all.")
     td.set_defaults(func=commands_workspace.cmd_workspace_todo)
