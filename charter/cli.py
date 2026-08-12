@@ -61,11 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--owner", help="Group/org/user that owns the repos "
                                      "(GitLab group or GitHub org/user).")
     ini.add_argument("--host", help="Self-hosted forge host (default: the forge's own public host).")
-    ini.add_argument("--shape", choices=["fleet", "embedded"],
-                     help="fleet: the plane is its own directory and workspaces hold "
-                          "clones. embedded: charter serves the codebase it sits inside, "
-                          "and workspaces hold worktrees of it. Default: embedded when "
-                          "run inside an existing git repo, otherwise fleet.")
     ini.set_defaults(func=commands.cmd_init)
 
     doc_check = sub.add_parser(
@@ -266,10 +261,6 @@ def _add_workspace_parser(sub) -> None:
     cr.add_argument("--vision", "--about", dest="vision",
                     help="The goal/idea for this workspace — seeds its living charter "
                          "(workspaces/<name>/workspace.md). Ask the developer if you don't know it.")
-    cr.add_argument("--branch", help="Branch for this workspace's working tree (embedded "
-                                     "planes only; default: the workspace name). In an "
-                                     "embedded plane a workspace IS a worktree of the "
-                                     "repo, since there is nothing to clone apart.")
     cr.add_argument("repos", nargs="*", help="Repos to clone into it immediately.")
     cr.set_defaults(func=commands_workspace.cmd_workspace_create)
 

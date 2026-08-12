@@ -356,10 +356,10 @@ class OverflowKeepsTheReposWithSomethingToSay(unittest.TestCase):
         self.states[Path("/w/zzz-ahead")] = {"dirty": False, "ahead": 2, "behind": 0}
         self.gl[Path("/w/mmm-ci")] = {"ci": "failed", "change": 412, "sigil": "#"}
 
-    def _pick(self, cur=None, root=None):
+    def _pick(self, cur=None):
         budget = statusline._MAX_REPO_LINES - 1
         return [d.name for d in
-                statusline._pick_rows(self.dirs, budget, cur, root, self.states, self.gl)]
+                statusline._pick_rows(self.dirs, budget, cur, self.states, self.gl)]
 
     def test_a_dirty_repo_survives_the_cap(self):
         self.assertIn("zzz-dirty", self._pick())
@@ -386,7 +386,7 @@ class OverflowKeepsTheReposWithSomethingToSay(unittest.TestCase):
         from pathlib import Path
         few = [Path("/w/a"), Path("/w/b")]
         st = {d: {} for d in few}
-        self.assertEqual(statusline._pick_rows(few, 13, None, None, st, {}),
+        self.assertEqual(statusline._pick_rows(few, 13, None, st, {}),
                          few)
 
     def test_a_repo_keeps_its_colour_when_a_neighbour_enters_the_cap(self):

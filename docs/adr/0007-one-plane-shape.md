@@ -23,10 +23,15 @@ holes underneath it:
 2. selecting a workspace never moved the session into its tree — charter printed
    `cd … && claude` and trusted the caller.
 
-**Fleet has both holes.** `repo_trees` returned `root_tree() + clones(ws)` in either shape,
-so a session that stays in the plane root edits the plane root regardless of which workspace
-it claims and regardless of which shape the plane is. The removal changes nothing about
-that, which is why it ships alongside ADR 0008.
+Removing the shape closes the first hole outright: `own_tree` is what made `default` the
+plane root, and a fleet plane's `repo_trees` is its clones and nothing else — `root_tree()`
+returns `None` in any shape but embedded, verified by running it. So after this change
+charter never *presents* the plane root as a tree you work in.
+
+The second hole survives, and it is the one that bites. Nothing **stops** a session sitting
+in the plane root and running git there, whatever charter lists; the plane root is a real
+git repo and a real directory. Not presenting it is not the same as preventing it, which is
+why this ships alongside ADR 0008.
 
 ## Consequences
 

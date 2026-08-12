@@ -26,14 +26,13 @@ share = "local"
 # problem reading an OLDER schema. Omit it and 1 is assumed.
 schema = 1
 
-# Which of charter's two deployments this plane is. See "Fleet and embedded" below.
+# Optional. Only needed to move worktrees off their default location.
 [plane]
-shape = "fleet"                  # "fleet" | "embedded". Default: "fleet".
 worktrees = "../plane.worktrees" # Where worktrees live. A relative path resolves against
                                   # this file's directory; $CHARTER_WORKTREES overrides it.
-                                  # Default: fleet keeps them per-workspace under
-                                  # workspaces/<ws>/.worktrees/; embedded puts them in a
-                                  # SIBLING of the repo — see "Where worktrees live" below.
+                                  # Default: per-workspace, under
+                                  # workspaces/<ws>/.worktrees/ — see "Where worktrees
+                                  # live" below.
 
 # One [[forge]] block per code-hosting forge this control plane tracks. A single-forge
 # control plane (the common case) declares exactly one; see "Mixed-forge" below for more
@@ -68,55 +67,37 @@ personal **user** account). `charter` accepts either key name in a `[[forge]]` b
 the forge in question. If a block sets both, `group` wins. `charter init --owner <name>`
 always writes the field as `owner`, since it works for either forge kind.
 
-## Fleet and embedded: `[plane].shape`
+## One shape
 
-charter is deployed two ways, and a plane declares which one it is.
+A control plane is its own directory, and a workspace holds **clones** — one per repo the
+task touches, each of which can carry worktrees. That is the only arrangement.
 
-**`fleet`** (the default, and the original) — the control plane is its own directory. A
-workspace holds many **clones**, one per repo the task touches, each of which can carry
-worktrees. This is what the rest of this document assumes.
+charter used to have a second one, `shape = "embedded"`: charter installed *inside* the
+single codebase it served, where a workspace held worktrees of the plane's own root rather
+than clones. It was removed — see [ADR 0007](adr/0007-one-plane-shape.md) — because every
+plane exercised exactly one of the two, so the other was carried on trust. An existing
+`shape` key is simply ignored.
 
-**`embedded`** — charter installed *inside* the single codebase it serves, which may
-itself be a monorepo of backend, frontend and the rest. There is nothing to clone: the
-tree you edit is the plane's own root, and a workspace holds **worktrees** of it rather
-than clones. Teams reach for this when there is one repo, not a fleet, and they still
-want personas, memory and a vault.
+`charter init` therefore produces the same plane wherever it runs. Being inside a git repo
+no longer changes what you get; it changes only what init *offers*, which is to clone that
+repo into your first workspace.
 
-```toml
-[plane]
-shape = "embedded"
-```
+### The plane root is not a place to work
 
-The status line follows the declaration. An embedded plane shows its own repo as the
-first row — branch, dirty state, CI, open change — with each worktree on its own row
-beneath it. A fleet plane shows the workspace's clones, exactly as before.
+The directory holding `charter.toml` holds the control plane — personas, inventory,
+workspaces, config — and nothing you edit. Work happens in a workspace's clones.
 
-### Why this is declared rather than detected
+Nothing in the filesystem enforces that, which is why it is worth stating. The plane root
+is a real git repo, and `charter init` is documented as something you run inside your
+existing repo. charter no longer *lists* it as one of your repos, but not listing a tree is
+not the same as preventing work in it: two sessions that both sit in the plane root share
+one working tree and one HEAD, and will thrash each other's branches while charter reports
+two different workspaces.
 
-A fleet plane's root is *also* a git repo in the normal case: its personas carry
-committed memory, and the `exclude` example above exists precisely because the plane's
-own repo lives on the forge. So the presence of `.git` cannot separate the two shapes —
-in one it means "the repo I work in", in the other "the plane itself, which I do not".
-
-Every filesystem signal that might substitute has the same defect in a worse place.
-"No clones anywhere" and "empty inventory" both describe a *fresh fleet plane*, before
-its first `discover` or `clone` — the moment a new user can least afford charter to
-guess. What separates the shapes is intent, and `charter init` is where the intent
-exists: running it inside a repo you already work in is the choice. So it is written
-down, once, instead of re-derived forever.
-
-An unrecognised value falls back to `fleet`, on the same principle as `[memory].share`
-falling back to `local`: a typo should cost a feature, not rearrange something that works.
-
-`charter init` decides it for you, because init is the only moment it is decidable: run
-inside a directory that is already a git repo, it writes `shape = "embedded"` and says so;
-run anywhere else, it writes nothing and you get a fleet plane. Afterwards the evidence is
-gone — a fleet plane's root becomes a git repo too — which is exactly why it is recorded
-rather than re-derived. `charter init --shape fleet|embedded` overrides the detection.
-
-An embedded plane gets no `inventory/` directory: the inventory lists a forge owner's
-repos so `clone` has targets, and an embedded plane clones nothing. `doctor` and
-`reinit` both know this, so neither reports its absence as drift.
+So the status line warns when the plane root is dirty or off its default branch, and
+`doctor` checks the same thing at session start. See
+[ADR 0008](adr/0008-the-plane-root-is-not-a-work-tree.md) for why those are warnings rather
+than refusals.
 
 ### Where worktrees live
 
@@ -124,49 +105,26 @@ Worktrees normally sit at `workspaces/<ws>/.worktrees/<repo>/<piece>` — delibe
 **outside every clone**, so that nx, jest and maven never recurse into them and a
 `git clean -xfd` inside a clone cannot destroy live work.
 
-That path assumes the clone and the control plane are different directories. In an
-embedded plane they are the same directory, so the identical rule now requires leaving the
-plane as well — otherwise a worktree is a complete second copy of the codebase sitting
-inside the tree that every root-level glob walks. This is not hypothetical: charter's own
-checkout, with two worktrees, answered a root-level test glob with 214 files of which 142
-were duplicates. `.gitignore` hides that from git and from nothing else — pytest, jest,
-nx, tsc and every IDE indexer read the working tree directly.
-
-So an embedded plane defaults its worktrees to a **sibling of the repo**, `<root>.worktrees/`,
-keeping the layout below it identical:
-
-```
-my-app/                                 the plane, and the codebase
-my-app.worktrees/<workspace>/my-app/<piece>
-```
+That default is right whenever a workspace holds clones, which is always. It matters
+because the failure it avoids is quiet: put worktrees anywhere a build tool globs from and
+the tree answers a root-level glob with several copies of itself. Measured in a layout that
+made that mistake — 214 test files discoverable from one root, 142 of them duplicates.
+`.gitignore` hides that from git and from nothing else; pytest, jest, nx, tsc and every IDE
+indexer read the working tree directly.
 
 Set `[plane].worktrees` (or `$CHARTER_WORKTREES`) to put them somewhere else. Only the
 worktrees move — `workspaces/<ws>/memory/` and `refs/` stay inside the plane, because they
 are a few KB of text and `charter workspace live` exists precisely to un-ignore them so a
 team can commit them.
 
-Worktrees created before this are **not** relocated automatically: moving one means
-rewriting git's own `gitdir` pointer, and `git worktree move` is the command that does it
-correctly. `charter doctor` finds any that are still inside the codebase and prints that
-command with the paths filled in.
+Relocating an existing worktree means rewriting git's own `gitdir` pointer, and
+`git worktree move` is the command that does it correctly — charter never moves one for you.
 
-### What a workspace is, in each shape
+### What a workspace is
 
 A workspace is **a set of working trees** — one task's code, kept apart from every other
-task's. How it gets those trees is the only thing that differs:
-
-| | fleet | embedded |
-| --- | --- | --- |
-| a workspace's trees | clones, via `charter clone` | a **worktree** of the one repo |
-| `default` | its own clones like any other | **the repo itself** |
-| creating one | `workspace create` then `clone` | `workspace create` materialises the tree |
-
-In an embedded plane there is nothing to clone apart, so a workspace that materialised
-nothing isolated nothing: every workspace resolved to the same root tree, and `ws use
-alpha` then `ws use beta` changed the memory namespace while leaving you on exactly the
-same files. Two agents in two workspaces edited the same branch.
-
-So `charter workspace create feature-x` now creates the tree that makes it a workspace:
+task's. It gets them by cloning: `charter workspace create feature-x`, then `charter clone`
+the repos that task touches. `default` is an ordinary workspace like any other.
 
 ```
 $ charter workspace create feature-x
@@ -202,9 +160,9 @@ lacked: a session that had never chosen anything could inherit another session's
 
 ### Working inside a worktree
 
-`charter.toml` is a tracked file, so an embedded plane checks a copy of it into every
-worktree — which means each worktree *looks* like its own control plane. It is not: a
-worktree is a view of a repo, not a repo.
+`charter.toml` is a tracked file, so if the repo you are working in is itself a control
+plane, every worktree cut from it checks out a copy — which makes each worktree *look* like
+its own control plane. It is not: a worktree is a view of a repo, not a repo.
 
 So the plane's identity follows the **main working tree**. Standing anywhere inside a
 worktree, `charter` resolves the plane to the repo the worktree belongs to, and personas,
@@ -219,9 +177,10 @@ you genuinely want a plane of its own there.
 ### Nested planes
 
 `charter` takes the **innermost** `charter.toml` above your working directory. That is the
-right rule — it is the one git, cargo and npm use — but the embedded shape puts a
-`charter.toml` into ordinary product repos, and a fleet plane clones product repos into its
-workspaces. So `cd`-ing into `workspaces/<ws>/<repo>` can land you in a *different* control
+right rule — it is the one git, cargo and npm use — but a plane clones product repos into
+its workspaces, and a product repo may itself carry a `charter.toml`, since `charter init`
+is run inside existing repos. So `cd`-ing into `workspaces/<ws>/<repo>` can land you in a
+*different* control
 plane: different personas, a different vault, and memories written somewhere you did not
 choose.
 

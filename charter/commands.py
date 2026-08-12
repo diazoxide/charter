@@ -370,16 +370,11 @@ def cmd_status(args) -> int:
 
 
 def _status_for_workspace(ws: str, inv_by_name: dict, active: str) -> None:
-    # `repo_trees` includes an embedded plane's own repo, which has no clone and never
-    # will — listing only `clones` reported it as an empty workspace and then advised
-    # `charter clone`, in a shape with nothing to clone.
     clones = {d.name: d for d in workspace.repo_trees(ws)}
     marker = " (active)" if ws == active else ""
     print(f"— workspace: {ws}{marker} · {len(clones)} repo(s) —")
     if not clones:
-        hint = (f"`charter worktree add <repo> <piece>` to start a piece"
-                if config.PLANE_SHAPE == "embedded"
-                else f"`charter clone <repo> --workspace {ws}` to populate")
+        hint = f"`charter clone <repo> --workspace {ws}` to populate"
         print(f"  (empty; {hint})\n")
         return
     fmt = "  {:<38} {:<12} {}"
@@ -403,10 +398,8 @@ def cmd_gl_refresh(args) -> int:
     from . import glstate
 
     ws = workspace.resolve(getattr(args, "workspace", None))
-    # `repo_trees`, not `clones`: the status line draws the plane's own root tree as a
-    # repo row, and this is what fills that row's CI and change columns. A monorepo plane
-    # has NO clones, so the old list was empty and this command returned early — the one
-    # shape where every repo it should refresh is the one it skipped.
+    # `repo_trees` is what the status line draws, so refreshing the same list is what
+    # keeps a repo from being drawn without its forge state having been fetched.
     dirs = workspace.repo_trees(ws)
     # Worktrees carry their own branch, so they carry their own pipeline and their own
     # open change; the status line gives them full rows when a workspace holds a single
@@ -450,19 +443,10 @@ def _toml_str(s: str) -> str:
     return json.dumps(s)
 
 
-def _render_charter_toml(forge_kind: str, owner: str, host: str | None,
-                         shape: str = "fleet") -> str:
+def _render_charter_toml(forge_kind: str, owner: str, host: str | None) -> str:
     from . import instance as _instance
 
     lines = [f"schema = {_instance.SCHEMA}"]
-    # Written only when it is not the default, so a fleet plane's charter.toml stays the
-    # same minimal file it has always been and nobody has to learn a key they don't need.
-    if shape == "embedded":
-        lines += ["",
-                  "# charter is installed inside the one codebase it serves. Nothing to",
-                  "# clone: the tree you edit is this directory, and a workspace holds",
-                  "# worktrees of it. See docs/control-plane.md.",
-                  "[plane]", 'shape = "embedded"']
     lines += ["", "[[forge]]", f"kind = {_toml_str(forge_kind)}"]
     if owner:
         lines.append(f"owner = {_toml_str(owner)}")
@@ -625,40 +609,23 @@ def cmd_init(args) -> int:
     owner = getattr(args, "owner", None) or ""
     host = getattr(args, "host", None)
 
-    # THE moment the fleet/embedded distinction is decidable. `charter init` run inside a
-    # directory that is already a git repo means the user chose to install charter into a
-    # codebase they work in — the embedded shape — and running it in an empty or non-repo
-    # directory means the plane is its own thing. Afterwards nothing can tell: a fleet
-    # plane's root is a git repo too (its personas carry committed memory), so `ROOT/.git`
-    # stops being evidence the moment init has finished. So decide here, write it down,
-    # and never sniff for it again. `--shape` overrides for scripted setups.
-    shape = getattr(args, "shape", None)
-    if shape and shape not in _instance.SHAPES:
-        util.err(f"unknown --shape {shape!r} — known shapes: "
-                 f"{', '.join(_instance.SHAPES)}")
-        return 1
-    detected = (root / ".git").is_dir()
-    shape = shape or ("embedded" if detected else "fleet")
-
+    # Being inside a git repo used to decide the plane's SHAPE here, and there is now only
+    # one shape — so `init` produces the same plane wherever it runs. What it detects is
+    # still worth knowing, but it changes only what init OFFERS (a first clone of the repo
+    # you are standing in), never what it builds.
     created, present, blocked = [], [], []
 
     toml_path = root / _root.MARKER
     if toml_path.exists():
         present.append(_root.MARKER)
-        shape = _instance.shape_of(_instance.load(root))   # existing file decides
     else:
-        toml_path.write_text(_render_charter_toml(forge_kind, owner, host, shape))
+        toml_path.write_text(_render_charter_toml(forge_kind, owner, host))
         created.append(_root.MARKER)
-        if shape == "embedded":
-            util.info(f"{root.name} is already a git repo, so this plane is EMBEDDED: "
-                      f"charter serves this codebase, there is nothing to clone, and "
-                      f"worktrees live outside the tree. Re-run with --shape fleet if "
-                      f"you meant a plane that clones other repos.")
-        elif not owner:
+        if not owner:
             util.warn(f"No --owner given — {_root.MARKER}'s [[forge]] block has no "
                       f"owner/group set. Add one before `charter discover`.")
 
-    d_created, d_present, d_blocked = _create_baseline_dirs(root, shape)
+    d_created, d_present, d_blocked = _create_baseline_dirs(root)
     created += d_created
     present += d_present
     blocked += d_blocked
@@ -719,9 +686,8 @@ def cmd_init(args) -> int:
 # the heal half; `doctor`'s "schema" check is where the drift is visible       #
 # without running this first.                                                  #
 # --------------------------------------------------------------------------- #
-def _create_baseline_dirs(root: Path,
-                          shape: str = "fleet") -> tuple[list[str], list[str], list[tuple[str, Path]]]:
-    """Create any ``instance.baseline_dirs_for(shape)`` absent under ``root``; never touch a
+def _create_baseline_dirs(root: Path) -> tuple[list[str], list[str], list[tuple[str, Path]]]:
+    """Create any ``instance.BASELINE_DIRS`` absent under ``root``; never touch a
     directory that's already there. Shared by ``cmd_init`` (a fresh control plane) and
     ``cmd_reinit`` (healing an existing one) so both follow the exact same additive
     discipline instead of two dialects of the same rule.
@@ -735,7 +701,7 @@ def _create_baseline_dirs(root: Path,
     from . import instance as _instance
 
     created, present, blocked = [], [], []
-    for d in _instance.baseline_dirs_for(shape):
+    for d in _instance.BASELINE_DIRS:
         p = root / d
         if p.is_dir():
             present.append(f"{d}/")
@@ -759,13 +725,7 @@ def cmd_reinit(args) -> int:
         return 1
     from . import instance as _instance
 
-    # Read from the plane on disk, NOT `config.PLANE_SHAPE`. Both are "the shape", but the
-    # global is an import-time snapshot of whatever ROOT was then, and `instance.drift` —
-    # the detect half this command heals — reads the file every time. When those two
-    # disagree, `doctor` reports drift that `reinit` then declines to fix, which is a loop
-    # with no way out from the outside. Same source, same answer, always.
-    shape = _instance.shape_of(_instance.load(config.ROOT))
-    created, present, blocked = _create_baseline_dirs(config.ROOT, shape)
+    created, present, blocked = _create_baseline_dirs(config.ROOT)
 
     if blocked:
         for d, p in blocked:

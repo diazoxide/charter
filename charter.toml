@@ -1,16 +1,8 @@
 schema = 1
 
-# charter is installed inside the one codebase it serves — its own. Nothing to clone:
-# the tree you edit is this directory, and a workspace holds worktrees of it.
-[plane]
-shape = "embedded"
-
 [[forge]]
 kind = "github"
 owner = "diazoxide"
-# This control plane's own repo. Excluded so `discover` never offers to clone charter
-# into charter's own workspace — the repo is already here, as the plane's root tree.
-exclude = ["charter"]
 
 [memory]
 share = "local"

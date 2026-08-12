@@ -35,12 +35,11 @@ Install charter (https://github.com/diazoxide/charter) for me:
 Then tell me to restart this session so the plugin's hooks load.
 ```
 
-Step 4 is not caution for its own sake: `charter init` behaves differently depending on
-where it runs. Inside a directory that is already a git repo it writes
-`shape = "embedded"` and makes *that repo* a control plane (see
-[docs/control-plane.md](docs/control-plane.md)). Run from an unrelated project by
-accident, it would quietly convert it — so the prompt stops before the step that writes
-into your working directory, and hands the choice back to you.
+Step 4 is not caution for its own sake: `charter init` makes the directory it runs in a
+control plane, writing `charter.toml` and scaffolding `personas/`, `inventory/` and
+`workspaces/` (see [docs/control-plane.md](docs/control-plane.md)). Run from an unrelated
+project by accident, it would quietly convert it — so the prompt stops before the step that
+writes into your working directory, and hands the choice back to you.
 
 The manual steps below are the same install, written out. Reach for them when you want to
 know exactly what is happening, or when the prompt does something you did not expect.

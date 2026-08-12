@@ -12,7 +12,8 @@ clone cannot destroy live work. ``workspaces/`` is gitignored, so none of it can
 control plane's history.
 
 That path assumes the clone and the control plane are different directories. In an
-**embedded** plane they are the same one, and "outside every clone" then requires leaving
+a plane whose clone was its own root they were the same one, and "outside every clone"
+then required leaving
 the plane too — so there the root moves to a sibling of the repo (``config.WORKTREES_ROOT``,
 overridable via ``[plane] worktrees``) and the layout below it is unchanged:
 ``<root>/<ws>/<repo>/<piece>``. Same rule, followed to where it leads.
@@ -28,7 +29,7 @@ DIR_NAME = ".worktrees"
 
 
 def root(ws: str) -> Path:
-    """This workspace's worktree root — relocated (embedded) or in-plane (fleet)."""
+    """This workspace's worktree root — relocated by config, or in-plane by default."""
     ext = config.WORKTREES_ROOT
     return (ext / ws) if ext is not None else (workspace.workspace_dir(ws) / DIR_NAME)
 

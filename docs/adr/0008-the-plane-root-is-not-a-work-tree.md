@@ -4,18 +4,22 @@ The directory holding `charter.toml` is the **plane root**. It holds the control
 personas, inventory, workspaces, config — and nothing anyone is meant to edit or switch
 branches in. Work happens in a **workspace tree**: a clone a workspace owns.
 
-This needs writing down because nothing in the code makes it true. The plane root *is* a
-git repo, `charter init` is documented as something you run inside your existing repo, and
-the status line lists the root tree alongside the repos you work in. Every signal says
-"this is a place to work". Only a warning says otherwise.
+This needs writing down because nothing in the code makes it true, and because the code
+looks like it does. After ADR 0007 charter never *lists* the plane root as a repo — a fleet
+plane's `repo_trees` is its clones and nothing else. That is easy to mistake for the problem
+being solved. It is not: the plane root remains a real git repo in a real directory that
+`charter init` is documented as being run inside, and **not presenting a tree is not the
+same as preventing work in it**.
 
 ## Why it matters
 
-Two sessions in two workspaces are perfectly isolated right up until both of them are
-actually sitting in the plane root — at which point they share one working tree and one
-HEAD, and they thrash each other's branches while charter reports two different workspaces.
-That is the failure this constraint exists to prevent, and removing the embedded plane
-shape (ADR 0007) does not prevent it: `repo_trees` lists the root tree in every shape.
+Two sessions in two workspaces are perfectly isolated right up until both are actually
+sitting in the plane root — at which point they share one working tree and one HEAD and
+thrash each other's branches, while charter reports two different workspaces and lists no
+tree that would hint at why.
+
+That last part is what makes it worth a signal rather than nothing. The failure is invisible
+in exactly the surface a user would check.
 
 Observed rather than theorised. In the session that produced this decision the agent was
 nominally in two different workspaces in turn while doing every git operation in the plane
@@ -30,10 +34,10 @@ wants evidence: `charter` itself must obviously work there, and so must whatever
 does to configure their plane. Shipping a refusal built on a guess would either block
 legitimate work or be so narrow it protects nothing.
 
-So the first step is signal, in the two places already designed to carry it: the status
-line marks the root row as infrastructure rather than drawing it as a peer of the clones,
-and `doctor` — which runs at SessionStart, while acting on it is still cheap — checks the
-root is clean and on its default branch.
+So the first step is signal, in the two places already designed to carry it: the status line
+gains an explicit warning when the plane root is dirty or off its default branch — a new
+element, since the root is otherwise not rendered at all — and `doctor`, which runs at
+SessionStart while acting on it is still cheap, checks the same thing.
 
 ## Consequences
 

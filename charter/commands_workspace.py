@@ -74,26 +74,7 @@ def cmd_workspace_create(args) -> int:
     if live:
         workspace.set_live(args.name, True)
 
-    # Embedded: give the workspace the working tree that MAKES it a workspace. A fleet
-    # workspace gets its trees from `charter clone`; here there is nothing to clone, so
-    # the only way to isolate is a worktree of the one repo — and leaving that to the user
-    # is what made every embedded workspace share one checkout.
     tree_path = None
-    if (config.PLANE_SHAPE == "embedded"
-            and args.name != config.DEFAULT_WORKSPACE
-            and workspace.own_tree(args.name) is None):
-        rt = workspace.root_tree()
-        if rt is not None:
-            branch = getattr(args, "branch", None) or args.name
-            tree_path = worktree.path_for(args.name, rt.name, args.name)
-            tree_path.parent.mkdir(parents=True, exist_ok=True)
-            add = ["worktree", "add", str(tree_path)]
-            add += (["-b", branch] if not worktree.branch_exists(rt, branch) else [branch])
-            proc = util.run(["git", "-C", str(rt), *add], check=False)
-            if proc.returncode != 0:
-                util.err(f"could not create this workspace's working tree:\n"
-                         f"{(proc.stderr or '').strip()}")
-                return 1
     mode = ("LIVE — charter + manifest + memory committed + shared + auto-saved" if live
             else "LOCAL — private (nothing committed); `charter workspace live` to share")
     util.ok(f"Workspace '{args.name}' ready ({mode}) → {wd.relative_to(config.ROOT)}/")
@@ -141,22 +122,6 @@ def cmd_workspace_use(args) -> int:
     # `use fature-x` created `fature-x`, took the session lock, and the correction then
     # hit `✗ Workspace is 🔒 locked to 'fature-x' for this session`. Creating is now
     # deliberate (`--create`), and an unknown name is a question rather than an action.
-    # In an embedded plane a workspace IS a working tree, so one without a tree isolates
-    # nothing — selecting it would put this session on the same files as every other
-    # workspace, which is the promise `workspace` exists to keep. Refused rather than
-    # warned: this is charter's own command, so it can decline without breaking any work,
-    # and a warning would leave the default path wrong.
-    if (config.PLANE_SHAPE == "embedded"
-            and args.name != config.DEFAULT_WORKSPACE
-            and args.name in workspace.list_workspaces()
-            and workspace.own_tree(args.name) is None):
-        util.err(f"workspace '{args.name}' has no working tree of its own, so selecting it "
-                 f"would leave you on the same files as every other workspace.")
-        util.info(f"  Give it one: charter workspace create {args.name}")
-        util.info(f"  (In an embedded plane a workspace is a worktree of this repo; "
-                  f"'{config.DEFAULT_WORKSPACE}' is the repo itself.)")
-        return 1
-
     # `default` is always selectable, whether or not its directory exists yet — it is
     # documented as "the always-present workspace used when none is selected", and
     # `ensure` creates it on demand. The unknown-name guard below refused it in a plane

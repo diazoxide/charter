@@ -335,89 +335,26 @@ def clones(name: str) -> list[Path]:
     return sorted(d for d in wd.iterdir() if is_clone(d))
 
 
-def root_tree() -> Path | None:
-    """The codebase an **embedded** plane serves — its own root — or ``None``.
-
-    In the embedded shape (`charter init` run inside the repo you already work in) there
-    is nothing to clone: ``workspaces/`` holds no repos and the tree you edit IS the root.
-    It belongs to no single workspace — it is in all of them, since there is physically
-    one of it — which is what separates it from everything :func:`clones` returns.
-
-    Two conditions, and the shape check is the load-bearing one. A **fleet** plane's root
-    is very often a git repo as well (personas carry committed memory; docs/control-
-    plane.md ships ``exclude = ["this-control-plane"]`` because the plane's own repo lives
-    on the forge) — but there it is the plane, not a repo you work in, and listing it
-    beside the workspace's real clones would be wrong. ``ROOT/.git`` cannot tell those
-    apart, so :func:`charter.instance.shape_of` is asked instead.
-
-    The ``is_clone`` half still matters: an embedded plane whose ``.git`` has been removed
-    has no tree to offer, and a *worktree* of one (``.git`` is a file) is not the trunk.
-    """
-    try:
-        if config.PLANE_SHAPE != "embedded":
-            return None
-        return config.ROOT if is_clone(config.ROOT) else None
-    except OSError:
-        return None
-
-
-def own_tree(ws: str) -> Path | None:
-    """The working tree that belongs to *ws* alone, in an **embedded** plane.
-
-    Embedded means the codebase cannot be cloned apart, so a workspace that materialises
-    nothing isolates nothing: `ws use alpha` then `ws use beta` changed the memory
-    namespace and not one file being edited, while charter promised "never mix
-    workspaces". Two agents in two workspaces were editing the same files on the same
-    branch.
-
-    So in an embedded plane a workspace **is** a working tree:
-
-    - ``default`` owns the root tree. A solo user's experience stays `charter init` and
-      work in your repo — charter starts materialising trees only when you ask for a
-      SECOND concurrent thing, so the simplest case is never the strangest one.
-    - every other workspace owns the worktree whose piece name equals the workspace name,
-      i.e. ``<worktrees-root>/<ws>/<repo>/<ws>``. Reusing the existing piece layout rather
-      than inventing a level: `worktree.dirs_for` keeps listing it, and a workspace's own
-      tree is simply its first piece.
-
-    ``None`` when the workspace has no tree yet — the state `workspace use` refuses.
-    Always ``None`` in a fleet plane, where a workspace holds clones instead.
-    """
-    if config.PLANE_SHAPE != "embedded":
-        return None
-    rt = root_tree()
-    if rt is None:
-        return None
-    if ws == config.DEFAULT_WORKSPACE:
-        return rt
-    from . import worktree
-    p = worktree.path_for(ws, rt.name, ws)
-    return p if is_tree(p) else None
-
-
 def repo_trees(ws: str) -> list[Path]:
-    """Every repo this workspace works in.
+    """Every repo this workspace works in — its clones, and nothing else.
 
     The one list anything asking "which repos am I on?" should use — the status line's
     rows and `gl-refresh`'s fetch targets both come from here, so a repo can never be
     drawn without its forge state having been fetched, or fetched without being drawn.
-    Splitting that decision in two is what left the root tree with a permanently empty
-    CI column: it was rendered from one list and refreshed from another.
+    Splitting that decision in two is what left a tree with a permanently empty CI column:
+    it was rendered from one list and refreshed from another.
 
-    Fleet: the plane's own repo (it has a branch like any other) plus this workspace's
-    clones. Embedded: this workspace's OWN tree — the root for `default`, its worktree
-    otherwise. Returning the root for every embedded workspace is what made them all look
-    like the same workspace, because they were.
+    The **plane root is deliberately not here**, and its absence is a decision rather than
+    an oversight. The root is a git repo — personas carry committed memory, and a plane's
+    own repo usually lives on a forge — but it is the plane, not a repo you work in.
+    Listing it beside a workspace's clones would invite exactly the thing charter is trying
+    to stop: two sessions editing one working tree while reporting two workspaces.
+
+    Note what that does NOT buy: not listing the root does not prevent anyone working in
+    it. That gap is why the status line and `doctor` warn about a dirty or off-branch root
+    (docs/adr/0008).
     """
-    if config.PLANE_SHAPE == "embedded":
-        # The workspace's OWN tree stands where the shared root used to — every embedded
-        # workspace returning the same root is what made them all one workspace. Clones
-        # still count: nothing stops `charter clone` in an embedded plane, and a hybrid
-        # (the codebase plus a vendored dependency) is a reasonable thing to have.
-        own = own_tree(ws)
-        return ([own] if own is not None else []) + clones(ws)
-    rt = root_tree()
-    return ([rt] if rt is not None else []) + clones(ws)
+    return clones(ws)
 
 
 def legacy_flat_clones() -> list[Path]:

@@ -34,39 +34,33 @@ DEFAULT_WORKSPACE_FALLBACK = "default"
 SHARED_PERSONA = "_shared"
 
 
-def worktrees_root_for(root: "Path", shape: str, cfg: dict) -> "Path | None":
-    """Where worktrees live, or ``None`` to keep them per-workspace under ``.worktrees/``.
+def worktrees_root_for(root: "Path", cfg: dict) -> "Path | None":
+    """An explicitly relocated worktree root, or ``None`` for the default.
 
-    ``$CHARTER_WORKTREES`` → ``[plane] worktrees`` → the shape's default. Relative values
-    resolve against ROOT, so ``"../charter.worktrees"`` reads as written.
+    ``$CHARTER_WORKTREES`` → ``[plane] worktrees`` → ``None``. Relative values resolve
+    against ROOT, so ``"../charter.worktrees"`` reads as written.
 
-    The defaults differ because the shapes do. A **fleet** plane keeps the original
-    layout: ``workspaces/<ws>/.worktrees/`` is already outside every clone, which was the
-    whole point of that path. An **embedded** plane's clone IS the plane root, so the same
-    path lands the worktrees inside the codebase and every root-level glob — pytest, jest,
-    nx, tsc, an IDE indexer — sees the source several times over. There the default is a
-    SIBLING of the repo: outside the tree, but adjacent to it rather than hidden away in a
-    home directory, so it is findable with ``cd ..`` and obvious in a path.
+    ``None`` means the standard layout: ``workspaces/<ws>/.worktrees/``, which is already
+    outside every clone — the whole point of that path, and correct whenever a workspace
+    holds clones, which is now always. There used to be a second default here, for a plane
+    whose clone WAS its own root; that shape is gone.
 
-    Only the worktrees move. ``workspaces/<ws>/memory/`` and ``refs/`` stay put — they are
-    a few KB of text, and ``charter workspace live`` exists specifically to un-ignore them
-    so a team can commit them. Relocating those would break sharing to fix a problem they
-    do not have.
+    Only the worktrees ever move. ``workspaces/<ws>/memory/`` and ``refs/`` stay put — a
+    few KB of text that ``charter workspace live`` exists specifically to un-ignore so a
+    team can commit them. Relocating those would break sharing to fix a problem they do
+    not have.
 
-    Takes *root*/*shape*/*cfg* rather than reading the module globals so the test harness
-    can re-derive it against a temp ROOT the way it already does for GROUP, EXCLUDE and
-    the rest. When this read the globals directly it defaulted to the REAL repo's sibling
-    in every test — which is outside the tmp tree, so the suite wrote worktrees into the
-    developer's checkout directory and accumulated them across cases.
+    Takes *root*/*cfg* rather than reading the module globals so the test harness can
+    re-derive it against a temp ROOT the way it already does for GROUP, EXCLUDE and the
+    rest. When this read the globals directly it defaulted to the REAL repo's sibling in
+    every test — outside the tmp tree — so the suite wrote worktrees into the developer's
+    checkout and accumulated them across cases.
     """
     declared = os.environ.get("CHARTER_WORKTREES") or _instance.worktrees_of(cfg)
-    if declared:
-        p = Path(declared).expanduser()
-        p = p if p.is_absolute() else (root / p)
-    elif shape == "embedded":
-        p = root.parent / f"{root.name}.worktrees"
-    else:
+    if not declared:
         return None
+    p = Path(declared).expanduser()
+    p = p if p.is_absolute() else (root / p)
     try:
         return p.resolve()
     except (OSError, RuntimeError):
@@ -220,13 +214,8 @@ def derive(root: Path) -> dict:
     #: How far a written memory travels — see charter.instance.SHARE_MODES.
     d["MEMORY_SHARE"] = _instance.share_of(cfg)
 
-    #: Which deployment this plane is — ``fleet`` (many clones per workspace) or
-    #: ``embedded`` (charter installed inside the single codebase it serves). See
-    #: charter.instance.SHAPES for why this is declared rather than sniffed off the disk.
-    d["PLANE_SHAPE"] = _instance.shape_of(cfg)
-
     #: Root for worktrees, or ``None`` for the per-workspace ``.worktrees/`` default.
-    d["WORKTREES_ROOT"] = worktrees_root_for(root, d["PLANE_SHAPE"], cfg)
+    d["WORKTREES_ROOT"] = worktrees_root_for(root, cfg)
 
     #: The SHARED half of the vault registry — committed, beside personas/ and inventory/.
     #: Holds what is identical on every machine: provider, persona, op-vault, and a `file`

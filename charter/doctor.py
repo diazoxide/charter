@@ -279,11 +279,6 @@ def check_inventory() -> Result:
     n = inventory.load().get("count", 0)
     if n:
         return Result("inventory", OK, detail=f"{n} repos mapped")
-    # An embedded plane clones nothing, so it has no clone targets to enumerate and
-    # `discover` is not a thing it will ever run. Nagging for it forever is how a
-    # permanently-yellow preflight teaches people to stop reading preflight.
-    if _config.PLANE_SHAPE == "embedded":
-        return Result("inventory", OK, detail="not used by an embedded plane")
     return Result("inventory", WARN, hint="Run: charter discover  (builds inventory/repos.json).")
 
 
@@ -497,56 +492,6 @@ def check_personas() -> Result:
                   hint="charter persona lint  (per-persona detail and how to fix each)")
 
 
-def check_embedded_worktrees() -> Result:
-    """An **embedded** plane must not keep worktrees inside its own codebase.
-
-    Worktrees default to ``workspaces/<ws>/.worktrees/`` — outside every clone, which is
-    what stops nx/jest/maven recursing into them. In an embedded plane the clone IS the
-    plane root, so that same path puts a full second copy of the source inside the tree
-    every root-level glob walks. Nothing warns you: ``.gitignore`` hides it from git, and
-    from git alone. Measured in charter's own checkout: 214 test files discoverable from
-    the root, 142 of them duplicates of the other 72.
-
-    `config.WORKTREES_ROOT` moves new worktrees out. Existing ones are NOT moved
-    automatically — relocating a worktree means rewriting git's own ``gitdir`` pointer,
-    and ``git worktree move`` is the command that does it correctly. So this reports them
-    and hands over that command rather than guessing.
-
-    Silent on a fleet plane, where the default path was never a problem.
-    """
-    from . import config as _config, workspace as _ws
-    if _config.PLANE_SHAPE != "embedded":
-        return Result("worktrees", OK, detail="fleet plane — worktrees stay per-workspace")
-
-    stray: list[Path] = []
-    try:
-        for d in sorted(_config.WORKSPACES_DIR.glob(f"*/{_worktree_dir_name()}/*/*")):
-            if d.is_dir():
-                stray.append(d)
-    except OSError:
-        pass
-
-    dest = _config.WORKTREES_ROOT
-    if not stray:
-        where = f" → {dest}" if dest else ""
-        return Result("worktrees", OK, detail=f"outside the codebase{where}")
-
-    names = ", ".join(d.name for d in stray[:3]) + (" …" if len(stray) > 3 else "")
-    return Result(
-        "worktrees",
-        WARN,
-        detail=f"{len(stray)} inside the codebase ({names}) — every root-level glob "
-               f"(pytest/jest/nx/tsc, IDE indexers) sees the source twice over",
-        hint=("Move each one with git, which rewrites its gitdir pointer: "
-              f"git worktree move <old> {dest}/<workspace>/<repo>/<piece>"),
-    )
-
-
-def _worktree_dir_name() -> str:
-    from . import worktree
-    return worktree.DIR_NAME
-
-
 def check_plugin_skew() -> Result:
     """`charter` ships as two artifacts — the CLI (pip/uv) and the Claude Code plugin
     (``.claude-plugin/plugin.json`` + ``hooks/hooks.json``) — with two version numbers.
@@ -624,7 +569,7 @@ def _checks():
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
                 check_inventory(), check_vaults(), check_version_lock(),
-                check_memory_indexes(), check_personas(), check_embedded_worktrees(),
+                check_memory_indexes(), check_personas(),
                 check_plugin_skew()]
     return results
 

@@ -319,33 +319,6 @@ def _repo_trees(ws: str) -> list[Path]:
         return _clone_dirs(ws)
 
 
-def _root_tree() -> Path | None:
-    """The control plane's own repo, when the plane's root is itself a git clone.
-
-    A **monorepo** control plane is `charter init` run inside the repo you already work
-    in: there is nothing to clone, `workspaces/` stays empty, and the tree you are
-    editing IS the root. Without this the status line renders `repos 0/0` in a repo with
-    a live branch, uncommitted work and an open PR — the one shape where every column it
-    draws has an answer and it showed none.
-
-    Not a new concept, and deliberately so: :func:`charter.gitpolicy.repos` has always
-    meant "the control plane itself plus every repo clone". This is the status line
-    agreeing with git policy about what counts as a repo, rather than a second opinion.
-
-    A *fleet* plane whose root happens to be a git repo (the common case — control planes
-    get committed) gets the same row, which is right: it has a branch and a dirty state
-    you care about, and it is the one repo `charter clone` will never produce. It stays
-    excluded from the *inventory* (``exclude`` in charter.toml) because that lists clone
-    targets, and cloning yourself into your own workspace is the thing to prevent — a
-    different question from whether the tree is here, which it demonstrably is.
-    """
-    from . import workspace
-    try:
-        return workspace.root_tree()
-    except Exception:
-        return None
-
-
 def _available() -> int:
     try:
         return json.loads(config.INVENTORY.read_text()).get("count", 0)
@@ -456,16 +429,15 @@ def _markers(state: dict) -> tuple[str, str, bool]:
 def _current(payload: dict) -> tuple[str | None, str] | None:
     """``(workspace, repo)`` that the session's cwd is inside, if any.
 
-    The workspace is ``None`` when the cwd is inside the plane's own root tree
-    (:func:`_root_tree`), which belongs to no single workspace — it is in all of them.
-    A caller comparing against the active workspace must read ``None`` as "matches
-    whichever workspace is active".
+    The workspace is ``None`` when the cwd is inside no workspace at all — standing in the
+    plane root is the ordinary way that happens. A caller comparing against the active
+    workspace must read ``None`` as "matches whichever workspace is active".
 
     Worktrees are resolved FIRST, and to their *piece* name, which is what the nested rows
     are labelled with. This never worked in either layout: an in-plane worktree sits at
     ``workspaces/<ws>/.worktrees/<repo>/<piece>``, so the plain workspace arithmetic below
     read its repo as the literal ``.worktrees`` and matched no row, leaving the cwd
-    unmarked. In an embedded plane the worktrees are the rows you move between, so an
+    unmarked. Where worktrees are the rows you move between, an
     unmarked one is the whole feature missing.
 
     ``workspaces/`` is checked next and, once the cwd is known to be under it, this returns
@@ -497,13 +469,6 @@ def _current(payload: dict) -> tuple[str | None, str] | None:
     if parts is not None:
         return (parts[0], parts[1]) if len(parts) >= 2 else None
 
-    rt = _root_tree()
-    if rt is not None:
-        try:
-            here.relative_to(rt.resolve())
-            return (None, rt.name)
-        except Exception:
-            pass
     return None
 
 
@@ -540,7 +505,7 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None) -> 
     return tui.Row(name, branch, ci, mr_cell, gap=_GAP)
 
 
-def _pick_rows(dirs, budget: int, cur_repo, root_dir, states, gl) -> list[Path]:
+def _pick_rows(dirs, budget: int, cur_repo, states, gl) -> list[Path]:
     """Which repos get a row when there are more repos than rows.
 
     The cap was a bare positional slice, so with the list in directory order the rows went
@@ -564,7 +529,6 @@ def _pick_rows(dirs, budget: int, cur_repo, root_dir, states, gl) -> list[Path]:
         info = gl.get(d) or {}
         return (
             0 if d.name == cur_repo else 1,        # where you are, always
-            0 if d == root_dir else 1,             # the plane's own tree
             0 if st.get("dirty") else 1,
             0 if (st.get("ahead") or st.get("behind")) else 1,
             0 if info.get("ci") in ("failed", "running") else 1,
@@ -601,8 +565,7 @@ def _detail_worktrees(ws: str, dirs) -> list[Path]:
         return []
 
 
-def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
-               detail_wts=()) -> list[tui.Node]:
+def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[tui.Node]:
     """One table row per clone, nested under the workspace like a tree:
 
         ├─ <repo>   <branch><markers>   <ci>   <sigil><change>
@@ -619,12 +582,10 @@ def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
     nested rows), so a repo is never dropped just because an earlier repo's worktrees
     ate the budget.
 
-    *root_dir* — the plane's own tree (:func:`_root_tree`), when it is in *dirs*. It is
-    drawn in the plane's own colour (the cyan of `⬢ <workspace>` two rows up) rather than
-    from `_PALETTE`, so "this repo IS the control plane" is carried by the one channel
-    that costs no columns. Every other repo distinction here is already colour, and a new
-    glyph in the name cell would have to earn its width against `_NAME_W` — see the
-    header comments in `render` for what a mis-measured glyph does to this layout.
+    Every row here is a clone the workspace owns. The plane's own tree used to appear
+    among them, drawn in the plane's colour to say "this repo IS the control plane"; it is
+    no longer a row at all, because listing it beside repos you are meant to edit is what
+    invited editing it (docs/adr/0008).
     """
     if not dirs:
         return []
@@ -633,7 +594,7 @@ def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
     cur_repo = cur[1] if (cur and (cur[0] is None or cur[0] == active)) else None
     n = len(dirs)
     capped = n > _MAX_REPO_LINES
-    show = _pick_rows(dirs, _MAX_REPO_LINES - 1, cur_repo, root_dir, states, gl) if capped else dirs
+    show = _pick_rows(dirs, _MAX_REPO_LINES - 1, cur_repo, states, gl) if capped else dirs
     # What's left of the total-row budget after every shown repo gets its own row (and,
     # if capped, the trailing "…(+N more)" line) — spent on nested worktree rows below.
     wt_budget = _MAX_REPO_LINES - len(show) - (1 if capped else 0)
@@ -642,19 +603,11 @@ def _repo_rows(dirs, active, cur, states, branches, gl, root_dir=None,
     # `show` meant a repo changed colour whenever a neighbour entered or left the cap —
     # and with ranked selection that happens the moment anything goes dirty, so the one
     # channel carrying "this row is that repo" would churn turn to turn.
-    palette_ix, _k = {}, 0
-    for d in dirs:
-        if root_dir is not None and d == root_dir:
-            continue
-        palette_ix[d] = _k
-        _k += 1
+    palette_ix = {d: i for i, d in enumerate(dirs)}
 
     rows: list[tui.Node] = []
     for i, d in enumerate(show):
-        if root_dir is not None and d == root_dir:
-            color = _CYAN
-        else:
-            color = _PALETTE[palette_ix.get(d, i) % len(_PALETTE)]
+        color = _PALETTE[palette_ix.get(d, i) % len(_PALETTE)]
         emph = f"{_BOLD}{_UNDER}" if d.name == cur_repo else ""
 
         # worktrees: a ⑂N badge here, plus either full nested rows (`_detail_worktrees`)
@@ -1036,8 +989,9 @@ def _nested_under() -> Path | None:
     """The OUTER control plane whose ``workspaces/`` contains this one, if any.
 
     ``root.find_root`` takes the innermost ``charter.toml`` — the git/cargo/npm contract,
-    and the right one. But the embedded shape puts a ``charter.toml`` into ordinary
-    product repos, and a fleet plane clones product repos into its workspaces. So `cd`
+    and the right one. But a plane clones product repos into its workspaces, and a product
+    repo may itself carry a ``charter.toml`` — `charter init` is run inside existing repos.
+    So `cd`
     into ``workspaces/<ws>/<repo>`` and the active plane silently becomes a different one:
     different personas, a different vault, and a memory write landing somewhere the user
     did not choose. Nothing said so.
@@ -1216,11 +1170,9 @@ def render(payload: dict | None = None) -> str:
     try:
         active, src = _active(payload.get("session_id"))
         nws = _count_workspaces()
-        # The plane's own tree leads, then the active workspace's clones. A monorepo
-        # plane has only the former, a fleet plane usually only the latter, and both
-        # shapes render through the exact same rows — the monorepo is not a special
-        # case here, just a workspace whose clone list happens to be empty.
-        root_dir = _root_tree()
+        # The active workspace's clones, and only those. The plane's own tree is
+        # deliberately not a row: it is the plane, not a repo you work in, and drawing it
+        # beside the clones is what invited editing it (docs/adr/0008).
         dirs = _repo_trees(active)
         avail = _available()
         nv = _vaults()
@@ -1288,7 +1240,7 @@ def render(payload: dict | None = None) -> str:
         sid = payload.get("session_id")
         repo_lines = [r.render(_LEFT_W)[0]
                       for r in _repo_rows(dirs, active, cur, states, branches, gl,
-                                          root_dir, detail_wts)]
+                                          detail_wts)]
         chips = _persona_chips(sid)
     except Exception:
         return f"{_CYAN}⬢{_R} charter"

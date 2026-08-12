@@ -16,20 +16,15 @@ from . import root as _root
 def clone_for(ws: str, repo: str) -> Path | None:
     """The tree named *repo* that this workspace can cut worktrees from.
 
-    The plane's own root tree is checked too, and it is the whole point in a **monorepo**
-    control plane: there, `workspaces/` holds no clones at all, so without this every
-    `charter worktree` command would answer "isn't cloned in workspace X" about the one
-    repo that is unmistakably present — the one you are standing in.
-
-    Clones win a name collision. A workspace's own clone of `foo` is the tree the user
-    selected by cloning it *into this workspace*; the root tree is ambient. Preferring
-    the ambient one would silently cut the worktree off the wrong repo.
+    Only the workspace's own clones. The plane's own root tree used to be checked too, for
+    a shape where `workspaces/` held no clones at all and the one repo present was the one
+    you were standing in. That shape is gone, and with it the reason: a worktree is always
+    cut from a repo the workspace selected by cloning it, never from the plane itself.
     """
     for d in workspace.clones(ws):
         if d.name == repo:
             return d
-    rt = workspace.root_tree()
-    return rt if (rt is not None and rt.name == repo) else None
+    return None
 
 
 def _resolve(args) -> tuple[str, Path | None]:
@@ -119,7 +114,7 @@ def cmd_worktree_list(args) -> int:
     else:
         # `repo_trees`, not `clones` — its own docstring calls it "the one list
         # anything asking 'which repos am I on?' should use", and `gl-refresh`
-        # already uses it. An embedded plane has NO clones, so this said "No
+        # already uses it. A plane with no clones yet said "No
         # worktrees" while the status line one line above was drawing them.
         targets = workspace.repo_trees(ws)
 

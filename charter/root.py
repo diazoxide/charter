@@ -56,8 +56,8 @@ def find_root(start: Path | None = None) -> Path:
     #
     # `_plane_of` handles the case where the worktree HAS a `charter.toml` — it redirects
     # to the main tree. It cannot fire here, because the walk above found no marker to
-    # redirect from, and in the documented embedded flow there is none to find: `charter
-    # init` writes `charter.toml` and never stages it, so a worktree cut from `main` does
+    # redirect from, and there is often none to find: `charter init` writes
+    # `charter.toml` and never stages it, so a worktree cut from `main` does
     # not contain it. A worktree branched before the plane was committed has the same
     # shape. Following charter's own `enter:` line then landed a session in a plane-less
     # directory — no personas, no vault, memory written where `git worktree remove
@@ -114,12 +114,11 @@ def _plane_of(marked: Path) -> Path:
     """The plane a found marker really belongs to.
 
     A worktree is a *view of a repo*, not a repo — but ``charter.toml`` is a tracked file,
-    so in an **embedded** plane every worktree gets its own copy checked out and therefore
-    looks like its own control plane. Standing in one, charter used to resolve the plane to
-    the worktree: the status line went blank (``root_tree`` requires ``.git`` to be a
-    DIRECTORY, and a linked worktree's is a file), and personas, the vault and every
-    written memory resolved into a directory ``git worktree remove`` deletes. Worktrees are
-    how you are meant to work in an embedded plane, so that landed on the main path.
+    so when the repo IS a plane (committed marker), every worktree cut from it gets its own
+    copy checked out and therefore looks like its own control plane. Standing in one,
+    charter used to resolve the plane to the worktree: personas, the vault and every written
+    memory resolved into a directory ``git worktree remove`` deletes. Worktrees are a normal
+    way to work, so that landed on the main path.
 
     Identity therefore follows the main working tree. The marker must be present there too
     — if it is not, this is not one plane seen from two directories and the found marker
