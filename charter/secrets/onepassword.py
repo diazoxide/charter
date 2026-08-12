@@ -51,6 +51,23 @@ _TAG = "charter"
 _CATEGORY = "PASSWORD"
 
 
+def _field_name(f: dict) -> str:
+    """The key a field is addressable by: its **label**, falling back to its id.
+
+    Label first, and the order is the whole of issue #75. `id` was preferred, and `or`
+    only falls through when the left side is falsy — which an id never is on a real item.
+    charter-created items hid it completely, because `_write` sets id == label == key; it
+    surfaced only on an item charter adopted, where 1Password assigns a random id and
+    keeps the human text as the label. Every key then came back as a random string, while
+    `doctor` and `vault verify` both reported healthy: resolution genuinely worked, and
+    only the names were unusable.
+
+    The fallback matters too — 1Password does not require a label, and a field without one
+    stays addressable by id rather than vanishing from the vault.
+    """
+    return str(f.get("label") or f.get("id") or "")
+
+
 class OnePasswordProvider(VaultProvider):
     id = "1password"
     label = "1Password (op CLI — charter creates and manages the items)"
@@ -222,20 +239,58 @@ class OnePasswordProvider(VaultProvider):
             doc = json.loads(proc.stdout or "{}")
         except json.JSONDecodeError as e:
             raise VaultError(f"could not parse 1Password item '{self.op_item}': {e}")
+        out: dict = {}
+        for f in doc.get("fields") or []:
+            name = _field_name(f)
+            if not name or "value" not in f:
+                continue
+            if name in out:
+                # 1Password permits two fields with the same label; only the ids
+                # disambiguate them. Letting one silently win would make a secret
+                # unreachable while `list`, `doctor` and `verify` all reported healthy —
+                # invisible loss, which is the one outcome worth failing for.
+                raise VaultError(
+                    f"1Password item '{self.op_item}' has more than one field labelled "
+                    f"'{name}', so charter cannot tell which secret that key means. "
+                    f"Rename one in 1Password, then retry.")
+            out[name] = f["value"]
+        return out
+
+    def _existing_ids(self) -> dict:
+        """``{field name: 1Password's id}`` for the item as it stands.
+
+        Adoption must be non-destructive: a field charter did not create carries an id
+        1Password generated, and rewriting it to the key name on the next write would
+        mutate an identifier the user never chose on an item charter does not own.
+        """
+        proc = self._run(self._argv("item", "get", self.op_item, "--vault", self.op_vault,
+                                    "--format", "json"))
+        if proc.returncode != 0:
+            return {}
+        try:
+            doc = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return {}
         out = {}
         for f in doc.get("fields") or []:
-            fid = f.get("id") or f.get("label")
-            if fid and "value" in f:
-                out[str(fid)] = f["value"]
+            name = _field_name(f)
+            if name and f.get("id"):
+                out[name] = str(f["id"])
         return out
 
     def _write(self, fields: dict, creating: bool) -> None:
-        """Replace the item with exactly *fields*. The template travels on stdin."""
+        """Replace the item with exactly *fields*. The template travels on stdin.
+
+        Existing ids are carried through so adopting a hand-made item does not renumber
+        its fields; only genuinely new ones take the key as their id, which is what makes
+        charter-created items round-trip identically.
+        """
+        ids = {} if creating else self._existing_ids()
         template = json.dumps({
             "title": self.op_item,
             "category": _CATEGORY,
             "tags": [_TAG, self._vault_tag()],
-            "fields": [{"id": k, "label": k, "type": "CONCEALED", "value": v}
+            "fields": [{"id": ids.get(k, k), "label": k, "type": "CONCEALED", "value": v}
                        for k, v in sorted(fields.items())],
         })
         if creating:

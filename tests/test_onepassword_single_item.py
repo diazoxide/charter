@@ -38,9 +38,13 @@ from tests._isolation import PersonaIso
 class FakeOp:
     """Stands in for `op`, recording every argv and stdin."""
 
-    def __init__(self, fields=None, item_exists=True, legacy=(), fail_on=None):
+    def __init__(self, fields=None, item_exists=True, legacy=(), fail_on=None,
+                 raw_fields=None):
         self.calls: list[dict] = []
         self.fields = dict(fields or {})
+        #: Full field dicts, for items charter did not create — 1Password assigns a
+        #: random `id` and keeps the human text as `label`.
+        self.raw_fields = raw_fields
         self.item_exists = item_exists
         self.legacy = list(legacy)
         self.fail_on = fail_on
@@ -49,7 +53,8 @@ class FakeOp:
         return json.dumps({
             "id": "itm1", "title": "charter-devops",
             "category": "PASSWORD", "vault": {"name": "Eng"},
-            "fields": [{"id": k, "label": k, "type": "CONCEALED", "value": v}
+            "fields": self.raw_fields if self.raw_fields is not None else
+                      [{"id": k, "label": k, "type": "CONCEALED", "value": v}
                        for k, v in self.fields.items()],
         })
 
@@ -74,7 +79,9 @@ class FakeOp:
             return SimpleNamespace(returncode=0, stdout=self.fields[key], stderr="")
         if a[:3] in (["op", "item", "edit"], ["op", "item", "create"]):
             tpl = json.loads(input or "{}")
-            self.fields = {f["id"]: f.get("value", "") for f in tpl.get("fields", [])}
+            self.raw_fields = tpl.get("fields", [])
+            self.fields = {f.get("label") or f["id"]: f.get("value", "")
+                           for f in tpl.get("fields", [])}
             self.item_exists = True
             return SimpleNamespace(returncode=0, stdout=self._item_json(), stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -370,6 +377,105 @@ class TestHealthNeverReadsAValue(OpCase):
         op, p = self.make(fields={"A": "1"})
         p.health()
         self.assertNotIn("--reveal", " ".join(" ".join(c["argv"]) for c in op.calls))
+
+
+class TestAdoptedItemsUseLabelsAsKeys(OpCase):
+    """Issue #75. `--op-item` documents itself as "point it at an item you already
+    curate" — and adopting one produced 1Password's random field IDs as key names, so
+    every consumer naming a key broke.
+
+    Invisible on charter-created items, because `_write` sets id == label == key. It
+    appears only on adopted items, which is precisely the case the flag exists for.
+    """
+
+    ADOPTED = [
+        {"id": "27r3gphb4fnsonx5ikcaw3cxwq", "label": "PROD_KUBECONFIG",
+         "type": "CONCEALED", "value": "kubeconfig-body"},
+        {"id": "6kqf7x6wchnoeucvbwwogt6bai", "label": "GITHUB_TOKEN",
+         "type": "CONCEALED", "value": "ghp_xyz"},
+    ]
+
+    def test_keys_are_the_labels_a_human_typed(self):
+        _, p = self.make(raw_fields=self.ADOPTED)
+        self.assertEqual(p.keys(), ["GITHUB_TOKEN", "PROD_KUBECONFIG"])
+
+    def test_the_generated_ids_are_not_keys(self):
+        _, p = self.make(raw_fields=self.ADOPTED)
+        self.assertNotIn("27r3gphb4fnsonx5ikcaw3cxwq", p.keys())
+
+    def test_a_field_with_no_label_still_resolves_by_id(self):
+        """1Password does not require a label. Falling back keeps such a field
+        addressable rather than dropping it silently."""
+        _, p = self.make(raw_fields=[{"id": "abc123", "type": "CONCEALED", "value": "v"}])
+        self.assertEqual(p.keys(), ["abc123"])
+
+    def test_charter_created_items_are_unaffected(self):
+        _, p = self.make(fields={"A": "1", "B": "2"})
+        self.assertEqual(p.keys(), ["A", "B"])
+
+
+class TestDuplicateLabels(OpCase):
+    """1Password permits two fields with the same label; ids disambiguate. Letting one
+    win silently would make a secret unreachable while everything reported healthy —
+    which is the #55 shape, and worse here because the loss is invisible."""
+
+    DUPES = [
+        {"id": "aaa", "label": "TOKEN", "type": "CONCEALED", "value": "s3cret-alpha"},
+        {"id": "bbb", "label": "TOKEN", "type": "CONCEALED", "value": "s3cret-beta"},
+    ]
+
+    def test_it_refuses_rather_than_picking_one(self):
+        _, p = self.make(raw_fields=self.DUPES)
+        with self.assertRaises(base.VaultError):
+            p.keys()
+
+    def test_the_error_names_the_item_and_the_label(self):
+        _, p = self.make(raw_fields=self.DUPES)
+        with self.assertRaises(base.VaultError) as e:
+            p.keys()
+        self.assertIn("TOKEN", str(e.exception))
+        self.assertIn("charter-devops", str(e.exception))
+
+    def test_the_error_does_not_echo_a_value(self):
+        """Values are distinctive on purpose: a short fixture like "one" collides with
+        ordinary prose in the message ("Rename one in 1Password") and the assertion then
+        fails on the explanation rather than on a leak."""
+        _, p = self.make(raw_fields=self.DUPES)
+        with self.assertRaises(base.VaultError) as e:
+            p.keys()
+        self.assertNotIn("s3cret", str(e.exception))
+
+    def test_health_reports_it_rather_than_raising(self):
+        _, p = self.make(raw_fields=self.DUPES)
+        ok, _ = p.health()
+        self.assertFalse(ok)
+
+
+class TestAdoptionIsNonDestructive(OpCase):
+    """A round-trip used to rewrite `id` to the key name, mutating identifiers the user
+    never chose on an item charter does not own."""
+
+    ADOPTED = [
+        {"id": "27r3gphb4fnsonx5ikcaw3cxwq", "label": "PROD_KUBECONFIG",
+         "type": "CONCEALED", "value": "body"},
+    ]
+
+    def test_an_existing_fields_id_is_preserved(self):
+        op, p = self.make(raw_fields=list(self.ADOPTED))
+        p.set("GITHUB_TOKEN", "ghp_new")
+        written = {f["label"]: f["id"] for f in op.raw_fields}
+        self.assertEqual(written["PROD_KUBECONFIG"], "27r3gphb4fnsonx5ikcaw3cxwq")
+
+    def test_a_new_field_takes_the_key_as_its_id(self):
+        op, p = self.make(raw_fields=list(self.ADOPTED))
+        p.set("GITHUB_TOKEN", "ghp_new")
+        written = {f["label"]: f["id"] for f in op.raw_fields}
+        self.assertEqual(written["GITHUB_TOKEN"], "GITHUB_TOKEN")
+
+    def test_the_adopted_value_survives_the_write(self):
+        op, p = self.make(raw_fields=list(self.ADOPTED))
+        p.set("GITHUB_TOKEN", "ghp_new")
+        self.assertEqual(op.fields["PROD_KUBECONFIG"], "body")
 
 
 if __name__ == "__main__":
