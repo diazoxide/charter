@@ -507,21 +507,25 @@ def is_live(name: str) -> bool:
 
 
 def _live_block(names) -> str:
+    """The managed .gitignore block un-ignoring every LIVE workspace's shareable paths.
+
+    Each path is listed twice — the directory and its contents — because un-ignoring
+    ``…/memory`` alone re-includes the directory entry and none of the files inside it.
+    ``todos`` needs the same pair: a shared task list is one of the better reasons to make
+    a workspace LIVE at all, and without a line here the list would simply never travel,
+    which is the quietest way this could fail.
+    """
     lines = [_LIVE_BEGIN]
     for n in sorted(names):
         lines += [f"!/workspaces/{n}/workspace.json", f"!/workspaces/{n}/workspace.md",
-                  f"!/workspaces/{n}/memory", f"!/workspaces/{n}/memory/**"]
+                  f"!/workspaces/{n}/memory", f"!/workspaces/{n}/memory/**",
+                  f"!/workspaces/{n}/todos", f"!/workspaces/{n}/todos/**"]
     lines.append(_LIVE_END)
     return "\n".join(lines)
 
 
-def set_live(name: str, live: bool) -> bool:
-    """Mark a workspace LIVE (un-ignore its manifest+memory) or LOCAL (re-ignore).
-    Returns True if the liveness changed. Rewrites the managed .gitignore block."""
-    names = live_workspaces()
-    if (name in names) == live:
-        return False
-    names = names | {name} if live else names - {name}
+def _write_live_block(names) -> None:
+    """Rewrite the managed block for exactly *names*, creating it if absent."""
     gi = _gitignore()
     text = gi.read_text() if gi.exists() else ""
     block = _live_block(names)
@@ -533,6 +537,28 @@ def set_live(name: str, live: bool) -> bool:
     else:
         text = text.rstrip("\n") + "\n" + block + "\n"
     gi.write_text(text)
+
+
+def refresh_live_block() -> None:
+    """Regenerate the managed block from the workspaces that are already LIVE.
+
+    Idempotent, and it changes no workspace's liveness — it only brings the block up to
+    the paths this version of charter shares. A plane made LIVE before `todos/` existed
+    has a block listing four paths per workspace and nothing re-runs `set_live` on its
+    own, so without this the list silently never travels for exactly the people who
+    adopted the feature earliest.
+    """
+    _write_live_block(live_workspaces())
+
+
+def set_live(name: str, live: bool) -> bool:
+    """Mark a workspace LIVE (un-ignore its manifest+memory) or LOCAL (re-ignore).
+    Returns True if the liveness changed. Rewrites the managed .gitignore block."""
+    names = live_workspaces()
+    if (name in names) == live:
+        return False
+    names = names | {name} if live else names - {name}
+    _write_live_block(names)
     return True
 
 
@@ -857,6 +883,11 @@ def reinit(name: str) -> dict:
     content. Returns the pre-reinit status (what was missing / the old version)."""
     before = structure_status(name)
     scaffold(name)  # creates memory/refs/workspace.md if missing + stamps the marker
+    # Structure is not only what lives inside the workspace directory: which of its paths
+    # are SHARED is part of the layout too, and that lives in the managed .gitignore block.
+    # A plane made LIVE before `todos/` existed lists four paths per workspace and nothing
+    # re-runs `set_live` unprompted — so the upgrade command is where it gets repaired.
+    refresh_live_block()
     return before
 
 

@@ -24,3 +24,6 @@ dist/
 # working-tree status line lives (`python3 -m charter statusline`) — the committed
 # settings.json keeps `charter statusline`, which is what an actual user runs.
 /.claude/settings.local.json
+
+# Agent worktrees created by the harness for isolated sub-agent runs.
+.claude/worktrees/
