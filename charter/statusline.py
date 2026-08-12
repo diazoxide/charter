@@ -380,15 +380,37 @@ def _repo_states(dirs: list[Path]) -> dict:
 
 
 def _run_state(d: Path) -> dict:
-    """One `git status --porcelain --branch` → dirty flag + ahead/behind counts."""
+    """One `git status --porcelain --branch` → dirty flags + ahead/behind counts.
+
+    TWO notions of dirt, from the one command, because two callers legitimately want
+    different ones:
+
+    * ``dirty`` — anything at all, untracked files included. What a repo row's ``*``
+      means, and right for a tree you are actually working in: a new file you have not
+      added yet is still work in progress.
+    * ``tracked_dirty`` — the same minus untracked (``??``) entries, i.e. exactly what
+      ``git status --untracked-files=no`` reports. What :func:`_plane_root_alert` uses,
+      and it is `doctor`'s `check_plane_root` that makes it necessary rather than merely
+      nicer: that check asks git the ``-uno`` question, so a plane-root warning built on
+      the wider notion would have the status line calling the root dirty every turn
+      while `doctor` called it clean — two answers to one question, which is worse than
+      either answer alone. The reason `doctor` narrowed it applies here identically:
+      memory defaults to ``share = "local"``, so ``personas/*/memory/`` accumulates
+      untracked files on any plane a few days old, and a warning that is permanently on
+      is furniture.
+
+    Computed here, in the one place that already reads git's answer, rather than by a
+    second `git status` in the caller: the plane root's state would otherwise cost a
+    subprocess on every render, since only this path is behind `_repo_states`' TTL cache.
+    """
     try:
         r = subprocess.run(
             ["git", "-C", str(d), "status", "--porcelain=v1", "--branch"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3,
         )
     except Exception:
-        return {"dirty": False, "ahead": 0, "behind": 0}
-    dirty, ahead, behind = False, 0, 0
+        return {"dirty": False, "tracked_dirty": False, "ahead": 0, "behind": 0}
+    dirty, tracked_dirty, ahead, behind = False, False, 0, 0
     for ln in r.stdout.splitlines():
         if ln.startswith("## "):
             m = re.search(r"\[([^\]]*)\]", ln)
@@ -401,7 +423,12 @@ def _run_state(d: Path) -> dict:
                         behind = _int(part[7:])
         elif ln.strip():
             dirty = True
-    return {"dirty": dirty, "ahead": ahead, "behind": behind}
+            # `??` is the only untracked form in porcelain v1 (`!!` needs --ignored,
+            # which is not asked for). Everything else — modified, staged, renamed,
+            # unmerged — is a tracked path, and is what `-uno` would have printed.
+            if not ln.startswith("??"):
+                tracked_dirty = True
+    return {"dirty": dirty, "tracked_dirty": tracked_dirty, "ahead": ahead, "behind": behind}
 
 
 def _int(s: str) -> int:
@@ -1091,11 +1118,14 @@ def _plane_root_alert() -> str | None:
     Both findings share ONE line. A row is spent on every single turn, and "dirty AND off
     main" is one situation with two symptoms.
 
-    A dirty root also covers the milder case of uncommitted control-plane edits — a
-    persona, or a memory written under the default ``share = "local"`` posture, which is
-    never committed for you. That is still something to act on (`charter save`), so the
-    line stays honest; if it ever becomes furniture on a real plane, the fix is a
-    narrower notion of "dirty", not a quieter warning.
+    "Dirty" here means ``tracked_dirty`` — untracked files excluded, which is exactly
+    what `doctor`'s `check_plane_root` asks git for (``--untracked-files=no``). Both the
+    reason and the agreement matter. The reason: memory defaults to ``share = "local"``,
+    written to disk and never committed for you, so ``personas/*/memory/`` fills with
+    untracked files on any plane a few days old and the wider notion would put this line
+    on screen permanently — furniture, which is the one thing this element must not
+    become. The agreement: `doctor` and the status line answer the same question about
+    the same tree, and two answers to one question is worse than either alone.
     """
     try:
         if not config.HAS_CONTROL_PLANE:
@@ -1121,7 +1151,11 @@ def _plane_root_alert() -> str | None:
         default = _default_branch(gitdir)
 
         bits = []
-        if state.get("dirty"):
+        # `tracked_dirty`, never `dirty` — see this function's docstring and `_run_state`.
+        # `.get` defaults to False rather than to `dirty`: a cache entry written seconds
+        # ago by an older charter has no such key, and a few silent seconds is a better
+        # failure than a warning derived from the notion `doctor` disagrees with.
+        if state.get("tracked_dirty"):
             # The word, not the repo table's `*`. A marker reads as a marker beside a
             # column of them; this line has no siblings to be read against.
             bits.append(f"{_YELLOW}dirty{_R}")

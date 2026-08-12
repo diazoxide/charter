@@ -80,7 +80,16 @@ class PlaneRootIso(PersonaIso):
     # -- the two ways a root gets worked in ------------------------------------ #
 
     def dirty(self) -> None:
+        """Dirt of the kind that counts: an edit to a file git is already tracking."""
         (self.tmp / "charter.toml").write_text("schema = 1\n# edited\n")
+
+    def leave_untracked_file(self) -> Path:
+        """A file git has never been told about — what a recorded memory looks like on
+        the default `share = "local"` posture."""
+        p = self.tmp / "personas" / "alpha" / "memory" / "zz-note.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# a memory nobody committed\n")
+        return p
 
     def switch_to(self, branch: str) -> None:
         git(self.tmp, "checkout", "-q", "-b", branch)
@@ -228,6 +237,28 @@ class ACleanRootSaysNothing(PlaneRootIso):
         self.forget_state()
         self.assertEqual(len(self.lines()), before + 1)
 
+    def test_an_untracked_file_alone_does_not_raise_the_warning(self):
+        """The regression that would make this element worthless.
+
+        Memory defaults to ``share = "local"``: written to disk and never committed for
+        you. So `personas/*/memory/` accumulates untracked files on any plane a few days
+        old, and counting them would put this line on screen every turn forever — and a
+        warning that is always on is furniture within a day, after which a real one draws
+        no more attention than a zero would.
+
+        It is also what `doctor`'s `check_plane_root` decided, by asking git the
+        `--untracked-files=no` question. Two answers to one question would be worse than
+        either answer alone."""
+        self.leave_untracked_file()
+        self.assertIsNone(statusline._plane_root_alert())
+
+    def test_a_tracked_edit_beside_untracked_files_still_speaks(self):
+        """The narrower notion must not be a mute button: untracked files sitting there
+        cannot hide an actual uncommitted change to the control plane."""
+        self.leave_untracked_file()
+        self.dirty()
+        self.assertIn("dirty", self.warning() or "")
+
     def test_a_plane_root_that_is_not_a_git_repo_is_silent(self):
         """`charter init` in a fresh directory does not run `git init`, and that is the
         README's 60-second path. A plane with no repo cannot be off a branch, and
@@ -297,6 +328,57 @@ class TheLineIsFullWidthFurniture(PlaneRootIso):
         self.dirty()
         self.switch_to("feat/some-very-long-branch-name-that-will-not-fit")
         self.assertIsNotNone(self.warning(40), self.lines(40))
+
+
+class DoctorAndTheStatusLineCannotDisagree(PlaneRootIso):
+    """Both answer "is anyone working in the plane root?", about the same tree, from the
+    same ADR — one at session start, one on every turn. They reached that question by
+    different routes: `doctor` shells out to git (it has a budget and a timeout), while
+    the status line reads the filesystem and reuses `_repo_states`' cached
+    `git status`. Different routes are fine; different answers are not, and the one that
+    already shipped and diverged was dirt — untracked files counted here and not there,
+    so on the default memory posture `doctor` said `clean on main` while the status line
+    said `dirty`, every turn.
+
+    Asserted as agreement rather than as two copies of an expected string, so whichever
+    side changes its mind next has to change the other with it.
+    """
+
+    def doctor_says_dirty(self) -> bool:
+        from charter import doctor
+        r = doctor.check_plane_root()
+        return "uncommitted" in (r.detail or "")
+
+    def statusline_says_dirty(self) -> bool:
+        return "dirty" in _plain(statusline._plane_root_alert() or "")
+
+    def test_they_agree_that_an_untracked_file_is_not_dirt(self):
+        self.leave_untracked_file()
+        self.assertEqual(self.statusline_says_dirty(), self.doctor_says_dirty())
+        self.assertFalse(self.doctor_says_dirty(), "fixture proves nothing if doctor warns")
+
+    def test_they_agree_that_a_tracked_edit_is_dirt(self):
+        self.dirty()
+        self.assertEqual(self.statusline_says_dirty(), self.doctor_says_dirty())
+        self.assertTrue(self.doctor_says_dirty(), "fixture proves nothing if doctor is quiet")
+
+    def test_they_agree_on_which_branch_is_the_default(self):
+        """`origin/HEAD` first, then a `main`/`master` that actually exists, then no
+        claim at all — reached by reading refs on one side and by asking git on the
+        other, which is exactly the kind of pair that drifts unwatched."""
+        from charter import doctor
+        head = self.tmp / ".git" / "refs" / "remotes" / "origin"
+        head.mkdir(parents=True, exist_ok=True)
+        (head / "HEAD").write_text("ref: refs/remotes/origin/trunk\n")
+        self.assertEqual(statusline._default_branch(self.tmp / ".git"),
+                         doctor._plane_default_branch(self.tmp))
+
+    def test_they_agree_when_nothing_says_what_the_default_is(self):
+        from charter import doctor
+        git(self.tmp, "branch", "-m", "main", "trunk")
+        self.assertEqual(statusline._default_branch(self.tmp / ".git"),
+                         doctor._plane_default_branch(self.tmp))
+        self.assertIsNone(doctor._plane_default_branch(self.tmp))
 
 
 class ItNeverBreaksTheStatusLine(PlaneRootIso):
