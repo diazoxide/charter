@@ -569,6 +569,63 @@ def cmd_workspace_note(args) -> int:
     return cmd_workspace_remember(args)
 
 
+def cmd_workspace_todo(args) -> int:
+    """Record one **todo** — something this task still means to do — or list them.
+
+    Shaped like `remember`: the verb with text records, the verb bare lists. A literal
+    `todo list` subcommand would be indistinguishable from recording a todo whose text is
+    "list", which is a real thing somebody will eventually try to write down.
+
+    Intent is not memory (docs/adr/0004): a todo stops being true the moment it is done,
+    so it lives in its own store and never surfaces from `charter recall`.
+    """
+    from . import todos
+    name = getattr(args, "workspace", None) or workspace.resolve()
+    text = (getattr(args, "text", None) or "").strip()
+    query = getattr(args, "query", None)
+
+    if not text:
+        return _list_todos(name, query)
+
+    # Duplicate intent is worse than duplicate memory: closing one of a near-identical
+    # pair leaves its twin looking outstanding, so the list starts lying about what is
+    # left. Warn and skip rather than merge, so the writer learns it is already there.
+    dup = todos.duplicate_of(name, text)
+    if dup:
+        util.err(f"already on the list: {dup}")
+        util.info(f"  See it: charter ws todo --workspace {name}")
+        return 1
+
+    p = todos.add(name, text)
+    util.ok(f"Todo recorded in '{name}' → workspaces/{name}/todos/{p.name}")
+    if not workspace.is_live(name):
+        util.info(f"  '{name}' is LOCAL (private) — todos stay on disk, not committed.")
+    return 0
+
+
+def _list_todos(name: str, query: str | None) -> int:
+    """Open todos, oldest first — the ranking the whole feature uses."""
+    from . import todos
+    if query:
+        hits = todos.search(name, query)
+        if not hits:
+            util.info(f"No todos in '{name}' match {query!r}.")
+            return 0
+        for p, title, _score in hits:
+            print(f"  {p.stem}  {title}")
+        return 0
+
+    open_ = todos.open_todos(name)
+    if not open_:
+        # Silence is indistinguishable from a broken command, so say it plainly.
+        util.info(f"No open todos in '{name}'. Record one: charter ws todo \"<what>\"")
+        return 0
+
+    for t in open_:
+        print(f"  {t['slug']}  {t['age_days']}d  {t['title']}")
+    return 0
+
+
 def cmd_workspace_recall(args) -> int:
     """Search this workspace's memories (--query) or list them all chronologically."""
     name = getattr(args, "workspace", None) or workspace.resolve()

@@ -216,7 +216,14 @@ def search(dirs, query: str, limit: int = 8) -> list[tuple[Path, str, int]]:
     return [(p, title, score) for score, _s, p, title in scored[:limit]]
 
 
-def _wordset(text: str) -> set[str]:
+def wordset(text: str) -> set[str]:
+    """The comparable words in *text* — the tokenizer :func:`duplicates` scores with.
+
+    Public because near-duplicate detection has a second caller (the todo store, which asks
+    "would this new text duplicate an existing one?" rather than "which stored pairs
+    duplicate each other?"). Both must tokenize identically or the shared threshold means
+    two different things.
+    """
     return {w for w in re.split(r"\W+", text.lower()) if len(w) > 3}
 
 
@@ -225,7 +232,7 @@ def duplicates(dirs, threshold: float = 0.5) -> list[tuple[float, Path, str, Pat
     ents = []
     for d in dirs:
         ents += entries(d)
-    sets = [(p, title, _wordset(text)) for p, title, text in ents]
+    sets = [(p, title, wordset(text)) for p, title, text in ents]
     dupes = []
     for i in range(len(sets)):
         pa, ta, sa = sets[i]

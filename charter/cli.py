@@ -340,6 +340,17 @@ def _add_workspace_parser(sub) -> None:
     fg.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
     fg.set_defaults(func=commands_workspace.cmd_workspace_forget)
 
+    td = wsub.add_parser("todo",
+                         help="Record what this task still means to do — or list them. "
+                              "Intent, kept apart from memory (what it learned) and the "
+                              "journal (what happened).")
+    # Text optional, exactly like `remember`: the bare verb lists. A `list` SUBCOMMAND
+    # would be indistinguishable from recording a todo whose text is "list".
+    td.add_argument("text", nargs="?", help="The todo; omit to list this workspace's todos.")
+    td.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    td.add_argument("--query", "-q", help="Search the todos instead of listing them all.")
+    td.set_defaults(func=commands_workspace.cmd_workspace_todo)
+
     nt = wsub.add_parser("note", help="Alias for `remember` — record a workspace memory (or list them).")
     nt.add_argument("message", nargs="?", help="Memory text; omit to list the workspace's memories.")
     nt.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
