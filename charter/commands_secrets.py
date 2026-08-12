@@ -144,6 +144,8 @@ def cmd_vault_add(args) -> int:
                      f"  charter vault add {args.name} --provider 1password --op-vault Engineering")
             return 1
         cfg["op-vault"] = args.op_vault
+        if getattr(args, "op_item", None):
+            cfg["op-item"] = args.op_item
         if getattr(args, "account", None):
             cfg["account"] = args.account
     try:

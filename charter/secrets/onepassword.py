@@ -5,20 +5,28 @@ The sibling :mod:`reference` provider points *at* a secret someone else created
 creates the item, ``rm`` deletes it — so a credential can be provisioned for a persona
 without opening the 1Password UI.
 
-Schema: **one item per key**, not one item per vault.
+Schema: **one item per vault**, whose custom fields are the secrets.
 
-    charter vault 'devops', key 'KUBECONFIG'
-        → 1Password item titled  charter-devops-KUBECONFIG
-          tagged                 charter, charter:devops
-          value in its           password field
+    charter vault 'devops', key 'AWS_ACCESS_KEY_ID'
+        → 1Password item  charter-devops   (or `op-item` from the registry)
+          tagged          charter, charter:devops
+          field           AWS_ACCESS_KEY_ID, concealed
 
-One item per *vault* would have been tidier in the 1Password UI and is the obvious
-first design — it is also wrong here, for a reason worth recording. Updating one field
-of a multi-field item means a read-modify-write through a JSON template, and a template
-**replaces** the item; meanwhile ``op item get --format json`` *conceals* values unless
-asked otherwise. Round-tripping that would overwrite every sibling secret with a mask.
-One item per key removes the interaction entirely: each write touches exactly the
-credential it was asked to touch.
+This replaced one item per key, which could not describe real 1Password vaults: two keys
+sharing an item, or a value living in `notesPlain` rather than `password`. Anyone whose
+layout it could not express had to keep a separate file of `op://` URIs to work around it.
+Custom fields express all of it directly, and the vault becomes one item with one ACL.
+
+The earlier design rejected this for a reason that turned out to be solvable: `op item get
+--format json` **conceals** values, so a naive round-trip would write masks back over every
+sibling secret. `--reveal` returns the real ones. Two costs remain and are deliberate:
+
+* a write pulls every sibling value through memory. Same trust boundary charter already
+  works in, but real — which is why reads use `op read` on the one field and never the
+  whole item;
+* `op` templates replace rather than merge, so a write is a read-modify-write and two
+  agents writing different keys at once can drop one another's field. 1Password keeps item
+  history, and `set` verifies the field landed so the failure is loud rather than silent.
 
 **No secret ever reaches argv.** 1Password's own help says it plainly — "Command
 arguments get logged in your command history, and can be visible to other processes on
@@ -62,6 +70,16 @@ class OnePasswordProvider(VaultProvider):
                 f"vault should its items live in? Re-register it:\n"
                 f"  charter vault add {self.name} --provider 1password --op-vault <NAME>")
         return v
+
+    @property
+    def op_item(self) -> str:
+        """The single 1Password item whose fields are this vault's secrets.
+
+        Defaults to ``charter-<vault>`` so the simple case needs no extra flag, and is
+        overridable because the common real case is an item somebody already curates.
+        """
+        v = (self.config.get("op-item") or self.config.get("op_item") or "").strip()
+        return v or f"{_TAG}-{self.name}"
 
     @property
     def account(self) -> str | None:
@@ -115,63 +133,52 @@ class OnePasswordProvider(VaultProvider):
 
     # --- CRUD -------------------------------------------------------------- #
     def get(self, key: str) -> str:
-        """Read via ``op read``, which returns the bare value on stdout."""
-        uri = f"op://{self.op_vault}/{self._title(key)}/password"
+        """Read one field via ``op read`` — one call, and only this secret.
+
+        Deliberately not the whole-item round-trip that writes use: reading through the
+        item would pull every sibling value into memory to answer a question about one.
+        """
+        uri = f"op://{self.op_vault}/{self.op_item}/{key}"
         proc = self._run(self._argv("read", "--no-newline", uri))
         if proc.returncode != 0:
-            # `op read` cannot distinguish "no such item" from "no access" without
-            # parsing localised stderr, so a miss is reported as a miss and the
-            # remedy for both is the same: check the vault and your session.
             raise SecretNotFound(
                 f"no secret '{key}' in vault '{self.name}' "
-                f"(1Password item '{self._title(key)}' in vault '{self.op_vault}')")
+                f"(field '{key}' of 1Password item '{self.op_item}' in '{self.op_vault}')")
         value = proc.stdout or ""
         return value[:-1] if value.endswith("\n") else value
 
     def set(self, key: str, value: str) -> None:
-        """Create the item, or replace its password — the value travels on stdin.
+        """Create or replace one field, leaving every sibling untouched.
 
-        The template is a whole item because ``op`` templates replace rather than
-        merge. That is safe *because* of the one-item-per-key schema: the only field
-        charter owns on this item is its password.
+        Read-modify-write, because ``op`` templates replace rather than merge — fetched
+        with ``--reveal`` so siblings round-trip as their real values rather than as
+        masks, which is the failure that made an earlier design reject this schema.
+
+        Verified afterwards: a concurrent writer can land between the read and the write
+        and drop this field, and silently losing a credential somebody believes they
+        stored is worse than failing.
         """
-        title = self._title(key)
-        template = json.dumps({
-            "title": title,
-            "category": _CATEGORY,
-            "tags": [_TAG, self._vault_tag()],
-            "fields": [{"id": "password", "type": "CONCEALED",
-                        "purpose": "PASSWORD", "label": "password", "value": value}],
-        })
-        if self._exists(title):
-            proc = self._run(self._argv("item", "edit", title,
-                                        "--vault", self.op_vault), stdin=template)
-            if proc.returncode != 0:
-                raise self._fail(f"updating '{key}' in 1Password", proc, write=True)
-            return
-        proc = self._run(self._argv("item", "create", "-",
-                                    "--vault", self.op_vault), stdin=template)
-        if proc.returncode != 0:
-            raise self._fail(f"creating '{key}' in 1Password", proc, write=True)
+        fields = self._fields(reveal=True)
+        fields[key] = value
+        self._write(fields, creating=fields is not None and not self._item_present())
+        if self.get(key) != value:
+            raise VaultError(
+                f"wrote '{key}' to 1Password item '{self.op_item}' but reading it back "
+                f"did not return what was written. Another writer may have replaced the "
+                f"item between the read and the write — 1Password keeps item history, so "
+                f"check the item's previous versions before retrying.")
 
     def delete(self, key: str) -> None:
-        title = self._title(key)
-        if not self._exists(title):
+        """Remove one field. The item itself survives — it is the vault, not the secret."""
+        fields = self._fields(reveal=True)
+        if key not in fields:
             raise SecretNotFound(f"no secret '{key}' in vault '{self.name}'")
-        proc = self._run(self._argv("item", "delete", title, "--vault", self.op_vault))
-        if proc.returncode != 0:
-            raise self._fail(f"deleting '{key}' from 1Password", proc, write=True)
+        del fields[key]
+        self._write(fields, creating=False)
 
     def keys(self) -> list[str]:
-        """Item titles charter owns in this vault, mapped back to key names.
-
-        Filtered by tag rather than by title prefix: the 1Password vault may well be a
-        shared one the team also fills by hand, and charter must not list — far less
-        offer to delete — an item it did not create.
-        """
-        items = self._list_items()
-        prefix = f"{_TAG}-{self.name}-"
-        return sorted(t[len(prefix):] for t in items if t.startswith(prefix))
+        """The item's field names. Empty when the item does not exist yet."""
+        return sorted(self._fields())
 
     # --- helpers ----------------------------------------------------------- #
     def _list_items(self) -> list[str]:
@@ -188,16 +195,94 @@ class OnePasswordProvider(VaultProvider):
     def _exists(self, title: str) -> bool:
         return title in self._list_items()
 
-    def health(self) -> tuple[bool, str]:
-        """Count items — never read a value.
+    def _item_present(self) -> bool:
+        proc = self._run(self._argv("item", "get", self.op_item,
+                                    "--vault", self.op_vault, "--format", "json"))
+        return proc.returncode == 0
 
-        ``vault list`` and ``doctor`` call this routinely, and a read would hit
-        1Password every time and could prompt for re-authentication.
+    def _fields(self, reveal: bool = False) -> dict:
+        """This vault's secrets as ``{field: value}``. ``{}`` if there is no item yet.
+
+        ``reveal`` is **off by default and belongs only to the write path.** With it, `op`
+        returns real values — which is what makes the read-modify-write safe, since writing
+        back a concealed item would replace every sibling secret with a mask. Without it,
+        the field NAMES are still all there, which is all `keys()` and `health()` need.
+
+        That distinction is not cosmetic: `vault list` and `doctor` call `health()`
+        routinely, and revealing there would pull every secret in the vault into memory on
+        a listing, and could prompt for re-authentication each time.
+        """
+        argv = ["item", "get", self.op_item, "--vault", self.op_vault, "--format", "json"]
+        if reveal:
+            argv.append("--reveal")
+        proc = self._run(self._argv(*argv))
+        if proc.returncode != 0:
+            return {}
+        try:
+            doc = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError as e:
+            raise VaultError(f"could not parse 1Password item '{self.op_item}': {e}")
+        out = {}
+        for f in doc.get("fields") or []:
+            fid = f.get("id") or f.get("label")
+            if fid and "value" in f:
+                out[str(fid)] = f["value"]
+        return out
+
+    def _write(self, fields: dict, creating: bool) -> None:
+        """Replace the item with exactly *fields*. The template travels on stdin."""
+        template = json.dumps({
+            "title": self.op_item,
+            "category": _CATEGORY,
+            "tags": [_TAG, self._vault_tag()],
+            "fields": [{"id": k, "label": k, "type": "CONCEALED", "value": v}
+                       for k, v in sorted(fields.items())],
+        })
+        if creating:
+            proc = self._run(self._argv("item", "create", "-", "--vault", self.op_vault),
+                             stdin=template)
+            what = f"creating 1Password item '{self.op_item}'"
+        else:
+            proc = self._run(self._argv("item", "edit", self.op_item,
+                                        "--vault", self.op_vault), stdin=template)
+            what = f"updating 1Password item '{self.op_item}'"
+        if proc.returncode != 0:
+            raise self._fail(what, proc, write=True)
+
+    def _legacy_items(self) -> list[str]:
+        """Items left by the one-item-per-key schema — `charter-<vault>-<key>`.
+
+        Their credentials still exist; charter simply stops finding them. Reporting such
+        a vault as healthy-and-empty is the failure #55 was about, in a new place.
+        """
+        prefix = f"{_TAG}-{self.name}-"
+        return sorted(t for t in self._list_items() if t.startswith(prefix))
+
+    def health(self) -> tuple[bool, str]:
+        """Whether the item is reachable, and how many fields it holds.
+
+        Never reads a value: `vault list` and `doctor` call this routinely, and revealing
+        here would hit 1Password on every listing. Reports the count of fields, which
+        `op item get` gives without `--reveal`.
+
+        A vault with no item but with leftover one-item-per-key items is NOT healthy: the
+        credentials are there and charter can no longer see them, and saying "0 secrets,
+        all fine" is exactly the green-line-over-a-broken-subsystem failure of #55.
         """
         if not shutil.which("op"):
             return False, "op CLI not on PATH"
         try:
             n = len(self.keys())
+            if n == 0:
+                legacy = self._legacy_items()
+                if legacy:
+                    return False, (
+                        f"{len(legacy)} item(s) from the old one-item-per-key layout are "
+                        f"not readable as this vault — charter now keeps a vault in a "
+                        f"single item ('{self.op_item}'). Their credentials still exist "
+                        f"in 1Password; re-register them with `charter secret set`, then "
+                        f"delete the old items.")
+                return True, f"no secrets yet in item '{self.op_item}'"
         except VaultError as e:
             return False, str(e).split(".")[0]
-        return True, f"{n} item(s) in 1Password vault '{self.op_vault}'"
+        return True, f"{n} secret(s) in 1Password item '{self.op_item}'"

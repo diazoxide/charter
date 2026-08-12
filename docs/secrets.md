@@ -184,7 +184,7 @@ something that rides along inside `add`.
 | --- | --- | --- |
 | Plain file (JSON, 0600) | `plain-file` | Implemented. Stores the value itself. |
 | Reference (`op://`, `vault://`) | `reference` | Implemented. Stores a **URI**; the value is fetched at read time. |
-| 1Password (native) | `1password` | Implemented. charter **creates and manages** the items via the `op` CLI. |
+| 1Password (native) | `1password` | Implemented. One item per vault; charter **creates and manages** its fields via the `op` CLI. |
 
 If 1Password is where your credentials belong, you have two shapes to choose between,
 and the difference is who owns the item:
@@ -196,6 +196,24 @@ and the difference is who owns the item:
   charter, or when a human should stay in charge of rotating it.
 
 ### Native 1Password vaults
+
+A `1password` vault is **one 1Password item whose custom fields are the secrets**:
+
+```
+charter vault 'devops', key 'AWS_ACCESS_KEY_ID'
+    → item  charter-devops   (override with --op-item)
+      field AWS_ACCESS_KEY_ID, concealed
+```
+
+One item means one ACL to manage and one thing to find in the 1Password UI, and it lets
+charter describe layouts it previously could not — two keys sharing an item, or a value in
+`notesPlain` rather than `password`. Point `--op-item` at an item you already curate to
+adopt it as-is; no vault file is created either way.
+
+Reads fetch one field (`op read op://<vault>/<item>/<field>`). Writes are a read-modify-write
+of the whole item, because `op` templates replace rather than merge — so `set` re-reads the
+field afterwards and fails loudly if it did not land, which is what a concurrent writer
+looks like. 1Password keeps item history if that ever happens.
 
 ```bash
 charter vault add devops --provider 1password --op-vault Engineering --persona devops
