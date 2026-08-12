@@ -892,6 +892,29 @@ def _mem_count(name: str, shared: bool = False, ephemeral: bool = False,
         return 0
 
 
+def _todo_count(ws: str) -> int:
+    """How many todos the given workspace still has open.
+
+    Workspace-scoped by construction (:func:`charter.todos.count_open` is), and that is
+    the whole reason this number may sit on the top line at all: it is a property of the
+    active workspace, so it belongs beside that workspace's name. A total across every
+    workspace would be a figure no command could reproduce — `charter ws todo` lists one
+    workspace, because a workspace is the unit of task isolation.
+
+    Cheap for the same reason :func:`_mem_count` is: one directory glob, no parse. This
+    renders on EVERY turn, so nothing here may read the network or walk a repo.
+
+    0 on any failure, never an exception. The count is the least important thing on the
+    line — trading the entire status line for one digit, which is what letting this
+    escape into `render`'s fallback would do, is the wrong bargain by a wide margin.
+    """
+    try:
+        from . import todos
+        return todos.count_open(ws)
+    except Exception:
+        return 0
+
+
 def _mem_badge(persistent: int, ephemeral: int = 0) -> str:
     """Coloured memory-count badge: ``✎N`` persistent (green, committed) + ``◌N``
     ephemeral (yellow, session scratch). '' when both are zero."""
@@ -1219,14 +1242,38 @@ def render(payload: dict | None = None) -> str:
         glstate.maybe_spawn(scan, active)
 
         pin = f"{_YELLOW}*{_R}" if src == "$CHARTER_WORKSPACE" else ""
-        # Reinit tip sits right after the name so it survives truncation on narrow panes.
+        # Reinit tip stays ahead of the workspace count so it survives truncation on
+        # narrow panes. Only the todo count is allowed in front of it, and only because
+        # it is about this same workspace and costs a fixed handful of columns — the
+        # name it qualifies has to come first, or the number reads as a count of
+        # something else.
         reinit = f"{_YELLOW}⚠ reinit: {_BOLD}charter ws reinit{_R}" if _stale_structure(active) else None
         # Zone 1 — WHERE I am. Identity and navigation only: which workspace is active,
-        # and how many others exist to switch to. Everything that used to ride along
-        # here (repo count, vault count, ctx/⚡) described something else and now sits
-        # with the thing it describes.
+        # what it still means to do, and how many others exist to switch to. Everything
+        # that used to ride along here (repo count, vault count, ctx/⚡) described
+        # something else and now sits with the thing it describes.
+        #
+        # Open todos are a property of the ACTIVE WORKSPACE, so the layout's one rule —
+        # a count lives next to what it counts — puts them here rather than on the
+        # session strip (they outlive the session; that is the point of the store) or in
+        # the repo column (they are not about a repo). Beside the name rather than on a
+        # row of its own, because a row is spent on every single turn and what it would
+        # carry is usually one digit.
+        #
+        # Zero renders NOTHING, the same discipline `_session_news` keeps: a `todo 0`
+        # present every turn is furniture within a day, and then a real `todo 7` in that
+        # spot draws no more attention than the zero did. Presence is the signal.
+        #
+        # A plain word, no glyph. `tui.width` only knows what the Unicode tables claim,
+        # and this layout has twice paid for a character a font drew wider than that
+        # (see the header comments below) — a decoration here could only cost columns,
+        # since the label already reads. `todo` singular because it is exactly the
+        # subcommand that shows them, `charter ws todo`, so the label doubles as the way
+        # to read the detail — the same thing `ws N` does for `charter ws`.
+        ntodo = _todo_count(active)
         summary = f"{_DIM} · {_R}".join(filter(None, [
             f"{_CYAN}⬢{_R} {_BOLD}{active}{_R}{pin}",
+            f"{_DIM}todo{_R} {ntodo}" if ntodo else None,
             reinit,
             f"{_DIM}ws{_R} {nws}",
         ]))

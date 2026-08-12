@@ -381,16 +381,19 @@ turn. It is grouped by **scope** — each zone answers exactly one question, and
 always sits next to the thing it counts:
 
 ```
-⬢ umbrella-improvements · ws 9                                    ← WHERE am I
+⬢ umbrella-improvements · todo 3 · ws 9                           ← WHERE am I
 ◫ repos 2/38                    │ ◈ personas 13 · vaults 6 · shared ✎130
 ├─ easysender-ui-workspace  main  ✗ failed │ ◆ steward · ✎2       ← WHAT I'm on × WHO I am
 └─ iam-service ⑂2           main  ✓ passed │ ○ devops ✓ ✎192
 ctx 22% · ⚡90% · ⛊1 denied · ✎1 recorded            ⬢ charter 0.10.0   ← THIS session
 ```
 
-- **Top — identity and navigation.** The active workspace and how many others exist.
-  Nothing else: the repo count describes the left column, the vault count describes the
-  right one, and the gauges describe the session, so each lives with what it describes.
+- **Top — identity and navigation.** The active workspace, how many todos it still has
+  open (`charter ws todo`), and how many other workspaces exist. Nothing else: the repo
+  count describes the left column, the vault count describes the right one, and the
+  gauges describe the session, so each lives with what it describes. `todo N` belongs
+  here for the same reason — open todos are a property of *this* workspace. It is absent
+  when the count is zero, like everything else that would otherwise render every turn.
 - **Columns — the Role × Task axes.** Left is the *task* (repos cloned into this
   workspace, their branch, CI and MRs); right is the *role* (the persona roster, each
   chip carrying its vault state and memory counts). Personas are global, repos are
