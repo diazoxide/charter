@@ -1097,9 +1097,33 @@ def _default_branch(gitdir: Path) -> str | None:
     return None
 
 
+def _head_detached(gitdir: Path) -> bool:
+    """True when HEAD names a commit rather than a branch.
+
+    Its own read rather than an inference from :func:`_branch`, which collapses the two:
+    a detached HEAD reads back from there as a short sha, and a short sha is not
+    distinguishable from a branch someone named after one. The distinction has to be
+    made where git makes it — HEAD is a symref (``ref: refs/heads/…``) or it is not.
+
+    Reads the gitdir it is GIVEN, never the common dir — the opposite of
+    :func:`_default_branch`. HEAD is per-worktree (that is the whole point of a linked
+    worktree), while refs are shared, so following ``commondir`` here would report the
+    main tree's branch for a worktree standing on its own.
+
+    ``False`` when HEAD cannot be read at all. "Unknown" is not "detached", and
+    manufacturing the most alarming of the three states out of a failed read is exactly
+    the false alarm this element cannot afford.
+    """
+    try:
+        txt = (gitdir / "HEAD").read_text().strip()
+    except OSError:
+        return False
+    return bool(txt) and not txt.startswith("ref:")
+
+
 def _plane_root_alert() -> str | None:
-    """One line when the **plane root** is being worked in — dirty, or off its default
-    branch. ``None`` otherwise, which is the ordinary case.
+    """One line when the **plane root** is being worked in — dirty, detached, or off its
+    default branch. ``None`` otherwise, which is the ordinary case.
 
     The root is the directory holding ``charter.toml``: the control plane itself, and
     since ADR 0007 not a repo row at all — a plane's `repo_trees` is its clones and
@@ -1115,7 +1139,7 @@ def _plane_root_alert() -> str | None:
     nothing — the row has no right-hand neighbour, so unlike a row in the repo column it
     cannot shear a column by being one cell wider than `tui.width` believes.
 
-    Both findings share ONE line. A row is spent on every single turn, and "dirty AND off
+    All findings share ONE line. A row is spent on every single turn, and "dirty AND off
     main" is one situation with two symptoms.
 
     "Dirty" here means ``tracked_dirty`` — untracked files excluded, which is exactly
@@ -1159,11 +1183,20 @@ def _plane_root_alert() -> str | None:
             # The word, not the repo table's `*`. A marker reads as a marker beside a
             # column of them; this line has no siblings to be read against.
             bits.append(f"{_YELLOW}dirty{_R}")
+        if _head_detached(gitdir):
+            # Reported on its own terms and WITHOUT a default to compare against, unlike
+            # the branch case below. Detachment is a fact about HEAD alone, it is the
+            # most alarming of these states rather than the least — a commit made here is
+            # unreachable the moment anything else is checked out — and staying silent
+            # about it on a plane whose default cannot be discovered would be the wrong
+            # way round. `doctor`'s `check_plane_root` reports it the same way and on the
+            # same terms; the words match so the two cannot be read as different findings.
+            bits.append(f"{_YELLOW}detached HEAD{_R}")
         # `?` is `_branch`'s "HEAD unreadable" — nothing to compare, so nothing to claim.
-        # A detached HEAD is not `?`: it reads as a short sha, which differs from any
-        # default, and a detached HEAD in the plane root is the same accident wearing a
-        # different hat.
-        if default and branch not in ("?", default):
+        # A detached HEAD never reaches here: it is already said above, and saying it
+        # again as "on 1a2b3c4, not main" would dress the worst state up as an ordinary
+        # branch you happened to be on.
+        elif default and branch not in ("?", default):
             bits.append(f"{_DIM}on{_R} {branch}{_DIM}, not{_R} {default}")
         if not bits:
             return None

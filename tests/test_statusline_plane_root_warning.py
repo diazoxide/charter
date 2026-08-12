@@ -188,10 +188,25 @@ class AnOffDefaultRootSpeaks(PlaneRootIso):
         self.assertIn("feat/x", line)
         self.assertIn("main", line)
 
-    def test_a_detached_head_counts_as_off_the_default(self):
-        """A detached HEAD in the plane root is the same accident wearing a sha."""
+    def test_a_detached_head_is_reported_as_detachment_not_as_a_branch(self):
+        """The most alarming of these states, and it must read as itself. `_branch`
+        answers a detached HEAD with a short sha, so comparing that against the default
+        would print `on 1a2b3c4, not main` — which dresses "whatever you commit here
+        becomes unreachable" up as an ordinary branch you happened to be on."""
         git(self.tmp, "checkout", "-q", "--detach")
-        self.assertIsNotNone(self.warning(), self.lines())
+        line = self.warning()
+        self.assertIsNotNone(line, self.lines())
+        self.assertIn("detached", line)
+        self.assertNotIn("not main", line)
+
+    def test_a_detached_head_speaks_even_when_no_default_is_discoverable(self):
+        """Detachment is a fact about HEAD alone. Requiring a default to compare against
+        would silence the worst state on exactly the planes charter knows least about —
+        the wrong way round, and a disagreement with `doctor`, which reports it
+        independently of the default."""
+        git(self.tmp, "branch", "-m", "main", "trunk")     # no main/master to fall back on
+        git(self.tmp, "checkout", "-q", "--detach")
+        self.assertIn("detached", self.warning() or "", self.lines())
 
     def test_origin_head_decides_what_the_default_is(self):
         """Not a hardcoded `main`: the repo already states its own default, and a plane
@@ -352,6 +367,13 @@ class DoctorAndTheStatusLineCannotDisagree(PlaneRootIso):
     def statusline_says_dirty(self) -> bool:
         return "dirty" in _plain(statusline._plane_root_alert() or "")
 
+    def doctor_says_detached(self) -> bool:
+        from charter import doctor
+        return "detached" in (doctor.check_plane_root().detail or "")
+
+    def statusline_says_detached(self) -> bool:
+        return "detached" in _plain(statusline._plane_root_alert() or "")
+
     def test_they_agree_that_an_untracked_file_is_not_dirt(self):
         self.leave_untracked_file()
         self.assertEqual(self.statusline_says_dirty(), self.doctor_says_dirty())
@@ -361,6 +383,22 @@ class DoctorAndTheStatusLineCannotDisagree(PlaneRootIso):
         self.dirty()
         self.assertEqual(self.statusline_says_dirty(), self.doctor_says_dirty())
         self.assertTrue(self.doctor_says_dirty(), "fixture proves nothing if doctor is quiet")
+
+    def test_they_agree_that_a_detached_head_speaks_with_no_default_to_compare(self):
+        """The case that would have caught the divergence this class is named for.
+
+        The status line's branch clause needs a default to compare against; `doctor`'s
+        detached-HEAD finding never did. So a plane with no `origin/HEAD`, no `main` and
+        no `master`, standing on a detached HEAD, had `doctor` warning and the status
+        line silent — a known exception to an invariant this class asserts, which is
+        worse than either behaviour, because the next reader believes the name."""
+        from charter import doctor
+        git(self.tmp, "branch", "-m", "main", "trunk")
+        git(self.tmp, "checkout", "-q", "--detach")
+        self.assertIsNone(doctor._plane_default_branch(self.tmp),
+                          "fixture proves nothing if a default is still discoverable")
+        self.assertEqual(self.statusline_says_detached(), self.doctor_says_detached())
+        self.assertTrue(self.doctor_says_detached(), "fixture proves nothing if both are quiet")
 
     def test_they_agree_on_which_branch_is_the_default(self):
         """`origin/HEAD` first, then a `main`/`master` that actually exists, then no
