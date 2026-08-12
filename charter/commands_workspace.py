@@ -471,9 +471,23 @@ def cmd_workspace_save(args) -> int:
 
 
 def _ws_meta_paths(name: str) -> list[str]:
+    """A LIVE workspace's shareable paths, as repo-relative strings — what `save`, the
+    autosave, `live --off` and `rename` hand to git.
+
+    Must name the same set that `workspace._live_block` un-ignores, and nothing but a test
+    enforces that, because the two live in different modules. `todos/` was added to the
+    gitignore block and not here, so a LIVE workspace's todo list was visible to git and
+    staged by nothing — un-ignoring a path only says it *may* be tracked. See
+    tests/test_todos_are_committed.py, which pins the two halves together.
+
+    Filtered by existence deliberately: these go to git as literal paths, and `git rm
+    --cached` on one that was never tracked fails the whole call — taking the manifest and
+    memory down with a workspace that simply had no todos.
+    """
     wd = workspace.workspace_dir(name)
     return [str(p.relative_to(config.ROOT))
-            for p in (wd / "workspace.json", wd / "workspace.md", wd / "memory") if p.exists()]
+            for p in (wd / "workspace.json", wd / "workspace.md", wd / "memory",
+                      wd / "todos") if p.exists()]
 
 
 def cmd_workspace_autosave(args) -> int:
