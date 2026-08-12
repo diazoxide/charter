@@ -274,6 +274,143 @@ def check_control_plane_schema() -> Result:
     )
 
 
+def _git_in(root: Path, *args: str):
+    """One read-only git question about ``root``, never raising on a non-zero exit.
+
+    Timed out like every other check: the plane root is normally a small local repo, but
+    a plane on a stalled network mount makes `git status` hang, and the SessionStart hook
+    has a budget — a check that eats it prints nothing at all (see `CHECK_TIMEOUT`)."""
+    return util.run(["git", "-C", str(root), *args], check=False, timeout=CHECK_TIMEOUT)
+
+
+def _plane_default_branch(root: Path) -> str | None:
+    """This repo's default branch, or ``None`` when charter cannot honestly say.
+
+    Asked in order of decreasing authority:
+
+    1. ``refs/remotes/origin/HEAD`` — the *remote's own* answer, recorded by `git clone`.
+       It is the only source that is a fact rather than a guess, so it is consulted
+       first: a plane whose default is `trunk` can easily still carry a stale local
+       `main`, and guessing before asking would warn about the correct branch.
+    2. A local ``main`` or ``master``, in that order. Needed because a plane is very often
+       `git init`-ed and then given a remote by hand (`charter init` does not clone), and
+       that never writes ``origin/HEAD`` — without this fallback the branch half of the
+       check would be silent on most real planes.
+
+    ``None`` when neither answers, and the caller must then say nothing about branches.
+    Naming a default charter has not discovered would fire a warning at every session of
+    a plane whose only sin is calling its branch something else, and a preflight that is
+    permanently yellow is one people stop reading (`check_memory_indexes` records the
+    same concern for the same reason)."""
+    ref = _git_in(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    remote_head = ref.stdout.strip()
+    if ref.returncode == 0 and remote_head:
+        # `--short` renders it as `origin/main`, not `main`.
+        return remote_head.split("/", 1)[1] if remote_head.startswith("origin/") else remote_head
+    for guess in ("main", "master"):
+        if _git_in(root, "rev-parse", "--verify", "--quiet",
+                   f"refs/heads/{guess}").returncode == 0:
+            return guess
+    return None
+
+
+def check_plane_root() -> Result:
+    """Is anyone working in the plane root?
+
+    The plane root — the directory holding ``charter.toml`` — holds the control plane:
+    personas, inventory, workspaces, config, and nothing anyone is meant to edit or
+    switch branches in. Work happens in a workspace's clones. Nothing in the filesystem
+    enforces that (ADR 0008), and the failure it invites is invisible in exactly the
+    surface a user would check: two sessions both sitting in the root share one working
+    tree and one HEAD and thrash each other's branches, while charter reports two
+    different workspaces and lists no tree that would hint at why. Observed rather than
+    theorised — six branches in one session, and a `git checkout main` in the root that
+    silently reverted in-flight work out of the tree.
+
+    This is the replacement for `check_embedded_worktrees`, which went with the embedded
+    plane shape (ADR 0007). That check guarded a hazard specific to a shape that no
+    longer exists; deleting it without a successor would leave the *new* failure mode
+    unwatched in the file built to watch for failure modes.
+
+    WARN, never FAIL. FAIL is doctor's "you cannot work" list — it is what makes
+    `charter doctor` exit non-zero, which is what makes the SessionStart wrapper print
+    the preflight-failed banner — and a root being worked in is a smell that gets
+    expensive later, not a broken plane. ADR 0008 chose signal over refusal on purpose,
+    and this is that signal at the moment acting on it is still cheap.
+
+    Never raises: this runs from the SessionStart hook, and is the command you run
+    *because* something is wrong. The exceptions caught are narrow (a missing/unusable
+    git, a root that cannot be read, git not answering in time) rather than a bare
+    ``except``, for the reason `check_memory_indexes` records: a broad catch there once
+    swallowed a `NameError` and reported OK, and a check that silently does nothing is
+    worse than no check.
+    """
+    from . import config as _config
+
+    name = "plane root"
+    if not _config.HAS_CONTROL_PLANE:
+        # No plane, no plane root. `check_control_plane_config` already says so loudly;
+        # a second row repeating it is noise.
+        return Result(name, OK, detail="no control plane found")
+
+    root = Path(_config.ROOT)
+    try:
+        top = _git_in(root, "rev-parse", "--show-toplevel")
+        toplevel = top.stdout.strip()
+        if top.returncode != 0 or not toplevel:
+            # `charter init` in a fresh directory does not run `git init` — that is the
+            # README's own 60-second path. No history, no branch to be on, no dirt.
+            return Result(name, OK, detail="not a git repository")
+        # `.resolve()` on both sides or this comparison lies: macOS hands out temp and
+        # home paths through symlinks (`/var` → `/private/var`), and git always answers
+        # with the physical path.
+        if Path(toplevel).resolve() != root.resolve():
+            # A `charter.toml` in a subdirectory of some larger repo: that repo is not
+            # the plane's. Its branch is whatever that project is working on and its dirt
+            # is that project's work in progress, so reporting on it would warn every
+            # session about a state that is entirely correct.
+            return Result(name, OK, detail=f"not its own repository (inside {toplevel})")
+
+        head = _git_in(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+        # Non-zero means detached — asked this way rather than `rev-parse --abbrev-ref`,
+        # which answers the literal string "HEAD" and so reads as an ordinary branch name
+        # right up until it is compared against the default.
+        branch = head.stdout.strip() if head.returncode == 0 else None
+        default = _plane_default_branch(root)
+        # `--untracked-files=no` deliberately. Memory defaults to `share = "local"` —
+        # written to disk and never committed — so every plane a few days old carries
+        # untracked files under `personas/*/memory/`. Counting those would put this row
+        # permanently in the yellow, which costs the two findings that do matter.
+        status = _git_in(root, "status", "--porcelain", "--untracked-files=no")
+        dirty = [ln for ln in status.stdout.splitlines() if ln.strip()]
+    except (util.ProcTimeout, OSError) as e:
+        return Result(name, OK, detail=f"not checked ({e})")
+
+    findings, actions = [], []
+    if branch is None:
+        findings.append("detached HEAD")
+        actions.append(f"Put the root back on a branch: git -C {root} checkout "
+                       f"{default or '<your default branch>'}.")
+    elif default and branch != default:
+        findings.append(f"on {branch}, not {default}")
+        actions.append(f"Put the root back: git -C {root} checkout {default}.")
+    if dirty:
+        findings.append(f"{len(dirty)} uncommitted file(s)")
+        actions.append("Commit control-plane content with `charter save`.")
+    if not findings:
+        return Result(name, OK, detail=f"clean on {branch}")
+    # Where the work belongs is said ONCE, after the per-finding actions. Saying it per
+    # finding printed the same "move it into a workspace clone" clause twice in a row
+    # that fires with both findings at once — which is the common case, since whoever
+    # branched in the root is also editing in it.
+    return Result(
+        name, WARN, detail=", ".join(findings),
+        hint=" ".join(actions) + " Anything that is not control plane belongs in a "
+             "workspace clone — charter workspace create <task>, then charter clone "
+             "<repo>; the plane root is one working tree every session shares.",
+    )
+
+
 def check_inventory() -> Result:
     from . import config as _config
     n = inventory.load().get("count", 0)
@@ -568,6 +705,7 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
+                check_plane_root(),
                 check_inventory(), check_vaults(), check_version_lock(),
                 check_memory_indexes(), check_personas(),
                 check_plugin_skew()]
