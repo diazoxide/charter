@@ -116,7 +116,10 @@ charter clone some-repo
   (`personas/`, `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and a
   Claude Code status line — additive and idempotent, so re-running it is always safe.
   `--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or
-  GitHub org/user whose repos this control plane tracks.
+  GitHub org/user whose repos this control plane tracks. Run inside an existing git repo
+  it also *offers* to clone that repo into your first workspace — accept with
+  `charter init --clone-this-repo`, because work happens in a workspace, never in the
+  plane root.
 - **`charter doctor`** preflights the environment (python, git, git identity, the
   forge's CLI and its auth) and tells you exactly what's missing before anything else
   tries to use it.

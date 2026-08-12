@@ -587,6 +587,181 @@ def _ensure_statusline(root: Path) -> tuple[str, Path | None]:
     return "created", None
 
 
+# --------------------------------------------------------------------------- #
+# init's one offer: the repo you are standing in                               #
+#                                                                              #
+# Being inside a git repo used to decide the plane's SHAPE; there is one shape #
+# now (docs/adr/0007), so it decides nothing about what init BUILDS. It is     #
+# kept for the debt that removal created: charter used to promise a solo user  #
+# with one repo could `charter init` and carry on working in that repo,        #
+# because the `default` workspace WAS the plane root. It isn't, so init offers #
+# the first clone instead — the lesson "work happens in a workspace, not in    #
+# the plane root" met once at setup rather than later as "where did my code    #
+# go?".                                                                        #
+#                                                                              #
+# "Offers" is not a prompt, and cannot be: `util.py` carries info/ok/warn/err  #
+# and nothing that reads stdin, because charter runs inside hooks and agent    #
+# sessions where blocking on stdin hangs the turn. So the offer is a printed   #
+# command and running it (`charter init --clone-this-repo`) IS the acceptance  #
+# — the same two-step shape `charter report` uses for consent, where the       #
+# second command is the consent (docs/adr/0003, charter/commands_report.py).   #
+# Nothing is ever cloned that was not asked for by name.                       #
+# --------------------------------------------------------------------------- #
+def _is_repo_top_level(root: Path) -> bool:
+    """True when *root* is the TOP LEVEL of a git working tree.
+
+    Deliberately not "is root somewhere inside a repo". ``rev-parse --show-toplevel``
+    walks upwards, and a great many people keep ``$HOME`` under git for their dotfiles —
+    so a plane scaffolded at ``~/planes/acme`` would have init offering to clone the home
+    directory into it. The offer exists for one person standing in one project, which is
+    the equality case; anything looser turns a helpful line into an alarming one.
+
+    Asked of git rather than tested as ``(root / ".git").exists()`` so a linked worktree
+    (whose ``.git`` is a file) and a genuinely broken ``.git`` are judged by git's own
+    rules. Paths are resolved on both sides because git answers with the real path and the
+    plane root may be reached through a symlink — ``/var/…`` vs ``/private/var/…`` on
+    macOS is enough to make a true equality read as false.
+
+    A machine with no git at all gets no offer instead of a traceback: `init` is the one
+    command a stranger runs BEFORE `doctor` has told them git is missing.
+    """
+    try:
+        proc = _git(["rev-parse", "--show-toplevel"], cwd=root)
+        top = (proc.stdout or "").strip()
+        if proc.returncode != 0 or not top:
+            return False
+        return Path(top).resolve() == Path(root).resolve()
+    except OSError:
+        return False
+
+
+def _origin_url(root: Path) -> str:
+    """*root*'s ``origin`` remote as configured, or ``""`` — never raises."""
+    try:
+        return _git(["remote", "get-url", "origin"], cwd=root).stdout.strip()
+    except OSError:
+        return ""
+
+
+def _first_clone_name(root: Path) -> str:
+    """What to call the clone of the repo *root* sits in.
+
+    The basename of its ``origin`` URL when it has one, NOT the directory the plane
+    happens to live in: `cmd_clone` names a clone after its inventory record, which
+    carries the FORGE's name for the repo. A plane in ``~/work/acme-api-checkout`` whose
+    origin is ``…/acme/api.git`` must produce ``workspaces/default/api``, or a later
+    `charter clone api` lands a second copy of the same repo beside the first and neither
+    one is obviously the real one.
+
+    ``workspace.valid_name`` is reused as a sanity filter on a path segment charter is
+    about to create — a URL that ends in nothing name-shaped falls back to the directory
+    the user already calls their project."""
+    url = _origin_url(root)
+    tail = re.split(r"[/:]", url.rstrip("/"))[-1] if url else ""
+    if tail.endswith(".git"):
+        tail = tail[:-len(".git")]
+    return tail if workspace.valid_name(tail) else root.name
+
+
+def _first_clone_dest(root: Path) -> Path:
+    """Where the first clone of *root*'s repo goes — the FIRST workspace, by name.
+
+    `workspace.resolve()` is deliberately not consulted: it answers "which workspace is
+    this session on", and during `init` there is no session to have chosen one. The
+    workspace being offered is the one every plane starts with."""
+    return config.WORKSPACES_DIR / config.DEFAULT_WORKSPACE / _first_clone_name(root)
+
+
+def _offer_first_clone(root: Path) -> None:
+    """Say it once, in the terms the person is standing in (docs/adr/0008: the plane root
+    is not a work tree).
+
+    One `util.info` with embedded newlines rather than three calls, because each call
+    prefixes its own `•` bullet — and a bullet in front of the command is a character that
+    gets copied along with it. The malformed-settings warning below already prints its
+    paste-me JSON this way for the same reason."""
+    name = _first_clone_name(root)
+    util.info(f"You are standing in the git repo '{name}'. Work happens in a workspace, "
+              f"not in the plane root — clone it into the first one:\n"
+              f"      charter init --clone-this-repo\n"
+              f"  Nothing is cloned unless you run that. It lands in "
+              f"workspaces/{config.DEFAULT_WORKSPACE}/{name}/, and declining leaves this "
+              f"plane complete.")
+
+
+def _clone_first_workspace(root: Path) -> int:
+    """Accept the offer: clone the repo *root* sits in into the first workspace.
+
+    Cloned from the plane root ON DISK rather than fetched from its origin. This runs
+    during setup, before `doctor` has checked that the forge CLI is even authed, and it
+    must not be the step that stalls on an SSH passphrase or fails on a token that isn't
+    there yet. A local clone also carries commits that were never pushed — for the one
+    person standing in their own project, that is the work they were in the middle of.
+
+    Its ``origin`` is then repointed at the SOURCE's origin (rewritten to HTTPS by that
+    forge's own rule when charter recognises the host — golden rule 0 is that git talks
+    over a token, never SSH). Left pointing at the plane root it would look right and fail
+    at the first push: git refuses a push to a non-bare repo's checked-out branch.
+
+    Never touches the plane root's git state — it is read, and only read. The plane root
+    is a working tree someone is in the middle of using.
+    """
+    name = _first_clone_name(root)
+    ws = config.DEFAULT_WORKSPACE
+    try:
+        wd = workspace.ensure(ws)
+    except ValueError as e:
+        util.err(str(e))
+        return 1
+    dest = wd / name
+    if dest.exists():
+        # Additive, exactly like the rest of `init`: re-running is always safe, and never
+        # re-clones over work that is already sitting there.
+        util.info(f"{name}: already cloned in '{ws}' — left exactly as it is.")
+        return 0
+
+    util.info(f"Cloning {name} into workspace '{ws}' …")
+    proc = _git(["clone", "--quiet", str(root), str(dest)])
+    if proc.returncode != 0:
+        util.err(f"could not clone {root} into {dest} — nothing else was changed.\n"
+                 + (proc.stderr or "").strip())
+        return 1
+
+    upstream = _origin_https(root) or _origin_url(root)
+    if upstream:
+        _git(["remote", "set-url", "origin", upstream], cwd=dest)
+    else:
+        util.warn(f"{name} has no origin of its own yet, so this clone's origin is the "
+                  f"plane root — give it a real remote before you push.")
+    from . import gitpolicy
+    gitpolicy.apply(dest)     # golden rule 0, same as `charter clone` does per clone
+
+    rel = dest.relative_to(config.ROOT)
+    util.ok(f"{name} → {rel}")
+    _hint_repo_docs(dest, {"name": name})
+    util.info(f"  work there: cd {rel}   (being in that directory IS this workspace)")
+    return 0
+
+
+def _first_clone_step(root: Path, accepted: bool) -> int:
+    """The one thing being inside a git repo changes about `init`: what it OFFERS."""
+    here = _is_repo_top_level(root)
+    if not accepted:
+        # An offer already taken is noise. `init` is idempotent and gets re-run — after
+        # adding a forge, after an upgrade — and repeating a suggestion the user has
+        # already acted on is how people learn to skip init's output, which is also where
+        # its actual errors are.
+        if here and not _first_clone_dest(root).exists():
+            _offer_first_clone(root)
+        return 0
+    if not here:
+        util.err(f"--clone-this-repo: there is no repo here to clone. {root} is not the "
+                 f"top level of a git working tree, and the flag clones the repo you are "
+                 f"standing in. The control plane itself was still created.")
+        return 1
+    return _clone_first_workspace(root)
+
+
 def cmd_init(args) -> int:
     """Scaffold a control plane from nothing — the first-run command a stranger needs
     and the one `root.py`'s own "no control plane found" error already points to.
@@ -612,7 +787,7 @@ def cmd_init(args) -> int:
     # Being inside a git repo used to decide the plane's SHAPE here, and there is now only
     # one shape — so `init` produces the same plane wherever it runs. What it detects is
     # still worth knowing, but it changes only what init OFFERS (a first clone of the repo
-    # you are standing in), never what it builds.
+    # you are standing in — see `_first_clone_step`, called last), never what it builds.
     created, present, blocked = [], [], []
 
     toml_path = root / _root.MARKER
@@ -673,7 +848,11 @@ def cmd_init(args) -> int:
         util.info(f"  already present: {', '.join(present)}")
     util.info("Next: `charter doctor` to preflight, then `charter discover` to build the "
               "inventory.")
-    return 0
+    # Last, so the most specific thing init can say about THIS directory is the line the
+    # user's eye lands on. Its rc becomes init's: a clone that was asked for and did not
+    # happen is the same failure shape as a blocked baseline path — "you requested this,
+    # it did not happen" has to be visible from the exit code alone.
+    return _first_clone_step(root, bool(getattr(args, "clone_this_repo", False)))
 
 
 # --------------------------------------------------------------------------- #

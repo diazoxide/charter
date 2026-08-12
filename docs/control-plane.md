@@ -80,7 +80,22 @@ plane exercised exactly one of the two, so the other was carried on trust. An ex
 
 `charter init` therefore produces the same plane wherever it runs. Being inside a git repo
 no longer changes what you get; it changes only what init *offers*, which is to clone that
-repo into your first workspace.
+repo into your first workspace:
+
+```
+$ charter init --forge github --owner acme
+✓ Initialized control plane (schema 1) → charter.toml, personas/, …
+• You are standing in the git repo 'myapp'. Work happens in a workspace, not in the plane
+  root — clone it into the first one:
+      charter init --clone-this-repo
+```
+
+That is an offer, not a prompt: charter never reads stdin (it runs inside hooks, where
+blocking would hang the turn), so the second command *is* the acceptance — the same shape
+`charter report` uses for consent. Run it and you get `workspaces/default/myapp/`, cloned
+from the repo you are standing in and pointed at the same `origin` it has; ignore it and
+the plane is complete as it stands. Either way the control plane itself is identical, and
+nothing is written to your repo's git state.
 
 ### The plane root is not a place to work
 
@@ -136,9 +151,10 @@ $ charter workspace create feature-x
 
 Its branch is the workspace name unless you pass `--branch`.
 
-`default` deliberately stays the repo itself, so a solo user's path is `charter init`, work
-in your repo — charter starts materialising trees only when you ask for a *second*
-concurrent thing.
+A solo user with one repo used to be able to `charter init` and carry on working in that
+repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is
+`charter init --clone-this-repo` — the offer above — and then work in
+`workspaces/default/<repo>/`.
 
 **Selecting a workspace with no tree is refused**, because it would put you on the same
 files as every other workspace — the thing workspaces exist to prevent. `charter workspace

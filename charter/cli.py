@@ -61,6 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--owner", help="Group/org/user that owns the repos "
                                      "(GitLab group or GitHub org/user).")
     ini.add_argument("--host", help="Self-hosted forge host (default: the forge's own public host).")
+    # The acceptance half of init's one offer. charter has no interactive prompt (it runs
+    # inside hooks, where blocking on stdin hangs the turn), so the offer is a printed
+    # command and this flag is the command — nothing is ever cloned unasked.
+    ini.add_argument("--clone-this-repo", action="store_true",
+                     help="Also clone the git repo you are standing in into the first "
+                          "workspace. This is how you accept the offer `charter init` "
+                          "prints when it finds one; without it, init clones nothing.")
     ini.set_defaults(func=commands.cmd_init)
 
     doc_check = sub.add_parser(
