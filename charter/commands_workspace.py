@@ -596,6 +596,12 @@ def cmd_workspace_todo(args) -> int:
             # could act on later. Ask for the missing half instead.
             util.err(f"`todo {text}` needs the slug of the todo to close.")
             util.info(f"  The slug is the first column: charter ws todo --workspace {name}")
+            # Issue #59: the reserved words swallow a todo you genuinely wanted to record
+            # under that name. The escape already existed — matching is exact and
+            # lowercase, so any other capitalisation records — but nothing said so, which
+            # made a recoverable slip look like a wall.
+            util.info(f"  To record a todo actually called \"{text}\", capitalise it or "
+                      f"add a word: charter ws todo \"{text.capitalize()} …\"")
             return 1
         return _close_todo(name, slug, journal=(text == "done"))
 

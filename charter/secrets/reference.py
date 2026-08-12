@@ -139,9 +139,17 @@ class ReferenceProvider(VaultProvider):
         if proc.returncode != 0:
             raise VaultError(
                 f"resolving '{key}' via {cli} failed (exit {proc.returncode}) for {uri}"
-                f"{self.identity_note()}. "
-                f"Check that you are authenticated to {cli} and the reference exists. "
-                "(Resolver output withheld — it can contain the secret.)")
+                f"{self.identity_note()}.\n"
+                f"  Causes, roughly in order of how often they are the real one:\n"
+                f"    - the item or field behind the reference was renamed, moved or "
+                f"deleted (the vault stays healthy — `charter vault verify` tests this)\n"
+                f"    - you are not authenticated to {cli}\n"
+                f"    - the identity variable for this vault is unset, so {cli} read the "
+                f"vault as somebody else\n"
+                f"    - charter version drift: an older build may not map this vault's "
+                f"identity into {cli}'s environment (`charter version` shows the pin; "
+                f"`charter version sync` conforms this machine)\n"
+                "  (Resolver output withheld — it can contain the secret.)")
         value = proc.stdout or ""
         # `op read --no-newline` already omits it; `vault kv get -field=` appends one.
         return value[:-1] if value.endswith("\n") else value

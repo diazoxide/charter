@@ -486,8 +486,21 @@ def check_vaults() -> Result:
                            f"someone else)")
     if bad:
         return Result("vaults", WARN, detail=f"{len(vs)} configured",
-                      hint="unhealthy: " + ", ".join(bad))
-    return Result("vaults", OK, detail=f"{len(vs)} configured, all healthy")
+                      hint="not reachable: " + ", ".join(bad))
+    # Says what was actually checked, and nothing more. This line used to read "all
+    # healthy", which is a claim about resolution that nothing here tests: `health()`
+    # asks whether the vault is REACHABLE and how many items it holds, and deliberately
+    # never resolves — `vault list` and `doctor` call it routinely, and resolving would
+    # hit 1Password every time and could prompt for re-auth.
+    #
+    # Issue #55: "6 configured, all healthy" printed minutes apart from every resolution
+    # through those vaults failing. Both were true. A reference can point at an item that
+    # no longer exists while the vault holding it is perfectly reachable — and `doctor` is
+    # the command you run BECAUSE something is wrong, so a green line about the broken
+    # subsystem does not merely fail to help, it steers you away from the cause. It cost
+    # the reporter forty minutes mid-incident.
+    return Result("vaults", OK, detail=f"{len(vs)} reachable (references not resolved)",
+                  hint="Resolve them for real: charter vault verify")
 
 
 #: Entry count at which a memory index is worth curating. Not a cap and not a

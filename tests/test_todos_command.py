@@ -312,3 +312,27 @@ class TestClosingIsWorkspaceScoped(ClosingCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheReservedWordsAreEscapable(TodoCommandCase):
+    """Issue #59. `done` and `forget` are reserved as closing verbs, so a todo whose text
+    is exactly one of them cannot be recorded. Degenerate, but the escape existed all
+    along — matching is exact and lowercase — and nothing told you, which turned a
+    recoverable slip into a dead end."""
+
+    def test_the_exact_lowercase_word_is_still_refused(self):
+        rc, _ = self.run_todo(text="done")
+        self.assertNotEqual(rc, 0)
+
+    def test_the_refusal_says_how_to_record_it_anyway(self):
+        _, out = self.run_todo_all(text="done")
+        self.assertIn("capitalise", out.lower())
+
+    def test_any_other_capitalisation_records_normally(self):
+        rc, _ = self.run_todo(text="Done")
+        self.assertEqual(rc, 0)
+        self.assertEqual([t["title"] for t in todos.open_todos("alpha")], ["Done"])
+
+    def test_the_word_inside_a_longer_todo_is_untouched(self):
+        rc, _ = self.run_todo(text="done with the migration, write it up")
+        self.assertEqual(rc, 0)

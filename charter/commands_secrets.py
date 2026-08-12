@@ -195,6 +195,92 @@ def cmd_vault_add(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# verify — the check that actually resolves                                    #
+#                                                                              #
+# `health()` asks whether a vault is REACHABLE and how many items it holds. It #
+# deliberately never resolves: `vault list` and `doctor` call it routinely, and #
+# a resolve would hit 1Password every time and could prompt for re-auth. Good  #
+# reason to skip it — and no reason to then call the result "healthy".         #
+#                                                                              #
+# Issue #55, from a live incident: `doctor` said "6 configured, all healthy"   #
+# while every resolution through those vaults was failing. Both true. A        #
+# reference can point at an item that no longer exists while the vault holding #
+# it is perfectly reachable, and nothing tested that until something failed at #
+# runtime — with the green line steering people away from the cause for forty  #
+# minutes. So the expensive check gets its own command, and the cheap one      #
+# stops overclaiming.                                                          #
+# --------------------------------------------------------------------------- #
+def verify_vault(prov) -> list[dict]:
+    """Resolve every reference in *prov*, reporting whether each one worked.
+
+    Returns ``[{"key", "ok", "error"}]`` and **never the resolved value** — a verify
+    result is printed to a terminal and may end up in a log or a CI transcript.
+
+    A vault whose key list itself cannot be read reports one failing row rather than
+    raising: `verify` is the command you run when something is already wrong, so it has
+    to survive the thing being wrong.
+    """
+    try:
+        keys = prov.keys()
+    except Exception as e:  # noqa: BLE001 - see docstring
+        return [{"key": "*", "ok": False, "error": str(e)}]
+
+    rows = []
+    for key in keys:
+        try:
+            prov.get(key)
+        except Exception as e:  # noqa: BLE001 - any resolver failure is a failed verify
+            rows.append({"key": key, "ok": False, "error": str(e)})
+        else:
+            rows.append({"key": key, "ok": True, "error": ""})
+    return rows
+
+
+def _vaults_to_verify(name: str | None = None):
+    names = [name] if name else list(registry.vaults())
+    out = []
+    for n in names:
+        try:
+            out.append(registry.provider_for(n))
+        except base.VaultError as e:
+            util.err(f"{n}: {e}")
+    return out
+
+
+def cmd_vault_verify(args) -> int:
+    """Resolve every reference in every vault (or one named vault) and report failures.
+
+    Exits non-zero when anything fails to resolve, because the exit status is what a CI
+    step or a `&&` chain reads — printing a dead reference and exiting 0 would be the same
+    lie in a new place.
+    """
+    provs = _vaults_to_verify(getattr(args, "name", None))
+    if not provs:
+        util.info("No vaults to verify.")
+        return 0
+
+    failed = 0
+    for prov in provs:
+        rows = verify_vault(prov)
+        bad = [r for r in rows if not r["ok"]]
+        failed += len(bad)
+        if not rows:
+            util.info(f"{prov.name}: no references to verify")
+            continue
+        if not bad:
+            util.ok(f"{prov.name}: {len(rows)} reference(s) resolved")
+            continue
+        util.err(f"{prov.name}: {len(bad)} of {len(rows)} reference(s) did NOT resolve")
+        for r in bad:
+            print(f"    {r['key']}: {r['error']}")
+    if failed:
+        util.info("A reference can be registered and still not resolve — the vault being "
+                  "reachable says nothing about the item behind the reference.")
+        return 1
+    return 0
+
+
 def cmd_vault_list(args) -> int:
     doc = registry.load_registry()
     vs = registry.vaults(doc)

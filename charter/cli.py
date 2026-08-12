@@ -474,6 +474,13 @@ def _add_vault_parser(sub) -> None:
     lst = vsub.add_parser("list", help="List configured vaults (names/status only, never values).")
     lst.set_defaults(func=commands_secrets.cmd_vault_list)
 
+    vfy = vsub.add_parser("verify",
+                          help="Resolve every reference for real and report what does NOT "
+                               "resolve. `list` and `doctor` only check the vault is "
+                               "reachable — a reference can be registered and still be dead.")
+    vfy.add_argument("name", nargs="?", help="One vault (default: all of them).")
+    vfy.set_defaults(func=commands_secrets.cmd_vault_verify)
+
     rm = vsub.add_parser("remove", help="Unregister a vault (leaves its file on disk).")
     rm.add_argument("name")
     rm.set_defaults(func=commands_secrets.cmd_vault_remove)
