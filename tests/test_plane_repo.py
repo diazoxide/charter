@@ -33,6 +33,11 @@ class PlaneRepoCase(PersonaIso):
         """The plane root as a real git repo with an origin — the ordinary case."""
         subprocess.run(["git", "init", "-q", str(config.ROOT)], check=True,
                        capture_output=True)
+        # Set per-repo, not inherited: a CI runner has no global git identity, so a
+        # fixture that commits fails there with exit 128 while passing on any developer
+        # machine. `tests/test_statusline_worktree_rows.py::init_repo` does the same.
+        _git(config.ROOT, "config", "user.email", "t@example.com")
+        _git(config.ROOT, "config", "user.name", "t")
         if origin:
             _git(config.ROOT, "remote", "add", "origin", origin)
         (config.ROOT / "charter.toml").write_text(
