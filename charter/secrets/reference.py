@@ -105,8 +105,14 @@ class ReferenceProvider(VaultProvider):
         if not scheme_of(value):
             raise VaultError(
                 f"'{key}': a reference vault stores a URI, not a value — expected one of "
-                f"{', '.join(s + '://' for s in sorted(_RESOLVERS))}. "
-                "Use a plain-file vault to store the value itself.")
+                f"{', '.join(s + '://' for s in sorted(_RESOLVERS))}.\n"
+                f"  A reference vault POINTS AT items somebody else owns, which is why it "
+                f"declines to create one. To have charter own the item — creating it and "
+                f"storing the value, with the value on stdin and never in argv:\n"
+                f"      charter vault add <name> --provider 1password --op-vault <VAULT>\n"
+                f"      charter secret set <name> {key} --from-file <path>\n"
+                f"  To keep the value on this machine instead: --provider plain-file.\n"
+                f"  To register an item you created elsewhere: pass its URI here.")
         _RESOLVERS[scheme_of(value)](value)  # validate shape now, not at read time
         data = self._load()
         data[key] = value

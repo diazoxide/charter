@@ -252,6 +252,20 @@ charter vault add team --provider reference --file .charter/vaults/team.json
 charter secret set team DEPLOY_TOKEN --value 'op://Eng/deploy/token'
 ```
 
+`secret set` on a reference vault takes a **URI**, never a value — accepting one would
+turn it into a plaintext vault without saying so. If what you have is the secret itself
+and you want charter to store it, you want the other shape: a `1password` vault owns its
+items and `secret set` creates them, with the value arriving on stdin and never in argv.
+
+```bash
+charter vault add team-owned --provider 1password --op-vault Engineering
+… | charter secret set team-owned DEPLOY_TOKEN
+```
+
+The distinction is who owns the item, not which CLI is involved — both end up in
+1Password. Reach for `reference` when a human or another system should stay in charge of
+rotating the credential, and for `1password` when charter should.
+
 Every consuming path works unchanged — the value is resolved only when something
 actually needs it:
 
