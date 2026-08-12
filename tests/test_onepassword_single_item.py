@@ -84,6 +84,21 @@ class FakeOp:
 
 
 class OpCase(PersonaIso):
+    """`op` is not installed on CI, and the provider checks PATH before running.
+
+    Stubbing that keeps these tests about charter's contract with `op` rather than about
+    whether this particular machine happens to have it — the suite must give the same
+    answer on a laptop with 1Password installed and on a bare runner. Carried over from
+    the harness this module replaced; dropping it made CI fail where local passed.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        import charter.secrets.onepassword as mod
+        real = mod.shutil.which
+        mod.shutil.which = lambda n: "/usr/local/bin/op" if n == "op" else None
+        self.addCleanup(lambda: setattr(mod.shutil, "which", real))
+
     def make(self, cfg=None, **kw):
         op = FakeOp(**kw)
         p = OnePasswordProvider("devops", {"op-vault": "Eng", **(cfg or {})})
