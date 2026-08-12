@@ -320,8 +320,17 @@ def _repo_trees(ws: str) -> list[Path]:
 
 
 def _available() -> int:
+    """The denominator in `repos N/M` — how many repos this plane could clone.
+
+    Asked of `inventory.repos()` rather than the file's own `count`, because the plane's
+    own repo is clonable whether or not `discover` has run. Reading the count alone
+    rendered `repos 0/0` on a plane where `charter clone <its own repo>` works — the
+    status line contradicting the CLI about the same question, which is the split this
+    layout has paid for before.
+    """
     try:
-        return json.loads(config.INVENTORY.read_text()).get("count", 0)
+        from . import inventory
+        return len(inventory.repos())
     except Exception:
         return 0
 

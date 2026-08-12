@@ -412,11 +412,28 @@ def check_plane_root() -> Result:
 
 
 def check_inventory() -> Result:
-    from . import config as _config
+    """Can this plane clone anything?
+
+    Asked of `inventory.repos()` rather than the file's own count, because a plane can
+    clone its own repo without ever running `discover` — the root's `origin` says what it
+    is (`inventory.plane_repo`). `discover` is therefore optional, and a plane that can
+    reach the repo it was made for is not missing anything.
+
+    Warning regardless would be the permanently-yellow preflight `check_memory_indexes`
+    records the case against — and the nag is expensive in its own right: on a personal
+    account `discover` enumerates every repo the owner has, and writes that listing into
+    a tracked `inventory/repos.json`. Telling someone to publish sixty repos to silence a
+    row about the one they already have is worse advice than saying nothing.
+    """
     n = inventory.load().get("count", 0)
     if n:
         return Result("inventory", OK, detail=f"{n} repos mapped")
-    return Result("inventory", WARN, hint="Run: charter discover  (builds inventory/repos.json).")
+    if inventory.repos():
+        return Result("inventory", OK,
+                      detail="not built — this plane's own repo is clonable without it")
+    return Result("inventory", WARN,
+                  detail="empty, and this plane's own repo could not be derived",
+                  hint="Run: charter discover  (builds inventory/repos.json).")
 
 
 def check_vaults() -> Result:

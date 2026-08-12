@@ -222,8 +222,15 @@ class CountDenominator(ClonedRepoIso):
         self.assertNotIn("repos 1/0", joined)
 
     def test_denominator_returns_once_there_is_an_inventory(self):
+        """Records, not a bare count. `inventory.save` always writes
+        ``count == len(repos)``, so a document claiming 38 with none listed is a state
+        charter cannot produce — and the denominator is now what is actually clonable
+        (`inventory.repos()`), which includes the plane repo and so cannot be read off
+        `count` alone."""
         config.INVENTORY.parent.mkdir(parents=True, exist_ok=True)
-        config.INVENTORY.write_text(json.dumps({"count": 38, "repos": []}))
+        records = [{"name": f"r{i}", "path_with_namespace": f"acme/r{i}",
+                    "forge": "github"} for i in range(38)]
+        config.INVENTORY.write_text(json.dumps({"count": len(records), "repos": records}))
         self.assertIn("repos 1/38", "\n".join(self.render()))
 
 

@@ -18,6 +18,19 @@ from .forge import ForgeError
 from .forge.gitlab import GitLabForge
 
 
+def _clone_announcement(r: dict) -> str:
+    """``name (branch)``, or just ``name`` when the branch is unknown.
+
+    Read straight off the record as ``r['default_branch']`` until a record turned up
+    without one — the plane repo, the first record charter builds by hand rather than from
+    a forge query — and the KeyError took down the whole command instead of cloning. Any
+    hand-built or older record could do the same; the branch is a nicety, not a
+    precondition for cloning.
+    """
+    branch = r.get("default_branch")
+    return f"{r['name']} ({branch})" if branch else r["name"]
+
+
 def _https_url(r: dict) -> str:
     """HTTPS clone URL for a repo (so cloning uses that repo's own forge's token, never
     SSH) — rewritten via THAT forge's own SSH forms (`registry.for_repo`, from the
@@ -224,8 +237,13 @@ def refresh_readme_personas() -> bool:
 # --------------------------------------------------------------------------- #
 def cmd_clone(args) -> int:
     doc = inventory.load()
-    if not doc.get("repos"):
-        util.err("Inventory is empty — run `charter discover` first.")
+    # `inventory.repos()`, not the raw document: the plane's own repo is clonable whether
+    # or not `discover` has ever run (see `inventory.plane_repo`), so refusing on an empty
+    # FILE would turn the one repo a fresh plane definitely has into the one it cannot get.
+    if not inventory.repos(doc):
+        util.err("Nothing to clone: this plane has no inventory, and its own repo could "
+                 "not be derived (no origin, or a forge it does not declare).")
+        util.info("  Build one: charter discover")
         return 1
 
     targets = _resolve_targets(args, doc)
@@ -252,7 +270,7 @@ def cmd_clone(args) -> int:
             _hint_repo_docs(dest, r)
             continue
         forge = registry.for_repo(r)
-        util.info(f"Cloning {r['name']} ({r['default_branch']}) into '{ws}' via {forge.cli} (HTTPS) …")
+        util.info(f"Cloning {_clone_announcement(r)} into '{ws}' via {forge.cli} (HTTPS) …")
         proc = _git([*_cred_flag(forge), "clone", "--branch", r["default_branch"], _https_url(r), str(dest)])
         if proc.returncode != 0:
             failures += 1
@@ -340,7 +358,10 @@ def _sync_one(d: Path, ws: str) -> None:
 # --------------------------------------------------------------------------- #
 def cmd_status(args) -> int:
     doc = inventory.load()
-    inv_by_name = {r["name"]: r for r in doc.get("repos", [])}
+    # `inventory.repos(doc)`, not the raw document: the plane's own repo is clonable
+    # without `discover` (see `inventory.plane_repo`), so counting only what is on disk
+    # would report "0 repos available to clone" beside a `charter clone` that works.
+    inv_by_name = {r["name"]: r for r in inventory.repos(doc)}
     all_ws = workspace.list_workspaces()
     explicit = getattr(args, "workspace", None)
     active = workspace.resolve(explicit)
