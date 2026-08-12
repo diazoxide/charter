@@ -107,7 +107,11 @@ class TheCountSitsWithWhatItCounts(TodoIso):
         """Beside the name, ahead of `ws N`: the count belongs to the workspace it
         follows, and `ws N` counts a different thing entirely (how many workspaces exist
         to switch to). Reading order is the only thing saying which noun a count is
-        about, so it has to be right."""
+        about, so it has to be right.
+
+        This is the ordinary render — no reinit tip, because nothing is stale. The one
+        item that may come between the name and the count is covered below.
+        """
         self.open_one("default", "one thing worth remembering to do")
         top = _top(_USAGE)
         name, todo, ws = top.index("default"), top.index("todo"), top.index("ws ")
@@ -134,6 +138,63 @@ class TheCountSitsWithWhatItCounts(TodoIso):
     def test_a_todo_recorded_in_another_workspace_alone_shows_nothing(self):
         self.open_one("other", "somebody else's deferred work")
         self.assertNotIn("todo", _top(_USAGE))
+
+
+class TheWarningOutranksTheCount(TodoIso):
+    """Zone 1's left-to-right order IS its truncation order, so the order encodes a
+    priority — and a warning outranks information.
+
+    `⚠ reinit` is the only item on this row reporting something BROKEN, and it carries
+    the command that fixes it. The todo count is a fact about a healthy workspace. On a
+    pane with room for one of them and not the other, the warning is the one that has to
+    survive; a count crowding it out would trade a fixable problem for a number.
+
+    The count pays nothing for this in practice: the tip renders only when the on-disk
+    structure is genuinely stale, so nearly every turn has no tip at all and the count
+    still sits directly against the name whose todos it counts.
+
+    `_stale_structure` is stubbed rather than a real half-migrated workspace being built:
+    what is under test is the ORDER of the assembled row, and manufacturing stale
+    on-disk layout would test `workspace.needs_reinit` instead.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.open_one("default", "something still outstanding in this workspace")
+        self.enterContext(mock.patch.object(statusline, "_stale_structure",
+                                            return_value=True))
+
+    def test_the_reinit_warning_comes_before_the_count(self):
+        top = _top(_USAGE)
+        # `rindex` for the workspace count: the tip's own text ends in `charter ws
+        # reinit`, so a forward search for "ws " finds the warning, not the count.
+        name, warn, todo, ws = (top.index("default"), top.index("⚠ reinit"),
+                                top.index("todo"), top.rindex("ws "))
+        self.assertLess(name, warn, top)
+        self.assertLess(warn, todo, top)
+        self.assertLess(todo, ws, top)
+
+    def test_a_pane_that_fits_only_one_of_them_keeps_the_warning(self):
+        """The case the ordering exists for, asserted where it actually bites. At this
+        width the row has room for the name and the whole tip but not the count, and it
+        is the count that must give way."""
+        top = _top(_USAGE, width=52)
+        self.assertIn("⚠ reinit", top, top)
+        self.assertIn("charter ws reinit", top, "the tip's command must survive with it")
+        self.assertNotIn("todo", top, top)
+
+    def test_both_render_in_full_once_there_is_room(self):
+        top = _top(_USAGE, width=120)
+        self.assertIn("⚠ reinit", top)
+        self.assertIn("todo 1", top)
+
+    def test_a_healthy_workspace_puts_the_count_straight_after_the_name(self):
+        """The tip is the exception, not a permanent gap between name and count."""
+        with mock.patch.object(statusline, "_stale_structure", return_value=False):
+            top = _top(_USAGE)
+        self.assertNotIn("reinit", top)
+        self.assertLess(top.index("default"), top.index("todo"))
+        self.assertLess(top.index("todo"), top.index("ws "))
 
 
 class ZeroRendersNothing(TodoIso):

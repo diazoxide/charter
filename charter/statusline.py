@@ -1242,11 +1242,10 @@ def render(payload: dict | None = None) -> str:
         glstate.maybe_spawn(scan, active)
 
         pin = f"{_YELLOW}*{_R}" if src == "$CHARTER_WORKSPACE" else ""
-        # Reinit tip stays ahead of the workspace count so it survives truncation on
-        # narrow panes. Only the todo count is allowed in front of it, and only because
-        # it is about this same workspace and costs a fixed handful of columns — the
-        # name it qualifies has to come first, or the number reads as a count of
-        # something else.
+        # Reinit tip sits right after the name so it survives truncation on narrow panes.
+        # Nothing informational goes in front of it: it is the one item on this row that
+        # reports something BROKEN, and it carries the command that fixes it. A pane with
+        # room for one item and not two must spend that room on the problem.
         reinit = f"{_YELLOW}⚠ reinit: {_BOLD}charter ws reinit{_R}" if _stale_structure(active) else None
         # Zone 1 — WHERE I am. Identity and navigation only: which workspace is active,
         # what it still means to do, and how many others exist to switch to. Everything
@@ -1259,6 +1258,14 @@ def render(payload: dict | None = None) -> str:
         # the repo column (they are not about a repo). Beside the name rather than on a
         # row of its own, because a row is spent on every single turn and what it would
         # carry is usually one digit.
+        #
+        # It follows the reinit tip rather than preceding it. This row's order IS its
+        # truncation order, and a warning outranks information: on a pane wide enough
+        # for the tip or the count but not both, the item naming a broken structure has
+        # to be the one that survives. The count pays nothing for that in practice —
+        # reinit renders only when the on-disk layout is actually stale, so essentially
+        # every turn reads `⬢ <name> · todo N · ws M`, with the count still against the
+        # name whose todos it counts.
         #
         # Zero renders NOTHING, the same discipline `_session_news` keeps: a `todo 0`
         # present every turn is furniture within a day, and then a real `todo 7` in that
@@ -1273,8 +1280,8 @@ def render(payload: dict | None = None) -> str:
         ntodo = _todo_count(active)
         summary = f"{_DIM} · {_R}".join(filter(None, [
             f"{_CYAN}⬢{_R} {_BOLD}{active}{_R}{pin}",
-            f"{_DIM}todo{_R} {ntodo}" if ntodo else None,
             reinit,
+            f"{_DIM}todo{_R} {ntodo}" if ntodo else None,
             f"{_DIM}ws{_R} {nws}",
         ]))
 
