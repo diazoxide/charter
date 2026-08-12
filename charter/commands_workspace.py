@@ -748,9 +748,10 @@ def cmd_workspace_vision(args) -> int:
 def cmd_workspace_fork(args) -> int:
     """Fork a workspace: create <new> pre-loaded with <src>'s context — the living
     charter (workspace.md: vision, context, glossary), the manifest (repos+branches),
-    and the task memo — so you can branch off and continue with full context. The
-    repo clones are not copied (they're reconstructible): pass --restore to clone them
-    from the manifest, or `charter clone` on demand. Starts LOCAL unless --live."""
+    the task memo, and the open todos — so you can branch off and continue with full
+    context. The repo clones are not copied (they're reconstructible): pass --restore to
+    clone them from the manifest, or `charter clone` on demand. Starts LOCAL unless --live."""
+    from . import todos
     src, new = args.src, args.new
     if not workspace.valid_name(new):
         util.err(f"invalid workspace name '{new}' (use lowercase letters, digits, . _ -)")
@@ -773,6 +774,20 @@ def cmd_workspace_fork(args) -> int:
     src_mem = workspace.memory_dir(src)
     if src_mem.exists():
         shutil.copytree(src_mem, workspace.memory_dir(new), dirs_exist_ok=True)
+    # Open todos travel with the memory, and for the same reason: a fork exists so someone
+    # can pick the task up with full context, and what is still to be done is the most
+    # actionable part of that. Inheriting everything the task LEARNED while dropping
+    # everything it still INTENDED leaves the fork re-deriving the plan — the exact problem
+    # todos were built to end.
+    #
+    # A COPY, so the two lists diverge from here: closing one in the fork must not rewrite
+    # the source's plan. Copied wholesale (files + index) rather than re-added one by one,
+    # which would restamp every todo with today's date and hide a three-week-old intent
+    # behind a fresh one — age is the only ranking this feature has. Closed todos never
+    # arise, since finishing one deletes it.
+    src_todos = todos.todos_dir(src)
+    if src_todos.exists():
+        shutil.copytree(src_todos, todos.todos_dir(new), dirs_exist_ok=True)
     m = workspace.read_manifest(src)
     repos = list(m.get("repos") or [])
     if m:
@@ -787,6 +802,12 @@ def cmd_workspace_fork(args) -> int:
         workspace.set_live(new, True)
     util.ok(f"Forked '{src}' → '{new}' — charter + context + memo copied "
             f"({'LIVE' if getattr(args, 'live', False) else 'LOCAL'}).")
+    inherited = todos.count_open(new)
+    if inherited:
+        # Said out loud because the two lists are independent from here: whoever forked
+        # needs to know they now own a second copy of this intent, not a view of the first.
+        util.info(f"Inherited {inherited} open todo(s) from '{src}' — the fork's own list "
+                  f"now: charter ws todo --workspace {new}")
     if getattr(args, "restore", False) and repos:
         util.info(f"Cloning {len(repos)} repo(s) from the inherited manifest…")
         return cmd_workspace_restore(SimpleNamespace(name=new, on_demand=False))
