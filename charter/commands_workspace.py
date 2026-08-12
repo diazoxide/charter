@@ -219,6 +219,16 @@ def cmd_workspace_remove(args) -> int:
         )
         return 2
 
+    # Open todos are REPORTED, never guarded on — see `_work_at_risk` for why they are not
+    # in that list. Said here rather than above the guard so the count describes what is
+    # actually about to happen, and only when there is something to say: "0 open todos" on
+    # every removal is how a line stops being read at all, including on the removal where
+    # it mattered.
+    from . import todos
+    open_todos = todos.count_open(name)
+    if open_todos:
+        util.warn(f"Discarding {open_todos} open todo(s) with '{name}' — nothing else holds them.")
+
     shutil.rmtree(wd)
     util.ok(f"Removed workspace '{name}' and its clones.")
     if workspace.resolve() == name and workspace.source() in ("session", "active-file"):
@@ -270,7 +280,14 @@ def cmd_workspace_rename(args) -> int:
 
 
 def _work_at_risk(name: str) -> list[str]:
-    """Clones in the workspace with uncommitted or unpushed work."""
+    """Clones in the workspace with uncommitted or unpushed work.
+
+    Only that. Open todos are deliberately NOT here, though `remove` reports them: this
+    list is what is *unrecoverable*, and a todo is a note about the future, not work that
+    ceases to exist. A workspace whose todos were all abandoned is precisely the one worth
+    deleting, and making that case demand `--force` would teach the habit of reaching for
+    `--force` — which is how a guard stops protecting the commits it exists for.
+    """
     out = []
     for d in workspace.clones(name):
         if _git(["status", "--porcelain"], cwd=d).stdout.strip():
