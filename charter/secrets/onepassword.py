@@ -43,6 +43,48 @@ import shutil
 from .. import util
 from .base import SecretNotFound, VaultError, VaultProvider
 
+#: Failures of `op` charter recognises, each paired with the provenance that earns its
+#: place here. Matching another CLI's English is only defensible because of which way it
+#: fails: an unmatched signature costs precision, never correctness — `_fail` falls back
+#: to candidates presented as candidates. Adding an entry without a source is how #78
+#: happened, so every entry names where its wording was observed.
+_DIAGNOSES: tuple[tuple[str, str], ...] = (
+    # op 2.34.0, reproduced locally: no account configured on this machine at all.
+    ("no accounts configured",
+     "`op` has no account configured on this machine. Sign in (`op signin`), or set "
+     "this vault's service-account token, then retry."),
+    # A real incident: a service-account token that could read the vault but not write
+    # to it. 101 is 1Password's own code, carried inside the message — the process still
+    # exits 1, which is precisely why the exit status cannot classify this.
+    ("you do not have permission",
+     "1Password refused this as unauthorised. For a service-account token that usually "
+     "means it has no WRITE access to this vault — the same token reads perfectly well, "
+     "which is what makes the failure look like a charter bug."),
+    # Reported in #78 against op 2.34.0: `op` says this when it never parsed the JSON
+    # template, which DOES declare a category. The flag it asks for is a red herring,
+    # and supplying it is actively destructive, so the hint has to say so.
+    ("provide the item category",
+     "`op` did not parse the JSON template it was given on stdin — that template does "
+     "declare a category, so the flag op asks for is not the real problem. Do NOT add "
+     "--category or --title to satisfy it: op then creates the item with every custom "
+     "field silently dropped, storing nothing while reporting success (issue #78)."),
+)
+
+
+def _diagnose(stderr: str | None) -> str | None:
+    """Recognise a failure of `op`, or admit that we do not.
+
+    Returns a **fixed** string per signature. ``stderr`` is matched against and never
+    interpolated into the result, which is what makes "charter errors never carry
+    provider output" a property of this function's shape rather than of anyone
+    remembering to scrub. There is no path by which op's text can reach a message.
+    """
+    low = (stderr or "").lower()
+    for needle, hint in _DIAGNOSES:
+        if needle in low:
+            return hint
+    return None
+
 #: Every item charter creates carries this, so `keys()` can list its own without
 #: sweeping a shared 1Password vault the team also uses by hand.
 _TAG = "charter"
@@ -128,25 +170,39 @@ class OnePasswordProvider(VaultProvider):
         return self.runner(argv, input=stdin, check=False, env=self.env_overlay())
 
     def _fail(self, what: str, proc, write: bool = False) -> VaultError:
-        """Errors never carry the process output.
+        """Report what failed, and a cause only where one was actually recognised.
 
-        ``op``'s stderr can echo the assignment it was given, and on a read path its
-        stdout *is* the secret. Report the exit status and what was attempted.
+        Errors never carry the process output: ``op``'s stderr can echo the assignment
+        it was given, and on a read path its stdout *is* the secret.
 
-        Write failures name **permissions** first, from experience: against a real
-        account the first failure was ``(101) You do not have permission to perform
-        this action`` — a service-account token that could read the vault but not write
-        to it. The original message suggested checking that `op` was signed in and the
-        vault existed; both were true, so it sent the reader looking in the wrong place.
+        They also never guess. This message used to staple a fixed sentence to every
+        write failure — *check that a service-account token has WRITE access; a
+        read-only token fails here with (101)*. That was earned once, against a real
+        101, and then said unconditionally. In #78 it met a template `op` had refused to
+        parse and reported a permissions problem; the reporter went and audited tokens.
+        Naming a culprit you have not checked is worse than admitting ignorance, because
+        the vague message keeps someone looking and the confident one tells them to stop.
         """
-        hint = ("Check that `op` is signed in (`op whoami`), that the vault exists, and "
-                "— for a service-account token — that it has WRITE access to this vault; "
-                "a read-only token fails here with 1Password error (101)."
-                if write else
-                "Check that `op` is signed in (`op whoami`) and the vault exists.")
+        note = f"{what} failed (op exit {proc.returncode}){self.identity_note()}."
+        hint = _diagnose(getattr(proc, "stderr", ""))
+        if hint:
+            return VaultError(f"{note} {hint}")
+        # Nothing matched. The path is the only information left, so it shapes the
+        # order of the candidates — and they stay candidates.
+        causes = (["the token can read this vault but can not write to it — a "
+                   "service-account token fails here while every read succeeds",
+                   "another writer changed or removed the item mid-operation"]
+                  if write else
+                  ["the vault or item does not exist under this identity",
+                   "this vault's identity variable is unset, so `op` read it as "
+                   "somebody else"]) + \
+                 ["`op` is not signed in, or its session has expired"]
         return VaultError(
-            f"{what} failed (op exit {proc.returncode}){self.identity_note()}. {hint} "
-            "(op output withheld — it can contain the secret.)")
+            f"{note} charter did not recognise this failure. Causes, roughly in order "
+            f"of how often they are the real one:\n"
+            + "".join(f"    - {c}\n" for c in causes)
+            + "  Run the same `op` command yourself to see what it said — charter "
+              "withholds op's output because it can contain the secret.")
 
     # --- CRUD -------------------------------------------------------------- #
     def get(self, key: str) -> str:

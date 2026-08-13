@@ -39,8 +39,12 @@ class FakeOp:
     """Stands in for `op`, recording every argv and stdin."""
 
     def __init__(self, fields=None, item_exists=True, legacy=(), fail_on=None,
-                 raw_fields=None):
+                 raw_fields=None, fail_stderr="denied"):
         self.calls: list[dict] = []
+        #: What `op` writes to stderr when `fail_on` trips. Tests that care which
+        #: failure this is set it to real `op` output — charter classifies on this
+        #: text, so a generic default would make every failure look unrecognised.
+        self.fail_stderr = fail_stderr
         self.fields = dict(fields or {})
         #: Full field dicts, for items charter did not create — 1Password assigns a
         #: random `id` and keeps the human text as `label`.
@@ -62,7 +66,7 @@ class FakeOp:
         self.calls.append({"argv": list(argv), "input": input})
         a = [x for x in argv if not x.startswith("--")]
         if self.fail_on and self.fail_on in " ".join(argv):
-            return SimpleNamespace(returncode=1, stdout="", stderr="denied")
+            return SimpleNamespace(returncode=1, stdout="", stderr=self.fail_stderr)
         if a[:3] == ["op", "item", "get"]:
             if not self.item_exists:
                 return SimpleNamespace(returncode=1, stdout="", stderr="not found")
@@ -333,13 +337,34 @@ class TestErrorsWithholdOutput(OpCase):
 class TestWriteFailuresNamePermissions(OpCase):
     """Against a real account the first failure was `(101) You do not have permission` —
     a service-account token that could read the vault but not write to it. The original
-    message suggested checking sign-in and vault existence; both were true."""
+    message suggested checking sign-in and vault existence; both were true.
 
-    def test_a_write_failure_mentions_permissions(self):
+    This class used to fail a write with the fake's generic stderr and assert that the
+    message named WRITE access. It passed, because the message named WRITE access on
+    every write failure whatever `op` had said — so the test asserted the diagnosis
+    without ever supplying the evidence for it, and could not have distinguished a
+    message that had learnt something from one that always says the same thing. That is
+    what #78 walked into. The assertion is kept and now earns itself: the fake emits the
+    real 101, and its opposite is pinned alongside.
+    """
+
+    def test_a_write_failure_against_a_real_101_names_permissions(self):
         op, p = self.make(fields={"A": "1"}, fail_on="item edit")
+        op.fail_stderr = "(101) You do not have permission to perform this action"
         with self.assertRaises(base.VaultError) as e:
             p.set("B", "2")
         self.assertIn("write access", str(e.exception).lower())
+
+    def test_a_write_failure_op_did_not_explain_does_not_assert_permissions(self):
+        """The other half, and the actual regression: an unrecognised failure may list
+        a read-only token among its candidates, never announce it as the cause."""
+        op, p = self.make(fields={"A": "1"}, fail_on="item edit")
+        op.fail_stderr = "ERROR: unexpected end of JSON input"
+        with self.assertRaises(base.VaultError) as e:
+            p.set("B", "2")
+        m = str(e.exception).lower()
+        self.assertIn("did not recognise", m)
+        self.assertNotIn("write access", m)
 
     def test_a_read_failure_does_not_blame_permissions(self):
         op, p = self.make(fields={})
