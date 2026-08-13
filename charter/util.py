@@ -84,9 +84,25 @@ def run(
     itself — a mutated `os.environ` would outlive the call and silently apply to the next
     vault, which is the identity confusion the whole feature exists to prevent.
     """
+    overlay = dict(env or {})
+    if cmd and cmd[0] == "git":
+        # git falls back to prompting on the TERMINAL when a credential helper produces
+        # nothing — and this function captures stdout/stderr while leaving stdin
+        # INHERITED, so that prompt is invisible and the call simply waits, forever.
+        #
+        # charter's auth design (see `planegit`) says a prompt is never the path: every
+        # git operation authenticates with its forge CLI's token over HTTPS. So this
+        # restricts nothing charter supports — it makes that intent enforceable, and turns
+        # an invisible hang into the "isn't authed (`gh auth status`)" error that already
+        # exists. It matters more now that clones run concurrently, where a stuck child
+        # is one of eight and its prompt is buffered out of sight.
+        #
+        # Covers git's own prompts only — not a GUI credential manager, and not an SSH
+        # signing agent, which is a separate way for a captured git call to hang.
+        overlay.setdefault("GIT_TERMINAL_PROMPT", "0")
     child_env = None
-    if env:
-        child_env = {**os.environ, **{k: v for k, v in env.items() if v is not None}}
+    if overlay:
+        child_env = {**os.environ, **{k: v for k, v in overlay.items() if v is not None}}
     try:
         proc = subprocess.run(
             list(cmd),

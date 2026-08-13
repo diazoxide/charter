@@ -260,32 +260,66 @@ def cmd_clone(args) -> int:
         util.err(str(e))
         return 1
 
-    from .forge import registry
+    if len(targets) > 1:
+        util.info(f"Cloning {len(targets)} repo(s) into '{ws}', "
+                  f"{min(CLONE_WORKERS, len(targets))} at a time …")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CLONE_WORKERS) as ex:
+        results = list(ex.map(lambda r: _clone_one(r, wd), targets))
 
+    # Printed HERE, from one thread, in the order the repos were asked for. Eight workers
+    # calling util.info/ok/err directly would interleave into something no one can scan
+    # for which repo failed — and the failure list is the only part of this output that
+    # anybody reads twice.
     failures = 0
-    for r in targets:
-        dest = wd / r["name"]
-        if dest.exists():
+    for res in results:
+        r, dest = res["repo"], res["dest"]
+        if res["status"] == "exists":
             util.info(f"{r['name']}: already cloned in '{ws}'")
-            _hint_repo_docs(dest, r)
-            continue
-        forge = registry.for_repo(r)
-        util.info(f"Cloning {_clone_announcement(r)} into '{ws}' via {forge.cli} (HTTPS) …")
-        proc = _git([*_cred_flag(forge), "clone", "--branch", r["default_branch"], _https_url(r), str(dest)])
-        if proc.returncode != 0:
+        elif res["status"] == "ok":
+            util.ok(f"{r['name']} → {dest.relative_to(config.ROOT)} "
+                    f"({_clone_announcement(r)} via {res['forge'].cli}, HTTPS)")
+        else:
             failures += 1
-            util.err(
-                f"{r['name']}: clone failed — no access, network, or {forge.cli} isn't authed "
-                f"(`{forge.cli} auth status`). Skipping.\n" + (proc.stderr or "").strip()
-            )
+            cli = res["forge"].cli
+            util.err(f"{r['name']}: clone failed — no access, network, or {cli} isn't authed "
+                     f"(`{cli} auth status`). Skipping.\n" + res["stderr"])
             continue
-        # Golden rule 0: every git op from this clone uses ITS FORGE's token over HTTPS —
-        # credential helper + signing off + SSH→HTTPS rewrites (see charter/gitpolicy.py).
-        from . import gitpolicy
-        gitpolicy.apply(dest)
-        util.ok(f"{r['name']} → {dest.relative_to(config.ROOT)}")
         _hint_repo_docs(dest, r)
     return 1 if failures else 0
+
+
+#: Concurrent clones. The same number `_build_batch` uses for its API probes, so there is
+#: one concurrency figure to reason about in this file rather than two. Cloning is
+#: network-bound, so this is deliberately not derived from CPU count — a 16-core laptop
+#: would open 14 connections to one forge for no gain.
+CLONE_WORKERS = 8
+
+
+def _clone_one(r: dict, wd) -> dict:
+    """Clone ONE repo and return what happened. **Prints nothing** — `cmd_clone` renders
+    every result afterwards, in order, from a single thread.
+
+    Runs in a worker thread: `_git` shells out (releasing the GIL for the network wait,
+    which is the whole point), `registry.for_repo` builds a fresh backend per call, and
+    `gitpolicy.apply` writes only inside this clone's own `.git/config`. Nothing here is
+    shared between repos.
+    """
+    from . import gitpolicy
+    from .forge import registry
+
+    dest = wd / r["name"]
+    if dest.exists():
+        return {"repo": r, "dest": dest, "status": "exists"}
+    forge = registry.for_repo(r)
+    proc = _git([*_cred_flag(forge), "clone", "--branch", r["default_branch"],
+                 _https_url(r), str(dest)])
+    if proc.returncode != 0:
+        return {"repo": r, "dest": dest, "status": "failed", "forge": forge,
+                "stderr": (proc.stderr or "").strip()}
+    # Golden rule 0: every git op from this clone uses ITS FORGE's token over HTTPS —
+    # credential helper + signing off + SSH→HTTPS rewrites (see charter/gitpolicy.py).
+    gitpolicy.apply(dest)
+    return {"repo": r, "dest": dest, "status": "ok", "forge": forge}
 
 
 def cmd_save(args) -> int:
