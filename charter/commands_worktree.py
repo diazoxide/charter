@@ -9,8 +9,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import config, util, workspace, worktree
+from . import config, pieces, util, workspace, worktree
 from . import root as _root
+
+#: Exit code for "this piece is already claimed", distinct from the generic 1 every other
+#: failure returns. A worker that loses a race takes the next unclaimed name from its plan,
+#: and it must not have to parse English to know that is what happened — nor mistake an
+#: invalid piece name for a lost race.
+CLAIM_TAKEN = 2
 
 
 def clone_for(ws: str, repo: str) -> Path | None:
@@ -44,6 +50,32 @@ def _rel(p: Path) -> str:
         return str(p)
 
 
+def _claim_holder(ws: str, clone: Path, path: Path, branch: str | None) -> str | None:
+    """Who already holds this claim, or ``None`` if it is free.
+
+    Two shapes of the same collision. The piece's directory existing is the obvious one.
+    The branch being checked out by another live worktree is the same thing under a
+    different piece name — git refuses either way, since a branch can be checked out in
+    exactly one tree.
+
+    A branch that merely *exists* is deliberately not a holder: nobody is working in it, so
+    reporting it as claimed would send workers past names that were free.
+    """
+    if path.exists():
+        return f"a worktree at {_rel(path)}"
+    if branch:
+        for r in worktree.list_for(clone, ws):
+            if r["branch"] == branch and not r["prunable"]:
+                return f"piece '{r['piece']}'"
+    return None
+
+
+def _refuse_taken(piece: str, held_by: str) -> int:
+    util.err(f"'{piece}' is already claimed — held by {held_by}.")
+    util.info("Take the next unclaimed piece from the plan, or work in the existing worktree.")
+    return CLAIM_TAKEN
+
+
 def cmd_worktree_add(args) -> int:
     ws, clone = _resolve(args)
     if clone is None:
@@ -54,9 +86,10 @@ def cmd_worktree_add(args) -> int:
         return 1
 
     path = worktree.path_for(ws, args.repo, args.piece)
-    if path.exists():
-        util.err(f"'{args.piece}' already exists → {_rel(path)}")
-        return 1
+    branch = args.branch or args.piece
+    held = _claim_holder(ws, clone, path, branch)
+    if held:
+        return _refuse_taken(args.piece, held)
 
     base, detached = worktree.head_of(clone)
     if detached:
@@ -79,8 +112,21 @@ def cmd_worktree_add(args) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     proc = util.run(["git", "-C", str(clone), *cmd], check=False)
     if proc.returncode != 0:
+        # The check above is not the mutex — git is. A worker that won between that check
+        # and git's own lock leaves this failure indistinguishable from a broken repo
+        # unless we look again, so look: if the path or the branch is now held, the cause
+        # was established by reading reality rather than by parsing git's English, which
+        # is the only kind of cause charter is allowed to name (ADR 0009).
+        held = _claim_holder(ws, clone, path, branch)
+        if held:
+            return _refuse_taken(args.piece, held)
         util.err(f"git worktree add failed:\n{proc.stderr.strip()}")
         return 1
+
+    # The worktree is the claim; this only records who took it, because git will not know
+    # that until a commit lands (ADR 0011). Best-effort by construction — a claim that
+    # git granted must not be undone by a log that could not be written.
+    pieces.record(ws, "claimed", args.repo, args.piece)
 
     util.ok(f"{args.repo} · {args.piece} → {_rel(path)}")
     util.info(f"  base:   {base}{' (detached)' if detached else ''}")
@@ -118,6 +164,10 @@ def cmd_worktree_list(args) -> int:
         # worktrees" while the status line one line above was drawing them.
         targets = workspace.repo_trees(ws)
 
+    # Rows come from git and only from git. The record is joined onto what git found, to
+    # put a name on it — it is never asked which worktrees exist (ADR 0011).
+    claims = pieces.claims(ws)
+
     total = 0
     for clone in targets:
         rows = worktree.list_for(clone, ws)
@@ -132,7 +182,8 @@ def cmd_worktree_list(args) -> int:
             else:
                 state = "dirty" if worktree.is_dirty(Path(r["path"])) else "clean"
             branch = r["branch"] or f"detached {r['path']}"
-            print(f"    {r['piece']:<24} {branch:<28} {state}")
+            who = pieces.claimant(claims.get((clone.name, r["piece"])))
+            print(f"    {r['piece']:<24} {branch:<28} {state:<8} {who}")
             total += 1
     if not total:
         util.info("No worktrees. Create one: "

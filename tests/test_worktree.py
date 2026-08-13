@@ -230,10 +230,14 @@ class TestAdd(WorktreeIso):
         self.assertEqual(worktree.head_of(p), ("taken", False))
 
     def test_add_refuses_a_duplicate_piece(self):
+        """Refused with `CLAIM_TAKEN`, not the generic 1 this asserted before #96. A
+        duplicate piece IS a lost claim, and the code is what lets a worker take the next
+        name from its plan without reading the message."""
         a = _Args(workspace=self.ws, repo="iam-service", piece="spi-schema")
         self.assertEqual(self.cw.cmd_worktree_add(a), 0)
         self.assertEqual(self.cw.cmd_worktree_add(
-            _Args(workspace=self.ws, repo="iam-service", piece="spi-schema")), 1)
+            _Args(workspace=self.ws, repo="iam-service", piece="spi-schema")),
+            self.cw.CLAIM_TAKEN)
 
     def test_add_never_writes_inside_the_clone(self):
         before = sorted(p.name for p in self.clone.iterdir())
