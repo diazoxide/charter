@@ -126,7 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
                                      "default workspace,persona,shared.")
     rcl.add_argument("--ephemeral", action="store_true", help="Also include the persona's session scratch.")
     rcl.add_argument("--persona", help="Search this persona instead of the active one.")
-    rcl.add_argument("--workspace", "-w", help="Search this workspace instead of the active one.")
+    # One workspace or every workspace — never both. `-w beta --all-workspaces` has no
+    # coherent reading, and argparse refusing it beats silently honouring one of them.
+    _ws = rcl.add_mutually_exclusive_group()
+    _ws.add_argument("--workspace", "-w", help="Search this workspace instead of the active one.")
+    _ws.add_argument("--all-workspaces", action="store_true",
+                     help="Search EVERY workspace's journal (persona + shared appear once). "
+                          "For 'it was two weeks ago and I forget which task'.")
+    rcl.add_argument("--since", metavar="WHEN",
+                     help="Only memories recorded on/after this: an age (14d, 2w, 3m) or a "
+                          "date (2026-07-01). Undated memories are excluded and counted.")
     rcl.add_argument("--limit", type=int, default=8, help="Max results (0 = no cap).")
     rcl.set_defaults(func=commands.cmd_recall)
 

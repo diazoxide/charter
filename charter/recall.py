@@ -13,7 +13,10 @@ assembly of *which* dirs are in scope and tags each result with where it came fr
 
 from __future__ import annotations
 
+import datetime
+import re
 from pathlib import Path
+from typing import NamedTuple
 
 from . import config, memstore
 
@@ -22,16 +25,74 @@ SCOPES = ("workspace", "persona", "shared", "ephemeral")
 DEFAULT_SCOPES = ("workspace", "persona", "shared")  # the committed bases; ephemeral is opt-in
 
 
+class Hit(NamedTuple):
+    """One recalled memory. A NamedTuple rather than a bare tuple because this grew a field
+    once (``date``) and every positional unpack in the codebase broke at the same time —
+    the next field should not cost that again."""
+    label: str
+    path: Path
+    title: str
+    score: int
+    date: datetime.date | None
+
+
+class Recalled(NamedTuple):
+    """Hits, plus what was *withheld*. ``undated`` counts memories a ``since`` filter could
+    not place in time (no in-body stamp, no date-prefixed filename) and therefore dropped.
+    Reported rather than silently discarded: a filter that hides what it excluded is a
+    filter you cannot trust — and 0 undated is the common case, so it costs nothing."""
+    hits: list[Hit]
+    undated: int
+
+
+#: `14d` / `2w` / `3m`. Months are 30 days — predictable beats calendar-correct for a
+#: filter whose whole job is "roughly two weeks ago".
+_REL_RE = re.compile(r"^(\d+)([dwm])$")
+_REL_DAYS = {"d": 1, "w": 7, "m": 30}
+
+
+def parse_since(value: str, today: datetime.date | None = None) -> datetime.date:
+    """The earliest date a ``--since`` filter accepts. Takes a relative age (``14d``,
+    ``2w``, ``3m``) or an ISO date (``2026-07-01``).
+
+    Raises ``ValueError`` on anything else — deliberately, rather than falling back to no
+    filter. A silently-ignored ``--since`` returns MORE than was asked for, and a reader
+    then takes a full corpus as proof that nothing was recorded recently. A future date is
+    accepted and simply matches nothing; that is a real answer, not an error."""
+    s = (value or "").strip()
+    m = _REL_RE.match(s)
+    if m:
+        return (today or datetime.date.today()) - datetime.timedelta(
+            days=int(m.group(1)) * _REL_DAYS[m.group(2)])
+    try:
+        return datetime.date.fromisoformat(s)
+    except ValueError:
+        raise ValueError(
+            f"unrecognised --since {value!r} — use an age (14d, 2w, 3m) or a date (2026-07-01)"
+        ) from None
+
+
 def sources(session_id: str | None = None, persona_name: str | None = None,
-            workspace_name: str | None = None, scopes=DEFAULT_SCOPES) -> list[tuple[str, Path]]:
+            workspace_name: str | None = None, scopes=DEFAULT_SCOPES,
+            all_workspaces: bool = False) -> list[tuple[str, Path]]:
     """``[(source_label, memory_dir)]`` for the requested scopes in the current context.
     Resolves the active workspace/persona unless overridden. Skips a scope with no owner
-    (e.g. no active persona → no persona/ephemeral rows)."""
+    (e.g. no active persona → no persona/ephemeral rows).
+
+    ``all_workspaces`` widens the WORKSPACE axis only — one base per workspace, LOCAL and
+    LIVE alike (that setting governs what is committed, not what you may search on your own
+    machine). Persona and shared memory are not workspace-scoped, so they stay single rows;
+    emitting them once per workspace would multiply every role fact by the workspace count.
+    """
     from . import workspace as ws_mod, persona as p_mod
     out: list[tuple[str, Path]] = []
     if "workspace" in scopes:
-        ws = workspace_name or ws_mod.resolve(session_id=session_id)
-        out.append((f"workspace:{ws}", ws_mod.memory_dir(ws)))
+        if all_workspaces:
+            for ws in ws_mod.list_workspaces():
+                out.append((f"workspace:{ws}", ws_mod.memory_dir(ws)))
+        else:
+            ws = workspace_name or ws_mod.resolve(session_id=session_id)
+            out.append((f"workspace:{ws}", ws_mod.memory_dir(ws)))
     name = persona_name or p_mod.resolve_active()
     if "persona" in scopes and name:
         out.append((f"persona:{name}", p_mod.memory_dir(name)))
@@ -54,23 +115,48 @@ def _label_of(path: Path, srcs: list[tuple[str, Path]]) -> str:
 
 def recall(query: str | None = None, session_id: str | None = None, limit: int = 8,
            persona_name: str | None = None, workspace_name: str | None = None,
-           scopes=DEFAULT_SCOPES) -> list[tuple[str, Path, str, int]]:
+           scopes=DEFAULT_SCOPES, since: datetime.date | None = None,
+           all_workspaces: bool = False) -> Recalled:
     """THE memory fetch gate. With a ``query`` → keyword-ranked hits across all in-scope
     bases (title hits weigh 3×, via the memstore engine). Without → every in-scope memory,
-    newest-first. Returns ``[(source_label, path, title, score)]`` best-first (score 0 when
-    listing). ``limit`` caps the results (``0`` = no cap)."""
+    newest-first by recorded date. ``limit`` caps the results (``0`` = no cap).
+
+    ``since`` drops anything recorded earlier, on the same ``memstore.memory_date`` key the
+    no-query listing already sorts by — so the filter and the order can never disagree. It
+    **narrows, it never re-ranks**: with a query the survivors stay in score order, because
+    someone who typed a keyword asked for relevance, and quietly re-sorting by date would
+    change what "best match" means without saying so.
+    """
     srcs = sources(session_id=session_id, persona_name=persona_name,
-                   workspace_name=workspace_name, scopes=scopes)
+                   workspace_name=workspace_name, scopes=scopes,
+                   all_workspaces=all_workspaces)
     dirs = [d for _lbl, d in srcs]
+    undated = 0
+
+    def _dated(p: Path) -> datetime.date | None:
+        try:
+            return memstore.memory_date(p.read_text(), p.name)
+        except OSError:
+            return None
+
     if query:
-        hits = memstore.search(dirs, query, limit or 10_000)
-        return [(_label_of(p, srcs), p, title, score) for p, title, score in hits]
-    # no query → list everything in scope, newest-first by recorded date
-    import datetime
-    items = []
+        rows = []
+        for p, title, score in memstore.search(dirs, query, 0 or 10_000):
+            d = _dated(p)
+            if since is not None and (d is None or d < since):
+                undated += d is None
+                continue
+            rows.append(Hit(_label_of(p, srcs), p, title, score, d))
+        return Recalled(rows[:limit] if limit else rows, undated)
+
+    items: list[tuple[datetime.date, Hit]] = []
     for lbl, d in srcs:
         for p, title, text in memstore.entries(d):
-            items.append((memstore.memory_date(text, p.name) or datetime.date.min, lbl, p, title))
+            dt = memstore.memory_date(text, p.name)
+            if since is not None and (dt is None or dt < since):
+                undated += dt is None
+                continue
+            items.append((dt or datetime.date.min, Hit(lbl, p, title, 0, dt)))
     items.sort(key=lambda x: x[0], reverse=True)
-    rows = [(lbl, p, title, 0) for _dt, lbl, p, title in items]
-    return rows[:limit] if limit else rows
+    rows = [h for _dt, h in items]
+    return Recalled(rows[:limit] if limit else rows, undated)

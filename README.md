@@ -35,8 +35,10 @@ deploys gate on the e2e suite and not the unit ones. That knowledge dies with th
 so next week you explain it again or watch it get rediscovered the slow way.
 `charter persona remember` and `charter workspace remember` write one fact per markdown
 file; `charter recall` searches the workspace's notes, the active role's own notes and the
-shared ones in a single pass. They're ordinary committed files, so a teammate's agent can
-start where yours left off.
+shared ones in a single pass — by keyword, or by `--since 2w` and `--all-workspaces` for
+the case where you remember roughly when a thing was decided but not where or in what
+words. They're ordinary committed files, so a teammate's agent can start where yours left
+off.
 
 ### One agent that holds every credential and every context
 
@@ -266,6 +268,9 @@ charter clone some-repo
   (`charter persona remember` / `charter workspace remember`). How far a note travels —
   disk only, committed locally, or pushed to the team — is one setting,
   `[memory].share`, and it **defaults to `local`**: see `docs/control-plane.md`.
+  `charter recall` reads them back: with keywords to search, without to browse newest-first,
+  `--since 2w` when you remember *when* but not the wording, and `--all-workspaces` when you
+  no longer remember which task it belonged to.
 - **Vault** — where a persona's credentials live: plaintext JSON at file mode 0600, with
   **no encryption at rest**. What it protects against is different and real — keeping a
   secret value out of an agent's context and transcript. Read `docs/secrets.md` before

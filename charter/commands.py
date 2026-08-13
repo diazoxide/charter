@@ -1034,9 +1034,23 @@ def cmd_recall(args) -> int:
             return 1
     if getattr(args, "ephemeral", False) and "ephemeral" not in scopes:
         scopes.append("ephemeral")
-    results = rc.recall(query=getattr(args, "query", None), limit=getattr(args, "limit", 8),
-                        persona_name=getattr(args, "persona", None),
-                        workspace_name=getattr(args, "workspace", None), scopes=scopes)
+    since = None
+    if getattr(args, "since", None):
+        try:
+            since = rc.parse_since(args.since)
+        except ValueError as e:
+            util.err(str(e))
+            return 2
+    limit = getattr(args, "limit", 8)
+    all_ws = getattr(args, "all_workspaces", False)
+    # Ask for one more than we will show, so "8 of ?" can say whether anything was cut
+    # without a second pass over every base.
+    got = rc.recall(query=getattr(args, "query", None), limit=(limit + 1) if limit else 0,
+                    persona_name=getattr(args, "persona", None),
+                    workspace_name=getattr(args, "workspace", None), scopes=scopes,
+                    since=since, all_workspaces=all_ws)
+    truncated = bool(limit) and len(got.hits) > limit
+    results = got.hits[:limit] if limit else got.hits
     if not results:
         q = getattr(args, "query", None)
         # "No memories match X" and "none of X was searchable" are different answers, and
@@ -1050,14 +1064,26 @@ def cmd_recall(args) -> int:
                           f"{'is' if len(_ms.dropped_terms(q)) == 1 else 'are'} too short "
                           f"or too common to rank. Try a distinctive word.")
                 return 0
-        util.info(f"No memories {'match ' + repr(q) if q else 'yet'} across {', '.join(scopes)}.")
+        where = "every workspace" if all_ws else ", ".join(scopes)
+        when = f" recorded since {since}" if since else ""
+        util.info(f"No memories {'match ' + repr(q) if q else 'yet'} across {where}{when}.")
+        if got.undated:
+            util.info(f"{got.undated} undated memory(ies) skipped — no recorded date to compare.")
         return 0
-    width = max((len(s) for s, _p, _t, _sc in results), default=8)
-    for source, path, title, score in results:
-        tag = f"  ({score})" if score else ""
-        print(f"  {source:<{width}}  {title}{tag}")
-    util.info(f"{len(results)} memory(ies) across {', '.join(scopes)}. "
+    width = max((len(h.label) for h in results), default=8)
+    for h in results:
+        tag = f"  ({h.score})" if h.score else ""
+        # The date leads because when listing it IS the sort key — and the column order
+        # stays identical under a query (where score orders instead), since a layout that
+        # rearranges itself per mode is harder to read than one that never moves.
+        print(f"  {h.date.isoformat() if h.date else '—':<10}  {h.label:<{width}}  {h.title}{tag}")
+    where = "every workspace" if all_ws else ", ".join(scopes)
+    util.info(f"{len(results)} memory(ies) across {where}. "
               f"Read one: find the file under its base (workspaces/… or personas/…).")
+    if truncated:
+        util.info(f"Showing {len(results)} — pass --limit 0 for all.")
+    if got.undated:
+        util.info(f"{got.undated} undated memory(ies) skipped by --since — no recorded date.")
     return 0
 
 
