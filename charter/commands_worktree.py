@@ -148,6 +148,50 @@ def cmd_worktree_add(args) -> int:
     return 0
 
 
+def _declare(event: str, reason: str | None = None) -> int:
+    """Record a declaration for the piece the caller is standing in.
+
+    Neither verb takes a piece argument, and that absence is the design: a worker naming its
+    own piece is a worker that can name someone else's. `worktree.locate` answers it from
+    the working directory — path arithmetic, no subprocess, and the same triple the rest of
+    charter identifies a piece by.
+    """
+    here = worktree.locate(Path.cwd())
+    if here is None:
+        util.err("Not inside a worktree — `done` and `abandon` declare the piece you are "
+                 "standing in, so there is nothing here to declare.")
+        util.info("cd into the piece first; `charter worktree list` shows where they are.")
+        return 1
+    ws, repo, piece = here
+
+    previous = pieces.declaration_for(ws, repo, piece)
+    if previous:
+        util.warn(f"'{piece}' was already declared {previous['event']} — recording "
+                  f"{event} over it (the earlier one stays in the log).")
+
+    pieces.record(ws, event, repo, piece, reason=reason)
+    util.ok(f"{repo} · {piece} — {event}" + (f": {reason}" if reason else ""))
+    return 0
+
+
+def cmd_worktree_done(args) -> int:
+    """Declare the piece you are in finished."""
+    return _declare("done")
+
+
+def cmd_worktree_abandon(args) -> int:
+    """Declare the piece you are in given up, with a reason.
+
+    The reason is required because it is the most useful thing an abandoning worker
+    produces — the next worker reads it instead of re-deriving why this stopped.
+    """
+    reason = (getattr(args, "reason", None) or "").strip()
+    if not reason:
+        util.err("abandon needs a reason — it is what whoever picks this up reads first.")
+        return 1
+    return _declare("abandoned", reason)
+
+
 def cmd_worktree_list(args) -> int:
     ws = workspace.resolve(getattr(args, "workspace", None))
     util.info(f"workspace: {ws}")
@@ -167,6 +211,7 @@ def cmd_worktree_list(args) -> int:
     # Rows come from git and only from git. The record is joined onto what git found, to
     # put a name on it — it is never asked which worktrees exist (ADR 0011).
     claims = pieces.claims(ws)
+    declared = pieces.declarations(ws)
 
     total = 0
     for clone in targets:
@@ -183,7 +228,8 @@ def cmd_worktree_list(args) -> int:
                 state = "dirty" if worktree.is_dirty(Path(r["path"])) else "clean"
             branch = r["branch"] or f"detached {r['path']}"
             who = pieces.claimant(claims.get((clone.name, r["piece"])))
-            print(f"    {r['piece']:<24} {branch:<28} {state:<8} {who}")
+            said = pieces.outcome(declared.get((clone.name, r["piece"])))
+            print(f"    {r['piece']:<24} {branch:<28} {state:<8} {who:<16} {said}".rstrip())
             total += 1
     if not total:
         util.info("No worktrees. Create one: "

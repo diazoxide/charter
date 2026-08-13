@@ -52,7 +52,19 @@ DIR_NAME = "pieces"
 
 #: Every key a line may carry. A closed set, asserted by the tests: this is where an
 #: innocent-looking extra field would quietly reverse ADR 0011.
-FIELDS = ("ts", "event", "repo", "piece", "session", "host", "persona")
+FIELDS = ("ts", "event", "repo", "piece", "session", "host", "persona", "reason")
+
+#: The whole vocabulary. ``claimed`` is an observation charter makes when it creates the
+#: worktree; the other two are the worker's declarations.
+#:
+#: There is deliberately no ``failed``, ``blocked`` or ``timed-out``. charter can verify
+#: none of them, and a state nobody can verify is the marker that lies — a worker that dies
+#: declares nothing at all, and that *absence* is what gets reported, with an age. Adding a
+#: value here is how this design stops being honest.
+EVENTS = ("claimed", "done", "abandoned")
+
+#: The subset a worker declares about itself, as opposed to what charter observed.
+DECLARATIONS = ("done", "abandoned")
 
 
 def _host() -> str:
@@ -73,14 +85,21 @@ def log_path(ws: str) -> Path:
     return dir_for(ws) / f"{_host()}.jsonl"
 
 
-def record(ws: str, event: str, repo: str, piece: str,
+def record(ws: str, event: str, repo: str, piece: str, reason: str | None = None,
            when: datetime | None = None) -> Path | None:
     """Append one event. Best-effort: returns ``None`` if it could not be written.
 
-    Swallowing the failure is deliberate. This is bookkeeping about a claim that git has
-    already granted — raising here would fail a command whose real work succeeded, and a
+    Swallowing an I/O failure is deliberate. This is bookkeeping about a claim that git has
+    already granted — raising there would fail a command whose real work succeeded, and a
     worker cannot un-create its worktree in response.
+
+    An event outside :data:`EVENTS` raises instead, because it is a different kind of
+    problem: not a disk that was full, but a caller inventing vocabulary. Swallowing that
+    would let a ``failed`` state reach the log and be reported as if charter had verified
+    it, which is the whole thing this design refuses to do.
     """
+    if event not in EVENTS:
+        raise ValueError(f"unknown piece event {event!r} — the vocabulary is {EVENTS}")
     when = when or _now()
     line = {
         "ts": when.isoformat(timespec="seconds"),
@@ -91,6 +110,8 @@ def record(ws: str, event: str, repo: str, piece: str,
         "host": _host(),
         "persona": persona.resolve_active(),
     }
+    if reason:
+        line["reason"] = reason
     p = log_path(ws)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +169,33 @@ def claims(ws: str) -> dict[tuple[str, str], dict]:
 
 def claim_for(ws: str, repo: str, piece: str) -> dict | None:
     return claims(ws).get((repo, piece))
+
+
+def declarations(ws: str) -> dict[tuple[str, str], dict]:
+    """The latest declaration per piece, keyed ``(repo, piece)``.
+
+    Latest wins, and the earlier ones stay in the log. A worker that declared ``done`` and
+    then found it was not done must be able to say so, and the history of it having changed
+    its mind is worth more than a record that pretends the first answer never happened.
+    """
+    out: dict[tuple[str, str], dict] = {}
+    for e in events(ws):
+        if e.get("event") in DECLARATIONS:
+            out[(e.get("repo") or "", e["piece"])] = e
+    return out
+
+
+def declaration_for(ws: str, repo: str, piece: str) -> dict | None:
+    return declarations(ws).get((repo, piece))
+
+
+def outcome(entry: dict | None) -> str:
+    """How a declaration reads in a listing. Empty when there is none — which is *silence*,
+    not a third outcome, and #98 is what gives it an age."""
+    if not entry:
+        return ""
+    reason = entry.get("reason")
+    return f"{entry['event']}: {reason}" if reason else entry["event"]
 
 
 def claimant(entry: dict | None) -> str:

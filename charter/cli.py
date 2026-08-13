@@ -433,6 +433,15 @@ def _add_worktree_parser(sub) -> None:
     lst.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
     lst.set_defaults(func=commands_worktree.cmd_worktree_list)
 
+    # `done` and `abandon` take no piece argument on purpose: the piece is where you are
+    # standing, and an argument is an opportunity to declare someone else's finished.
+    done = wsub.add_parser("done", help="Declare the piece you are standing in finished.")
+    done.set_defaults(func=commands_worktree.cmd_worktree_done)
+
+    ab = wsub.add_parser("abandon", help="Declare the piece you are standing in given up.")
+    ab.add_argument("reason", help="Why you stopped — what whoever picks this up reads first.")
+    ab.set_defaults(func=commands_worktree.cmd_worktree_abandon)
+
     rm = wsub.add_parser("remove", help="Remove a worktree (refuses to lose uncommitted "
                                         "or unpushed work).")
     rm.add_argument("repo")
