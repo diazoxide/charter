@@ -155,24 +155,50 @@ def _transcript_dir() -> Path:
     return Path.home() / ".claude" / "projects" / slug
 
 
-def _earliest_live() -> datetime | None:
-    """Start of the live-tallied period. Backfill must not import anything at or after
-    it, or a session that was both live-recorded and transcribed would count twice."""
-    best = None
+def _live_keys() -> set[tuple[str, str]]:
+    """Every dispatch the live hook actually recorded, by identity — (timestamp, agent).
+
+    This replaced a single global cutoff: the earliest live record, with everything at or
+    after it skipped. That prevented double-counting on one assumption — that once live
+    recording had started it was **complete** — and #83 is the report that it is not. A
+    `PostToolUse(Task|Agent)` hook does not fire for every background dispatch, so three
+    real dispatches on 2026-08-10 were missing from a store whose earliest record was
+    2026-08-07, and the cutoff put them permanently out of backfill's reach. One early
+    live record disabled reconciliation for all later history.
+
+    Identity expresses the same guarantee without the assumption, and it self-heals: a
+    window the hook missed is imported the next time backfill runs, whenever that is,
+    without anyone having to know which window it was.
+    """
+    keys: set[tuple[str, str]] = set()
     d = _dir()
     if not d.exists():
-        return None
+        return keys
     for f in d.glob("*.jsonl"):
         if f.name.endswith(BACKFILL_SUFFIX):
             continue
         for ln in f.read_text(errors="replace").splitlines():
             try:
-                t = _ts(json.loads(ln))
+                o = json.loads(ln)
+                t = _ts(o)
             except ValueError:
                 continue
-            if t and (best is None or t < best):
-                best = t
-    return best
+            if t:
+                keys.add((t.isoformat(timespec="seconds"), str(o.get("agent") or "")))
+    return keys
+
+
+def last_backfill() -> datetime | None:
+    """When transcripts were last reconciled into the tally, or None if never.
+
+    `stats` reports this because the tally is only as complete as its last reconciliation,
+    and a count that silently omits every background dispatch reads exactly like a count
+    that includes them (#83)."""
+    d = _dir()
+    if not d.exists():
+        return None
+    stamps = [f.stat().st_mtime for f in d.glob(f"*{BACKFILL_SUFFIX}")]
+    return datetime.fromtimestamp(max(stamps)) if stamps else None
 
 
 def scan_transcripts() -> list[dict]:
@@ -211,20 +237,24 @@ def scan_transcripts() -> list[dict]:
 def backfill() -> tuple[int, int]:
     """Seed the tally from transcripts. Returns (imported, skipped-as-already-live).
     Idempotent: rewrites only the backfill files it owns."""
-    cutoff = _earliest_live()
-    keep: dict[str, list[str]] = {}
+    live = _live_keys()
+    keep: dict[str, set[str]] = {}
+    seen: set[tuple[str, str]] = set()
     imported = skipped = 0
     for row in scan_transcripts():
         t = _ts(row)
         if not t:
             continue
-        if cutoff and t >= cutoff:
+        key = (t.isoformat(timespec="seconds"), str(row.get("agent") or ""))
+        if key in live or key in seen:
+            # Already tallied — by the live hook, or by an earlier line of this same run
+            # (one dispatch can appear in more than one transcript file).
             skipped += 1
             continue
+        seen.add(key)
         name = f"{t:%Y-%m}.{_host()}{BACKFILL_SUFFIX}"
-        keep.setdefault(name, []).append(
-            json.dumps({"ts": t.isoformat(timespec="seconds"), "agent": row["agent"]},
-                       sort_keys=True))
+        keep.setdefault(name, set()).add(
+            json.dumps({"ts": key[0], "agent": row["agent"]}, sort_keys=True))
         imported += 1
     d = _dir()
     d.mkdir(parents=True, exist_ok=True)

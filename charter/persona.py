@@ -658,8 +658,11 @@ def find_duplicates(name: str, threshold: float = 0.5,
 
 
 def forget(name: str, slug: str, *, shared: bool = False, ephemeral: bool = False,
-           session: str | None = None) -> bool:
-    """Delete one memory file (by slug/filename) and drop its index line."""
+           session: str | None = None):
+    """Delete one memory file (by slug/filename) and drop its index line.
+
+    Returns the removed path (falsy when nothing matched) so the caller can stage the
+    deletion — see `memstore.forget`."""
     from . import memstore
     d = ephemeral_dir(name, shared, session) if ephemeral else memory_dir(name, shared)
     return memstore.forget(d, slug)

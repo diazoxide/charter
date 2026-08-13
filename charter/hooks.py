@@ -538,17 +538,40 @@ def pretooluse() -> int:
 # C: SessionStart — inject the active persona's memory index as context          #
 # --------------------------------------------------------------------------- #
 def _uncommitted_memory_nudge() -> str:
-    """One-line reminder if persona memory/refs are sitting uncommitted (knowledge not
-    yet shared). Fires independent of the active persona; best-effort, never raises."""
+    """One-line reminder if memory/refs are sitting uncommitted (knowledge not yet shared).
+
+    Scans **both** stores. It used to scan `personas` alone, so a workspace memory could
+    sit uncommitted indefinitely with nothing to say so — while `_mem_cadence_nudge` was
+    telling the agent that workspace memory was committed and shared. One hook claimed it
+    was shared and the other could not see that it wasn't (#82).
+
+    Silent under the ``local`` posture, where uncommitted memory is not a backlog but the
+    declared design: nothing is meant to reach a remote without a human between writing
+    and disclosure. A nudge that fired on the intended state would be a new false alarm,
+    and telling someone to run a sync command charter deliberately did not run is worse
+    than saying nothing.
+
+    Best-effort; never raises.
+    """
     try:
+        from . import instance as _instance
+        if _instance.clamp_share(config.MEMORY_SHARE) == "local":
+            return ""
         import subprocess
-        r = subprocess.run(["git", "-C", str(config.ROOT), "status", "--porcelain", "--", "personas"],
+        r = subprocess.run(["git", "-C", str(config.ROOT), "status", "--porcelain", "--",
+                            "personas", "workspaces"],
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3)
-        n = sum(1 for ln in r.stdout.splitlines()
-                if ln.strip() and ("/memory/" in ln or "/refs/" in ln))
-        if n:
-            return (f"⬤ {n} persona memory/ref file(s) are **uncommitted** — durable knowledge "
-                    f"not yet shared. Commit + push it with `charter persona memory-sync`.")
+        rows = [ln for ln in r.stdout.splitlines()
+                if ln.strip() and ("/memory/" in ln or "/refs/" in ln)]
+        if not rows:
+            return ""
+        ws = sum(1 for ln in rows if "workspaces/" in ln)
+        where = ("persona" if not ws else "workspace" if ws == len(rows) else "persona + workspace")
+        how = ("`charter persona memory-sync`" if not ws else
+               "`charter workspace save`" if ws == len(rows) else
+               "`charter persona memory-sync` and `charter workspace save`")
+        return (f"⬤ {len(rows)} {where} memory/ref file(s) are **uncommitted** — durable "
+                f"knowledge not yet shared. Commit + push it with {how}.")
     except Exception:
         pass
     return ""
@@ -884,18 +907,44 @@ def _mem_cadence_nudge(sid: str | None, count: int) -> str:
     except Exception:
         pass
     if live:
-        how = f"`charter workspace remember \"<fact>\"` (workspace **{ws}** — committed + shared)"
+        how = f"`charter workspace remember \"<fact>\"` (workspace **{ws}**)"
     elif active:
-        how = f"`charter persona remember {active} \"<fact>\"` (committed + shared)"
+        how = f"`charter persona remember {active} \"<fact>\"`"
     else:
         how = ("`charter workspace remember \"<fact>\"` (make the workspace LIVE to share) or "
                "`charter persona remember <p> \"<fact>\"`")
     return (f"⬢ Memory check — ~{count} file changes since your last recorded memory. Recording "
             f"durable memory is a standing part of the flow, and it fades on long sessions. If this "
             f"work produced something durable — a decision, a gotcha, a verified fact, a *why* — "
-            f"record it now so it survives this session and reaches the team: {how}. It's reactive "
-            f"(commits + pushes immediately). If nothing here is worth keeping, carry on — don't "
-            f"record filler.")
+            f"record it now so it survives this session: {how}. {memory_share_note()} If nothing "
+            f"here is worth keeping, carry on — don't record filler.")
+
+
+def memory_share_note() -> str:
+    """What recording a memory will ACTUALLY do on this plane.
+
+    This used to be the fixed sentence *"committed + shared … reactive (commits + pushes
+    immediately)"*, chosen on workspace LIVENESS. Whether anything is committed is decided
+    somewhere else entirely — ``config.MEMORY_SHARE`` — which defaults to ``local``, where
+    `commit_memory_reactive` returns before touching git. Both underlying facts were true
+    and the sentence built by reading one off the other was false, on the default posture,
+    which is the one chosen so that nothing reaches a remote without a human in between.
+
+    A memory recorded under that promise sat on one laptop while the agent reported it had
+    reached the team (#82). Saying what the posture will actually do costs one lookup.
+    """
+    try:
+        from . import instance as _instance
+        share = _instance.clamp_share(config.MEMORY_SHARE)
+    except Exception:
+        return ""
+    return {
+        "local": "It stays on THIS MACHINE — this plane's `share` is `local`, so charter "
+                 "commits nothing; commit and push it yourself if the team needs it.",
+        "commit": "It is committed locally straight away, but NOT pushed — this plane's "
+                  "`share` is `commit`.",
+        "push": "It is committed and pushed immediately, so it reaches the team.",
+    }.get(share, "")
 
 
 def posttooluse() -> int:

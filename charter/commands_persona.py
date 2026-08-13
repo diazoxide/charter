@@ -709,6 +709,16 @@ def cmd_persona_forget(args) -> int:
     if persona.forget(name, args.slug, shared=args.shared, ephemeral=args.ephemeral):
         util.ok(f"Forgot '{args.slug}' from {name}'s "
                 f"{'ephemeral' if args.ephemeral else 'persistent'} memory.")
+        if args.ephemeral:
+            return 0  # session scratch, gitignored — nothing to commit
+        # Symmetric with `remember`: a removal that stays on one machine is not a
+        # removal. Staging the memory DIRECTORY rather than the deleted file is
+        # deliberate — `git add` on a path that no longer exists and was never tracked
+        # fails the whole call, taking the index update down with it (#82).
+        from .commands import commit_memory_reactive
+        d = persona.memory_dir(name, args.shared)
+        commit_memory_reactive([str(d.relative_to(config.ROOT))],
+                               f"persona({name}): forget {args.slug}")
         return 0
     util.err(f"no memory '{args.slug}' in that store")
     return 1
@@ -896,6 +906,16 @@ def cmd_persona_stats(args) -> int:
     else:
         util.info("No dispatches recorded yet — the tally starts filling as sub-agents are "
                   "dispatched (`charter persona dispatch-backfill` seeds it from past sessions).")
+    # How complete this tally is, stated rather than implied. `PostToolUse(Task|Agent)`
+    # does not fire for every background dispatch, so DISP, ⚑ and the routing ratio are
+    # all floors, not counts — three real dispatches were missing from one plane's store
+    # while `stats` reported `0 / never dispatched` (#83). A count that silently omits
+    # them reads exactly like one that includes them, and personas get retired on it.
+    last = dispatch.last_backfill()
+    when = f"last reconciled {last:%Y-%m-%d}" if last else "never reconciled"
+    util.info(f"Tallied live from a PostToolUse hook, which can miss background "
+              f"dispatches — treat DISP and ⚑ as a FLOOR ({when}). Reconcile against "
+              f"this project's transcripts: charter persona dispatch-backfill.")
     if unused:
         util.warn(f"{unused} persona(s) NEVER dispatched — they exist, lint green, and are "
                   f"unused. Check whether their work is routing to a generic agent instead.")

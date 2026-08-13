@@ -1,12 +1,128 @@
 # charter
 
-**charter** is a control plane for Claude Code agents working across many repos on
-GitHub or GitLab. It gives an agent durable **personas** (specialist role identities,
-each with its own committed memory and a scoped credential vault), isolated per-task
-**workspaces** for cloning and working several repos in parallel without mixing them up,
-and a **vault** that keeps credentials out of the model's context — so an agent (or a
-whole team of them) can move between repos and tasks without losing what it has learned
-or leaking a secret into a transcript.
+**charter** is a control plane for Claude Code agents working across many repos on GitHub
+or GitLab: durable **personas**, isolated per-task **workspaces**, and a credential
+**vault** the model never reads from.
+
+## What it solves
+
+Each of these is something that went wrong often enough to get built around.
+
+### Dozens of repos, and several tasks in flight at once
+
+A team's work doesn't sit in one repository, and an engineer rarely has one task open.
+Two features and a hotfix means three sets of branches across a shifting set of repos, and
+if they share a checkout you spend the day stashing. A **workspace** is one directory of
+clones per task (`workspaces/<task>/<repo>`), each repo on its own branch, so moving
+between tasks is `charter workspace use <name>` and nothing follows you across. The
+status line shows which one is active and what state every clone in it is in.
+`charter discover` keeps the map of every repo in the org — including the ones nobody has
+cloned yet — so an agent can find a repo before it exists locally.
+
+### Two sub-agents that need the same repo
+
+Splitting a task across parallel sub-agents falls apart the moment both want the same
+repository on different branches. Cloning it twice wastes the disk and they still collide.
+A **worktree** splits one clone into several checkouts (`.worktrees/<repo>/<piece>`), a
+branch each, so the pieces genuinely run at the same time. `charter worktree remove`
+refuses if it would drop uncommitted or unpushed work.
+
+### You are always teaching the agent the same things
+
+`CLAUDE.md` holds what you sat down and wrote. It doesn't hold what the agent worked out
+at 2am — that the flaky checkout test is a DNS timeout rather than the code, that billing
+deploys gate on the e2e suite and not the unit ones. That knowledge dies with the session,
+so next week you explain it again or watch it get rediscovered the slow way.
+`charter persona remember` and `charter workspace remember` write one fact per markdown
+file; `charter recall` searches the workspace's notes, the active role's own notes and the
+shared ones in a single pass. They're ordinary committed files, so a teammate's agent can
+start where yours left off.
+
+### One agent that holds every credential and every context
+
+A single agent carrying every token, every convention and every repo's history is both a
+security problem and a quality one — it has access it doesn't need for the task in front
+of it, and a context full of things that don't apply. A **persona** is a small named scope
+(`devops`, `qa`, `reviewer`) with its own charter, its own committed memory, its own vault,
+and a `delegate-when` line saying what should be handed to it. `charter persona
+sync-agents` turns each one into a real Claude Code sub-agent, so dispatching a role is
+ordinary delegation rather than a prompt trick. They compose the way people do: `extends:`
+inherits a parent's charter, `uses:` says this role routes work to that one, and
+`agent-tools` narrows what the generated sub-agent is allowed to touch.
+
+### Credentials that end up in the transcript
+
+The moment an agent reads a token, that token is in the context window — and from there in
+the transcript, the logs, and any summary fed into a later prompt. A **vault** holds the
+value and hands it to a *command* rather than to the model:
+
+```
+charter secret exec devops --env TOKEN=API_TOKEN -- some-tool
+```
+
+charter resolves the secret in its own process, puts it in the child's environment, and
+redacts every occurrence of it from whatever that command prints. Reads are masked by
+default, `--reveal` refuses a non-interactive stdout, and the plugin's guard denies both
+that flag and `cat`-ing a vault file outright. Read [docs/secrets.md](docs/secrets.md)
+before storing anything real: the default provider is plaintext at 0600, so what this buys
+you is the model never seeing the value — not encryption at rest.
+
+### An unattended run that stops to ask a question
+
+An SSH key passphrase or a GPG signing prompt hangs an autonomous agent until it times
+out, because there is nobody at the keyboard to answer it. Every git operation charter
+performs authenticates with that repo's own forge CLI token over HTTPS — `gh` or `glab`,
+never a key, never signing. `charter git-policy --apply` writes that into a repo's local
+git config, and `charter clone` applies it to everything it clones. The plugin denies the
+commands that would route around it, which is why a denial there is the rule working
+rather than a bug.
+
+### What the task still means to do
+
+Claude Code's task list is per-session: close the terminal and the intent is gone. That's
+fine for "run the tests" and useless for "we still owe the billing team a migration".
+`charter ws todo "<what>"` records intent against the **workspace**, so it outlives the
+session that noticed it — finishing one journals it, abandoning one goes quietly. Each
+workspace also carries a **Vision**, one line saying what the whole task is for, which a
+fork inherits.
+
+### Coming back to a task cold, or handing it to someone else
+
+Two weeks later a workspace is a pile of repos on branches whose names you no longer
+trust. `charter workspace snapshot` writes the repos and their branches into a committed
+manifest and `charter workspace restore` rebuilds the whole thing from it, on your machine
+or a colleague's. `charter workspace fork` copies a workspace's charter, manifest and
+memory so you can branch a task off with its context intact. Workspaces stay private until
+you decide otherwise; `charter workspace live` is what makes one shareable.
+
+### Everyone on the team running a slightly different charter
+
+Once a control plane is shared, the version each engineer happens to have installed stops
+being a private detail: hooks fire differently, a guard denies on one machine and not the
+next, and bug reports stop lining up. It's opt-in — with no pin, charter tracks whatever
+you have — but `[charter].version` in `charter.toml` pins one version the way a lockfile
+does, and the `SessionStart` hook conforms each machine to it once per session, never
+mid-turn. The pin is exact rather than a floor, so it downgrades too; putting a team back
+on a known-good release is precisely the case worth automating. `charter version bump`
+installs and verifies the target *before* writing the lock, so you can't pin colleagues to
+a build you haven't run yourself, and charter only ever shows you that command — it never
+moves the pin on its own. A conform that fails (offline, no `uv`) warns and gets out of
+the way instead of blocking you, and the drift stays visible in `charter doctor` until
+someone deals with it.
+
+### Not being able to see what any of it is doing
+
+Across four repos and three roles, "is anything broken" shouldn't take six commands to
+answer. The status line carries the active workspace and its open todos, every clone with
+its branch, dirty and ahead/behind markers, CI and open PRs, beside the personas, their
+vault health and how much each has remembered — all read from disk, with no git subprocess
+and no network on the render path. `charter doctor` preflights the environment before an
+agent discovers the problem halfway through a task. `charter trace` shows what actually
+happened in a session: guard denials, tool approvals, secret warnings, memory writes. And
+`charter persona stats` says whether a role is being dispatched at all, or whether that
+work is quietly routing to a generic agent instead.
+
+---
 
 If you've never seen it before, you can go from `uv tool install charter-cp` to a working
 control plane in about a minute — see [60 seconds](#60-seconds-from-nothing-to-a-working-control-plane) below.

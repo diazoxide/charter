@@ -717,6 +717,10 @@ def cmd_workspace_forget(args) -> int:
     name = getattr(args, "workspace", None) or workspace.resolve()
     if workspace.forget_memory(name, args.slug):
         util.ok(f"Forgot '{args.slug}' from workspace '{name}'.")
+        # Symmetric with `remember` — see `cmd_persona_forget` for why the directory,
+        # not the deleted file, is what gets staged (#82).
+        commit_memory_reactive([str(workspace.memory_dir(name).relative_to(config.ROOT))],
+                               f"workspace({name}): forget {args.slug}")
         return 0
     util.err(f"no memory '{args.slug}' in workspace '{name}' (list them: charter workspace recall).")
     return 1
@@ -790,11 +794,17 @@ def cmd_workspace_fork(args) -> int:
     src_todos = todos.todos_dir(src)
     if src_todos.exists():
         shutil.copytree(src_todos, todos.todos_dir(new), dirs_exist_ok=True)
+    # Membership comes from BOTH sources — see `workspace.merge_repo_rows`. Reading the
+    # manifest alone made a fork of an un-snapshotted workspace inherit nothing while
+    # `status` cheerfully reported its clones (#81).
     m = workspace.read_manifest(src)
-    repos = list(m.get("repos") or [])
-    if m:
+    disk = [{"name": d.name, "branch": _repo_branch(d)} for d in workspace.clones(src)]
+    repos, disk_only = workspace.merge_repo_rows(m.get("repos") or [], disk)
+    if repos or m:
         m["name"] = new
         m["forked_from"] = src
+        m["repos"] = repos
+        m.setdefault("description", "")
         m["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
         m["updated_by"] = _git_user()
         workspace.write_manifest(new, m)
@@ -810,14 +820,25 @@ def cmd_workspace_fork(args) -> int:
         # needs to know they now own a second copy of this intent, not a view of the first.
         util.info(f"Inherited {inherited} open todo(s) from '{src}' — the fork's own list "
                   f"now: charter ws todo --workspace {new}")
+    # Say which source each repo came from. A snapshot promises its branch was pushed;
+    # a clone found on disk promises only that it is checked out here right now, and
+    # `restore` on another machine will fail on a branch that was never pushed. Reporting
+    # it at the moment of use beats a drift warning that would fire on every workspace
+    # nobody has snapshotted — which is most of them, by design.
+    if disk_only:
+        util.info(f"  {len(disk_only)} of them come from clones on disk, not from a "
+                  f"snapshot ({', '.join(disk_only)}) — their branch is whatever is "
+                  f"checked out now, which may not be pushed. `charter workspace "
+                  f"snapshot {src}` records them properly.")
     if getattr(args, "restore", False) and repos:
-        util.info(f"Cloning {len(repos)} repo(s) from the inherited manifest…")
+        util.info(f"Cloning {len(repos)} inherited repo(s)…")
         return cmd_workspace_restore(SimpleNamespace(name=new, on_demand=False))
     if repos:
-        util.info(f"Clone its {len(repos)} recorded repo(s): charter workspace restore {new}  "
+        util.info(f"Clone its {len(repos)} inherited repo(s): charter workspace restore {new}  "
                   f"(or re-run fork with --restore).")
     else:
-        util.info(f"No repos recorded on '{src}' yet — clone into the fork: charter clone <repo> -w {new}")
+        util.info(f"No repos on '{src}' — neither a snapshot nor clones on disk. "
+                  f"Clone into the fork: charter clone <repo> -w {new}")
     if getattr(args, "live", False):
         util.info(f"Share the fork: charter workspace save {new}")
     return 0

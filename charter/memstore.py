@@ -258,14 +258,24 @@ def resolve(mem_dir: Path, ident: str) -> Path | None:
     return hits[0] if hits else None
 
 
-def forget(mem_dir: Path, ident: str) -> bool:
-    """Delete one memory (by filename or slug) and drop its index line. True if removed."""
+def forget(mem_dir: Path, ident: str) -> Path | None:
+    """Delete one memory (by filename or slug) and drop its index line.
+
+    Returns the path that was removed, so the caller can stage the deletion — `remember`
+    is reactive and `forget` was not, which meant a purge stayed on the machine that ran
+    it while the memory it removed lived on in the remote and came back with the next
+    pull. Removal is the operation that most needs to propagate: it is how a poisoned or
+    secret-bearing memory is taken out of circulation (#82).
+
+    Falsy when nothing matched, as before — a `Path` is truthy, so callers testing the
+    result still read correctly.
+    """
     p = resolve(mem_dir, ident)
     if not p or not p.exists():
-        return False
+        return None
     p.unlink()
     _drop_index_line(mem_dir, p.name)
-    return True
+    return p
 
 
 def _drop_index_line(mem_dir: Path, filename: str) -> None:

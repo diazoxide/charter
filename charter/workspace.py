@@ -547,6 +547,47 @@ def write_manifest(name: str, data: dict) -> None:
     manifest_path(name).write_text(json.dumps(data, indent=2) + "\n")
 
 
+def merge_repo_rows(manifest_rows, disk_rows) -> tuple[list[dict], list[str]]:
+    """Union of what a workspace RECORDED and what it actually HAS.
+
+    charter has two answers to "which repos are in this workspace" and they are both
+    right about different questions. `status` and `workspace list` scan the directory:
+    always current, never portable. The manifest is a **snapshot**: portable and
+    committed, but written only by `charter workspace snapshot`, which deliberately
+    refuses while a repo has unpushed work so a recorded branch can actually be restored.
+
+    Nothing reconciled them, and `fork` read the manifest alone. So a workspace with nine
+    clones and no snapshot reported nine repos everywhere a human looked and inherited
+    zero — issue #81, observed live with the whole point of forking a task environment
+    silently defeated.
+
+    Taking the union rather than picking a winner is what keeps both cases working: a
+    workspace nobody snapshotted still forks its clones, and a teammate who has just
+    cloned the plane — with no repos on disk at all — still inherits from the snapshot.
+
+    Where both know a repo, the **manifest's** branch wins: it was recorded under
+    `snapshot`'s guarantee that the branch was pushed, where the disk only knows whatever
+    happens to be checked out now.
+
+    Returns ``(rows, disk_only)`` — rows sorted by name, and the names no snapshot
+    recorded, which the caller reports rather than silently passing off as snapshotted.
+    """
+    by_name: dict[str, dict] = {}
+    for r in disk_rows or []:
+        n = str(r.get("name") or "").strip()
+        if n:
+            by_name[n] = {"name": n, "branch": r.get("branch") or "HEAD"}
+    disk_only = set(by_name)
+    for r in manifest_rows or []:
+        n = str(r.get("name") or "").strip()
+        if not n:
+            continue
+        disk_only.discard(n)
+        by_name[n] = {"name": n,
+                      "branch": r.get("branch") or by_name.get(n, {}).get("branch") or "HEAD"}
+    return [by_name[n] for n in sorted(by_name)], sorted(disk_only)
+
+
 def memory_dir(name: str) -> Path:
     return workspace_dir(name) / "memory"
 
@@ -621,8 +662,11 @@ def recall(name: str, query: str | None = None, limit: int = 8) -> list[tuple[Pa
     return [(p, t, 0) for p, t, _tx in memstore.entries(memory_dir(name))]
 
 
-def forget_memory(name: str, ident: str) -> bool:
-    """Delete one workspace memory (by slug or filename) and drop its index line."""
+def forget_memory(name: str, ident: str):
+    """Delete one workspace memory (by slug or filename) and drop its index line.
+
+    Returns the removed path (falsy when nothing matched) so the caller can stage the
+    deletion — see `memstore.forget`."""
     from . import memstore
     return memstore.forget(memory_dir(name), ident)
 
