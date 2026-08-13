@@ -16,7 +16,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 
-from charter import todos, workspace
+from charter import todos, workspace, worktree
 from charter import commands_workspace as cw
 from tests._isolation import PersonaIso
 
@@ -48,6 +48,37 @@ class RemoveCase(PersonaIso):
                        env={**os.environ, **_GIT_ENV})
         (d / "unsaved.txt").write_text("work nobody has committed\n")
         return d
+
+    def git(self, cwd, *args: str):
+        return subprocess.run(["git", "-C", str(cwd), *args], check=True,
+                              capture_output=True, text=True,
+                              env={**os.environ, **_GIT_ENV})
+
+    def commit(self, cwd, message: str):
+        """`commit.gpgsign=false` per `tests/test_worktree.py` — a developer whose global
+        config signs commits gets an interactive signer, which hangs the suite forever."""
+        self.git(cwd, "add", "-A")
+        self.git(cwd, "-c", "commit.gpgsign=false", "commit", "-qm", message)
+
+    def make_clone_with_worktree(self, name: str = "alpha", repo: str = "svc",
+                                 piece: str = "slice"):
+        """A clone carrying one commit, plus a linked worktree on its own branch.
+
+        The worktree's ``.git`` is a FILE, which is precisely why `workspace.clones()`
+        cannot see it — and why removal used to delete it unguarded.
+        """
+        env = {**os.environ, **_GIT_ENV}
+        clone = workspace.workspace_dir(name) / repo
+        clone.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(clone)], check=True,
+                       capture_output=True, env=env)
+        (clone / "README").write_text("base\n")
+        self.commit(clone, "base")
+
+        wt = worktree.path_for(name, repo, piece)
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        self.git(clone, "worktree", "add", "-q", "-b", piece, str(wt))
+        return clone, wt
 
 
 class TestTodosAreReportedOnRemoval(RemoveCase):
@@ -107,6 +138,85 @@ class TestWorkAtRiskStillBlocks(RemoveCase):
 
     def test_force_still_removes_work_at_risk(self):
         self.make_dirty_clone()
+        rc, _ = self.remove(force=True)
+        self.assertEqual(rc, 0)
+        self.assertFalse(workspace.workspace_dir("alpha").exists())
+
+
+class TestWorktreesAreGuardedToo(RemoveCase):
+    """#91 — the exclusion that keeps a worktree from being *counted* as a clone also kept
+    it from being *guarded*, while `shutil.rmtree` took it anyway. `charter worktree remove`
+    refuses to lose this work; `charter workspace remove` said `✓ Removed workspace`.
+
+    The guard follows `worktree remove`'s stance rather than the clone rule beside it: for a
+    worktree, *no upstream* counts as at risk. That difference is the whole point — a
+    parallel agent's branch is unpushed with no upstream almost by definition, so the clone
+    rule would keep missing exactly the case this exists for.
+    """
+
+    def test_uncommitted_work_in_a_worktree_refuses_removal(self):
+        _, wt = self.make_clone_with_worktree()
+        (wt / "unsaved.txt").write_text("an agent's work, never committed\n")
+        rc, _ = self.remove()
+        self.assertNotEqual(rc, 0)
+        self.assertTrue(workspace.workspace_dir("alpha").exists())
+
+    def test_commits_that_exist_nowhere_else_refuse_removal(self):
+        """The fleet case. The tree is clean, so a dirt check alone passes it — but the
+        branch has no upstream, so deleting the workspace is the only copy going away."""
+        _, wt = self.make_clone_with_worktree()
+        (wt / "feature.txt").write_text("committed, pushed nowhere\n")
+        self.commit(wt, "work")
+        rc, _ = self.remove()
+        self.assertNotEqual(rc, 0)
+        self.assertTrue(workspace.workspace_dir("alpha").exists())
+
+    def test_the_piece_is_named_in_the_refusal(self):
+        """A refusal that cannot say *which* piece is holding work sends the reader to
+        check every worktree by hand — ADR 0009's complaint, in the guard rather than the
+        error classifier."""
+        _, wt = self.make_clone_with_worktree(piece="slice")
+        (wt / "unsaved.txt").write_text("work\n")
+        _, out = self.remove()
+        self.assertIn("slice", out)
+
+    def test_the_worktree_appears_in_the_work_at_risk_set(self):
+        """Asserted against the guard itself, so a future refactor that reports worktrees
+        without actually guarding them cannot pass."""
+        _, wt = self.make_clone_with_worktree()
+        (wt / "unsaved.txt").write_text("work\n")
+        self.assertTrue(any("slice" in r for r in cw._work_at_risk("alpha")))
+
+    def test_a_pushed_clean_worktree_does_not_block(self):
+        """Specificity: the guard must protect work, not merely notice worktrees. A piece
+        whose branch is clean and on a remote survives deletion of the workspace, so
+        refusing over it would teach the `--force` habit the clone guard avoids."""
+        clone, wt = self.make_clone_with_worktree()
+        # Outside the workspace, so removal cannot take the remote with it.
+        bare = workspace.workspace_dir("alpha").parent.parent / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True,
+                       capture_output=True, env={**os.environ, **_GIT_ENV})
+        self.git(wt, "remote", "add", "origin", str(bare))
+        self.git(wt, "push", "-q", "-u", "origin", "slice")
+        rc, out = self.remove()
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(workspace.workspace_dir("alpha").exists())
+
+    def test_a_fresh_worktree_blocks_because_it_has_no_upstream(self):
+        """Pinned deliberately rather than left to be discovered. A just-created piece has
+        nothing to lose, so refusing over it is a false positive — but it is the same false
+        positive `charter worktree remove` already has, and the two guards agreeing on what
+        "at risk" means matters more than shaving it here. Narrowing the rule to commits
+        unique to the branch changes that definition, and belongs in its own ticket.
+        """
+        self.make_clone_with_worktree()
+        rc, out = self.remove()
+        self.assertNotEqual(rc, 0)
+        self.assertIn("slice", out)
+
+    def test_force_still_removes_a_worktree_holding_work(self):
+        _, wt = self.make_clone_with_worktree()
+        (wt / "unsaved.txt").write_text("work\n")
         rc, _ = self.remove(force=True)
         self.assertEqual(rc, 0)
         self.assertFalse(workspace.workspace_dir("alpha").exists())

@@ -245,7 +245,7 @@ def cmd_workspace_rename(args) -> int:
 
 
 def _work_at_risk(name: str) -> list[str]:
-    """Clones in the workspace with uncommitted or unpushed work.
+    """Clones **and worktrees** in the workspace with uncommitted or unpushed work.
 
     Only that. Open todos are deliberately NOT here, though `remove` reports them: this
     list is what is *unrecoverable*, and a todo is a note about the future, not work that
@@ -263,6 +263,47 @@ def _work_at_risk(name: str) -> list[str]:
             ahead = _git(["rev-list", "--count", "@{u}..HEAD"], cwd=d).stdout.strip()
             if ahead and ahead != "0":
                 out.append(f"{d.name}: {ahead} unpushed commit(s)")
+    return out + _worktrees_at_risk(name)
+
+
+def _worktrees_at_risk(name: str) -> list[str]:
+    """Worktrees of this workspace holding work that removing it would destroy (#91).
+
+    The loop above cannot see these and never could: it iterates `workspace.clones()`,
+    which filters on `is_clone` — a clone's ``.git`` is a directory, a linked worktree's is
+    a FILE. That exclusion is deliberate and correct for counting repos, and it is exactly
+    what left worktrees unguarded while `shutil.rmtree` took them anyway.
+
+    The **rule** differs from the clone rule above, not just the paths. `charter worktree
+    remove` treats a branch with NO upstream as work at risk — its commits exist nowhere
+    else — where the clone loop does not. That difference is the point rather than an
+    inconsistency: a parallel agent's piece is unpushed with no upstream almost by
+    definition, so applying the clone rule here would keep missing the very case this
+    exists for. The two guards now refuse on the same grounds.
+
+    This fires even when the worktree directory lives outside the workspace — a relocated
+    ``[plane] worktrees`` root, which `shutil.rmtree` never touches. That is not an
+    oversight: a linked worktree keeps its objects in the CLONE's object store, so removing
+    the clone destroys those commits whether or not the directory survives.
+    """
+    base = worktree.root(name)
+    try:
+        repos = sorted(d.name for d in base.iterdir() if d.is_dir())
+    except OSError:
+        return []
+
+    out = []
+    for repo in repos:
+        for wt in sorted(worktree.dirs_for(name, repo)):
+            label = f"{repo}/{wt.name}"
+            if worktree.is_dirty(wt):
+                out.append(f"{label}: uncommitted changes")
+                continue
+            ahead = worktree.unpushed(wt)
+            if ahead is None:
+                out.append(f"{label}: no upstream, so its commits exist nowhere else")
+            elif ahead:
+                out.append(f"{label}: {ahead} unpushed commit(s)")
     return out
 
 
