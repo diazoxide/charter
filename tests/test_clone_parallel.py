@@ -108,19 +108,47 @@ class CloneCase(unittest.TestCase):
 
 
 class TestClonesRunConcurrently(CloneCase):
-    def test_eight_slow_clones_overlap_rather_than_queue(self):
-        """The point of the change. Sequentially this is 8 × 0.10s; concurrently it is
-        about one of them. The threshold is loose so a busy machine cannot flake it, but
-        it is far below the sequential floor."""
-        def slow(r, wd):
-            time.sleep(0.10)
+    def test_clones_overlap_rather_than_queue(self):
+        """The point of the change, asserted as the PROPERTY rather than as a duration.
+
+        This used to time eight 0.10s clones and require the total under 0.40s — far below
+        the 0.80s sequential floor, and still flaky: it measured 0.53s on a loaded CI runner
+        and failed the release gate, while the identical commit passed on a re-run. A
+        wall-clock threshold cannot distinguish "the code queued" from "the machine was
+        busy", so it fails for the wrong reason and the fix is always to loosen it — until
+        it is so loose it would pass sequentially too.
+
+        A rendezvous answers the real question exactly. Every worker waits at a barrier for
+        all the others, so it can only trip if they are genuinely in flight together; if the
+        pool ever became a loop again the first worker waits alone, the barrier breaks on
+        timeout, and the failure names what happened. No sleeps, so the passing case is also
+        faster than what it replaces.
+
+        Parties come from the cap rather than a literal 8: lowering `CLONE_WORKERS` must
+        make this test measure the new cap, not fail against a stale one.
+        """
+        names = "abcdefgh"
+        parties = min(commands.CLONE_WORKERS, len(names))
+        # Generous: it only has to cover thread start-up on a loaded runner, and it is paid
+        # solely when the test is about to fail anyway.
+        barrier = threading.Barrier(parties, timeout=10)
+        queued = []
+        lock = threading.Lock()
+
+        def rendezvous(r, wd):
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                with lock:
+                    queued.append(r["name"])
             return {"repo": r, "dest": commands.config.ROOT / r["name"], "status": "ok",
                     "forge": SimpleNamespace(cli="gh")}
 
-        t0 = time.monotonic()
-        rc, _ = self.run_clone(self.targets(*"abcdefgh"), slow)
+        rc, _ = self.run_clone(self.targets(*names), rendezvous)
         self.assertEqual(rc, 0)
-        self.assertLess(time.monotonic() - t0, 0.40)
+        self.assertEqual(queued, [],
+                         f"clones queued: {parties} never overlapped, so the pool is "
+                         f"running like a loop")
 
     def test_no_more_than_the_cap_run_at_once(self):
         """Unbounded threads would open a connection per repo — a 50-repo restore would
