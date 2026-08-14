@@ -303,15 +303,20 @@ def cmd_worktree_remove(args) -> int:
             util.err(f"'{args.piece}' has uncommitted changes — refusing to remove.")
             util.info("Commit them, or discard with --force.")
             return 1
-        ahead = worktree.unpushed(path)
-        if ahead is None:
-            util.err(f"'{args.piece}' has no upstream, so its commits exist nowhere else "
+        # What would actually cease to exist: commits on this branch and on no other ref.
+        # The old test was "has no upstream", which refused over a just-created piece that
+        # had nothing to lose — and a guard that fires on the harmless common case is how
+        # `--force` becomes a habit (#104).
+        alone = worktree.unique_commits(path)
+        if alone is None:
+            util.err(f"could not determine whether '{args.piece}' holds unique commits "
                      "— refusing to remove.")
-            util.info("Push the branch, or discard with --force.")
+            util.info("Check the worktree by hand, or discard with --force.")
             return 1
-        if ahead:
-            util.err(f"'{args.piece}' has {ahead} unpushed commit(s) — refusing to remove.")
-            util.info("Push them, or discard with --force.")
+        if alone:
+            util.err(f"'{args.piece}' has {alone} commit(s) that exist nowhere else "
+                     "— refusing to remove.")
+            util.info("Push the branch or merge it, or discard with --force.")
             return 1
 
     if stale is not None:

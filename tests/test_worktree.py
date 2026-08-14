@@ -419,7 +419,9 @@ class TestRemove(WorktreeIso):
             _Args(workspace=self.ws, repo="iam-service", piece="spi-schema"))
         self.assertEqual(rc, 1)
         self.assertTrue(self.wt.exists())
-        self.assertIn("unpushed", (out + err).lower())
+        # Wording follows the rule: the guard now refuses over commits reachable from no
+        # other ref (#104), which is what "ahead of its upstream" is a special case of.
+        self.assertIn("exist nowhere else", (out + err).lower())
 
     def test_delete_branch_drops_the_branch_the_worktree_is_actually_on(self):
         """`remove` deliberately deletes the branch the worktree was CHECKED OUT ON

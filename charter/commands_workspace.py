@@ -342,12 +342,16 @@ def _worktrees_at_risk(name: str) -> list[str]:
     a FILE. That exclusion is deliberate and correct for counting repos, and it is exactly
     what left worktrees unguarded while `shutil.rmtree` took them anyway.
 
-    The **rule** differs from the clone rule above, not just the paths. `charter worktree
-    remove` treats a branch with NO upstream as work at risk — its commits exist nowhere
-    else — where the clone loop does not. That difference is the point rather than an
-    inconsistency: a parallel agent's piece is unpushed with no upstream almost by
-    definition, so applying the clone rule here would keep missing the very case this
-    exists for. The two guards now refuse on the same grounds.
+    The **rule** differs from the clone rule above, not just the paths. A worktree is at
+    risk when it holds commits reachable from no other ref — the work that would actually
+    cease to exist — which `charter worktree remove` uses too, so the two guards refuse on
+    identical grounds. Keeping them identical is the point: they answer one question, and a
+    workspace that removed what a worktree refused to would be the original bug again.
+
+    Not "has no upstream", which is what this was first written as (#91) and then narrowed
+    (#104): a parallel agent's piece has no upstream from the moment it is created, so that
+    reading refused over pieces with nothing to lose — and a guard that fires on the
+    harmless common case teaches the `--force` habit that stops it protecting anything.
 
     This fires even when the worktree directory lives outside the workspace — a relocated
     ``[plane] worktrees`` root, which `shutil.rmtree` never touches. That is not an
@@ -367,11 +371,11 @@ def _worktrees_at_risk(name: str) -> list[str]:
             if worktree.is_dirty(wt):
                 out.append(f"{label}: uncommitted changes")
                 continue
-            ahead = worktree.unpushed(wt)
-            if ahead is None:
-                out.append(f"{label}: no upstream, so its commits exist nowhere else")
-            elif ahead:
-                out.append(f"{label}: {ahead} unpushed commit(s)")
+            alone = worktree.unique_commits(wt)
+            if alone is None:
+                out.append(f"{label}: could not be checked for unique commits")
+            elif alone:
+                out.append(f"{label}: {alone} commit(s) that exist nowhere else")
     return out
 
 

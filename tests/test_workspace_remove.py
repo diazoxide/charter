@@ -148,10 +148,15 @@ class TestWorktreesAreGuardedToo(RemoveCase):
     it from being *guarded*, while `shutil.rmtree` took it anyway. `charter worktree remove`
     refuses to lose this work; `charter workspace remove` said `✓ Removed workspace`.
 
-    The guard follows `worktree remove`'s stance rather than the clone rule beside it: for a
-    worktree, *no upstream* counts as at risk. That difference is the whole point — a
-    parallel agent's branch is unpushed with no upstream almost by definition, so the clone
-    rule would keep missing exactly the case this exists for.
+    The guard follows `worktree remove`'s stance rather than the clone rule beside it: a
+    worktree is at risk when it holds commits reachable from **no other ref**. That
+    difference is the whole point — a parallel agent's branch is unpushed almost by
+    definition, so the clone rule would keep missing exactly the case this exists for.
+
+    That rule started as "has no upstream" (#91) and was narrowed to unique commits (#104),
+    because the first version also refused over freshly created pieces that had nothing to
+    lose. Both guards moved together, and must continue to: they answer one question, and a
+    workspace that removed what a worktree refused to would be the original bug again.
     """
 
     def test_uncommitted_work_in_a_worktree_refuses_removal(self):
@@ -202,17 +207,34 @@ class TestWorktreesAreGuardedToo(RemoveCase):
         self.assertEqual(rc, 0, out)
         self.assertFalse(workspace.workspace_dir("alpha").exists())
 
-    def test_a_fresh_worktree_blocks_because_it_has_no_upstream(self):
-        """Pinned deliberately rather than left to be discovered. A just-created piece has
-        nothing to lose, so refusing over it is a false positive — but it is the same false
-        positive `charter worktree remove` already has, and the two guards agreeing on what
-        "at risk" means matters more than shaving it here. Narrowing the rule to commits
-        unique to the branch changes that definition, and belongs in its own ticket.
+    def test_a_fresh_worktree_does_not_block(self):
+        """The inversion #104 was filed for. This asserted the opposite when #91 landed:
+        the rule was "has no upstream", which a just-created piece satisfies from the
+        moment it exists — so removal refused over a worktree with nothing to lose.
+
+        A guard that fires on the harmless common case is how `--force` becomes a habit,
+        and fleets create worktrees constantly, so the harmless case was about to become
+        the usual one. The rule is now "commits reachable from no other ref", which a fresh
+        piece scores zero on because its base's branch still reaches its tip.
         """
         self.make_clone_with_worktree()
         rc, out = self.remove()
-        self.assertNotEqual(rc, 0)
-        self.assertIn("slice", out)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(workspace.workspace_dir("alpha").exists())
+
+    def test_work_that_landed_on_another_branch_does_not_block(self):
+        """The rule is *reachable from somewhere else*, not *pushed*. A piece whose commits
+        were merged into the clone's own branch is safe to delete with no remote involved
+        at all — which the old no-upstream rule got wrong, and which is the ordinary end of
+        a piece's life once its work is integrated.
+        """
+        clone, wt = self.make_clone_with_worktree()
+        (wt / "feature.txt").write_text("done and merged\n")
+        self.commit(wt, "work")
+        self.git(clone, "merge", "--no-edit", "-q", "slice")
+        rc, out = self.remove()
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(workspace.workspace_dir("alpha").exists())
 
     def test_force_still_removes_a_worktree_holding_work(self):
         _, wt = self.make_clone_with_worktree()

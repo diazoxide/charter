@@ -164,6 +164,46 @@ def unpushed(path: Path) -> int | None:
         return None
 
 
+def unique_commits(path: Path) -> int | None:
+    """Commits reachable from HEAD and from **no other ref** — the work that would actually
+    cease to exist if this tree were deleted. ``None`` when git could not answer.
+
+    This replaces "has no upstream" as the definition of work at risk. That reading was
+    conservative in the right direction but wrong about the common case: a piece created a
+    minute ago has no upstream and nothing to lose, and refusing over it taught the habit of
+    reaching for ``--force`` — which is how a guard stops protecting the commits it exists
+    for. Fleets create worktrees constantly, so the harmless case was about to become the
+    usual one.
+
+    Asking git directly is both narrower and stronger. A fresh piece sits on its base's tip,
+    which some other branch still reaches, so it scores zero. A worker's unpushed commits are
+    on no other branch and score more than zero. A pushed branch is reached by its
+    remote-tracking ref and scores zero without anyone consulting an upstream setting — so a
+    branch pushed somewhere other than its configured upstream is now correctly safe, which
+    the old rule got wrong in the opposite direction.
+    """
+    cur = _git(path, "branch", "--show-current").stdout.strip()
+    args = ["rev-list", "--count", "HEAD", "--not"]
+    if cur:
+        # The pattern is interpreted RELATIVE to refs/heads when it precedes `--branches`,
+        # so it is the bare branch name — `refs/heads/<cur>` silently excludes nothing, and
+        # the failure mode is the guard reporting zero unique commits for work that is
+        # genuinely unique.
+        #
+        # `--exclude` also applies to the NEXT ref-listing option only, which is what we
+        # want: this branch is dropped from `--branches`, while `--remotes` still counts its
+        # remote-tracking copy — that copy existing is exactly what "pushed" means.
+        args.append(f"--exclude={cur}")
+    args += ["--branches", "--remotes"]
+    r = _git(path, *args)
+    if r.returncode != 0:
+        return None
+    try:
+        return int(r.stdout.strip())
+    except ValueError:
+        return None
+
+
 def branch_exists(clone: Path, name: str) -> bool:
     return _git(clone, "rev-parse", "--verify", "--quiet",
                 f"refs/heads/{name}").returncode == 0
