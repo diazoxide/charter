@@ -329,6 +329,17 @@ def _add_workspace_parser(sub) -> None:
     ri.add_argument("--all", action="store_true", help="Reinit every workspace (after a charter upgrade).")
     ri.set_defaults(func=commands_workspace.cmd_workspace_reinit)
 
+    opt = wsub.add_parser("optimize",
+                          help="Curate a workspace's memory: collapse exact duplicates and "
+                               "repair the index with --apply; propose the rest.")
+    opt.add_argument("name", nargs="?", help="Workspace to optimize (default: every one).")
+    opt.add_argument("--all", action="store_true", help="Every workspace (the default).")
+    opt.add_argument("--apply", action="store_true",
+                     help="Apply the safe, reversible ops. Proposals always stay manual.")
+    opt.add_argument("--stale-days", type=int, default=90, dest="stale_days",
+                     help="Age at which a memory is proposed for review (default: 90).")
+    opt.set_defaults(func=commands_workspace.cmd_workspace_optimize)
+
     rem = wsub.add_parser("remember",
                           help="Record one workspace memory (its own file, indexed) — the task journal.")
     rem.add_argument("text", nargs="?", help="Memory text; omit to list the workspace's memories.")

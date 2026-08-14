@@ -566,6 +566,12 @@ def check_memory_indexes() -> Result:
     dangling = unindexed = 0
     worst = []
     large = []
+    # WHICH KIND of base drifted, not just how much. The hint used to name
+    # `charter persona optimize` for every base including `ws:` ones, whose loop never
+    # touches a workspace — so it ran cleanly, fixed nothing, and left the drift reading as
+    # repaired. A remediation hint that silently no-ops is worse than no hint at all.
+    unindexed_kinds: set[str] = set()
+    large_kinds: set[str] = set()
     for label, mem_dir in bases:
         if not mem_dir.exists():
             continue
@@ -573,6 +579,8 @@ def check_memory_indexes() -> Result:
         if d["dangling"] or d["unindexed"]:
             dangling += len(d["dangling"])
             unindexed += len(d["unindexed"])
+            if d["unindexed"]:
+                unindexed_kinds.add("workspace" if label.startswith("ws:") else "persona")
             worst.append(f"{label} ({len(d['dangling'])} dangling, "
                          f"{len(d['unindexed'])} unindexed)")
         # Growth signal. An index only ever appends, so a long-lived persona's grows
@@ -582,18 +590,21 @@ def check_memory_indexes() -> Result:
         n = memstore.index_size(mem_dir)
         if n >= _INDEX_LINES_WARN:
             large.append(f"{label} ({n} entries)")
+            large_kinds.add("workspace" if label.startswith("ws:") else "persona")
     if not worst and not large:
         return Result("memory indexes", OK, detail=f"{len(bases)} base(s) consistent")
     hint = ", ".join(worst[:4]) + (", …" if len(worst) > 4 else "")
     if unindexed:
-        hint += "  → charter persona optimize --all --apply  (links unindexed files)"
+        for kind in sorted(unindexed_kinds):
+            hint += f"  → charter {kind} optimize --all --apply  (links unindexed files)"
     if dangling:
         hint += "  → a dangling link is proposal-only: prune it, or write the memory it names"
     if large:
         if hint:
             hint += "  "
         hint += ("large: " + ", ".join(large[:4]) + (", …" if len(large) > 4 else "")
-                 + "  → charter persona optimize <name>  (curate; growth is not a defect)")
+                 + "".join(f"  → charter {k} optimize <name>" for k in sorted(large_kinds))
+                 + "  (curate; growth is not a defect)")
     if not worst:
         return Result("memory indexes", WARN,
                       detail=f"{len(large)} large index(es)", hint=hint)

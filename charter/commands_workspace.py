@@ -244,6 +244,74 @@ def cmd_workspace_rename(args) -> int:
     return commit_push(config.ROOT, ["add", "-A", "--", *tracked_old, *new_rel, ".gitignore"], msg)
 
 
+def cmd_workspace_optimize(args) -> int:
+    """Optimize a workspace's memory (one, or ``--all``) — the workspace half of what
+    ``charter persona optimize`` has always done for personas.
+
+    The engine was never persona-specific: ``curate.report``/``apply_safe`` take any memory
+    directory. Only the wiring was, which left the fastest-growing store in the plane — the
+    workspace journal, appended every session and nudged by the memory-cadence hook — with
+    no dedupe, no index repair and no stale review.
+
+    Same two tiers as the persona command, deliberately: ``--apply`` performs only the safe
+    and reversible ops (collapse exact duplicates, repair the index), and proposals (near-dup
+    merges, stale archives) are printed for a human to decide. A read-only run names what
+    ``--apply`` would do, because a read-only run that quietly rewrote an index is how
+    "read-only" stops meaning anything.
+    """
+    from . import curate
+    names = [args.name] if getattr(args, "name", None) else workspace.list_workspaces()
+    if getattr(args, "name", None) and not workspace.workspace_dir(args.name).exists():
+        util.err(f"no workspace '{args.name}'")
+        return 1
+    if not names:
+        util.info("No workspaces to optimize.")
+        return 0
+
+    apply = getattr(args, "apply", False)
+    stale_days = getattr(args, "stale_days", 90)
+    total_actions = 0
+    for n in names:
+        mdir = workspace.memory_dir(n)
+        if not mdir.exists():
+            continue
+        rep = curate.report(mdir, stale_days=stale_days)
+        if rep["total"] == 0:
+            continue
+        print(f"\n◆ {n}  ({rep['total']} memories · {len(rep['exact_dups'])} exact-dup "
+              f"group(s) · {len(rep['near_dups'])} near-dup pair(s) · {len(rep['stale'])} stale)")
+        if apply:
+            actions = curate.apply_safe(mdir)
+            for a in actions:
+                util.ok(f"  auto: {a}")
+            total_actions += len(actions)
+            if actions:
+                rel = str(mdir.relative_to(config.ROOT))
+                commit_memory_reactive(
+                    [rel], f"workspace({n}): curate — {len(actions)} safe op(s)")
+            rep = curate.report(mdir, stale_days=stale_days)
+        else:
+            pending = curate.pending_auto(rep)
+            if pending:
+                print("  would auto-apply (re-run with --apply):")
+                for a in pending:
+                    print(f"    + {a}")
+        props = curate.proposals(rep)
+        if props:
+            print("  proposals (not auto-applied — decide these yourself):")
+            for p in props:
+                print(f"    ? {p}")
+        elif apply:
+            util.info("  clean — nothing to propose.")
+
+    if not apply:
+        util.info("\nRead-only. Re-run with --apply to auto-apply the safe/reversible ops "
+                  "(exact-dup collapse + index repair); proposals always stay manual.")
+    elif total_actions == 0:
+        util.info("\nNo safe ops to apply — the journal is already tidy.")
+    return 0
+
+
 def _work_at_risk(name: str) -> list[str]:
     """Clones **and worktrees** in the workspace with uncommitted or unpushed work.
 
