@@ -59,6 +59,31 @@ CDN-cached and lags by minutes, which reads as a failed publish when it is not:
 https://pypi.org/pypi/charter-cp/<X.Y.Z>/json
 ```
 
+## Then upgrade this machine — CLI first, pinned
+
+That endpoint answers "does the artifact exist", which is **not** the same as "can it be
+installed". The simple index that installers actually read propagates a little later, and
+in that window an upgrade either fails outright or, worse, succeeds against a cached index
+and leaves you on the old version reporting success.
+
+```
+uv tool install --force --refresh charter-cp==<X.Y.Z>   # pinned and refreshed, not bare --force
+claude plugin marketplace update charter                # the plugin is a separate artifact
+claude plugin update charter@charter --scope <project|user>
+```
+
+**CLI before plugin, and it is not a style preference.** If the lag catches you, upgrading
+the plugin first leaves the plugin NEWER than the CLI — the one direction that breaks
+things, because the plugin can dispatch `charter hook <name>` for a handler this CLI does
+not have, so the guard looks installed and is not. Doing the CLI first means a lag leaves
+the plugin *behind*, which is quietly supported.
+
+Both failure modes are real and were seen in consecutive releases: `uv tool install --force
+charter-cp` silently kept 0.27.2 after 0.28.0 published, then failed as "requirements are
+unsatisfiable" moments after 0.28.1 did. Neither announced itself; both were caught only by
+re-reading `charter --version` afterwards, which is therefore part of the sequence and not
+a courtesy.
+
 ## Choosing the number
 
 Minor for new config keys, new CLI flags, or a changed default. Patch for fixes that add no
