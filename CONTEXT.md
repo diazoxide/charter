@@ -87,3 +87,59 @@ A piece with a claim and no outcome. Not a third outcome but the absence of one,
 shape every undeclared failure takes — denial, timeout, or a killed session alike. Silence
 has an *age*, which is the only thing charter says about it: the cause is never inferred.
 _Avoid_: stuck, failed, timed-out, orphaned, dead
+
+## Prose
+
+The glossary governs words; this governs sentences. It is written down because docs drift
+gradually — no single paragraph looks wrong, and a year later the README sells instead of
+explaining. Every rule below is a pattern already in these docs, recorded so the next
+person or session can follow it without having read all of them first.
+
+**Name the failure, not the feature**:
+A heading says what went wrong often enough to get built around — "Two sub-agents that need
+the same repo" — and the body answers it. A reader recognises their own bad afternoon in a
+failure; nobody recognises themselves in "Worktrees".
+_Avoid_: Features, Key benefits, Capabilities, any heading that is only a noun
+
+**Make every claim checkable**:
+Reach for the number, the path, the flag, the file mode: "plaintext JSON at file mode 0600"
+carries what "stored securely" does not. A sentence that could move to another project's
+README unchanged is carrying no information.
+_Avoid_: secure, robust, powerful, seamless, blazing, simply, just, easily
+
+**State the limit at full volume**:
+What a thing does not do belongs in the same breath as what it does. "The vault is not a
+password manager" is the sentence that earns the rest of that section its trust. A
+limitation the reader discovers alone was concealed, however honestly it was omitted.
+_Avoid_: note that, please be aware, a caveats section at the end
+
+**Explain the why — the what is already on screen**:
+A paragraph beside a command earns its place by naming the failure that command prevents,
+never by restating it. The same rule governs code comments, which is why the good ones read
+as records of things that went wrong.
+_Avoid_: This command will, As you can see, In other words
+
+**Describe the reader's day, not the abstraction**:
+"Two features and a hotfix means three sets of branches, and if they share a checkout you
+spend the day stashing" — second person, concrete nouns, an afternoon the reader has had.
+An abstraction says the same thing while being impossible to disagree with.
+_Avoid_: workflow, productivity, overhead, friction, streamline, leverage, empower
+
+**A refusal is the rule working**:
+Where charter denies something on purpose, say so plainly and name the fix in the same
+breath. A reader who does not know the rule reads the denial as a bug and files it.
+_Avoid_: error, failure, blocked — for anything charter did deliberately
+
+**Never tell the reader how to feel**:
+The evidence goes on the page and the reader draws the conclusion. No exclamation marks, no
+promise that something is easy.
+_Avoid_: !, amazing, incredible, you will love, it is that simple
+
+One rewrite, for calibration:
+
+> **✗** charter provides powerful workspace isolation, seamlessly enabling developers to
+> effortlessly manage concurrent tasks and boost productivity.
+
+> **✓** Two features and a hotfix means three sets of branches across a shifting set of
+> repos, and if they share a checkout you spend the day stashing. A workspace is one
+> directory of clones per task, each repo on its own branch.
