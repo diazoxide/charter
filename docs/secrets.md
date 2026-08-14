@@ -51,9 +51,18 @@ shell history**, while still letting an agent *use* the credential:
   argument — an argument shows up in shell history and `ps` output for any other
   process on the machine to read.
 - A Claude Code guard hook denies `--reveal` outright, and denies reading a vault file
-  directly (`cat .charter/vaults/…`) — both would print a secret straight into the
-  conversation. **A denial here is that guard working, not a bug** — see the README's
-  "one credential" section for the same idea applied to git auth.
+  directly — both would print a secret straight into the conversation. **A denial here is
+  that guard working, not a bug** — see the README's "one credential" section for the same
+  idea applied to git auth.
+
+  "Directly" covers the shell (`cat`, `grep`, `head`, … on `.charter/vaults/…`) **and** the
+  harness's own file-reading tools (`Read`, `Grep`). It used to mean only the shell, which
+  made this bullet false in the way that mattered: the shell denial names the path it
+  refused, so reading that path with `Read` was the obvious next move and it worked (#90).
+
+  `Glob` is not denied — it returns file *names*, and that a vault exists is not the secret.
+  Neither is a search rooted far above `.charter/`, which reads vault files as collateral;
+  denying every broad search is untenable, so the guard checks the path you actually named.
 
 ## Setting one up
 

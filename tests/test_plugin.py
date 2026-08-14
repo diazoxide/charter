@@ -95,6 +95,11 @@ class TestPluginManifest(unittest.TestCase):
             ("SessionStart", "charter gl-refresh"),              # refresh forge state
             ("UserPromptSubmit", "charter hook userpromptsubmit --plugin-version"),
             ("PreToolUse", "charter hook pretooluse --plugin-version"),
+            # The vault guard for file-reading TOOLS. A separate matcher rather than folding
+            # it into `pretooluse`, because that one is registered for Bash and reads
+            # `tool_input["command"]` — a Read carries no command and would reach none of it
+            # (#90). Registered for Read|Grep only: Glob returns names, not contents.
+            ("PreToolUse", "charter hook pretooluse-read --plugin-version"),
             ("PreToolUse", "charter hook pretooluse-dispatch --plugin-version"),
             ("PostToolUse", "charter hook posttooluse --plugin-version"),
             ("PostToolUse", "charter hook posttooluse-dispatch --plugin-version"),

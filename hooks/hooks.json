@@ -55,6 +55,16 @@
         ]
       },
       {
+        "matcher": "Read|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "charter hook pretooluse-read --plugin-version 0.26.0",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Task|Agent",
         "hooks": [
           {

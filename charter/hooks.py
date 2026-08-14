@@ -505,6 +505,58 @@ def _touch_piece(data: dict) -> None:
 _CONTINUATIONS = ("resume", "clear", "compact")
 
 
+#: Tools that surface file CONTENT, and therefore leak a vault's plaintext into the
+#: transcript. `Glob` is deliberately absent: it returns NAMES, which is why `ls` is absent
+#: from `_READERS` too — that a vault exists is not the secret.
+_CONTENT_TOOLS = frozenset(("Read", "Grep"))
+
+#: Where each of them carries the thing it will read.
+_PATH_KEYS = ("file_path", "path", "notebook_path")
+
+
+def pretooluse_read() -> int:
+    """Deny a file-reading TOOL that would print a vault's plaintext into the transcript.
+
+    `pretooluse` guards Bash by inspecting ``tool_input["command"]``. A
+    ``Read(file_path=".charter/vaults/devops.json")`` carries no command and matched no
+    registered matcher, so it reached none of that — while the Bash denial helpfully *named
+    the path it refused*, making `Read` on that path the agent's obvious next move.
+
+    Same regex as the Bash guard on purpose (:data:`_VAULT_PATH_RE`), including its
+    carve-out: ``.charter/vaults.json`` is the registry — provider config and paths, never
+    values — and only ``.charter/vaults/`` holds secrets. Two guards that disagreed about
+    what counts as a vault would be worse than one, because the gap would sit exactly where
+    nobody looks.
+
+    Known limit, shared with the Bash guard and stated rather than papered over: a `Grep`
+    rooted at the repo top searches vault files as collateral. Denying every broad search is
+    untenable, so this checks the path the caller actually named.
+    """
+    data = _read_stdin()
+    _touch_piece(data)
+    try:
+        if (data.get("tool_name") or "") not in _CONTENT_TOOLS:
+            return 0
+        ti = data.get("tool_input") or {}
+        targets = [str(ti[k]) for k in _PATH_KEYS if ti.get(k)]
+        # Each target is tested with a trailing slash appended as well. `_VAULT_PATH_RE`
+        # requires `vaults/` — the slash is what keeps `.charter/vaults.json`, the registry,
+        # out of it — so a Grep rooted at the DIRECTORY `.charter/vaults` would otherwise
+        # walk past a guard that stops every file inside it. Appending cannot create a false
+        # positive: `.charter/vaults.json/` still has no `vaults/` in it.
+        if not any(_VAULT_PATH_RE.search(t) or _VAULT_PATH_RE.search(t + "/")
+                   for t in targets):
+            return 0
+        reason = ("reads a vault/secret file directly (would print plaintext). "
+                  "Use `charter … secret exec`/`cp` instead of reading `.charter/`")
+        _deny("PreToolUse", reason)
+        _trace("deny", data.get("session_id"), reason=reason[:70],
+               cmd=(data.get("tool_name") or "")[:40])
+    except Exception:
+        return 0
+    return 0
+
+
 def _piece_announcement(data: dict) -> str | None:
     """Tell a session which piece it holds and what it owes — the whole reason declarations
     ever get made, since a worker is otherwise just a session sitting in a directory.
@@ -1523,6 +1575,7 @@ _HANDLERS = {
     "sessionstart": sessionstart,
     "userpromptsubmit": userpromptsubmit,
     "pretooluse": pretooluse,
+    "pretooluse-read": pretooluse_read,
     "pretooluse-dispatch": pretooluse_dispatch,
     "posttooluse": posttooluse,
     "posttooluse-dispatch": posttooluse_dispatch,
