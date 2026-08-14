@@ -229,6 +229,11 @@ def cmd_worktree_list(args) -> int:
             branch = r["branch"] or f"detached {r['path']}"
             who = pieces.claimant(claims.get((clone.name, r["piece"])))
             said = pieces.outcome(declared.get((clone.name, r["piece"])))
+            if not said:
+                quiet = pieces.silence(ws, clone.name, r["piece"])
+                # An age, never a verdict. Whether `silent 3d` is a problem is the reader's
+                # call — charter has not verified that the worker is gone (ADR 0009).
+                said = f"silent {quiet}" if quiet else ""
             print(f"    {r['piece']:<24} {branch:<28} {state:<8} {who:<16} {said}".rstrip())
             total += 1
     if not total:

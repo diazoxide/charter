@@ -473,8 +473,35 @@ def _trace(event, session, **f):
         pass
 
 
+def _touch_piece(data: dict) -> None:
+    """Record that the worker in this session's directory is alive.
+
+    Called from the handlers that already run whenever a session is doing anything, which
+    is the point: liveness must not depend on the worker remembering, because the worker we
+    most need to catch is precisely the one that did not. A session outside a worktree has
+    no piece and writes nothing.
+
+    Silent and best-effort like everything else in this module — a turn must never fail
+    over bookkeeping. It is one small overwritten file, so the cost is a write, not a grep.
+    """
+    try:
+        cwd = data.get("cwd") or ""
+        if not cwd:
+            return
+        from pathlib import Path as _Path
+        from . import pieces, worktree
+        here = worktree.locate(_Path(cwd))
+        if here is None:
+            return
+        ws, repo, piece = here
+        pieces.seen(ws, repo, piece, session=data.get("session_id"))
+    except Exception:
+        return
+
+
 def pretooluse() -> int:
     data = _read_stdin()
+    _touch_piece(data)
     ti = data.get("tool_input") or {}
     cmd = ti.get("command", "") or ""
     cwd = data.get("cwd") or ""
@@ -753,6 +780,7 @@ def _autosync_version_lock() -> str | None:
 
 def sessionstart() -> int:
     data = _read_stdin()
+    _touch_piece(data)
     sid = data.get("session_id")
     try:
         from . import persona
@@ -949,6 +977,7 @@ def memory_share_note() -> str:
 
 def posttooluse() -> int:
     data = _read_stdin()
+    _touch_piece(data)
     if (data.get("tool_name") or "") not in ("Write", "Edit", "MultiEdit"):
         return 0
     ti = data.get("tool_input") or {}
@@ -1331,6 +1360,7 @@ def _commitment_nudge(prompt: str, sid: str | None) -> str:
 
 def userpromptsubmit() -> int:
     data = _read_stdin()
+    _touch_piece(data)
     sid = data.get("session_id")
     parts = []
     try:

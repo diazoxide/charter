@@ -189,6 +189,89 @@ def declaration_for(ws: str, repo: str, piece: str) -> dict | None:
     return declarations(ws).get((repo, piece))
 
 
+#: Liveness lives under here, one file per piece, OVERWRITTEN rather than appended.
+#:
+#: It is written by a hook that fires every turn. Appending it to the log would bury three
+#: meaningful lines per piece under thousands and make the log unbounded, so it is a
+#: separate store answering a separate question — the log is *what happened*, this is *the
+#: latest observation*. Overwriting breaches nothing: "last seen at T" is a past
+#: observation, not a cached derivable fact, and there is no reality it can contradict.
+#: What it discards is heartbeat history, which nothing needs.
+SEEN_DIR = "seen"
+
+
+def seen_path(ws: str, repo: str, piece: str) -> Path:
+    return dir_for(ws) / SEEN_DIR / repo / f"{piece}.json"
+
+
+def seen(ws: str, repo: str, piece: str, session: str | None = None,
+         when: datetime | None = None) -> Path | None:
+    """Mark a piece's worker alive now. Best-effort — never raises, never blocks a turn."""
+    p = seen_path(ws, repo, piece)
+    when = when or _now()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"ts": when.isoformat(timespec="seconds"),
+                                 "session": session}, sort_keys=True) + "\n")
+        return p
+    except OSError:
+        return None
+
+
+def last_seen(ws: str, repo: str, piece: str) -> dict | None:
+    """The latest observation of this piece's worker, or ``None``.
+
+    A malformed file reads as ``None`` rather than raising. An append-only world collects
+    half-written files from killed processes, and this feeds a listing and a status line —
+    both of which must render whatever they find.
+    """
+    try:
+        obj = json.loads(seen_path(ws, repo, piece).read_text())
+    except (OSError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) and obj.get("ts") else None
+
+
+def _parse(ts: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(ts) if ts else None
+    except (TypeError, ValueError):
+        return None
+
+
+def since(when: datetime | None, now: datetime | None = None) -> str:
+    """A coarse age — ``3m``, ``5h``, ``3d``. Coarse on purpose: the number is context for
+    a human decision, not an input to one charter is making."""
+    if when is None:
+        return "?"
+    secs = max(0, int(((now or _now()) - when).total_seconds()))
+    if secs < 3600:
+        return f"{secs // 60}m"
+    if secs < 86400:
+        return f"{secs // 3600}h"
+    return f"{secs // 86400}d"
+
+
+def silence(ws: str, repo: str, piece: str) -> str | None:
+    """How long this piece has said nothing, or ``None`` if it declared an outcome.
+
+    Measured from the last observation, falling back to the **claim** when the worker never
+    got as far as a first turn — that is precisely the case worth seeing, and answering
+    "unknown" there would lose it.
+
+    Note what is deliberately absent: any judgement. This returns an age. Whether an age is
+    a problem is the reader's call, and no threshold here may ever make it charter's
+    (ADR 0009, ADR 0011).
+    """
+    if declaration_for(ws, repo, piece):
+        return None
+    claim = claim_for(ws, repo, piece)
+    if not claim:
+        return None
+    mark = last_seen(ws, repo, piece)
+    return since(_parse((mark or {}).get("ts")) or _parse(claim.get("ts")))
+
+
 def outcome(entry: dict | None) -> str:
     """How a declaration reads in a listing. Empty when there is none — which is *silence*,
     not a third outcome, and #98 is what gives it an age."""
