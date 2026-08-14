@@ -1,12 +1,5 @@
 # MCP servers, personas, and credentials
 
-> **Corrected.** An earlier version of this page said Claude Code could not scope an MCP
-> *server* to a sub-agent, and that charter should therefore never grow an `mcp:` field.
-> Both claims were wrong. Sub-agent frontmatter has an `mcpServers` field, and it does
-> exactly what that paragraph said was impossible. What follows is what the host actually
-> supports; charter's own modelling of it is tracked in
-> [#141](https://github.com/diazoxide/charter/issues/141) and is not built yet.
-
 ## The host scopes servers per sub-agent
 
 A sub-agent's frontmatter takes `mcpServers:` — a list whose entries are either a string
@@ -69,19 +62,70 @@ Two things that will bite:
 - **Never put values in an `env` block.** Agent files are committed. That is the failure
   this whole path exists to prevent.
 
-## Until #141 lands
+## Declaring one on a persona
 
-`charter persona sync-agents` **generates** `.claude/agents/<name>.md`, so an `mcpServers:`
-block added there by hand is overwritten the next time any persona changes. Today the
-options are to declare the server in `.mcp.json` — which gives up the per-persona scoping
-above — or to accept that the hand-edit is temporary.
+`charter persona sync-agents` **generates** `.claude/agents/<name>.md`, so a block written
+there by hand is overwritten the next time any persona changes. charter emits it instead,
+from a sidecar beside the charter:
 
-`agent-tools:` still works and is unaffected: it narrows the generated `tools:` line, and
-accepts MCP patterns (`mcp__<server>`, `mcp__<server>__*`). Note that if **no** entry in a
-`tools:` list resolves to a real tool, the sub-agent usually fails to launch — so naming an
-MCP server that is not connected is not free.
+```jsonc
+// personas/reddit/mcp.json — same schema as .mcp.json, plus `secrets`
+{
+  "mcpServers": {
+    "reddit": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["some-reddit-mcp"],
+      "secrets": {
+        "REDDIT_CLIENT_ID": "client-id",
+        "REDDIT_CLIENT_SECRET": "client-secret"
+      }
+    }
+  }
+}
+```
 
-## Caveats that survive #141
+A sidecar rather than frontmatter because `persona.md`'s parser is line-based and charter
+carries no runtime dependencies: nested YAML can be emitted (JSON is valid YAML) but not
+read. It also means a server's own README snippet pastes in unchanged.
+
+`secrets` maps an env var **the server demands** to a key **in this persona's vault**.
+charter consumes it and emits the wrapper:
+
+```yaml
+tools: Read, WebFetch, Bash, mcp__reddit__*
+mcpServers:
+  - reddit: {"type": "stdio", "command": "charter", "args": ["secret", "exec", "reddit",
+      "--env", "REDDIT_CLIENT_ID=client-id", "--env", "REDDIT_CLIENT_SECRET=client-secret",
+      "--exec", "--", "uvx", "some-reddit-mcp"]}
+```
+
+Three things it does on your behalf:
+
+- **Wraps the command in the persona's vault.** The generated file names the *keys*; no
+  value is resolved until the sub-agent starts the server, and then only into that
+  process's environment.
+- **Grants the tools.** Every declared server contributes `mcp__<server>__*` to `tools:`
+  when `agent-tools` is set. Otherwise the server list and the tool list are two things
+  that must agree by hand, and disagreement surfaces at *dispatch* time as an error about
+  "unresolved entries" — the symptom, not the cause. With no `agent-tools` the sub-agent
+  inherits every tool already, so nothing is added.
+- **Leaves credential-free servers alone.** No `secrets`, no wrapper: dragging a public
+  server through charter would add a process and buy nothing.
+
+Servers are **inherited and unioned** along `extends:`, parent first, child winning a name
+collision — the rule `tools` and `uses` already follow.
+
+### A missing vault does not block the sync
+
+The charter is committed and shared; a vault is machine-local by design. A teammate cloning
+this repo legitimately has neither the vault nor the keys, so `sync-agents` renders the
+wrapper regardless — it is correct either way, and only the *run* would fail. `charter
+persona lint` reports a server declaring `secrets` on a persona that names no vault. That
+is ADR 0013 applied: name the divergence, do not resolve it, and do not refuse a sync on a
+fresh clone.
+
+## Caveats
 
 - **`mcpServers` is ignored for plugin sub-agents**, deliberately, for security. charter's
   personas generate into `.claude/agents/` and charter's plugin declares no agents, so this

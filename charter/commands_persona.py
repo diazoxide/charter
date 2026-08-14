@@ -8,6 +8,7 @@ credentials — and, per the secrets contract, never sees the plaintext.
 
 from __future__ import annotations
 
+import json
 import os
 
 from . import commands_secrets, config, persona, trace, util
@@ -463,8 +464,32 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
     role = meta.get("role") or name.title()
     desc = meta.get("agent-description") or meta.get("description") or _agent_description(name, meta)
     fm = [f"name: {name}", f"description: {_yaml_str(desc)}"]
+
+    # Declared MCP servers, wrapped in the persona's vault. Claude Code connects an inline
+    # server when the sub-agent starts and disconnects it when it finishes, and its tool
+    # descriptions never reach the parent conversation — so this is per-persona scoping of
+    # the server itself, not merely of the tools.
+    servers = persona.mcp_servers(name)
+    vault = meta.get("vault")
+
     if meta.get("agent-tools"):
-        fm.append(f"tools: {meta['agent-tools']}")  # narrow the toolset; omit = inherit all
+        tools = meta["agent-tools"]
+        # Declaring a server grants its tools. Otherwise `tools:` and the server list are
+        # two hand-kept lists that must agree, and disagreement surfaces at DISPATCH time
+        # as "unresolved entries" — a message about the symptom, not the cause.
+        grants = [f"mcp__{s}__*" for s in servers
+                  if f"mcp__{s}" not in tools]
+        fm.append(f"tools: {', '.join([tools, *grants]) if grants else tools}")
+    # No `agent-tools` means the sub-agent inherits every tool, so adding a narrowing
+    # `tools:` line here to carry the grant would be a downgrade rather than a grant.
+
+    if servers:
+        fm.append("mcpServers:")
+        for server_name in sorted(servers):
+            entry = persona.mcp_render_entry(name, vault, servers[server_name])
+            # JSON, because JSON is valid YAML — this emits a nested block without
+            # hand-rolling a YAML writer or taking a dependency to do it.
+            fm.append(f"  - {server_name}: {json.dumps(entry, ensure_ascii=False)}")
     for k in _AGENT_PASSTHROUGH_KEYS:  # pass through when the charter sets them
         if meta.get(k):
             fm.append(f"{k}: {meta[k]}")

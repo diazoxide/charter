@@ -165,6 +165,69 @@ def _csv_list(v) -> list[str]:
     return [x.strip() for x in (v or "").strip("[]").split(",") if x.strip()]
 
 
+#: The sidecar naming a persona's MCP servers, same schema as `.mcp.json` plus a
+#: charter-only `secrets` map per server. A separate FILE rather than frontmatter because
+#: `parse` above is line-based and charter carries no runtime dependencies: nested YAML can
+#: be emitted (JSON is valid YAML) but not read. A sidecar also takes a server's own README
+#: snippet unchanged, which is the form these arrive in.
+MCP_FILE = "mcp.json"
+
+
+def mcp_servers(name: str) -> dict:
+    """``{server_name: config}`` a persona declares, inheritance applied.
+
+    Unioned along the lineage the way ``tools``/``uses`` are — parent first, child wins on
+    a name collision. A child that silently lost the server its parent declared would be a
+    surprise, and this is the rule the rest of the frontmatter already follows.
+
+    Never raises. The file is hand-edited, and a stray comma in it must not take down
+    `sync-agents` for every persona in the plane.
+    """
+    out = {}
+    for anc in lineage(name):
+        try:
+            doc = json.loads((dir_of(anc) / MCP_FILE).read_text())
+            servers = doc.get("mcpServers") or {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(servers, dict):
+            out.update(servers)
+    return out
+
+
+def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
+    """One declared server, as the generated agent should carry it.
+
+    A ``secrets`` map — ``{ENV_VAR: vault-key}`` — turns the entry into a
+    ``charter secret exec … --exec -- <original command>`` invocation, so the value reaches
+    the server's environment without ever reaching a context window. The env var names
+    belong to the third-party server, which is why they are declared rather than inferred:
+    charter cannot know them, and injecting every key in the vault would hand a server
+    every credential the persona holds instead of the two it needs.
+
+    ``--exec`` is not optional. It replaces the process rather than capturing it, and an
+    MCP stdio server never returns — the capturing form would hang holding output nobody
+    reads.
+
+    A server with no ``secrets`` is passed through untouched: dragging a credential-free
+    server through charter would buy nothing and add a process.
+    """
+    out = {k: v for k, v in entry.items() if k != "secrets"}
+    secrets = entry.get("secrets") or {}
+    if not secrets or not vault:
+        return out
+    args = ["secret", "exec", vault]
+    for env_name, key in secrets.items():
+        args += ["--env", f"{env_name}={key}"]
+    args += ["--exec", "--"]
+    if out.get("command"):
+        args.append(out["command"])
+    args += list(out.get("args") or [])
+    out["command"] = "charter"
+    out["args"] = args
+    return out
+
+
 def lineage(name: str) -> list[str]:
     """The inheritance chain, child-first: ``[name, parent, grandparent, …]``.
     Cycle-safe (stops if it revisits a persona)."""
@@ -500,6 +563,21 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     issues += structural_errors(name)
     if deep:
         issues += _skill_ref_issues(d["charter"])
+    # A declared MCP server whose `secrets` cannot be resolved. Reported rather than
+    # refused: the persona charter is committed and SHARED, while a vault is machine-local
+    # by design, so a teammate cloning this repo legitimately has neither the vault nor the
+    # keys. The wrapper charter emits is correct either way — only the run would fail — and
+    # refusing to render would break `sync-agents` on a fresh clone (ADR 0013: name the
+    # divergence, do not resolve it).
+    servers = mcp_servers(name)
+    if servers:
+        vault = (resolve(name) or {}).get("meta", {}).get("vault")
+        needs_secrets = sorted(s for s, e in servers.items() if (e or {}).get("secrets"))
+        if needs_secrets and (not vault or vault == "none"):
+            issues.append(("error",
+                           f"mcp: server(s) {', '.join(needs_secrets)} declare `secrets` but "
+                           f"this persona names no vault — add `vault:` or drop the secrets"))
+
     return issues
 
 

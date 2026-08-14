@@ -82,12 +82,12 @@ charter secret exec reddit \
 so stdio streams through. An MCP server never exits, so the capturing form would hang
 holding output nobody reads. See `docs/secrets.md` and `docs/mcp.md`.
 
-**No MCP server is wired to this persona yet.** Claude Code scopes servers per sub-agent
-via `mcpServers:` in the generated agent file, but `sync-agents` overwrites that file, so
-charter has to emit it — tracked in issue #141. Until then this persona works from
-`WebFetch`, `WebSearch` and `Bash`, and `agent-tools` deliberately does **not** name
-`mcp__reddit__*`: listing a tool that resolves to nothing is a claim this persona cannot
-honour, and enough of them in a `tools:` list prevents a sub-agent from launching at all.
+**No MCP server is wired to this persona yet** — declaring one is a decision about which
+third-party code runs on this machine, and it is not charter's to make for you. When it is
+chosen, it goes in `personas/reddit/mcp.json` and `charter persona sync-agents` wraps it in
+this vault automatically; `agent-tools` then gains `mcp__reddit__*` on its own, so do not
+add it by hand. See `docs/mcp.md`. Until then this persona works from `WebFetch`,
+`WebSearch` and `Bash`.
 
 Never `--reveal` a Reddit credential, never paste one into a draft, and never put one in a
 `.mcp.json` `env` block — that file is committed.
