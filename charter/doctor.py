@@ -413,6 +413,13 @@ def check_plane_root() -> Result:
     # every change arrives through a workspace clone and a PR, and nothing pulls the root.
     # Observed three times in one session, twice acting on a stale checkout.
     #
+    # Appended to BOTH paths. The first version put it only on the clean one, so a root
+    # that was dirty *and* behind said nothing about being behind — and those two states
+    # share a cause, since the same neglect that leaves memory files uncommitted is what
+    # leaves the checkout stale. It stayed silent on the one occasion it mattered: a plane
+    # three commits behind, holding the fix for the bug being debugged, reporting only its
+    # uncommitted file.
+    #
     # "at last fetch" is not hedging. The number is read from a ref that is only as current
     # as the last fetch, and presenting it as a live reading would be the failure ADR 0013
     # names — in the check whose whole job is to report state honestly.
@@ -425,7 +432,7 @@ def check_plane_root() -> Result:
     # that fires with both findings at once — which is the common case, since whoever
     # branched in the root is also editing in it.
     return Result(
-        name, WARN, detail=", ".join(findings),
+        name, WARN, detail=", ".join(findings) + drift,
         hint=" ".join(actions) + " Anything that is not control plane belongs in a "
              "workspace clone — charter workspace create <task>, then charter clone "
              "<repo>; the plane root is one working tree every session shares.",

@@ -127,6 +127,18 @@ class TestTheCleanLineSaysWhetherItIsCurrent(PlaneRootBehindBase):
         r = doctor.check_plane_root()
         self.assertIn("uncommitted", r.detail)
 
+    def test_dirt_does_not_suppress_the_drift(self):
+        """The first version reported drift only on the clean path, so a root that was
+        BOTH dirty and behind said nothing about being behind — and a root nobody works in
+        is dirty for exactly the reason it is also stale: memory files accumulate while no
+        one pulls. Observed: a plane three commits behind, holding the fix for the very
+        thing being debugged, reporting only the uncommitted file."""
+        self._advance_remote(2)
+        (self.root / "seed.txt").write_text("edited\n")
+        r = doctor.check_plane_root()
+        self.assertIn("uncommitted", r.detail)
+        self.assertIn("2 behind", r.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
