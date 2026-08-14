@@ -383,6 +383,14 @@ def check_plane_root() -> Result:
         # permanently in the yellow, which costs the two findings that do matter.
         status = _git_in(root, "status", "--porcelain", "--untracked-files=no")
         dirty = [ln for ln in status.stdout.splitlines() if ln.strip()]
+        # How far the root has drifted behind its upstream. Read from the ALREADY-FETCHED
+        # remote ref — never a live query, because this runs from the SessionStart hook and
+        # must not reach the network. `@{upstream}` fails cleanly on a root with no
+        # tracking branch (a plane `git init`-ed by hand), which is not a fault.
+        behind = _git_in(root, "rev-list", "--count", "HEAD..@{upstream}")
+        behind_n = int(behind.stdout.strip() or 0) if behind.returncode == 0 else 0
+        upstream = _git_in(root, "rev-parse", "--abbrev-ref", "@{upstream}")
+        upstream_ref = upstream.stdout.strip() if upstream.returncode == 0 else ""
     except (util.ProcTimeout, OSError) as e:
         return Result(name, OK, detail=f"not checked ({e})")
 
@@ -397,8 +405,21 @@ def check_plane_root() -> Result:
     if dirty:
         findings.append(f"{len(dirty)} uncommitted file(s)")
         actions.append("Commit control-plane content with `charter save`.")
+    # Said in the DETAIL and never as a finding: a root behind its upstream is the normal
+    # resting state of a directory nobody works in, so warning about it would put this row
+    # permanently in the yellow — the cost this check already refuses to pay for untracked
+    # memory files. But `clean on main` is a statement about the working TREE that reads as
+    # one about the plane, and a root drifts behind precisely BECAUSE nobody works in it:
+    # every change arrives through a workspace clone and a PR, and nothing pulls the root.
+    # Observed three times in one session, twice acting on a stale checkout.
+    #
+    # "at last fetch" is not hedging. The number is read from a ref that is only as current
+    # as the last fetch, and presenting it as a live reading would be the failure ADR 0013
+    # names — in the check whose whole job is to report state honestly.
+    drift = (f", {behind_n} behind {upstream_ref or 'upstream'} at last fetch"
+             if behind_n else "")
     if not findings:
-        return Result(name, OK, detail=f"clean on {branch}")
+        return Result(name, OK, detail=f"clean on {branch}{drift}")
     # Where the work belongs is said ONCE, after the per-finding actions. Saying it per
     # finding printed the same "move it into a workspace clone" clause twice in a row
     # that fires with both findings at once — which is the common case, since whoever
