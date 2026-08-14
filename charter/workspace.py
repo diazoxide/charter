@@ -299,20 +299,24 @@ def set_active(name: str, session_id: str | None = None, force: bool = False) ->
     if locked and locked != name and not force:
         return "locked"
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    scope = "none"
     tid = _terminal_id()
     if tid:
         config.TERMINALS_DIR.mkdir(parents=True, exist_ok=True)
         _terminal_file(tid).write_text(name + "\n")
-        scope = "terminal"
     sid = _session_id(session_id)
     if sid:
         config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         _session_file(sid).write_text(name + "\n")
         _lock_file(sid).write_text(name + "\n")  # confirming = locking for the session
-        scope = "session"
     _prune()
-    return scope
+    # The scope is the REACH of what was written, so it names the longest-lived pointer
+    # that actually landed — and the terminal one outlives the session one. These used to
+    # be assigned in sequence, so the session branch overwrote the terminal branch and
+    # every caller was told `session`. `_scope_note` reads persistence out of this value,
+    # so a pane that HAD kept its workspace across restarts was told it had not, and a
+    # shell with no pane id at all was told it had, which is the direction that costs
+    # someone their selection with nothing having said so.
+    return "terminal" if tid else "session" if sid else "none"
 
 
 def reconcile(session_id: str | None = None, terminal_id: str | None = None) -> str | None:

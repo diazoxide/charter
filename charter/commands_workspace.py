@@ -633,8 +633,18 @@ def cmd_workspace_pushbg(args) -> int:
 
 
 def _scope_note(scope: str) -> str:
-    if scope in ("session", "terminal"):
+    """How far the selection reaches, in the words the reader needs.
+
+    Only a terminal pointer survives closing and reopening Claude. A session-scoped
+    selection is gone the moment the session is, and saying so is the whole point: the
+    reader who is not told goes looking for a bug the next time the status line says
+    `default`.
+    """
+    if scope == "terminal":
         return " (this terminal only — kept across closing/reopening Claude)"
+    if scope == "session":
+        return (f" (this session only — this terminal reports no pane id, so a new "
+                f"session starts at '{config.DEFAULT_WORKSPACE}')")
     return ""
 
 
