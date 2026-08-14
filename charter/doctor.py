@@ -724,6 +724,24 @@ def check_vault_registry_divergence() -> Result:
                        "charter vault add <name> --provider <p> … --share --force")
 
 
+def _plugin_ids(root: Path) -> tuple[str, str]:
+    """``(plugin, marketplace)`` from the manifests the installed plugin carries.
+
+    Both files sit in the directory ``CLAUDE_PLUGIN_ROOT`` already names, so the id is
+    exact without parsing Claude Code's cache path — a layout charter does not own and
+    must not depend on. Either being absent falls back to a placeholder: the id is a
+    convenience, while naming the two *steps* is the part that was missing.
+    """
+    def name(filename: str, fallback: str) -> str:
+        try:
+            doc = json.loads((root / ".claude-plugin" / filename).read_text())
+            return (doc.get("name") or "").strip() or fallback
+        except (OSError, ValueError, AttributeError):
+            return fallback
+
+    return name("plugin.json", "<plugin>"), name("marketplace.json", "<marketplace>")
+
+
 def check_plugin_skew() -> Result:
     """`charter` ships as two artifacts — the CLI (pip/uv) and the Claude Code plugin
     (``.claude-plugin/plugin.json`` + ``hooks/hooks.json``) — with two version numbers.
@@ -764,9 +782,24 @@ def check_plugin_skew() -> Result:
     # matches the installed CLI" against a v0.13.1 CLI is how the drift stayed invisible.
     if plugin_version == hooks.MIN_PLUGIN_VERSION:
         return Result("plugin", OK, detail=f"v{plugin_version} matches the installed CLI")
+    # The advice goes in `detail`, not `hint`: `Result.render` drops the hint entirely
+    # when the status is OK, so guidance written there would be invisible while looking
+    # shipped — which is the failure ADR 0013 is about, and it would be an unusually poor
+    # place to commit it.
+    #
+    # Both steps, in order, because "upgrade it" did not upgrade anything. The marketplace
+    # is a git clone advertising whatever it last fetched, so without refreshing it first
+    # `plugin update` finds the installed version already current and correctly does
+    # nothing; and `update` defaults to `user` scope while the plugin is usually installed
+    # per project, which fails outright rather than silently. Observed together: a plugin
+    # two minor versions behind, with `doctor` run repeatedly throughout.
+    plugin_name, marketplace = _plugin_ids(Path(root))
     return Result("plugin", OK,
                   detail=f"v{plugin_version} (CLI v{hooks.MIN_PLUGIN_VERSION}) — older "
-                         f"plugin, supported; upgrade it for the newest hooks")
+                         f"plugin, supported. Upgrade: `claude plugin marketplace update "
+                         f"{marketplace}` (skip it and the next is a no-op), then `claude "
+                         f"plugin update {plugin_name}@{marketplace} --scope "
+                         f"<project|user, see: claude plugin list>`")
 
 
 #: Seconds a single preflight check may take before it is reported as timed out rather
