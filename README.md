@@ -195,6 +195,9 @@ not encryption at rest. The vault is not a password manager.
   against, `secret exec`, and feeding a tool that wants a dotenv file.
 - [docs/git-policy.md](docs/git-policy.md) — the one-credential rule, and why a denial from
   the plugin's guard is the rule working rather than a bug.
+- [docs/mcp.md](docs/mcp.md) — giving an MCP server a persona's vault credentials without
+  the value entering the model, and what the per-persona tool allowlist does and does not
+  constrain.
 - [docs/forges.md](docs/forges.md) — what GitLab and GitHub each need, self-hosted hosts,
   and the rule for a repo name that collides across forges.
 
