@@ -35,9 +35,63 @@ command.
   dependency there is a cost they did not choose. Build-time and test-time are stdlib too.
 - **Cross-platform care.** macOS and Linux diverge in ways that have bitten this repo
   before — path normalisation under `/tmp`, `seq` counting down on BSD, case-insensitive
-  filesystems. If your change touches paths or shells out, think about both.
+  filesystems. If your change touches paths or shells out, think about both. See *Your
+  machine is not the runner* below, which this keeps turning out to be a case of.
 - **Docs move with the code.** A flag that is not in `docs/` does not exist. If you change
   what a command does, update the page that describes it in the same PR.
+
+## Your machine is not the runner
+
+Three times now a change has been green locally and red on `main`, and each time the cause
+was the same shape: **the test inherited something from the developer's machine instead of
+pinning it.** Not an OS difference in the end — a *configuration* difference the test never
+declared it depended on.
+
+The most recent one is the clearest. A fixture built a bare git remote with
+`git init --bare`, so that remote's `HEAD` followed whatever `init.defaultBranch` the
+machine happened to set. `git fetch` copies that into `refs/remotes/origin/HEAD`, and that
+ref is the first thing charter's default-branch resolver trusts. On a machine setting
+`main`, the fixture was one repository. On a runner leaving it unset, it was a different
+one, whose default branch was `master`. The assertions were correct throughout; they were
+describing something that only existed on one machine.
+
+The others: `seq 1 0` counts *down* on BSD and prints nothing on GNU, so a "zero iterations"
+loop silently ran twice on macOS. And `/tmp` is a symlink to `/private/var/...` on macOS, so
+a path comparison that passes locally fails on Linux unless both sides are `.resolve()`d.
+
+**So: a test pins what it depends on.** Anything that changes behaviour and comes from
+outside the test — git config, `$PATH`, locale, the default shell, an env var, the
+filesystem's case sensitivity — is either set explicitly by the test or is a bug waiting
+for someone else's machine.
+
+For git specifically, pin it on the invocation rather than trusting the environment:
+
+```python
+_PINS = ["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+         "-c", "tag.gpgsign=false"]
+subprocess.run(["git", *_PINS, "-C", str(cwd), *args], ...)
+```
+
+Signing belongs in that list even when the test has nothing to do with signing: a developer
+with a signing helper configured gets a fixture commit that stops to ask for a passphrase,
+and a suite with nobody at the keyboard hangs rather than fails. That is the same failure
+`docs/git-policy.md` exists to prevent in charter itself.
+
+### Reproducing the runner before you push
+
+You can hand git a config the way the runner has it, without touching your own:
+
+```bash
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.defaultBranch GIT_CONFIG_VALUE_0=master \
+  python3 -m unittest discover -s tests
+```
+
+If a change touches git behaviour, run the suite that way once. It is cheaper than a red
+`main`, and it is how the last one was diagnosed.
+
+**Watch the run on `main` after a merge, not only the one on your PR.** PR checks run
+against the PR branch; `main` is a different commit. Every one of these three was green on
+the PR and red immediately after merging.
 
 ## Architecture decisions
 
