@@ -601,6 +601,90 @@ def _detail_worktrees(ws: str, dirs) -> list[Path]:
         return []
 
 
+def _piece_state(ws: str, repo: str, piece: str) -> str:
+    """What a piece row says about itself: its declaration, or how long it has been silent.
+
+    Never a verdict. `silent 3d` is an age and whether that is a problem is the reader's
+    call — charter has not verified that the worker is gone, and ADR 0009's rule about
+    unearned diagnoses applies with more force here than anywhere, because the status line
+    is read at a glance and its wording is taken as settled.
+
+    File reads only: this is on the every-turn path and the module's contract forbids a git
+    subprocess. Returns "" rather than raising on anything unreadable — a footer that
+    blanks is worse than one that shows less.
+    """
+    try:
+        from . import pieces as _p
+        said = _p.outcome(_p.declaration_for(ws, repo, piece))
+        if said:
+            return said.split(":")[0]  # the reason belongs in `worktree list`, not here
+        quiet = _p.silence(ws, repo, piece)
+        return f"silent {quiet}" if quiet else ""
+    except Exception:
+        return ""
+
+
+def _piece_summary(ws: str) -> str | None:
+    """The workspace line's piece cell — counts, and the oldest silence.
+
+    Omitted entirely when the workspace has no pieces, exactly as the todo count is: a
+    figure that renders on every session including the ones it means nothing for is how a
+    line stops being read at all.
+
+    Existence comes from `worktree.dirs_for`, which is filesystem-only by design — its own
+    docstring records that listing those directories IS reading git's output, since
+    `git worktree add`/`remove` are what create and delete them.
+    """
+    try:
+        from . import pieces as _p
+        from . import worktree as _wt
+        base = _wt.root(ws)
+        repos = sorted(d.name for d in base.iterdir() if d.is_dir())
+    except (OSError, Exception):
+        return None
+
+    total = done = gave_up = 0
+    quiet: list[str] = []
+    for repo in repos:
+        try:
+            for wt in _wt.dirs_for(ws, repo):
+                total += 1
+                d = _p.declaration_for(ws, repo, wt.name)
+                if d and d["event"] == "done":
+                    done += 1
+                elif d:
+                    gave_up += 1
+                else:
+                    s = _p.silence(ws, repo, wt.name)
+                    if s:
+                        quiet.append(s)
+        except Exception:
+            continue
+    if not total:
+        return None
+
+    parts = [f"{_DIM}pieces{_R} {total}"]
+    if done:
+        parts.append(f"{_GREEN}{done} done{_R}")
+    if gave_up:
+        parts.append(f"{_YELLOW}{gave_up} abandoned{_R}")
+    if quiet:
+        parts.append(f"{_DIM}{len(quiet)} silent {max(quiet, key=_silence_rank)}{_R}")
+    return " ".join(parts)
+
+
+#: Order silence ages so the OLDEST is the one reported. Coarse strings ("3m", "5h", "2d")
+#: do not sort lexically — "9m" would beat "2d" — and the oldest is the whole point.
+_UNIT_SECS = {"m": 60, "h": 3600, "d": 86400}
+
+
+def _silence_rank(age: str) -> int:
+    try:
+        return int(age[:-1]) * _UNIT_SECS.get(age[-1], 0)
+    except (ValueError, IndexError):
+        return 0
+
+
 def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[tui.Node]:
     """One table row per clone, nested under the workspace like a tree:
 
@@ -684,10 +768,16 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[t
                 # tree, not of its name), so the column comes to mean "this piece is NOT on
                 # the branch you would assume" — the only case worth 34 columns.
                 wb = branches.get(w, "?")
+                # When the branch restates the piece name — the default, since `worktree
+                # add` names them alike — the column was already being emptied as 34
+                # wasted columns. Spend them on what the piece SAID instead. When the
+                # branch differs it still wins: "this piece is not on the branch you would
+                # assume" is the surprise, and a surprise outranks a status.
+                state = _piece_state(active, d.name, w.name)
                 rows.append(_tree_cells(f"  {_DIM}{_TREE_PIPE}{mark}{_R}",
                                         f"{emph_w}{_DIM}{w.name}{_R}",
                                         w, states, branches, gl,
-                                        branch="" if wb == w.name else wb))
+                                        branch=state if wb == w.name else wb))
         # ONE summary line per repo, newest piece first — a fixed cost no matter how many
         # worktrees exist, so the footer can't grow with them (the ⑂N badge above carries
         # the true total, and overflow truncates with … rather than dropping pieces
@@ -1473,6 +1563,7 @@ def render(payload: dict | None = None) -> str:
             f"{_CYAN}⬢{_R} {_BOLD}{active}{_R}{pin}",
             reinit,
             f"{_DIM}todo{_R} {ntodo}" if ntodo else None,
+            _piece_summary(active),
             f"{_DIM}ws{_R} {nws}",
         ]))
 
