@@ -442,6 +442,16 @@ def _add_worktree_parser(sub) -> None:
     ab.add_argument("reason", help="Why you stopped — what whoever picks this up reads first.")
     ab.set_defaults(func=commands_worktree.cmd_worktree_abandon)
 
+    # Its own command, not `list --history`: `list` answers what is running here (from git),
+    # this answers what happened here (from the record), and ADR 0010 is about not letting
+    # one name cover both.
+    hist = wsub.add_parser("history", help="What happened to this workspace's pieces, "
+                                           "including ones whose worktree is gone.")
+    hist.add_argument("repo", nargs="?", help="Only this repo (default: all).")
+    hist.add_argument("piece", nargs="?", help="Only this piece (default: all).")
+    hist.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    hist.set_defaults(func=commands_worktree.cmd_worktree_history)
+
     rm = wsub.add_parser("remove", help="Remove a worktree (refuses to lose uncommitted "
                                         "or unpushed work).")
     rm.add_argument("repo")

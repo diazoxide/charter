@@ -242,6 +242,40 @@ def cmd_worktree_list(args) -> int:
     return 0
 
 
+def cmd_worktree_history(args) -> int:
+    """What happened to this workspace's pieces — including pieces that no longer exist.
+
+    A separate command rather than a flag on ``list``, and deliberately so. ``list`` answers
+    *what is running here*, from git; this answers *what happened here*, from the record.
+    ADR 0010's rule is that where two sources answer a question you name which question each
+    answers — folding this into ``list --history`` would put both behind one name and invite
+    exactly the confusion that ADR describes the expensive way.
+
+    So this reads only the log and never git: a piece whose worktree is long gone is the
+    main reason to run it.
+    """
+    ws = workspace.resolve(getattr(args, "workspace", None))
+    util.info(f"workspace: {ws}")
+
+    repo = getattr(args, "repo", None)
+    piece = getattr(args, "piece", None)
+    rows = [e for e in pieces.events(ws)
+            if (not repo or e.get("repo") == repo) and (not piece or e.get("piece") == piece)]
+
+    if not rows:
+        scope = f" for {repo}/{piece}" if piece else (f" for {repo}" if repo else "")
+        util.info(f"No piece history recorded{scope}. Claims are recorded by "
+                  "`charter worktree add`.")
+        return 0
+
+    for e in rows:
+        who = pieces.claimant(e)
+        reason = f" — {e['reason']}" if e.get("reason") else ""
+        print(f"    {e.get('ts', ''):<22} {e.get('repo', ''):<16} "
+              f"{e.get('piece', ''):<24} {e.get('event', ''):<10} {who}{reason}")
+    return 0
+
+
 def cmd_worktree_remove(args) -> int:
     ws, clone = _resolve(args)
     if clone is None:
