@@ -125,6 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
     rcl.add_argument("--scope", help="Comma list of scopes to search (workspace,persona,shared,ephemeral); "
                                      "default workspace,persona,shared.")
     rcl.add_argument("--ephemeral", action="store_true", help="Also include the persona's session scratch.")
+    rcl.add_argument("--full", action="store_true",
+                     help="Also print a line of each memory's body (the path is always shown).")
     rcl.add_argument("--persona", help="Search this persona instead of the active one.")
     # One workspace or every workspace — never both. `-w beta --all-workspaces` has no
     # coherent reading, and argparse refusing it beats silently honouring one of them.

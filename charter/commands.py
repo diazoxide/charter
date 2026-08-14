@@ -1021,6 +1021,41 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def _rel_to_root(path) -> str:
+    """Plane-relative where possible. An absolute path out of a temp dir or someone else's
+    home is noise in a transcript, and every other charter surface prints relative."""
+    try:
+        return str(Path(path).relative_to(config.ROOT))
+    except (ValueError, TypeError):
+        return str(path)
+
+
+def _body_snippet(path, width: int = 90) -> str:
+    """The first real line of a memory's body — enough to tell whether this is the hit you
+    wanted, without a `Read`. Frontmatter, headings and the `_Avoid_`-style italic lines are
+    skipped because none of them distinguish one memory from another.
+
+    Unreadable is not an error: `recall` runs constantly and must degrade to less, never to
+    a failure.
+    """
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError:
+        return ""
+    in_front = False
+    for i, raw in enumerate(lines):
+        ln = raw.strip()
+        if i == 0 and ln == "---":
+            in_front = True
+            continue
+        if in_front:
+            in_front = ln != "---"
+            continue
+        if ln and not ln.startswith("#") and not ln.startswith("_"):
+            return ln[:width] + ("…" if len(ln) > width else "")
+    return ""
+
+
 def cmd_recall(args) -> int:
     """The single memory-fetch gate: search (or list) across every relevant memory base —
     the active workspace's journal, the active persona's own memory, and the shared
@@ -1071,15 +1106,25 @@ def cmd_recall(args) -> int:
             util.info(f"{got.undated} undated memory(ies) skipped — no recorded date to compare.")
         return 0
     width = max((len(h.label) for h in results), default=8)
+    full = getattr(args, "full", False)
     for h in results:
         tag = f"  ({h.score})" if h.score else ""
         # The date leads because when listing it IS the sort key — and the column order
         # stays identical under a query (where score orders instead), since a layout that
         # rearranges itself per mode is harder to read than one that never moves.
         print(f"  {h.date.isoformat() if h.date else '—':<10}  {h.label:<{width}}  {h.title}{tag}")
+        # The ADDRESS, on every hit. This used to be a closing sentence telling the reader
+        # to go and find the file, which is a direction rather than a location — and the
+        # slug rules differ per base (the journal timestamps its filenames, persona memory
+        # does not), so following it cost an inference and a `Read` per hit.
+        print(f"              {_rel_to_root(h.path)}")
+        if full:
+            snip = _body_snippet(h.path)
+            if snip:
+                print(f"              {snip}")
     where = "every workspace" if all_ws else ", ".join(scopes)
-    util.info(f"{len(results)} memory(ies) across {where}. "
-              f"Read one: find the file under its base (workspaces/… or personas/…).")
+    util.info(f"{len(results)} memory(ies) across {where}."
+              + ("" if full else "  Pass --full for a line of each body."))
     if truncated:
         util.info(f"Showing {len(results)} — pass --limit 0 for all.")
     if got.undated:
