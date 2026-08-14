@@ -30,6 +30,21 @@ SPAWN_COOLDOWN = 3600     # and at most one background attempt per hour, success
 NET_TIMEOUT = 5           # a detached child, but still: never hang around
 
 
+#: Said wherever a pin and an install disagree, and nowhere else.
+#:
+#: The pin is per control plane; the binary is one machine-global install. Two planes
+#: pinning different versions cannot both be satisfied, and `version sync` does not fix
+#: that — it picks a winner and puts the other plane into drift, which is how a plane that
+#: nobody touched went from "in sync" to "drift" because of work done somewhere else.
+#: charter is a control plane, not a version manager, so it says this rather than growing a
+#: shim to resolve the pinned version per plane.
+SHARED_INSTALL_NOTE = (
+    "the `charter` binary is ONE machine-global install shared by every control plane on "
+    "this machine, so a pin is advisory — syncing here can put another plane into drift "
+    "(see: uv tool list)"
+)
+
+
 def _cache_file() -> Path:
     return config.STATE_DIR / "cache" / "update.json"
 
@@ -67,6 +82,31 @@ def newer_than(current: str) -> str | None:
         return latest if _parse(latest) > _parse(current) else None
     except Exception:
         return None
+
+
+def latest_display(installed: str) -> str:
+    """The `latest` line, honest about what it is.
+
+    `latest` is a reading of PyPI cached for up to :data:`REFRESH_TTL`, not a live answer.
+    Usually the distinction does not matter. It matters completely in one case: when the
+    INSTALLED version is newer than the cached one, the cache is *provably* out of date —
+    you cannot be running something PyPI has not published — and printing the lower number
+    beside it produced `installed 0.27.2 / latest 0.26.0`, a contradiction on one screen
+    that invites the reader to distrust every other line in the output.
+
+    So that case reports the staleness instead of the number. ADR 0013: do not present as
+    checked what was not checked.
+    """
+    latest = (load().get("latest") or "").strip()
+    if not latest:
+        return "— (not checked yet)"
+    try:
+        stale = bool(installed) and _parse(latest) < _parse(installed)
+    except Exception:
+        stale = False
+    if stale:
+        return f"— (cached {latest} is stale: it predates the {installed} you are running)"
+    return latest
 
 
 def fetch_and_store() -> str | None:

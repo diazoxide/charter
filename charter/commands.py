@@ -1236,10 +1236,11 @@ def cmd_version(args) -> int:
 
     print(f"  installed  {installed}")
     print(f"  locked     {locked or '— (this control plane pins no version)'}")
-    print(f"  latest     {latest or '— (not checked yet)'}")
+    print(f"  latest     {update.latest_display(installed)}")
     print()
     if locked and locked != installed:
         util.warn(f"drift: this control plane pins {locked}, you are running {installed}.")
+        util.info(f"  {update.SHARED_INSTALL_NOTE}")
         util.info(f"  conform this machine:  charter version sync")
         return 1
     if latest and update.newer_than(installed):
@@ -1262,6 +1263,10 @@ def cmd_version_sync(args) -> int:
     if locked == installed:
         util.ok(f"already on the locked version ({locked}).")
         return 0
+    # Said before the install, not after: this conforms a binary every plane on the
+    # machine shares, so the next plane the reader opens may have just gone into drift.
+    from . import update as _update
+    util.warn(_update.SHARED_INSTALL_NOTE)
     util.info(f"syncing {installed} → {locked} …")
     ok, detail = sync_to(locked)
     if not ok:

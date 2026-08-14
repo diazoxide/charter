@@ -526,9 +526,14 @@ def check_version_lock() -> Result:
         return Result("version lock", OK, detail="not pinned")
     if locked == __version__:
         return Result("version lock", OK, detail=f"pinned {locked}, in sync")
+    from . import update
+    # The note rides on the drift branch only. Everywhere else it is furniture, and a
+    # sentence printed on every clean preflight is a sentence nobody reads on the one
+    # that isn't.
     return Result("version lock", WARN,
                   detail=f"pinned {locked}, running {__version__}",
-                  hint="Run: charter version sync  (conforms this machine to the lock)")
+                  hint=f"{update.SHARED_INSTALL_NOTE}. "
+                       f"Run: charter version sync  (conforms this machine to the lock)")
 
 
 def check_memory_indexes() -> Result:
