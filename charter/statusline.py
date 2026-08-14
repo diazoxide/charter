@@ -146,10 +146,18 @@ _PALETTE = (
     "\033[35m", "\033[34m", "\033[36m", "\033[32m",
     "\033[33m", "\033[95m", "\033[94m", "\033[92m",
 )
-def _active(session_id: str | None = None) -> tuple[str, str]:
+def _active(session_id: str | None = None, cwd: str | None = None) -> tuple[str, str]:
+    """``(workspace, source)`` for the SESSION, not for this process.
+
+    ``cwd`` is the session's directory out of the payload. It matters because the cwd rung
+    outranks every pointer, so reading the hook's own directory there does not merely miss
+    a better answer — it overrides the right one. The renderer already trusts the payload
+    for :func:`_current`, and the two must agree: marking a row in one workspace under a
+    header naming another is worse than either mistake alone.
+    """
     from . import workspace
-    return (workspace.resolve(session_id=session_id),
-            workspace.source(session_id=session_id))
+    return (workspace.resolve(session_id=session_id, cwd=cwd),
+            workspace.source(session_id=session_id, cwd=cwd))
 
 
 def _count_workspaces() -> int:
@@ -1513,7 +1521,8 @@ def render(payload: dict | None = None) -> str:
     failure anywhere in data-gathering falls back to the same minimal string."""
     payload = payload or {}
     try:
-        active, src = _active(payload.get("session_id"))
+        active, src = _active(payload.get("session_id"),
+                              (payload.get("workspace") or {}).get("current_dir"))
         nws = _count_workspaces()
         # The active workspace's clones, and only those. The plane's own tree is
         # deliberately not a row: it is the plane, not a repo you work in, and drawing it

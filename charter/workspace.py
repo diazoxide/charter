@@ -190,7 +190,8 @@ def from_path(path=None) -> str | None:
     return parts[0] if len(parts) >= 2 else None
 
 
-def resolve(explicit: str | None = None, session_id: str | None = None) -> str:
+def resolve(explicit: str | None = None, session_id: str | None = None,
+            cwd=None) -> str:
     """Active workspace by precedence: ``--workspace`` → ``$CHARTER_WORKSPACE`` → **the
     tree you are standing in** → per-session pointer → per-terminal pointer → ``default``.
 
@@ -198,13 +199,19 @@ def resolve(explicit: str | None = None, session_id: str | None = None) -> str:
     at paths that name the workspace, so being inside one is not a hint about which
     workspace is active, it is the fact. The pointers remain for the case with no tree to
     stand in — a shell at the plane root.
+
+    ``cwd`` names *whose* directory that rung should read, and exists because the process
+    asking is not always the session being described. A status line is the case: Claude
+    Code runs the hook and passes the session's directory in the payload, so a renderer
+    reading ``os.getcwd()`` would answer for the hook. Callers that ARE the session — every
+    CLI command — leave it unset and get the process cwd, which is the same fact.
     """
     if explicit:
         return explicit
     env = os.environ.get("CHARTER_WORKSPACE")
     if env:
         return env.strip()
-    here = from_path()
+    here = from_path(cwd)
     if here:
         return here
     sid = _session_id(session_id)
@@ -220,13 +227,20 @@ def resolve(explicit: str | None = None, session_id: str | None = None) -> str:
     return config.DEFAULT_WORKSPACE
 
 
-def source(explicit: str | None = None, session_id: str | None = None) -> str:
-    """Human label for where the active workspace came from (for display)."""
+def source(explicit: str | None = None, session_id: str | None = None,
+           cwd=None) -> str:
+    """Human label for where the active workspace came from (for display).
+
+    Takes ``cwd`` for the same reason :func:`resolve` does, and must be called with the
+    same one: a header that named the workspace from the session's directory and the
+    *reason* from the process's would explain the answer by naming a rung that did not
+    decide it.
+    """
     if explicit:
         return "--workspace"
     if os.environ.get("CHARTER_WORKSPACE"):
         return "$CHARTER_WORKSPACE"
-    if from_path():
+    if from_path(cwd):
         return "cwd"      # must mirror `resolve`'s order, or the status line explains
                           # the active workspace by naming a source that did not decide it
     sid = _session_id(session_id)
