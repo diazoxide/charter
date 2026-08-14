@@ -29,8 +29,19 @@ from charter import config, doctor
 from tests._isolation import PersonaIso
 
 
+#: Pinned on every invocation rather than inherited. `init.defaultBranch` decides what a
+#: bare repo's HEAD points at, `git fetch` copies that into `refs/remotes/origin/HEAD`, and
+#: that ref is the FIRST thing `_plane_default_branch` trusts. A machine that sets it to
+#: `main` and a CI runner that leaves it unset therefore disagree about what this fixture
+#: even is — which is how these tests passed locally and failed on `main`.
+#: Signing is pinned off for the reason charter has a whole rule about: a commit that stops
+#: to ask for a passphrase hangs a suite with nobody there to answer.
+_PINS = ["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+         "-c", "tag.gpgsign=false"]
+
+
 def _git(cwd, *args):
-    return subprocess.run(["git", "-C", str(cwd), *args],
+    return subprocess.run(["git", *_PINS, "-C", str(cwd), *args],
                           capture_output=True, text=True, check=False)
 
 
@@ -51,8 +62,8 @@ class PlaneRootBehindBase(PersonaIso):
 
         # A real upstream, so `@{upstream}` resolves the way it does on a live plane.
         bare = self.tmp.parent / f"{self.tmp.name}-remote.git"
-        _git(root, "init", "-q", "--bare", str(bare)) if False else \
-            subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=False)
+        subprocess.run(["git", *_PINS, "init", "-q", "-b", "main", "--bare", str(bare)],
+                       check=False, capture_output=True)
         self.addCleanup(lambda: __import__("shutil").rmtree(bare, ignore_errors=True))
         _git(root, "remote", "add", "origin", str(bare))
         _git(root, "push", "-q", "-u", "origin", "main")
@@ -61,7 +72,8 @@ class PlaneRootBehindBase(PersonaIso):
     def _advance_remote(self, n=3):
         """Move origin/main ahead of the root, the way a merged PR does."""
         clone = self.tmp.parent / f"{self.tmp.name}-clone"
-        subprocess.run(["git", "clone", "-q", str(self.bare), str(clone)], check=False)
+        subprocess.run(["git", *_PINS, "clone", "-q", str(self.bare), str(clone)],
+                       check=False, capture_output=True)
         self.addCleanup(lambda: __import__("shutil").rmtree(clone, ignore_errors=True))
         _git(clone, "config", "user.email", "t@example.test")
         _git(clone, "config", "user.name", "T")
