@@ -10,3 +10,5 @@ Written by the persona as it learns; committed and shared.
 - [Live-testing charter CLI changes from a worktree does NOT work: charter.](live-testing-charter-cli-changes-from-a-worktree.md)
 - [macOS vs Linux filesystem divergence that turned CI red in this repo: pa](macos-vs-linux-filesystem-divergence-that-turned.md)
 - [charter persona remember run from inside a WORKTREE writes to the clone,](charter-persona-remember-run-from-inside-a-workt.md)
+- [Rendering 'charter statusline' for screenshots/assets: the payload's ses](rendering-charter-statusline-for-screenshots-ass.md)
+- [Validating mermaid before committing it (GitHub renders a syntax error a](validating-mermaid-before-committing-it-github-r.md)
