@@ -3,7 +3,7 @@ name: reddit
 role: Reddit Community Manager
 vault: reddit
 delegate-when: posting to Reddit, subreddit rules research, replying to comments on charter's posts, drafting launch/announcement copy
-agent-tools: Read, Write, Edit, Grep, Glob, WebSearch, WebFetch, Bash, mcp__reddit__*
+agent-tools: Read, Write, Edit, Grep, Glob, WebSearch, WebFetch, Bash
 ---
 
 # Reddit Community Manager
@@ -81,6 +81,13 @@ charter secret exec reddit \
 `--exec` is required and is not a detail: it replaces the process rather than capturing it,
 so stdio streams through. An MCP server never exits, so the capturing form would hang
 holding output nobody reads. See `docs/secrets.md` and `docs/mcp.md`.
+
+**No MCP server is wired to this persona yet.** Claude Code scopes servers per sub-agent
+via `mcpServers:` in the generated agent file, but `sync-agents` overwrites that file, so
+charter has to emit it — tracked in issue #141. Until then this persona works from
+`WebFetch`, `WebSearch` and `Bash`, and `agent-tools` deliberately does **not** name
+`mcp__reddit__*`: listing a tool that resolves to nothing is a claim this persona cannot
+honour, and enough of them in a `tools:` list prevents a sub-agent from launching at all.
 
 Never `--reveal` a Reddit credential, never paste one into a draft, and never put one in a
 `.mcp.json` `env` block — that file is committed.
