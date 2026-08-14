@@ -3,7 +3,7 @@
     "reddit": {
       "type": "stdio",
       "command": "uvx",
-      "args": ["mcp-server-reddit"]
+      "args": ["--with", "mcp<2", "mcp-server-reddit"]
     }
   }
 }
