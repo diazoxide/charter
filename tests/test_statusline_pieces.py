@@ -166,6 +166,40 @@ class TestItNeverBlanksTheFooter(PieceStatusCase):
         self.addCleanup(d.chmod, 0o700)
         self.assertIn("parser", self.render())
 
+    def test_an_unreadable_record_directory_still_renders_with_linux_semantics(self):
+        """`chmod 000` does not reproduce this everywhere: listing an unreadable directory
+        RAISES on Linux and yields nothing on macOS. That divergence is exactly why the
+        test above passed locally and went red on CI, with the footer collapsing to
+        `⬢ charter` — the blank this module promises never to show.
+
+        So the raising behaviour is patched in explicitly, and the platform that happens to
+        run the suite stops deciding whether this case is covered.
+        """
+        self.add_piece("parser")
+        blocked = pieces.dir_for(self.ws)
+        real_glob, real_is_dir = Path.glob, Path.is_dir
+
+        def denied(p) -> bool:
+            return p == blocked or blocked in p.parents
+
+        def strict_glob(self_, pattern, *a, **kw):
+            if denied(self_):
+                raise PermissionError(13, "Permission denied", str(self_))
+            return real_glob(self_, pattern, *a, **kw)
+
+        def strict_is_dir(self_, *a, **kw):
+            # pathlib swallows ENOENT/ENOTDIR/EBADF/ELOOP but NOT EACCES, so this raises
+            # on Linux where macOS quietly answers False.
+            if denied(self_):
+                raise PermissionError(13, "Permission denied", str(self_))
+            return real_is_dir(self_, *a, **kw)
+
+        Path.glob, Path.is_dir = strict_glob, strict_is_dir
+        self.addCleanup(setattr, Path, "is_dir", real_is_dir)
+        self.addCleanup(setattr, Path, "glob", real_glob)
+        self.assertEqual(pieces.events(self.ws), [])
+        self.assertIn("parser", self.render())
+
 
 if __name__ == "__main__":
     unittest.main()

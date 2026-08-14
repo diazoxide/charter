@@ -137,8 +137,17 @@ def events(ws: str) -> list[dict]:
     d = dir_for(ws)
     if not d.exists():
         return []
+    try:
+        # Listing an unreadable directory RAISES on Linux and yields nothing on macOS.
+        # The divergence is why this needs a guard rather than a comment: a suite green on
+        # a developer's Mac went red on CI over exactly this line, and the failure it
+        # produced was the status line falling back to `⬢ charter` — the blank footer this
+        # module promises never to show.
+        files = sorted(d.glob("*.jsonl"))
+    except OSError:
+        return []
     out = []
-    for f in sorted(d.glob("*.jsonl")):
+    for f in files:
         try:
             text = f.read_text()
         except OSError:

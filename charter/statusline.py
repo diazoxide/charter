@@ -4,10 +4,26 @@ Wired via ``.claude/settings.json`` → ``statusLine``. Claude Code pipes a JSON
 payload on stdin (session/model/workspace context) and renders this command's
 stdout in the footer on every turn.
 
-Contract we honor (see docs/workspaces.md): read *all* of stdin, stay fast (no
-git subprocess, no network — branches are read straight from ``.git/HEAD``),
-never raise (fall back to a minimal string), and exit 0. ANSI colour and
-multiple lines are supported.
+Contract we honor (see docs/workspaces.md): read *all* of stdin, stay fast, no
+network, never raise (fall back to a minimal string), and exit 0. ANSI colour
+and multiple lines are supported.
+
+**On subprocesses.** This used to claim "no git subprocess", which was never true
+of the module as a whole and misled at least one change into asserting it: dirt
+and ahead/behind come from :func:`_run_state`, one ``git status --porcelain
+--branch`` per tree, and origin's URL costs another. What *is* true is narrower
+and still worth stating, because it is the rule new work has to follow:
+
+* **Branches never fork.** They are read straight from ``.git/HEAD`` — see
+  :func:`_branch` — because a branch is needed for every row and a subprocess per
+  row is what the cheap read exists to avoid.
+* **Nothing new may add one per row.** :func:`_piece_state` and
+  :func:`_piece_summary` are file reads for exactly this reason, and
+  :func:`charter.worktree.dirs_for` exists so that listing pieces does not become
+  a ``git worktree list`` per clone on every turn.
+
+So: a bounded number of subprocesses proportional to *repos*, none proportional
+to rows, and none at all for anything that can be read off the filesystem.
 
 This module only *gathers* content (repos, branches, CI, personas) and
 declares the layout; all width math lives in :mod:`charter.tui`, whose nodes

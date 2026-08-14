@@ -122,22 +122,41 @@ def valid_name(name: str) -> bool:
     return bool(name) and name not in (".", "..") and _NAME_RE.match(name) is not None
 
 
+def _unreadable(fn) -> bool:
+    """Run a filesystem predicate, treating "I am not allowed to look" as "no".
+
+    ``pathlib`` does NOT count ``EACCES`` among the errors it swallows — only ENOENT,
+    ENOTDIR, EBADF and ELOOP — so ``(d / ".git").is_dir()`` *raises* on a directory the
+    process cannot enter. It raises on Linux and returns False on macOS, which is how a
+    suite green on a laptop goes red on CI.
+
+    Every caller here is asking "is there a checkout at this path", and the honest answer
+    for a directory we cannot read is no. Raising instead means one unreadable directory
+    anywhere under ``workspaces/`` takes down every caller that scans it — including the
+    status line, whose failure mode is a blank footer on every turn.
+    """
+    try:
+        return fn()
+    except OSError:
+        return False
+
+
 def is_git_repo(path: Path) -> bool:
-    return (path / ".git").exists()
+    return _unreadable(lambda: (path / ".git").exists())
 
 
 def is_tree(path: Path) -> bool:
     """A working tree of either provenance — a clone (``.git`` is a directory) or a
     linked worktree (``.git`` is a file). :func:`is_clone` deliberately excludes the
     second; this is for callers that only need "is there a checkout here"."""
-    return (Path(path) / ".git").exists()
+    return _unreadable(lambda: (Path(path) / ".git").exists())
 
 
 def is_clone(path: Path) -> bool:
     """A real clone, not a worktree. Git itself draws the line: a clone's ``.git`` is a
     DIRECTORY, a linked worktree's ``.git`` is a FILE pointing at the shared gitdir. So a
     worktree can never be miscounted as a cloned repo — no bookkeeping required."""
-    return (path / ".git").is_dir()
+    return _unreadable(lambda: (path / ".git").is_dir())
 
 
 def workspace_dir(name: str) -> Path:

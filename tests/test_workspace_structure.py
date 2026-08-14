@@ -165,5 +165,47 @@ class StructureCase(PersonaIso):
         self.assertEqual(cw.cmd_workspace_reinit(SimpleNamespace(name="ghost", all=False)), 1)
 
 
+class UnreadableDirectoriesAnswerNo(PersonaIso):
+    """`is_clone` and friends answer "is there a checkout here". For a directory the
+    process cannot enter, the honest answer is no — not an exception.
+
+    `pathlib` does not count EACCES among the errors it swallows (only ENOENT, ENOTDIR,
+    EBADF and ELOOP), so `(d / ".git").is_dir()` RAISES on Linux and returns False on
+    macOS. That divergence took CI red once already: one unreadable directory under
+    `workspaces/` took down every caller that scans it, including the status line, whose
+    failure mode is a blank footer on every turn.
+    """
+
+    def _denying(self, path):
+        from pathlib import Path
+        real = Path.is_dir
+
+        def strict(self_, *a, **kw):
+            if self_ == path or path in self_.parents:
+                raise PermissionError(13, "Permission denied", str(self_))
+            return real(self_, *a, **kw)
+
+        Path.is_dir = strict
+        self.addCleanup(setattr, Path, "is_dir", real)
+
+    def test_is_clone_answers_no_rather_than_raising(self):
+        workspace.ensure("alpha")
+        workspace.scaffold("alpha")
+        d = workspace.workspace_dir("alpha") / "locked"
+        d.mkdir(parents=True, exist_ok=True)
+        self._denying(d)
+        self.assertFalse(workspace.is_clone(d))
+
+    def test_scanning_a_workspace_survives_one_unreadable_directory(self):
+        """The case that actually bit: the scan, not the predicate. One directory nobody
+        can enter must not make the whole workspace unlistable."""
+        workspace.ensure("alpha")
+        workspace.scaffold("alpha")
+        d = workspace.workspace_dir("alpha") / "locked"
+        d.mkdir(parents=True, exist_ok=True)
+        self._denying(d)
+        self.assertEqual(workspace.clones("alpha"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
