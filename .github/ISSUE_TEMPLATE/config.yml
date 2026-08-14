@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/diazoxide/charter/security/advisories/new
+    about: Report a vulnerability privately — never in a public issue.
+  - name: Docs
+    url: https://github.com/diazoxide/charter/tree/main/docs
+    about: The control plane file, personas, secrets, forges and the git policy.

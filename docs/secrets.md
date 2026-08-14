@@ -329,3 +329,28 @@ The interface (`charter.secrets.base.VaultProvider`) is deliberately small (`get
 later without touching any call site above it — `charter vault add --provider <x>`
 already accepts an unimplemented provider and reports it as "registered for later use"
 rather than crashing.
+
+## Feeding a tool that wants a dotenv file
+
+Some tools take a *file* of secrets rather than environment variables. `--dotenv` writes
+one 0600 temp file containing every entry you name, points an env var at its path, and
+deletes it when the command exits — so no value is ever printed, stored, or placed in
+argv.
+
+```bash
+charter secret exec qa \
+  --dotenv PLAYWRIGHT_MCP_SECRETS_FILE=APP_USER:platform-user \
+  --dotenv PLAYWRIGHT_MCP_SECRETS_FILE=APP_PASS:platform-pass \
+  -- npx @playwright/cli@0.1.18 -s=login fill e3 APP_PASS
+```
+
+Repeats sharing an env-var name merge into a single file, in flag order. Different names
+produce separate files. Defining the same NAME twice under one ENVVAR is an error (exit
+code 2).
+
+The value is never typed by the caller: the tool refers to the secret by the **name** you
+gave it (`APP_PASS`) and resolves it from the file. Any value that does appear in captured
+output is redacted.
+
+`--dotenv` cannot be combined with `--exec` — exec replaces this process, so the temp file
+would never be cleaned up. Use `--env` for an exec'd command.

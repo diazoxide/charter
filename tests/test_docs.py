@@ -12,11 +12,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 README = (ROOT / "README.md").read_text()
+INSTALL = (ROOT / "docs" / "install.md").read_text()
+
+#: Badge and image lines carry no prose. Counting them against the "first paragraph"
+#: budget would fail the check for adding a CI badge, which is not what it is for.
+_DECORATION = re.compile(r"^\s*(\[!\[.*|!\[.*)$", re.M)
 
 
 class TestReadme(unittest.TestCase):
     def test_says_what_it_is_in_the_first_paragraph(self):
-        head = README[:600].lower()
+        head = _DECORATION.sub("", README)[:600].lower()
         self.assertIn("claude code", head)
         for word in ("persona", "workspace", "repo"):
             self.assertIn(word, head, word)
@@ -65,19 +70,28 @@ class TestConfigDocs(unittest.TestCase):
 
 
 class TestPasteInInstall(unittest.TestCase):
-    """The README carries a prompt users paste into Claude Code to install charter.
+    """The docs carry a prompt users paste into Claude Code to install charter.
 
     Prose that drifts merely reads oddly; a prompt that drifts *fails*, in someone else's
     session, on their first contact with the project. Every command in it is therefore
     checked against the thing it names — the distribution on PyPI, and the plugin id built
     from the two manifests — rather than trusted to stay true.
+
+    The prompt is looked for in the README *and* in `docs/install.md`, because which page
+    hosts it is a layout decision and these checks are not: they must keep holding when it
+    moves, or moving it silently retires them.
     """
 
     def _paste_block(self) -> str:
-        blocks = re.findall(r"```\n(.*?)```", README, re.S)
-        found = [b for b in blocks if "Install charter" in b]
-        self.assertTrue(found, "the paste-in install prompt is gone from the README")
-        return found[0]
+        # Each document is scanned on its own. Concatenating them first puts the fence
+        # matcher out of phase — a ```bash block opens with "```bash", not "```\n", so
+        # its *closing* fence reads as an opening one and the pairing shifts by one from
+        # there on. Joined, the prompt stops being found at all.
+        for doc in (README, INSTALL):
+            for block in re.findall(r"```\n(.*?)```", doc, re.S):
+                if "Install charter" in block:
+                    return block
+        self.fail("the paste-in install prompt is gone from the docs")
 
     def test_it_installs_the_distribution_that_actually_exists(self):
         """`charter` is not installable — PyPI would not allow the name, so the
