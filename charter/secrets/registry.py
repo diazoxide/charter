@@ -204,9 +204,26 @@ def add_vault(name: str, provider: str, cfg: dict, persona: str | None = None,
         save_shared(shared)
         # An account pin still belongs to this machine, so it is layered on top rather
         # than published with the rest of the entry.
-        if local_cfg:
-            local = load_local()
-            local["vaults"].setdefault(name, {}).setdefault("config", {}).update(local_cfg)
+        #
+        # The local half is also REDUCED to those keys, which is the other half of the
+        # same idea. `load_registry` layers local over shared per field, so a registration
+        # that already existed locally shadows the one just published — every field of it,
+        # guaranteed, not as a race. Publishing without clearing it therefore did nothing
+        # at all: the entry landed in the committed half while every read still resolved
+        # through the stale local copy, and `vault add` printed the old item name back
+        # under a success line because it read the merged view (ADR 0013).
+        local = load_local()
+        previous = local["vaults"].get(name)
+        keep = {k: v for k, v in ((previous or {}).get("config") or {}).items()
+                if k in LOCAL_ONLY_KEYS}
+        keep.update(local_cfg)
+        if keep:
+            local["vaults"][name] = {"config": keep}
+            save_registry(local)
+        elif previous is not None:
+            # Nothing local-only to preserve, so the entry goes rather than lingering as
+            # an empty shadow waiting to shadow the next change.
+            del local["vaults"][name]
             save_registry(local)
     else:
         entry["config"] = {**cfg, **local_cfg}

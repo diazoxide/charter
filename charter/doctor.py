@@ -670,6 +670,55 @@ def check_personas() -> Result:
                   hint="charter persona lint  (per-persona detail and how to fix each)")
 
 
+def check_vault_registry_divergence() -> Result:
+    """The two halves of the vault registry, disagreeing about the same vault.
+
+    `registry.load_registry` layers local over shared **per field**, so where both halves
+    define one, the local value is what every read resolves through — silently, and while
+    `vault list` reports the scope as `both` and says nothing more. The failure it produces
+    is an empty vault rather than an error: `secret get` reports the key missing,
+    `vault verify` finds no references, and `check_vaults` stays green because reachability
+    is not resolution.
+
+    FAIL rather than WARN, per ADR 0013: `cmd_doctor` exits non-zero only on FAIL, and that
+    exit code is the only thing that makes the SessionStart wrapper print. A divergence
+    worth naming is worth failing for.
+
+    :data:`LOCAL_ONLY_KEYS` are excluded by construction — an account pin layered over a
+    shared entry is the design working, not a fault.
+    """
+    from .secrets import base, registry
+
+    try:
+        shared = registry.load_shared().get("vaults", {})
+        local = registry.load_local().get("vaults", {})
+    except base.VaultError as e:
+        return Result("vault registry", WARN, hint=str(e))
+
+    clashes = []
+    for name in sorted(set(shared) & set(local)):
+        s, l = shared[name] or {}, local[name] or {}
+        for key in ("provider", "persona"):
+            sv, lv = s.get(key), l.get(key)
+            if sv is not None and lv is not None and sv != lv:
+                clashes.append(f"{name}.{key}: shared {sv!r}, local {lv!r}")
+        sc, lc = s.get("config") or {}, l.get("config") or {}
+        for key in sorted(set(sc) & set(lc)):
+            if key in registry.LOCAL_ONLY_KEYS or sc[key] == lc[key]:
+                continue
+            clashes.append(f"{name}.{key}: shared {sc[key]!r}, local {lc[key]!r}")
+
+    if not clashes:
+        return Result("vault registry", OK, detail="shared and local halves agree")
+    shown = "; ".join(clashes[:3])
+    if len(clashes) > 3:
+        shown += f" (+{len(clashes) - 3} more)"
+    return Result("vault registry", FAIL, detail=shown,
+                  hint="the local half shadows the shared one field by field, so these "
+                       "resolve through the local value. Re-publish to clear it: "
+                       "charter vault add <name> --provider <p> … --share --force")
+
+
 def check_plugin_skew() -> Result:
     """`charter` ships as two artifacts — the CLI (pip/uv) and the Claude Code plugin
     (``.claude-plugin/plugin.json`` + ``hooks/hooks.json``) — with two version numbers.
@@ -747,7 +796,8 @@ def _checks():
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
                 check_plane_root(),
-                check_inventory(), check_vaults(), check_version_lock(),
+                check_inventory(), check_vaults(),
+                check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(),
                 check_plugin_skew()]
     return results
