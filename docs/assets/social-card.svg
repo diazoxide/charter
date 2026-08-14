@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640"
+     role="img" aria-label="charter — a control plane for Claude Code agents working across many repos: personas, workspaces, worktrees, and a vault the model never reads from.">
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace; }
+  </style>
+
+  <rect width="1280" height="640" fill="#0d1117"/>
+
+  <!-- The mark, oversized and nearly invisible: texture at full size, gone at thumbnail
+       size, where it would otherwise compete with the one word that must read. -->
+  <text class="mono" x="1180" y="500" font-size="520" text-anchor="middle"
+        fill="#39c5cf" opacity="0.07">⬢</text>
+
+  <text class="mono" x="96" y="286" font-size="104" font-weight="700" fill="#e6edf3">
+    <tspan fill="#39c5cf">⬢</tspan> charter
+  </text>
+
+  <text class="mono" x="102" y="348" font-size="30" fill="#8b949e">A control plane for Claude Code agents</text>
+  <text class="mono" x="102" y="390" font-size="30" fill="#8b949e">working across many repos</text>
+
+  <g class="mono" font-size="27">
+    <text x="102" y="470" fill="#bc8cff">personas</text>
+    <text x="242" y="470" fill="#6e7681">·</text>
+    <text x="272" y="470" fill="#58a6ff">workspaces</text>
+    <text x="444" y="470" fill="#6e7681">·</text>
+    <text x="474" y="470" fill="#39c5cf">worktrees</text>
+    <text x="632" y="470" fill="#6e7681">·</text>
+    <text x="662" y="470" fill="#d29922">a vault the model never reads</text>
+  </g>
+
+  <line x1="102" y1="524" x2="1178" y2="524" stroke="#30363d"/>
+  <text class="mono" x="102" y="566" font-size="24" fill="#6e7681">github.com/diazoxide/charter</text>
+  <text class="mono" x="1178" y="566" font-size="24" text-anchor="end" fill="#6e7681">MIT · uv tool install charter-cp</text>
+</svg>
