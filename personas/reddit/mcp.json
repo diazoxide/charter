@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "reddit": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-reddit"]
+    }
+  }
+}

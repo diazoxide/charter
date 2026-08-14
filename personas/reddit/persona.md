@@ -82,12 +82,17 @@ charter secret exec reddit \
 so stdio streams through. An MCP server never exits, so the capturing form would hang
 holding output nobody reads. See `docs/secrets.md` and `docs/mcp.md`.
 
-**No MCP server is wired to this persona yet** — declaring one is a decision about which
-third-party code runs on this machine, and it is not charter's to make for you. When it is
-chosen, it goes in `personas/reddit/mcp.json` and `charter persona sync-agents` wraps it in
-this vault automatically; `agent-tools` then gains `mcp__reddit__*` on its own, so do not
-add it by hand. See `docs/mcp.md`. Until then this persona works from `WebFetch`,
-`WebSearch` and `Bash`.
+**The wired server is read-only.** `personas/reddit/mcp.json` declares
+`mcp-server-reddit`, which reads Reddit's public API and needs no credentials — so nothing
+is wrapped in the vault yet, and the `mcp__reddit__*` grant in `agent-tools` is derived
+from that declaration rather than written by hand. It can read a subreddit's rules and a
+post with its comment tree. It cannot post, which suits the rule above.
+
+Adding a server that CAN post means adding `secrets` to that entry, mapping the env vars it
+demands to keys in this vault — charter then wraps its command in `charter secret exec`
+automatically. Reddit API credentials are created by a human at
+`https://www.reddit.com/prefs/apps`; charter never creates them and never prints them.
+See `docs/mcp.md`.
 
 Never `--reveal` a Reddit credential, never paste one into a draft, and never put one in a
 `.mcp.json` `env` block — that file is committed.
