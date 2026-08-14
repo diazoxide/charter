@@ -1,14 +1,33 @@
 # README assets
 
-Every image in this directory is **generated from real command output**. None of them are
-mockups, and none should be hand-edited — regenerate instead, so a screenshot can never
-quietly drift from what charter actually prints.
+Two kinds of image live here, and the difference matters when one needs updating.
 
-| File | What it is | How to regenerate |
-| --- | --- | --- |
-| `statusline.svg` | The status line, rendered against the demo plane below | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
-| `demo.svg` | The quickstart, animated | `capture-demo.sh` → `ansi2svg.py --animate` |
-| `model.svg` | The on-disk model, hand-drawn | Edit by hand — it is a diagram, not a capture |
+**Captures** are generated from real command output. None of them are mockups and none
+should ever be hand-edited — regenerate instead, so a screenshot cannot quietly drift from
+what charter actually prints. **Drawings** are authored by hand and say what they mean to
+say; they have no source to re-run.
+
+| File | Kind | What it is | How to update |
+| --- | --- | --- | --- |
+| `statusline.svg` | capture | The status line, rendered against the demo plane below | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
+| `demo.svg` | capture | The quickstart, animated | `capture-demo.sh` → `ansi2svg.py --animate` |
+| `model.svg` | drawing | The on-disk model | Edit by hand |
+| `social-card.svg` | drawing | GitHub's social preview — the image link previews show | Edit by hand |
+| `social-card.png` | rendered | `social-card.svg` at 2560×1280 (2:1), for upload | See below; do not edit the PNG |
+
+`social-card.png` is the only asset here that is not used by the repo itself: GitHub stores
+the social preview separately, uploaded through **Settings → General → Social preview**,
+which has no CLI. The PNG is committed so the upload is reproducible rather than a one-off
+that exists only inside a settings page.
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
+  --force-device-scale-factor=2 --window-size=1280,640 \
+  --screenshot=docs/assets/social-card.png file://$PWD/docs/assets/social-card.svg
+```
+
+GitHub recommends 1280×640 and caps uploads at 1MB; rendering at 2× keeps it sharp on
+retina and still lands around 120KB.
 
 ## The tools
 
