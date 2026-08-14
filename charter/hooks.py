@@ -499,6 +499,65 @@ def _touch_piece(data: dict) -> None:
         return
 
 
+#: SessionStart `source` values that mean "this is the same work continuing", not a second
+#: worker arriving. A resumed session gets a NEW session id, so an id check alone would warn
+#: on every resume — which is the fastest way to teach people to ignore the warning.
+_CONTINUATIONS = ("resume", "clear", "compact")
+
+
+def _piece_announcement(data: dict) -> str | None:
+    """Tell a session which piece it holds and what it owes — the whole reason declarations
+    ever get made, since a worker is otherwise just a session sitting in a directory.
+
+    MUST be computed before :func:`_touch_piece` writes this session's liveness, or a
+    visitor overwrites the holder's mark with its own and the collision can never be seen.
+
+    A collision is reported, never refused: ADR 0008 faced the identical choice for the
+    plane root, chose signal over refusal because which cases count is a judgement wanting
+    evidence, and recorded that the warning would be worked through at first. There are
+    legitimate second sessions — a human reading a worker's tree among them.
+    """
+    try:
+        cwd = data.get("cwd") or ""
+        if not cwd:
+            return None
+        from pathlib import Path as _Path
+        from . import pieces, worktree
+        here = worktree.locate(_Path(cwd))
+        if here is None:
+            return None
+        ws, repo, piece = here
+
+        lines = []
+        declared = pieces.declaration_for(ws, repo, piece)
+        if declared:
+            lines.append(f"⬢ You are in piece **{piece}** of `{repo}` (workspace `{ws}`), "
+                         f"already declared **{declared['event']}**.")
+        else:
+            lines.append(
+                f"⬢ You hold piece **{piece}** of `{repo}` (workspace `{ws}`). "
+                f"When you finish, declare it — nothing else will: "
+                f"`charter worktree done`, or "
+                f"`charter worktree abandon \"<why you stopped>\"` if you cannot. "
+                f"A piece that declares nothing is reported as silent, which is how a fleet "
+                f"that finished 7 of 8 stops reading as success.")
+
+        sid = data.get("session_id")
+        claim = pieces.claim_for(ws, repo, piece)
+        holder = (claim or {}).get("session")
+        if (holder and holder != sid
+                and (data.get("source") or "") not in _CONTINUATIONS):
+            age = pieces.seen_age(ws, repo, piece)
+            lines.append(
+                f"⚠ This piece was already claimed by `{holder}`, last seen {age} ago. "
+                f"Two sessions in one worktree share a working tree and a HEAD. Nothing "
+                f"stops you — this is a signal, not a refusal — but if that session is "
+                f"live, you will thrash each other's branches.")
+        return "\n".join(lines)
+    except Exception:
+        return None
+
+
 def pretooluse() -> int:
     data = _read_stdin()
     _touch_piece(data)
@@ -780,6 +839,9 @@ def _autosync_version_lock() -> str | None:
 
 def sessionstart() -> int:
     data = _read_stdin()
+    # Read the piece's existing state BEFORE recording this session as alive — the write
+    # below would otherwise replace the holder's mark with ours and hide the collision.
+    _piece_note = _piece_announcement(data)
     _touch_piece(data)
     sid = data.get("session_id")
     try:
@@ -826,6 +888,11 @@ def sessionstart() -> int:
         todo = _todo_digest(sid)
         if todo:
             parts.append(todo)
+
+        # The piece this session is standing in, last: it is the most specific thing here
+        # and the one an agent acts on immediately, so it reads closest to the work.
+        if _piece_note:
+            parts.append(_piece_note)
 
         # NOT refreshing the README's roster block here, deliberately. It splices per-
         # persona DISPATCH COUNTS into a committed file, so opening a session dirtied the

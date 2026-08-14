@@ -252,6 +252,18 @@ def since(when: datetime | None, now: datetime | None = None) -> str:
     return f"{secs // 86400}d"
 
 
+def seen_age(ws: str, repo: str, piece: str) -> str:
+    """How long since this piece's worker was observed, falling back to its claim.
+
+    Unlike :func:`silence` this answers even for a piece that has declared an outcome — it
+    is "how long ago", not "how long has it said nothing", and the collision warning needs
+    the first question.
+    """
+    mark = last_seen(ws, repo, piece)
+    claim = claim_for(ws, repo, piece)
+    return since(_parse((mark or {}).get("ts")) or _parse((claim or {}).get("ts")))
+
+
 def silence(ws: str, repo: str, piece: str) -> str | None:
     """How long this piece has said nothing, or ``None`` if it declared an outcome.
 
