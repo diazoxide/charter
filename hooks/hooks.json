@@ -15,7 +15,7 @@
           },
           {
             "type": "command",
-            "command": "charter hook sessionstart --plugin-version 0.28.1",
+            "command": "charter hook sessionstart --plugin-version 0.29.0",
             "timeout": 5
           },
           {
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "charter hook userpromptsubmit --plugin-version 0.28.1",
+            "command": "charter hook userpromptsubmit --plugin-version 0.29.0",
             "timeout": 5
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "charter hook pretooluse --plugin-version 0.28.1",
+            "command": "charter hook pretooluse --plugin-version 0.29.0",
             "timeout": 10
           }
         ]
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "charter hook pretooluse-read --plugin-version 0.28.1",
+            "command": "charter hook pretooluse-read --plugin-version 0.29.0",
             "timeout": 5
           }
         ]
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "charter hook pretooluse-dispatch --plugin-version 0.28.1"
+            "command": "charter hook pretooluse-dispatch --plugin-version 0.29.0"
           }
         ]
       }
@@ -80,7 +80,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "charter hook posttooluse --plugin-version 0.28.1",
+            "command": "charter hook posttooluse --plugin-version 0.29.0",
             "timeout": 5
           }
         ]
@@ -90,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "charter hook posttooluse-dispatch --plugin-version 0.28.1",
+            "command": "charter hook posttooluse-dispatch --plugin-version 0.29.0",
             "timeout": 5
           }
         ]
