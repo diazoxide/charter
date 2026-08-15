@@ -45,3 +45,31 @@ A warning you can work through is a warning you learn to work through, and this 
 expected to be ignored at first. That is accepted for now, and it is the reason this ADR
 exists: so that when someone later proposes making it an error, the note explaining why it
 was not one on day one is already here.
+
+## 2026-08-16 — the evidence arrived, so branch moves are now refused (#157)
+
+The prediction above held exactly. In one session an agent switched the plane root between
+branches **six times**, with `doctor` printing its correct, complete, actionable warning on
+every run in between; it was read, judged "expected mid-work", and dismissed each time. Not
+missed and not unclear — rationalised past, repeatedly, by precisely the consumer charter is
+built for. The operator's notes supply the cost: two background agents in one working tree
+clobber each other through `git checkout`, and the symptom presents as an unrelated bug.
+
+That is the evidence this ADR said prevention was waiting on, so `pretooluse` now **denies**
+a branch move in the plane root. The judgement it asked for — *which commands count* — is
+answered as narrowly as the evidence supports:
+
+* **`checkout` and `switch` only.** `reset`, `rebase` and `merge` also rewrite the shared
+  tree, and are deliberately not covered: the evidence is about switching, and a guard that
+  over-blocks is disabled once and then protects nothing.
+* **`git commit` is untouched.** `charter save` commits here by design, and advancing HEAD
+  along the branch you are on was never the failure.
+* **Returning to the default branch is always allowed.** The warning's own remedy is
+  `git -C <plane> checkout main`; a guard that blocks the fix it recommends is a trap, and
+  would be routed around within a session.
+
+What does **not** change: the warning stays, because it is what explains the denial when one
+arrives, and because it still covers the states prevention cannot — a root left dirty, or
+sitting on a non-default branch from before this shipped. Signal and refusal are not
+alternatives here; the refusal stops the next switch, and the signal describes the tree you
+are already in.

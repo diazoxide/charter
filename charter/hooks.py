@@ -361,6 +361,109 @@ def _ssh_prefix_hosts(forges: dict[str, object]) -> dict[str, str]:
     return out
 
 
+#: git subcommands that move HEAD from one branch to another. Deliberately short: `reset`,
+#: `rebase` and `merge` also rewrite the shared tree, but the evidence in #157 is about
+#: SWITCHING, and ADR 0008 asked for the command set to follow evidence rather than
+#: imagination. Widening it later is cheap; a guard that over-blocks gets disabled once and
+#: then protects nothing.
+_BRANCH_MOVERS = ("checkout", "switch")
+
+#: Flags that make one of the above CREATE a branch rather than move to an existing one.
+_BRANCH_CREATORS = ("-b", "-B", "-c", "-C")
+
+
+def _git_target(cwd: str, args: list[str]) -> tuple[Path, list[str]]:
+    """Which repo a git invocation acts on, and its argv with ``-C <path>`` removed.
+
+    `git -C <path>` is how a session standing in a workspace reaches the shared tree, so a
+    guard that only looked at the cwd would leave the door open from every clone.
+
+    *args* is `_invocation`'s argv, which INCLUDES the program — dropping it here is what
+    lets the caller take "the first non-flag token" as the subcommand rather than as `git`.
+    """
+    target = Path(cwd or ".")
+    rest: list[str] = []
+    i = 1 if args else 0
+    while i < len(args):
+        if args[i] == "-C" and i + 1 < len(args):
+            target = Path(args[i + 1])
+            i += 2
+            continue
+        rest.append(args[i])
+        i += 1
+    return target, rest
+
+
+def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
+    """Deny a git command that would move the PLANE ROOT between branches (#157).
+
+    The plane root is one working tree every session shares. ADR 0008 chose to report this
+    rather than refuse it, and said prevention was the real answer once there was evidence
+    about which commands count. There is now: one session switched the root six times,
+    reading and dismissing `doctor`'s warning each time, while two background agents in one
+    tree silently clobber each other through exactly this.
+
+    Three things keep it a guard rather than a cage:
+
+    * **Only branch moves.** `git commit` is untouched — `charter save` commits here by
+      design, and advancing HEAD along the branch you are on is not the failure.
+    * **Only the root.** A workspace clone is where branch work belongs, so it is never
+      touched, whether reached by cwd or by ``git -C``.
+    * **The remedy stays executable.** `doctor` prints *"Put the root back:
+      `git -C <plane> checkout main`"*, so returning to the plane's default branch is
+      always allowed. A guard that blocks the fix it recommends teaches people to bypass it.
+
+    Costs one `git symbolic-ref` only once a candidate is found — this runs on every Bash
+    call, and the common case exits on a string comparison.
+    """
+    from . import config as _cfg
+    try:
+        root = Path(_cfg.ROOT).resolve()
+    except OSError:
+        return None
+
+    for seg in _segments(cmd):
+        prog, _env, args = _invocation(seg)
+        if not prog or os.path.basename(prog) != "git":
+            continue
+        target, rest = _git_target(cwd, args)
+        sub = next((a for a in rest if not a.startswith("-")), "")
+        if sub not in _BRANCH_MOVERS:
+            continue
+        try:
+            if target.resolve() != root:
+                continue
+        except OSError:
+            continue
+
+        post = rest[rest.index(sub) + 1:]
+        # `git checkout -- <path>` restores a file and never moves HEAD.
+        if "--" in post:
+            continue
+        creating = any(a in _BRANCH_CREATORS for a in post)
+        # A bare `-` is a REF (the previous branch), not a flag — and `git checkout -` is
+        # what makes a six-switch session cheap to repeat, so reading it as a flag would
+        # leave the guard blind to the cheapest form of the thing it exists to stop.
+        wants = [a for a in post if a == "-" or not a.startswith("-")]
+        if not wants and not creating:
+            continue  # bare `git checkout` moves nothing
+
+        if not creating and wants:
+            from .doctor import _plane_default_branch
+            if wants[0] == _plane_default_branch(root):
+                continue  # the documented remedy — must stay runnable
+
+        moving = f"create '{wants[0]}'" if creating and wants else (
+            f"switch to '{wants[0]}'" if wants else "switch branches")
+        return (
+            f"would {moving} in the PLANE ROOT, which is one working tree every session "
+            f"shares — two agents here silently clobber each other's branches, and the "
+            f"symptom looks like an unrelated bug. Branch work belongs in a workspace "
+            f"clone: `charter workspace create <task>`, then `charter clone <repo>`. "
+            f"Returning the root to its default branch is always allowed.")
+    return None
+
+
 def _single_credential_reason(cmd: str) -> str | None:
     """Deny a git action that would depend on SSH or commit signing instead of that
     repo's own forge's credential (its token over HTTPS) — golden rule 0, per forge.
@@ -644,6 +747,14 @@ def pretooluse() -> int:
     if cred:
         _deny("PreToolUse", cred)
         _trace("deny", sid, reason="single-credential", cmd=head)
+        return 0
+    # A3: the plane root is one shared working tree — refuse a branch move in it (#157).
+    # Same gate as A2, and for the same reason: outside a plane there is no plane root, and
+    # denying there would explain a control plane that does not exist on that machine.
+    branch = _plane_root_branch_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
+    if branch:
+        _deny("PreToolUse", branch)
+        _trace("deny", sid, reason="plane-root-branch", cmd=head)
         return 0
     # B: committing inside a clone → ASK, not deny. A repo-rooted session is usually better
     # (the repo's own hooks/conventions apply), but it's a preference, not a safety rule —
