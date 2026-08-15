@@ -439,6 +439,66 @@ def check_plane_root() -> Result:
     )
 
 
+def check_workspace_clones() -> Result:
+    """Clones that are behind their upstream — in EVERY workspace, not just the active one.
+
+    `doctor` reported a healthy machine while a clone in a non-active workspace sat seven
+    commits behind `origin/main`. `sync` defaults to the active workspace, which was empty,
+    so it reported success having done nothing (#156). Both were locally truthful and
+    jointly misleading, because neither was scoped to the thing that was out of date — and
+    a stale clone is not inert, it is what a session reads if it happens to work there.
+
+    **Read from remote-tracking refs; never fetched.** This runs from the SessionStart hook
+    and must not reach the network, exactly as `check_plane_root` reads the root's own drift.
+    The honest consequence, and it belongs in the output rather than only here: the check can
+    **under**-report — origin moving is invisible until something fetches — but it can never
+    invent staleness. That is the acceptable direction of failure, and the same discipline
+    ADR 0009 sets for error text.
+
+    Only *behind*. A clone with no upstream cannot be behind anything, and one that is
+    **ahead** has unpushed work — a different condition, with a different remedy, that
+    `sync` would not fix. Reporting either here would send the reader to the wrong command
+    and put the row permanently yellow on ordinary planes, which costs the findings that
+    matter (`check_memory_indexes` records the same concern).
+
+    WARN, never FAIL: a stale clone is a thing to know, not a broken machine.
+    """
+    from . import config as _config
+    from . import workspace as _workspace
+
+    name = "workspace clones"
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail="no control plane found")
+
+    behind: list[str] = []
+    total = 0
+    try:
+        for ws in _workspace.list_workspaces():
+            for clone in _workspace.clones(ws):
+                total += 1
+                # `@{upstream}` fails cleanly where there is no tracking branch, which is
+                # not a fault — see the docstring.
+                r = _git_in(clone, "rev-list", "--count", "HEAD..@{upstream}")
+                if r.returncode != 0:
+                    continue
+                n = int(r.stdout.strip() or 0)
+                if n:
+                    behind.append(f"{ws}/{clone.name} ({n} behind)")
+    except (util.ProcTimeout, OSError, ValueError) as e:
+        # Narrow, per `check_memory_indexes`: a broad catch here once swallowed a NameError
+        # and reported OK, and a check that silently does nothing is worse than no check.
+        return Result(name, OK, detail=f"not checked ({e})")
+
+    if not behind:
+        return Result(name, OK, detail=f"{total} clone(s) across all workspaces, none behind")
+    return Result(name, WARN,
+                  detail=", ".join(behind[:4]) + (", …" if len(behind) > 4 else ""),
+                  hint=("→ charter sync --all  (plain `sync` only touches the ACTIVE "
+                        "workspace, which is how this stays hidden)  "
+                        "Counted from what the last fetch recorded, so it can under-report "
+                        "— never a live query, this runs at SessionStart."))
+
+
 def check_inventory() -> Result:
     """Can this plane clone anything?
 
@@ -861,7 +921,7 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(),
+                check_plane_root(), check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(),
