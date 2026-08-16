@@ -935,6 +935,30 @@ def cmd_persona_stats(args) -> int:
         dormant += r["status"] == "dormant"
         idle += r["status"] == "idle"
     print()
+
+    # Declared-vs-used skills. A separate block rather than a column, because it is per
+    # persona and variable-length — and because it is the answer to a different question
+    # than the table's: the table asks whether a persona is USED, this asks whether the
+    # equipment it carries is worth carrying.
+    from . import skilluse
+    drifted = []
+    for r in rows:
+        if r["persona"] == config.SHARED_PERSONA:
+            continue
+        d = skilluse.drift(r["persona"])
+        if d["unused"] or d["undeclared"]:
+            drifted.append((r["persona"], d))
+    if drifted:
+        print("SKILLS — declared vs actually invoked")
+        for name, d in drifted:
+            if d["unused"]:
+                # Not untidy: `skills:` preloads full text on EVERY dispatch, so an unused
+                # declaration is a standing context cost bought for nothing.
+                print(f"  {name:<26} unused: {', '.join(d['unused'])}"
+                      f"   (preloaded every dispatch)")
+            if d["undeclared"]:
+                print(f"  {name:<26} used but not declared: {', '.join(d['undeclared'])}")
+        print()
     util.info(f"RECENT = memories in the last {getattr(args, 'recent_days', 14)} days · "
               f"VERIFY = share carrying a verification marker (quality proxy) · DUP = share "
               f"in a near-dup pair (noise) · DISP = times DISPATCHED as a sub-agent (committed "
@@ -944,6 +968,11 @@ def cmd_persona_stats(args) -> int:
         util.info(f"Routing: {total - gen}/{total} dispatches went to a persona · {gen} to a "
                   f"generic agent ({100 * gen // total}%). A high generic share means the work "
                   f"a persona owns is being done without it.")
+    if drifted:
+        util.info("SKILLS drift is named, not resolved: an unused declaration may be dead "
+                  "weight or a skill whose moment has not come, and an undeclared one may "
+                  "be a charter out of date or a persona reaching past its remit. Which it "
+                  "is depends on intent charter cannot read.")
     else:
         util.info("No dispatches recorded yet — the tally starts filling as sub-agents are "
                   "dispatched (`charter persona dispatch-backfill` seeds it from past sessions).")

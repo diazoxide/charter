@@ -1382,6 +1382,34 @@ def pretooluse_dispatch() -> int:
     return 0
 
 
+def posttooluse_skill() -> int:
+    """Tally a Skill invocation against the persona that made it.
+
+    The observability half of the persona↔skill link. A persona declares the skills it
+    starts holding and the host preloads their full text on every dispatch; nothing could
+    see whether any of it was used. Same blindness `dispatch.py` was built for, aimed at a
+    persona's equipment rather than at the persona.
+
+    Records the skill NAME and the active persona — never the arguments, which is where a
+    workspace or client name would travel. `skilluse.record` swallows its own failures: a
+    tally must never break a turn.
+    """
+    data = _read_stdin()
+    _touch_piece(data)
+    try:
+        if (data.get("tool_name") or "") != "Skill":
+            return 0
+        name = ((data.get("tool_input") or {}).get("skill") or "").strip()
+        if not name:
+            return 0
+        from . import persona as _persona, skilluse
+        if skilluse.record(name, _persona.resolve_active()):
+            _trace("skill", data.get("session_id"), skill=name[:60])
+    except Exception:
+        return 0
+    return 0
+
+
 def posttooluse_dispatch() -> int:
     data = _read_stdin()
     if (data.get("tool_name") or "") not in ("Task", "Agent"):
@@ -1689,6 +1717,7 @@ _HANDLERS = {
     "pretooluse-read": pretooluse_read,
     "pretooluse-dispatch": pretooluse_dispatch,
     "posttooluse": posttooluse,
+    "posttooluse-skill": posttooluse_skill,
     "posttooluse-dispatch": posttooluse_dispatch,
 }
 

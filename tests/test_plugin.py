@@ -102,6 +102,9 @@ class TestPluginManifest(unittest.TestCase):
             ("PreToolUse", "charter hook pretooluse-read --plugin-version"),
             ("PreToolUse", "charter hook pretooluse-dispatch --plugin-version"),
             ("PostToolUse", "charter hook posttooluse --plugin-version"),
+            # The skill tally: which skills a persona actually invokes, against the ones its
+            # charter declares and the host preloads on every dispatch.
+            ("PostToolUse", "charter hook posttooluse-skill --plugin-version"),
             ("PostToolUse", "charter hook posttooluse-dispatch --plugin-version"),
             ("Stop", "charter workspace _autosave"),             # debounced auto-save
             ("SubagentStop", "charter workspace _autosave"),     # ditto, per dispatch
