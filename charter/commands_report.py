@@ -149,6 +149,35 @@ def cmd_report_show(args) -> int:
     return 0
 
 
+def cmd_report_delete(args) -> int:
+    """Discard a report drafted on this machine.
+
+    `not sent` is a TODO, and its worth is that it is actionable. A superseded draft that
+    can never be removed turns `report list` into a list with a permanent false positive,
+    and a list you cannot trust is one where a real pending report gets missed among the
+    dead ones — the failure mode of a suite full of permanently-skipped tests (#155).
+
+    A SENT report needs `--force`, and not merely as ceremony: `prune` keeps sent reports
+    forever on purpose, because they are what lets a later identical crash point at the
+    existing upstream issue instead of drafting a duplicate. Deleting one removes that
+    pointer, and with it the only local trace of something that exists publicly under the
+    Reporter's identity.
+    """
+    rid = getattr(args, "id", None)
+    rec = report.load(rid)
+    if not rec:
+        util.err(f"no report '{rid}'. List them: charter report list")
+        return 1
+    if rec.get("issue_url") and not getattr(args, "force", False):
+        util.err(f"'{rid}' was already sent → {rec['issue_url']}")
+        util.info("Kept so a later identical crash can point at that issue instead of "
+                  "filing a duplicate. Discard it anyway with --force.")
+        return 2
+    report.delete(rid)
+    util.ok(f"Discarded report '{rid}'.")
+    return 0
+
+
 def cmd_report_comment(args) -> int:
     """Add this Reporter's details to an existing upstream issue.
 

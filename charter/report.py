@@ -302,6 +302,23 @@ def _write(rec: dict) -> str:
     return rec["id"]
 
 
+def delete(report_id: str) -> bool:
+    """Remove one report from local storage. True if it was there.
+
+    The undo for drafting. Drafting is deliberately cheap and local (ADR 0003 keeps
+    recording separate from reporting), and that only works if discarding is cheap too —
+    otherwise a redrafted report leaves its superseded twin in `report list` forever, and a
+    list with permanent false positives stops being read (#155).
+
+    No network, for the same reason drafting has none: this is the Reporter's own disk.
+    """
+    p = _path(report_id)
+    if not p.exists():
+        return False
+    p.unlink(missing_ok=True)
+    return True
+
+
 def prune() -> int:
     """Drop unsent drafts older than :data:`MAX_DRAFT_AGE_DAYS`. Returns how many went.
 

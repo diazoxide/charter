@@ -229,6 +229,17 @@ def _add_report_parser(sub) -> None:
     sh.add_argument("id")
     sh.set_defaults(func=commands_report.cmd_report_show)
 
+    # The undo for drafting. Drafting is cheap and local on purpose, which only works if
+    # discarding is too — otherwise a redrafted report leaves its superseded twin in `list`
+    # forever and the "not sent" column stops meaning anything.
+    dl = rsub.add_parser("delete", aliases=["discard"],
+                         help="Discard a drafted report (a sent one needs --force).")
+    dl.add_argument("id")
+    dl.add_argument("--force", action="store_true",
+                    help="Discard even one already sent — that also drops the pointer a "
+                         "later identical crash would have reused.")
+    dl.set_defaults(func=commands_report.cmd_report_delete)
+
     # Its own command, not a flag on `send`: a flag an agent can pass is a flag it will
     # pass every time, where a one-off command has a single auditable purpose (ADR 0003).
     cs = rsub.add_parser("consent",
