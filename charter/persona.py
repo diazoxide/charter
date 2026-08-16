@@ -522,6 +522,58 @@ def structural_errors(name: str, known: set[str] | None = None) -> list[tuple[st
     return issues
 
 
+def declared_skills(name: str) -> list[str]:
+    """The skills this persona is accountable for, from its ``skills:`` frontmatter.
+
+    Not an allowlist — the host has no such thing. `skills:` **preloads** the full text of
+    each skill into the sub-agent's context at startup, so a declared skill is standing
+    equipment the persona begins holding rather than something it might discover. Access is
+    all-or-nothing and lives elsewhere: ``Skill`` in or out of ``agent-tools``.
+
+    The prose and this list answer different questions, which is what keeps them from being
+    the duplicate index ADR 0010 warns about. Prose says *when and how* to use a skill; this
+    says *what the persona starts holding*. Only this one can be acted on — charter emits it
+    into the generated agent, and prose can only mention.
+
+    Comma-separated, matching ``uses:`` — one frontmatter idiom for one shape of list.
+    """
+    d = load(name)
+    if not d:
+        return []
+    raw = (d["meta"].get("skills") or "").strip()
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def declared_skill_issues(name: str) -> list[tuple[str, str]]:
+    """Lint a persona's DECLARED skills, on the same terms as the ones its prose names.
+
+    A declared skill that does not resolve is worse than a prose mention that does not: the
+    prose is advice a reader can route around, while this is emitted into the agent, so the
+    failure is silent at the moment it matters.
+
+    Costs context on every dispatch, which is the part worth being strict about — `skills:`
+    injects full content at startup, so a dead entry is paid forever for nothing.
+    """
+    names = declared_skills(name)
+    if not names:
+        return []
+    skills = _installed_skills()
+    if skills is None:  # no plugin cache here → cannot verify; skip, as `_skill_ref_issues` does
+        return []
+    out: list[tuple[str, str]] = []
+    for ref in names:
+        leaf = ref.split(":", 1)[-1]
+        if leaf not in skills:
+            out.append(("error", f"declares skill `{ref}` — not installed here; it is "
+                                 f"preloaded into the agent, so this fails silently at "
+                                 f"dispatch. Remove it or install the plugin"))
+        elif not skills[leaf]:
+            out.append(("warn", f"declares skill `{ref}`, which is human-only "
+                                f"(disable-model-invocation) — preloading its text is "
+                                f"harmless but the agent can never invoke it"))
+    return out
+
+
 def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     """Config-correctness checks for one persona → ``[(level, message)]`` where
     level is ``'error'`` (dangling ``uses:``, or a charter naming a human-only/unknown
@@ -541,6 +593,10 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
         return [("error", f"persona '{name}' does not load")]
     meta = d["meta"]
     issues: list[tuple[str, str]] = []
+    if deep:
+        # Declared skills are checked on the same walk as the prose references — one plugin
+        # cache read serves both, which is what `_installed_skills`' memo exists for.
+        issues += declared_skill_issues(name)
     if not meta.get("role"):
         issues.append(("warn", "no role"))
     if not vault_of(name) and not declares_no_vault(name):

@@ -456,7 +456,7 @@ _AGENT_PASSTHROUGH_KEYS = ("model", "color", "memory")
 _CHARTER_OWN_KEYS = (
     "name", "role", "vault", "extends", "uses", "delegate-when", "description",
     "agent-description", "agent-tools", "tools", "activity", "dispatch-isolation",
-    "draft",
+    "draft", "skills",
 )
 
 
@@ -482,6 +482,22 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
         fm.append(f"tools: {', '.join([tools, *grants]) if grants else tools}")
     # No `agent-tools` means the sub-agent inherits every tool, so adding a narrowing
     # `tools:` line here to carry the grant would be a downgrade rather than a grant.
+
+    # Declared skills, PRELOADED into the sub-agent at startup — the host injects each
+    # skill's full text, not just its description. That is what makes a persona's skills
+    # standing equipment rather than something it might discover mid-task, and it is the
+    # one thing charter can do with the list that reading the charter prose cannot.
+    #
+    # NOT an allowlist: the host has none. A sub-agent can still invoke unlisted skills
+    # through the Skill tool, and the only real restriction is withholding `Skill` itself
+    # via `agent-tools`. Saying "allowed skills" here would promise an enforcement charter
+    # cannot deliver.
+    #
+    # The cost is why lint is strict about dead entries: full text, injected on EVERY
+    # dispatch of this persona, for as long as the line is there.
+    skills = persona.declared_skills(name)
+    if skills:
+        fm.append(f"skills: {', '.join(skills)}")
 
     if servers:
         fm.append("mcpServers:")
