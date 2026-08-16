@@ -439,6 +439,57 @@ def check_plane_root() -> Result:
     )
 
 
+def check_guard_wired() -> Result:
+    """Can `charter hook pretooluse` actually be invoked? (#168)
+
+    The plane-root branch guard (#157) lives in that handler. If nothing is wired to call
+    it, no branch move is ever refused — and `check_plugin_skew` printed a green
+    ``✓ not running under the Claude Code plugin`` over exactly that state. **The absence
+    of a protection rendered as health**, at the moment it mattered most: someone upgrades
+    to get the guard, runs `doctor` to confirm the upgrade, sees all green, and reasonably
+    believes they are protected.
+
+    Whether the plane runs as a plugin is an implementation detail. Whether the guard fires
+    is the fact the operator needs, so this reports the guard and `check_plugin_skew` keeps
+    answering its own separate question about version skew.
+
+    Reachable means ANY of: running under the plugin, or `charter hook pretooluse` declared
+    in the plane's ``.claude/settings.json``, its ``.claude/settings.local.json``, or the
+    user's ``~/.claude/settings.json``. All four, because a plane that IS wired and gets
+    warned every session teaches people to ignore the row — the failure
+    `check_memory_indexes` already records.
+
+    It asserts that specific handler rather than "some hook exists": a plane wiring only
+    `sessionstart` is unprotected while looking configured, which is this issue again one
+    level down.
+    """
+    from . import config as _config
+
+    name = "plane-root guard"
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail="no control plane found")
+    if os.environ.get("CLAUDE_PLUGIN_ROOT"):
+        return Result(name, OK, detail="wired (Claude Code plugin)")
+
+    candidates = [
+        Path(_config.ROOT) / ".claude" / "settings.json",
+        Path(_config.ROOT) / ".claude" / "settings.local.json",
+        Path.home() / ".claude" / "settings.json",
+    ]
+    for p in candidates:
+        try:
+            if "charter hook pretooluse" in p.read_text():
+                return Result(name, OK, detail=f"wired ({p})")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return Result(name, WARN,
+                  detail="pretooluse is not wired — branch moves in the plane root are "
+                         "NOT refused",
+                  hint=("The 0.30.0 guard only fires through `charter hook pretooluse`.  "
+                        "→ charter reinit  (wires it into .claude/settings.json), or "
+                        "install the Claude Code plugin."))
+
+
 def check_nested_plane() -> Result:
     """Is the plane charter resolved sitting inside ANOTHER plane's ``workspaces/``? (#140)
 
@@ -961,7 +1012,8 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_nested_plane(), check_workspace_clones(),
+                check_plane_root(), check_guard_wired(), check_nested_plane(),
+                check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(),

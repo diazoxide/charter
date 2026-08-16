@@ -578,6 +578,73 @@ def _statusline_snippet() -> str:
     return json.dumps({"statusLine": _STATUSLINE}, indent=2)
 
 
+#: The ONE hook charter wires itself, and only this one.
+#:
+#: It is the plane-root branch guard (#157) — the safety feature — and #168 was filed
+#: because it ships inert on any plane not running the plugin while `doctor` showed a green
+#: tick over it. A safety feature that ships off by default stays off.
+#:
+#: Only `pretooluse`, deliberately. If the plugin is installed later, everything wired here
+#: fires TWICE. For `pretooluse` that is harmless: the same denial computed twice is the
+#: same denial. For `sessionstart` it is not — the persona briefing, memory digest and todo
+#: list would render twice every session. So the other five stay plugin-only, where the
+#: plugin owns their lifecycle, and charter's footprint in a user-owned file stays at one
+#: hook rather than six.
+_GUARD_HOOK = {
+    "matcher": "Bash",
+    "hooks": [{"type": "command", "command": "charter hook pretooluse", "timeout": 10}],
+}
+
+
+def _hooks_snippet() -> str:
+    """The exact JSON for a user whose settings file charter could not safely touch."""
+    return json.dumps({"hooks": {"PreToolUse": [_GUARD_HOOK]}}, indent=2)
+
+
+def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
+    """Wire `charter hook pretooluse` into ``.claude/settings.json`` IF ABSENT.
+
+    Same contract and the same restraint as :func:`_ensure_statusline`, for the same
+    reason: that file is user-owned and git-tracked and holds keys charter has no business
+    touching. This adds one entry under one key, only when no charter `pretooluse` hook is
+    already declared there, and never rewrites a malformed file.
+
+    Returns ``(status, detail)`` — ``"created"`` / ``"present"`` / ``"malformed"`` /
+    ``"blocked"``, matching `_ensure_statusline` so callers report both the same way.
+    """
+    d = root / ".claude"
+    p = d / "settings.json"
+    if not p.exists():
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return "blocked", d
+        p.write_text(json.dumps({"hooks": {"PreToolUse": [_GUARD_HOOK]}}, indent=2) + "\n")
+        return "created", None
+    raw = p.read_text()
+    try:
+        settings = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return "malformed", p
+    if not isinstance(settings, dict):
+        return "malformed", p
+    hooks_block = settings.get("hooks")
+    if hooks_block is not None and not isinstance(hooks_block, dict):
+        return "malformed", p
+    pre = (hooks_block or {}).get("PreToolUse") or []
+    if not isinstance(pre, list):
+        return "malformed", p
+    if any("charter hook pretooluse" in json.dumps(entry) for entry in pre):
+        return "present", None
+    settings.setdefault("hooks", {}).setdefault("PreToolUse", []).append(_GUARD_HOOK)
+    indent, separators = _json_style(raw)
+    rewritten = json.dumps(settings, indent=indent, separators=separators)
+    if raw.endswith("\n"):
+        rewritten += "\n"
+    p.write_text(rewritten)
+    return "created", None
+
+
 def _json_style(text: str) -> tuple[str | None, tuple[str, str]]:
     """Best-effort ``(indent, separators)`` for ``json.dumps`` that echoes ``text``'s own
     formatting, so adding one key doesn't reformat the whole file. Not a true round-trip
@@ -877,6 +944,20 @@ def cmd_init(args) -> int:
     elif sl_status == "blocked":
         blocked.append((".claude", sl_detail))
 
+    # The plane-root branch guard (#157). Wired here because #168: it shipped inert on any
+    # plane not running the plugin, with `doctor` showing a green tick over it — and a
+    # safety feature that ships off by default stays off.
+    gh_status, gh_detail = _ensure_guard_hook(root)
+    if gh_status == "created":
+        created.append(".claude/settings.json (plane-root guard)")
+    elif gh_status == "present":
+        present.append(".claude/settings.json (plane-root guard already wired)")
+    elif gh_status == "malformed":
+        util.warn(f"{gh_detail} is not valid JSON — left it completely untouched. Wire the "
+                  f"plane-root guard yourself:\n{_hooks_snippet()}")
+    elif gh_status == "blocked":
+        blocked.append((".claude", gh_detail))
+
     # Same failure shape either way — "you asked for this, it did not happen" — so both
     # exit non-zero: a blocked baseline path (file already prints its own util.err above)
     # and a malformed settings.json (its util.warn already fired where sl_status was
@@ -960,6 +1041,17 @@ def cmd_reinit(args) -> int:
     from . import instance as _instance
 
     created, present, blocked = _create_baseline_dirs(config.ROOT)
+
+    # The plane-root guard, on the SAME terms as init. `doctor`'s hint for an unwired plane
+    # names `charter reinit`, so reinit has to be the command that actually wires it (#168).
+    gh_status, gh_detail = _ensure_guard_hook(config.ROOT)
+    if gh_status == "created":
+        created.append(".claude/settings.json (plane-root guard)")
+    elif gh_status == "present":
+        present.append(".claude/settings.json (plane-root guard already wired)")
+    elif gh_status == "malformed":
+        util.warn(f"{gh_detail} is not valid JSON — left it completely untouched. Wire the "
+                  f"plane-root guard yourself:\n{_hooks_snippet()}")
 
     if blocked:
         for d, p in blocked:
