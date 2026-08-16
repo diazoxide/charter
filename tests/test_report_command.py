@@ -47,7 +47,7 @@ class TestDraftingABug(PersonaIso):
         workspace.ensure("acme-migration")
         _, out = self._run("clone fails in acme-migration")
         self.assertNotIn("acme-migration", out)
-        self.assertIn(report.REDACTED, out)
+        self.assertIn("[workspace]", out)
 
 
 class TestDraftingTouchesNoNetwork(PersonaIso):

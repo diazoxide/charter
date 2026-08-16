@@ -18,26 +18,26 @@ from tests._isolation import PersonaIso
 class TestScrubbingProse(PersonaIso):
     def test_an_absolute_home_path_does_not_survive(self):
         """Absolute paths carry the Reporter's username in the second segment."""
-        out = report.scrub(f"it broke at {Path.home()}/code/billing/app.py")
+        out, _ = report.scrub(f"it broke at {Path.home()}/code/billing/app.py")
         self.assertNotIn(str(Path.home()), out)
 
     def test_a_workspace_name_is_replaced(self):
         """charter knows its own workspace names, which a generic scrubber never would.
         A workspace is usually named after the client or the project."""
         workspace.ensure("acme-migration")
-        out = report.scrub("charter clone fails inside acme-migration every time")
+        out, _ = report.scrub("charter clone fails inside acme-migration every time")
         self.assertNotIn("acme-migration", out)
 
     def test_a_persona_name_is_replaced(self):
         self.make_persona("client-billing-reviewer")
-        out = report.scrub("the client-billing-reviewer persona cannot do this")
+        out, _ = report.scrub("the client-billing-reviewer persona cannot do this")
         self.assertNotIn("client-billing-reviewer", out)
 
     def test_the_surrounding_prose_survives(self):
         """Scrubbing must not shred the report — what remains has to still describe the
         gap, or the Reporter is left approving something useless."""
         workspace.ensure("acme")
-        out = report.scrub("charter clone fails inside acme every time")
+        out, _ = report.scrub("charter clone fails inside acme every time")
         self.assertIn("charter clone fails inside", out)
         self.assertIn("every time", out)
 
@@ -45,18 +45,23 @@ class TestScrubbingProse(PersonaIso):
         """A redaction the Reporter cannot see reads as charter having sent the original.
         The placeholder is the signal that something was removed."""
         workspace.ensure("acme-migration")
-        self.assertIn(report.REDACTED, report.scrub("broken in acme-migration"))
+        # A per-CATEGORY placeholder since #137: `[workspace]` keeps a command's shape
+        # followable where a uniform `[redacted]` did not, and still shows plainly that
+        # something was removed.
+        out, used = report.scrub("broken in acme-migration")
+        self.assertIn("[workspace]", out)
+        self.assertEqual(used, ["[workspace]"])
 
     def test_text_with_nothing_sensitive_is_returned_unchanged(self):
         text = "charter has no way to archive a workspace"
-        self.assertEqual(report.scrub(text), text)
+        self.assertEqual(report.scrub(text), (text, []))
 
     def test_the_default_workspace_name_is_not_scrubbed(self):
         """`default` exists on every install, so it identifies nobody — and redacting it
         would mangle ordinary English in most reports."""
         workspace.ensure(config.DEFAULT_WORKSPACE)
         text = f"the {config.DEFAULT_WORKSPACE} workspace behaves differently"
-        self.assertEqual(report.scrub(text), text)
+        self.assertEqual(report.scrub(text), (text, []))
 
 
 class TestRecordingAGap(PersonaIso):

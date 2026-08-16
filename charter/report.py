@@ -143,42 +143,112 @@ REDACTED = "[redacted]"
 _HOME_PATH_RE = re.compile(r"(?:/Users|/home)/\S*")
 
 
-def scrub(text: str) -> str:
-    """Remove from *text* what charter can positively identify as the Reporter's.
+#: Vault config keys whose VALUES are the Reporter's identifiers rather than charter's
+#: wiring: which 1Password vault, which item, which token variable. `file` is deliberately
+#: absent — it is a path, and paths are handled by `_HOME_PATH_RE` above.
+_VAULT_ID_KEYS = ("op-vault", "op_vault", "op-item", "op_item", "token-env", "token_env")
 
-    The advantage over a generic scrubber is that charter knows its own **workspace** and
-    **persona** names — which are routinely named after the client or the project. That is
-    also the trade-off: a workspace named after a common word will redact that word out of
-    ordinary prose. Preferring a mangled sentence to a leaked client name is deliberate,
-    and the Reporter reads the result before it is sent either way.
+#: Per-category placeholders rather than one `[redacted]` for everything. The complaint in
+#: #137/#154 was not only that the scrub was incoherent but that it cost READABILITY: a
+#: maintainer reading `charter vault add [redacted] --op-vault "[redacted]"` cannot follow
+#: the command. Naming the category keeps the shape legible while removing the value.
+_W, _P, _V, _T = "[workspace]", "[persona]", "[vault]", "[token-env]"
+
+
+def _identifiers() -> list[tuple[str, str]]:
+    """(value, placeholder) for every identifier charter knows about this machine.
+
+    Lazy imports: importing `report` happens on every `cli` invocation, and this is the only
+    place that needs the workspace, persona and vault machinery.
     """
-    # Lazy imports: this is the only place report.py needs them, and keeping them out of
-    # module scope means importing `report` (which `cli` does on every invocation) does not
-    # drag the workspace and persona machinery in.
     from . import persona, workspace
+    from .secrets import registry
 
-    out = _HOME_PATH_RE.sub(REDACTED, text)
-
-    names = set(workspace.list_workspaces()) | set(persona.list_personas())
+    out: list[tuple[str, str]] = []
+    for w in workspace.list_workspaces():
+        out.append((w, _W))
+    for p in persona.list_personas():
+        out.append((p, _P))
+    try:
+        for name, vc in (registry.vaults() or {}).items():
+            out.append((name, _V))
+            cfg = (vc or {}).get("config") or {}
+            for key in _VAULT_ID_KEYS:
+                val = cfg.get(key)
+                if isinstance(val, str) and val.strip():
+                    out.append((val.strip(), _T if "token" in key else _V))
+    except Exception:
+        # A registry that cannot be read must not stop the rest of the scrub: the failure
+        # direction that matters is "scrubbed less than it could", never "sent nothing".
+        pass
     # `default` exists on every install, so it identifies nobody — and redacting it would
     # mangle ordinary English in most reports.
-    names.discard(config.DEFAULT_WORKSPACE)
+    return [(v, ph) for v, ph in out if v and v != config.DEFAULT_WORKSPACE]
+
+
+def scrub(text: str) -> tuple[str, list[str]]:
+    """Remove what charter can positively identify as the Reporter's, and say what it removed.
+
+    Returns ``(text, categories)``.
+
+    The advantage over a generic scrubber is that charter knows its own names — workspaces,
+    personas, **vaults, vault items and token variables** — which are routinely named after
+    the client, the project or the company.
+
+    **The whole cluster or none of it.** Redacting the persona/vault *alias* while leaving
+    the real 1Password vault name and `OP_..._SERVICE_ACCOUNT_TOKEN` on the adjacent lines
+    cost readability and bought no privacy — the alias was recoverable in one step — and it
+    created false confidence, because seeing `[redacted]` reads as "the identifiers were
+    handled" and stops an author checking what else is going out on a PUBLIC tracker under
+    their own identity (#137, #154).
+
+    Between "redact everything charter knows" and "redact only the unambiguous", this takes
+    the first: a vault name is frequently a **company** name, which is precisely the class
+    of identifier this exists to keep off a public tracker.
+
+    The known cost is unchanged and still deliberate — a workspace named after a common word
+    redacts that word out of ordinary prose — and is paid down two ways rather than argued
+    away: per-category placeholders keep a command's shape followable, and the returned
+    categories give the Reporter's mandatory read (ADR 0003) something to check against
+    instead of having to notice absences.
+    """
+    out = text
+    used: set[str] = set()
+
+    if _HOME_PATH_RE.search(out):
+        used.add("home paths")
+        out = _HOME_PATH_RE.sub(REDACTED, out)
+
     # Longest first, so `acme-migration` is removed whole rather than being half-eaten by
-    # a shorter `acme` and leaving `[redacted]-migration` behind.
-    for name in sorted(names, key=len, reverse=True):
-        out = re.sub(rf"\b{re.escape(name)}\b", REDACTED, out)
-    return out
+    # a shorter `acme` and leaving `[workspace]-migration` behind.
+    for value, placeholder in sorted(_identifiers(), key=lambda p: len(p[0]), reverse=True):
+        pattern = rf"\b{re.escape(value)}\b" if value[:1].isalnum() else re.escape(value)
+        if re.search(pattern, out):
+            used.add(placeholder)
+            out = re.sub(pattern, placeholder, out)
+    return out, sorted(used)
+
+
+def scrubbed(text: str) -> str:
+    """`scrub` for callers that only want the text."""
+    return scrub(text)[0]
 
 
 def gap_payload(text: str) -> dict:
     """The publishable part of a **gap** report. No exception type and no frames — a gap
     is not a crash — but the same version context, which is what tells the maintainer
     whether the capability landed since."""
+    body, scrubbed_categories = scrub(text)
     return {
         "charter_version": __version__,
         "python_version": platform.python_version(),
         "os": platform.platform(),
-        "text": scrub(text),
+        "text": body,
+        # Carried in the payload so `render` can state it. ADR 0003 makes the Reporter read
+        # the draft before it is sent; without this the read has to notice ABSENCES, which
+        # is the hardest thing to check for and the reason a half-redaction went out
+        # looking handled (#137).
+        "scrubbed": scrubbed_categories,
     }
 
 
@@ -333,6 +403,12 @@ def render(rec: dict) -> str:
         lines.append("")
     if rec.get("occurrences", 1) > 1:
         lines.append(f"Hit {rec['occurrences']} times on this machine.")
+    if p.get("scrubbed"):
+        # Named categories, because the Reporter's mandatory read (ADR 0003) is otherwise a
+        # search for things that are NOT there. A visible `[vault]` also stops the failure
+        # #154 describes — seeing a redaction and concluding the identifiers were handled.
+        lines.append(f"_Scrubbed before drafting: {', '.join(p['scrubbed'])}. "
+                     f"Restore anything over-redacted before sending._")
     lines.append(
         f"charter {p.get('charter_version')} · Python {p.get('python_version')} "
         f"· {p.get('os')}")
