@@ -145,8 +145,8 @@ def _leak_reason(cmd: str) -> str | None:
     vault registered elsewhere is therefore still unguarded here — a separate finding,
     not something to half-fix on the hot path.
     """
-    for seg in _segments(cmd):
-        prog, _env, args = _invocation(seg)
+    for _toks in _segment_argv(cmd):
+        prog, _env, args = _split_env(_toks)
         if not prog:
             continue
         if _is_charter(prog, args) and any(
@@ -294,11 +294,74 @@ def _is_sshcommand_config_write(args: list[str]) -> bool:
     return any(a in _CONFIG_WRITE_ONLY_FLAGS for a in args)
 
 
+#: Shell operators that end one separately-executed command and begin the next.
+_OPERATORS = (";", "&&", "||", "|", "&", "\n")
+
+
+def _segment_argv(cmd: str) -> list[list[str]]:
+    """A shell command as **argv per separately-executed segment**, quoting respected.
+
+    This replaced a regex split on shell operators, which ran BEFORE any tokenizer and
+    therefore split on operators living inside a quoted argument. The result was that
+
+        echo 'example: cd somewhere ; git checkout -b my-branch'
+
+    became two "commands", the second of which looked exactly like a branch move — and the
+    stray closing quote rode along into what the guard believed was a branch name (#183).
+    Worse, `_invocation`'s naive fallback for unbalanced quotes then DIGNIFIED the fragment:
+    the regex created it and the fallback made it look like a real invocation.
+
+    ``shlex`` with ``punctuation_chars`` is the stdlib's own answer — it emits the operators
+    as distinct tokens while honouring quotes natively, so prose stays prose. No dependency,
+    which the zero-dependency promise requires.
+
+    **On a command that cannot be parsed at all** (genuinely unbalanced quotes) this returns
+    the whole string as ONE segment, and that single behaviour gives every caller the
+    failure direction it needs without a per-caller flag:
+
+    * the leak guard scans the entire text and stays **fail-closed** — not printing a secret
+      is a safety invariant, and swallowing an unparseable command would be the one failure
+      it may not have;
+    * the plane-root guard sees a program that is not ``git`` and does not fire —
+      **fail-open**, which is right for a guard whose failure mode is annoyance.
+    """
+    import shlex
+    try:
+        lex = shlex.shlex(cmd or "", punctuation_chars=True, posix=True)
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        # ONE segment, but still tokenized: the leak guard has to be able to see
+        # `--reveal` among the arguments, and a single opaque blob would hide it. Naive
+        # whitespace split is exactly the old `_invocation` fallback — kept for the guard
+        # that must fail CLOSED, minus the operator splitting that created phantom commands.
+        return [(cmd or "").split()]
+    out: list[list[str]] = []
+    cur: list[str] = []
+    for t in toks:
+        if t in _OPERATORS:
+            out.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    out.append(cur)
+    return [c for c in out if c]
+
+
+def _split_env(toks: list[str]) -> tuple[str, list[str], list[str]]:
+    """``(program, env-assignment prefixes, argv)`` for one already-tokenized segment."""
+    env = []
+    toks = list(toks)
+    while toks and _ENV_ASSIGN_RE.match(toks[0]):
+        env.append(toks.pop(0))
+    return (toks[0] if toks else ""), env, toks
+
+
 def _segments(cmd: str) -> list[str]:
-    """Split a shell command into separately-executed segments, so we inspect real
-    invocations rather than scanning prose (a commit message may legitimately *mention*
-    an SSH URL — that must not trip the guard)."""
-    return re.split(r"&&|\|\||[|;&\n]", cmd or "")
+    """Back-compat string form of :func:`_segment_argv`, for callers that re-tokenize."""
+    import shlex
+    return [shlex.join(a) if hasattr(shlex, "join") else " ".join(a)
+            for a in _segment_argv(cmd)]
 
 
 def _invocation(seg: str) -> tuple[str, list[str], list[str]]:
@@ -422,11 +485,22 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     except OSError:
         return None
 
-    for seg in _segments(cmd):
-        prog, _env, args = _invocation(seg)
-        if not prog or os.path.basename(prog) != "git":
+    here = cwd
+    for _toks in _segment_argv(cmd):
+        prog, _env, args = _split_env(_toks)
+        base = os.path.basename(prog or "")
+        # A `cd` earlier in the SAME command moves where the later segments run. Without
+        # this the guard refused `cd workspaces/<ws>/<repo> && git checkout -b x` — which is
+        # the workflow its own denial message recommends, so the first time someone obeyed
+        # the message they were told they were doing the forbidden thing (#183).
+        if base == "cd":
+            dest = next((a for a in args[1:] if not a.startswith("-")), None)
+            if dest:
+                here = str(Path(here or ".") / dest) if not os.path.isabs(dest) else dest
             continue
-        target, rest = _git_target(cwd, args)
+        if base != "git":
+            continue
+        target, rest = _git_target(here, args)
         sub = next((a for a in rest if not a.startswith("-")), "")
         if sub not in _BRANCH_MOVERS:
             continue
@@ -480,8 +554,8 @@ def _single_credential_reason(cmd: str) -> str | None:
     # straight through it.
     lower_prefix_hosts = {p.lower(): h for p, h in ssh_prefix_hosts.items()}
     lower_prefixes = tuple(lower_prefix_hosts)
-    for seg in _segments(cmd):
-        prog, env, argv = _invocation(seg)
+    for _toks in _segment_argv(cmd):
+        prog, env, argv = _split_env(_toks)
         base = prog.rsplit("/", 1)[-1]
         if base == "git":
             args = argv[1:]
