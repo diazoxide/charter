@@ -44,6 +44,20 @@ class Result:
         return line
 
 
+#: Why a check that could not RUN is a warning rather than a tick (#171).
+#:
+#: "not checked" is the absence of information, not evidence of health — and a green glyph
+#: over it is read as the latter by anyone scanning the column, which is how the whole class
+#: this audit came from works. Two of these sites already carried the comment "a check that
+#: silently does nothing is worse than no check" and then returned OK anyway; the principle
+#: was right and the status contradicted it.
+#:
+#: WARN, never FAIL: `cmd_doctor` exits non-zero only on FAIL, and an unreadable tree or a
+#: git that timed out is not "you cannot work" — it is "charter cannot tell you either way".
+_NOT_CHECKED_HINT = ("This check could not run, so its silence means nothing. Re-run "
+                     "`charter doctor` — if it persists, the reason above is the thing to fix.")
+
+
 def _first_line(text: str) -> str:
     text = (text or "").strip()
     return text.splitlines()[0] if text else ""
@@ -392,7 +406,8 @@ def check_plane_root() -> Result:
         upstream = _git_in(root, "rev-parse", "--abbrev-ref", "@{upstream}")
         upstream_ref = upstream.stdout.strip() if upstream.returncode == 0 else ""
     except (util.ProcTimeout, OSError) as e:
-        return Result(name, OK, detail=f"not checked ({e})")
+        return Result(name, WARN, detail=f"not checked ({e})",
+                      hint=_NOT_CHECKED_HINT)
 
     findings, actions = [], []
     if branch is None:
@@ -555,7 +570,8 @@ def check_nested_plane() -> Result:
     try:
         outer = _root.enclosing_plane(Path(_config.ROOT))
     except OSError as e:
-        return Result(name, OK, detail=f"not checked ({e})")
+        return Result(name, WARN, detail=f"not checked ({e})",
+                      hint=_NOT_CHECKED_HINT)
     if outer is None:
         return Result(name, OK, detail="not nested")
     return Result(name, WARN,
@@ -614,9 +630,12 @@ def check_workspace_clones() -> Result:
     except (util.ProcTimeout, OSError, ValueError) as e:
         # Narrow, per `check_memory_indexes`: a broad catch here once swallowed a NameError
         # and reported OK, and a check that silently does nothing is worse than no check.
-        return Result(name, OK, detail=f"not checked ({e})")
+        return Result(name, WARN, detail=f"not checked ({e})",
+                      hint=_NOT_CHECKED_HINT)
 
     if not behind:
+        if not total:
+            return Result(name, OK, detail="no clones in any workspace — nothing to check")
         return Result(name, OK, detail=f"{total} clone(s) across all workspaces, none behind")
     return Result(name, WARN,
                   detail=", ".join(behind[:4]) + (", …" if len(behind) > 4 else ""),
@@ -736,7 +755,8 @@ def check_version_lock() -> Result:
     try:
         locked = _instance.locked_version(_instance.load(_config.ROOT))
     except Exception as e:
-        return Result("version lock", OK, detail=f"not checked ({e})")
+        return Result("version lock", WARN, detail=f"not checked ({e})",
+                      hint=_NOT_CHECKED_HINT)
     if not locked:
         return Result("version lock", OK, detail="not pinned")
     if locked == __version__:
@@ -781,7 +801,8 @@ def check_memory_indexes() -> Result:
         # Only an unreadable/absent tree is tolerated. A broader `except` here once
         # swallowed a NameError and reported OK — a check that silently does
         # nothing is worse than no check.
-        return Result("memory indexes", OK, detail=f"not checked ({e})")
+        return Result("memory indexes", WARN, detail=f"not checked ({e})",
+                      hint=_NOT_CHECKED_HINT)
 
     dangling = unindexed = 0
     worst = []
@@ -854,7 +875,8 @@ def check_personas() -> Result:
     try:
         names = persona.list_personas()
     except Exception as e:
-        return Result("personas", OK, detail=f"not checked ({e})")
+        return Result("personas", WARN, detail=f"not checked ({e})",
+                      hint=_NOT_CHECKED_HINT)
     if not names:
         return Result("personas", OK, detail="none defined")
 
@@ -929,7 +951,15 @@ def check_vault_registry_divergence() -> Result:
             clashes.append(f"{name}.{key}: shared {sc[key]!r}, local {lc[key]!r}")
 
     if not clashes:
-        return Result("vault registry", OK, detail="shared and local halves agree")
+        if not shared and not local:
+            # Claiming "the halves agree" when neither half holds anything is an agreement
+            # nothing was compared to reach — the exact wording `check_plugin_skew` already
+            # warns about in this file ("it must not claim agreement it hasn't checked").
+            return Result("vault registry", OK,
+                          detail="no vaults registered — nothing to compare")
+        return Result("vault registry", OK,
+                      detail=f"shared and local halves agree ({len(shared) + len(local)} "
+                             f"entr{'y' if len(shared) + len(local) == 1 else 'ies'})")
     shown = "; ".join(clashes[:3])
     if len(clashes) > 3:
         shown += f" (+{len(clashes) - 3} more)"

@@ -182,7 +182,10 @@ class PlaneRootCheck(PersonaIso):
         something is wrong. It may not be the thing that breaks."""
         with mock.patch("charter.doctor.util.run", side_effect=OSError("no git here")):
             r = doctor.check_plane_root()
-        self.assertEqual(r.status, doctor.OK)
+        # WARN since #171, not OK: it still degrades to a report rather than raising, which
+        # is what this test is about — but "not checked" is the absence of information, and
+        # a green glyph over it is read as health by anyone scanning the column.
+        self.assertEqual(r.status, doctor.WARN)
         self.assertIn("not checked", r.detail)
 
     def test_a_git_that_never_answers_degrades_to_a_report(self):
@@ -192,7 +195,10 @@ class PlaneRootCheck(PersonaIso):
         with mock.patch("charter.doctor.util.run",
                         side_effect=util.ProcTimeout(["git", "status"], 5.0)):
             r = doctor.check_plane_root()
-        self.assertEqual(r.status, doctor.OK)
+        # WARN since #171, not OK: it still degrades to a report rather than raising, which
+        # is what this test is about — but "not checked" is the absence of information, and
+        # a green glyph over it is read as health by anyone scanning the column.
+        self.assertEqual(r.status, doctor.WARN)
         self.assertIn("not checked", r.detail)
 
     # -------------------------------------------------------------- integration
