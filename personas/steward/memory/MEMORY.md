@@ -12,3 +12,5 @@ Written by the persona as it learns; committed and shared.
 - [charter persona remember run from inside a WORKTREE writes to the clone,](charter-persona-remember-run-from-inside-a-workt.md)
 - [Rendering 'charter statusline' for screenshots/assets: the payload's ses](rendering-charter-statusline-for-screenshots-ass.md)
 - [Validating mermaid before committing it (GitHub renders a syntax error a](validating-mermaid-before-committing-it-github-r.md)
+- [Overnight autonomous batches: a parked issue is a DECISION, not a backlo](overnight-autonomous-batches-a-parked-issue-is-a.md)
+- [Test fixtures must pin init.defaultBranch: 'git init --bare' WITHOUT -b](test-fixtures-must-pin-init-defaultbranch-git-in.md)
