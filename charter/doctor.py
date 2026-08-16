@@ -439,6 +439,39 @@ def check_plane_root() -> Result:
     )
 
 
+
+def _plugin_declaring_guard() -> str | None:
+    """The installed Claude Code plugin whose own ``hooks.json`` dispatches the guard.
+
+    ``CLAUDE_PLUGIN_ROOT`` is set only for the plugin's OWN processes, so a `charter doctor`
+    a human runs in a terminal never sees it — even on a machine where the plugin is
+    installed and the guard demonstrably fires. Checking the env var alone therefore cries
+    wolf on exactly the planes that ARE protected, which is the failure this check was
+    written to avoid, pointed the other way.
+
+    Read from ``installed_plugins.json`` rather than globbed out of the plugin cache: the
+    cache keeps every version ever fetched, so a stale copy would answer "wired" for a
+    plugin that has since been removed. The manifest is what the host actually installed.
+    """
+    manifest = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+    try:
+        doc = json.loads(manifest.read_text())
+    except (OSError, ValueError):
+        return None
+    for pid, entries in (doc.get("plugins") or {}).items():
+        for entry in entries or []:
+            path = (entry or {}).get("installPath")
+            if not path:
+                continue
+            hooks_json = Path(path) / "hooks" / "hooks.json"
+            try:
+                if "charter hook pretooluse" in hooks_json.read_text():
+                    return pid
+            except (OSError, UnicodeDecodeError):
+                continue
+    return None
+
+
 def check_guard_wired() -> Result:
     """Can `charter hook pretooluse` actually be invoked? (#168)
 
@@ -470,6 +503,9 @@ def check_guard_wired() -> Result:
         return Result(name, OK, detail="no control plane found")
     if os.environ.get("CLAUDE_PLUGIN_ROOT"):
         return Result(name, OK, detail="wired (Claude Code plugin)")
+    installed = _plugin_declaring_guard()
+    if installed:
+        return Result(name, OK, detail=f"wired (installed plugin {installed})")
 
     candidates = [
         Path(_config.ROOT) / ".claude" / "settings.json",

@@ -79,6 +79,37 @@ class TestEveryWiringRouteCounts(GuardWiredCase):
     """A plane that IS wired but gets warned every session teaches people to ignore the
     row — the failure `check_memory_indexes` already records. All four routes count."""
 
+    def test_an_INSTALLED_plugin_counts_even_without_the_env_var(self):
+        """The false positive this check shipped with. `CLAUDE_PLUGIN_ROOT` is set only for
+        the plugin's OWN processes, so a `charter doctor` a human runs in a terminal never
+        sees it — and warned on a machine where the plugin was installed and the guard
+        demonstrably fired. Read from `installed_plugins.json`, which is what the host
+        actually installed, rather than the plugin cache, which keeps every version ever
+        fetched and would answer "wired" for one since removed.
+        """
+        plug = self.tmp / "plug"
+        (plug / "hooks").mkdir(parents=True)
+        (plug / "hooks" / "hooks.json").write_text(json.dumps(
+            {"hooks": {"PreToolUse": [{"hooks": [
+                {"type": "command", "command": "charter hook pretooluse"}]}]}}))
+        man = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        man.parent.mkdir(parents=True, exist_ok=True)
+        man.write_text(json.dumps({"version": 2, "plugins": {
+            "charter@charter": [{"scope": "user", "installPath": str(plug)}]}}))
+        self.assertEqual(doctor.check_guard_wired().status, OK)
+
+    def test_a_plugin_that_does_not_declare_the_guard_does_not_count(self):
+        plug = self.tmp / "other"
+        (plug / "hooks").mkdir(parents=True)
+        (plug / "hooks" / "hooks.json").write_text(json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [
+                {"type": "command", "command": "other-tool hook"}]}]}}))
+        man = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        man.parent.mkdir(parents=True, exist_ok=True)
+        man.write_text(json.dumps({"version": 2, "plugins": {
+            "other@market": [{"scope": "user", "installPath": str(plug)}]}}))
+        self.assertEqual(doctor.check_guard_wired().status, WARN)
+
     def test_the_plugin_counts(self):
         os.environ["CLAUDE_PLUGIN_ROOT"] = str(self.tmp / "plugin")
         self.addCleanup(os.environ.pop, "CLAUDE_PLUGIN_ROOT", None)
