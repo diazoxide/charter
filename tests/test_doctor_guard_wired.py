@@ -79,6 +79,58 @@ class TestEveryWiringRouteCounts(GuardWiredCase):
     """A plane that IS wired but gets warned every session teaches people to ignore the
     row — the failure `check_memory_indexes` already records. All four routes count."""
 
+    def _install(self, pid="charter@charter", wires_guard=True, enabled=True):
+        """An installed plugin, optionally enabled, optionally wiring the guard."""
+        plug = self.tmp / pid.replace("@", "-")
+        (plug / "hooks").mkdir(parents=True, exist_ok=True)
+        cmd = "charter hook pretooluse" if wires_guard else "other-tool hook"
+        (plug / "hooks" / "hooks.json").write_text(json.dumps(
+            {"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": cmd}]}]}}))
+        man = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        man.parent.mkdir(parents=True, exist_ok=True)
+        man.write_text(json.dumps({"version": 2, "plugins": {
+            pid: [{"scope": "user", "installPath": str(plug)}]}}))
+        if enabled:
+            s = Path(config.ROOT) / ".claude" / "settings.json"
+            self.settings(s, {"enabledPlugins": {pid: True}})
+        return plug
+
+    def test_an_installed_but_DISABLED_plugin_does_not_count(self):
+        """#177, and the reason 0.31.1 was wrong: installed, enabled and wired are three
+        different states, and only the third protects anything. The reporting plane had the
+        plugin installed and disabled, and `git checkout -b` in the root succeeded under a
+        tick asserting the guard was wired."""
+        self._install(enabled=False)
+        self.assertEqual(doctor.check_guard_wired().status, WARN)
+
+    def test_an_enabled_plugin_counts(self):
+        self._install(enabled=True)
+        self.assertEqual(doctor.check_guard_wired().status, OK)
+
+    def test_a_plugin_disabled_by_an_explicit_false_does_not_count(self):
+        self._install(enabled=False)
+        self.settings(Path(config.ROOT) / ".claude" / "settings.json",
+                      {"enabledPlugins": {"charter@charter": False}})
+        self.assertEqual(doctor.check_guard_wired().status, WARN)
+
+    def test_an_OLD_enabled_plugin_still_counts(self):
+        """Deliberately against #177's suggestion to require a minimum plugin version.
+
+        A plugin supplies only the WIRING; the handler is whatever `charter` is on PATH. The
+        reporting plane's 0.29.1 plugin predates the guard and its hooks.json still
+        dispatches `charter hook pretooluse` — which runs today's CLI, guard included.
+        Requiring a version would warn on a plane that is genuinely protected, which is the
+        cry-wolf failure 0.31.1 was itself fixing.
+        """
+        plug = self._install(enabled=True)
+        (plug / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (plug / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "0.29.1"}))
+        self.assertEqual(doctor.check_guard_wired().status, OK)
+
+    def test_an_enabled_plugin_that_wires_something_else_does_not_count(self):
+        self._install(wires_guard=False, enabled=True)
+        self.assertEqual(doctor.check_guard_wired().status, WARN)
+
     def test_an_INSTALLED_plugin_counts_even_without_the_env_var(self):
         """The false positive this check shipped with. `CLAUDE_PLUGIN_ROOT` is set only for
         the plugin's OWN processes, so a `charter doctor` a human runs in a terminal never
@@ -96,6 +148,9 @@ class TestEveryWiringRouteCounts(GuardWiredCase):
         man.parent.mkdir(parents=True, exist_ok=True)
         man.write_text(json.dumps({"version": 2, "plugins": {
             "charter@charter": [{"scope": "user", "installPath": str(plug)}]}}))
+        # Enabled too, since #177: installation alone no longer satisfies the check.
+        self.settings(Path(config.ROOT) / ".claude" / "settings.json",
+                      {"enabledPlugins": {"charter@charter": True}})
         self.assertEqual(doctor.check_guard_wired().status, OK)
 
     def test_a_plugin_that_does_not_declare_the_guard_does_not_count(self):

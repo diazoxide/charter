@@ -440,25 +440,72 @@ def check_plane_root() -> Result:
 
 
 
+def _settings_files() -> list[Path]:
+    """The settings the HOST actually resolves, in the order it reads them.
+
+    One list, used both for a directly-declared hook and for `enabledPlugins`, so the two
+    halves of "is it wired" can never disagree about which files are in force.
+    """
+    from . import config as _config
+    return [Path(_config.ROOT) / ".claude" / "settings.json",
+            Path(_config.ROOT) / ".claude" / "settings.local.json",
+            Path.home() / ".claude" / "settings.json"]
+
+
+def _enabled_plugin_ids() -> set[str]:
+    """Plugin ids the host has ENABLED. Installed is not enabled (#177)."""
+    out: set[str] = set()
+    for p in _settings_files():
+        try:
+            doc = json.loads(p.read_text())
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for pid, on in (doc.get("enabledPlugins") or {}).items():
+            if on:
+                out.add(pid)
+    return out
+
+
 def _plugin_declaring_guard() -> str | None:
-    """The installed Claude Code plugin whose own ``hooks.json`` dispatches the guard.
+    """An ENABLED Claude Code plugin whose own ``hooks.json`` dispatches the guard.
 
     ``CLAUDE_PLUGIN_ROOT`` is set only for the plugin's OWN processes, so a `charter doctor`
-    a human runs in a terminal never sees it — even on a machine where the plugin is
-    installed and the guard demonstrably fires. Checking the env var alone therefore cries
-    wolf on exactly the planes that ARE protected, which is the failure this check was
-    written to avoid, pointed the other way.
+    a human runs in a terminal never sees it — even where the plugin is enabled and the
+    guard demonstrably fires. Checking the env var alone cries wolf on exactly the planes
+    that ARE protected.
+
+    But **installed, enabled and wired are three different states, and only the third
+    protects anything** (#177). 0.31.1 accepted the first and printed a tick over a plane
+    where `git checkout -b` in the root succeeded: the plugin was installed and *disabled*,
+    so nothing dispatched the hook. That is #168's own category error — verifying a proxy
+    instead of the fact — committed while fixing #168.
+
+    Deliberately NOT version-checked, against #177's suggestion. A plugin supplies only the
+    WIRING; the handler is whatever ``charter`` is on PATH. The reporting plane's plugin was
+    0.29.1, from before the guard existed, and its ``hooks.json`` still dispatches
+    ``charter hook pretooluse`` — which would have run today's CLI, guard included, had it
+    been enabled. Requiring a minimum plugin version would warn on planes that are genuinely
+    protected, which is the cry-wolf failure 0.31.1 was itself fixing. A plugin too old to
+    wire ``pretooluse`` at all is already excluded by reading its hooks.json rather than its
+    version.
 
     Read from ``installed_plugins.json`` rather than globbed out of the plugin cache: the
-    cache keeps every version ever fetched, so a stale copy would answer "wired" for a
-    plugin that has since been removed. The manifest is what the host actually installed.
+    cache keeps every version ever fetched, so a stale copy would answer for a plugin since
+    removed. The manifest is what the host actually installed.
     """
+    enabled = _enabled_plugin_ids()
+    if not enabled:
+        return None
     manifest = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
     try:
         doc = json.loads(manifest.read_text())
     except (OSError, ValueError):
         return None
     for pid, entries in (doc.get("plugins") or {}).items():
+        if pid not in enabled:
+            continue
         for entry in entries or []:
             path = (entry or {}).get("installPath")
             if not path:
@@ -505,14 +552,9 @@ def check_guard_wired() -> Result:
         return Result(name, OK, detail="wired (Claude Code plugin)")
     installed = _plugin_declaring_guard()
     if installed:
-        return Result(name, OK, detail=f"wired (installed plugin {installed})")
+        return Result(name, OK, detail=f"wired (enabled plugin {installed})")
 
-    candidates = [
-        Path(_config.ROOT) / ".claude" / "settings.json",
-        Path(_config.ROOT) / ".claude" / "settings.local.json",
-        Path.home() / ".claude" / "settings.json",
-    ]
-    for p in candidates:
+    for p in _settings_files():
         try:
             if "charter hook pretooluse" in p.read_text():
                 return Result(name, OK, detail=f"wired ({p})")
