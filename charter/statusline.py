@@ -1351,20 +1351,17 @@ def _nested_under() -> Path | None:
 
     Only walks upward comparing paths — no config is parsed for the ancestors beyond the
     marker's presence, because this runs on every render.
+
+    The rule itself lives in :func:`charter.root.enclosing_plane`, which `doctor` also uses.
+    It was implemented twice, here and there, which is how two surfaces come to disagree
+    about what "nested" means — and the one that disagrees is always the one nobody was
+    looking at. This wrapper keeps the render-path contract (never raise) and nothing else.
     """
     try:
-        here = config.ROOT.resolve()
-    except (OSError, RuntimeError):
+        from . import root as _r
+        return _r.enclosing_plane(config.ROOT)
+    except Exception:
         return None
-    for anc in here.parents:
-        if not (anc / _root_marker()).is_file():
-            continue
-        try:                       # only a plane whose WORKSPACES holds us is the trap:
-            here.relative_to(anc / "workspaces")   # a plain parent directory is not
-        except ValueError:
-            continue
-        return anc
-    return None
 
 
 def _root_marker() -> str:

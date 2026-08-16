@@ -439,6 +439,46 @@ def check_plane_root() -> Result:
     )
 
 
+def check_nested_plane() -> Result:
+    """Is the plane charter resolved sitting inside ANOTHER plane's ``workspaces/``? (#140)
+
+    `charter.toml` is tracked, so every clone of a plane is a plane, and `charter clone`
+    puts clones exactly where an outer plane keeps them. Standing in one, every command
+    silently operates on the inner plane — its own vault registry, its own workspace
+    pointers, its own `workspaces/`.
+
+    Reported rather than resolved. The ambiguity is genuine: sometimes the inner plane is
+    the one you mean, since charter's own dogfooding clones charter into a workspace and
+    that clone is a plane you might legitimately manage. Changing `ROOT` resolution is the
+    most invasive change available in this codebase and would guess for you; naming it ends
+    the silence, which is the actual complaint — the failure is invisible in both
+    directions, so nothing tells you the outer plane never saw your command.
+
+    ADR 0013's second rule, applied: a divergence charter can see, charter names.
+
+    WARN, never FAIL: the inner plane works perfectly. It is simply, probably, not the one
+    you meant.
+    """
+    from . import config as _config
+    from . import root as _root
+
+    name = "nested plane"
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail="no control plane found")
+    try:
+        outer = _root.enclosing_plane(Path(_config.ROOT))
+    except OSError as e:
+        return Result(name, OK, detail=f"not checked ({e})")
+    if outer is None:
+        return Result(name, OK, detail="not nested")
+    return Result(name, WARN,
+                  detail=f"this plane sits inside {outer}'s workspaces/",
+                  hint=("Commands here act on THIS plane — its vaults, its workspace "
+                        "pointers — and the outer plane never sees them. That is often "
+                        "not what you meant: a clone ships `charter.toml`, so it is a "
+                        f"plane too.  → to act on the outer one: cd {outer}"))
+
+
 def check_workspace_clones() -> Result:
     """Clones that are behind their upstream — in EVERY workspace, not just the active one.
 
@@ -921,7 +961,7 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_workspace_clones(),
+                check_plane_root(), check_nested_plane(), check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(),

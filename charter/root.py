@@ -133,6 +133,43 @@ def _plane_of(marked: Path) -> Path:
     return marked
 
 
+def enclosing_plane(root: Path | None = None) -> Path | None:
+    """The plane whose ``workspaces/`` contains *root*, or ``None``.
+
+    ``charter.toml`` is tracked, so **every clone of a plane is itself a plane** — and
+    `charter clone` puts clones at ``workspaces/<ws>/<repo>``. Standing in one, resolution
+    stops at the first marker walking up, so the inner plane silently shadows the outer:
+    its own `.charter/` state, its own vault registry, its own workspace pointers (#140).
+
+    It is silent in **both** directions, which is what makes it expensive. The inner plane
+    looks entirely normal — a `vault add` there reports success — while the outer plane
+    simply never sees what you did.
+
+    This only *detects* the nesting. Resolution is deliberately unchanged: the ambiguity is
+    genuine, because sometimes the inner plane IS the one you mean (charter's own
+    dogfooding clones charter into a workspace, and that clone is a control plane you might
+    legitimately manage). ADR 0013's second rule covers exactly this shape — a divergence
+    charter can see, charter names — so callers report it and leave the choice alone.
+    """
+    root = Path(root or find_root_or_cwd())
+    try:
+        here = root.resolve()
+    except OSError:
+        return None
+    for parent in here.parents:
+        if not (parent / MARKER).is_file():
+            continue
+        try:
+            # `workspaces/` is where an outer plane puts clones. A marker further up that
+            # does NOT own this path through its workspaces dir is an unrelated plane
+            # somewhere above, not the one being shadowed.
+            here.relative_to((parent / "workspaces").resolve())
+        except (ValueError, OSError):
+            continue
+        return parent
+    return None
+
+
 def find_root_or_cwd(start: Path | None = None) -> Path:
     """Like :func:`find_root`, but falls back to the starting directory.
 
