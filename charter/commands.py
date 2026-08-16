@@ -1400,5 +1400,12 @@ def cmd_version_bump(args) -> int:
             return rc
         util.ok("committed + pushed — teammates conform on their next session.")
     else:
-        util.info(f"  commit it to share: git add {rel} && git commit -m 'charter: pin to {target}'")
+        # `charter save`, not raw git. The pin is written into the PLANE ROOT, and on a plane
+        # whose repo requires pull requests the root is the one tree #157 forbids branching —
+        # so "commit it yourself" stranded the change and sent the operator to make the same
+        # edit twice (#167). `save` now knows how to land it either way.
+        util.info(f"  share it: charter save 'charter: pin to {target}'")
+        util.info(f"  (on a plane whose repo requires pull requests, that pushes a branch "
+                  f"and hands you the URL to open one — {rel} lives in the plane root, which "
+                  f"is not a tree to branch by hand.)")
     return 0

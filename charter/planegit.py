@@ -116,6 +116,80 @@ def commit_memory_reactive(paths: list[str], title: str) -> int:
     return commit_push(config.ROOT, ["add", "--", *paths], msg, background=True)
 
 
+#: Signatures a forge uses to say "this branch requires a pull request". Matched, never
+#: interpolated, and each one observed rather than imagined — ADR 0009's rule: charter may
+#: name a cause it RECOGNISED, never one it inferred. An unmatched rejection falls through
+#: to the generic "push failed" warning, which costs precision and can never mislead.
+_PROTECTED_SIGNATURES = (
+    "protected branch",              # GitHub + GitLab both use this wording
+    "GH006",                         # GitHub's protected-branch push rejection code
+    "pre-receive hook declined",     # generic server-side policy hook
+    "required status check",
+    "merge_request",                 # GitLab: "you are not allowed to push … open a MR"
+    "not allowed to push",
+)
+
+
+def _is_protected_rejection(stderr: str) -> bool:
+    blob = (stderr or "").lower()
+    return any(s.lower() in blob for s in _PROTECTED_SIGNATURES)
+
+
+def _compare_url(https: str, branch: str) -> str | None:
+    """A one-click "open a pull request for this branch" URL.
+
+    A plain HTTPS link, deliberately: charter has no PR-creation capability in any forge
+    adapter, and this closes the PR-gated workflow **without** adding one — no API call, no
+    extra token scope, no new adapter surface.
+    """
+    base = (https or "").removesuffix(".git")
+    if not base.startswith("https://"):
+        return None
+    if "github.com" in base:
+        return f"{base}/compare/{branch}?expand=1"
+    # GitLab, and self-hosted GitLab, use the same new-MR form.
+    return (f"{base}/-/merge_requests/new?merge_request%5Bsource_branch%5D={branch}")
+
+
+def _land_via_branch(root, https: str, cred: list, default_branch: str) -> int:
+    """Push the commit that is already on HEAD to a NEW remote branch, and hand back a URL.
+
+    The sanctioned path for a control plane whose own repo requires pull requests (#167).
+    charter's guidance is that control-plane content is committed with `charter save`,
+    straight to the default branch — which works only where a direct push lands. On a
+    protected `main` it cannot, and 0.30.0's guard (#157) refuses the obvious workaround of
+    branching the plane root. The operator was left making the same edit twice and
+    discarding one.
+
+    **The plane root's HEAD never moves.** That is what keeps this compatible with the guard
+    instead of poking a hole in it: `git push HEAD:refs/heads/<new>` needs no checkout, no
+    branch creation and no worktree — only a different *remote* ref for a commit that
+    already exists locally. (A throwaway worktree was the first design; it turned out to be
+    machinery for a problem that does not exist, since nothing here needs a second working
+    tree.)
+
+    The cost, stated rather than hidden: local `<default_branch>` is left one commit ahead
+    of the remote until the pull request lands, and the caller says so with the command that
+    reconciles it.
+    """
+    sha = _git(["rev-parse", "--short", "HEAD"], cwd=root).stdout.strip() or "change"
+    branch = f"charter/{sha}"
+    p = _git([*cred, "push", https, f"HEAD:refs/heads/{branch}"], cwd=root)
+    if p.returncode != 0:
+        util.err(f"'{default_branch}' requires a pull request, and pushing the branch "
+                 f"'{branch}' also failed:")
+        for ln in (p.stderr or p.stdout or "").splitlines()[-4:]:
+            util.err("  " + ln)
+        return 1
+    util.ok(f"'{default_branch}' requires a pull request — pushed {branch} instead.")
+    url = _compare_url(https, branch)
+    if url:
+        util.info(f"  open it: {url}")
+    util.info(f"  the commit is also on your local {default_branch}, one ahead of the "
+              f"remote. After the PR merges: git -C {root} pull --rebase")
+    return 0
+
+
 def commit_push(root, add_cmd: list, message: str | None,
                 sign: bool = False, no_push: bool = False, background: bool = False) -> int:
     """Stage (``add_cmd``) → secret-scan staged memory/refs → commit → push via the
@@ -221,6 +295,12 @@ def commit_push(root, add_cmd: list, message: str | None,
     if p.returncode == 0:
         _git(["update-ref", f"refs/remotes/origin/{branch}", "HEAD"], cwd=root)  # sync tracking
         util.ok(f"Pushed {branch} via {forge.cli} (HTTPS token — no SSH, no 1Password).")
+    elif _is_protected_rejection(p.stderr or p.stdout or ""):
+        # The plane's own repo requires a pull request. That is a supported shape (#167),
+        # not a failure to report and abandon: without this the change is stranded in the
+        # one tree #157 forbids branching, and the operator has to make the same edit again
+        # somewhere else and discard this one.
+        return _land_via_branch(root, https, cred, branch)
     else:
         util.warn(f"Committed, but the {forge.cli} push failed:")
         for ln in (p.stderr or p.stdout or "").splitlines()[-4:]:
