@@ -184,6 +184,12 @@ not encryption at rest. The vault is not a password manager.
   guard denials and tool approvals and memory writes, and `charter persona stats` says
   whether a role is actually being dispatched or whether that work is quietly routing to a
   generic agent.
+- **A plane writing down charter's own rules, and getting them wrong later.** The plugin
+  ships the skills for its surface — `charter:secrets` (use a credential without its value
+  reaching the transcript), `charter:working-in-a-clone` (the boundary between the plane's
+  session and a repo's own `.claude/`), and `charter:persona` (adopting a role, and routing
+  work to one instead of switching). They version with the CLI, so a plane no longer needs
+  a copy that can drift out from under it.
 
 ## The model
 
