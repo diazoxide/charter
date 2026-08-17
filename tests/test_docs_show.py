@@ -23,11 +23,15 @@ Two properties carry that promise and are pinned here:
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+
+from charter import docsrc
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = REPO_ROOT / "docs"
@@ -135,3 +139,61 @@ class TestDocsCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheContainmentCheckIsReal(unittest.TestCase):
+    """`page.parent` is `root` by construction, so checking it asked a question whose
+    answer was always yes. A symlink inside the docs directory pointed anywhere on disk,
+    `is_file()` followed it, and `read_text()` printed it — through a command whose whole
+    contract is "a topic names one page, and nothing else"."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.docs = self.tmp / "_docs"
+        self.docs.mkdir()
+        (self.docs / "real.md").write_text("# real\n")
+        self._orig = docsrc._PACKAGED
+        docsrc._PACKAGED = self.docs
+        self.addCleanup(setattr, docsrc, "_PACKAGED", self._orig)
+
+    def test_a_symlink_out_of_the_docs_dir_is_not_read(self):
+        secret = self.tmp / "outside.txt"
+        secret.write_text("NOT A DOCUMENTATION PAGE\n")
+        (self.docs / "leak.md").symlink_to(secret)
+        self.assertIsNone(docsrc.read("leak"))
+
+    def test_a_real_page_still_reads(self):
+        self.assertEqual(docsrc.read("real"), "# real\n")
+
+
+class TestTheCheckoutFallbackIsNotSitePackages(unittest.TestCase):
+    """Installed, `_CHECKOUT` resolves to `<site-packages>/docs` — a path that belongs to
+    nobody, which another distribution can create by shipping a stray top-level directory.
+    A wheel built without its `_docs` must report the broken build `source` describes,
+    not quietly serve a stranger's pages as charter's."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self._pkg, self._chk = docsrc._PACKAGED, docsrc._CHECKOUT
+        self.addCleanup(setattr, docsrc, "_PACKAGED", self._pkg)
+        self.addCleanup(setattr, docsrc, "_CHECKOUT", self._chk)
+        docsrc._PACKAGED = self.tmp / "absent"          # the broken-wheel case
+
+    def test_a_stray_site_packages_docs_dir_is_not_a_source(self):
+        stray = self.tmp / "site-packages" / "docs"
+        stray.mkdir(parents=True)
+        (stray / "install.md").write_text("# someone else's page\n")
+        docsrc._CHECKOUT = stray
+        self.assertIsNone(docsrc.source())
+        self.assertIsNone(docsrc.read("install"))
+
+    def test_a_real_checkout_still_resolves(self):
+        repo = self.tmp / "repo"
+        (repo / "docs").mkdir(parents=True)
+        (repo / "pyproject.toml").write_text("[project]\nname='charter-cp'\n")
+        (repo / "docs" / "install.md").write_text("# ours\n")
+        docsrc._CHECKOUT = repo / "docs"
+        self.assertEqual(docsrc.source(), repo / "docs")
+        self.assertEqual(docsrc.read("install"), "# ours\n")

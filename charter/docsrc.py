@@ -31,12 +31,27 @@ _PACKAGED = Path(__file__).resolve().parent / "_docs"
 _CHECKOUT = Path(__file__).resolve().parents[1] / "docs"
 
 
+def _is_checkout(docs: Path) -> bool:
+    """True when *docs* is the repo's own `docs/`, not a directory that merely sits where
+    one would.
+
+    Installed, ``_CHECKOUT`` resolves to ``<site-packages>/docs`` — a path that belongs to
+    nobody and that another distribution can create by shipping a stray top-level
+    directory. Without this, a wheel built without its `_docs` would not report the broken
+    build `source`'s docstring describes; it would quietly serve a stranger's pages as
+    charter's. `pyproject.toml` beside `docs/` is what a checkout has and site-packages
+    never does.
+    """
+    return (docs.parent / "pyproject.toml").is_file()
+
+
 def source() -> Path | None:
     """The directory the pages are read from, or None when neither exists — which
     happens only in a build so broken that the wheel shipped without its data."""
-    for candidate in (_PACKAGED, _CHECKOUT):
-        if candidate.is_dir():
-            return candidate
+    if _PACKAGED.is_dir():
+        return _PACKAGED
+    if _CHECKOUT.is_dir() and _is_checkout(_CHECKOUT):
+        return _CHECKOUT
     return None
 
 
@@ -60,10 +75,13 @@ def read(topic: str) -> str | None:
     if root is None or not _TOPIC.match(topic or ""):
         return None
     page = root / f"{topic}.md"
-    # `_TOPIC` already excludes separators and `..`, so this cannot currently fail. It
-    # stays because the regex is the kind of thing that gets loosened later to allow some
-    # new page name, and the containment check is what makes that safe rather than lucky.
-    if page.parent.resolve() != root.resolve() or not page.is_file():
+    # Containment is asserted on the RESOLVED page, not on its parent. `page.parent` is
+    # `root` by construction, so checking that asked a question whose answer was always
+    # yes — including for a symlink sitting inside the directory and pointing anywhere on
+    # disk, which `is_file()` follows and `read_text()` then prints. Resolving the page
+    # itself is what makes the check real, both for that case and for the regex being
+    # loosened later to admit some new page name.
+    if page.resolve().parent != root.resolve() or not page.is_file():
         return None
     try:
         return page.read_text()
