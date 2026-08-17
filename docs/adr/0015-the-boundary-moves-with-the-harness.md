@@ -130,6 +130,25 @@ added after it fired in unrelated repos and explained a control plane that did n
 there." Codex also trusts hooks by hash, so an entry written without approval is inert
 while looking wired, which is the shape #177 and #197 already cost this repo.
 
+## Both were run, and one of them needed nothing
+
+Verified in live sessions, because everything above is a prediction until it is:
+
+* **opencode** denies and the refusal reads as the rule working — `✗ ssh git@github.com
+  failed / Error: charter guard: The control plane is token-only …`, relayed by the model
+  as a policy interception rather than a crash. CONTEXT.md requires that of a deliberate
+  denial, and it was the one thing about opencode that could not be checked for free.
+* **Codex needed no charter code at all.** `charter hook pretooluse` spoke its contract
+  as shipped: `hook: SessionStart Completed`, `hook: UserPromptSubmit Completed`,
+  `hook: PreToolUse Blocked`, carrying charter's own reason verbatim into the transcript.
+
+Both runs also earned the fail-open branch its scepticism. The opencode shim called
+`.stdin()` on Bun's shell, which does not exist — so it threw on every tool call and the
+catch failed it open, leaving no guard running while `doctor` reported the tree wired. It
+parsed, it loaded, it did nothing. Bun takes stdin by redirection (`$`cmd < ${blob}`), and
+the test that now pins it drives the hook through a `$` stub implementing only what Bun
+implements. **Asserting that generated code parses is not the same as asserting it works.**
+
 ## What this is NOT
 
 It is not two implementations of charter. The opencode integration is written concretely and
