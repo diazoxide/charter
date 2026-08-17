@@ -182,8 +182,17 @@ def build_parser() -> argparse.ArgumentParser:
     gp.set_defaults(func=commands.cmd_git_policy)
 
     sl = sub.add_parser("statusline",
-                        help="Render the Claude Code status line (reads a JSON payload on stdin).")
-    sl.set_defaults(func=lambda args: statusline.main())
+                        help="Render the plane's status line — from a JSON payload on "
+                             "stdin, or ambiently with --watch on a harness that has no "
+                             "status bar of its own.")
+    sl.add_argument("--watch", action="store_true",
+                    help="Repaint in place until Ctrl-C, in any spare terminal. Needs no "
+                         "status-bar socket and no multiplexer, so it is the same render "
+                         "on every harness.")
+    sl.add_argument("--interval", type=float, default=statusline.WATCH_INTERVAL,
+                    help="Seconds between repaints with --watch.")
+    sl.set_defaults(func=lambda args: statusline.main(
+        (["--watch", "--interval", str(args.interval)] if args.watch else [])))
 
     gl = sub.add_parser("gl-refresh",
                         help="Refresh the status line's forge state (open MRs/PRs + CI) "

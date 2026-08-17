@@ -298,7 +298,7 @@ class OpenCodeHarness(Harness):
     deficits = (
         Deficit("status-bar",
                 "no status-bar socket: opencode has no `statusLine` config, so the plane "
-                "state renders on demand via `/charter` rather than ambiently."),
+                "state renders on demand via `/charter` rather than ambiently.", "charter statusline --watch"),
         Deficit("prompt-hook",
                 "no per-turn prompt hook: charter's mid-session nudges ride the output of "
                 "effectful tools (write/edit/bash) instead of arriving beside them."),

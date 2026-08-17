@@ -25,6 +25,10 @@ class Deficit(NamedTuple):
 
     key: str
     detail: str
+    #: A command that closes the gap, or "" when charter has no answer. An empty remedy
+    #: is a claim too — inventing one sends somebody off to configure something that does
+    #: not exist, which costs more than an honest gap.
+    remedy: str = ""
 
 
 class Harness:

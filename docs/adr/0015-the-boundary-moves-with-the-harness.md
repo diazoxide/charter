@@ -149,6 +149,24 @@ parsed, it loaded, it did nothing. Bun takes stdin by redirection (`$`cmd < ${bl
 the test that now pins it drives the hook through a `$` stub implementing only what Bun
 implements. **Asserting that generated code parses is not the same as asserting it works.**
 
+## A ceiling that carries what to do about it
+
+`doctor` earned its deficit list by refusing to render a lower ceiling as health. The next
+failure is subtler: **a limit stated and left there reads as "nothing can be done"**, and
+the operator stops looking. So a `Deficit` carries a `remedy` — a command that closes the
+gap — printed on the ceiling it answers rather than in a footnote.
+
+`charter statusline --watch` is the first: the plane state repainting in place in any
+spare terminal, needing no status-bar socket and no multiplexer, and identical on every
+harness including the one that does have a bar. It says what it cannot show — there is no
+session payload, so the token and context columns are blank — because a render that looks
+like the real thing while silently omitting a column teaches the reader to trust a number
+that is not on the screen.
+
+An empty remedy is a claim too, and stays empty. charter cannot conjure opencode a
+per-turn prompt hook, and inventing one would send somebody off to configure a thing that
+does not exist — which costs more than an honest gap.
+
 ## What this is NOT
 
 It is not two implementations of charter. The opencode integration is written concretely and

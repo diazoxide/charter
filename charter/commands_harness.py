@@ -21,6 +21,8 @@ def cmd_harness_list(args) -> int:
         util.info(f"{mark} {h.name}")
         for d in h.deficits:
             util.info(f"      ↳ {d.key}: {d.detail}")
+            if d.remedy:
+                util.info(f"          → {d.remedy}")
     if live and registry.get(live) is None:
         util.warn(f"  running under '{live}', which charter has no record of — its "
                   f"surfaces are unverified.")

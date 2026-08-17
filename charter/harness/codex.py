@@ -117,7 +117,8 @@ class CodexHarness(Harness):
         Deficit("status-bar",
                 "`tui.status_line` takes a list of built-in segments, not a command "
                 "(a string or bool is rejected, an array of strings is not) — so charter "
-                "cannot render into it, and `/charter` renders on demand instead."),
+                "cannot render into it, and `/charter` renders on demand instead.",
+                "charter statusline --watch"),
         Deficit("session-lock",
                 "`shell_environment_policy.set` holds constants, so no per-session "
                 "`$CHARTER_SESSION_ID` reaches a shell; the workspace lock falls back to "

@@ -615,7 +615,13 @@ def check_harness() -> Result:
     gaps = _harness.deficits(current)
     if not gaps:
         return Result(name, OK, detail=current)
-    listed = "\n".join(f"        ↳ {d.key}: {d.detail}" for d in gaps)
+    def _line(d):
+        # The remedy sits on the ceiling it answers, not in a footnote: a limit stated and
+        # left there reads as "nothing can be done", and the operator stops looking.
+        fix = f"  → {d.remedy}" if d.remedy else ""
+        return f"        ↳ {d.key}: {d.detail}{fix}"
+
+    listed = "\n".join(_line(d) for d in gaps)
     plural = "" if len(gaps) == 1 else "s"
     return Result(name, OK, detail=f"{current} — {len(gaps)} capability ceiling{plural}\n{listed}")
 

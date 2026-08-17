@@ -37,6 +37,7 @@ even though its commands honor the env var. Cosmetic only.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import subprocess
@@ -1816,7 +1817,66 @@ def _columns(left_lines: list[str], right_lines: list[str] | None, width: int) -
     return "\n".join(node.render(width))
 
 
+#: How often the ambient render repaints. The same cadence charter writes into Claude
+#: Code's `statusLine.refreshInterval`, so the plane state ages at one rate whichever
+#: harness you are looking at it through.
+WATCH_INTERVAL = 10.0
+
+_HOME_CLEAR = "\033[H\033[J"
+_HIDE_CURSOR, _SHOW_CURSOR = "\033[?25l", "\033[?25h"
+
+
+def watch(interval: float = WATCH_INTERVAL) -> int:
+    """Repaint the plane state in place until Ctrl-C. ``charter statusline --watch``.
+
+    The remedy for a harness with no status bar (ADR 0015). Claude Code renders the line
+    every turn because it has a socket for one; opencode has none, and Codex's
+    `tui.status_line` takes built-in segments rather than a command. This needs neither —
+    a spare terminal, no multiplexer, and the same render on every harness.
+
+    **What it cannot show, and says so.** There is no session payload here, so the token
+    and context columns are blank. A render that looks like the real thing while silently
+    omitting a column teaches the reader to trust a number that is not on the screen.
+
+    The cursor is hidden while painting and restored on the way out, including on Ctrl-C:
+    an ambient display that leaves the operator's terminal broken is a worse failure than
+    the one it set out to fix. A render that raises is drawn as a single line rather than
+    ending the loop, for the same reason `main` guards it — this process is meant to sit
+    there for hours.
+    """
+    out = sys.stdout
+    out.write(_HIDE_CURSOR)
+    try:
+        while True:
+            try:
+                body = render({})
+            except Exception:
+                body = f"{_CYAN}⬢{_R} charter — render failed; still watching"
+            out.write(f"{_HOME_CLEAR}{body}\n")
+            out.write(f"{_DIM}no session attached — token and context columns are blank; "
+                      f"this is the plane, not the session. Ctrl-C to stop.{_R}\n")
+            out.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        out.write(_SHOW_CURSOR)
+        out.flush()
+
+
 def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="charter statusline", add_help=True)
+    ap.add_argument("--watch", action="store_true",
+                    help="repaint the plane state in place until Ctrl-C — an ambient "
+                         "status line on a harness that has no bar of its own.")
+    ap.add_argument("--interval", type=float, default=WATCH_INTERVAL,
+                    help=f"seconds between repaints with --watch (default {WATCH_INTERVAL:g}).")
+    # `argv or []`, never None: `parse_args(None)` reads sys.argv, and this function is
+    # called programmatically (and by the crash-guard test) with no arguments at all —
+    # where inheriting the parent process's flags would turn a render into a usage error.
+    a = ap.parse_args(argv or [])
+    if a.watch:
+        return watch(interval=a.interval)
     try:
         payload = json.load(sys.stdin)
     except Exception:
