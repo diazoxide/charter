@@ -58,5 +58,53 @@ class ShimParses(unittest.TestCase):
                          "shell.env,tool.execute.after,tool.execute.before")
 
 
+    def _drive(self, reply: str, tool: str = "bash") -> subprocess.CompletedProcess:
+        """Call `tool.execute.before` with a `$` that implements ONLY what Bun's shell
+        implements: a tagged template returning a thenable with `.env`, `.quiet` and
+        `.nothrow` — and **no `.stdin`**.
+
+        This is the test the first version needed and did not have. The shim called
+        `.stdin(...)`, which does not exist, so it threw on every tool call and failed
+        open: the guard never fired while `doctor` reported everything wired. A stub that
+        mirrors the real surface turns that into a red test instead of a silent hole.
+        """
+        src = self._write(".mjs")
+        probe = self.dir / "drive.mjs"
+        probe.write_text(f"""
+import {{ CharterPlugin }} from './{src.name}';
+const $ = (strings, ...vals) => {{
+  const p = Promise.resolve({{ stdout: Buffer.from({reply!r}) }});
+  p.env = () => p; p.quiet = () => p; p.nothrow = () => p;
+  return p;
+}};
+const hooks = await CharterPlugin({{ $, directory: '/tmp' }});
+try {{
+  await hooks['tool.execute.before']({{ tool: {tool!r}, sessionID: 's' }},
+                                     {{ args: {{ command: 'x' }} }});
+  console.log('ALLOWED');
+}} catch (e) {{ console.log('DENIED: ' + e.message); }}
+""")
+        return subprocess.run([_RUNTIME, str(probe)], capture_output=True, text=True,
+                              timeout=120, cwd=self.dir)
+
+    def test_a_deny_from_charter_throws_and_carries_the_reason(self):
+        reply = ('{"hookSpecificOutput":{"permissionDecision":"deny",'
+                 '"permissionDecisionReason":"charter guard: token-only"}}')
+        proc = self._drive(reply)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "DENIED: charter guard: token-only")
+
+    def test_no_decision_lets_the_tool_run(self):
+        proc = self._drive('{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "ALLOWED")
+
+    def test_silence_from_charter_lets_the_tool_run(self):
+        """An unwired plane, or a charter that is not installed: the guard must fail OPEN.
+        A guard that cannot run must not make the harness unusable."""
+        proc = self._drive("")
+        self.assertEqual(proc.stdout.strip(), "ALLOWED")
+
+
 if __name__ == "__main__":
     unittest.main()

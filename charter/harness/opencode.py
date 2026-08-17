@@ -114,10 +114,13 @@ export const CharterPlugin = async ({ $, directory }) => {
       }
       let parsed
       try {
-        const res = await $`charter hook pretooluse`
+        // `< ${blob}` is how Bun's shell takes stdin; there is no such
+        // METHOD on it. An earlier version called one, threw on every tool
+        // call, and failed OPEN silently — the guard never fired while
+        // everything looked wired. Verified against opencode 1.18.18.
+        const res = await $`charter hook pretooluse < ${new Blob([JSON.stringify(payload)])}`
           .env({ ...process.env, CHARTER_HARNESS: "opencode",
                  CHARTER_SESSION_ID: input?.sessionID ?? "" })
-          .stdin(new Response(JSON.stringify(payload)))
           .quiet()
           .nothrow()
         const out = res.stdout.toString().trim()
@@ -151,10 +154,13 @@ export const CharterPlugin = async ({ $, directory }) => {
       }
       let note
       try {
-        const res = await $`charter hook posttooluse`
+        // `< ${blob}` is how Bun's shell takes stdin; there is no such
+        // METHOD on it. An earlier version called one, threw on every tool
+        // call, and failed OPEN silently — the guard never fired while
+        // everything looked wired. Verified against opencode 1.18.18.
+        const res = await $`charter hook posttooluse < ${new Blob([JSON.stringify(payload)])}`
           .env({ ...process.env, CHARTER_HARNESS: "opencode",
                  CHARTER_SESSION_ID: input?.sessionID ?? "" })
-          .stdin(new Response(JSON.stringify(payload)))
           .quiet()
           .nothrow()
         const out = res.stdout.toString().trim()
