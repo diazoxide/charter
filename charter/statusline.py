@@ -68,6 +68,12 @@ _TREE_MID, _TREE_END, _TREE_PIPE, _TREE_WT = "├─ ", "└─ ", "│  ", "╰
 # emits 2 lines, so counting repos alone let the footer grow past its budget.
 _MAX_REPO_LINES = 14  # keep the footer from growing unbounded
 
+# The SAME budget for the persona column, and for the same reason. The repo side was capped
+# and the persona side was not — and because the layout pads the shorter column to match the
+# longer, personas alone drove total height: measured at 35 lines for 30 personas, whatever
+# the repo count. A status line taller than the conversation is not a status line.
+_MAX_PERSONA_LINES = 14
+
 # Fixed column widths for the strict-table repo view (visible chars).
 _NAME_W, _BRANCH_W, _CI_W = 32, 34, 12
 _MR_W = 6  # fixed MR cell, so a right-hand persona column stays aligned
@@ -1042,10 +1048,16 @@ def _persona_chips(session: str | None = None) -> list[str]:
         order = ([active] if active in names else []) + [n for n in names if n != active]
         known = set(names)   # computed once for the whole column, not once per persona
         chips = []
+        flagged_names: set[str] = set()
         for n in order:
             dot = _vault_dot(persona.vault_of(n))
             badge = _mem_badge(_mem_count(n), _mem_count(n, ephemeral=True, session=session))
             health = _health_mark(n, known=known)
+            if health:
+                # `_health_mark` speaks ONLY when something is wrong, so its presence is
+                # the signal — recorded here rather than recovered from the rendered chip,
+                # which would tie truncation to a glyph choice.
+                flagged_names.add(n)
             # The marker is always exactly two columns, so every persona name starts in
             # the same column as every other AND as the column header above them — the
             # header carries `_MARK_HEAD` for exactly that reason. All three markers are
@@ -1055,6 +1067,23 @@ def _persona_chips(session: str | None = None) -> list[str]:
                 chips.append(f"{_MAGENTA}{_MARK_ACTIVE} {_BOLD}{n}{_R}{dot}{badge}{health}")
             else:
                 chips.append(f"{_DIM}{_MARK_IDLE} {n}{_R}{dot}{badge}{health}")
+        if len(chips) > _MAX_PERSONA_LINES:
+            # Which ones survive matters more than how many. Keeping the first N
+            # alphabetically would drop exactly the personas worth seeing, so the order is
+            # by what a truncated column is FOR: the active persona, then anything carrying
+            # a health mark (`_health_mark` speaks only when something is wrong), then the
+            # rest. The count of what is hidden is shown rather than implied — the same
+            # contract `_repo_rows` keeps with its own "(+N more)".
+            keep = _MAX_PERSONA_LINES - 1          # one row spent saying what was dropped
+            by_name = dict(zip(order, chips))
+            head = [n for n in order[:1] if n == active]
+            rest = [n for n in order if n not in head]
+            ordered = head + [n for n in rest if n in flagged_names] \
+                           + [n for n in rest if n not in flagged_names]
+            shown = ordered[:keep]
+            hidden = len(order) - len(shown)
+            chips = [by_name[n] for n in shown]
+            chips.append(f"{_DIM}  …(+{hidden} more · charter persona list){_R}")
         return chips
     except Exception:
         return []
