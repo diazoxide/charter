@@ -110,8 +110,17 @@ question of *scope*:
 | | where charter writes its wiring | committed | blast radius |
 | --- | --- | --- | --- |
 | Claude Code | `.claude/settings.json` | yes | the plane |
-| opencode | `.opencode/plugin/charter.ts` | ignorable | the plane |
+| opencode | `.opencode/` in **every work tree** | locally excluded | one tree |
 | Codex | `~/.codex/config.toml` | no | **every repo on the machine** |
+
+opencode's row is per-tree for a reason discovered the hard way, after a plane-root-only
+version shipped: **it does not search parent directories for plugins**, checked by putting
+one in a parent and booting from a nested directory, where it never loaded. Work happens in
+a clone or a worktree (ADR 0008), so `clone` and `worktree add` arm each tree as it comes
+into being, `reinit` backfills, and `doctor check_harness_trees` names any still missing.
+Charter's generated files are hidden through `.git/info/exclude` — per-checkout and
+untracked, so charter never edits a `.gitignore` the repo's owners maintain — and only the
+files charter itself created are hidden.
 
 So `CodexHarness.wire()` deliberately writes nothing, and `doctor` reports the gap rather
 than an integration that looks armed. `init` reaching outside the plane to arm hooks in
