@@ -210,7 +210,40 @@ def cmd_persona_use(args) -> int:
     persona.set_active(args.name)
     util.ok(f"Active persona set to '{args.name}'.")
     _warn_env(args.name)
+    _say_mcp_boundary(args.name)
     return 0
+
+
+def _say_mcp_boundary(name: str) -> None:
+    """Say plainly which boundary persona-scoped MCP servers apply at (#186).
+
+    Charter scopes a persona's servers at DISPATCH: `_render_agent` emits them inline, the
+    host connects them when the sub-agent starts and disconnects them when it finishes, and
+    their tool descriptions never reach the main conversation. That is a stronger guarantee
+    than an allowlist — the server does not run at all for this session.
+
+    It is also not the guarantee someone reads into `persona use`. The reporter switched to a
+    generalist, found another persona's five analytics servers still live, and reasonably
+    concluded charter had no MCP story at all — while the story existed for a boundary they
+    were not using (#186).
+
+    So charter names the boundary rather than moving it. Scoping the main session would mean
+    writing `disabledMcpServers` into a user-owned settings file and then OWNING it forever:
+    stateful, subtractive, and effective only on the next session — so `persona use` would
+    print a scoping claim that is not true of the session you are in. Naming beats resolving
+    where the tool cannot honestly deliver, which is the call #140 made for the same reason.
+    """
+    try:
+        servers = persona.mcp_servers(name)
+    except Exception:
+        return
+    if not servers:
+        return
+    util.info(f"  {len(servers)} MCP server(s) declared: {', '.join(sorted(servers))}.")
+    util.info("  These are scoped to DISPATCH — the host starts them when this persona runs "
+              "as a sub-agent and stops them after, and their tools never enter this "
+              "conversation. They are NOT started for the session you are in, and servers "
+              "already live here (from .mcp.json or an enabled plugin) stay live.")
 
 
 def cmd_persona_current(args) -> int:
@@ -398,13 +431,14 @@ def _agent_description(name: str, meta: dict) -> str:
         tail = f" Pulls credentials from the '{vault}' vault."
     else:
         tail = " Holds no credentials of its own."
-    # `isolation` is a parameter of the Agent TOOL, chosen by the caller at dispatch
-    # time — there is no agent-side way to declare it (confirmed against the shipped
-    # Claude Code schema). A persona that writes code therefore cannot isolate itself;
-    # the best charter can do is say so in the one string the router actually reads
-    # when it picks an agent. Advisory by construction, and aimed at whoever decides.
+    # `isolation` USED to be a dispatch-time parameter of the Agent tool with no agent-side
+    # way to declare it, so this string was the only place a persona could ask for it —
+    # advisory, aimed at whoever chose. The host has since gained an `isolation:` frontmatter
+    # field, and `_render_agent` now emits it, so the persona isolates ITSELF and the router
+    # has nothing to remember. The sentence stays because it still tells the router why this
+    # persona behaves differently, but it no longer asks for anything (#185).
     if (meta.get("dispatch-isolation") or "").strip() == "worktree":
-        tail += " Dispatch with isolation: worktree — it writes code, and parallel dispatches share one working tree."
+        tail += " Runs in its own git worktree — it writes code, and parallel dispatches would otherwise share one working tree."
     # The `delegate-when` triggers are what let the agent auto-route work here; a
     # persona without them falls back to a generic (weakly-triggering) description.
     if when:
@@ -456,7 +490,7 @@ _AGENT_PASSTHROUGH_KEYS = ("model", "color", "memory")
 _CHARTER_OWN_KEYS = (
     "name", "role", "vault", "extends", "uses", "delegate-when", "description",
     "agent-description", "agent-tools", "tools", "activity", "dispatch-isolation",
-    "draft", "skills",
+    "draft", "skills", "disallowed-tools",
 )
 
 
@@ -498,6 +532,20 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
     skills = persona.declared_skills(name)
     if skills:
         fm.append(f"skills: {', '.join(skills)}")
+
+    # The host's own field, emitted from the charter key that already means this. NOT a
+    # second spelling: `dispatch-isolation:` predates the host gaining `isolation:`, and
+    # renaming it would churn every persona to say the same thing. One name in a charter,
+    # one behaviour in the agent (#185).
+    if (meta.get("dispatch-isolation") or "").strip() == "worktree":
+        fm.append("isolation: worktree")
+
+    # A DENYLIST, which is often the honest shape where `agent-tools` forces an allowlist:
+    # "everything except Bash" is one line here and an enumeration of every other tool
+    # there. Passed straight through — unlike `permissionMode`/`maxTurns`, which would let
+    # a persona charter widen its own permissions and are deliberately left out.
+    if (meta.get("disallowed-tools") or "").strip():
+        fm.append(f"disallowedTools: {meta['disallowed-tools'].strip()}")
 
     if servers:
         fm.append("mcpServers:")

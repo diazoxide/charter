@@ -122,11 +122,16 @@ class GeneratedAgentBody(unittest.TestCase):
 
 
 class DispatchIsolationHint(unittest.TestCase):
-    """#12: `isolation` is an Agent TOOL parameter, chosen by the caller.
+    """#12, revised by #185: `isolation` WAS only an Agent-tool parameter chosen by the
+    caller, so a persona that writes code could not isolate itself and the `description` was
+    the only lever charter had — advisory by construction.
 
-    There is no agent-side way to declare it, so a persona that writes code cannot
-    isolate itself. The only lever charter has is the `description` — the one string
-    the router reads when picking an agent. Advisory by construction.
+    The host has since gained an `isolation:` subagent frontmatter field. The persona now
+    isolates ITSELF (`_render_agent` emits it from the `dispatch-isolation:` key that already
+    meant this), so the description no longer asks the router for anything. It still says
+    WHY this persona behaves differently, because that is what the router reads when picking
+    one — but stale advice telling a caller to pass a parameter the agent now sets is worse
+    than none.
     """
 
     def _desc(self, **extra):
@@ -140,17 +145,27 @@ class DispatchIsolationHint(unittest.TestCase):
 
     def test_present_when_the_charter_asks_for_it(self):
         d = self._desc(**{"dispatch-isolation": "worktree"})
-        self.assertIn("isolation: worktree", d)
+        self.assertIn("own git worktree", d)
         self.assertIn("share one working tree", d)   # says why, not just what
+        self.assertNotIn("Dispatch with", d)         # no longer asks the caller to pass it
+
+    def test_the_agent_declares_it_rather_than_requesting_it(self):
+        """The upgrade #185 made possible: advisory prose became an enforced field."""
+        from charter.commands_persona import _render_agent
+        body = _render_agent("dev", {"role": "Dev", "vault": "v",
+                                     "dispatch-isolation": "worktree"}, "# body\n")
+        self.assertIn("isolation: worktree", body.split("---")[1])
 
     def test_only_worktree_is_recognised(self):
-        """An unknown value must not silently produce a nonsense instruction."""
-        self.assertNotIn("isolation", self._desc(**{"dispatch-isolation": "sandbox"}))
+        """An unknown value must not silently produce a nonsense instruction. Asserted on
+        `worktree` rather than the word "isolation", which the description no longer uses —
+        the old assertion would now pass for every input."""
+        self.assertNotIn("worktree", self._desc(**{"dispatch-isolation": "sandbox"}))
 
     def test_the_hint_lands_at_the_end_where_truncation_costs_least(self):
         """delegate-when triggers drive routing; the hint must not displace them."""
         d = self._desc(**{"dispatch-isolation": "worktree"})
-        self.assertLess(d.index("writing code"), d.index("isolation: worktree"))
+        self.assertLess(d.index("writing code"), d.index("own git worktree"))
 
     def test_the_key_is_in_the_lint_vocabulary(self):
         """Otherwise the whitelist added for #8 would flag charter's own key."""
