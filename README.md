@@ -71,6 +71,23 @@ charter harness list          # every harness, what it can't carry, and which on
 charter harness install codex # Codex only — see below
 ```
 
+```
+  claude-code
+* opencode
+      ↳ status-bar: no status-bar socket: opencode has no `statusLine` config …
+          → charter statusline --watch
+      ↳ prompt-hook: no per-turn prompt hook: charter's mid-session nudges ride …
+  codex
+      ↳ status-bar: `tui.status_line` takes a list of built-in segments, not a command …
+          → charter statusline --watch
+      ↳ session-lock: `shell_environment_policy.set` holds constants, so no per-session …
+      ↳ wiring-scope: no project-level config: hooks live only in `~/.codex/config.toml` …
+```
+
+The `*` is the harness this session is in, and those names are what `$CHARTER_HARNESS`
+holds. A harness charter has no record of is reported too, as a warning rather than a
+clean row — an unverified integration and a complete one must not read the same.
+
 `charter init` writes each harness's wiring into the plane, and `charter clone` /
 `charter worktree add` arm every tree as it is created, because a session starts in a
 clone and not in the plane root. Nothing to install per harness, with one exception.
