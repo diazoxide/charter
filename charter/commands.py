@@ -569,7 +569,20 @@ def _ensure_gitignore(root: Path) -> bool:
 
 
 #: What `init` writes into `.claude/settings.json`'s `statusLine` key.
-_STATUSLINE = {"type": "command", "command": "charter statusline", "padding": 0}
+#: `refreshInterval` re-runs the status line every N seconds IN ADDITION to the event-driven
+#: updates. Set because charter's status line is mostly things that change without a session
+#: event: `silent 12m` ages with wall-clock, piece counts move as background workers claim
+#: and declare, and the plane-root warning fires on state another agent created. The docs
+#: name this case exactly — "the event-driven triggers can go quiet when the main session is
+#: idle, for example while a coordinator waits on background subagents".
+#:
+#: TEN, not the permitted minimum of one. Charter renders silence in MINUTES, so a
+#: one-second timer is ~60x finer than the coarsest thing displayed — and a render is ~80ms
+#: on a two-clone plane (a `git status` per tree), so it would burn ~8% of a core
+#: continuously to refresh a number that changes once a minute. Ten is still six times finer
+#: than the granularity, at a tenth of the cost.
+_STATUSLINE = {"type": "command", "command": "charter statusline", "padding": 0,
+               "refreshInterval": 10}
 
 
 def _statusline_snippet() -> str:
@@ -676,6 +689,9 @@ def _ensure_statusline(root: Path) -> tuple[str, Path | None]:
     Returns ``(status, detail)``:
     - ``"created"``, ``None`` — file (or just the key) was written.
     - ``"present"``, ``None`` — a ``statusLine`` already exists; untouched.
+    - ``"updated"``, ``None`` — charter's OWN status line gained a field it now writes
+      (currently ``refreshInterval``). Only ever charter's own, only ever a field that was
+      absent — a hand-set value is never reverted.
     - ``"malformed"``, the settings path — exists but isn't valid JSON; untouched.
     - ``"blocked"``, the ``.claude`` path — that path exists and isn't a directory.
     """
@@ -695,6 +711,23 @@ def _ensure_statusline(root: Path) -> tuple[str, Path | None]:
         return "malformed", p
     if not isinstance(settings, dict):
         return "malformed", p
+    existing = settings.get("statusLine")
+    if isinstance(existing, dict):
+        # Charter's OWN status line, missing a field charter has since started writing.
+        # Adding it is updating a key charter wrote, which is a different act from touching
+        # a user's — and without it the field would reach only brand-new planes. A status
+        # line running someone else's script is left alone, and so is a value someone set by
+        # hand: silently reverting a deliberate choice is what this function exists not to do.
+        if (existing.get("command") == _STATUSLINE["command"]
+                and "refreshInterval" not in existing):
+            existing["refreshInterval"] = _STATUSLINE["refreshInterval"]
+            indent, separators = _json_style(raw)
+            rewritten = json.dumps(settings, indent=indent, separators=separators)
+            if raw.endswith("\n"):
+                rewritten += "\n"
+            p.write_text(rewritten)
+            return "updated", None
+        return "present", None
     if "statusLine" in settings:
         return "present", None
     settings["statusLine"] = dict(_STATUSLINE)
@@ -935,6 +968,8 @@ def cmd_init(args) -> int:
     sl_status, sl_detail = _ensure_statusline(root)
     if sl_status == "created":
         created.append(".claude/settings.json (statusLine)")
+    elif sl_status == "updated":
+        created.append(".claude/settings.json (statusLine refreshInterval)")
     elif sl_status == "present":
         present.append(".claude/settings.json (statusLine already set)")
     elif sl_status == "malformed":
@@ -1044,6 +1079,18 @@ def cmd_reinit(args) -> int:
 
     # The plane-root guard, on the SAME terms as init. `doctor`'s hint for an unwired plane
     # names `charter reinit`, so reinit has to be the command that actually wires it (#168).
+    # The status line, on the same terms as the guard hook below: charter's own key gains a
+    # field charter has since started writing (`refreshInterval`), and nothing else is
+    # touched. Without this the field would reach only brand-new planes.
+    sl_status, sl_detail = _ensure_statusline(config.ROOT)
+    if sl_status == "created":
+        created.append(".claude/settings.json (statusLine)")
+    elif sl_status == "updated":
+        created.append(".claude/settings.json (statusLine refreshInterval)")
+    elif sl_status == "malformed":
+        util.warn(f"{sl_detail} is not valid JSON — left it completely untouched. Add the "
+                  f"status line yourself:\n{_statusline_snippet()}")
+
     gh_status, gh_detail = _ensure_guard_hook(config.ROOT)
     if gh_status == "created":
         created.append(".claude/settings.json (plane-root guard)")
