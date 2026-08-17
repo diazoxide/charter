@@ -19,6 +19,7 @@ from . import (
     toolgate,
     util,
 )
+from .browser import PINNED as _PLAYWRIGHT_PIN
 from .forge.registry import KINDS as _FORGE_KINDS
 from .secrets.registry import PROVIDERS
 
@@ -107,6 +108,18 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--workspace", "-w", help="Workspace to detail (default: the active one).")
     st.add_argument("--all", action="store_true", help="Detail every workspace.")
     st.set_defaults(func=commands.cmd_status)
+
+    br = sub.add_parser("browser",
+                        help="The browser lane: charter ships the credential bridge, "
+                             "Playwright ships the page-driving surface.")
+    brsub = br.add_subparsers(dest="browser_cmd", required=True)
+    bri = brsub.add_parser("install",
+                           help="Generate Playwright's driving-surface skill into this "
+                                "plane, from the tool that owns it (charter vendors none "
+                                "of it — Apache-2.0, and it ships far more often than "
+                                "charter does).")
+    bri.add_argument("--version", help=f"@playwright/cli version (default: {_PLAYWRIGHT_PIN}).")
+    bri.set_defaults(func=commands.cmd_browser_install)
 
     doc = sub.add_parser("docs",
                          help="Regenerate this plane's docs/topology.md — or read "

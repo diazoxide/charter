@@ -164,9 +164,14 @@ not encryption at rest. The vault is not a password manager.
 - **A plane writing down charter's own rules, and getting them wrong later.** The plugin
   ships the skills for its surface — `charter:secrets` (use a credential without its value
   reaching the transcript), `charter:working-in-a-clone` (the boundary between the plane's
-  session and a repo's own `.claude/`), and `charter:persona` (adopting a role, and routing
-  work to one instead of switching). They version with the CLI, so a plane no longer needs
-  a copy that can drift out from under it.
+  session and a repo's own `.claude/`), `charter:persona` (adopting a role, and routing
+  work to one instead of switching), and `charter:browser`. They version with the CLI, so a
+  plane no longer needs a copy that can drift out from under it.
+- **A browser login without the password in the transcript.** `charter:browser` bridges a
+  vault into Playwright, so a credential is referred to by name and redacted from output.
+  Charter ships the bridge and none of Playwright's own pages — those are Apache-2.0 and
+  move far faster than charter releases, so `charter browser install` generates them from
+  the tool that owns them, at whatever version you ask for.
 
 ## The model
 

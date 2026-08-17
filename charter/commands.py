@@ -213,6 +213,46 @@ def cmd_docs(args) -> int:
     return 0
 
 
+def cmd_browser_install(args) -> int:
+    """Generate Playwright's own driving-surface skill into this plane.
+
+    Charter ships the `browser` skill (vault bridge, per-worker isolation) and none of
+    Playwright's pages — see charter/browser.py for why redistributing them is the wrong
+    trade. This fetches them from the tool that owns them.
+    """
+    from . import browser as _browser
+
+    if not config.HAS_CONTROL_PLANE:
+        util.err("no control plane found (no charter.toml here or in any parent) — "
+                 "`charter browser install` writes into a plane's .claude/skills/.")
+        return 1
+    if not _browser.npx_available():
+        util.err("npx not found — install Node.js to generate the Playwright skill.")
+        util.info("The `browser` skill's credential bridge works regardless; only the "
+                  "page-driving reference needs this.")
+        return 1
+
+    version = getattr(args, "version", None) or _browser.PINNED
+    util.info(f"Generating the Playwright driving surface (@playwright/cli@{version})…")
+    code, output = _browser.install(config.ROOT, version)
+    if code != 0:
+        util.err(f"the generator failed (exit {code}).")
+        # Handed back verbatim: this is npm's diagnosis (offline, no such version, EACCES),
+        # and paraphrasing it would be charter guessing at somebody else's error (ADR 0009).
+        print(output.rstrip())
+        return 1
+
+    landed = config.ROOT / _browser.SKILL_DIR
+    if landed.is_dir():
+        util.ok(f"Wrote {_browser.SKILL_DIR} ({len(list(landed.rglob('*.md')))} page(s))")
+    else:
+        util.warn(f"The generator reported success but {_browser.SKILL_DIR} is not there.")
+        return 1
+    util.info("It is Playwright's, not charter's — regenerate it with this command "
+              "rather than editing it.")
+    return 0
+
+
 def cmd_docs_list(args) -> int:
     """charter's own pages — the ones `docs show` can print.
 
