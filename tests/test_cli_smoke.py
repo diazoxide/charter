@@ -15,6 +15,7 @@ belong in this module.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import unittest
@@ -124,3 +125,55 @@ class CliSmokeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInitDoesNotPrintOneEnormousLine(unittest.TestCase):
+    """The headline is a count; the paths go underneath it.
+
+    That line named every path it had written, on one line that does not wrap. It grew
+    every time charter learned to write something new — 184 characters at 0.38, 254 once
+    harness wiring landed — so it was unreadable in an 80-column terminal, and because the
+    README's demo is a real capture it made that image 254 columns wide. The regression is
+    silent: nothing fails, the asset just gets worse each release.
+    """
+
+    MAX = 100
+
+    def test_no_line_of_init_output_is_absurdly_wide(self):
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        d = tempfile.mkdtemp(prefix="charter-initwidth-")
+        p = subprocess.run([sys.executable, "-m", "charter", "init",
+                            "--forge", "github", "--owner", "acme"],
+                           cwd=d, capture_output=True, text=True,
+                           env={**os.environ, "CHARTER_ROOT": d,
+                                "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
+        out = (p.stdout or "") + (p.stderr or "")
+        # Exit code first. Without it this passed against "No module named charter" —
+        # a one-line error is narrow, so the width assertion held while init never ran.
+        self.assertEqual(p.returncode, 0, out)
+        widest = max((len(ln) for ln in out.splitlines()), default=0)
+        self.assertLessEqual(widest, self.MAX,
+                             f"widest init line is {widest} cols:\n" +
+                             "\n".join(ln for ln in out.splitlines()
+                                       if len(ln) > self.MAX))
+
+    def test_it_still_says_what_it_wrote(self):
+        """Narrower must not mean vaguer — the paths are still listed, just underneath."""
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        d = tempfile.mkdtemp(prefix="charter-initwidth-")
+        p = subprocess.run([sys.executable, "-m", "charter", "init",
+                            "--forge", "github", "--owner", "acme"],
+                           cwd=d, capture_output=True, text=True,
+                           env={**os.environ, "CHARTER_ROOT": d,
+                                "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
+        out = (p.stdout or "") + (p.stderr or "")
+        self.assertIn("charter.toml", out)
+        self.assertIn("personas/", out)

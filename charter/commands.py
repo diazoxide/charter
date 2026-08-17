@@ -1341,8 +1341,16 @@ def cmd_init(args) -> int:
         return 1
 
     if created:
-        util.ok(f"Initialized control plane (schema {_instance.SCHEMA}) → "
-                f"{', '.join(created)}.")
+        # A COUNT on the headline and the names beneath it, rather than one line naming
+        # every path. That line grew every time charter learned to write something new —
+        # 184 characters at 0.38, 254 once harness wiring landed — and it does not wrap, so
+        # it was unreadable in an 80-column terminal and made the README's own demo image
+        # 254 columns wide. What a reader needs first is "it worked, here is how much"; the
+        # inventory of paths is detail, and detail belongs under the headline.
+        util.ok(f"Initialized control plane (schema {_instance.SCHEMA}) — "
+                f"{len(created)} item(s) written.")
+        for item in created:
+            util.info(f"  + {item}")
     else:
         util.ok(f"Control plane already fully set up (schema {_instance.SCHEMA}) — "
                 f"nothing to do.")

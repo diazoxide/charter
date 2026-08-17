@@ -31,6 +31,19 @@ COLS="${COLUMNS:-88}"
 # "succeeded" with exit 0, and the assets quietly stopped being regenerable.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The capture must show THIS tree's charter, not whichever version happens to be on the
+# developer's PATH. Without this the asset silently documents an older build: the demo was
+# regenerated against an installed 0.40.0 and reproduced an `init` line that the tree had
+# already fixed, so the image stayed 254 columns wide for a defect that no longer existed.
+SRC_ROOT="$(cd "$HERE/../.." && pwd)"
+SHIM="$(mktemp -d -t charter-shim)"
+cat > "$SHIM/charter" <<SH
+#!/bin/sh
+exec python3 -c 'import sys; sys.path.insert(0, "$SRC_ROOT"); sys.path = [p for p in sys.path if p not in ("", "$DIR")]; from charter.cli import main; sys.exit(main())' "\$@"
+SH
+chmod +x "$SHIM/charter"
+PATH="$SHIM:$PATH"
+
 rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR" || exit 1
 REAL="$(pwd -P)"
 unset $(env | grep -o '^CHARTER_[A-Z_]*' || true) 2>/dev/null || true
