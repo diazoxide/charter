@@ -740,22 +740,46 @@ def check_ask_rules() -> Result:
 SHIPPED_SKILLS = frozenset({"secrets", "working-in-a-clone", "persona", "browser"})
 
 
+def _is_charter_checkout(root) -> bool:
+    """True when *root* is a clone of charter itself.
+
+    Structural, and deliberately so: the marker is charter's own source tree sitting beside
+    a `pyproject.toml` that names the distribution. Nothing here depends on how this
+    process was installed, which is what the previous test got wrong.
+    """
+    from pathlib import Path
+
+    root = Path(root)
+    if not (root / "charter" / "docsrc.py").is_file():
+        return False
+    try:
+        return "charter-cp" in (root / "pyproject.toml").read_text()
+    except OSError:
+        return False
+
+
 def shadowed_knowledge(root) -> dict[str, list[str]]:
     """A plane's own pages and skills that cover something charter already ships.
 
     Returns {"skills": [...], "docs": [...]} — names only, sorted.
 
-    Empty when the plane *is* this repo. Charter's own checkout is a control plane, and its
-    `docs/personas.md` is the very page `docs show personas` serves; reporting that as a
-    shadow of itself would make the check noise on the one machine most likely to run it.
+    Empty when the plane *is* charter's own checkout. Its `docs/personas.md` is the very
+    page `docs show personas` serves; reporting that as a shadow of itself would make the
+    check noise on the one machine most likely to run it.
+
+    That test asks what the ROOT is, not where `docsrc` happened to read from. Keying it on
+    `docsrc.source()` looked equivalent and was not: `source()` prefers the packaged copy,
+    so it only matched for someone running `python3 -m charter` from the clone. Every
+    contributor also has `uv tool install charter-cp` — the README says to — and for them
+    the exemption missed and doctor reported all eight of charter's own pages as shadows of
+    themselves. Exactly the noise this paragraph promises to prevent.
     """
     from pathlib import Path
 
     from . import docsrc
 
     root = Path(root)
-    source = docsrc.source()
-    if source is not None and source.resolve().parent == root.resolve():
+    if _is_charter_checkout(root):
         return {"skills": [], "docs": []}
 
     skills = sorted(

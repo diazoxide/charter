@@ -21,7 +21,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from charter import doctor
+from charter import doctor, docsrc  # noqa: F401
+from tests._isolation import PersonaIso
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,3 +103,46 @@ class TestShippedSkillsStayInSync(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCharterItselfIsExemptHoweverItWasInstalled(PersonaIso):
+    """The exemption used to key on `docsrc.source()`, which prefers the PACKAGED copy — so
+    it only matched for someone running `python3 -m charter` from the clone. Every
+    contributor also has `uv tool install charter-cp`, and for them doctor reported all
+    eight of charter's own pages as shadows of themselves: precisely the noise the
+    docstring promises to prevent, on the machine most likely to run the check."""
+
+    def make_checkout(self) -> Path:
+        root = Path(self.tmp) / "charter-clone"
+        (root / "charter").mkdir(parents=True)
+        (root / "charter" / "docsrc.py").write_text("# source\n")
+        (root / "pyproject.toml").write_text('[project]\nname = "charter-cp"\n')
+        (root / "docs").mkdir()
+        for topic in docsrc.topics()[:3] or ["personas"]:
+            (root / "docs" / f"{topic}.md").write_text("# ours\n")
+        return root
+
+    def test_exempt_when_running_from_a_checkout(self):
+        root = self.make_checkout()
+        self.assertEqual(doctor.shadowed_knowledge(root), {"skills": [], "docs": []})
+
+    def test_still_exempt_when_the_cli_is_an_installed_wheel(self):
+        """The case that was broken. `docsrc.source()` points into site-packages and has
+        nothing to do with which plane is being checked."""
+        root = self.make_checkout()
+        packaged = Path(self.tmp) / "site-packages" / "charter" / "_docs"
+        packaged.mkdir(parents=True)
+        for p in (root / "docs").glob("*.md"):
+            (packaged / p.name).write_text(p.read_text())
+        real = docsrc._PACKAGED
+        docsrc._PACKAGED = packaged
+        self.addCleanup(setattr, docsrc, "_PACKAGED", real)
+        self.assertEqual(doctor.shadowed_knowledge(root), {"skills": [], "docs": []})
+
+    def test_an_ordinary_plane_is_still_reported(self):
+        """The exemption must not have widened into "never report anything"."""
+        root = Path(self.tmp) / "someones-plane"
+        (root / "docs").mkdir(parents=True)
+        topic = (docsrc.topics() or ["personas"])[0]
+        (root / "docs" / f"{topic}.md").write_text("# a local copy\n")
+        self.assertIn(topic, doctor.shadowed_knowledge(root)["docs"])
