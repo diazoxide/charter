@@ -87,5 +87,24 @@ class WiringWritesIt(PersonaIso):
         self.assertEqual((tree / "opencode.json").read_text(), "{not json")
 
 
+
+class StatuslineOnDemand(PersonaIso):
+    """opencode has no status-bar socket, so the plane state is a command you run.
+
+    `.opencode/command/<name>.md` is the location (quoted from the binary's own docs
+    table), and a command body may embed shell output — so `/charter` shows the real
+    status line rather than asking a model to describe it.
+    """
+
+    def test_the_tree_gets_a_charter_command(self):
+        tree = self.tmp / "tree"
+        tree.mkdir(parents=True, exist_ok=True)
+        registry.get("opencode").wire_tree(tree)
+        cmd = tree / opencode.COMMAND_PATH
+        self.assertTrue(cmd.is_file())
+        body = cmd.read_text()
+        self.assertIn("charter statusline", body)
+        self.assertIn("!`", body, "the command must embed shell output, not describe it")
+
 if __name__ == "__main__":
     unittest.main()

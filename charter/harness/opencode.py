@@ -42,8 +42,36 @@ TOOL_NAMES = {
     "task": "Task",
 }
 
+#: Tools whose output charter may append to. Deliberately NOT the ones that return
+#: content: a `read` whose output carries charter's nudge is a false record of that file,
+#: and the agent may write it back. These three report an action instead, so a note
+#: appended to them adds to the record rather than corrupting it.
+#:
+#: Claude Code needs no such list — its `additionalContext` arrives BESIDE the result.
+#: This restriction is the price of opencode having no channel of its own.
+EFFECTFUL_TOOLS = ("bash", "edit", "write")
+
 #: Where opencode looks for project-local plugins.
 SHIM_PATH = Path(".opencode") / "plugin" / "charter.ts"
+
+#: The on-demand status line. opencode has no status-bar socket, so the plane state is a
+#: command instead of an ambient row. `.opencode/command/<name>.md` is the location, from
+#: the binary's own docs table: "Project commands | `.opencode/command/<name>.md`".
+COMMAND_PATH = Path(".opencode") / "command" / "charter.md"
+
+#: A command body may embed shell output with ``!`…` ``, so `/charter` prints the REAL
+#: status line. Describing it to a model instead would spend a turn to get a worse answer.
+COMMAND = """\
+---
+description: The control plane — active workspace, open todos, pieces, repos and CI.
+---
+
+The control plane's current state:
+
+!`echo '{}' | charter statusline`
+
+Read it and continue; nothing here needs a reply.
+"""
 
 #: The session context, for the harness that has no SessionStart hook. Named in the
 #: tree's ``instructions`` so opencode reads it at startup.
@@ -64,6 +92,8 @@ _SHIM_TEMPLATE = '''\
 // sessions, so a module-level "current session" would have no correct value.
 
 const TOOL_NAMES = %(tool_names)s
+
+const EFFECTFUL = %(effectful)s
 
 export const CharterPlugin = async ({ $, directory }) => {
   return {
@@ -105,6 +135,37 @@ export const CharterPlugin = async ({ $, directory }) => {
           ?? "charter denied this command")
       }
     },
+
+    // charter's mid-session nudges. On Claude Code they arrive beside the result; here
+    // there is no such channel, so they ride the result itself — and only for EFFECTFUL
+    // tools, because a `read` carrying appended text is a false record of that file.
+    "tool.execute.after": async (input, output) => {
+      if (!EFFECTFUL.includes(input?.tool)) return
+      const payload = {
+        hook_event_name: "PostToolUse",
+        session_id: input?.sessionID ?? "",
+        cwd: directory,
+        tool_name: TOOL_NAMES[input?.tool] ?? input?.tool ?? "",
+        tool_input: input?.args ?? {},
+        tool_response: { output: String(output?.output ?? "") },
+      }
+      let note
+      try {
+        const res = await $`charter hook posttooluse`
+          .env({ ...process.env, CHARTER_HARNESS: "opencode",
+                 CHARTER_SESSION_ID: input?.sessionID ?? "" })
+          .stdin(new Response(JSON.stringify(payload)))
+          .quiet()
+          .nothrow()
+        const out = res.stdout.toString().trim()
+        note = out ? JSON.parse(out)?.hookSpecificOutput?.additionalContext : null
+      } catch (e) {
+        return
+      }
+      if (!note) return
+      // Fenced, so nothing here can be read back as the tool's own output.
+      output.output = `${output?.output ?? ""}\n\n--- charter ---\n${note}\n--- end charter ---`
+    },
   }
 }
 '''
@@ -113,7 +174,10 @@ export const CharterPlugin = async ({ $, directory }) => {
 #: `@opencode-ai/plugin` exists only for type checking, and depending on it would send Bun
 #: to the network before charter's own hook can run — a failure that would look like
 #: charter being broken.
-SHIM = _SHIM_TEMPLATE % {"tool_names": json.dumps(TOOL_NAMES, indent=2, sort_keys=True)}
+SHIM = _SHIM_TEMPLATE % {
+    "tool_names": json.dumps(TOOL_NAMES, indent=2, sort_keys=True),
+    "effectful": json.dumps(list(EFFECTFUL_TOOLS)),
+}
 
 
 def ensure_shim(root: Path) -> str:
@@ -264,6 +328,11 @@ class OpenCodeHarness(Harness):
         # The context, and the line telling opencode to read it. Without these the guards
         # fire but the session never learns which workspace it is in, which persona it is,
         # or what the task still means to do — charter guarding instead of governing.
+        cmd = Path(tree) / COMMAND_PATH
+        if not cmd.exists():
+            cmd.parent.mkdir(parents=True, exist_ok=True)
+            cmd.write_text(COMMAND)
+            out.append(("created", f"{tree.name}/{COMMAND_PATH}"))
         write_context(tree)
         if ensure_instructions(tree) == "created":
             out.append(("created", f"{tree.name}/opencode.json (instructions)"))

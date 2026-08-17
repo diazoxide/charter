@@ -91,3 +91,37 @@ class GuardForwarding(unittest.TestCase):
                       "throw"):
             with self.subTest(token=token):
                 self.assertIn(token, self.src)
+
+
+class MidSessionNudges(unittest.TestCase):
+    """charter's governance text reaches an opencode session by riding a tool result.
+
+    On Claude Code it arrives BESIDE the result, as `PostToolUse.additionalContext`.
+    opencode has no such channel, so the shim appends to the result itself — verified
+    possible by reading the binary: `trigger` hands hooks the result object and returns
+    it, so a mutation propagates.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="charter-oc-n-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.root, True))
+        opencode.ensure_shim(self.root)
+        self.src = (self.root / ".opencode" / "plugin" / "charter.ts").read_text()
+
+    def test_it_hooks_the_event_that_runs_after_the_tool(self):
+        self.assertIn('"tool.execute.after"', self.src)
+        self.assertIn("charter hook posttooluse", self.src)
+
+    def test_only_effectful_tools_carry_it(self):
+        """A `read` whose output has charter's text appended is a false record of that
+        file — and the agent may write it back. Tools that RETURN CONTENT are never
+        touched; only the ones whose output is a report of an action."""
+        self.assertEqual(opencode.EFFECTFUL_TOOLS, ("bash", "edit", "write"))
+        for tool in opencode.EFFECTFUL_TOOLS:
+            with self.subTest(tool=tool):
+                self.assertIn(f'"{tool}"', self.src)
+        self.assertIn("EFFECTFUL", self.src)
+
+    def test_the_appended_text_is_fenced_so_it_cannot_be_mistaken_for_output(self):
+        self.assertIn("charter", self.src.lower())
+        self.assertIn("additionalContext", self.src)
