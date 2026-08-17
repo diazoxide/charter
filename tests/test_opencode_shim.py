@@ -55,3 +55,39 @@ class EnsureShim(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GuardForwarding(unittest.TestCase):
+    """The shim turns an opencode tool call into the hook payload charter already reads.
+
+    Verified against opencode 1.18.18 by reading the bundled call site in the binary:
+    `trigger("tool.execute.before", {tool, sessionID, callID}, {args})` is awaited BEFORE
+    `u.execute(...)`, and `Plugin.trigger` wraps each hook in `Effect.promise` with no
+    try/catch — so a throw prevents the tool from running.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="charter-oc-g-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.root, True))
+        opencode.ensure_shim(self.root)
+        self.src = (self.root / ".opencode" / "plugin" / "charter.ts").read_text()
+
+    def test_it_hooks_the_event_that_runs_before_the_tool(self):
+        self.assertIn('"tool.execute.before"', self.src)
+
+    def test_opencode_tool_ids_are_mapped_to_the_names_charter_guards(self):
+        """charter's guard matches `tool_name == "Bash"`; opencode calls it `bash`.
+        The mapping lives in Python and is generated into the shim, so there is one
+        source of truth rather than a table in each language that can drift."""
+        self.assertEqual(opencode.TOOL_NAMES["bash"], "Bash")
+        for oc_id, charter_name in opencode.TOOL_NAMES.items():
+            with self.subTest(tool=oc_id):
+                self.assertIn(f'"{oc_id}"', self.src)
+                self.assertIn(f'"{charter_name}"', self.src)
+
+    def test_it_sends_the_payload_charter_reads_and_throws_on_deny(self):
+        for token in ("hook_event_name", "PreToolUse", "session_id", "tool_name",
+                      "tool_input", "charter hook pretooluse", "permissionDecision",
+                      "throw"):
+            with self.subTest(token=token):
+                self.assertIn(token, self.src)
