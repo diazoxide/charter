@@ -29,6 +29,27 @@ that exists only inside a settings page.
 GitHub recommends 1280×640 and caps uploads at 1MB; rendering at 2× keeps it sharp on
 retina and still lands around 120KB.
 
+## Staying current
+
+`captured.json` records the charter version each capture was taken at. `tests/
+test_asset_freshness.py` fails when one falls **more than a minor** behind, which leaves
+exactly one release of slack: bump once and nothing happens, bump twice without
+regenerating and the suite says so.
+
+A check rather than a release step, deliberately. Regenerating on every publish would put a
+terminal recorder on the critical path and let a flaky capture block a release — the same
+reasoning that keeps `charter version sync` from running `claude plugin update` for you.
+
+Update the stamp in the same commit as the regenerated asset:
+
+```json
+{ "demo.svg": "0.39.0", "statusline.svg": "0.39.0" }
+```
+
+The stamp is a sidecar rather than a comment inside each SVG, because `ansi2svg.py`
+rewrites an SVG wholesale — a version written by the step that is supposed to be recording
+it proves nothing.
+
 ## The tools
 
 **`ansi2svg.py`** turns captured ANSI output into a self-contained SVG. Stdlib only, so

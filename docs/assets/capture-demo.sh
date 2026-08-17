@@ -24,6 +24,13 @@ REPO="${3:?repo}"
 PROMPT=$'\033[32m❯\033[0m'
 COLS="${COLUMNS:-88}"
 
+# Resolved BEFORE the `cd` below. `BASH_SOURCE[0]` is usually relative — invoking this
+# as `./docs/assets/capture-demo.sh` and resolving it after moving into the scratch
+# directory produced an empty HERE and a `python3 /ptyrun.py` that could not open its
+# own helper. Every command then captured a traceback instead of output, the capture
+# "succeeded" with exit 0, and the assets quietly stopped being regenerable.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR" || exit 1
 REAL="$(pwd -P)"
 unset $(env | grep -o '^CHARTER_[A-Z_]*' || true) 2>/dev/null || true
@@ -61,7 +68,6 @@ sanitize() { python3 "$SANITIZER" "$REAL" "$OWNER"; }
 
 RAW="$(mktemp -t charter-capture)"
 trap 'rm -f "$SANITIZER" "$RAW"' EXIT
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 run() {
   printf '%s %s\n' "$PROMPT" "$*" >> "$RAW"

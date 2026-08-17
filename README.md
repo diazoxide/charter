@@ -154,9 +154,25 @@ not encryption at rest. The vault is not a password manager.
   branches into a committed manifest; `restore` rebuilds the whole thing on another
   machine; `fork` copies a workspace's charter, manifest and memory.
 - **Everyone on a slightly different charter.** `[charter].version` in `charter.toml` pins
-  one version like a lockfile, and a `SessionStart` hook conforms each machine to it.
-  Opt-in, exact rather than a floor, so it downgrades too.
+  one version like a lockfile. The pin is measured against the **plugin**, which Claude Code
+  installs *per project* out of a cache holding every version at once — so two planes on one
+  laptop can sit on different charters, and `claude plugin update charter@charter` moves
+  this plane and no other.
   → [docs/control-plane.md](docs/control-plane.md)
+- **Two planes fighting over one binary.** They no longer do. The `charter` CLI stays a
+  single machine-global install for your own terminal; the version a *plane* runs is its
+  plugin's. `charter version sync --cli` is still there for a machine with no plugin.
+- **A rule you want everyone prompted for.** `charter guard ask 'terraform apply *'` writes
+  a Claude Code `permissions.ask` rule into the plane's committed settings. charter keeps no
+  list of its own — one record, nothing to sync.
+  → [docs/adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md](docs/adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md)
+- **A tool that silently stopped existing.** After a rename removed the shim they launched
+  through, MCP servers failed with ENOENT and their tools simply vanished from the session.
+  `charter doctor` now names any registered launcher whose path does not exist, and the
+  one-line fix.
+- **Who is in which tree.** A repo or worktree row says which persona was last seen working
+  in it and how long ago — `▸steward now`, `▸forge 7m +1`. An observation with an age, never
+  a claim that anyone is still there.
 - **Seeing what any of it is doing.** `charter doctor` preflights, `charter trace` shows
   guard denials and tool approvals and memory writes, and `charter persona stats` says
   whether a role is actually being dispatched or whether that work is quietly routing to a
@@ -173,6 +189,11 @@ not encryption at rest. The vault is not a password manager.
 - **Worktree** — a further split *within* one workspace's clone
   (`workspaces/<ws>/.worktrees/<repo>/<piece>`), so parallel sub-agents each get their own
   branch of the *same* repo without re-cloning it.
+- **Piece** — one worktree seen as a unit of work. Creating it *is* the claim, because git
+  already arbitrates who wins the path; the worker later declares `done` or `abandoned`.
+  There is deliberately no `failed` or `blocked` — a worker that dies declares nothing, and
+  that **silence**, with an age, is what gets reported.
+  → [docs/adr/0011-the-record-holds-only-what-git-cannot-know.md](docs/adr/0011-the-record-holds-only-what-git-cannot-know.md)
 - **Persona** — a specialist role identity with a committed charter, persistent memory, and
   a named vault — dispatchable as an isolated Claude Code sub-agent. charter's
   differentiator; see [docs/personas.md](docs/personas.md).

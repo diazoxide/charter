@@ -1,10 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1112" height="622" viewBox="0 0 1112.40 622.20" role="img" aria-label="nothing → a working control plane">
-<rect x="0.5" y="0.5" width="1111.40" height="621.20" rx="9" fill="#0d1117" stroke="#30363d"/>
-<path d="M0.5 9.5a9 9 0 0 1 9-9h1093.40a9 9 0 0 1 9 9v21.00h-1111.40z" fill="#161b22" stroke="#30363d"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="622" viewBox="0 0 1440.00 622.20" role="img" aria-label="nothing → a working control plane">
+<rect x="0.5" y="0.5" width="1439.00" height="621.20" rx="9" fill="#0d1117" stroke="#30363d"/>
+<path d="M0.5 9.5a9 9 0 0 1 9-9h1421.00a9 9 0 0 1 9 9v21.00h-1439.00z" fill="#161b22" stroke="#30363d"/>
 <circle cx="18" cy="15.0" r="5" fill="#ff5f57"/>
 <circle cx="34" cy="15.0" r="5" fill="#febc2e"/>
 <circle cx="50" cy="15.0" r="5" fill="#28c840"/>
-<text x="556.20" y="19.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="11" fill="#8b949e">nothing → a working control plane</text>
+<text x="720.00" y="19.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="11" fill="#8b949e">nothing → a working control plane</text>
 <style>.ln{animation:11.45s linear infinite both}@keyframes k0{0%,8.287%{opacity:0}8.297%,100%{opacity:1}}.l0{animation-name:k0}@keyframes k1{0%,10.907%{opacity:0}10.917%,100%{opacity:1}}.l1{animation-name:k1}@keyframes k2{0%,19.204%{opacity:0}19.214%,100%{opacity:1}}.l2{animation-name:k2}@keyframes k3{0%,20.077%{opacity:0}20.087%,100%{opacity:1}}.l3{animation-name:k3}@keyframes k4{0%,20.951%{opacity:0}20.961%,100%{opacity:1}}.l4{animation-name:k4}@keyframes k5{0%,23.571%{opacity:0}23.581%,100%{opacity:1}}.l5{animation-name:k5}@keyframes k6{0%,31.868%{opacity:0}31.878%,100%{opacity:1}}.l6{animation-name:k6}@keyframes k7{0%,32.741%{opacity:0}32.751%,100%{opacity:1}}.l7{animation-name:k7}@keyframes k8{0%,33.614%{opacity:0}33.624%,100%{opacity:1}}.l8{animation-name:k8}@keyframes k9{0%,34.488%{opacity:0}34.498%,100%{opacity:1}}.l9{animation-name:k9}@keyframes k10{0%,35.361%{opacity:0}35.371%,100%{opacity:1}}.l10{animation-name:k10}@keyframes k11{0%,36.235%{opacity:0}36.245%,100%{opacity:1}}.l11{animation-name:k11}@keyframes k12{0%,38.855%{opacity:0}38.865%,100%{opacity:1}}.l12{animation-name:k12}@keyframes k13{0%,47.152%{opacity:0}47.162%,100%{opacity:1}}.l13{animation-name:k13}@keyframes k14{0%,48.025%{opacity:0}48.035%,100%{opacity:1}}.l14{animation-name:k14}@keyframes k15{0%,48.898%{opacity:0}48.908%,100%{opacity:1}}.l15{animation-name:k15}@keyframes k16{0%,49.772%{opacity:0}49.782%,100%{opacity:1}}.l16{animation-name:k16}@keyframes k17{0%,52.392%{opacity:0}52.402%,100%{opacity:1}}.l17{animation-name:k17}@keyframes k18{0%,60.689%{opacity:0}60.699%,100%{opacity:1}}.l18{animation-name:k18}@keyframes k19{0%,61.562%{opacity:0}61.572%,100%{opacity:1}}.l19{animation-name:k19}@keyframes k20{0%,64.182%{opacity:0}64.192%,100%{opacity:1}}.l20{animation-name:k20}@keyframes k21{0%,65.056%{opacity:0}65.066%,100%{opacity:1}}.l21{animation-name:k21}@keyframes k22{0%,67.676%{opacity:0}67.686%,100%{opacity:1}}.l22{animation-name:k22}@keyframes k23{0%,68.549%{opacity:0}68.559%,100%{opacity:1}}.l23{animation-name:k23}@keyframes k24{0%,69.422%{opacity:0}69.432%,100%{opacity:1}}.l24{animation-name:k24}@keyframes k25{0%,70.296%{opacity:0}70.306%,100%{opacity:1}}.l25{animation-name:k25}@keyframes k26{0%,72.916%{opacity:0}72.926%,100%{opacity:1}}.l26{animation-name:k26}@keyframes k27{0%,73.789%{opacity:0}73.799%,100%{opacity:1}}.l27{animation-name:k27}</style>
 <g font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13.0">
 <g class="ln l0">
@@ -40,7 +40,10 @@
 <text x="626.40 634.20 642.00 649.80 657.60 665.40 673.20 681.00 688.80 696.60 704.40 712.20" y="117.45" fill="#c9d1d9">workspaces/,</text>
 <text x="727.80 735.60 743.40 751.20 759.00 766.80 774.60 782.40 790.20 798.00 805.80" y="117.45" fill="#c9d1d9">.gitignore,</text>
 <text x="821.40 829.20 837.00 844.80 852.60 860.40 868.20 876.00 883.80 891.60 899.40 907.20 915.00 922.80 930.60 938.40 946.20 954.00 961.80 969.60 977.40" y="117.45" fill="#c9d1d9">.claude/settings.json</text>
-<text x="993.00 1000.80 1008.60 1016.40 1024.20 1032.00 1039.80 1047.60 1055.40 1063.20 1071.00 1078.80 1086.60" y="117.45" fill="#c9d1d9">(statusLine).</text>
+<text x="993.00 1000.80 1008.60 1016.40 1024.20 1032.00 1039.80 1047.60 1055.40 1063.20 1071.00 1078.80 1086.60" y="117.45" fill="#c9d1d9">(statusLine),</text>
+<text x="1102.20 1110.00 1117.80 1125.60 1133.40 1141.20 1149.00 1156.80 1164.60 1172.40 1180.20 1188.00 1195.80 1203.60 1211.40 1219.20 1227.00 1234.80 1242.60 1250.40 1258.20" y="117.45" fill="#c9d1d9">.claude/settings.json</text>
+<text x="1273.80 1281.60 1289.40 1297.20 1305.00 1312.80 1320.60 1328.40 1336.20 1344.00 1351.80" y="117.45" fill="#c9d1d9">(plane-root</text>
+<text x="1367.40 1375.20 1383.00 1390.80 1398.60 1406.40 1414.20" y="117.45" fill="#c9d1d9">guard).</text>
 </g>
 <g class="ln l4">
 <text x="18.00" y="137.60" fill="#39c5cf">•</text>
@@ -127,7 +130,15 @@
 <text x="33.60 41.40 49.20 57.00 64.80 72.60 80.40 88.20 96.00 103.80" y="339.10" fill="#c9d1d9">workspace:</text>
 <text x="119.40 127.20 135.00 142.80 150.60 158.40 166.20" y="339.10" fill="#c9d1d9">default</text>
 <text x="189.60 197.40 205.20 213.00" y="339.10" fill="#c9d1d9">(via</text>
-<text x="228.60 236.40 244.20 252.00 259.80 267.60 275.40 283.20" y="339.10" fill="#c9d1d9">default)</text>
+<text x="228.60 236.40 244.20 252.00 259.80 267.60 275.40" y="339.10" fill="#c9d1d9">default</text>
+<text x="291.00 298.80 306.60" y="339.10" fill="#c9d1d9">(no</text>
+<text x="322.20 330.00 337.80 345.60" y="339.10" fill="#c9d1d9">pane</text>
+<text x="361.20 369.00" y="339.10" fill="#c9d1d9">id</text>
+<text x="384.60" y="339.10" fill="#c9d1d9">—</text>
+<text x="400.20 408.00 415.80 423.60 431.40 439.20 447.00" y="339.10" fill="#c9d1d9">nothing</text>
+<text x="462.60 470.40 478.20 486.00 493.80 501.60 509.40 517.20" y="339.10" fill="#c9d1d9">persists</text>
+<text x="532.80 540.60 548.40 556.20 564.00 571.80 579.60" y="339.10" fill="#c9d1d9">between</text>
+<text x="595.20 603.00 610.80 618.60 626.40 634.20 642.00 649.80 657.60 665.40" y="339.10" fill="#c9d1d9">sessions))</text>
 </g>
 <g class="ln l15">
 <text x="18.00" y="359.25" fill="#3fb950">✓</text>
@@ -175,7 +186,15 @@
 <text x="423.60 431.40 439.20 447.00 454.80 462.60 470.40" y="439.85" fill="#c9d1d9">active:</text>
 <text x="486.00 493.80 501.60 509.40 517.20 525.00 532.80" y="439.85" fill="#c9d1d9">default</text>
 <text x="548.40 556.20 564.00 571.80" y="439.85" fill="#c9d1d9">(via</text>
-<text x="587.40 595.20 603.00 610.80 618.60 626.40 634.20 642.00" y="439.85" fill="#c9d1d9">default)</text>
+<text x="587.40 595.20 603.00 610.80 618.60 626.40 634.20" y="439.85" fill="#c9d1d9">default</text>
+<text x="649.80 657.60 665.40" y="439.85" fill="#c9d1d9">(no</text>
+<text x="681.00 688.80 696.60 704.40" y="439.85" fill="#c9d1d9">pane</text>
+<text x="720.00 727.80" y="439.85" fill="#c9d1d9">id</text>
+<text x="743.40" y="439.85" fill="#c9d1d9">—</text>
+<text x="759.00 766.80 774.60 782.40 790.20 798.00 805.80" y="439.85" fill="#c9d1d9">nothing</text>
+<text x="821.40 829.20 837.00 844.80 852.60 860.40 868.20 876.00" y="439.85" fill="#c9d1d9">persists</text>
+<text x="891.60 899.40 907.20 915.00 922.80 930.60 938.40" y="439.85" fill="#c9d1d9">between</text>
+<text x="954.00 961.80 969.60 977.40 985.20 993.00 1000.80 1008.60 1016.40 1024.20" y="439.85" fill="#c9d1d9">sessions))</text>
 </g>
 <g class="ln l20">
 </g>
