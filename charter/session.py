@@ -26,15 +26,20 @@ _SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def current(explicit: str | None = None) -> str | None:
-    """This Claude session's id, or ``None`` when there is not one.
+    """This session's id, or ``None`` when there is not one.
 
     ``explicit`` first — the status line receives the id in its stdin payload rather than
-    its environment, which Claude Code scrubs. Then ``$CLAUDE_CODE_SESSION_ID``, which is
-    present for Bash-tool commands and hooks.
+    its environment, which Claude Code scrubs. Then ``$CHARTER_SESSION_ID``, which any
+    harness sets when it knows its own session (opencode's plugin reads it off
+    ``shell.env``'s ``input.sessionID``, per invocation — one server hosts many sessions,
+    so nothing may be cached). Then ``$CLAUDE_CODE_SESSION_ID``, kept so no session
+    already running regresses the day the neutral name ships.
 
     Sanitised, because the value becomes a filename.
     """
-    raw = explicit or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    raw = (explicit
+           or os.environ.get("CHARTER_SESSION_ID")
+           or os.environ.get("CLAUDE_CODE_SESSION_ID"))
     if not raw:
         return None
     sid = _SAFE.sub("", raw.strip())

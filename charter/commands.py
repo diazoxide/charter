@@ -868,6 +868,61 @@ def _ensure_statusline(root: Path) -> tuple[str, Path | None]:
     return "created", None
 
 
+def ensure_env_var(root: Path, key: str, value: str) -> tuple[str, Path | None]:
+    """Set ``env[key]`` in ``.claude/settings.json`` IF ABSENT (ADR 0015).
+
+    Claude Code's `env` *"sets environment variables that apply to every session"*, which
+    is how a harness with no per-shell hook still names itself to charter. Public rather
+    than underscored because a harness class calls it — `settings.json` is this module's
+    territory (it already owns the status line, the guard hook and the ask rules in that
+    same file), so the plumbing stays here and the harness asks for it.
+
+    Same contract and restraint as :func:`_ensure_statusline`. An `env` that is not an
+    object, or a key someone set by hand, is left alone — reverting a deliberate choice
+    is what these writers exist not to do.
+    """
+    settings, p = _load_settings(root)
+    if settings is None:
+        return "malformed", p
+    env = settings.get("env")
+    if "env" in settings and not isinstance(env, dict):
+        return "present", p
+    if not isinstance(env, dict):
+        env = {}
+    if env.get(key):
+        return "present", p
+    env[key] = value
+    settings["env"] = env
+    raw = p.read_text() if p.exists() else ""
+    indent, separators = _json_style(raw)
+    rewritten = json.dumps(settings, indent=indent, separators=separators)
+    if raw.endswith("\n"):
+        rewritten += "\n"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(rewritten)
+    return "created", p
+
+
+def _wire_harnesses(root: Path) -> list[tuple[str, str]]:
+    """Write every REGISTERED harness's wiring under *root*, IF ABSENT.
+
+    Every harness, not the detected one: `init` typically runs from a plain shell where
+    no harness is detectable at all, and wiring only the runtime you happen to be sitting
+    in makes the plane you built depend on which terminal you built it from. Writing one
+    harness's wiring unconditionally while another waits to be asked is also the lock-in
+    ADR 0015 removes.
+
+    Nothing here names a harness. Adding Codex is adding a class to
+    ``harness.registry.KINDS`` — this loop, and `init`'s report, cover it that day.
+    """
+    from .harness import registry
+
+    out: list[tuple[str, str]] = []
+    for h in registry.all():
+        out.extend(h.wire(root))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # init's one offer: the repo you are standing in                               #
 #                                                                              #
@@ -1108,6 +1163,9 @@ def cmd_init(args) -> int:
     # The plane-root branch guard (#157). Wired here because #168: it shipped inert on any
     # plane not running the plugin, with `doctor` showing a green tick over it — and a
     # safety feature that ships off by default stays off.
+    for status, label in _wire_harnesses(root):
+        (created if status == "created" else present).append(label)
+
     gh_status, gh_detail = _ensure_guard_hook(root)
     if gh_status == "created":
         created.append(".claude/settings.json (plane-root guard)")
@@ -1216,6 +1274,10 @@ def cmd_reinit(args) -> int:
     elif sl_status == "malformed":
         util.warn(f"{sl_detail} is not valid JSON — left it completely untouched. Add the "
                   f"status line yourself:\n{_statusline_snippet()}")
+
+    for status, label in _wire_harnesses(config.ROOT):
+        if status == "created":
+            created.append(label)
 
     gh_status, gh_detail = _ensure_guard_hook(config.ROOT)
     if gh_status == "created":
