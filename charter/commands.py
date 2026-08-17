@@ -1405,22 +1405,47 @@ def cmd_version(args) -> int:
 
 
 def cmd_version_sync(args) -> int:
-    """Conform this machine to the lock — including downgrading, which is the point."""
-    from . import instance as _instance
+    """Move THIS plane to its lock. ``--cli`` conforms the machine-global binary instead.
+
+    The default flipped in the change that unparked #127. `version sync` used to conform a
+    binary every plane on the machine shares, which is not a fix but a choice of victim:
+    "two planes with different pins thrash the same binary back and forth, each `sync`
+    breaking the other". The plugin is installed per project out of a cache holding every
+    version at once, so moving it honours this plane's pin and touches nothing else.
+
+    ``--cli`` keeps the old behaviour rather than deleting it: a machine running charter
+    with no plugin at all still needs a way to conform the binary, and removing the escape
+    hatch would be its own defect.
+    """
+    from . import instance as _instance, update as _update
     locked = _instance.locked_version(_instance.load(config.ROOT))
     if not locked:
         util.info("This control plane pins no version — nothing to sync. "
                   "Pin one with: charter version bump --push")
         return 0
+
+    if not getattr(args, "cli", False):
+        plugin = _update.plugin_version_here()
+        if plugin == locked:
+            util.ok(f"the plugin serving this project is already on the lock ({locked}).")
+            return 0
+        where = f"{plugin} → {locked}" if plugin else f"→ {locked}"
+        util.info(f"this plane's version is the plugin's ({where}).")
+        # Named, not run. `claude` may be absent, may prompt for a scope, and the command
+        # mutates the reader's editor install — charter says exactly what to run and lets
+        # them run it, the same restraint the MCP launcher check keeps.
+        util.info(f"  run: {_update.PLUGIN_SYNC_CMD}")
+        util.info(f"  the machine-global binary instead: charter version sync --cli")
+        return 0
+
     installed = _installed_version()
     if locked == installed:
         util.ok(f"already on the locked version ({locked}).")
         return 0
     # Said before the install, not after: this conforms a binary every plane on the
     # machine shares, so the next plane the reader opens may have just gone into drift.
-    from . import update as _update
     util.warn(_update.SHARED_INSTALL_NOTE)
-    util.info(f"syncing {installed} → {locked} …")
+    util.info(f"syncing the machine-global binary {installed} → {locked} …")
     ok, detail = sync_to(locked)
     if not ok:
         util.err(f"could not install {locked}: {detail}")

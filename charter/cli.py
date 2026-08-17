@@ -173,8 +173,11 @@ def build_parser() -> argparse.ArgumentParser:
     ver.set_defaults(func=commands.cmd_version)     # bare `charter version` = show
 
     vsy = vsub.add_parser("sync",
-                          help="Install exactly the version this control plane pins "
-                               "(downgrades too — that is the point of a pin).")
+                          help="Move THIS plane to the version it pins. A plugin is "
+                               "installed per project, so no other plane moves.")
+    vsy.add_argument("--cli", action="store_true",
+                     help="Conform the machine-global `charter` binary instead. Shared by "
+                          "every plane on this machine, so it can put others into drift.")
     vsy.set_defaults(func=commands.cmd_version_sync)
 
     vbp = vsub.add_parser("bump",

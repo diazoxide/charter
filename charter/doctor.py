@@ -813,16 +813,32 @@ def check_version_lock() -> Result:
                       hint=_NOT_CHECKED_HINT)
     if not locked:
         return Result("version lock", OK, detail="not pinned")
-    if locked == __version__:
-        return Result("version lock", OK, detail=f"pinned {locked}, in sync")
+
     from . import update
-    # The note rides on the drift branch only. Everywhere else it is furniture, and a
-    # sentence printed on every clean preflight is a sentence nobody reads on the one
-    # that isn't.
+    # The pin is measured against the PLUGIN, because the plugin is the only part of
+    # charter that is genuinely per-plane: Claude Code installs it per project, out of a
+    # cache holding every version side by side. Measuring it against the machine-global
+    # binary is what made the pin unhonourable — no plane can own that binary, so the drift
+    # it reported had no fix that did not break another plane (#127).
+    plugin = update.plugin_version_here()
+    if plugin is not None:
+        if plugin == locked:
+            return Result("version lock", OK, detail=f"pinned {locked}, plugin in sync")
+        return Result("version lock", WARN,
+                      detail=f"pinned {locked}, plugin here runs {plugin}",
+                      hint=f"Run: {update.PLUGIN_SYNC_CMD}  (this project only — a plugin "
+                           f"is installed per project, so no other plane moves)")
+
+    # Not running under the plugin: a `charter` typed in a terminal cannot see which plugin
+    # version serves this project. Say that, and compare what CAN be seen — but never call
+    # the machine-global CLI "this plane's version", which is the conflation #127 is about.
+    if locked == __version__:
+        return Result("version lock", OK,
+                      detail=f"pinned {locked}, CLI in sync (plugin not visible from here)")
     return Result("version lock", WARN,
-                  detail=f"pinned {locked}, running {__version__}",
-                  hint=f"{update.SHARED_INSTALL_NOTE}. "
-                       f"Run: charter version sync  (conforms this machine to the lock)")
+                  detail=f"pinned {locked}, CLI is {__version__}",
+                  hint=f"{update.SHARED_INSTALL_NOTE}. To move THIS plane only: "
+                       f"{update.PLUGIN_SYNC_CMD}")
 
 
 def check_memory_indexes() -> Result:

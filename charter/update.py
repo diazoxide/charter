@@ -40,9 +40,45 @@ NET_TIMEOUT = 5           # a detached child, but still: never hang around
 #: shim to resolve the pinned version per plane.
 SHARED_INSTALL_NOTE = (
     "the `charter` binary is ONE machine-global install shared by every control plane on "
-    "this machine, so a pin is advisory — syncing here can put another plane into drift "
-    "(see: uv tool list)"
+    "this machine, so syncing here can put another plane into drift (see: uv tool list). "
+    "The per-plane version is the PLUGIN's — see `charter version`"
 )
+
+#: The per-project fix, and the whole of what #127 asked for.
+#:
+#: A Claude Code plugin is installed **per project**: `installed_plugins.json` records an
+#: `installPath` into `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, and that
+#: cache holds many versions side by side. Two projects on one machine were observed serving
+#: two different charter versions at once — exactly what #127 reported as impossible.
+#:
+#: So this command is the one that honours a pin: it moves THIS project and no other, where
+#: `version sync` conforms a binary every plane shares.
+PLUGIN_SYNC_CMD = "claude plugin update charter@charter"
+
+
+def plugin_version_here() -> str | None:
+    """The version of the charter PLUGIN serving this project, or ``None``.
+
+    ``$CLAUDE_PLUGIN_ROOT`` is a **documented** variable that Claude Code sets for the
+    plugin's own processes, and it points at the versioned directory this project resolved
+    to. That is the whole mechanism: no cache layout is parsed and `installed_plugins.json`
+    is never read, because those are Claude Code internals — fine to look at by hand,
+    never something to build on. Betting on an internal path is what `bin/edm` did, and it
+    broke silently (#197).
+
+    ``None`` outside a plugin process, which is the ordinary case for a `charter` typed in
+    a terminal. Callers must say "not visible from here" rather than substituting the
+    machine-global CLI's version and calling it this plane's — that conflation is #127.
+    """
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if not root:
+        return None
+    try:
+        doc = json.loads((Path(root) / ".claude-plugin" / "plugin.json").read_text())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    v = doc.get("version") if isinstance(doc, dict) else None
+    return v.strip() if isinstance(v, str) and v.strip() else None
 
 
 def _cache_file() -> Path:

@@ -83,9 +83,19 @@ class TestThePinIsDescribedAsAdvice(PersonaIso):
     def test_the_note_names_how_to_see_the_truth(self):
         self.assertIn("uv tool list", update.SHARED_INSTALL_NOTE)
 
-    def test_the_note_does_not_promise_enforcement(self):
+    def test_the_note_no_longer_calls_the_pin_advisory(self):
+        """It used to, and that was right while the machine-global binary was the only
+        thing a pin could be measured against. A plugin is installed per project out of a
+        cache holding every version at once, so a pin IS honourable now — `claude plugin
+        update charter@charter` moves this plane and no other (#127). Calling it advisory
+        would send the reader back to the shared binary, which is the trap."""
         low = update.SHARED_INSTALL_NOTE.lower()
-        self.assertIn("advisory", low)
+        self.assertNotIn("advisory", low)
+
+    def test_the_note_points_at_the_per_plane_mechanism(self):
+        """What must survive: the note explains that this binary is not the plane's, and
+        where the plane's version actually lives."""
+        self.assertIn("plugin", update.SHARED_INSTALL_NOTE.lower())
 
 
 class TestVersionSyncSaysWhatItMutates(PersonaIso):
