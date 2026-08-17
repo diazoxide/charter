@@ -37,10 +37,10 @@ class DoctorHarness(unittest.TestCase):
         charter having no knowledge, not the harness having no gaps. Rendering the two
         the same way prints a clean row over an unverified integration, which is exactly
         `check_guard_wired`'s failure: the absence of information shown as health."""
-        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "codex"}, clear=True):
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "gemini-cli"}, clear=True):
             r = doctor.check_harness()
         self.assertEqual(r.status, doctor.WARN)
-        self.assertIn("codex", r.detail)
+        self.assertIn("gemini-cli", r.detail)
         self.assertTrue(r.hint, "an unknown harness must say what to do about it")
 
     def test_no_harness_is_reported_without_nagging(self):

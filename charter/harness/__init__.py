@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from .base import Deficit, Harness
 from .claude_code import NAME as CLAUDE_CODE
+from .codex import NAME as CODEX
 from .opencode import NAME as OPENCODE
 from .registry import KINDS, all, current, deficits, get
 
-__all__ = ["CLAUDE_CODE", "OPENCODE", "Deficit", "Harness", "KINDS",
+__all__ = ["CLAUDE_CODE", "CODEX", "OPENCODE", "Deficit", "Harness", "KINDS",
            "all", "current", "deficits", "get"]

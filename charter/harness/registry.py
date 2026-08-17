@@ -12,12 +12,14 @@ import os
 
 from .base import Deficit, Harness
 from .claude_code import NAME as CLAUDE_CODE, ClaudeCodeHarness
+from .codex import NAME as CODEX, CodexHarness
 from .opencode import NAME as OPENCODE, OpenCodeHarness
 
 #: Every harness charter knows, by the name it puts in ``$CHARTER_HARNESS``.
 KINDS: dict[str, type] = {
     CLAUDE_CODE: ClaudeCodeHarness,
     OPENCODE: OpenCodeHarness,
+    CODEX: CodexHarness,
 }
 
 

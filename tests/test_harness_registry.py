@@ -20,19 +20,20 @@ from charter.harness import base, registry
 
 
 class Registry(unittest.TestCase):
-    def test_both_harnesses_are_registered_under_their_own_name(self):
-        self.assertEqual({h.name for h in registry.all()}, {"claude-code", "opencode"})
+    def test_every_harness_is_registered_under_its_own_name(self):
+        self.assertEqual({h.name for h in registry.all()},
+                         {"claude-code", "opencode", "codex"})
 
     def test_a_harness_is_looked_up_by_the_name_it_puts_in_the_environment(self):
         self.assertEqual(registry.get("opencode").name, "opencode")
-        self.assertIsNone(registry.get("codex"))
+        self.assertIsNone(registry.get("gemini-cli"))
 
     def test_an_unknown_harness_still_resolves(self):
         """The harness is the authority on its own identity. A `$CHARTER_HARNESS` charter
         has never heard of is reported verbatim rather than swallowed — an unrecognised
         harness is information, and discarding it would render as "no harness"."""
-        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "codex"}, clear=True):
-            self.assertEqual(registry.current(), "codex")
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "gemini-cli"}, clear=True):
+            self.assertEqual(registry.current(), "gemini-cli")
 
     def test_native_evidence_names_the_harness_when_the_variable_is_absent(self):
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_ROOT": "/p"}, clear=True):

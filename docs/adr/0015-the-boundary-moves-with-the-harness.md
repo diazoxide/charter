@@ -32,13 +32,13 @@ ADR 0014's table asks one question of each guard: can the rule be stated without
 where you are standing or who you are? That table has a hidden column — it is a *Claude
 Code* table.
 
-| guard | expressible on Claude Code | expressible on opencode |
-| --- | --- | --- |
-| `_leak_reason` | no | no |
-| `_plane_root_branch_reason` | no | no |
-| `_clone_commit_reason` | no | no |
-| `toolgate.decide` | no | **yes** |
-| `_single_credential_reason` | yes | yes |
+| guard | Claude Code | opencode | Codex |
+| --- | --- | --- | --- |
+| `_leak_reason` | no | no | no |
+| `_plane_root_branch_reason` | no | no | no |
+| `_clone_commit_reason` | no | no | no |
+| `toolgate.decide` | no | **yes** | no |
+| `_single_credential_reason` | yes | yes | yes |
 
 The row that moved: opencode scopes permissions per agent — *"Agent permissions are merged
 with the global config, and agent rules take precedence"* — and charter already generates
@@ -91,6 +91,35 @@ The unregistered case is the one that would otherwise rot. `deficits()` returns 
 for a harness with no gaps and for a harness charter has never met — one sentence for two
 opposite facts. So `doctor` WARNs on an unregistered `$CHARTER_HARNESS` and names the fix,
 rather than printing a clean row over an integration nobody has verified.
+
+## Codex, and the second axis nobody expected
+
+Codex CLI 0.147.0 implements **Claude Code's hook contract near-verbatim** — the same
+events, the same `hookSpecificOutput` wire, and a `PostToolUse` payload whose required
+fields are Claude Code's field names plus `turn_id`/`agent_id`/`agent_type`. So
+`charter/hooks.py` very likely speaks Codex already. The harness that looked furthest away
+is the one needing least code, and opencode — which looked like ordinary adoption — is the
+one that needed a generated plugin and a corrected design.
+
+What Codex does not have is a **project-level config**. A `.codex/config.toml` or
+`codex.toml` in a project directory is ignored (checked by planting a type error in each
+and watching the config load anyway); hooks live only in `~/.codex/config.toml`. That is a
+second axis this ADR did not anticipate, and it is not a capability ceiling — it is a
+question of *scope*:
+
+| | where charter writes its wiring | committed | blast radius |
+| --- | --- | --- | --- |
+| Claude Code | `.claude/settings.json` | yes | the plane |
+| opencode | `.opencode/plugin/charter.ts` | ignorable | the plane |
+| Codex | `~/.codex/config.toml` | no | **every repo on the machine** |
+
+So `CodexHarness.wire()` deliberately writes nothing, and `doctor` reports the gap rather
+than an integration that looks armed. `init` reaching outside the plane to arm hooks in
+repos that have no control plane is the failure ADR 0014 already paid for once — its
+credential guard "needs `config.HAS_CONTROL_PLANE` to stay silent outside a plane — a gate
+added after it fired in unrelated repos and explained a control plane that did not exist
+there." Codex also trusts hooks by hash, so an entry written without approval is inert
+while looking wired, which is the shape #177 and #197 already cost this repo.
 
 ## What this is NOT
 
