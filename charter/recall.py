@@ -21,8 +21,13 @@ from typing import NamedTuple
 from . import config, memstore
 
 #: The selectable scopes, in the order they're assembled/displayed.
-SCOPES = ("workspace", "persona", "shared", "ephemeral")
-DEFAULT_SCOPES = ("workspace", "persona", "shared")  # the committed bases; ephemeral is opt-in
+SCOPES = ("workspace", "persona", "shared", "ephemeral", "refs")
+#: `refs` is DEFAULT-ON, unlike `ephemeral`. The distinction is standing, not size: refs are
+#: committed, curated and shared — the same standing the other three defaults have — while
+#: ephemeral is session scratch. Opt-in would also fix only the letter of #178: an agent that
+#: must already know to ask for refs is in exactly the position the report describes, told
+#: with a straight face that the runbook does not exist.
+DEFAULT_SCOPES = ("workspace", "persona", "shared", "refs")
 
 
 class Hit(NamedTuple):
@@ -43,6 +48,13 @@ class Recalled(NamedTuple):
     filter you cannot trust — and 0 undated is the common case, so it costs nothing."""
     hits: list[Hit]
     undated: int
+    #: Refs excluded by `since`. Counted apart from `undated` because they are different
+    #: facts: an undated MEMORY lost a stamp it was supposed to carry, while a refs document
+    #: never had one — a date filter over undated documents can only lie or pass everything,
+    #: so refs are excluded, and the message must not blame them for a missing stamp (#178).
+    #: Defaulted so existing positional unpacking of (hits, undated) keeps working — this
+    #: NamedTuple's own docstring records what happened the last time a field was added.
+    undated_refs: int = 0
 
 
 #: `14d` / `2w` / `3m`. Months are 30 days — predictable beats calendar-correct for a
@@ -100,7 +112,34 @@ def sources(session_id: str | None = None, persona_name: str | None = None,
         out.append((f"persona:{name}:ephemeral", p_mod.ephemeral_dir(name, session=session_id)))
     if "shared" in scopes:
         out.append(("shared", p_mod.memory_dir(config.SHARED_PERSONA, shared=True)))
+    if "refs" in scopes:
+        # A different KIND of knowledge, not a different owner: curated documents rather
+        # than recorded facts. Its own scope so `--scope persona` can still mean only
+        # memory — the one thing someone narrowing scope usually wants (#178).
+        if name:
+            for d in _ref_dirs(p_mod.refs_dir(name)):
+                out.append((f"refs:{name}", d))
+        for d in _ref_dirs(p_mod.refs_dir(config.SHARED_PERSONA, shared=True)):
+            out.append(("refs:shared", d))
     return out
+
+
+def _ref_dirs(base: Path) -> list[Path]:
+    """*base* and every directory under it.
+
+    Refs NEST — the reporting plane's own example is `refs/release/keycloak-prerequisites.md`
+    — while `memstore.files` is a flat `*.md` glob, because memory is flat by construction.
+    Rather than teach the memory engine to recurse (and change what every other base
+    searches), each subdirectory is offered as its own source. `memstore.search` already
+    takes a list of dirs, so recursion falls out of the assembly step where the shape
+    difference actually lives.
+    """
+    if not base.exists():
+        return []
+    try:
+        return [base, *(d for d in sorted(base.rglob("*")) if d.is_dir())]
+    except OSError:
+        return [base]
 
 
 def _label_of(path: Path, srcs: list[tuple[str, Path]]) -> str:
@@ -131,7 +170,7 @@ def recall(query: str | None = None, session_id: str | None = None, limit: int =
                    workspace_name=workspace_name, scopes=scopes,
                    all_workspaces=all_workspaces)
     dirs = [d for _lbl, d in srcs]
-    undated = 0
+    undated = undated_refs = 0
 
     def _dated(p: Path) -> datetime.date | None:
         try:
@@ -143,20 +182,29 @@ def recall(query: str | None = None, session_id: str | None = None, limit: int =
         rows = []
         for p, title, score in memstore.search(dirs, query, 0 or 10_000):
             d = _dated(p)
+            lbl = _label_of(p, srcs)
             if since is not None and (d is None or d < since):
-                undated += d is None
+                if lbl.startswith("refs"):
+                    undated_refs += 1
+                else:
+                    undated += d is None
                 continue
-            rows.append(Hit(_label_of(p, srcs), p, title, score, d))
-        return Recalled(rows[:limit] if limit else rows, undated)
+            rows.append(Hit(lbl, p, title, score, d))
+        return Recalled(rows[:limit] if limit else rows, undated, undated_refs)
 
     items: list[tuple[datetime.date, Hit]] = []
     for lbl, d in srcs:
         for p, title, text in memstore.entries(d):
             dt = memstore.memory_date(text, p.name)
             if since is not None and (dt is None or dt < since):
-                undated += dt is None
+                if lbl.startswith("refs"):
+                    undated_refs += 1
+                else:
+                    undated += dt is None
                 continue
+            # `date.min` puts undated last without dropping them: "list everything" must not
+            # silently omit the larger half of the corpus.
             items.append((dt or datetime.date.min, Hit(lbl, p, title, 0, dt)))
     items.sort(key=lambda x: x[0], reverse=True)
     rows = [h for _dt, h in items]
-    return Recalled(rows[:limit] if limit else rows, undated)
+    return Recalled(rows[:limit] if limit else rows, undated, undated_refs)

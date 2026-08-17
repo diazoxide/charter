@@ -1221,6 +1221,12 @@ def cmd_recall(args) -> int:
         util.info(f"Showing {len(results)} — pass --limit 0 for all.")
     if got.undated:
         util.info(f"{got.undated} undated memory(ies) skipped by --since — no recorded date.")
+    if got.undated_refs:
+        # Said separately from the memory count on purpose: an undated MEMORY lost a stamp it
+        # was meant to carry, while a refs document never had one. Blaming a runbook for a
+        # missing date would read as corruption rather than as the filter not applying.
+        util.info(f"{got.undated_refs} ref doc(s) not searched — `--since` filters by "
+                  f"recorded date and refs carry none. Drop --since to include them.")
     return 0
 
 

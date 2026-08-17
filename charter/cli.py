@@ -122,8 +122,12 @@ def build_parser() -> argparse.ArgumentParser:
                          help="The one memory gate: search/list across ALL bases (active workspace + "
                               "active persona own + shared), each hit labeled by source.")
     rcl.add_argument("query", nargs="?", help="Keyword query; omit to list recent memories across bases.")
-    rcl.add_argument("--scope", help="Comma list of scopes to search (workspace,persona,shared,ephemeral); "
-                                     "default workspace,persona,shared.")
+    rcl.add_argument("--scope", help="Comma list of scopes to search "
+                                     "(workspace,persona,shared,refs,ephemeral); default "
+                                     "workspace,persona,shared,refs. `refs` is the curated "
+                                     "docs a persona collects — committed and shared, so it "
+                                     "is searched by default; `ephemeral` is scratch and is "
+                                     "not.")
     rcl.add_argument("--ephemeral", action="store_true", help="Also include the persona's session scratch.")
     rcl.add_argument("--full", action="store_true",
                      help="Also print a line of each memory's body (the path is always shown).")
