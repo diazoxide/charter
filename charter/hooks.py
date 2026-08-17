@@ -1091,73 +1091,103 @@ def _autosync_version_lock() -> str | None:
         return None
 
 
+def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
+    """The blocks a session needs to know who and where it is.
+
+    One function, because two harnesses need the same text by different routes: Claude
+    Code and Codex take it as `SessionStart`'s `additionalContext`, and opencode — which
+    has no such hook — reads it from a file charter writes into the tree. Rendering it
+    twice would drift, and the copy nobody looks at would be the stale one.
+
+    *live* is False when this is being written to a file rather than injected into a
+    running session. It suppresses the version autosync: conforming the machine to the
+    plane's version lock is an ACTION, and `charter clone` silently upgrading the guard
+    binary because it regenerated some context is not something anybody asked for.
+    """
+    from . import persona
+    sid = data.get("session_id")
+    parts: list[str] = []
+    if live:
+        # Conform this machine to the control plane's version lock, if it declares one.
+        # Says what it did — an auto-update that changes the guard binary is never silent.
+        sync = _autosync_version_lock()
+        if sync:
+            parts.append(sync)
+    ws = _workspace_confirm_nudge(sid)
+    if ws:
+        parts.append(ws)  # first: the start-of-session action gate
+
+    name = persona.resolve_active()
+    d = persona.resolve(name) if name else None  # inheritance applied (merged role/remit)
+    if d:
+        # 1) ROLE — adopt the persona's identity + remit. Injected ALWAYS (even with no
+        #    memory), so the default (steward = front door) reliably shapes the session.
+        meta = d.get("meta", {})
+        role = meta.get("role") or name
+        when = (meta.get("delegate-when") or "").strip()
+        src = persona.source()
+        identity = f"You are acting as the **{name}** persona — {role} (active via {src})."
+        if when:
+            identity += f"\n**Remit:** {when}"
+        identity += f"\nAdopt this role for the session; full charter: `charter persona show {name}`."
+        # 2) MEMORY — a BOUNDED digest, not the whole index (see _memory_digest).
+        digest = _memory_digest(name)
+        if digest:
+            identity += digest
+        parts.append(identity)
+
+    mem = _uncommitted_memory_nudge()
+    if mem:
+        parts.append(mem)
+
+    # The workspace's open todos — appended as its own part, deliberately, rather than
+    # folded into the identity block the way the memory digest is. A separate part is
+    # additive by construction: it cannot shorten, reorder or truncate the role, the
+    # memory digest or the workspace gate above it, whatever it contains. Last because
+    # it is a reminder, not a gate — nothing here should push the confirm nudge down.
+    todo = _todo_digest(sid)
+    if todo:
+        parts.append(todo)
+
+    # The piece this session is standing in, last: it is the most specific thing here
+    # and the one an agent acts on immediately, so it reads closest to the work.
+    if piece_note:
+        parts.append(piece_note)
+
+    # NOT refreshing the README's roster block here, deliberately. It splices per-
+    # persona DISPATCH COUNTS into a committed file, so opening a session dirtied the
+    # working tree — and `_uncommitted_memory_nudge` below then complained about the
+    # uncommitted file charter had just written. On a shared plane it produces
+    # recurring conflicts in a block marked "do not edit by hand", because the counts
+    # differ per developer and change on every dispatch.
+    #
+    # It belongs where the marker already points: `charter docs` / `make docs`, run
+    # deliberately, by someone about to commit the result.
+
+    return parts
+
+
+def context_block(cwd=None) -> str:
+    """The session context as plain text, for a harness with no SessionStart hook.
+
+    Never raises and never acts: a failure here must cost a tree its context file, not
+    the command that was writing it.
+    """
+    data = {"cwd": str(cwd)} if cwd else {}
+    try:
+        return "\n\n".join(_context_parts(data, _piece_announcement(data), live=False))
+    except Exception:
+        return ""
+
+
 def sessionstart() -> int:
     data = _read_stdin()
     # Read the piece's existing state BEFORE recording this session as alive — the write
     # below would otherwise replace the holder's mark with ours and hide the collision.
-    _piece_note = _piece_announcement(data)
+    piece_note = _piece_announcement(data)
     _touch_piece(data)
-    sid = data.get("session_id")
     try:
-        from . import persona
-        parts: list[str] = []
-        # Before anything else: conform this machine to the control plane's version
-        # lock, if it declares one. Says what it did — an auto-update that changes
-        # the guard binary should never be silent.
-        sync = _autosync_version_lock()
-        if sync:
-            parts.append(sync)
-        ws = _workspace_confirm_nudge(sid)
-        if ws:
-            parts.append(ws)  # first: the start-of-session action gate
-
-        name = persona.resolve_active()
-        d = persona.resolve(name) if name else None  # inheritance applied (merged role/remit)
-        if d:
-            # 1) ROLE — adopt the persona's identity + remit. Injected ALWAYS (even with no
-            #    memory), so the default (steward = front door) reliably shapes the session.
-            meta = d.get("meta", {})
-            role = meta.get("role") or name
-            when = (meta.get("delegate-when") or "").strip()
-            src = persona.source()
-            identity = f"You are acting as the **{name}** persona — {role} (active via {src})."
-            if when:
-                identity += f"\n**Remit:** {when}"
-            identity += f"\nAdopt this role for the session; full charter: `charter persona show {name}`."
-            # 2) MEMORY — a BOUNDED digest, not the whole index (see _memory_digest).
-            digest = _memory_digest(name)
-            if digest:
-                identity += digest
-            parts.append(identity)
-
-        mem = _uncommitted_memory_nudge()
-        if mem:
-            parts.append(mem)
-
-        # The workspace's open todos — appended as its own part, deliberately, rather than
-        # folded into the identity block the way the memory digest is. A separate part is
-        # additive by construction: it cannot shorten, reorder or truncate the role, the
-        # memory digest or the workspace gate above it, whatever it contains. Last because
-        # it is a reminder, not a gate — nothing here should push the confirm nudge down.
-        todo = _todo_digest(sid)
-        if todo:
-            parts.append(todo)
-
-        # The piece this session is standing in, last: it is the most specific thing here
-        # and the one an agent acts on immediately, so it reads closest to the work.
-        if _piece_note:
-            parts.append(_piece_note)
-
-        # NOT refreshing the README's roster block here, deliberately. It splices per-
-        # persona DISPATCH COUNTS into a committed file, so opening a session dirtied the
-        # working tree — and `_uncommitted_memory_nudge` below then complained about the
-        # uncommitted file charter had just written. On a shared plane it produces
-        # recurring conflicts in a block marked "do not edit by hand", because the counts
-        # differ per developer and change on every dispatch.
-        #
-        # It belongs where the marker already points: `charter docs` / `make docs`, run
-        # deliberately, by someone about to commit the result.
-
+        parts = _context_parts(data, piece_note, live=True)
         if parts:
             _emit({"hookSpecificOutput": {
                 "hookEventName": "SessionStart",

@@ -129,5 +129,19 @@ class LinkedWorktrees(unittest.TestCase):
                              capture_output=True, text=True).stdout
         self.assertEqual(out.strip(), "", f"wiring made the worktree dirty:\n{out}")
 
+    def test_a_config_the_repo_already_had_is_not_hidden(self):
+        """Charter hides what charter generated. An `opencode.json` the repo already
+        carries is somebody's file — possibly one they are about to commit — and making
+        it vanish from `git status` would be charter deciding that for them."""
+        _clone, wt = self._clone_with_worktree()
+        (wt / "opencode.json").write_text("{}\n")
+        registry.get("opencode").wire_tree(wt)
+        common = subprocess.run(["git", "-C", str(wt), "rev-parse", "--git-common-dir"],
+                                capture_output=True, text=True).stdout.strip()
+        exclude = (Path(common) / "info" / "exclude").read_text()
+        self.assertIn(".opencode/", exclude)
+        self.assertNotIn("\nopencode.json\n", exclude)
+
+
 if __name__ == "__main__":
     unittest.main()
