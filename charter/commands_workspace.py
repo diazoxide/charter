@@ -244,6 +244,40 @@ def cmd_workspace_rename(args) -> int:
     return commit_push(config.ROOT, ["add", "-A", "--", *tracked_old, *new_rel, ".gitignore"], msg)
 
 
+def cmd_workspace_default(args) -> int:
+    """Nominate the workspace a session lands on when nothing else has decided (#193).
+
+    Mirrors `charter persona default`. The rung sits below the per-session and per-terminal
+    pointers and above the built-in `default`, so an explicit choice survives a session
+    boundary the way an explicit persona choice does — which matters most on a terminal that
+    reports no pane id, where the pointer meant to cover "new session, same terminal" can
+    never fire.
+    """
+    name = getattr(args, "name", None)
+    if not name:
+        cur = workspace.declared_default()
+        if cur:
+            util.info(f"Declared default workspace: {cur}")
+        else:
+            util.info("No declared default — a session with nothing else selected lands on "
+                      f"'{config.DEFAULT_WORKSPACE}'. Set one: charter workspace default <ws>")
+        return 0
+    if getattr(args, "clear", False):
+        workspace.clear_declared_default()
+        util.ok("Cleared the declared default workspace.")
+        return 0
+    if not workspace.workspace_dir(name).exists():
+        util.err(f"no workspace '{name}' (create it: charter workspace create {name})")
+        return 1
+    workspace.set_declared_default(name)
+    util.ok(f"Default workspace set to '{name}' — sessions land here when nothing else "
+            f"has decided.")
+    util.info("  Committed, so it travels with the plane. It is read LAST, so an explicit "
+              "`--workspace`, $CHARTER_WORKSPACE, the tree you are standing in, or a "
+              "session/terminal selection all still win.")
+    return 0
+
+
 def cmd_workspace_optimize(args) -> int:
     """Optimize a workspace's memory (one, or ``--all``) — the workspace half of what
     ``charter persona optimize`` has always done for personas.

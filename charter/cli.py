@@ -342,6 +342,13 @@ def _add_workspace_parser(sub) -> None:
     ri.add_argument("--all", action="store_true", help="Reinit every workspace (after a charter upgrade).")
     ri.set_defaults(func=commands_workspace.cmd_workspace_reinit)
 
+    dflt = wsub.add_parser("default",
+                           help="Nominate the workspace a session lands on when nothing "
+                                "else decided (committed; mirrors `persona default`).")
+    dflt.add_argument("name", nargs="?", help="Workspace to nominate; omit to show it.")
+    dflt.add_argument("--clear", action="store_true", help="Remove the declared default.")
+    dflt.set_defaults(func=commands_workspace.cmd_workspace_default)
+
     opt = wsub.add_parser("optimize",
                           help="Curate a workspace's memory: collapse exact duplicates and "
                                "repair the index with --apply; propose the rest.")

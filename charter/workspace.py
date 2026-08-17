@@ -190,6 +190,43 @@ def from_path(path=None) -> str | None:
     return parts[0] if len(parts) >= 2 else None
 
 
+#: A committed, deliberately-chosen fallback workspace — `workspaces/.default`.
+#:
+#: NOT the "last active workspace" pointer #124 rejected, and the distinction is the whole
+#: argument. That one is IMPLICIT: written by every `workspace use`, changing under sessions
+#: that never asked, which is the failure `_terminal_id` was hardened against ("an id that is
+#: wrong in the sharing direction is worse than no id"). This is EXPLICIT: set once by a
+#: human, stable, and read only when every other rung has missed. `charter persona default`
+#: is exactly this shape and already ships.
+DEFAULT_FILE = ".default"
+
+
+def default_file() -> Path:
+    return config.WORKSPACES_DIR / DEFAULT_FILE
+
+
+def declared_default() -> str | None:
+    """The workspace nominated by `charter workspace default`, or ``None``."""
+    try:
+        val = default_file().read_text().strip()
+    except OSError:
+        return None
+    return val or None
+
+
+def set_declared_default(name: str) -> None:
+    d = default_file()
+    d.parent.mkdir(parents=True, exist_ok=True)
+    d.write_text(name.strip() + "\n")
+
+
+def clear_declared_default() -> None:
+    try:
+        default_file().unlink()
+    except OSError:
+        pass
+
+
 def resolve(explicit: str | None = None, session_id: str | None = None,
             cwd=None) -> str:
     """Active workspace by precedence: ``--workspace`` → ``$CHARTER_WORKSPACE`` → **the
@@ -224,6 +261,15 @@ def resolve(explicit: str | None = None, session_id: str | None = None,
         val = _read(_terminal_file(tid))
         if val:
             return val
+    # Below both pointers, above the built-in. What this replaces is not a considered
+    # answer — it is a literal `default` workspace nobody chose either — so slotting a
+    # nominated one here does not make workspaces less per-task; it makes the FALLBACK
+    # something a human picked, and lets `default` go back to meaning "nobody ever chose"
+    # (#193, unparking #124 on its own stated trigger: a terminal in common use that
+    # supplies no pane id).
+    declared = declared_default()
+    if declared:
+        return declared
     return config.DEFAULT_WORKSPACE
 
 
@@ -249,7 +295,15 @@ def source(explicit: str | None = None, session_id: str | None = None,
     tid = _terminal_id()
     if tid and _read(_terminal_file(tid)):
         return "terminal"
-    return "default"
+    if declared_default():
+        return "declared default"
+    # Say WHY nothing answered, not just that nothing did. The operator's complaint was
+    # "why are you in default workspace again?" — a surface asserting an answer with no
+    # reason, twice, where reconstructing it meant reading `resolve`. ADR 0013's second
+    # rule, aimed at the line people read every turn.
+    if not _terminal_id():
+        return "default (no pane id — nothing persists between sessions)"
+    return "default (nothing selected)"
 
 
 def _lock_file(sid: str) -> Path:

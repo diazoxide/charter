@@ -67,7 +67,10 @@ class TestResolveTakesACwd(SessionCwdBase):
 
     def test_a_cwd_outside_any_workspace_falls_through(self):
         """Standing in the plane root is not a claim about which workspace is active."""
-        self.assertEqual(workspace.source(cwd=str(self.tmp)), "default")
+        # `startswith`, not equality: since #193 the fall-through label also says WHY
+        # nothing answered ("no pane id — nothing persists between sessions"). What this
+        # test is about — the cwd rung not firing — is unchanged.
+        self.assertTrue(workspace.source(cwd=str(self.tmp)).startswith("default"))
 
     def test_an_explicit_workspace_still_outranks_the_cwd(self):
         self.assertEqual(workspace.resolve("beta", cwd=str(self.alpha)), "beta")
@@ -107,7 +110,7 @@ class TestStatusLineUsesTheSessionCwd(SessionCwdBase):
         outside = Path(self.tmp).parent / "somewhere-else" / "workspaces" / "ghost" / "r"
         ws, src = statusline._active(session_id="no-such-session", cwd=str(outside))
         self.assertEqual(ws, config.DEFAULT_WORKSPACE)
-        self.assertEqual(src, "default")
+        self.assertTrue(src.startswith("default"))   # see the note above on #193
 
 
 if __name__ == "__main__":
