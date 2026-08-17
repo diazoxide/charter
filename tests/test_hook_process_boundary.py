@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -25,11 +27,23 @@ _REPO = Path(__file__).resolve().parent.parent
 
 
 def _hook(name: str, payload: dict | None = None) -> subprocess.CompletedProcess:
-    """Run `charter hook <name>` as a real process, exactly as the manifest does."""
+    """Run `charter hook <name>` as a real process, exactly as the manifest does.
+
+    ``$CHARTER_ROOT`` is pinned to a throwaway directory, and that is not tidiness. These
+    are SUBPROCESSES, so `PersonaIso` cannot reach them — it redirects module globals in
+    this interpreter, not in a child. The child resolves its own plane by walking up from
+    `cwd`, and since `find_root` began hopping outward through `workspaces/` (0.37.0) a
+    checkout that happens to sit inside somebody's plane resolves to THAT plane. A handler
+    that writes anything — a trace row, a guard-seen mark — then writes it into the
+    developer's real control plane, from a test run.
+    """
+    root = tempfile.mkdtemp(prefix="charter-hookproc-")
+    (Path(root) / "charter.toml").write_text("schema = 1\n")
     return subprocess.run(
         [sys.executable, "-m", "charter", "hook", name],
         input=json.dumps(payload if payload is not None else {}),
         capture_output=True, text=True, cwd=_REPO,
+        env={**os.environ, "CHARTER_ROOT": root},
     )
 
 
@@ -98,9 +112,12 @@ class GuardAcrossTheProcessBoundary(unittest.TestCase):
                   for _e, c in _manifest_hooks() if "charter hook " in c}
         for name in sorted(engine):
             with self.subTest(hook=name):
+                root = tempfile.mkdtemp(prefix="charter-hookproc-")
+                (Path(root) / "charter.toml").write_text("schema = 1\n")
                 p = subprocess.run([sys.executable, "-m", "charter", "hook", name],
                                    input="not json at all", capture_output=True,
-                                   text=True, cwd=_REPO)
+                                   text=True, cwd=_REPO,
+                                   env={**os.environ, "CHARTER_ROOT": root})
                 self.assertEqual(p.returncode, 0,
                                  f"{name} exited {p.returncode}: {p.stderr[:300]}")
 

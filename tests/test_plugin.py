@@ -264,6 +264,24 @@ if __name__ == "__main__":
 
 
 class TestSkewReachesTheUser(unittest.TestCase):
+    # `hooks.dispatch` runs REAL handlers, and a handler may write plane state — a trace
+    # row, a guard-seen mark. Without redirecting the root those writes land in whatever
+    # plane this checkout resolves to, which since `find_root` began hopping outward
+    # through `workspaces/` (0.37.0) is the developer's own control plane. A test must not
+    # be able to touch it; `config.use` is the seam the rest of the suite already uses.
+    def setUp(self) -> None:
+        import tempfile
+        from charter import config as _config
+        self._tmp = tempfile.mkdtemp(prefix="charter-skew-")
+        (Path(self._tmp) / "charter.toml").write_text("schema = 1\n")
+        self._orig = _config.use(Path(self._tmp))
+
+    def tearDown(self) -> None:
+        import shutil
+        from charter import config as _config
+        _config.restore(self._orig)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
     """`README.md` promises "a plugin newer than the CLI says so loudly at session start".
     It did not. `dispatch` printed to stderr and returned 0, and Claude Code routes a
     zero-exit hook's stderr to the debug log only — so neither the user nor the model ever
