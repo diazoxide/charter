@@ -232,6 +232,10 @@ charter docs list             # the topics
 charter docs show secrets     # the page, from the install that implements it
 ```
 
+`charter doctor` names a plane that has kept its own copy of one of these, or of a shipped
+skill. It never tells you to delete it — an override may be deliberate — only that a local
+copy wins, is compared to nothing, and drifts unwatched in both directions.
+
 - [docs/install.md](docs/install.md) — both artifacts, alternatives to `uv`, and what
   `charter init` writes before you let it.
 - [docs/control-plane.md](docs/control-plane.md) — `charter.toml` in full: every key, a
