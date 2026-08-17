@@ -16,6 +16,8 @@ That is the status line under Claude Code, redrawn from disk every turn — the 
 the repos it owns and what branch each is sitting on, which are dirty or unpushed, CI and
 open PRs, and the roles you can hand work to. No git subprocess and no network on the
 render path. It is generated, not mocked: `docs/assets/` holds the script that produced it.
+On a harness with no status bar, `charter statusline --watch` puts the same render in any
+spare terminal.
 
 ## 60 seconds
 
@@ -76,11 +78,21 @@ clone and not in the plane root. Nothing to install per harness, with one except
 **What differs is not what charter enforces — it is what each harness lets charter
 offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 
-| | wiring | what it cannot carry |
-| --- | --- | --- |
-| Claude Code | the plugin, plus `.claude/settings.json` | — |
-| opencode | generated into every work tree by `charter init` | no status bar (`/charter` renders it on demand); no per-turn prompt hook, so mid-session notes ride tool output |
-| Codex | **opt-in**: `charter harness install codex` | no command-pattern permissions, so `charter guard ask` rules stay in charter's own hook |
+| | wiring | what it cannot carry | what to do about it |
+| --- | --- | --- | --- |
+| Claude Code | the plugin, plus `.claude/settings.json` | — | — |
+| opencode | generated into every work tree by `charter init` | no status bar; no per-turn prompt hook | `charter statusline --watch`; mid-session notes ride tool output already |
+| Codex | **opt-in**: `charter harness install codex` | no status bar; no command-pattern permissions; config is machine-wide | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
+
+`charter doctor` and `charter harness list` print that fourth column against whichever
+harness you are in, each ceiling carrying its own answer. Where the last column is empty
+it stays empty: charter cannot conjure opencode a per-turn prompt hook, and a workaround
+that does not exist costs more to chase than an honest gap.
+
+**`charter statusline --watch`** is the one worth knowing. It repaints the plane state in
+place in any spare terminal — no status-bar socket, no multiplexer, the same render on
+every harness including the one that has a bar. It shows the plane, not the session, so
+the token and context columns are blank and it says so.
 
 Codex is the exception because it has no project-level config: its hooks live in
 `~/.codex/config.toml` and arming them affects **every repo on the machine**. `charter

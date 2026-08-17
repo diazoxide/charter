@@ -100,6 +100,16 @@ own directory and does **not** search parent directories, so a session started i
 would otherwise be unguarded. `charter doctor`'s `harness trees` row names any tree that
 is missing them; `charter reinit` backfills.
 
+opencode has no status bar, so the plane state renders on demand through the `/charter`
+command charter writes into each tree — or ambiently, in any spare terminal:
+
+```bash
+charter statusline --watch
+```
+
+That works on every harness, including Claude Code, and needs no multiplexer. It shows the
+plane rather than the session, so the token and context columns are blank and it says so.
+
 **Codex: one opt-in command.**
 
 ```bash
