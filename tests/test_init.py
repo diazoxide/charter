@@ -194,10 +194,15 @@ class TestSummaryStaysReadable(InitIso):
         buf = io.StringIO()
         with redirect_stderr(buf):
             self._init()
-        line = next(l for l in buf.getvalue().splitlines() if "Initialized" in l)
-        self.assertEqual(line.count(".claude/settings.json"), 1, line)
-        self.assertIn("statusLine", line)
-        self.assertIn("plane-root guard", line)
+        # Asserted over the whole summary rather than the headline: the fold is still the
+        # behaviour under test, but the paths now sit UNDER the headline rather than on it,
+        # because folding took the line from 254 columns to 194 and 194 still does not
+        # wrap. The fold is what keeps this one entry instead of three; the shape is what
+        # keeps the line readable.
+        out = buf.getvalue()
+        self.assertEqual(out.count(".claude/settings.json"), 1, out)
+        self.assertIn("statusLine", out)
+        self.assertIn("plane-root guard", out)
 
     def test_the_line_stays_under_a_readable_width(self):
         import io
