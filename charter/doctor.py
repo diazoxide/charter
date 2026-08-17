@@ -628,6 +628,54 @@ def _work_trees() -> list[Path]:
     return _ws.all_trees() if _config.HAS_CONTROL_PLANE else []
 
 
+def check_guard_seen() -> Result:
+    """Has a guard ever actually RUN here, and under which harness?
+
+    A sibling of `check_guard_wired`, not a replacement, for the reason that check is itself
+    a sibling of `check_plugin_skew`: *"Whether the plane runs as a plugin is an
+    implementation detail. Whether the guard fires is the fact the operator needs"* — two
+    facts, two rows, so neither can hide behind the other. Declared and dispatched are just
+    as separate: a plane root was switched between branches four times and committed to,
+    unguarded, while `check_guard_wired` would have reported a tick throughout. The
+    declaration was real. Nothing dispatched it.
+
+    **An age, never a verdict.** A plane worked in from a plain terminal has no dispatch and
+    is fine; a plane whose guard last fired weeks ago under a harness you have since stopped
+    using is the incident. Charter supplies the date and the harness and lets the reader
+    draw that line (ADR 0013).
+
+    Silent on a plane nobody has worked in yet — nothing could have dispatched there, and a
+    warning on day one is how a row stops being read.
+    """
+    from . import guardseen as _seen
+
+    name = "guard seen"
+    rec = _seen.last()
+    if rec:
+        at = _seen_age(rec.get("ts"))
+        where = rec.get("harness") or "an unnamed harness"
+        return Result(name, OK, detail=f"last ran {at} ago under {where}")
+    if not _seen.plane_has_been_used():
+        return Result(name, OK, detail="plane not worked in yet")
+    return Result(name, WARN,
+                  detail="no guard has ever run in this plane",
+                  hint="Charter's guards reach a session through its harness, so work done "
+                       "outside one is unguarded and says nothing about it. If you work "
+                       "here through a harness, it is not wired: -> charter reinit")
+
+
+def _seen_age(ts) -> str:
+    from datetime import datetime, timezone
+
+    from . import pieces as _pieces
+
+    try:
+        when = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return "?"
+    return _pieces.since(when, datetime.now(timezone.utc))
+
+
 def check_harness_trees() -> Result:
     """Is every harness armed where sessions START, not just where the plane lives?
 
@@ -1570,7 +1618,7 @@ def _checks():
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
                 check_plane_root(), check_harness(), check_harness_trees(),
-                check_guard_wired(), check_nested_plane(),
+                check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),

@@ -107,7 +107,13 @@ class LinkedWorktrees(unittest.TestCase):
     def _clone_with_worktree(self) -> tuple[Path, Path]:
         clone = _tmp(self, git=True)
         (clone / "f.txt").write_text("x\n")
+        # `commit.gpgsign=false` is not optional here. A contributor may have signing on
+        # globally, and a 1Password/hardware signer then makes this commit fail (exit 128)
+        # or block on a prompt no test can answer — so the suite is green on CI, which has
+        # no signer, and red on the machines that actually write the code. Every other
+        # fixture in this suite pins it for the same reason.
         for cmd in (["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t",
+                                    "-c", "commit.gpgsign=false",
                                     "commit", "-qm", "init"]):
             subprocess.run(["git", "-C", str(clone), *cmd], check=True,
                            capture_output=True)

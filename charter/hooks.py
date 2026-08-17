@@ -662,6 +662,16 @@ def _trace(event, session, **f):
         pass
 
 
+def _mark_guard_seen() -> None:
+    """Record that the guard ran. Silent and best-effort, like everything else here — a
+    turn must never fail over bookkeeping."""
+    try:
+        from . import guardseen
+        guardseen.mark()
+    except Exception:
+        return
+
+
 def _touch_piece(data: dict) -> None:
     """Record that the worker in this session's directory is alive.
 
@@ -818,6 +828,10 @@ def _piece_announcement(data: dict) -> str | None:
 
 def pretooluse() -> int:
     data = _read_stdin()
+    # Reaching this handler at all is the proof no configuration can give: the guard is
+    # live, here, under this harness. `check_guard_wired` can only see the declaration, and
+    # a plane root was switched four times unguarded while that check reported a tick.
+    _mark_guard_seen()
     _touch_piece(data)
     ti = data.get("tool_input") or {}
     cmd = ti.get("command", "") or ""
