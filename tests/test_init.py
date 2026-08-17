@@ -178,3 +178,38 @@ class TestGitignorePresenceCheckIsPrecise(InitIso):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSummaryStaysReadable(InitIso):
+    """One line naming every file charter wrote is unreadable once there are three
+    harnesses to wire — it reached 254 characters, which is also what made the README's
+    demo capture 40% wider and its text too small to read.
+
+    Entries that share a file are folded into that file, so the line grows with the
+    number of FILES rather than the number of things charter did to them."""
+
+    def test_settings_entries_are_folded_into_one_mention_of_the_file(self):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            self._init()
+        line = next(l for l in buf.getvalue().splitlines() if "Initialized" in l)
+        self.assertEqual(line.count(".claude/settings.json"), 1, line)
+        self.assertIn("statusLine", line)
+        self.assertIn("plane-root guard", line)
+
+    def test_the_line_stays_under_a_readable_width(self):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            self._init()
+        line = next(l for l in buf.getvalue().splitlines() if "Initialized" in l)
+        # 195, and the number is accounted for rather than chosen: the line was 175
+        # characters before three harnesses were wired, and charter now genuinely writes
+        # one more file (`.opencode/plugin/charter.ts`, 27 characters). Folding absorbed
+        # everything else — it had reached 254. A budget, not a style rule: spend it on a
+        # new file, never on a longer way of naming an old one. Past this the README's
+        # demo capture stops being legible at GitHub's column width.
+        self.assertLess(len(line), 195, f"{len(line)} chars:\n{line}")

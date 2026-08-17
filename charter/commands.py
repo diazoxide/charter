@@ -976,6 +976,27 @@ def _ensure_statusline(root: Path) -> tuple[str, Path | None]:
     return "created", None
 
 
+def _fold_entries(entries: list[str]) -> list[str]:
+    """``a.json (x)``, ``a.json (y)`` → ``a.json (x, y)``, order preserved.
+
+    One line naming every file `init` wrote reached 254 characters once there were three
+    harnesses to wire — long enough that the README's demo capture grew 40% wider and its
+    text stopped being readable at GitHub's column width. Folding makes the line grow with
+    the number of FILES rather than the number of things charter did to each.
+    """
+    order: list[str] = []
+    notes: dict[str, list[str]] = {}
+    for e in entries:
+        head, _, tail = e.partition(" (")
+        if head not in notes:
+            order.append(head)
+            notes[head] = []
+        note = tail.rstrip(")") if tail else ""
+        if note and note not in notes[head]:
+            notes[head].append(note)
+    return [f"{h} ({', '.join(notes[h])})" if notes[h] else h for h in order]
+
+
 def ensure_env_var(root: Path, key: str, value: str) -> tuple[str, Path | None]:
     """Set ``env[key]`` in ``.claude/settings.json`` IF ABSENT (ADR 0015).
 
@@ -1342,7 +1363,7 @@ def cmd_init(args) -> int:
 
     if created:
         util.ok(f"Initialized control plane (schema {_instance.SCHEMA}) → "
-                f"{', '.join(created)}.")
+                f"{', '.join(_fold_entries(created))}.")
     else:
         util.ok(f"Control plane already fully set up (schema {_instance.SCHEMA}) — "
                 f"nothing to do.")
