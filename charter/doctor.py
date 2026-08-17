@@ -1113,7 +1113,24 @@ def _claude_json() -> Path:
     return Path.home() / ".claude.json"
 
 
-def _registered_launchers(doc: dict) -> list[tuple[str, str]]:
+def _vault_in_args(args) -> str | None:
+    """The vault a ``charter secret exec <vault> …`` invocation opens, or ``None``.
+
+    Read off the args rather than assumed, because it is the difference between advice that
+    works and advice that half-works: a launcher charter merely *starts* has no plane to
+    resolve, while one that opens a vault must find the plane holding it. Advice that
+    applies to every entry is read as boilerplate and then not read at all.
+    """
+    if not isinstance(args, list):
+        return None
+    flat = [a for a in args if isinstance(a, str)]
+    for i in range(len(flat) - 2):
+        if flat[i] == "secret" and flat[i + 1] == "exec" and not flat[i + 2].startswith("-"):
+            return flat[i + 2]
+    return None
+
+
+def _registered_launchers(doc: dict) -> list[tuple[str, str, list]]:
     """``(server name, command)`` for every **stdio** MCP server the host has registered.
 
     Both scopes, because checking only the top level would miss most real registrations —
@@ -1128,7 +1145,7 @@ def _registered_launchers(doc: dict) -> list[tuple[str, str]]:
         for body in projects.values():
             if isinstance(body, dict):
                 scopes.append(body.get("mcpServers"))
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, list]] = []
     for servers in scopes:
         if not isinstance(servers, dict):
             continue
@@ -1136,7 +1153,7 @@ def _registered_launchers(doc: dict) -> list[tuple[str, str]]:
             # An SSE/HTTP server has a `url` and no `command`. Absence of a launcher is
             # not a missing launcher.
             if isinstance(entry, dict) and isinstance(entry.get("command"), str):
-                out.append((str(name), entry["command"]))
+                out.append((str(name), entry["command"], entry.get("args") or []))
     return out
 
 
@@ -1189,19 +1206,43 @@ def check_mcp_launchers() -> Result:
         return Result("mcp", WARN, detail="~/.claude.json is not an object",
                       hint=_NOT_CHECKED_HINT)
 
-    checkable = [(n, c) for n, c in _registered_launchers(doc) if os.path.isabs(c)]
-    broken = [(n, c) for n, c in checkable if _launcher_missing(c)]
+    registered = _registered_launchers(doc)
+    checkable = [(n, c, a) for n, c, a in registered if os.path.isabs(c)]
+    broken = [(n, c, a) for n, c, a in checkable if _launcher_missing(c)]
     if not broken:
+        # "0 launcher(s) resolve" was shown for a plane whose only server had just been
+        # repaired onto a bare command. Zero were CHECKED and none were broken; printing
+        # the first as though it were a count of what resolves reads as "nothing is
+        # registered", which is a different claim about a different fact.
+        if not registered:
+            return Result("mcp", OK, detail="no MCP servers registered")
+        if not checkable:
+            # Every registered launcher is a bare command, resolved against the PATH of
+            # whoever starts it — which charter cannot see, and so does not claim to have
+            # checked. Saying how many exist keeps that honest without inventing a verdict.
+            return Result("mcp", OK,
+                          detail=f"{len(registered)} server(s), none on an absolute path")
         return Result("mcp", OK, detail=f"{len(checkable)} launcher(s) resolve")
 
     hints = []
-    for name, command in broken:
+    for name, command, args in broken:
         if Path(command).name in _REMOVED_SHIMS:
             # Charter removed this one, so it knows what replaced it. Naming the
             # replacement turns a diagnosis into a one-line fix.
-            hints.append(f"{name}: {command} is gone (the edm→charter rename removed that "
-                         f"shim) — set this server's command to `charter`, leaving its args "
-                         f"unchanged")
+            fix = (f"{name}: {command} is gone (the edm→charter rename removed that shim) "
+                   f"— set this server's command to `charter`, leaving its args unchanged")
+            vault = _vault_in_args(args)
+            if vault:
+                # The half of the advice that was missing. The old command was an absolute
+                # path into a particular umbrella; a bare `charter` resolves its plane from
+                # the LAUNCHING directory, and an `mcpServers` entry at the top level of
+                # `~/.claude.json` is user-scope — it launches for every project, most of
+                # which are not that plane. The server then starts, fails to find the vault,
+                # and the tools are missing again, silently, exactly as before.
+                fix += (f". It opens vault `{vault}`, so also set CHARTER_ROOT in this "
+                        f"server's `env` to the plane holding that vault — a user-scope "
+                        f"server has no directory to resolve one from")
+            hints.append(fix)
         else:
             # No claim about WHY it went missing: charter did not remove it and does not
             # know. It reports the fact and the two ways out.
@@ -1209,7 +1250,7 @@ def check_mcp_launchers() -> Result:
                          f"repoint its command or remove the registration")
     return Result("mcp", FAIL,
                   detail=f"{len(broken)} of {len(checkable)} launcher(s) missing: "
-                         + ", ".join(n for n, _ in broken),
+                         + ", ".join(n for n, _, _ in broken),
                   hint="; ".join(hints))
 
 
