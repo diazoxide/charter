@@ -218,7 +218,7 @@ def _say_mcp_boundary(name: str) -> None:
     """Say plainly which boundary persona-scoped MCP servers apply at (#186).
 
     Charter scopes a persona's servers at DISPATCH: `_render_agent` emits them inline, the
-    host connects them when the sub-agent starts and disconnects them when it finishes, and
+    harness connects them when the sub-agent starts and disconnects them when it finishes, and
     their tool descriptions never reach the main conversation. That is a stronger guarantee
     than an allowlist — the server does not run at all for this session.
 

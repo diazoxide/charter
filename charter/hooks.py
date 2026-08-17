@@ -1477,7 +1477,7 @@ def posttooluse_skill() -> int:
     """Tally a Skill invocation against the persona that made it.
 
     The observability half of the persona↔skill link. A persona declares the skills it
-    starts holding and the host preloads their full text on every dispatch; nothing could
+    starts holding and the harness preloads their full text on every dispatch; nothing could
     see whether any of it was used. Same blindness `dispatch.py` was built for, aimed at a
     persona's equipment rather than at the persona.
 

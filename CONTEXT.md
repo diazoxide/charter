@@ -14,6 +14,17 @@ The control plane — the directory holding `charter.toml`, its personas, invent
 workspaces and config. Not a place work happens (ADR 0008).
 _Avoid_: root, repo, home
 
+**Harness**:
+The agent runtime charter runs inside — Claude Code, opencode, Codex. Charter enforces the
+same invariants on every harness; what differs is what it can *offer*, and `charter doctor`
+names each gap rather than leaving it to be found (ADR 0015).
+_Avoid_: host, client, runner, IDE, platform
+
+**Host**:
+A forge host — `github.com`, a self-hosted GitLab. Never the agent runtime: both senses of
+this word were load-bearing at once until ADR 0015 split them.
+_Avoid_: harness, server, remote
+
 **Workspace**:
 An isolated per-task working context, owning clones of the repos that task touches. The
 task is the unit: one workspace, one task — so a workspace running N pieces in parallel is

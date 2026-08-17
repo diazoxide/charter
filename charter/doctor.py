@@ -1285,7 +1285,7 @@ def _registered_launchers(doc: dict) -> list[tuple[str, str, list]]:
 
     Both scopes, because checking only the top level would miss most real registrations —
     project-scoped servers are the common case. Every container is type-checked on the way
-    down: `~/.claude.json` is a large host-owned file (124KB of caches and counters on the
+    down: `~/.claude.json` is a large harness-owned file (124KB of caches and counters on the
     machine that reported #197) whose shape charter does not control, and one odd value
     must not take the whole preflight down.
     """
