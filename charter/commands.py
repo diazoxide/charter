@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, doctor, inventory, render, util, workspace, worktree
+from . import config, docsrc, doctor, inventory, render, util, workspace, worktree
 # One committer for the control plane, in charter/planegit.py. Re-exported rather
 # than moved-and-updated so every existing caller and test keeps working — the point
 # of the extraction is that there is ONE implementation, not that callers churn.
@@ -210,6 +210,42 @@ def cmd_docs(args) -> int:
 
     if refresh_readme_personas():
         util.ok("Refreshed the persona roster block in README.md")
+    return 0
+
+
+def cmd_docs_list(args) -> int:
+    """charter's own pages — the ones `docs show` can print.
+
+    Distinct from `cmd_docs`, which writes the *plane's* generated docs. One command
+    describes charter, the other describes your repos; they share a noun and nothing else.
+    """
+    names = docsrc.topics()
+    if not names:
+        util.warn("No documentation shipped with this charter — reinstall it "
+                  "(the wheel is missing charter/_docs).")
+        return 1
+    util.info(f"charter documentation ({docsrc.source()}):")
+    # The topics go to stdout (so `docs list` pipes) while the framing goes to stderr, as
+    # everywhere else in charter. Flushed before the trailing hint because stderr is
+    # unbuffered and stdout is not: without this the hint overtakes the list it describes
+    # the moment the output is a pipe rather than a terminal.
+    print("\n".join(f"  {name}" for name in names) + "\n", flush=True)
+    util.info("Read one with: charter docs show <topic>")
+    return 0
+
+
+def cmd_docs_show(args) -> int:
+    body = docsrc.read(args.topic)
+    if body is None:
+        names = docsrc.topics()
+        # ADR 0009 — classify, don't guess. `docs show persona` is a plausible typo for
+        # `personas`, and resolving it would be charter deciding what the caller meant;
+        # naming the real topics lets them decide, and costs one line.
+        util.err(f"No charter documentation topic named '{args.topic}'.")
+        if names:
+            util.info("Topics: " + ", ".join(names))
+        return 1
+    print(body, end="" if body.endswith("\n") else "\n")
     return 0
 
 
