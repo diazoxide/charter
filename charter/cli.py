@@ -9,6 +9,7 @@ import sys
 from . import (
     __version__,
     commands,
+    commands_harness,
     commands_persona,
     commands_report,
     commands_secrets,
@@ -218,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("-n", type=int, default=0, help="Show only the last N raw events.")
     tr.set_defaults(func=commands_persona.cmd_trace)
 
+    _add_harness_parser(sub)
     _add_workspace_parser(sub)
     _add_worktree_parser(sub)
     _add_vault_parser(sub)
@@ -464,6 +466,22 @@ def _add_workspace_parser(sub) -> None:
     aus.set_defaults(func=commands_workspace.cmd_workspace_autosave)
     pbg = wsub.add_parser("_pushbg")    # internal: background push half of autosave
     pbg.set_defaults(func=commands_workspace.cmd_workspace_pushbg)
+
+
+def _add_harness_parser(sub) -> None:
+    h = sub.add_parser("harness",
+                       help="Agent runtimes charter can run inside (Claude Code, opencode, "
+                            "Codex) — list them, or arm the one `init` will not.")
+    hsub = h.add_subparsers(dest="harness_cmd", required=True)
+
+    lst = hsub.add_parser("list", help="Every registered harness, its ceilings, and which "
+                                       "one this session is in.")
+    lst.set_defaults(func=commands_harness.cmd_harness_list)
+
+    ins = hsub.add_parser("install", help="Arm a harness whose wiring lives outside the "
+                                          "plane (Codex). Running it IS the consent.")
+    ins.add_argument("name", help="Harness name, e.g. codex.")
+    ins.set_defaults(func=commands_harness.cmd_harness_install)
 
 
 def _add_worktree_parser(sub) -> None:

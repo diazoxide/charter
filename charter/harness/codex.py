@@ -22,6 +22,8 @@ it is the decision about *where* to write the wiring, which is the problem below
 
 from __future__ import annotations
 
+import os
+import tomllib
 from pathlib import Path
 
 from .base import Deficit, Harness
@@ -35,10 +37,77 @@ NAME = "codex"
 HOOK_ENTRY_KEYS = ("type", "command")
 HOOK_TYPE = "command"
 
-#: Where a hook's wiring has to go. There is **no project-level config**: a
-#: `.codex/config.toml` or `codex.toml` planted in a project directory is ignored, checked
-#: by putting a deliberate type error in each and watching the config still load.
-CONFIG_PATH = Path("~/.codex/config.toml")
+#: The hooks charter wires, mirroring what the Claude Code plugin's own `hooks.json`
+#: declares. `matcher` is carried only where Codex's contract uses one.
+_WIRING = (
+    ("SessionStart", None, "charter hook sessionstart"),
+    ("UserPromptSubmit", None, "charter hook userpromptsubmit"),
+    ("PreToolUse", "Bash", "charter hook pretooluse"),
+)
+
+
+def config_path() -> Path:
+    """Codex's config file. There is **no project-level one**: a `.codex/config.toml` or
+    `codex.toml` planted in a project directory is ignored, checked by putting a
+    deliberate type error in each and watching the config load anyway.
+
+    ``$CODEX_HOME`` is honoured — verified by pointing it at a throwaway directory and
+    watching `codex mcp list` read that directory's config. Writing to `~/.codex`
+    unconditionally would silently miss anyone who sets it.
+    """
+    home = os.environ.get("CODEX_HOME")
+    return (Path(home) if home else Path.home() / ".codex") / "config.toml"
+
+
+def _block() -> str:
+    """The TOML charter appends. Whole tables only — see :func:`install`."""
+    lines = ["", "# --- charter (control plane) ---",
+             "# Written by `charter harness install codex`. Remove this block to unwire.",
+             "[shell_environment_policy]",
+             'set = { CHARTER_HARNESS = "codex" }', ""]
+    for event, matcher, command in _WIRING:
+        lines.append(f"[[hooks.{event}]]")
+        if matcher is not None:
+            lines.append(f'matcher = "{matcher}"')
+        lines.append(f"[[hooks.{event}.hooks]]")
+        lines.append(f'type = "{HOOK_TYPE}"')
+        lines.append(f'command = "{command}"')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def install() -> tuple[str, str]:
+    """Arm charter's hooks in Codex's config. ``(status, detail)``.
+
+    Not called by `init`, and that is the decision rather than an oversight: this file is
+    machine-wide, so writing it arms `charter hook pretooluse` in every repo on the
+    machine. Running this command IS the consent — the two-step shape ADR 0003 uses for
+    `charter report`, where "the second command is the consent".
+
+    Charter appends **whole tables or nothing**. A config that already declares `hooks` or
+    `shell_environment_policy` is reported and left untouched: merging would mean
+    rewriting TOML charter did not author, and `_load_settings` already refuses that for
+    the file charter half-owns, let alone this one.
+
+    A hook written here is still **inert until Codex trusts it** (`enabled`/
+    `trusted_hash`, and a `--dangerously-bypass-hook-trust` flag exist), so the caller is
+    told to approve it rather than left believing the wiring is live.
+    """
+    p = config_path()
+    raw = ""
+    if p.exists():
+        try:
+            raw = p.read_text()
+            doc = tomllib.loads(raw)
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            return "malformed", str(p)
+        clashes = [k for k in ("hooks", "shell_environment_policy") if k in doc]
+        if clashes:
+            return "present", f"{p} already declares {', '.join(clashes)}"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    sep = "" if (not raw or raw.endswith("\n")) else "\n"
+    p.write_text(raw + sep + _block())
+    return "created", str(p)
 
 
 class CodexHarness(Harness):
