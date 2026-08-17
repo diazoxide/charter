@@ -39,6 +39,18 @@ def _resolve(args) -> tuple[str, Path | None]:
     clone = clone_for(ws, args.repo)
     if clone is None:
         util.err(f"'{args.repo}' isn't cloned in workspace '{ws}'.")
+        # Before the clone tip, because when this plane is nested the tip is the wrong
+        # answer: the clone usually DOES exist, in the outer plane, and following the
+        # advice makes a second one in a plane nobody chose. Observed on charter's own
+        # dogfooding layout (#200) — `charter worktree add charter <branch>` run from
+        # inside the charter clone reported the repo missing while standing in it.
+        #
+        # The tip still prints. Not-cloned remains possible in a nested plane, and ADR
+        # 0009 is that charter classifies what it can see rather than picking one cause
+        # and hiding the other.
+        nested = util.nested_plane_note()
+        if nested:
+            util.info(nested)
         util.info(f"Clone it first: charter clone {args.repo} -w {ws}")
     return ws, clone
 

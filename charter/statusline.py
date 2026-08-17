@@ -1273,6 +1273,43 @@ def _head_detached(gitdir: Path) -> bool:
     return bool(txt) and not txt.startswith("ref:")
 
 
+def _nested_plane_mark() -> str | None:
+    """``⚠ nested in <outer>`` when this plane sits inside another plane's ``workspaces/``,
+    else ``None`` — which is the ordinary case, and renders nothing.
+
+    ``charter.toml`` is tracked, so every clone of a plane is itself a plane, and `charter
+    clone` puts clones exactly where the walk will find them first. `root.enclosing_plane`
+    has detected this since #140; what was missing is that the surface read every turn
+    never said it. The status line rendered another plane's workspace count, another
+    plane's personas and no active marker, and the operator had no reason to suspect the
+    plane rather than the workspace (#200).
+
+    **It does not change resolution.** #140 decided that deliberately: sometimes the inner
+    plane IS the one you mean — charter's own dogfooding clones charter into a workspace,
+    and that clone is a plane you might legitimately manage. This is ADR 0013's second
+    rule, a divergence charter can see being named rather than silently resolved.
+
+    The outer plane's **directory name**, not its path: the header is one row competing
+    with everything else on it, and the name is what the operator recognises as theirs.
+    `doctor` carries the full path and the `cd` that fixes it.
+
+    ``config.ROOT`` is passed explicitly rather than letting `enclosing_plane` default to
+    the process cwd. The renderer describes the SESSION, and a hook's own directory is not
+    the session's — the same trap `_active` documents, where reading the wrong cwd does
+    not merely miss a better answer, it overrides the right one.
+    """
+    from . import root as _root
+    try:
+        outer = _root.enclosing_plane(config.ROOT)
+    except OSError:
+        # This runs on every turn. An unreadable ancestor makes the answer unknown, and an
+        # unknown answer here is worth strictly less than the rest of the line.
+        return None
+    if outer is None:
+        return None
+    return f"{_YELLOW}⚠ nested in {_BOLD}{outer.name}{_R}"
+
+
 def _plane_root_alert() -> str | None:
     """One line when the **plane root** is being worked in — dirty, detached, or off its
     default branch. ``None`` otherwise, which is the ordinary case.
@@ -1574,6 +1611,7 @@ def render(payload: dict | None = None) -> str:
         glstate.maybe_spawn(scan, active)
 
         pin = f"{_YELLOW}*{_R}" if src == "$CHARTER_WORKSPACE" else ""
+        nested = _nested_plane_mark()
         # Reinit tip sits right after the name so it survives truncation on narrow panes.
         # Nothing informational goes in front of it: it is the one item on this row that
         # reports something BROKEN, and it carries the command that fixes it. A pane with
@@ -1612,6 +1650,11 @@ def render(payload: dict | None = None) -> str:
         ntodo = _todo_count(active)
         summary = f"{_DIM} · {_R}".join(filter(None, [
             f"{_CYAN}⬢{_R} {_BOLD}{active}{_R}{pin}",
+            # Ahead of the reinit tip, which is the only thing that outranks information
+            # on this row — because when the PLANE is not the one you meant, the structure
+            # that tip reports as stale belongs to the wrong plane too. Naming the plane
+            # first stops the operator fixing something they never chose.
+            nested,
             reinit,
             f"{_DIM}todo{_R} {ntodo}" if ntodo else None,
             _piece_summary(active),

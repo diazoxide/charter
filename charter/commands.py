@@ -401,7 +401,15 @@ def cmd_status(args) -> int:
     active = workspace.resolve(explicit)
 
     print(f"{config.GROUP}: {len(inv_by_name)} repos in inventory · "
-          f"{len(all_ws)} workspace(s) · active: {active} (via {workspace.source(explicit)})\n")
+          f"{len(all_ws)} workspace(s) · active: {active} (via {workspace.source(explicit)})")
+    # "Where am I" is this command's whole job, and the plane is the outermost part of that
+    # answer — every count above is a count *of this plane*, and a nested one reports
+    # numbers that look like the outer plane's and are not (#200). Resolution is unchanged
+    # (#140); this only says which plane answered.
+    nested = util.nested_plane_note()
+    if nested:
+        print(nested)
+    print()
 
     if all_ws:
         for n in all_ws:

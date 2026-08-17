@@ -35,6 +35,42 @@ def err(msg: str) -> None:
     print(_c("31", "✗") + " " + msg, file=sys.stderr)
 
 
+def nested_plane_note() -> str | None:
+    """The sentence naming the outer plane when this one sits inside another's
+    ``workspaces/``, else ``None`` — the ordinary case, which says nothing.
+
+    ``charter.toml`` is tracked, so every clone of a plane is a plane too, and `charter
+    clone` puts clones exactly where the upward walk finds them first. Resolution stops at
+    the inner one and every count a command prints silently describes a plane the operator
+    did not choose (#200).
+
+    Resolution is **unchanged** — #140 settled that, because sometimes the inner plane is
+    genuinely the one you mean. This only says which plane answered, which is ADR 0013's
+    second rule: a divergence charter can see, charter names.
+
+    It lives here, beside `info`/`err`, so the surfaces that say it — `charter status` and
+    the not-cloned error — cannot drift into two wordings of the same fact. It **returns**
+    the sentence rather than printing it because the two callers want different streams:
+    for `charter status` this is part of the answer and belongs on stdout with the header
+    it qualifies, while beside `util.err` it is diagnostic and belongs on stderr. A helper
+    that printed would have to pick one and be wrong for the other.
+
+    Imports are deferred because `util` sits below `config` and `root` in the import order
+    and must stay there.
+    """
+    from . import config
+    from . import root as _root
+    try:
+        outer = _root.enclosing_plane(config.ROOT)
+    except OSError:
+        # Every caller is on a path that has something more useful to say than a traceback.
+        return None
+    if outer is None:
+        return None
+    return (f"nested plane: this one sits inside {outer}'s workspaces/ — "
+            f"to act on that one instead: cd {outer}")
+
+
 class ProcTimeout(RuntimeError):
     """A subprocess outlived its ``timeout``.
 
