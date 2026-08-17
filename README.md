@@ -21,8 +21,8 @@ render path. It is generated, not mocked: `docs/assets/` holds the script that p
 ![Terminal recording: charter init scaffolds a control plane, charter discover writes an inventory of every repo in the org, charter clone pulls one into the active workspace, and charter status shows the result.](docs/assets/demo.svg)
 
 ```bash
-uv tool install charter-cp                        # the CLI  (Python ≥ 3.11)
-claude plugin marketplace add diazoxide/charter   # the plugin (hooks, guard, session context)
+uv tool install charter-cp                        # the CLI  — one per machine, for your terminal
+claude plugin marketplace add diazoxide/charter   # the plugin — one per project, and it carries the version
 claude plugin install charter@charter
 
 mkdir my-control-plane && cd my-control-plane
@@ -31,6 +31,13 @@ charter doctor
 charter discover
 charter clone some-repo
 ```
+
+**Two artifacts, and they are not redundant.** The CLI is a single machine-global install —
+it is what you type in your own terminal, and what CI or a cron job runs. The plugin is
+installed **per project**, out of a cache Claude Code keeps holding every version at once,
+which is why a *plane's* pinned version is the plugin's and not the binary's: two planes on
+one laptop can sit on different charters without fighting.
+→ [docs/install.md](docs/install.md)
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,
   `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and the status line

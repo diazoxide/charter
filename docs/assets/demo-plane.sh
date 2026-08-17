@@ -107,6 +107,41 @@ charter persona remember devops "billing deploys gate on the e2e suite, not the 
 charter persona remember qa "the flaky checkout test is a DNS timeout in CI, not the code" >/dev/null
 charter persona use devops >/dev/null
 
+# ── pieces (worktrees) ───────────────────────────────────────────────────────
+# The fleet story is invisible without these: nested worktree rows, a declared outcome,
+# and pieces that have said nothing for a while. Created through the real commands, AFTER
+# the personas exist, so each claim carries the persona that made it rather than `null`.
+charter worktree add billing-api  ledger-backfill  -w billing-migration >/dev/null
+charter worktree add billing-api  ledger-verify    -w billing-migration >/dev/null
+charter worktree add billing-core idempotency-keys -w billing-migration >/dev/null
+
+# One piece declares an outcome; the rest stay silent, which is the state ADR 0011 exists
+# to report — a worker that dies declares nothing, and that ABSENCE is what gets shown.
+( cd "workspaces/billing-migration/.worktrees/billing-api/ledger-verify" \
+    && charter worktree done >/dev/null )
+
+# Who was last seen in which tree, and how long ago. Written directly for the same reason
+# `inventory/repos.json` is: these are the files the every-turn hook would have written, in
+# exactly their shape, and the demo has no session to write them. Back-dated so the render
+# shows a real spread rather than three identical `now`s.
+python3 - "$PWD" <<'PYP'
+import json, pathlib, sys
+from datetime import datetime, timedelta, timezone
+root = pathlib.Path(sys.argv[1]) / "workspaces" / "billing-migration" / "pieces" / "seen"
+now = datetime.now(timezone.utc)
+def beat(repo, piece, persona, minutes):
+    d = root / repo if piece else root
+    d.mkdir(parents=True, exist_ok=True)
+    at = (now - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    (d / (f"{piece}.json" if piece else f"{repo}.json")).write_text(
+        json.dumps({"ts": at, "session": "demo", "persona": persona,
+                    "by": {persona: at}}, sort_keys=True) + "\n")
+beat("billing-api",      "ledger-backfill",  "devops",   0)
+beat("billing-core",     "idempotency-keys", "qa",       6)
+beat("checkout-ui",      None,               "reviewer", 3)
+beat("payments-service", None,               "devops",   22)
+PYP
+
 # ── forge state ──────────────────────────────────────────────────────────────
 # `charter gl-refresh` writes this from gh/glab. The demo has no forge, so the same
 # cache is written directly — same schema, same TTL fields the renderer reads.

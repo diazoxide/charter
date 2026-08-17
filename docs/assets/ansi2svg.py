@@ -215,6 +215,33 @@ def render(lines, title: str | None, animate: bool = False) -> str:
     return "\n".join(out) + "\n"
 
 
+def _width_of(lines) -> int:
+    return max((sum(cell_width(t) for t, _ in ln) for ln in lines if ln), default=0)
+
+
+def compose_box(text: str, width: int) -> str:
+    """Claude Code's prompt box, as ANSI, sized to match the capture beneath it.
+
+    Rendered through `parse` like any other captured line rather than emitted as SVG
+    directly: the box then inherits the same glyph metrics, colour handling and animation
+    schedule as everything else, so it cannot drift into its own layout.
+
+    Rounded corners because that is what Claude Code draws, and the point of the box is
+    recognition — a reader should see where the status line actually sits without being
+    told. It is the one part of these assets that is a DRAWING rather than a capture, so it
+    says something charter does not print; `docs/assets/README.md` keeps that distinction
+    and this is deliberately on the drawing side of it.
+    """
+    DIM, RESET, CYAN = "\033[2m", "\033[0m", "\033[36m"
+    inner = max(10, width - 2)
+    body = text if cell_width(text) <= inner - 4 else text[:inner - 5] + "…"
+    pad = inner - 2 - cell_width(body)
+    return (f"{DIM}╭{'─' * inner}╮{RESET}\n"
+            f"{DIM}│{RESET} {CYAN}>{RESET} {body}{' ' * max(0, pad - 2)} {DIM}│{RESET}\n"
+            f"{DIM}╰{'─' * inner}╯{RESET}\n"
+            f"\n")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-o", "--output", help="write here instead of stdout")
@@ -223,11 +250,18 @@ def main() -> int:
     ap.add_argument("--input", help="read here instead of stdin")
     ap.add_argument("--animate", action="store_true",
                     help="reveal the capture line by line, looping")
+    ap.add_argument("--compose", metavar="TEXT", default=None,
+                    help="draw Claude Code's input box above the capture, with TEXT in it. "
+                         "The status line renders directly beneath that box in a real "
+                         "session, and a render that omits it shows the asset out of the "
+                         "only context it ever appears in.")
     a = ap.parse_args()
 
     raw = (open(a.input, encoding="utf-8").read() if a.input
            else sys.stdin.read())
     lines = parse(raw)
+    if a.compose:
+        lines = parse(compose_box(a.compose, _width_of(lines))) + lines
     if not lines:
         print("ansi2svg: no input", file=sys.stderr)
         return 1

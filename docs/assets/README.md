@@ -76,9 +76,26 @@ written, in exactly their shape; the demo has no forge to query.
 ```bash
 ./docs/assets/demo-plane.sh /tmp/demo-plane
 cd /tmp/demo-plane
-COLUMNS=110 sh -c 'echo "{\"workspace\":{\"current_dir\":\"$PWD\"},\"model\":{\"display_name\":\"Opus 5\"},\"session_id\":\"demo\"}" | charter statusline' \
-  | python3 docs/assets/ansi2svg.py --title "charter statusline" -o docs/assets/statusline.svg
+COLUMNS=150 sh -c 'echo "{\"workspace\":{\"current_dir\":\"$PWD\"},\"model\":{\"display_name\":\"Opus 5\"},\"session_id\":\"demo\",\"context_window\":{\"used_percentage\":38,\"current_usage\":{\"cache_read_input_tokens\":74000,\"cache_creation_input_tokens\":6000}}}" | charter statusline' \
+  | python3 docs/assets/ansi2svg.py --title "charter statusline" \
+      --compose 'get payments-service onto the new idempotency keys' \
+      -o docs/assets/statusline.svg
 ```
+
+Three things in that command are load-bearing, and the previous capture had none of them:
+
+* **`COLUMNS=150`.** The persona column needs `_LEFT_W + _COL_SEP + _RIGHT_MIN_W` = 134
+  inner columns. At 110 the layout correctly falls back to stacking personas as rows, so
+  the capture showed charter's narrow-terminal behaviour while the prose described the
+  wide one.
+* **`context_window` in the payload.** `ctx 38% · ⚡92%` is read from there and from
+  nowhere else. Without it `_session_strip` is empty, the whole bottom row disappears, and
+  the brand collapses onto the last persona row.
+* **`--compose`.** The status line never appears alone — it renders directly beneath
+  Claude Code's prompt box. A render without it shows the asset out of the only context it
+  is ever seen in. This is the one **drawing** inside a capture; everything above the box
+  is still real output.
+
 
 ## Checking a change
 
