@@ -157,6 +157,55 @@ committed store, so `charter persona stats` can show *actual* routing health —
 that lints clean but has never once been dispatched is flagged `⚑ never dispatched`,
 the blind spot memory volume alone can't see.
 
+`charter persona dispatch-backfill` seeds that tally from past sessions' transcripts, so a
+roster that predates the tally has a baseline immediately instead of reading as *"nothing
+was ever dispatched"*. It skips anything already covered by live records, so re-running it
+never double-counts.
+
+A workflow run reaches the same personas: an `agent()` call resolves `agentType:
+"<persona>"` from the registry the Agent tool uses, so a workflow step can run **as a
+persona** rather than as a generic worker.
+
+## Reusing another persona (`uses:`)
+
+`extends:` inherits a charter. `uses:` is the other relationship — composition rather than
+inheritance — and it is what makes one persona able to reach another's capability without
+becoming it. A persona that `uses: devops` may:
+
+- read that persona's vault (`charter persona secret --persona devops …`),
+- run its declared `tools:` without a prompt while adopted — the tool gate unions them in,
+- and delegate a sub-task to its sub-agent.
+
+**Reuse is one level deep**, and it never touches the reused persona's own active state.
+That bound is the point: a role that needs a cluster credential for one step should borrow
+it explicitly and visibly, not acquire a transitive reach nobody declared.
+
+`charter persona remove` refuses to orphan — if another persona `extends:` or `uses:` the
+one being removed, removal is refused and the dependents are named (`--force` overrides).
+Before that, a dangling reference was only discovered later, by `lint`.
+
+## Curating memory: `charter persona optimize`
+
+Memory grows, and growth is not a defect — but a base that has accumulated near-duplicates
+and years-old scratch answers a `recall` worse than a smaller one would. `optimize` curates
+it in two tiers, split by whether a mistake is reversible:
+
+```
+charter persona optimize                 # read-only report, every persona + _shared
+charter persona optimize devops          # just one
+charter persona optimize --apply         # auto-apply only the safe, reversible half
+charter persona optimize --stale-days 60 # age past which a memory is *proposed* for archival (default 90)
+```
+
+With `--apply` it performs only what can be undone: collapsing exact-duplicate memories
+into `memory/archive/` and repairing the `MEMORY.md` index. Everything requiring judgement
+— near-duplicate merges, age-based archival, promoting a recurring fact into the charter —
+is **proposed and never applied**. A charter is a human artifact; a tool that silently
+edited one would make every charter suspect.
+
+The analysis is deterministic and stdlib-only. The judgement belongs to whoever reads the
+proposals.
+
 ## Everyday commands
 
 ```
@@ -167,6 +216,8 @@ charter persona secret set API_TOKEN --stdin   # store a credential (never on ar
 charter persona secret exec --env TOKEN=API_TOKEN -- some-cli   # use it without ever seeing it
 charter persona lint                       # dangling uses:/extends:, missing role/vault, drafts, stale agents
 charter persona stats                      # roster health: usage, verification rate, dispatch count
+charter persona optimize --apply           # curate memory: safe ops applied, the rest proposed
+charter persona dispatch-backfill          # seed the dispatch tally from past sessions
 ```
 
 ## Health: where it surfaces
