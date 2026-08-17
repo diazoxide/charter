@@ -212,14 +212,27 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     A server with no ``secrets`` is passed through untouched: dragging a credential-free
     server through charter would buy nothing and add a process.
     """
-    out = {k: v for k, v in entry.items() if k != "secrets"}
+    out = {k: v for k, v in entry.items() if k not in ("secrets", "secret_files")}
     secrets = entry.get("secrets") or {}
-    if not secrets or not vault:
+    # A separate key, not a marker inside `secrets`, because these are different MECHANISMS
+    # rather than two spellings of one: `secrets` puts a VALUE in the environment,
+    # `secret_files` materialises a 0600 file and puts its PATH there. Google ADC needs the
+    # second — `GOOGLE_APPLICATION_CREDENTIALS` takes a path, not a value — and before this a
+    # persona whose servers authenticate that way could not declare them at all (#190).
+    # A reader should see which mechanism is in play without decoding a value.
+    files = entry.get("secret_files") or {}
+    if not (secrets or files) or not vault:
         return out
     args = ["secret", "exec", vault]
     for env_name, key in secrets.items():
         args += ["--env", f"{env_name}={key}"]
-    args += ["--exec", "--"]
+    for env_name, key in files.items():
+        args += ["--file", f"{env_name}={key}"]
+    # `--stream` whenever a file is involved: `--exec` replaces charter, so nothing would
+    # survive to shred the tempfile. Streaming is unaffected — a forked child inherits this
+    # process's descriptors — so the only thing given up is process replacement, which is
+    # precisely what made cleanup impossible.
+    args += ["--stream" if files else "--exec", "--"]
     if out.get("command"):
         args.append(out["command"])
     args += list(out.get("args") or [])

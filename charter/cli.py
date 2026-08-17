@@ -583,11 +583,19 @@ def _sa_exec(p):
                         "ENVVAR to its path (repeatable — repeats sharing an "
                         "ENVVAR merge into one file). For tools that read a "
                         "dotenv secrets file, e.g. PLAYWRIGHT_MCP_SECRETS_FILE.")
+    p.add_argument("--stream", dest="stream_mode", action="store_true",
+                   help="Run the command as a CHILD with stdio inherited, wait for it, then "
+                        "shred any --file/--dotenv temp files. For a long-running child "
+                        "whose credential must be a FILE (Google ADC's "
+                        "GOOGLE_APPLICATION_CREDENTIALS takes a path, not a value) — the "
+                        "case --exec cannot serve, because exec leaves nothing alive to "
+                        "clean up. Output is NOT redacted (nothing is captured). Note: a "
+                        "SIGKILLed charter runs no cleanup and the 0600 file survives.")
     p.add_argument("--exec", dest="exec_mode", action="store_true",
                    help="Replace this process with the command (os.exec) instead of capturing "
                         "it, so stdio streams through — required for a long-running child such "
                         "as an MCP stdio server. Output is NOT redacted (nothing is captured); "
-                        "incompatible with --file and --dotenv.")
+                        "incompatible with --file and --dotenv — use --stream for those.")
     p.add_argument("command", nargs="*",
                    help="Command to run; put it after `--`, e.g. -- kubectl get pods.")
 

@@ -510,12 +510,28 @@ def cmd_secret_exec(args) -> int:
 
     exec_mode = bool(getattr(args, "exec_mode", False))
     dotenv_specs = list(getattr(args, "dotenv", None) or [])
+    # `--exec` REPLACES this process, so nothing survives to shred a temp file. A
+    # long-running child whose credential must be a FILE — every Google-ADC server, since
+    # GOOGLE_APPLICATION_CREDENTIALS takes a path and not a value — therefore fitted neither
+    # mode: --file was the only way to materialise it and --exec the only way to run it
+    # (#190).
+    #
+    # `--stream` is the third mode: fork, inherit stdio, wait, then clean up. Streaming was
+    # never what exec bought here — a forked child inherits the parent's descriptors — so the
+    # only thing given up is replacing the process, which is exactly the thing that made
+    # cleanup impossible.
+    stream_mode = bool(getattr(args, "stream_mode", False))
+    if exec_mode and stream_mode:
+        util.err("--exec and --stream are two ways to run the same command; pick one. "
+                 "--stream is the one that can clean up a --file credential.")
+        return 2
     if exec_mode and ((args.file or []) or dotenv_specs):
         flags = " and ".join(f for f, on in (("--file", args.file or []),
                                              ("--dotenv", dotenv_specs)) if on)
         util.err(f"{flags} cannot be combined with --exec: exec replaces this "
                  "process, so the temp file would never be cleaned up. "
-                 "Use --env for an exec'd command.")
+                 "Use --stream instead — it forks, inherits stdio, and shreds the file "
+                 "when the child exits.")
         return 2
 
     env = dict(os.environ)
@@ -614,6 +630,27 @@ def cmd_secret_exec(args) -> int:
             return 0  # unreachable: execvpe replaces the process or raises.
                       # Never fall through to the capturing path below — that
                       # would run the command a second time.
+
+        if stream_mode:
+            # Fork rather than exec, and do NOT capture: the child inherits this process's
+            # stdio, so an MCP stdio server streams exactly as it does under --exec. This
+            # process stays alive for one reason — the `finally` that shreds the temp files
+            # once the child exits.
+            #
+            # The honest limit, stated here and in --help rather than implied away: a
+            # SIGKILLed parent runs no cleanup, so the 0600 file survives in the system temp
+            # directory until it is removed or the machine reboots. That is strictly better
+            # than the alternative it replaces (every persona re-implementing the same trap
+            # in shell, with the same hole) but it is not a guarantee, and describing it as
+            # one would fail silently at the moment something has already gone wrong.
+            #
+            # Output is NOT redacted, for the same reason as --exec: nothing is captured.
+            try:
+                proc = subprocess.run(command, env=env)
+            except FileNotFoundError:
+                util.err(f"command not found: {command[0]}")
+                return 127
+            return proc.returncode
 
         try:
             proc = subprocess.run(command, env=env, text=True,
