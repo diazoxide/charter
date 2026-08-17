@@ -81,3 +81,44 @@ class TestBridgeGuidanceSurvives(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheGeneratorCannotHangOrPromptInvisibly(unittest.TestCase):
+    """Two ways the same command stalls with nothing on screen.
+
+    npm's documentation: a prompt "can be suppressed by providing either --yes or --no.
+    When standard input is not a TTY or a CI environment is detected, --yes is assumed."
+    An agent is therefore fine and a HUMAN is not — run it in a terminal against a cold
+    cache and npx asks a question, charter has captured the pipe it was printed to, and
+    the operator sees an unexplained pause while something waits on an answer they were
+    never shown.
+
+    And the call had no timeout at all, on the one operation in this module that reaches
+    the network. `util.run`'s docstring records what that costs: "every un-timeouted path
+    could hang indefinitely: a 1Password session needing re-auth stalled the SessionStart
+    preflight"."""
+
+    def test_the_prompt_is_suppressed(self):
+        self.assertIn("--yes", browser.install_argv("0.1.18"))
+
+    def test_the_package_spec_still_carries_the_version(self):
+        argv = browser.install_argv("9.9.9")
+        self.assertIn("@playwright/cli@9.9.9", argv)
+        self.assertEqual(argv[0], "npx")
+
+    def test_the_run_is_bounded(self):
+        self.assertTrue(0 < browser.INSTALL_TIMEOUT <= 600)
+
+    def test_a_timeout_is_reported_as_a_failure_not_a_traceback(self):
+        """The caller prints the generator's own words (ADR 0009). A TimeoutExpired
+        reaching the user as a traceback would be charter failing to classify its own
+        failure."""
+        from charter import util
+        real = util.run
+        util.run = lambda *a, **k: (_ for _ in ()).throw(
+            util.ProcTimeout("npx", browser.INSTALL_TIMEOUT))
+        self.addCleanup(setattr, util, "run", real)
+        code, out = browser.install(Path("."), "0.1.18")
+        self.assertNotEqual(code, 0)
+        self.assertIn("did not finish", out)
+        self.assertIn("npx", out)
