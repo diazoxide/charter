@@ -5,13 +5,14 @@
 [![Tests](https://github.com/diazoxide/charter/actions/workflows/test.yml/badge.svg)](https://github.com/diazoxide/charter/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**charter** is a control plane for Claude Code agents working across many repos on
-GitHub or GitLab: durable **personas**, isolated per-task **workspaces**, and a
-credential **vault** the model never reads from.
+**charter** is a control plane for coding agents working across many repos on GitHub or
+GitLab: durable **personas**, isolated per-task **workspaces**, and a credential **vault**
+the model never reads from. It runs inside **Claude Code, opencode and Codex**, enforcing
+the same rules in each.
 
 ![The charter status line: the active workspace and its open todos, four cloned repos with their branches, dirty and unpushed markers, CI status and open pull requests, then the personas with their vault and memory state.](docs/assets/statusline.svg)
 
-That is the Claude Code status line, redrawn from disk every turn — the task you're on,
+That is the status line under Claude Code, redrawn from disk every turn — the task you're on,
 the repos it owns and what branch each is sitting on, which are dirty or unpushed, CI and
 open PRs, and the roles you can hand work to. No git subprocess and no network on the
 render path. It is generated, not mocked: `docs/assets/` holds the script that produced it.
@@ -22,7 +23,7 @@ render path. It is generated, not mocked: `docs/assets/` holds the script that p
 
 ```bash
 uv tool install charter-cp                        # the CLI  — one per machine, for your terminal
-claude plugin marketplace add diazoxide/charter   # the plugin — one per project, and it carries the version
+claude plugin marketplace add diazoxide/charter   # Claude Code's plugin — one per project, and it carries the version
 claude plugin install charter@charter
 
 mkdir my-control-plane && cd my-control-plane
@@ -55,6 +56,37 @@ plugin's hooks inert, and the plugin ships no Python of its own — every hook i
 shells out to the CLI. The plugin loads on the **next** session, so restart after
 installing it. Full install notes, alternatives to `uv`, and a prompt you can paste into
 Claude Code to do all of it: **[docs/install.md](docs/install.md)**.
+
+## You use Claude Code. A teammate uses opencode. CI runs Codex.
+
+Same repos, same rules — or three sets of habits that drift until nobody knows which
+guard is actually running. charter runs inside all three and enforces the same invariants
+in each: the plane-root guard, the one-credential rule, the secret-leak check, and the
+persona's declared tools.
+
+```bash
+charter harness list          # every harness, what it can't carry, and which one you're in
+charter harness install codex # Codex only — see below
+```
+
+`charter init` writes each harness's wiring into the plane, and `charter clone` /
+`charter worktree add` arm every tree as it is created, because a session starts in a
+clone and not in the plane root. Nothing to install per harness, with one exception.
+
+**What differs is not what charter enforces — it is what each harness lets charter
+offer**, and `charter doctor` prints the gap rather than leaving you to find it:
+
+| | wiring | what it cannot carry |
+| --- | --- | --- |
+| Claude Code | the plugin, plus `.claude/settings.json` | — |
+| opencode | generated into every work tree by `charter init` | no status bar (`/charter` renders it on demand); no per-turn prompt hook, so mid-session notes ride tool output |
+| Codex | **opt-in**: `charter harness install codex` | no command-pattern permissions, so `charter guard ask` rules stay in charter's own hook |
+
+Codex is the exception because it has no project-level config: its hooks live in
+`~/.codex/config.toml` and arming them affects **every repo on the machine**. `charter
+init` will not do that behind your back, and Codex trusts hooks by hash — so the block
+charter writes stays inert until you approve it. Why the boundary sits where it does:
+**[docs/adr/0015-the-boundary-moves-with-the-harness.md](docs/adr/0015-the-boundary-moves-with-the-harness.md)**.
 
 ## Why charter
 

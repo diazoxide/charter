@@ -88,6 +88,34 @@ first. The CLI works standalone for everything else (`charter clone`, `charter p
 show`, …) with the plugin absent; install the plugin too if you want charter actively
 driving a live session, not just scripted from a terminal.
 
+## 3. opencode and Codex
+
+Step 2 is Claude Code's. The other two harnesses charter supports need less, or need one
+deliberate command.
+
+**opencode: nothing.** `charter init` writes the plugin, the session context and a
+`/charter` command into the plane, and `charter clone` / `charter worktree add` write them
+into every tree as it is created — because opencode reads its plugin from the session's
+own directory and does **not** search parent directories, so a session started in a clone
+would otherwise be unguarded. `charter doctor`'s `harness trees` row names any tree that
+is missing them; `charter reinit` backfills.
+
+**Codex: one opt-in command.**
+
+```bash
+charter harness install codex
+```
+
+`init` will not do this for you. Codex has no project-level config — its hooks live in
+`~/.codex/config.toml`, so arming them affects **every repo on this machine**, not just
+the plane. Charter's guards stay silent outside a control plane, but the hook processes do
+start. Running the command is the consent.
+
+Codex also trusts hooks by hash, so what charter writes is **inert until you approve it**:
+start Codex once, accept the prompt, and `charter doctor` will confirm it. Charter appends
+whole tables or nothing — a config already declaring `hooks` or `shell_environment_policy`
+is reported and left untouched, and an unparseable one is never repaired.
+
 ## First control plane
 
 ```bash
