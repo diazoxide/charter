@@ -84,10 +84,16 @@ class TestDoctorSaysSo(NestedCase):
 
     def test_the_hint_says_commands_here_do_not_reach_the_outer_plane(self):
         """The incident was a `vault add` that reported success into the wrong plane, so
-        the hint has to name the consequence, not just the geometry."""
+        the hint has to name the consequence, not just the geometry.
+
+        Asserted on the consequence rather than one phrasing of it: `find_root` now hops
+        outward, so reaching this state at all means $CHARTER_ROOT refused the hop, and the
+        hint was rewritten to say so. What must survive a rewrite is that it names what
+        goes wrong."""
         config.ROOT = self.nest()
         hint = doctor.check_nested_plane().hint or ""
-        self.assertIn("outer plane never sees", hint)
+        self.assertIn("never sees", hint)
+        self.assertIn("CHARTER_ROOT", hint)
 
     def test_an_ordinary_plane_is_ok(self):
         self.assertEqual(doctor.check_nested_plane().status, OK)

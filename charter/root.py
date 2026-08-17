@@ -49,7 +49,7 @@ def find_root(start: Path | None = None) -> Path:
     cur = (start or Path.cwd()).resolve()
     for d in (cur, *cur.parents):
         if (d / MARKER).is_file():      # is_file, not exists: a directory is not a marker
-            return _plane_of(d)
+            return _outermost(_plane_of(d))
 
     # Nothing above us. Before giving up, ask whether we are standing in a linked
     # WORKTREE whose plane lives in the repo it was cut from.
@@ -71,10 +71,76 @@ def find_root(start: Path | None = None) -> Path:
             continue
         for m in (main, *main.parents):
             if (m / MARKER).is_file():
-                return _plane_of(m)
+                return _outermost(_plane_of(m))
         break                            # its main tree has no plane either — stop here
 
     raise ControlPlaneNotFound(_explain(f"in {cur} or any parent"))
+
+
+def _outermost(marked: Path) -> Path:
+    """Follow ``workspaces/`` nesting outward until no plane encloses this one.
+
+    The innermost marker is the git/cargo/npm contract and is right almost everywhere. It
+    is wrong for the one structure charter builds itself: `charter clone` puts clones at
+    ``workspaces/<ws>/<repo>``, and a cloned repo may carry its own tracked
+    ``charter.toml``. Standing in one, the active plane silently became a different plane —
+    different personas, no vault, memory written where nobody chose (#200).
+
+    #140 detected that and left resolution alone, reasoning the inner plane is sometimes
+    the one you mean and naming charter's own dogfooding as the case. Measured against that
+    case, the inner plane carries no vault, a subset of the workspaces, and *tracked*
+    persona files, so a memory written there lands in the cloned repo's git index instead
+    of the operator's plane. The justification did not survive its own example.
+
+    **Not "outermost marker wins".** The hop is allowed only through an enclosing plane's
+    own ``workspaces/`` — `enclosing_plane`'s existing test. A bare walk to the topmost
+    marker would let one stray ``charter.toml`` in ``~`` swallow every plane beneath it,
+    turning a narrow mistake into a total one.
+
+    Loops until the answer stops moving, so a plane inside a plane inside a plane lands on
+    the one actually holding the vault rather than in the middle. ``seen`` guards against a
+    symlink arrangement that could otherwise cycle.
+
+    ``$CHARTER_ROOT`` never reaches here — it wins outright in :func:`find_root`, and is
+    the escape hatch for anyone who genuinely means the inner plane.
+    """
+    seen = {marked}
+    cur = marked
+    while True:
+        try:
+            outer = enclosing_plane(cur)
+        except OSError:
+            return cur
+        if outer is None or outer in seen:
+            return cur
+        seen.add(outer)
+        cur = outer
+
+
+def standing_in_nested_plane(start: Path | None = None) -> Path | None:
+    """The nested plane the caller is standing in, when :func:`find_root` redirected past
+    it — else ``None``.
+
+    Without this the redirect is invisible. Once `find_root` answers with the outer plane,
+    ``enclosing_plane(config.ROOT)`` is ``None`` *by construction* (the outer is not
+    nested), so every surface that used to name the nesting would fall silent and charter
+    would be quietly acting on a plane the operator cannot see it choose. ADR 0013's second
+    rule applies to charter's own corrections too.
+
+    Never raises: it is read on the status line's render path.
+    """
+    try:
+        cur = (start or Path.cwd()).resolve()
+    except (OSError, RuntimeError):
+        return None
+    try:
+        for d in (cur, *cur.parents):
+            if (d / MARKER).is_file():
+                inner = _plane_of(d)
+                return inner if enclosing_plane(inner) is not None else None
+    except OSError:
+        return None
+    return None
 
 
 def main_worktree_of(tree: Path) -> Path | None:

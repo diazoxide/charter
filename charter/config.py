@@ -174,11 +174,18 @@ def _repoint_vault_registry(legacy_dir: Path, new_dir: Path) -> None:
               file=sys.stderr)
 
 
-def derive(root: Path) -> dict:
+def derive(root: Path, start: Path | None = None) -> dict:
     """Every setting that follows from *root*, as ``{NAME: value}``.
 
     The single definition. :func:`use` applies it; the module bootstraps itself with it
     at import; the test harness calls :func:`use` instead of copying any of it.
+
+    *start* is the directory the plane was located FROM, and matters only for
+    ``NESTED_ORIGIN`` — "which plane am I standing in" is a fact about a directory, not
+    about the root that directory resolved to. ``None`` means the process cwd, which is the
+    truth at import; :func:`use` passes *root* instead so the test harness is not reading
+    the developer's actual working directory (it was: the suite ran from a worktree inside
+    a nested clone and picked up the real one).
     """
     root = Path(root)
     d: dict = {}
@@ -191,6 +198,19 @@ def derive(root: Path) -> dict:
     #: False when no ``charter.toml`` was found. Commands that need a control plane check
     #: this and fail with a clear message; ``--version`` and ``init`` do not.
     d["HAS_CONTROL_PLANE"] = (root / _root.MARKER).is_file()
+
+    #: The nested plane the caller is STANDING IN, when one encloses it — else ``None``.
+    #:
+    #: `find_root` hops outward through ``workspaces/`` so the plane holding the vault
+    #: wins, which means ``enclosing_plane(ROOT)`` is ``None`` by construction whenever the
+    #: hop fired. Without recording the origin, charter would silently act on a plane the
+    #: operator cannot see it choose. Three states, and each reads differently:
+    #:
+    #: * ``None`` — no nesting. Say nothing.
+    #: * ``!= ROOT`` — the hop fired: standing in a plane, acting on the one above it.
+    #: * ``== ROOT`` — ``$CHARTER_ROOT`` pinned this session INSIDE the nested plane, so
+    #:   the hop was overridden and the hazard #140 described is live.
+    d["NESTED_ORIGIN"] = _root.standing_in_nested_plane(start)
 
     #: Parsed once. ``config`` is imported by every command (including ``charter
     #: --version``), so a malformed ``charter.toml`` or a too-new schema must never crash
@@ -304,7 +324,9 @@ def use(root) -> dict:
     the derivation, and restores by handing the snapshot to :func:`restore`.
     """
     previous = {k: globals().get(k) for k in DERIVED}
-    globals().update(derive(root))
+    # `start=root`, never the process cwd: a test that redirected ROOT into a tmp dir must
+    # not have `NESTED_ORIGIN` answered from wherever the suite happens to be running.
+    globals().update(derive(root, start=root))
     return previous
 
 

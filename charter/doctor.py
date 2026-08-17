@@ -615,13 +615,25 @@ def check_nested_plane() -> Result:
         return Result(name, WARN, detail=f"not checked ({e})",
                       hint=_NOT_CHECKED_HINT)
     if outer is None:
+        # Standing in a nested clone no longer reaches here: `find_root` hops outward
+        # through `workspaces/`, so ROOT is already the outer plane and there is nothing to
+        # warn about. Say which plane answered anyway — the hop is a correction charter
+        # made on the operator's behalf, and ADR 0013's second rule covers charter's own
+        # corrections too.
+        origin = getattr(_config, "NESTED_ORIGIN", None)
+        if origin is not None and origin != _config.ROOT:
+            return Result(name, OK,
+                          detail=f"standing in {util.short_path(origin)}, acting on "
+                                 f"{util.short_path(_config.ROOT)}")
         return Result(name, OK, detail="not nested")
+    # Reached only when $CHARTER_ROOT refused the hop, which is the one state where the
+    # inner plane really does take the writes.
     return Result(name, WARN,
-                  detail=f"this plane sits inside {outer}'s workspaces/",
-                  hint=("Commands here act on THIS plane — its vaults, its workspace "
-                        "pointers — and the outer plane never sees them. That is often "
-                        "not what you meant: a clone ships `charter.toml`, so it is a "
-                        f"plane too.  → to act on the outer one: cd {outer}"))
+                  detail=f"pinned inside {util.short_path(outer)}'s workspaces/",
+                  hint=("$CHARTER_ROOT points at a plane nested in another one, so vaults "
+                        "and workspace pointers go to the inner plane and the outer never "
+                        "sees them. Without the override charter would resolve to "
+                        f"{util.short_path(outer)}.  → unset CHARTER_ROOT to use it"))
 
 
 def check_workspace_clones() -> Result:
