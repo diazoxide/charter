@@ -276,6 +276,10 @@ def cmd_clone(args) -> int:
         if res["status"] == "exists":
             util.info(f"{r['name']}: already cloned in '{ws}'")
         elif res["status"] == "ok":
+            # Armed the moment it exists. A clone is where sessions start, and opencode
+            # reads its plugin from the session's own directory — so a tree that gets its
+            # wiring "later" is a tree whose first session ran unguarded.
+            wire_work_tree(dest)
             util.ok(f"{r['name']} → {dest.relative_to(config.ROOT)} "
                     f"({_clone_announcement(r)} via {res['forge'].cli}, HTTPS)")
         else:
@@ -903,6 +907,45 @@ def ensure_env_var(root: Path, key: str, value: str) -> tuple[str, Path | None]:
     return "created", p
 
 
+def wire_work_tree(tree: Path) -> list[tuple[str, str]]:
+    """Arm every registered harness inside one clone or worktree.
+
+    Called the moment a tree comes into existence, because that is where sessions start:
+    opencode reads its plugin from the session's own directory and does not walk upwards,
+    so a plane-root-only shim is inert in every session that matters (ADR 0008 — the plane
+    root is not a work tree). Nothing here names a harness; a harness with no per-tree
+    wiring returns nothing and costs one call.
+    """
+    from .harness import registry
+
+    # Never bring the tree into being. This ran on a clone path before the clone existed
+    # and left `a/`, `r0/`… wherever the process happened to be standing — a writer that
+    # creates its own target cannot tell a real tree from a typo.
+    if not Path(tree).is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for h in registry.all():
+        out.extend(h.wire_tree(Path(tree)))
+    return out
+
+
+def _backfill_work_trees() -> list[str]:
+    """Arm every EXISTING tree. Labels of the ones that were missing it.
+
+    `reinit`'s job: a plane cloned before this shipped — or one whose worktrees were made
+    by an older charter — has trees that look wired because `init` reported writing a
+    shim, and are not. `doctor` names them; this is the command its hint points at.
+    """
+    from . import workspace as _ws
+
+    written: list[str] = []
+    for tree in _ws.all_trees():
+        for status, label in wire_work_tree(tree):
+            if status == "created":
+                written.append(label)
+    return written
+
+
 def _wire_harnesses(root: Path) -> list[tuple[str, str]]:
     """Write every REGISTERED harness's wiring under *root*, IF ABSENT.
 
@@ -1278,6 +1321,7 @@ def cmd_reinit(args) -> int:
     for status, label in _wire_harnesses(config.ROOT):
         if status == "created":
             created.append(label)
+    created.extend(_backfill_work_trees())
 
     gh_status, gh_detail = _ensure_guard_hook(config.ROOT)
     if gh_status == "created":

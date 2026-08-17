@@ -60,3 +60,29 @@ class Harness:
         name.
         """
         return []
+
+    def wire_tree(self, tree: Path) -> list[tuple[str, str]]:
+        """Write what this harness needs inside a **work tree** — a clone or a worktree.
+
+        Separate from :meth:`wire` because the plane is not where sessions start. ADR
+        0008 says the plane root is not a work tree, and opencode does not search parent
+        directories for plugins (checked by putting one in a parent and booting from a
+        nested directory, where it never loaded) — so a harness whose wiring is read from
+        the session's own directory has to be written into every tree, or it is inert
+        exactly where it matters.
+
+        Defaults to nothing, because most harnesses have no business writing into
+        somebody's repo: Claude Code's plugin is installed once for the machine and its
+        guard wiring is the plane's own file, and Codex's config is machine-wide.
+        """
+        return []
+
+    def wire_tree_missing(self, tree: Path) -> bool:
+        """Is this harness's per-tree wiring absent from *tree*?
+
+        Asked by `doctor`. A harness that writes nothing per tree can never be missing
+        it, so the default is ``False`` — "nothing to write" and "written" are the same
+        state here, and reporting a harness that has no per-tree wiring as unwired would
+        be a permanent false alarm.
+        """
+        return False

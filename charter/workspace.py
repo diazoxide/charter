@@ -462,6 +462,31 @@ def clones(name: str) -> list[Path]:
     return sorted(d for d in wd.iterdir() if is_clone(d))
 
 
+def all_trees() -> list[Path]:
+    """Every tree a session can start in, across every workspace — clones and worktrees.
+
+    One list, because two callers ask this question for the same reason: `reinit` writes
+    each harness's per-tree wiring into them, and `doctor` reports the ones missing it.
+    Answering it twice is how a writer and its check drift until the check passes over
+    trees the writer never visited.
+
+    Never raises. A plane mid-rename or an unreadable directory yields a shorter list —
+    this feeds a preflight row and an idempotent backfill, neither of which may die.
+    """
+    from . import worktree as _wt
+
+    trees: list[Path] = []
+    try:
+        for ws in sorted(d.name for d in Path(config.WORKSPACES_DIR).iterdir()
+                         if d.is_dir()):
+            for clone in clones(ws):
+                trees.append(clone)
+                trees.extend(_wt.dirs_for(ws, clone.name))
+    except Exception:
+        return trees
+    return trees
+
+
 def repo_trees(ws: str) -> list[Path]:
     """Every repo this workspace works in — its clones, and nothing else.
 

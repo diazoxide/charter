@@ -13,6 +13,7 @@ to read. Decisions stay in Python, where they are tested.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from .base import Deficit, Harness
@@ -127,6 +128,46 @@ def ensure_shim(root: Path) -> str:
     return "created"
 
 
+def _exclude_locally(tree: Path) -> None:
+    """Keep charter's generated plugin out of the repo's ``git status``, locally.
+
+    ``.git/info/exclude`` rather than ``.gitignore``: the ignore file is the repo owners'
+    to maintain and is committed, so charter editing it would push its own housekeeping
+    into their history. The exclude file is untracked and per-checkout — the right place
+    for "this checkout has a tool's file in it".
+
+    **Git is asked where that file is, never told.** A linked worktree's ``.git`` is a
+    *file* pointing into the clone, so testing it as a directory skipped the exclude for
+    exactly the trees charter creates most — leaving the generated plugin as an untracked
+    change, which made `charter worktree remove` refuse to remove a piece that had done
+    nothing. ``--git-common-dir`` resolves to the clone's own git directory from a
+    worktree and from the clone alike, so one exclude covers a clone and every worktree
+    over it.
+
+    Best-effort and silent. A tree that is not a checkout, a git that is missing, or a
+    directory charter cannot write to still gets the plugin: failing to hide a file is
+    not a reason to leave the harness unwired.
+    """
+    try:
+        proc = subprocess.run(["git", "-C", str(tree), "rev-parse", "--git-common-dir"],
+                              capture_output=True, text=True, timeout=10)
+        if proc.returncode != 0:
+            return
+        common = Path((proc.stdout or "").strip())
+        if not common.is_absolute():
+            common = Path(tree) / common
+        info = common / "info"
+        info.mkdir(parents=True, exist_ok=True)
+        p = info / "exclude"
+        raw = p.read_text() if p.exists() else ""
+        if ".opencode/" in raw:
+            return
+        sep = "" if (not raw or raw.endswith("\n")) else "\n"
+        p.write_text(f"{raw}{sep}# charter's generated opencode plugin\n.opencode/\n")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+
+
 class OpenCodeHarness(Harness):
     name = NAME
 
@@ -151,3 +192,17 @@ class OpenCodeHarness(Harness):
 
     def wire(self, root: Path) -> list[tuple[str, str]]:
         return [(ensure_shim(root), str(SHIM_PATH))]
+
+    def wire_tree(self, tree: Path) -> list[tuple[str, str]]:
+        """The plugin, plus a local exclude so it stays out of the repo's `git status`.
+
+        opencode reads plugins from the session's own directory and **does not walk
+        upwards** — so this, not :meth:`wire`, is what actually arms charter where work
+        happens. The plane-root copy stays for the rare session started there.
+        """
+        status = ensure_shim(tree)
+        _exclude_locally(tree)
+        return [(status, f"{tree.name}/{SHIM_PATH}")]
+
+    def wire_tree_missing(self, tree: Path) -> bool:
+        return not (Path(tree) / SHIM_PATH).is_file()

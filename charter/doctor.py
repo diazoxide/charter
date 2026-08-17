@@ -620,6 +620,41 @@ def check_harness() -> Result:
     return Result(name, OK, detail=f"{current} — {len(gaps)} capability ceiling{plural}\n{listed}")
 
 
+def _work_trees() -> list[Path]:
+    """Every tree a session starts in. Thin on purpose — `workspace.all_trees` is the
+    single answer, shared with the backfill that writes the wiring this row checks."""
+    from . import config as _config, workspace as _ws
+
+    return _ws.all_trees() if _config.HAS_CONTROL_PLANE else []
+
+
+def check_harness_trees() -> Result:
+    """Is every harness armed where sessions START, not just where the plane lives?
+
+    opencode reads plugins from the session's own directory and does not walk upwards —
+    checked by putting one in a parent and booting from a nested directory, where it never
+    loaded. Work happens in a clone or a worktree (ADR 0008), so a plane-root-only shim is
+    inert in every session that matters while `init` reports it as written.
+
+    That is the shape this repo keeps paying for (#177, #197), and it shipped here once
+    already — which is the argument for this check rather than for trusting the writer.
+    """
+    from .harness import registry as _harness
+
+    name = "harness trees"
+    trees = _work_trees()
+    if not trees:
+        return Result(name, OK, detail="no work trees yet")
+    bare = [t for t in trees if any(h.wire_tree_missing(t) for h in _harness.all())]
+    if not bare:
+        return Result(name, OK, detail=f"{len(trees)} tree(s) wired")
+    listed = ", ".join(t.name for t in bare[:5]) + ("…" if len(bare) > 5 else "")
+    return Result(name, WARN,
+                  detail=f"{len(bare)} of {len(trees)} tree(s) unwired: {listed}",
+                  hint="A session started there gets no charter guards — the plugin is "
+                       "read from the session's own directory. → charter reinit")
+
+
 def check_nested_plane() -> Result:
     """Is the plane charter resolved sitting inside ANOTHER plane's ``workspaces/``? (#140)
 
@@ -1435,7 +1470,8 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_harness(), check_guard_wired(), check_nested_plane(),
+                check_plane_root(), check_harness(), check_harness_trees(),
+                check_guard_wired(), check_nested_plane(),
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),

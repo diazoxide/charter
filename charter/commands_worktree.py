@@ -135,6 +135,11 @@ def cmd_worktree_add(args) -> int:
         util.err(f"git worktree add failed:\n{proc.stderr.strip()}")
         return 1
 
+    # Same reason as `clone`: this directory is where a session will start, and opencode
+    # reads its plugin from there rather than from any parent.
+    from . import commands as _commands
+    _commands.wire_work_tree(path)
+
     # The worktree is the claim; this only records who took it, because git will not know
     # that until a commit lands (ADR 0011). Best-effort by construction — a claim that
     # git granted must not be undone by a log that could not be written.
