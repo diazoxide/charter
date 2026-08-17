@@ -108,8 +108,24 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--all", action="store_true", help="Detail every workspace.")
     st.set_defaults(func=commands.cmd_status)
 
-    doc = sub.add_parser("docs", help="Regenerate docs/topology.md from the inventory.")
+    doc = sub.add_parser("docs",
+                         help="Regenerate this plane's docs/topology.md — or read "
+                              "charter's own documentation (`show`, `list`).")
+    dsub = doc.add_subparsers(dest="docs_cmd")
+    # Bare `charter docs` still generates. It did that long before it grew subcommands,
+    # and Makefiles in the wild call it that way, so making the group require a
+    # subcommand would break callers that never saw the change.
     doc.set_defaults(func=commands.cmd_docs)
+    dgen = dsub.add_parser("generate", help="Regenerate docs/topology.md from the inventory.")
+    dgen.set_defaults(func=commands.cmd_docs)
+    dls = dsub.add_parser("list", help="List charter's own documentation topics.")
+    dls.set_defaults(func=commands.cmd_docs_list)
+    dsh = dsub.add_parser("show",
+                          help="Print one of charter's own documentation pages — served "
+                               "by the install that implements it, so it cannot be a "
+                               "version behind the CLI reading it.")
+    dsh.add_argument("topic", help="e.g. secrets, personas, git-policy (see `docs list`).")
+    dsh.set_defaults(func=commands.cmd_docs_show)
 
     sv = sub.add_parser("save",
                         help="Commit + push the control plane's own changes via glab (HTTPS token — no SSH pain).")

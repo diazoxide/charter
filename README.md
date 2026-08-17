@@ -185,6 +185,14 @@ not encryption at rest. The vault is not a password manager.
 
 ## Learn more
 
+Every page below is also readable from the CLI, so an agent working in a control plane
+does not need a vendored copy that can drift from the binary it is describing:
+
+```bash
+charter docs list             # the topics
+charter docs show secrets     # the page, from the install that implements it
+```
+
 - [docs/install.md](docs/install.md) — both artifacts, alternatives to `uv`, and what
   `charter init` writes before you let it.
 - [docs/control-plane.md](docs/control-plane.md) — `charter.toml` in full: every key, a

@@ -39,3 +39,18 @@ charter = "charter.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["charter"]
+
+# `charter docs show <topic>` serves these, so they must travel with the code: the wheel
+# ships `charter/`, and `docs/` is outside it. Listed page by page rather than as a whole
+# directory so `adr/`, `audits/` and `superpowers/` — design record and working notes —
+# stay out of every user's site-packages. Adding a page here is not optional:
+# tests/test_docs_show.py fails on a `docs/*.md` that is not force-included, because the
+# gap is invisible from a checkout, where the fallback reads the repo and looks fine.
+[tool.hatch.build.targets.wheel.force-include]
+"docs/control-plane.md" = "charter/_docs/control-plane.md"
+"docs/forges.md" = "charter/_docs/forges.md"
+"docs/git-policy.md" = "charter/_docs/git-policy.md"
+"docs/install.md" = "charter/_docs/install.md"
+"docs/mcp.md" = "charter/_docs/mcp.md"
+"docs/personas.md" = "charter/_docs/personas.md"
+"docs/secrets.md" = "charter/_docs/secrets.md"
