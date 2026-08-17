@@ -151,3 +151,39 @@ class TestItIsScopedToAPlane(PlaneRootCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheSeparatorIsNotProofOfARestore(PlaneRootCase):
+    """`--` separates refs from PATHS, and only what follows it is a path.
+
+    Treating the token itself as proof of a file restore let two real branch moves through.
+    Verified against git, which answers "Switched to branch 'other'" for the first and
+    "Switched to a new branch 'created'" for the second:
+
+        git checkout <branch> --        switches
+        git checkout -b <new> --        creates and switches
+
+    The guard read both as restores and allowed them in the plane root — the exact move it
+    exists to refuse, reachable by appending two characters.
+    """
+
+    def test_a_bare_trailing_separator_does_not_excuse_a_switch(self):
+        self.assertEqual(_decision(self.run_cmd("git checkout feature --")), "deny")
+
+    def test_a_bare_trailing_separator_does_not_excuse_a_creation(self):
+        self.assertEqual(_decision(self.run_cmd("git checkout -b created --")), "deny")
+
+    def test_switch_with_a_trailing_separator_is_caught_too(self):
+        self.assertEqual(_decision(self.run_cmd("git switch -c created --")), "deny")
+
+    def test_restoring_a_path_is_still_allowed(self):
+        """The case the skip was written for: paths follow, so HEAD does not move."""
+        self.assertNotEqual(_decision(self.run_cmd("git checkout -- README")), "deny")
+
+    def test_restoring_a_path_from_another_branch_is_still_allowed(self):
+        """`git checkout <tree-ish> -- <paths>` reads from that tree and leaves HEAD alone —
+        confirmed against git."""
+        self.assertNotEqual(_decision(self.run_cmd("git checkout feature -- README")), "deny")
+
+    def test_the_remedy_still_runs_with_a_separator(self):
+        self.assertNotEqual(_decision(self.run_cmd("git checkout main --")), "deny")

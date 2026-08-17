@@ -511,9 +511,21 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
             continue
 
         post = rest[rest.index(sub) + 1:]
-        # `git checkout -- <path>` restores a file and never moves HEAD.
+        # `--` separates refs from PATHS, and only what follows it is a path. Treating the
+        # token itself as proof of a file restore let two real branch moves through:
+        # `git checkout <branch> --` and `git checkout -b <new> --` both switch — verified
+        # against git, which answers "Switched to branch" for each — while the guard read
+        # them as restores and allowed them in the plane root.
+        #
+        # So the test is what comes AFTER the separator, not whether it is present:
+        # something after it means paths, and `git checkout <tree-ish> -- <paths>` leaves
+        # HEAD where it was. Nothing after it means the separator is decoration on a branch
+        # move, and the operands before it still count.
         if "--" in post:
-            continue
+            cut = post.index("--")
+            if post[cut + 1:]:
+                continue                    # paths follow: a restore, HEAD does not move
+            post = post[:cut]               # a trailing bare `--` still switches
         creating = any(a in _BRANCH_CREATORS for a in post)
         # A bare `-` is a REF (the previous branch), not a flag — and `git checkout -` is
         # what makes a six-switch session cheap to repeat, so reading it as a flag would
