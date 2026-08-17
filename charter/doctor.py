@@ -1089,6 +1089,118 @@ def check_plugin_skew() -> Result:
                          f"<project|user, see: claude plugin list>`")
 
 
+#: Launcher basenames charter itself removed, so it can name the replacement instead of
+#: merely reporting the absence. `bin/edm` and its `bin/charter` forwarding shim went with
+#: the rename; a `charter` on PATH is what took over from both.
+_REMOVED_SHIMS = ("edm", "charter")
+
+
+def _claude_json() -> Path:
+    """Claude Code's user-level config — where `mcpServers` registrations live, both the
+    user-scoped ones and the per-project ones under `projects`."""
+    return Path.home() / ".claude.json"
+
+
+def _registered_launchers(doc: dict) -> list[tuple[str, str]]:
+    """``(server name, command)`` for every **stdio** MCP server the host has registered.
+
+    Both scopes, because checking only the top level would miss most real registrations —
+    project-scoped servers are the common case. Every container is type-checked on the way
+    down: `~/.claude.json` is a large host-owned file (124KB of caches and counters on the
+    machine that reported #197) whose shape charter does not control, and one odd value
+    must not take the whole preflight down.
+    """
+    scopes = [doc.get("mcpServers")]
+    projects = doc.get("projects")
+    if isinstance(projects, dict):
+        for body in projects.values():
+            if isinstance(body, dict):
+                scopes.append(body.get("mcpServers"))
+    out: list[tuple[str, str]] = []
+    for servers in scopes:
+        if not isinstance(servers, dict):
+            continue
+        for name, entry in servers.items():
+            # An SSE/HTTP server has a `url` and no `command`. Absence of a launcher is
+            # not a missing launcher.
+            if isinstance(entry, dict) and isinstance(entry.get("command"), str):
+                out.append((str(name), entry["command"]))
+    return out
+
+
+def _launcher_missing(command: str) -> bool:
+    """True only when the path is **known** absent.
+
+    An unreadable parent directory makes the answer unknown rather than negative, and
+    `pathlib` reports that differently per platform — it raises EACCES on Linux and returns
+    False on macOS, which has taken this repo's CI red twice. An ambiguous answer must
+    never become a FAIL, so uncertainty resolves to "not missing".
+    """
+    try:
+        return not Path(command).exists()
+    except OSError:
+        return False
+
+
+def check_mcp_launchers() -> Result:
+    """An MCP server whose launcher does not exist can never start — and says nothing.
+
+    This is #197. The `edm`->`charter` rename removed `bin/edm` and its forwarding shim,
+    and every MCP server registered as ``bin/edm secret exec <vault> … --exec -- <server>``
+    began failing with ENOENT. Claude Code does not surface that: the tools are simply
+    absent. A persona lost its whole toolset mid-investigation and rerouted through
+    cloudflared + Kibana before anyone worked out why. Nothing in charter read
+    `~/.claude.json` before this, so the breakage was invisible everywhere it happened.
+
+    **Absolute paths only.** A bare `npx` resolves against the PATH of whoever launches the
+    server, which is not the PATH charter runs under; calling that missing would be charter
+    asserting something about an environment it cannot see — the guess ADR 0009 forbids,
+    and how `doctor` cried wolf in 0.31.1 and #177. An absolute path that does not exist is
+    a fact, and it is the fact that classifies every instance of this failure, not just the
+    one that was reported.
+
+    **FAIL, not WARN**, for the reason `check_plugin_skew` chose it: `cmd_doctor` exits
+    non-zero only on FAIL, and that exit code is what makes the SessionStart wrapper print
+    anything at all. A WARN would reproduce the defect it diagnoses — a real breakage that
+    reached nobody.
+    """
+    path = _claude_json()
+    try:
+        doc = json.loads(path.read_text())
+    except FileNotFoundError:
+        # A machine that never registered an MCP server is healthy, not unknown.
+        return Result("mcp", OK, detail="no MCP servers registered")
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        return Result("mcp", WARN, detail=f"~/.claude.json unreadable ({_first_line(str(exc))})",
+                      hint=_NOT_CHECKED_HINT)
+    if not isinstance(doc, dict):
+        return Result("mcp", WARN, detail="~/.claude.json is not an object",
+                      hint=_NOT_CHECKED_HINT)
+
+    checkable = [(n, c) for n, c in _registered_launchers(doc) if os.path.isabs(c)]
+    broken = [(n, c) for n, c in checkable if _launcher_missing(c)]
+    if not broken:
+        return Result("mcp", OK, detail=f"{len(checkable)} launcher(s) resolve")
+
+    hints = []
+    for name, command in broken:
+        if Path(command).name in _REMOVED_SHIMS:
+            # Charter removed this one, so it knows what replaced it. Naming the
+            # replacement turns a diagnosis into a one-line fix.
+            hints.append(f"{name}: {command} is gone (the edm→charter rename removed that "
+                         f"shim) — set this server's command to `charter`, leaving its args "
+                         f"unchanged")
+        else:
+            # No claim about WHY it went missing: charter did not remove it and does not
+            # know. It reports the fact and the two ways out.
+            hints.append(f"{name}: {command} does not exist, so the server cannot start — "
+                         f"repoint its command or remove the registration")
+    return Result("mcp", FAIL,
+                  detail=f"{len(broken)} of {len(checkable)} launcher(s) missing: "
+                         + ", ".join(n for n, _ in broken),
+                  hint="; ".join(hints))
+
+
 #: Seconds a single preflight check may take before it is reported as timed out rather
 #: than waited on. `gh api`, `glab api` and `op` all reach the network or a desktop app; a
 #: 1Password session needing re-auth stalled the whole SessionStart preflight for its 20s
@@ -1125,7 +1237,7 @@ def _checks():
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(),
-                check_plugin_skew()]
+                check_mcp_launchers(), check_plugin_skew()]
     return results
 
 
