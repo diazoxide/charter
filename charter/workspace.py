@@ -190,6 +190,42 @@ def from_path(path=None) -> str | None:
     return parts[0] if len(parts) >= 2 else None
 
 
+def clone_of(path=None) -> tuple[str, str] | None:
+    """``(workspace, repo)`` when *path* is inside a **clone**, else ``None``.
+
+    The clone counterpart to `worktree.locate`, and deliberately exclusive of it: a path
+    inside a worktree answers ``None`` here, so a caller asking both questions can never
+    record the same directory twice under two identities.
+
+    ``None`` for the plane root, which is the point — the root already carries an alert
+    whose entire message is *work belongs in a workspace clone*, and marking who is present
+    there would decorate the thing charter is telling you to stop doing. ``None`` too for
+    ``workspaces/<ws>`` itself, which is a container rather than a tree.
+
+    Path arithmetic only, no git and no subprocess: this is reached from a hook that fires
+    every turn and from the status line's render path.
+    """
+    from . import worktree
+    try:
+        here = Path(path or os.getcwd()).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if worktree.locate(here):
+        return None
+    try:
+        parts = here.relative_to(Path(config.WORKSPACES_DIR).resolve()).parts
+    except (ValueError, OSError, RuntimeError):
+        return None
+    if len(parts) < 2:
+        return None
+    # A dotted second segment is charter's own furniture (`.worktrees/`), never a repo.
+    # `worktree.locate` catches those whose layout it knows; this catches the rest rather
+    # than inventing a repo called `.worktrees`.
+    if parts[1].startswith("."):
+        return None
+    return parts[0], parts[1]
+
+
 #: A committed, deliberately-chosen fallback workspace — `workspaces/.default`.
 #:
 #: NOT the "last active workspace" pointer #124 rejected, and the distinction is the whole

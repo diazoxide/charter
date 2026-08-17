@@ -538,6 +538,84 @@ def _current(payload: dict) -> tuple[str | None, str] | None:
     return None
 
 
+#: Marks the persona last seen in a tree. The same glyph the persona column uses for the
+#: ACTIVE persona, deliberately: both answer "who is here", and one glyph for one question
+#: is what keeps the two columns readable together. East-Asian Neutral, like every other
+#: marker in this layout — see the width notes at the top of the module.
+_PRESENCE = "▸"
+
+
+def _presence_text(ws: str, repo: str, piece: str | None) -> str:
+    """``▸steward now`` / ``▸steward 7m +1`` for a tree, or ``""``.
+
+    An **observation**, never an assertion. Charter cannot verify that anybody is working,
+    so this reads the way `silent 3d` already does — a name and an age, with the reader
+    drawing the conclusion. A bare ``▸steward`` would be the claim of activity ADR 0011
+    refuses to let charter make, which is why a fresh beat says ``now`` rather than nothing.
+
+    ``+N`` counts other personas seen in the same tree inside `pieces.PRESENCE_WINDOW`. The
+    heartbeat is one overwritten file, so a second worker used to vanish without trace; the
+    count is the honest admission that the cell is not the whole truth, and `charter
+    worktree list` is where the full picture belongs — the split `_piece_state` already
+    keeps when it drops a declaration's reason.
+
+    Returns ``""`` on anything unreadable: every-turn render path, and a footer that blanks
+    is worse than one that shows less.
+    """
+    try:
+        from . import pieces as _p
+        got = _p.presence(ws, repo, piece)
+    except Exception:
+        return ""
+    if not got:
+        return ""
+    who, age, others = got
+    tail = f" {_DIM}+{others}{_R}" if others else ""
+    return f"{_MAGENTA}{_PRESENCE}{who}{_R} {_DIM}{age}{_R}{tail}"
+
+
+def _branch_cell_for(branch_text: str, presence: str, marks_plain: str = "",
+                     marks_col: str = "", is_dirty: bool = False) -> str:
+    """The branch cell's contents: branch, markers, and presence **if it still fits**.
+
+    The losing order matters more than the layout. Markers and the branch name are true of
+    the tree; presence is an extra observation about who happened to be standing in it. So
+    the branch is truncated only so far as the markers demand — the rule this cell already
+    kept — and presence is appended only out of whatever room is genuinely left over. On a
+    narrow pane presence disappears and nothing that was there before moves.
+    """
+    br = tui.truncate(branch_text, max(1, _BRANCH_W - tui.width(marks_plain)))
+    out = f"{_YELLOW if is_dirty else _DIM}{br}{_R}{marks_col}"
+    if not presence:
+        return out
+    used = tui.width(br) + tui.width(marks_plain)
+    room = _BRANCH_W - used
+    need = tui.width(_strip(presence)) + 1        # +1 for the separating space
+    return out + f" {presence}" if room >= need else out
+
+
+def _strip(text: str) -> str:
+    import re as _re
+    return _re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _presence_for_dir(d) -> str:
+    """Presence for whatever kind of tree *d* is — a worktree or a clone.
+
+    Both, because `_tree_cells` draws both and working directly in a clone is ordinary; it
+    was invisible only because the liveness hook returned early outside a worktree.
+    """
+    try:
+        from . import worktree as _wt, workspace as _ws
+        loc = _wt.locate(d)
+        if loc:
+            return _presence_text(loc[0], loc[1], loc[2])
+        clone = _ws.clone_of(d)
+        return _presence_text(clone[0], clone[1], None) if clone else ""
+    except Exception:
+        return ""
+
+
 def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None) -> tui.Row:
     """One table row — ``<lead><label>`` in the name column, then branch+markers, CI, change.
 
@@ -559,8 +637,8 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None) -> 
     # branch + markers: truncate the *branch* so the markers always survive
     marks_plain, marks_col, is_dirty = _markers(states.get(d, {}))
     text = branches.get(d, "?") if branch is None else branch
-    br = tui.truncate(text, max(1, _BRANCH_W - tui.width(marks_plain)))
-    branch = tui.Cell(f"{_YELLOW if is_dirty else _DIM}{br}{_R}{marks_col}", _BRANCH_W)
+    branch = tui.Cell(_branch_cell_for(text, _presence_for_dir(d),
+                                       marks_plain, marks_col, is_dirty), _BRANCH_W)
 
     info = gl.get(d, {})
     ci = tui.Cell(_ci_part(info.get("ci")), _CI_W)

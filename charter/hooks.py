@@ -655,8 +655,19 @@ def _touch_piece(data: dict) -> None:
 
     Called from the handlers that already run whenever a session is doing anything, which
     is the point: liveness must not depend on the worker remembering, because the worker we
-    most need to catch is precisely the one that did not. A session outside a worktree has
-    no piece and writes nothing.
+    most need to catch is precisely the one that did not.
+
+    **Clones as well as worktrees.** This used to return early outside a worktree, which
+    made a persona working directly in a clone invisible — an ordinary way to work, and the
+    one the operator was using when they asked for this. A clone records under
+    ``piece=None``. The plane root records nothing: it already carries an alert whose whole
+    message is *work belongs in a workspace clone*, and marking who is present there would
+    decorate the thing charter is telling you to stop doing.
+
+    **The persona is recorded, not derived.** The claim log has carried one since ADR 0011,
+    and reading it back here would have needed no new field — but it names whoever CREATED
+    the piece, and a second persona picking up someone else's piece is the case the fleet
+    spine exists for.
 
     Silent and best-effort like everything else in this module — a turn must never fail
     over bookkeeping. It is one small overwritten file, so the cost is a write, not a grep.
@@ -666,12 +677,18 @@ def _touch_piece(data: dict) -> None:
         if not cwd:
             return
         from pathlib import Path as _Path
-        from . import pieces, worktree
-        here = worktree.locate(_Path(cwd))
-        if here is None:
-            return
-        ws, repo, piece = here
-        pieces.seen(ws, repo, piece, session=data.get("session_id"))
+        from . import persona as _persona, pieces, workspace as _workspace, worktree
+        here = _Path(cwd)
+        loc = worktree.locate(here)
+        if loc is not None:
+            ws, repo, piece = loc
+        else:
+            clone = _workspace.clone_of(here)
+            if clone is None:
+                return
+            ws, repo, piece = clone[0], clone[1], None
+        pieces.seen(ws, repo, piece, session=data.get("session_id"),
+                    persona=_persona.resolve_active())
     except Exception:
         return
 

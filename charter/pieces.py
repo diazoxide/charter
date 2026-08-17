@@ -41,7 +41,7 @@ import json
 import os
 import re
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import persona, session, workspace
@@ -209,22 +209,110 @@ def declaration_for(ws: str, repo: str, piece: str) -> dict | None:
 SEEN_DIR = "seen"
 
 
-def seen_path(ws: str, repo: str, piece: str) -> Path:
-    return dir_for(ws) / SEEN_DIR / repo / f"{piece}.json"
+#: How long a persona stays counted in ``by`` after its last beat.
+#:
+#: Without a window the count only ever grows, and ``+3`` decays into "three personas were
+#: in here at some point", which is not a fact worth a column. An hour is long enough to
+#: cover a pause — a review, a long build, lunch — and short enough that whoever left this
+#: morning is no longer presented as company.
+PRESENCE_WINDOW = timedelta(hours=1)
+
+#: Hard cap on ``by``, independent of the window. The window alone bounds the map in
+#: practice; this bounds it in principle, so a pathological plane cannot grow one heartbeat
+#: file without limit.
+PRESENCE_KEEP = 8
 
 
-def seen(ws: str, repo: str, piece: str, session: str | None = None,
-         when: datetime | None = None) -> Path | None:
-    """Mark a piece's worker alive now. Best-effort — never raises, never blocks a turn."""
+def seen_path(ws: str, repo: str, piece: str | None) -> Path:
+    """Where a tree's heartbeat lives. ``piece=None`` means the clone itself.
+
+    The clone's record is a file *beside* the piece directory, never inside it: a piece
+    named like any sentinel we might have used would otherwise collide with the clone's own
+    record, and piece names come from branch names, which are not ours to constrain.
+    """
+    base = dir_for(ws) / SEEN_DIR
+    return base / f"{repo}.json" if piece is None else base / repo / f"{piece}.json"
+
+
+def seen(ws: str, repo: str, piece: str | None, session: str | None = None,
+         persona: str | None = None, when: datetime | None = None) -> Path | None:
+    """Mark the worker in this tree alive now. Best-effort — never raises, never blocks.
+
+    ``persona`` is *recorded*, not derived. The claim log has carried a persona since ADR
+    0011, and joining to it would have needed no new field at all — but that names whoever
+    CREATED the piece, and a second persona picking up someone else's piece is the case the
+    fleet spine exists for. This records who is *there*; the claim records who *was*.
+
+    The file stays one small overwritten blob. ``by`` keeps the last beat per persona so a
+    second worker is counted rather than silently overwritten, pruned by
+    :data:`PRESENCE_WINDOW` and capped at :data:`PRESENCE_KEEP`.
+    """
     p = seen_path(ws, repo, piece)
     when = when or _now()
+    stamp = when.isoformat(timespec="seconds")
+    by: dict[str, str] = {}
+    if persona:
+        prev = last_seen(ws, repo, piece) or {}
+        old = prev.get("by")
+        if isinstance(old, dict):
+            for name, ts in old.items():
+                at = _parse(ts if isinstance(ts, str) else None)
+                if isinstance(name, str) and at is not None and when - at <= PRESENCE_WINDOW:
+                    by[name] = ts
+        by[persona] = stamp
+        if len(by) > PRESENCE_KEEP:
+            keep = sorted(by.items(), key=lambda kv: kv[1], reverse=True)[:PRESENCE_KEEP]
+            by = dict(keep)
+    blob = {"ts": stamp, "session": session}
+    if persona:
+        blob["persona"] = persona
+        blob["by"] = by
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"ts": when.isoformat(timespec="seconds"),
-                                 "session": session}, sort_keys=True) + "\n")
+        p.write_text(json.dumps(blob, sort_keys=True) + "\n")
         return p
     except OSError:
         return None
+
+
+def presence(ws: str, repo: str, piece: str | None) -> tuple[str, str, int] | None:
+    """``(persona, age, others)`` for the tree, or ``None`` when no persona was recorded.
+
+    An **observation**, never an assertion: charter cannot verify that anyone is working,
+    so the caller renders a name and an age and lets the reader draw the conclusion — the
+    grammar `silence` already uses, and the reason ADR 0011 has no ``failed`` state.
+
+    ``None`` rather than a guess for a heartbeat written by an older charter, which carries
+    no persona at all: those are overwritten within a turn, and a cell that invents a name
+    for one turn is worse than a cell that waits.
+    """
+    rec = last_seen(ws, repo, piece)
+    if not rec:
+        return None
+    who = rec.get("persona")
+    if not isinstance(who, str) or not who:
+        return None
+    at = _parse(rec.get("ts"))
+    now = _now()
+    by = rec.get("by")
+    others = 0
+    if isinstance(by, dict):
+        for name, ts in by.items():
+            seen_at = _parse(ts if isinstance(ts, str) else None)
+            if name != who and seen_at is not None and now - seen_at <= PRESENCE_WINDOW:
+                others += 1
+    return who, _presence_age(at, now), others
+
+
+def _presence_age(at: datetime | None, now: datetime) -> str:
+    """``now`` under a minute, then the coarse age.
+
+    ``0m`` is technically correct and reads as broken; a bare name would be the claim of
+    activity charter is not entitled to make.
+    """
+    if at is None:
+        return "?"
+    return "now" if (now - at).total_seconds() < 60 else since(at, now)
 
 
 def last_seen(ws: str, repo: str, piece: str) -> dict | None:
