@@ -206,3 +206,44 @@ class OpenCodeHarness(Harness):
 
     def wire_tree_missing(self, tree: Path) -> bool:
         return not (Path(tree) / SHIM_PATH).is_file()
+
+    def ask_rule(self, pattern: str) -> tuple[str, str]:
+        """``(tool, glob)``. opencode's permissions are `{tool: {pattern: decision}}` with
+        `*`/`?` wildcards — not Claude Code's `Tool(pattern)` string, so the same operator
+        sentence has to come apart differently here."""
+        p = (pattern or "").strip()
+        for oc_id, name in TOOL_NAMES.items():
+            for prefix in (f"{name}(", f"{oc_id}("):
+                if p.startswith(prefix) and p.endswith(")"):
+                    return oc_id, p[len(prefix):-1]
+        return "bash", p
+
+    def apply_ask_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+        """Write it into `opencode.json`, IF ABSENT and never repairing.
+
+        A `permission` block of the wrong shape is somebody's deliberate structure, and
+        an unparseable file is theirs to fix — the same restraint `_load_settings` keeps
+        for the file charter half-owns.
+        """
+        tool, glob = self.ask_rule(pattern)
+        p = Path(root) / "opencode.json"
+        doc: dict = {}
+        if p.exists():
+            try:
+                doc = json.loads(p.read_text())
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                return "malformed", str(p)
+            if not isinstance(doc, dict):
+                return "malformed", str(p)
+        perms = doc.setdefault("permission", {})
+        if not isinstance(perms, dict):
+            return "malformed", f"{p} (`permission` is not an object)"
+        block = perms.setdefault(tool, {})
+        if not isinstance(block, dict):
+            return "malformed", f"{p} (`permission.{tool}` is not an object)"
+        if block.get(glob) == "ask":
+            return "present", str(p)
+        block[glob] = "ask"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(doc, indent=2) + "\n")
+        return "added", str(p)

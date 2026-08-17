@@ -729,6 +729,32 @@ def _load_settings(root: Path) -> tuple[dict | None, Path]:
     return (doc if isinstance(doc, dict) else None), p
 
 
+def add_ask_rule(root: Path, rule: str) -> tuple[str, str]:
+    """Append *rule* to `permissions.ask` in the plane's `.claude/settings.json`.
+
+    Extracted from `cmd_guard_ask` when a second harness needed the same command: the
+    command now asks each registered harness to write its own file in its own syntax,
+    and this is Claude Code's half. Refuses a malformed file rather than repairing it,
+    and a `permissions` or `ask` of the wrong type is somebody's deliberate structure —
+    charter reports it and stops.
+    """
+    settings, path = _load_settings(root)
+    if settings is None:
+        return "malformed", str(path)
+    perms = settings.setdefault("permissions", {})
+    if not isinstance(perms, dict):
+        return "malformed", f"{path} (`permissions` is not an object)"
+    ask = perms.setdefault("ask", [])
+    if not isinstance(ask, list):
+        return "malformed", f"{path} (`permissions.ask` is not a list)"
+    if rule in ask:
+        return "present", str(path)
+    ask.append(rule)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+    return "added", str(path)
+
+
 def cmd_guard_ask(args) -> int:
     """Add a force-prompt rule to `permissions.ask` in the plane's `.claude/settings.json`.
 
@@ -748,32 +774,34 @@ def cmd_guard_ask(args) -> int:
     if not pattern:
         util.err("Nothing to add. Example: charter guard ask 'terraform apply *'")
         return 2
-    root = Path(config.ROOT)
-    settings, path = _load_settings(root)
-    if settings is None:
-        util.err(f"{path} is not valid JSON — left untouched.")
-        util.info("  Fix it by hand, then re-run. charter never repairs this file.")
-        return 1
+    from .harness import registry
 
-    rule = _as_rule(pattern)
-    perms = settings.setdefault("permissions", {})
-    if not isinstance(perms, dict):
-        util.err(f"{path}: `permissions` is not an object — left untouched.")
-        return 1
-    ask = perms.setdefault("ask", [])
-    if not isinstance(ask, list):
-        util.err(f"{path}: `permissions.ask` is not a list — left untouched.")
-        return 1
-    if rule in ask:
-        util.ok(f"already asking for {rule}.")
-        return 0
-    ask.append(rule)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2) + "\n")
-    util.ok(f"{rule} → permissions.ask")
-    util.info(f"  {path} is committed, so this applies to everyone on this repo.")
-    _warn_if_shadowing(rule)
-    return 0
+    root = Path(config.ROOT)
+    rc, wrote = 0, False
+    for h in registry.all():
+        status, detail = h.apply_ask_rule(root, pattern)
+        if status == "added":
+            util.ok(f"{h.name}: asking for {h.ask_rule(pattern)} → {detail}")
+            wrote = True
+        elif status == "present":
+            util.ok(f"{h.name}: already asking for {h.ask_rule(pattern)}.")
+            wrote = True
+        elif status == "malformed":
+            util.err(f"{h.name}: {detail} is not valid — left untouched.")
+            util.info("  Fix it by hand, then re-run. charter never repairs these files.")
+            rc = 1
+        else:
+            # Not a failure. The harness has no command-pattern permissions, so charter's
+            # own hook stays the only thing guarding this command there — which is worth
+            # saying, because silence would read as "the rule is in force everywhere".
+            util.info(f"  {h.name}: {detail} — charter's own guard still applies.")
+    if not wrote and rc == 0:
+        util.warn("  No harness took the rule.")
+    if wrote:
+        util.info("  These files are committed, so the rule applies to everyone on this "
+                  "repo — no sync step, and nothing that can drift (ADR 0014).")
+        _warn_if_shadowing(registry.get(registry.CLAUDE_CODE).ask_rule(pattern))
+    return rc
 
 
 def cmd_guard_list(args) -> int:

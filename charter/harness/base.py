@@ -86,3 +86,22 @@ class Harness:
         be a permanent false alarm.
         """
         return False
+
+    def ask_rule(self, pattern: str):
+        """*pattern* in this harness's own rule syntax, or ``None`` if it has none.
+
+        The operator types one sentence — `charter guard ask "git push *"` — and never
+        learns three syntaxes. ADR 0014: charter writes the harness's rules and keeps no
+        list of its own, which only holds if the translation lives here.
+        """
+        return None
+
+    def apply_ask_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+        """Write the rule under *root*. ``(status, detail)``.
+
+        ``"added"``, ``"present"``, ``"malformed"`` (refused, never repaired), or
+        ``"unsupported"`` with a reason. A harness that cannot express command patterns
+        says so: charter's own hook still guards the command, and the difference between
+        naming that limit and staying quiet is the difference between a limit and a lie.
+        """
+        return "unsupported", f"{self.name} has no command-pattern permissions"

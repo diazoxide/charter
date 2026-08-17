@@ -50,3 +50,13 @@ class ClaudeCodeHarness(Harness):
 
         status, _path = commands.ensure_env_var(root, "CHARTER_HARNESS", self.name)
         return [(status, ".claude/settings.json (env CHARTER_HARNESS)")]
+
+    def ask_rule(self, pattern: str) -> str:
+        from .. import commands
+
+        return commands._as_rule(pattern)
+
+    def apply_ask_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+        from .. import commands
+
+        return commands.add_ask_rule(root, self.ask_rule(pattern))
