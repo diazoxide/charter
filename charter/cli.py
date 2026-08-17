@@ -172,6 +172,19 @@ def build_parser() -> argparse.ArgumentParser:
     vsub = ver.add_subparsers(dest="version_cmd")
     ver.set_defaults(func=commands.cmd_version)     # bare `charter version` = show
 
+    gd = sub.add_parser("guard",
+                        help="Force-prompt rules for this plane. Written as Claude Code "
+                             "`permissions.ask` rules in .claude/settings.json — charter "
+                             "keeps no list of its own (ADR 0014).")
+    gsub = gd.add_subparsers(dest="guard_cmd")
+    gd.set_defaults(func=commands.cmd_guard_list)
+    ga = gsub.add_parser("ask", help="Always prompt before this command runs.")
+    ga.add_argument("pattern", help="e.g. 'terraform apply *' — wrapped as Bash(...) "
+                                    "unless it already names a tool.")
+    ga.set_defaults(func=commands.cmd_guard_ask)
+    gl = gsub.add_parser("list", help="Show this plane's force-prompt rules.")
+    gl.set_defaults(func=commands.cmd_guard_list)
+
     vsy = vsub.add_parser("sync",
                           help="Move THIS plane to the version it pins. A plugin is "
                                "installed per project, so no other plane moves.")

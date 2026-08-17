@@ -636,6 +636,103 @@ def check_nested_plane() -> Result:
                         f"{util.short_path(outer)}.  → unset CHARTER_ROOT to use it"))
 
 
+def _ask_rules() -> list | None:
+    """`permissions.ask` from the plane's settings — ``None`` when it cannot be read."""
+    from . import config as _config
+    p = Path(_config.ROOT) / ".claude" / "settings.json"
+    if not p.exists():
+        return []
+    try:
+        doc = json.loads(p.read_text())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    perms = doc.get("permissions")
+    if not isinstance(perms, dict):
+        return []
+    ask = perms.get("ask")
+    return ask if isinstance(ask, list) else []
+
+
+def _declared_binaries() -> dict[str, set[str]]:
+    """``{binary: {persona, …}}`` — every tool any persona declares, and who declares it."""
+    from . import persona as _persona
+    out: dict[str, set[str]] = {}
+    for name in _persona.list_personas():
+        try:
+            for tool in _persona.effective_tools(name) or ():
+                out.setdefault(tool, set()).add(name)
+        except Exception:
+            continue
+    return out
+
+
+def shadowed_tools(rules) -> set[str]:
+    """Declared persona tools that *rules* would force a prompt for.
+
+    Matching is deliberately coarse — the first token inside ``Bash(...)``, plus the blanket
+    forms ``Bash`` and ``Bash(*)`` which match everything. Charter is not re-implementing
+    the host's matcher; it is answering "would this obviously shadow a tool", and a coarse
+    answer that is right about `Bash(kubectl *)` is worth more than a precise one nobody
+    maintains.
+    """
+    declared = _declared_binaries()
+    if not declared:
+        return set()
+    hit: set[str] = set()
+    for raw in rules or ():
+        if not isinstance(raw, str):
+            continue
+        rule = raw.strip()
+        if rule in ("Bash", "Bash(*)", "*"):
+            return set(declared)
+        if not rule.startswith("Bash(") or not rule.endswith(")"):
+            continue
+        inner = rule[len("Bash("):-1].strip()
+        head = inner.split()[0] if inner.split() else ""
+        head = head.rstrip("*")
+        if head and head in declared:
+            hit.add(head)
+    return hit
+
+
+def check_ask_rules() -> Result:
+    """An `ask` rule that shadows a tool a persona declares.
+
+    ADR 0014 puts pattern-shaped policy in the host's `permissions`, which creates exactly
+    one interaction charter must not leave silent: *"a matching ask rule still prompts even
+    when the hook returned `allow` or `ask`"*. So `toolgate` can return `allow` for a
+    binary the active persona declares and the operator is prompted anyway — the persona's
+    tools quietly stop being pre-approved, with nothing naming the cause. That is the
+    looks-wired-but-isn't shape this repo has paid for twice (#177, #197).
+
+    It never suggests deleting the rule. The rule is the operator's policy and is probably
+    deliberate; charter names the consequence and leaves the choice (ADR 0013).
+    """
+    name = "ask rules"
+    rules = _ask_rules()
+    if rules is None:
+        return Result(name, WARN, detail="settings.json not readable",
+                      hint=_NOT_CHECKED_HINT)
+    if not rules:
+        return Result(name, OK, detail="none")
+    try:
+        hit = shadowed_tools(rules)
+    except Exception as e:
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+    if not hit:
+        return Result(name, OK, detail=f"{len(rules)} rule(s), none shadow a persona tool")
+    declared = _declared_binaries()
+    who = sorted({p for t in hit for p in declared.get(t, ())})
+    return Result(name, WARN,
+                  detail=f"{', '.join(sorted(hit))} prompt(s) despite being declared by "
+                         f"{', '.join(who)}",
+                  hint="An ask rule outranks a PreToolUse allow, so charter's persona "
+                       "tool-gate cannot pre-approve these. That may be exactly what you "
+                       "want — this names it so the prompts are not a mystery.")
+
+
 def check_workspace_clones() -> Result:
     """Clones that are behind their upstream — in EVERY workspace, not just the active one.
 
@@ -1305,7 +1402,7 @@ def _checks():
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
-                check_memory_indexes(), check_personas(),
+                check_memory_indexes(), check_personas(), check_ask_rules(),
                 check_mcp_launchers(), check_plugin_skew()]
     return results
 

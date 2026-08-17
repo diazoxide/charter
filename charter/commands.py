@@ -686,6 +686,124 @@ def _json_style(text: str) -> tuple[str | None, tuple[str, str]]:
     return None, (", " if comma_space else ",", ": " if colon_space else ":")
 
 
+#: Tools whose rules charter writes verbatim. Anything else is wrapped as ``Bash(...)``.
+#:
+#: `Bash(...)` is the host's syntax and the operator should not have to know it, but a rule
+#: naming another tool must survive untouched — wrapping `Read(./secrets/**)` would produce
+#: `Bash(Read(./secrets/**))`, which matches nothing and fails in the silent direction.
+_RULE_TOOLS = ("Bash", "Read", "Edit", "Write", "Grep", "Glob", "WebFetch", "NotebookEdit",
+               "Task", "mcp__")
+
+
+def _as_rule(pattern: str) -> str:
+    """A permission rule for *pattern*, wrapping a bare command in ``Bash(...)``."""
+    p = (pattern or "").strip()
+    if p.startswith(_RULE_TOOLS) and ("(" in p or p in ("Bash",)):
+        return p
+    return f"Bash({p})"
+
+
+def _settings_path(root: Path) -> Path:
+    return Path(root) / ".claude" / "settings.json"
+
+
+def _load_settings(root: Path) -> tuple[dict | None, Path]:
+    """``(settings, path)``; ``None`` when the file exists and is not parseable.
+
+    A missing file reads as ``{}`` — writing the first rule into a plane that has no
+    settings yet is ordinary. A *malformed* one reads as ``None`` so callers refuse rather
+    than repair: the operator's content is in there, and `_ensure_statusline` already keeps
+    that restraint for the same file.
+    """
+    p = _settings_path(root)
+    if not p.exists():
+        return {}, p
+    try:
+        doc = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None, p
+    return (doc if isinstance(doc, dict) else None), p
+
+
+def cmd_guard_ask(args) -> int:
+    """Add a force-prompt rule to `permissions.ask` in the plane's `.claude/settings.json`.
+
+    Charter writes the **host's** rule and keeps no list of its own (ADR 0014). Claude Code
+    already evaluates `deny → ask → allow`, segments compound commands correctly — the job
+    `hooks._segment_argv` does by hand and got wrong once — and the file is committed, so
+    every engineer on the repo gets the same list with nothing to install or sync. A
+    `charter.toml` list would be a second engine that could not win: *"a matching ask rule
+    still prompts even when the hook returned `allow` or `ask`"*.
+
+    `_ensure_statusline`'s docstring says settings.json holds keys "charter has no business
+    touching (``permissions``, …)". That still holds for `init`, which writes unasked. This
+    is the opposite: the operator named the rule and the command that writes it, so charter
+    is the editor rather than the author.
+    """
+    pattern = (getattr(args, "pattern", "") or "").strip()
+    if not pattern:
+        util.err("Nothing to add. Example: charter guard ask 'terraform apply *'")
+        return 2
+    root = Path(config.ROOT)
+    settings, path = _load_settings(root)
+    if settings is None:
+        util.err(f"{path} is not valid JSON — left untouched.")
+        util.info("  Fix it by hand, then re-run. charter never repairs this file.")
+        return 1
+
+    rule = _as_rule(pattern)
+    perms = settings.setdefault("permissions", {})
+    if not isinstance(perms, dict):
+        util.err(f"{path}: `permissions` is not an object — left untouched.")
+        return 1
+    ask = perms.setdefault("ask", [])
+    if not isinstance(ask, list):
+        util.err(f"{path}: `permissions.ask` is not a list — left untouched.")
+        return 1
+    if rule in ask:
+        util.ok(f"already asking for {rule}.")
+        return 0
+    ask.append(rule)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+    util.ok(f"{rule} → permissions.ask")
+    util.info(f"  {path} is committed, so this applies to everyone on this repo.")
+    _warn_if_shadowing(rule)
+    return 0
+
+
+def cmd_guard_list(args) -> int:
+    """Show the plane's force-prompt rules — read from the host's file, not a charter one."""
+    root = Path(config.ROOT)
+    settings, path = _load_settings(root)
+    if settings is None:
+        util.err(f"{path} is not valid JSON.")
+        return 1
+    perms = settings.get("permissions")
+    ask = (perms or {}).get("ask") if isinstance(perms, dict) else None
+    if not ask:
+        util.info("No force-prompt rules in this plane. "
+                  "Add one: charter guard ask 'terraform apply *'")
+        return 0
+    print(f"  {path}")
+    for rule in ask:
+        print(f"    {rule}")
+    return 0
+
+
+def _warn_if_shadowing(rule: str) -> None:
+    """Say at write time if this rule will shadow a persona's declared tool.
+
+    Doctor reports the same overlap; this is the moment the operator can still change their
+    mind, and charter knows it then.
+    """
+    from . import doctor as _doctor
+    hit = _doctor.shadowed_tools([rule])
+    if hit:
+        util.warn(f"this also prompts for {', '.join(sorted(hit))}, which a persona "
+                  f"declares — an ask rule outranks charter's tool-gate.")
+
+
 def _ensure_statusline(root: Path) -> tuple[str, Path | None]:
     """Write ``.claude/settings.json``'s ``statusLine`` key IF ABSENT. That file is
     user-owned, git-tracked, has no comment syntax, and holds keys charter has no
