@@ -1222,6 +1222,14 @@ def cmd_trace(args) -> int:
 
 def cmd_persona_gc(args) -> int:
     """Hidden: prune ephemeral scratch from ended sessions (SessionStart hook)."""
+    # `--detach` is checked first: the point is to return BEFORE any of the work
+    # below, in a process the harness will not tear down with the turn. This is
+    # what a hook's `"async": true` used to buy — asked of the host, and one host
+    # skips such entries outright, so charter does it itself.
+    if getattr(args, "detach", False):
+        util.detach_self(['persona', '_gc'])
+        return 0
+
     current = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if not current:
         try:

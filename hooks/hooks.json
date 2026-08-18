@@ -10,8 +10,7 @@
           },
           {
             "type": "command",
-            "command": "charter persona _gc >/dev/null 2>&1",
-            "async": true
+            "command": "charter persona _gc --detach"
           },
           {
             "type": "command",
@@ -26,8 +25,7 @@
           },
           {
             "type": "command",
-            "command": "charter gl-refresh >/dev/null 2>&1",
-            "async": true
+            "command": "charter gl-refresh --detach"
           }
         ]
       }

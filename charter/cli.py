@@ -198,6 +198,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Refresh the status line's forge state (open MRs/PRs + CI) "
                              "from each clone's own forge.")
     gl.add_argument("--workspace", "-w", help="Workspace to refresh (default: the active one).")
+    gl.add_argument("--detach", action="store_true",
+                    help="Return at once and refresh in a process that outlives this one. "
+                         "What a hook's `async` used to buy, done by charter — one harness "
+                         "skips async hooks outright.")
     gl.set_defaults(func=commands.cmd_gl_refresh)
 
     # Internal: the detached child `statusline` spawns to refresh the update cache.
@@ -831,6 +835,7 @@ def _add_persona_parser(sub) -> None:
     lg.set_defaults(func=commands_persona.cmd_persona_log)
 
     gc = psub.add_parser("_gc", help=argparse.SUPPRESS)  # SessionStart: prune ended-session scratch
+    gc.add_argument("--detach", action="store_true", help=argparse.SUPPRESS)
     gc.set_defaults(func=commands_persona.cmd_persona_gc)
 
     tg = psub.add_parser("tool-gate",

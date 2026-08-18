@@ -236,3 +236,26 @@ def branch_of(tree: Path) -> str:
     if txt.startswith("ref:"):
         return txt.split("/", 2)[-1] or "?"   # refs/heads/<branch> — keeps slashes
     return txt[:7] if txt else "?"            # detached HEAD → short sha
+
+
+def detach_self(args: list[str]) -> bool:
+    """Re-run ``charter <args>`` in a process that outlives this one. True if it started.
+
+    What a hook's `"async": true` bought, done by charter instead of asked of the host —
+    Codex supports no such flag and skips the entry outright, so a manifest that needs one
+    silently loses whatever it declared. `start_new_session` is the load-bearing part: a
+    hook's process group is torn down when the turn ends, and a refresh killed halfway is
+    worse than one that never started.
+
+    Never raises. The caller is a session-start hook, and a plane that cannot spawn a
+    background refresh must still open a session.
+    """
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "charter", *args],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
+        )
+    except Exception:
+        return False
+    return True

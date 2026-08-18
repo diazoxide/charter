@@ -114,16 +114,26 @@ class TestPluginManifest(unittest.TestCase):
             matches = [c for ev, c in pairs if ev == event and substr in c]
             self.assertEqual(len(matches), 1, f"{event}: {substr} -> {matches}")
 
-    def test_async_hooks_stay_async(self):
+    def test_the_session_never_waits_on_the_background_calls(self):
         """persona _gc and gl-refresh are network-touching background calls at session
-        start; losing `async` would make a session wait on them synchronously."""
-        async_cmds = [hook["command"] for _, hook in _flat_hooks() if hook.get("async") is True]
-        self.assertEqual(len(async_cmds), 2, async_cmds)
-        self.assertTrue(any("persona _gc" in c for c in async_cmds))
-        self.assertTrue(any("gl-refresh" in c for c in async_cmds))
-        # and neither async command also carries a competing timeout
+        start; a session must not wait on them synchronously.
+
+        This used to assert `"async": true`, which pinned the MECHANISM rather than the
+        intent. Codex loads charter's plugin and skips async entries outright — printing
+        `async hooks are not supported yet` twice a session — so the work simply never
+        happened there. The commands now detach themselves, which is charter's own code
+        and needs nothing from the host, and the manifest asks for no async at all.
+        """
+        cmds = [hook["command"] for _, hook in _flat_hooks()]
+        for needle in ("persona _gc", "gl-refresh"):
+            matching = [c for c in cmds if needle in c]
+            self.assertEqual(len(matching), 1, f"{needle} -> {matching}")
+            self.assertIn("--detach", matching[0])
+        self.assertEqual([h for _, h in _flat_hooks() if "async" in h], [],
+                         "a harness that skips async entries loses them silently")
+        # A detached command returns at once, so a timeout on it would be meaningless.
         for _, hook in _flat_hooks():
-            if hook.get("async") is True:
+            if "--detach" in hook.get("command", ""):
                 self.assertNotIn("timeout", hook)
 
     def test_timed_hooks_keep_their_original_timeout(self):

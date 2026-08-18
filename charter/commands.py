@@ -538,6 +538,14 @@ def _clone_note(d: Path) -> str:
 # gl-refresh (populate the status-line's forge state: open change + last CI)  #
 # --------------------------------------------------------------------------- #
 def cmd_gl_refresh(args) -> int:
+    # `--detach` is checked first: the point is to return BEFORE any of the work
+    # below, in a process the harness will not tear down with the turn. This is
+    # what a hook's `"async": true` used to buy — asked of the host, and one host
+    # skips such entries outright, so charter does it itself.
+    if getattr(args, "detach", False):
+        util.detach_self(['gl-refresh'])
+        return 0
+
     from . import glstate
 
     ws = workspace.resolve(getattr(args, "workspace", None))
