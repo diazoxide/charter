@@ -20,7 +20,7 @@ import os
 import unittest
 from unittest import mock
 
-from charter import workspace
+from charter import session, workspace
 from tests._isolation import PersonaIso
 
 
@@ -29,7 +29,7 @@ def _env(**kw):
     `_terminal_id` falls back to `os.ttyname(0)`, which in an interactive test runner
     would otherwise supply a real id and make these non-deterministic."""
     keep = {k: v for k, v in os.environ.items()
-            if k not in (*workspace._PANE_ID_VARS, *workspace._WINDOW_ID_VARS)}
+            if k not in (*session._PANE_ID_VARS, *session._WINDOW_ID_VARS)}
     return mock.patch.dict(os.environ, {**keep, **kw}, clear=True)
 
 

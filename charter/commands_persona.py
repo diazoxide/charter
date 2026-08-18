@@ -203,12 +203,31 @@ def _print_memory_summary(name: str) -> None:
           f"recall: charter persona recall {name}")
 
 
+def _scope_note(scope: str) -> str:
+    """How far this selection reaches, in the words the reader needs.
+
+    Three answers that differ in ways that matter, so none of them may be left implicit —
+    the reader who is not told goes looking for a bug the next time the status line
+    disagrees with what they picked. Only a terminal pointer survives closing and
+    reopening Claude; a session-scoped choice is gone with the session, and what the next
+    session starts as is the plane's declared front door, which may be nothing at all.
+    """
+    if scope == "terminal":
+        return " for this terminal (kept across closing/reopening Claude)"
+    if scope == "session":
+        nxt = persona.declared_default() or persona.default_persona()
+        starts = f"starts as '{nxt}'" if nxt else "starts with no persona"
+        return (f" for this session only — this terminal reports no pane id, "
+                f"so a new session {starts}")
+    return " for this control plane (no session or pane id to scope it to)"
+
+
 def cmd_persona_use(args) -> int:
     if not persona.load(args.name):
         util.err(f"no persona '{args.name}' (create it: charter persona create {args.name})")
         return 1
-    persona.set_active(args.name)
-    util.ok(f"Active persona set to '{args.name}'.")
+    scope = persona.set_active(args.name)
+    util.ok(f"Active persona set to '{args.name}'{_scope_note(scope)}.")
     _warn_env(args.name)
     _say_mcp_boundary(args.name)
     return 0

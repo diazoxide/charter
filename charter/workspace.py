@@ -57,53 +57,13 @@ def _session_file(sid: str) -> Path:
     return config.SESSIONS_DIR / f"{sid}.workspace"
 
 
-#: Environment variables that identify ONE PANE — one shell, so at most one Claude
-#: session. Safe to key a workspace pointer on.
-_PANE_ID_VARS = (
-    "TERM_SESSION_ID",   # iTerm2 / Terminal.app — per pane, survives reopen
-    "TMUX_PANE",         # tmux pane
-    "STY",               # GNU screen
-    "SSH_TTY",           # the pty of this ssh session
-)
-
-#: Identifies a WINDOW, which holds many tabs and splits. Listed to be explicit that it
-#: is deliberately NOT used — see `_terminal_id`.
-_WINDOW_ID_VARS = ("WINDOWID",)
-
-
 def _terminal_id(explicit: str | None = None) -> str | None:
-    """A stable id for the current terminal PANE, or ``None`` when there isn't one.
-
-    Unlike the Claude session id this survives closing and reopening Claude in the same
-    pane, which is the whole reason a per-terminal pointer exists.
-
-    ``WINDOWID`` is deliberately absent, and used to sit second in this chain. It
-    identifies a *window*, and a window holds many tabs and splits — so every Claude
-    session in that window received the same "terminal" id, wrote the same pointer, and
-    read each other's. Observed exactly that way: two sessions in one window, one runs
-    `charter ws use user-reporting`, and the other — which had no pointer of its own and
-    so fell through to the terminal one — silently moved with it. `source()` said
-    `terminal`; `set_active`'s docstring promised "selecting a workspace in one pane never
-    changes another". Parallel workspaces are the feature; sharing one behind the user's
-    back is the failure it exists to prevent.
-
-    So the rule is now: key the pointer on something that identifies a pane, or do not
-    write one at all. Returning ``None`` costs only the survives-a-restart convenience,
-    and only in terminals that cannot tell their panes apart — `resolve` then falls to the
-    per-session pointer, which Claude Code always provides, and to `default`. An id that
-    is wrong in the sharing direction is worse than no id.
-    """
-    raw = explicit or next(
-        (v for v in (os.environ.get(k) for k in _PANE_ID_VARS) if v), None)
-    if not raw:
-        try:
-            raw = os.ttyname(0)              # controlling tty, if stdin is one — per pane
-        except Exception:
-            raw = None
-    if not raw:
-        return None
-    tid = re.sub(r"[^A-Za-z0-9._-]", "-", raw.strip())
-    return tid or None
+    """This terminal PANE's id, or ``None`` — see :func:`charter.session.terminal`,
+    which owns it. Kept as a module-level name because it is the seam tests patch to
+    simulate a pane-less shell, and because `persona` asks the same question: two
+    copies of the WINDOWID lesson is one copy too many."""
+    from . import session as _session
+    return _session.terminal(explicit)
 
 
 def _terminal_file(tid: str) -> Path:

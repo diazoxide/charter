@@ -337,6 +337,31 @@ def declared_default() -> str | None:
     return val if val and def_path(val).exists() else None
 
 
+def _pointer_files() -> tuple[Path | None, Path | None]:
+    """``(session pointer, terminal pointer)`` for right now — either may be ``None``.
+
+    Mirrors workspaces exactly (``.charter/sessions/<id>.workspace`` and
+    ``.charter/terminals/<id>.workspace``), because the failure it prevents is the same
+    one, one noun over: a single plane-wide file meant `charter persona use forge` in one
+    pane changed the persona in every other pane and every future session, which is the
+    opposite of what a fleet of parallel personas is for (#255).
+    """
+    from . import session as _session
+    sid = _session.current()
+    tid = _session.terminal()
+    return (config.SESSIONS_DIR / f"{sid}.persona" if sid else None,
+            config.TERMINALS_DIR / f"{tid}.persona" if tid else None)
+
+
+def _read_pointer(f: Path | None) -> str | None:
+    if f is None:
+        return None
+    try:
+        return f.read_text().strip() or None
+    except OSError:
+        return None
+
+
 def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
     """``(persona, where it came from)`` — the whole precedence, decided ONCE.
 
@@ -350,6 +375,13 @@ def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
     env = os.environ.get("CHARTER_PERSONA")
     if env:
         return env.strip(), "$CHARTER_PERSONA"
+    sf, tf = _pointer_files()
+    val = _read_pointer(sf)
+    if val:
+        return val, "session"
+    val = _read_pointer(tf)
+    if val:
+        return val, "terminal"
     f = config.ACTIVE_PERSONA_FILE
     if f.exists():
         val = f.read_text().strip()
@@ -375,19 +407,46 @@ def source(explicit: str | None = None) -> str:
     return _resolved(explicit)[1]
 
 
-def set_active(name: str) -> None:
+def set_active(name: str) -> str:
+    """Select *name* for this session and this pane. Returns the reach of what was written
+    (``session`` | ``terminal`` | ``plane``) so a caller can say how long it will last.
+
+    The plane-wide file is written only when there is neither a session id nor a pane id —
+    a bare shell with nothing to key on. That is the one case where it is still the right
+    answer, and it is why the file is kept rather than removed.
+    """
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    config.ACTIVE_PERSONA_FILE.write_text((name or "") + "\n")
+    sf, tf = _pointer_files()
+    for f in (sf, tf):
+        if f is not None:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text((name or "") + "\n")
+    if sf is None and tf is None:
+        config.ACTIVE_PERSONA_FILE.write_text((name or "") + "\n")
     try:
         from . import trace
         trace.record("persona-use", persona=name)
     except Exception:
         pass
+    # The terminal pointer outlives the session one, so it names the longest-lived thing
+    # that actually landed — the same reasoning `workspace.use` records for its own return.
+    return "terminal" if tf is not None else "session" if sf is not None else "plane"
 
 
 def clear_active() -> None:
-    if config.ACTIVE_PERSONA_FILE.exists():
-        config.ACTIVE_PERSONA_FILE.unlink()
+    """Drop this session's and this pane's selection, and the plane-wide file with them.
+
+    All three, because they are rungs of one ladder: clearing only the top rung would hand
+    the session straight back to a lower one, and "cleared" would be a lie the very next
+    command exposes.
+    """
+    sf, tf = _pointer_files()
+    for f in (sf, tf, config.ACTIVE_PERSONA_FILE):
+        try:
+            if f is not None and f.exists():
+                f.unlink()
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------- #
