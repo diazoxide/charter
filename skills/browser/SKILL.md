@@ -46,19 +46,45 @@ substitutes the value and redacts it from output, so it never reaches the transc
 > is typed into the password field and no error is raised. Wrap the whole flow, `open`
 > through the last `fill`, in a single `charter secret exec`.
 
+> **Wait for each field before filling it.** `open` returns as soon as the first response
+> lands, not when the page you are logging in to exists — an SPA typically redirects to an
+> identity provider afterwards. Filling immediately fails with
+> `"#username" does not match any elements`, which reads as a **wrong selector** and sends
+> you hunting for a better one when the flow was already right. It is not free to get wrong
+> here: `charter secret exec` shreds the dotenv file when it exits, so the still-open
+> session can no longer be filled with a secret, and recovering means re-running the whole
+> flow rather than the failed step. The example waits so it never needs to.
+
 ```bash
 charter secret exec <vault> \
   --dotenv PLAYWRIGHT_MCP_SECRETS_FILE=USER:<user-key> \
   --dotenv PLAYWRIGHT_MCP_SECRETS_FILE=PASS:<pass-key> \
   -- bash -c '
     P="npx @playwright/cli@<version> -s=owner"
+
+    # `open` returning is not the page existing. Poll for the element itself rather than
+    # sleeping a fixed amount: a redirect to an IdP can take a moment or several.
+    wait_for() {
+      for _ in $(seq 1 15); do
+        $P eval "() => !!document.querySelector(\"$1\")" 2>/dev/null | grep -q true && return 0
+        sleep 2
+      done
+      echo "TIMEOUT waiting for $1" >&2; return 1
+    }
+
     $P open https://example.test/
+    wait_for "#username" || exit 1
     $P fill "#username" USER
+    wait_for "#password" || exit 1
     $P fill "#password" PASS
     $P click "button[type=submit]"
     $P snapshot
   '
 ```
+
+The second `wait_for` is not redundant: an identity provider may ask for the username on
+one screen and the password on the next, so `#password` can be absent at the moment the
+first field is submitted.
 
 Use `charter persona secret exec` to read the **active persona's** vault instead of naming
 one. A different fixture account is a different pair of keys, not a different mechanism.
