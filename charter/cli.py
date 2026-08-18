@@ -279,11 +279,23 @@ def _add_report_parser(sub) -> None:
     rsub = r.add_subparsers(dest="report_cmd", required=True)
 
     bug = rsub.add_parser("bug", help="Charter did something wrong.")
-    bug.add_argument("text", help="What went wrong, in your own words.")
+    # Optional, and joined by --from-file/--stdin: a body worth filing carries backticks,
+    # `$` and fenced code, none of which survives being a shell argument. Same two flags,
+    # same spelling, as `secret set` — there to keep a value off argv, here to keep one
+    # intact.
+    bug.add_argument("text", nargs="?", help="What went wrong, in your own words. Use `-` to read it from stdin.")
+    bug.add_argument("--from-file", help="Read the body verbatim from a file.")
+    bug.add_argument("--stdin", action="store_true", help="Read the body from stdin.")
     bug.set_defaults(func=commands_report.cmd_report_bug)
 
     gap = rsub.add_parser("gap", help="Charter cannot do something it should.")
-    gap.add_argument("text", help="What is missing, in your own words.")
+    # Optional, and joined by --from-file/--stdin: a body worth filing carries backticks,
+    # `$` and fenced code, none of which survives being a shell argument. Same two flags,
+    # same spelling, as `secret set` — there to keep a value off argv, here to keep one
+    # intact.
+    gap.add_argument("text", nargs="?", help="What is missing, in your own words. Use `-` to read it from stdin.")
+    gap.add_argument("--from-file", help="Read the body verbatim from a file.")
+    gap.add_argument("--stdin", action="store_true", help="Read the body from stdin.")
     gap.set_defaults(func=commands_report.cmd_report_gap)
 
     ls = rsub.add_parser("list", help="Reports drafted on this machine, and what was sent.")

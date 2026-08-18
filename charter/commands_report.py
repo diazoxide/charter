@@ -11,12 +11,56 @@ approval could not be a y/n prompt; it is a second command instead.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from . import __version__, report, util
+
+
+def _body(args) -> str | None:
+    """The report body, from a file, from stdin, or from argv. ``None`` on a read error.
+
+    A body worth filing is exactly the text that does not survive a shell argument: it
+    carries backticks, ``$``, quotes and fenced code. Passed inline, backticked terms are
+    command-substituted **away** — "when `open` returns" is stored as "when  returns", a
+    word silently deleted from a sentence still grammatical enough to skim past — and
+    ``$(…)`` inside a code sample executes.
+
+    charter already treats "do not put this on argv" as first-class for `secret set`, and
+    these are the same two flags spelled the same way. There the reason is disclosure; here
+    it is corruption, and the stakes are comparable: a report is published irreversibly, on
+    a public tracker, under the reporter's own identity, and the material that gets mangled
+    is the code sample that made it worth filing.
+    """
+    src = getattr(args, "from_file", None)
+    if src:
+        try:
+            return Path(src).expanduser().read_text()
+        except OSError as e:
+            util.err(f"could not read {src}: {e}")
+            return None
+    text = getattr(args, "text", None)
+    # `-` is the conventional spelling and costs nothing to honour.
+    if getattr(args, "stdin", False) or text == "-":
+        return sys.stdin.read()
+    if text:
+        return text
+    # A body arriving down a pipe with no flag is the ordinary shape, exactly as it is for
+    # `secret set`, whose docstring records that demanding an explicit `--stdin` broke every
+    # working pipeline to prevent a mistake an emptiness check already catches.
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+    return ""
 
 
 def _draft(kind: str, text: str) -> int:
     if not (text or "").strip():
-        util.err(f"nothing to report — describe the {kind}: charter report {kind} \"<what>\"")
+        util.err(f"nothing to report — describe the {kind}.")
+        util.info(f"  short:  charter report {kind} \"<what>\"")
+        util.info(f"  long:   charter report {kind} --from-file <path>   "
+                  f"(or --stdin, or `-`)")
+        util.info("  A long body does not survive the shell — backticks and `$(…)` are "
+                  "expanded before charter ever sees them.")
         return 1
 
     rid = report.record_described(kind, text)
@@ -40,12 +84,14 @@ def _draft(kind: str, text: str) -> int:
 def cmd_report_bug(args) -> int:
     """Draft a **bug** the Reporter describes by hand. The automatic path (a real crash,
     with a traceback) records itself; this is for "it did the wrong thing"."""
-    return _draft("bug", getattr(args, "text", None))
+    body = _body(args)
+    return 1 if body is None else _draft("bug", body)
 
 
 def cmd_report_gap(args) -> int:
     """Draft a **gap** — charter cannot do something it should."""
-    return _draft("gap", getattr(args, "text", None))
+    body = _body(args)
+    return 1 if body is None else _draft("gap", body)
 
 
 def cmd_report_consent(args) -> int:
