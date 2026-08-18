@@ -14,3 +14,7 @@ Written by the persona as it learns; committed and shared.
 - [Validating mermaid before committing it (GitHub renders a syntax error a](validating-mermaid-before-committing-it-github-r.md)
 - [Overnight autonomous batches: a parked issue is a DECISION, not a backlo](overnight-autonomous-batches-a-parked-issue-is-a.md)
 - [Test fixtures must pin init.defaultBranch: 'git init --bare' WITHOUT -b](test-fixtures-must-pin-init-defaultbranch-git-in.md)
+- [An MCP server in ~/.claude.json that launches via 'charter secret exec <](an-mcp-server-in-claude-json-that-launches-via-c.md)
+- [Verifying an opencode integration costs ZERO model tokens, and its publi](verifying-an-opencode-integration-costs-zero-mod.md)
+- [Codex CLI 0.147.0's hook system is Claude Code's contract near-verbatim](codex-cli-0-147-0-s-hook-system-is-claude-code-s.md)
+- [Bun's shell ($ in an opencode plugin) has NO .stdin() method — stdin goe](bun-s-shell-in-an-opencode-plugin-has-no-stdin-m.md)

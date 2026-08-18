@@ -1062,6 +1062,20 @@ def wire_work_tree(tree: Path) -> list[tuple[str, str]]:
     return out
 
 
+def refresh_work_tree(tree: Path) -> list[tuple[str, str]]:
+    """Bring one tree's wiring up to this charter. What `reinit` does, and what `doctor`'s
+    "→ charter reinit" hint promises — a hint that does not fix what it points at spends
+    the operator's trust and leaves the guard inert."""
+    from .harness import registry
+
+    if not Path(tree).is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for h in registry.all():
+        out.extend(h.refresh_tree(Path(tree)))
+    return out
+
+
 def _backfill_work_trees() -> list[str]:
     """Arm every EXISTING tree. Labels of the ones that were missing it.
 
@@ -1073,9 +1087,9 @@ def _backfill_work_trees() -> list[str]:
 
     written: list[str] = []
     for tree in _ws.all_trees():
-        for status, label in wire_work_tree(tree):
-            if status == "created":
-                written.append(label)
+        for status, label in refresh_work_tree(tree):
+            if status in ("created", "refreshed"):
+                written.append(f"{label} ({status})" if status == "refreshed" else label)
     return written
 
 

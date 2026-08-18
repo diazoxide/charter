@@ -1,0 +1,5 @@
+# Verifying an opencode integration costs ZERO model tokens, and its publi
+
+_2026-08-17 16:10 · persistent_
+
+Verifying an opencode integration costs ZERO model tokens, and its published plugin docs are wrong in a load-bearing way (checked against opencode 1.18.18, 2026-08-17). Technique: 'opencode serve --port N' in a project dir, then POST /session (plugins load ON SESSION CREATION, not at server boot — nothing is evaluated until then), then POST /session/{id}/shell {command, agent:'build'} which executes a real shell and returns tokens=0 cost=0. The full OpenAPI spec is at GET /doc (162 paths). What that disproved: the docs' shell.env example shows only input.cwd, but the real input is {cwd, sessionID, callID} — so a plugin CAN hand a per-invocation session id to every shell, and the 'opencode cannot key state per session' conclusion drawn from the docs was false. The plugin factory also gets {$, client, directory, experimental_workspace, project, serverUrl, worktree} — two more than documented. Rule: probe the binary before designing around a documented limit.
