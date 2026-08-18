@@ -145,10 +145,18 @@ class TestNothingOpenMeansNothingSaid(TodoInjectionCase):
 
     def test_another_workspaces_todos_do_not_fire_the_reminder(self):
         """Scoping is the whole basis of the feature: another workspace's intent is another
-        task's business, and surfacing it here would make this workspace look busy."""
+        task's business, and surfacing it here would make this workspace look busy.
+
+        Asserted as the principle rather than as the word "todo", because the neighbours
+        digest now reports a COUNT for each other workspace, attributed to it by name. A
+        count is not intent — it says how busy `beta` is, never what `beta` means to do —
+        and it cannot make this workspace look busy, because the reminder that speaks for
+        this workspace stays silent and the count carries someone else's name."""
         workspace.ensure("beta")
         self.add_aged("beta work nobody here should see", days=10, workspace_name="beta")
-        self.assertNotIn("todo", self.inject().lower())
+        ctx = self.inject()
+        self.assertNotIn("beta work nobody here should see", ctx)   # never the intent
+        self.assertEqual(hooks._todo_digest("s-todo"), "")          # never this workspace's
 
 
 class TestItAddsToTheBriefingRatherThanReplacingIt(TodoInjectionCase):

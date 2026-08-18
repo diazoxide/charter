@@ -865,6 +865,49 @@ def read_charter(name: str) -> str:
     return cf.read_text() if cf.exists() else ""
 
 
+def last_active(name: str) -> float | None:
+    """When this workspace was last *worked* — a unix timestamp, or ``None``.
+
+    One function, because two questions that sound different are the same one: "when did
+    someone last write here" (memory, todos, the manifest, a piece record) and "when did a
+    session last select it" (a pointer file naming it). A workspace can be chosen and then
+    only read from, and one that reported nothing in that case would look abandoned on the
+    exact day somebody was in it.
+
+    Derived at read time from mtimes, never cached: ADR 0011's rule is that the record holds
+    only what git cannot know, and "when was this touched" is something the filesystem
+    already answers. Best-effort — an unreadable workspace is undated, not an exception.
+    """
+    d = config.WORKSPACES_DIR / name
+    best: float | None = None
+
+    def bump(p: Path) -> None:
+        nonlocal best
+        try:
+            m = p.stat().st_mtime
+        except OSError:
+            return
+        if best is None or m > best:
+            best = m
+
+    for f in (d / "workspace.md", d / "workspace.json"):
+        if f.exists():
+            bump(f)
+    for sub in ("memory", "todos", "pieces", "refs"):
+        try:
+            for f in (d / sub).iterdir():
+                bump(f)
+        except OSError:
+            continue
+    try:
+        for f in config.SESSIONS_DIR.glob("*.workspace"):
+            if _read(f) == name:
+                bump(f)
+    except OSError:
+        pass
+    return best
+
+
 def read_vision(name: str) -> str:
     """The ## Vision section body, or "" if unset/placeholder."""
     m = re.search(r"^##\s+Vision\s*$(.*?)(?=^##\s|\Z)",

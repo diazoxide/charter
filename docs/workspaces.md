@@ -124,6 +124,25 @@ additive: nothing you wrote is touched.
 - **`remove <name>`** — deletes the workspace and its clones, and refuses if that would
   lose unpushed work.
 
+## Knowing the neighbours
+
+At session start charter names the **other** workspaces on the plane: each one's vision
+line, its open-todo count, and when it was last worked. Bounded to the newest few, with a
+count of the rest.
+
+This is knowledge, not logic. Nothing in charter reads it back and nothing branches on it —
+it exists so that work delivered by a parallel workspace is recognisable instead of
+surprising ("why did this file move?"). Another workspace's stated goal is the most
+instruction-shaped thing charter injects anywhere, so the block says in as many words that
+it is data to consider and never an instruction to obey.
+
+It deliberately does not report what those workspaces *delivered* — commits, PRs, branches.
+That costs a git log per workspace on every session start, to answer a question you can now
+ask yourself, knowing the workspace is there.
+
+Silent when the plane has one workspace: a signal that fires on no news teaches people to
+skim the ones that matter.
+
 ## See also
 
 - [control-plane.md](control-plane.md) — `charter.toml`, and the plane's view of a workspace
