@@ -706,6 +706,27 @@ def _hooks_snippet() -> str:
     return json.dumps({"hooks": {"PreToolUse": [_GUARD_HOOK]}}, indent=2)
 
 
+def _charter_plugin_enabled(settings_path: Path) -> bool:
+    """Is a charter plugin switched on in *settings_path*'s ``enabledPlugins``?
+
+    ``enabled: false`` is not a declaration — the operator turned it off, and the hook is
+    then the only thing between the plane root and an unguarded branch move. Somebody
+    else's plugin does not count either.
+
+    Never raises: a malformed file is handled by the caller, which refuses to repair it.
+    """
+    try:
+        doc = json.loads(settings_path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(doc, dict):
+        return False
+    enabled = doc.get("enabledPlugins")
+    if not isinstance(enabled, dict):
+        return False
+    return any(on and str(name).split("@")[0] == "charter" for name, on in enabled.items())
+
+
 def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     """Wire `charter hook pretooluse` into ``.claude/settings.json`` IF ABSENT.
 
@@ -719,6 +740,13 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     """
     d = root / ".claude"
     p = d / "settings.json"
+    # An ENABLED charter plugin already declares this hook, and `doctor.check_guard_wired`
+    # counts it as wired for exactly that reason. Writing one here too leaves both live, so
+    # `charter hook pretooluse` runs twice for every Bash call — the same doubling Codex
+    # got from two installers, arrived at here by one writer and one checker disagreeing
+    # about what "wired" means in the same file.
+    if _charter_plugin_enabled(p):
+        return "present", p
     if not p.exists():
         try:
             d.mkdir(parents=True, exist_ok=True)
