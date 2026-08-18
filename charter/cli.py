@@ -70,6 +70,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Also clone the git repo you are standing in into the first "
                           "workspace. This is how you accept the offer `charter init` "
                           "prints when it finds one; without it, init clones nothing.")
+    # The front door is a FILE, not a feature: init writes one generic persona and
+    # declares it in charter.toml. The name lives here, in a flag with a default — never
+    # in the engine, which knows only that a plane may declare a default persona.
+    ini.add_argument("--front-door", metavar="NAME", default="steward",
+                     help="Name of the generic front-door persona to scaffold and declare "
+                          "(default: steward). Skipped if this plane already has personas.")
+    ini.add_argument("--no-front-door", dest="front_door", action="store_const", const=None,
+                     help="Scaffold no persona at all; the plane declares no front door.")
     ini.set_defaults(func=commands.cmd_init)
 
     doc_check = sub.add_parser(

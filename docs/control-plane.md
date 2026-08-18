@@ -16,7 +16,20 @@ kind = "gitlab"
 
 [memory]
 share = "local"
+
+[persona]
+default = "steward"
 ```
+
+That last key is the plane's **front door** — the persona a session adopts when nobody has
+chosen one. `init` also scaffolds it: one generic `personas/steward/persona.md` you own and
+can rename, rewrite or delete. Name it something else with `charter init --front-door ops`,
+or skip it entirely with `--no-front-door`; either way charter's own code knows only *that*
+a plane may declare a default, never which one. If the plane already has personas, `init`
+scaffolds nothing — it creates only what is absent.
+
+The generated charter declares `routing: advise`, so once a second persona exists the front
+door sees the roster on work-shaped prompts. See `charter docs show personas`.
 
 ## Every key, in full
 
@@ -25,6 +38,13 @@ share = "local"
 # schema NEWER than it understands (upgrade the CLI instead of guessing); it has no
 # problem reading an OLDER schema. Omit it and 1 is assumed.
 schema = 1
+
+# Optional. The persona a session adopts when nothing else selects one — this plane's
+# front door. `charter persona default <name>` writes it. Overridden per developer by
+# `charter persona use`, `$CHARTER_PERSONA` and `--persona`; a name that no longer exists
+# resolves to no persona at all, and `charter doctor` says so.
+[persona]
+default = "steward"
 
 # Optional. Only needed to move worktrees off their default location.
 [plane]
