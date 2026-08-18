@@ -1503,6 +1503,9 @@ def pretooluse_dispatch() -> int:
     the most honest thing available is to say so at the moment of dispatch.
     """
     data = _read_stdin()
+    # Clear the routing mark first — the dispatch IS the routing, and clearing ahead of the
+    # early returns below means a read-only fan-out counts as routing too.
+    _route_mark_clear(data.get("session_id"))
     if (data.get("tool_name") or "") not in ("Task", "Agent"):
         return 0
     agent = ((data.get("tool_input") or {}).get("subagent_type") or "").strip()
@@ -1726,7 +1729,87 @@ _DIAGNOSE_RE = re.compile(
     r"not\s+work|doesn'?t\s+work|stack\s?trace|500\b|502\b|422\b|403\b|timeout)", re.I)
 
 
-def _roster_block() -> str:
+# --------------------------------------------------------------------------- #
+# `routing: require` — the one mark this design keeps, and what clears it.      #
+#                                                                              #
+# The mark says: the roster was shown this turn, at `require`, and nothing has  #
+# been dispatched since. It is written by the roster block, and cleared by any  #
+# of three things — a dispatch beginning (the routing happened), the ask having #
+# fired (once per turn, not once per edit), or the next prompt (a mark that     #
+# outlives its turn would ask about a roster nobody was shown).                 #
+#                                                                              #
+# Sub-agents need no detection because of the first of those: the dispatch that #
+# creates the sub-agent is what clears the mark, so there is nothing left to    #
+# fire inside it. Detection would have been a guess about the harness; this is  #
+# a fact about the sequence.                                                    #
+# --------------------------------------------------------------------------- #
+def _route_mark(sid: str | None) -> Path | None:
+    if not sid:
+        return None
+    return config.SESSIONS_DIR / f"{re.sub(r'[^A-Za-z0-9._-]', '', sid)}.route-pending"
+
+
+def _route_mark_set(sid: str | None, names: list[str]) -> None:
+    f = _route_mark(sid)
+    if f is None:
+        return
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        # The roster's NAMES, so the ask can list them without re-deriving the roster from
+        # a persona that may have changed mid-turn. Names only — the same counts-and-names
+        # discipline the tally keeps; no prompt text goes anywhere near this file.
+        f.write_text(",".join(names) + "\n")
+    except OSError:
+        pass
+
+
+def _route_mark_take(sid: str | None) -> list[str] | None:
+    """Read and clear the mark. Returns the roster names, or None when unmarked."""
+    f = _route_mark(sid)
+    if f is None or not f.exists():
+        return None
+    try:
+        val = f.read_text().strip()
+        f.unlink()
+    except OSError:
+        return None
+    return [n for n in val.split(",") if n]
+
+
+def _route_mark_clear(sid: str | None) -> None:
+    f = _route_mark(sid)
+    try:
+        if f is not None and f.exists():
+            f.unlink()
+    except OSError:
+        pass
+
+
+def pretooluse_edit() -> int:
+    """`require`'s tool-time half: ask once when a turn edits without dispatching.
+
+    Asks — never denies. A hard block would make a genuinely cross-cutting change
+    unworkable, and the fix a person reaches for then is `routing: off`, permanently.
+
+    The reason states a fact about this session (the roster was shown, nothing was
+    dispatched) and lists who was on it. It does not say which persona should have had the
+    work, because charter cannot know that (ADR 0016) — and a prompt that asserts it would
+    be wrong often enough to be dismissed on sight.
+    """
+    data = _read_stdin()
+    names = _route_mark_take(data.get("session_id"))
+    if not names:
+        return 0
+    who = ", ".join(f"`{n}`" for n in names)
+    _ask("PreToolUse",
+         f"the roster was shown this turn and nothing was dispatched — you are editing as "
+         f"the acting persona. Available: {who}. charter is not saying this is theirs; "
+         f"approve to carry on, or dispatch instead. (`routing: require`)")
+    _trace("routing-ask", data.get("session_id"))
+    return 0
+
+
+def _roster_block(sid: str | None) -> str:
     """Who else could take this work — facts only, never a verdict (ADR 0016).
 
     Fires when the ACTING persona declares ``routing: advise`` or ``require``. charter
@@ -1760,6 +1843,8 @@ def _roster_block() -> str:
             claim = r["delegate_when"] or f"{r['role']} work (no delegate-when declared)"
             rows.append(f"   • `{r['name']}` — {claim} · {when}")
         dispatch.record_advice()
+        if level == "require":
+            _route_mark_set(sid, [r["name"] for r in roster])
         return (
             f"⬡ **Who else could take this.** `{active}` declares `routing: {level}`, and "
             f"these personas advertise work of their own. charter is **not** saying which "
@@ -1783,7 +1868,7 @@ def _commitment_nudge(prompt: str, sid: str | None) -> str:
     # of the gate the sub-agent's problem, not this session's. Inside, because two blocks
     # on one prompt is how wallpaper gets manufactured, which is the failure this gate's
     # own history is about.
-    roster = _roster_block()
+    roster = _roster_block(sid)
     lead = roster + "\n\n" if roster else ""
     diagnosing = bool(_DIAGNOSE_RE.search(prompt or ""))
     if diagnosing:
@@ -1822,6 +1907,10 @@ def userpromptsubmit() -> int:
     data = _read_stdin()
     _touch_piece(data)
     sid = data.get("session_id")
+    # A mark belongs to the turn that made it. The gate has a cooldown, so a later prompt
+    # may show no roster at all — and an ask about a roster nobody was shown is exactly the
+    # stale prompt that gets a feature switched off.
+    _route_mark_clear(sid)
     parts = []
     try:
         msg = _config_update_nudge(sid)
@@ -1918,6 +2007,7 @@ _HANDLERS = {
     "pretooluse": pretooluse,
     "pretooluse-read": pretooluse_read,
     "pretooluse-dispatch": pretooluse_dispatch,
+    "pretooluse-edit": pretooluse_edit,
     "posttooluse": posttooluse,
     "posttooluse-skill": posttooluse_skill,
     "posttooluse-dispatch": posttooluse_dispatch,

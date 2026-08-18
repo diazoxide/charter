@@ -70,6 +70,16 @@
             "command": "charter hook pretooluse-dispatch --plugin-version 0.43.2"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "charter hook pretooluse-edit --plugin-version 0.43.2",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -101,6 +101,10 @@ class TestPluginManifest(unittest.TestCase):
             # (#90). Registered for Read|Grep only: Glob returns names, not contents.
             ("PreToolUse", "charter hook pretooluse-read --plugin-version"),
             ("PreToolUse", "charter hook pretooluse-dispatch --plugin-version"),
+            # `routing: require`'s tool-time half. Registered for the WRITE tools only:
+            # the ask is about editing without having dispatched, and a Read that triggered
+            # it would fire on the scouting the gate asks for two lines earlier.
+            ("PreToolUse", "charter hook pretooluse-edit --plugin-version"),
             ("PostToolUse", "charter hook posttooluse --plugin-version"),
             # The skill tally: which skills a persona actually invokes, against the ones its
             # charter declares and the host preloads on every dispatch.

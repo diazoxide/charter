@@ -66,6 +66,10 @@ with the **roster** — who else exists, what each advertises, when each was las
 One message, not two: two blocks on one prompt is how a nudge becomes wallpaper. charter
 never says which persona owns the prompt (ADR 0016); see `docs show personas`.
 
+At `routing: require` a second, quieter hook joins it: `PreToolUse` on `Write|Edit|MultiEdit`
+**asks** once when a turn edits after the roster fired and nothing was dispatched. It never
+denies, and a dispatch — or the next prompt — clears it.
+
 ## What gets counted
 
 Two tallies — tracked, not ignored, though charter never commits them for you (`[memory].share` defaults to `local`) — both counts-and-dates only, never prompt text, and both

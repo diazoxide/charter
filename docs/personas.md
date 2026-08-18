@@ -275,7 +275,7 @@ routes-to: forge, release
 | --- | --- |
 | `off` | nothing. The default when the key is absent. |
 | `advise` | on a work-shaped prompt, the commitment gate leads with the roster. |
-| `require` | the same today; a tool-time check lands in a later release. |
+| `require` | the same, plus an **ask** on the first edit of a turn where the roster fired and nothing was dispatched. |
 
 There is **no plane-level routing setting**. The level is only ever read from the one
 persona acting in a session, so a plane-wide floor would apply to personas that never asked
@@ -292,6 +292,16 @@ work stays put.
 It never names the owner. A keyword overlap between a prompt and a prose advert is not
 evidence of ownership, and the first confident wrong answer would cost the block the reader
 it needs. That decision, and its consequences, are recorded in `docs/adr/0016`.
+
+At `require`, the same restraint shapes the permission prompt: it states that the roster was
+shown and nothing was dispatched, lists who was on it, and says charter is not claiming the
+work is theirs. It **asks and never denies** — a hard block would make a genuinely
+cross-cutting change unworkable, and the fix people reach for then is `routing: off`,
+permanently. It asks once per turn, not once per edit.
+
+Sub-agents never see it: the mark is cleared the moment a dispatch begins, so a persona that
+was handed work is never told to hand it on. That is a property of the sequence rather than
+a guess about the harness.
 
 `routes-to:` puts named personas first. It **prioritises and never restricts** — a
 restriction would silently hide every persona created after the line was written.
