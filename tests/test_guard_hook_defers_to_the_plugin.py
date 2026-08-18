@@ -19,11 +19,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from charter import commands
+from unittest import mock
+
+from charter import commands, doctor
 
 
 class _Plane(unittest.TestCase):
     def setUp(self) -> None:
+        # Mocked, never read from the machine: the real one inspects the DEVELOPER's
+        # ~/.claude/plugins, so these tests passed or failed by who ran them.
+        self.dispatching = self.enterContext(
+            mock.patch.object(doctor, "_plugin_declaring_guard", return_value=None))
         self.root = Path(tempfile.mkdtemp(prefix="charter-guardhook-"))
         self.addCleanup(lambda: shutil.rmtree(self.root, True))
         self.settings = self.root / ".claude" / "settings.json"
@@ -36,29 +42,27 @@ class _Plane(unittest.TestCase):
         return json.loads(self.settings.read_text()).get("hooks", {})
 
 
-class WhenThePluginIsEnabled(_Plane):
+class WhenAPluginDispatchesTheGuard(_Plane):
     def test_no_hook_is_declared(self):
-        self._write({"enabledPlugins": {"charter@charter": True}})
+        self.dispatching.return_value = "charter@charter"
+        self._write({})
         status, _ = commands._ensure_guard_hook(self.root)
         self.assertEqual(status, "present")
         self.assertEqual(self._hooks(), {},
                          "the plugin declares pretooluse; declaring it here too runs "
                          "charter twice per Bash call")
 
-    def test_a_disabled_plugin_is_not_a_declaration(self):
-        """`enabled: false` means the operator turned it off. The hook is then the only
-        thing standing between the plane root and an unguarded branch move."""
-        self._write({"enabledPlugins": {"charter@charter": False}})
+    def test_a_plugin_that_dispatches_nothing_is_not_a_declaration(self):
+        """Installed, enabled and wired are three states and only the third protects
+        anything (#177). 0.43.1 read `enabledPlugins` and would have skipped the hook for
+        a plugin from before the guard existed — leaving the plane root unguarded while
+        looking configured."""
+        self._write({"enabledPlugins": {"charter@charter": True}})   # enabled, wires nothing
         commands._ensure_guard_hook(self.root)
         self.assertIn("PreToolUse", self._hooks())
 
-    def test_somebody_elses_plugin_does_not_count(self):
-        self._write({"enabledPlugins": {"other@marketplace": True}})
-        commands._ensure_guard_hook(self.root)
-        self.assertIn("PreToolUse", self._hooks())
 
-
-class WhenThereIsNoPlugin(_Plane):
+class WhenNothingDispatchesIt(_Plane):
     def test_the_hook_is_still_written(self):
         self._write({"statusLine": {"type": "command", "command": "charter statusline"}})
         self.assertEqual(commands._ensure_guard_hook(self.root)[0], "created")

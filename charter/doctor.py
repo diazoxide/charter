@@ -563,18 +563,40 @@ def check_guard_wired() -> Result:
     name = "plane-root guard"
     if not _config.HAS_CONTROL_PLANE:
         return Result(name, OK, detail="no control plane found")
-    if os.environ.get("CLAUDE_PLUGIN_ROOT"):
-        return Result(name, OK, detail="wired (Claude Code plugin)")
-    installed = _plugin_declaring_guard()
-    if installed:
-        return Result(name, OK, detail=f"wired (enabled plugin {installed})")
 
+    # `commands._ensure_guard_hook` asks the SAME question through the same function.
+    # Reading different evidence is how a writer and a checker disagreed about "wired"
+    # and left the guard declared twice — and enabled is not dispatched (#177).
+    plugin = ("Claude Code plugin" if os.environ.get("CLAUDE_PLUGIN_ROOT")
+              else _plugin_declaring_guard())
+
+    declared = []
     for p in _settings_files():
         try:
             if "charter hook pretooluse" in p.read_text():
-                return Result(name, OK, detail=f"wired ({p})")
+                declared.append(p)
         except (OSError, UnicodeDecodeError):
             continue
+
+    if plugin and declared:
+        # Not broken — doubled, which is why nobody finds it: two denials for one command
+        # read as one stubborn denial. 0.43.1 stopped `init` writing this; planes wired
+        # before it still carry the copy, and charter will not delete from a file that is
+        # the operator's and git-tracked.
+        where = ", ".join(str(p) for p in declared[:2])
+        return Result(name, WARN,
+                      detail=f"declared twice — the {plugin} dispatches it, and so does "
+                             f"{where}",
+                      hint=f"charter runs `hook pretooluse` once per declaration, so every "
+                           f"Bash call is guarded twice. Remove the charter `hooks` block "
+                           f"from {where} and keep the plugin — or disable the plugin and "
+                           f"keep the block. charter does not edit that file for you.")
+    if plugin:
+        detail = ("wired (Claude Code plugin)" if plugin == "Claude Code plugin"
+                  else f"wired (enabled plugin {plugin})")
+        return Result(name, OK, detail=detail)
+    if declared:
+        return Result(name, OK, detail=f"wired ({declared[0]})")
     return Result(name, WARN,
                   detail="pretooluse is not wired — branch moves in the plane root are "
                          "NOT refused",

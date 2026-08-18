@@ -706,25 +706,21 @@ def _hooks_snippet() -> str:
     return json.dumps({"hooks": {"PreToolUse": [_GUARD_HOOK]}}, indent=2)
 
 
-def _charter_plugin_enabled(settings_path: Path) -> bool:
-    """Is a charter plugin switched on in *settings_path*'s ``enabledPlugins``?
+def _plugin_dispatches_guard() -> str | None:
+    """The enabled plugin whose own ``hooks.json`` dispatches `charter hook pretooluse`.
 
-    ``enabled: false`` is not a declaration — the operator turned it off, and the hook is
-    then the only thing between the plane root and an unguarded branch move. Somebody
-    else's plugin does not count either.
+    Deliberately NOT "is a charter plugin enabled". `doctor._plugin_declaring_guard`
+    records why, and 0.43.1 got it wrong by reading `enabledPlugins` instead: **installed,
+    enabled and wired are three different states, and only the third protects anything**
+    (#177). A plugin from before the guard existed is enabled and dispatches nothing — and
+    skipping the hook for it would leave the plane root unguarded while looking configured.
 
-    Never raises: a malformed file is handled by the caller, which refuses to repair it.
+    Shared with `doctor.check_guard_wired` on purpose. A writer and a checker answering
+    "is this wired?" from different evidence is how the guard came to be declared twice.
     """
-    try:
-        doc = json.loads(settings_path.read_text())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    if not isinstance(doc, dict):
-        return False
-    enabled = doc.get("enabledPlugins")
-    if not isinstance(enabled, dict):
-        return False
-    return any(on and str(name).split("@")[0] == "charter" for name, on in enabled.items())
+    from . import doctor
+
+    return doctor._plugin_declaring_guard()
 
 
 def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
@@ -745,7 +741,7 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     # `charter hook pretooluse` runs twice for every Bash call — the same doubling Codex
     # got from two installers, arrived at here by one writer and one checker disagreeing
     # about what "wired" means in the same file.
-    if _charter_plugin_enabled(p):
+    if _plugin_dispatches_guard():
         return "present", p
     if not p.exists():
         try:
