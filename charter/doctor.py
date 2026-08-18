@@ -965,8 +965,14 @@ def check_shadowed_knowledge() -> Result:
     (ADR 0013). Charter names what is being shadowed and what it costs.
     """
     name = "shadowed docs"
+    # `_config`, imported here, the way every other check in this module reads the root.
+    # A bare `config` was never bound in this scope, so this check raised NameError on
+    # every single invocation and the `except` below rendered it as a benign environment
+    # warning — a mechanism that looks wired and is not, inside the check written to find
+    # exactly that (ADR 0014).
+    from . import config as _config
     try:
-        hit = shadowed_knowledge(config.ROOT)
+        hit = shadowed_knowledge(_config.ROOT)
     except Exception as e:  # noqa: BLE001 - a preflight line must never be the thing that fails
         return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
 

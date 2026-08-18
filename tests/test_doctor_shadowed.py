@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from charter import doctor, docsrc  # noqa: F401
+from charter import config, doctor, docsrc  # noqa: F401
 from tests._isolation import PersonaIso
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -146,3 +146,60 @@ class TestCharterItselfIsExemptHoweverItWasInstalled(PersonaIso):
         topic = (docsrc.topics() or ["personas"])[0]
         (root / "docs" / f"{topic}.md").write_text("# a local copy\n")
         self.assertIn(topic, doctor.shadowed_knowledge(root)["docs"])
+
+
+class TestTheCheckItselfIsWired(PersonaIso):
+    """The helper was well covered and the check could never run.
+
+    `tests/test_doctor_shadowed.py` exercised only `shadowed_knowledge(root)` with an
+    explicit argument, so the one line that resolves the root — the only line that could
+    raise — was never executed. 2201 tests passed over a check that raised NameError on
+    every invocation, and the `except Exception` around it rendered that as a benign
+    "not checked" environment warning.
+
+    A helper-only test cannot catch a wiring bug by construction. This calls the check.
+    """
+
+    def test_it_returns_a_real_verdict(self):
+        r = doctor.check_shadowed_knowledge()
+        self.assertIn(r.status, (doctor.OK, doctor.WARN))
+        self.assertNotIn("not checked", r.detail)
+
+    def test_it_reports_a_shadow_when_there_is_one(self):
+        """Wired AND correct: the check reaches the helper whose logic the rest of this
+        file covers."""
+        topic = (docsrc.topics() or ["personas"])[0]
+        docs = Path(config.ROOT) / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / f"{topic}.md").write_text("# a local copy\n")
+        r = doctor.check_shadowed_knowledge()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertIn(topic, r.detail)
+
+
+class TestNoCheckHidesAPythonErrorInAWarning(PersonaIso):
+    """The class, not the instance.
+
+    Any check whose `not checked` branch can be reached by a NameError or AttributeError
+    reports a code defect as a soft environment warning — which reads as "your machine is
+    odd" rather than "this is broken", and is why the above shipped green.
+
+    Asserting on the *exception signature* rather than on the words "not checked": a
+    genuinely unreadable directory or a timed-out subprocess is entitled to say that, and a
+    test forbidding it outright would be wrong the first time someone's disk misbehaved.
+    """
+
+    #: What a leaked Python error looks like inside a detail string.
+    _SIGNATURES = ("is not defined", "has no attribute", "NameError", "AttributeError",
+                   "TypeError", "unexpected keyword", "not subscriptable")
+
+    def test_no_check_reports_a_python_error_as_an_environment_warning(self):
+        leaked = []
+        for r in doctor.run_all():
+            blob = f"{r.detail} {r.hint}"
+            for sig in self._SIGNATURES:
+                if sig in blob:
+                    leaked.append(f"{r.name}: {r.detail}")
+                    break
+        self.assertEqual(leaked, [], "a code defect is being reported as 'not checked':\n"
+                                     + "\n".join(leaked))
