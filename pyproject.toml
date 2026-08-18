@@ -55,3 +55,4 @@ packages = ["charter"]
 "docs/mcp.md" = "charter/_docs/mcp.md"
 "docs/personas.md" = "charter/_docs/personas.md"
 "docs/secrets.md" = "charter/_docs/secrets.md"
+"docs/workspaces.md" = "charter/_docs/workspaces.md"

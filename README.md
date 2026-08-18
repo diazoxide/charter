@@ -303,6 +303,9 @@ copy wins, is compared to nothing, and drifts unwatched in both directions.
   self-hosted example, a mixed-forge example, the memory posture, the version pin.
 - [docs/personas.md](docs/personas.md) — the charter format, inheritance, the memory model,
   and dispatching a persona as a sub-agent, end to end.
+- [docs/workspaces.md](docs/workspaces.md) — the session lock and how to get out of it,
+  LIVE vs LOCAL and where your notes actually go, and what belongs in `workspace.md`
+  versus memory versus the manifest.
 - [docs/secrets.md](docs/secrets.md) — exactly what the vault does and does not protect
   against, `secret exec`, and feeding a tool that wants a dotenv file.
 - [docs/git-policy.md](docs/git-policy.md) — the one-credential rule, and why a denial from
