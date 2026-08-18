@@ -40,7 +40,21 @@ def path() -> Path:
     return Path(config.STATE_DIR) / FILE_NAME
 
 
-def mark(harness: str | None = None, when: datetime | None = None) -> Path | None:
+#: Source recorded when the running process was launched by the plugin — `$CLAUDE_PLUGIN_ROOT`
+#: is set only for a command the plugin itself dispatches, which is the one fact that
+#: distinguishes a declaration that IS loaded from one that is merely enabled (#261).
+PLUGIN = "plugin"
+#: Source recorded otherwise: a `charter hook pretooluse` line in a settings file.
+SETTINGS = "settings"
+
+
+def _source() -> str:
+    import os
+    return PLUGIN if os.environ.get("CLAUDE_PLUGIN_ROOT") else SETTINGS
+
+
+def mark(harness: str | None = None, when: datetime | None = None,
+         source: str | None = None) -> Path | None:
     """Record that a guard just ran. Best-effort — never raises, never blocks a turn.
 
     Called from the guard handler itself rather than from `sessionstart`, and that choice is
@@ -57,14 +71,32 @@ def mark(harness: str | None = None, when: datetime | None = None) -> Path | Non
         except Exception:
             harness = None
     when = when or datetime.now(timezone.utc)
+    # WHICH declaration dispatched this, so a sighting can never be read as evidence for a
+    # declaration that did not produce it. The reporter deleted the settings block on
+    # doctor's own advice, and the sighting it left behind then read as proof that the
+    # plugin replacing it was live — while the running session held no declaration at all
+    # (#261). A sighting belongs to the thing that made it.
+    src = source or _source()
     p = path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps({"ts": when.isoformat(timespec="seconds"),
-                                 "harness": harness}, sort_keys=True) + "\n")
+                                 "harness": harness, "source": src},
+                                sort_keys=True) + "\n")
         return p
     except OSError:
         return None
+
+
+def last_source() -> str | None:
+    """Which declaration produced the latest sighting, or ``None`` when it predates the
+    field. ``None`` means *unknown*, never *suspect*: a plane that upgrades mid-week must
+    not have its own history read back to it as a fault."""
+    rec = last()
+    if not rec:
+        return None
+    val = rec.get("source")
+    return str(val) if val else None
 
 
 def last() -> dict | None:

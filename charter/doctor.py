@@ -592,9 +592,30 @@ def check_guard_wired() -> Result:
                            f"from {where} and keep the plugin — or disable the plugin and "
                            f"keep the block. charter does not edit that file for you.")
     if plugin:
-        detail = ("wired (Claude Code plugin)" if plugin == "Claude Code plugin"
-                  else f"wired (enabled plugin {plugin})")
-        return Result(name, OK, detail=detail)
+        if plugin == "Claude Code plugin":
+            # `$CLAUDE_PLUGIN_ROOT` means this very process was launched by the plugin, so
+            # its hooks are demonstrably live. Nothing to qualify.
+            return Result(name, OK, detail="wired (Claude Code plugin)")
+        # ENABLED is not LOADED (#261). A plugin's hooks are loaded by the harness at
+        # session start, so a plugin installed mid-session — or one whose duplicate
+        # settings block was just removed on this check's own advice — is declared for the
+        # NEXT session while this one holds no declaration at all. The reporter branched
+        # the plane root in that window and nothing refused it.
+        #
+        # Reaching the handler is the only proof available, which is what `guardseen`
+        # exists to record; a sighting from THIS plugin is that proof.
+        from . import guardseen as _seen
+        if _seen.last_source() == _seen.PLUGIN:
+            return Result(name, OK,
+                          detail=f"wired (enabled plugin {plugin}) — and it has fired here")
+        return Result(
+            name, WARN,
+            detail=f"enabled plugin {plugin} declares it, but nothing has fired here yet — "
+                   f"a plugin's hooks load at session start, so this is wired for the NEXT "
+                   f"session and THIS one may be unguarded",
+            hint="Restart the session (or run a Bash command through it and re-check). If "
+                 "you just removed a duplicate `hooks` block on this check's advice, that "
+                 "was right — but it was the declaration this session actually had.")
     if declared:
         return Result(name, OK, detail=f"wired ({declared[0]})")
     return Result(name, WARN,
@@ -659,6 +680,16 @@ def check_harness() -> Result:
     return Result(name, OK, detail=f"{current} — {len(gaps)} capability ceiling{plural}\n{listed}")
 
 
+def _read_text(p) -> str:
+    """A settings file's text, or ``""`` when it cannot be read. A file charter is not
+    allowed to open is not evidence of anything, and a preflight row must render whatever
+    it finds rather than raise on it."""
+    try:
+        return p.read_text()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def check_guard_seen() -> Result:
     """Has a guard ever actually RUN here, and under which harness?
 
@@ -685,6 +716,26 @@ def check_guard_seen() -> Result:
     if rec:
         at = _seen_age(rec.get("ts"))
         where = rec.get("harness") or "an unnamed harness"
+        # A sighting is evidence for the declaration that PRODUCED it and for no other. The
+        # settings block that fired minutes ago can have been deleted since — on this
+        # command's own duplicate-guard advice — and "last ran 0m ago" then invites the
+        # reader to conclude the surviving declaration is working (#261). An unrecorded
+        # source predates the field and stays unqualified: unknown is not suspect.
+        src = _seen.last_source()
+        settings_declare = any("charter hook pretooluse" in _read_text(p)
+                               for p in _settings_files())
+        # Narrow deliberately: `settings` is also what a Codex or opencode dispatch records,
+        # and those declarations live in files this check never reads (`~/.codex/config.toml`),
+        # so "no settings file declares it" alone would warn at planes that are wired fine.
+        # The reported case is specific — the settings block was removed in favour of a
+        # plugin — so the plugin has to be the thing that survived it.
+        if src == _seen.SETTINGS and not settings_declare and _plugin_declaring_guard():
+            return Result(
+                name, WARN,
+                detail=f"last ran {at} ago under {where}, but from a settings declaration "
+                       f"that is no longer there",
+                hint="That sighting is not evidence for whatever declares the guard now. "
+                     "Run a Bash command in a fresh session and re-check.")
         return Result(name, OK, detail=f"last ran {at} ago under {where}")
     if not _seen.plane_has_been_used():
         return Result(name, OK, detail="plane not worked in yet")

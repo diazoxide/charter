@@ -25,7 +25,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import config, doctor
+from charter import guardseen, config, doctor
 
 
 class _Plane(unittest.TestCase):
@@ -72,6 +72,10 @@ class DeclaredOnce(_Plane):
     def test_the_plugin_alone_is_a_clean_row(self):
         self.dispatching.return_value = "charter@charter"
         self._write({})
+        # #261: enabled is not loaded — a plugin's hooks arrive at session start, so the
+        # tick now needs proof the declaration actually fired. This test's own reasoning
+        # already rested on that ("the guard demonstrably fired"); it is now checkable.
+        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
         r = doctor.check_guard_wired()
         self.assertEqual(r.status, doctor.OK)
         self.assertIn("plugin", r.detail)

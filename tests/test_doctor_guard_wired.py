@@ -20,7 +20,7 @@ import os
 import unittest
 from pathlib import Path
 
-from charter import commands, config, doctor
+from charter import guardseen, commands, config, doctor
 from tests._isolation import PersonaIso
 
 OK, WARN = doctor.OK, doctor.WARN
@@ -105,6 +105,10 @@ class TestEveryWiringRouteCounts(GuardWiredCase):
 
     def test_an_enabled_plugin_counts(self):
         self._install(enabled=True)
+        # #261: enabled is not loaded — a plugin's hooks arrive at session start, so the
+        # tick now needs proof the declaration actually fired. This test's own reasoning
+        # already rested on that ("the guard demonstrably fired"); it is now checkable.
+        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
         self.assertEqual(doctor.check_guard_wired().status, OK)
 
     def test_a_plugin_disabled_by_an_explicit_false_does_not_count(self):
@@ -125,6 +129,10 @@ class TestEveryWiringRouteCounts(GuardWiredCase):
         plug = self._install(enabled=True)
         (plug / ".claude-plugin").mkdir(parents=True, exist_ok=True)
         (plug / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "0.29.1"}))
+        # #261: enabled is not loaded — a plugin's hooks arrive at session start, so the
+        # tick now needs proof the declaration actually fired. This test's own reasoning
+        # already rested on that ("the guard demonstrably fired"); it is now checkable.
+        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
         self.assertEqual(doctor.check_guard_wired().status, OK)
 
     def test_an_enabled_plugin_that_wires_something_else_does_not_count(self):
@@ -151,6 +159,10 @@ class TestEveryWiringRouteCounts(GuardWiredCase):
         # Enabled too, since #177: installation alone no longer satisfies the check.
         self.settings(Path(config.ROOT) / ".claude" / "settings.json",
                       {"enabledPlugins": {"charter@charter": True}})
+        # And fired, since #261: enabled is not loaded. This test's own reasoning is that
+        # the check warned "on a machine where the plugin was installed and the guard
+        # demonstrably fired" — the sighting is that demonstration, now recorded.
+        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
         self.assertEqual(doctor.check_guard_wired().status, OK)
 
     def test_a_plugin_that_does_not_declare_the_guard_does_not_count(self):
