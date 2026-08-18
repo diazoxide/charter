@@ -60,7 +60,7 @@ class TestTheStampIsUsable(unittest.TestCase):
         drawings (`model.svg`, `social-card.svg`) have no source to re-run and are
         deliberately not listed — see docs/assets/README.md."""
         doc = json.loads(_STAMP.read_text())
-        captures = {"demo.svg", "statusline.svg"}
+        captures = {"demo.svg", "personas.svg", "statusline.svg"}
         self.assertEqual(captures - set(doc), set(),
                          "a capture exists with no recorded version")
 

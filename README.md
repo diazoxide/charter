@@ -5,19 +5,21 @@
 [![Tests](https://github.com/diazoxide/charter/actions/workflows/test.yml/badge.svg)](https://github.com/diazoxide/charter/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**charter** is a control plane for coding agents working across many repos on GitHub or
+**Your agent forgets everything, holds every credential, and works in one checkout.**
+
+![The charter status line: the active workspace and its open todos, four cloned repos with their branches, dirty and unpushed markers, CI status and open pull requests, then the personas with their vault and memory state.](docs/assets/statusline.svg)
+
+charter is a control plane for coding agents working across many repos on GitHub or
 GitLab: durable **personas**, isolated per-task **workspaces**, and a credential **vault**
 the model never reads from. It runs inside **Claude Code, opencode and Codex**, enforcing
 the same rules in each.
 
-![The charter status line: the active workspace and its open todos, four cloned repos with their branches, dirty and unpushed markers, CI status and open pull requests, then the personas with their vault and memory state.](docs/assets/statusline.svg)
-
-That is the status line under Claude Code, redrawn from disk every turn — the task you're on,
-the repos it owns and what branch each is sitting on, which are dirty or unpushed, CI and
-open PRs, and the roles you can hand work to. No git subprocess and no network on the
-render path. It is generated, not mocked: `docs/assets/` holds the script that produced it.
-On a harness with no status bar, `charter statusline --watch` puts the same render in any
-spare terminal.
+That image is the status line under Claude Code, redrawn from disk every turn — the task
+you're on, the repos it owns and what branch each is sitting on, which are dirty or
+unpushed, CI and open PRs, and the roles you can hand work to. No git subprocess and no
+network on the render path. It is generated, not mocked: `docs/assets/` holds the script
+that produced it. On a harness with no status bar, `charter statusline --watch` puts the
+same render in any spare terminal.
 
 ## 60 seconds
 
@@ -35,12 +37,14 @@ charter discover
 charter clone some-repo
 ```
 
-**Two artifacts, and they are not redundant.** The CLI is a single machine-global install —
-it is what you type in your own terminal, and what CI or a cron job runs. The plugin is
-installed **per project**, out of a cache Claude Code keeps holding every version at once,
-which is why a *plane's* pinned version is the plugin's and not the binary's: two planes on
-one laptop can sit on different charters without fighting.
-→ [docs/install.md](docs/install.md)
+**Two artifacts, and you want both.** The CLI is a single machine-global install — what you
+type in your own terminal, and what CI or a cron job runs. The plugin is installed **per
+project**, out of a cache Claude Code keeps holding every version at once, which is why a
+*plane's* pinned version is the plugin's and not the binary's: two planes on one laptop can
+sit on different charters without fighting. A CLI-only install leaves the plugin's hooks
+inert, and the plugin ships no Python of its own — every hook it declares shells out to the
+CLI. The plugin loads on the **next** session, so restart after installing it.
+→ **[docs/install.md](docs/install.md)**
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,
   `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and the status line
@@ -53,93 +57,78 @@ one laptop can sit on different charters without fighting.
 - **`charter clone <repo>`** clones on demand into the active workspace, already carrying
   the one-credential git policy below.
 
-charter ships as **two artifacts** and you want both: a CLI-only install leaves the
-plugin's hooks inert, and the plugin ships no Python of its own — every hook it declares
-shells out to the CLI. The plugin loads on the **next** session, so restart after
-installing it. Full install notes, alternatives to `uv`, and a prompt you can paste into
-Claude Code to do all of it: **[docs/install.md](docs/install.md)**.
+## You don't need charter if
 
-## You use Claude Code. A teammate uses opencode. CI runs Codex.
+- You work in **one repo**, on **one task at a time**.
+- Your agent touches **no credential** you'd mind seeing in a transcript.
+- Nothing it works out in a session is worth having **next week**.
 
-Same repos, same rules — or three sets of habits that drift until nobody knows which
-guard is actually running. charter runs inside all three and enforces the same invariants
-in each: the plane-root guard, the one-credential rule, the secret-leak check, and the
-persona's declared tools.
+Any one of those and this is overhead. If two or three of them made you wince, keep
+reading — each section below is a failure that happened often enough to get built around.
 
-```bash
-charter harness list          # every harness, what it can't carry, and which one you're in
-charter harness install codex # Codex only — see below
-```
+---
 
-```
-  claude-code
-* opencode
-      ↳ status-bar: no status-bar socket: opencode has no `statusLine` config …
-          → charter statusline --watch
-      ↳ prompt-hook: no per-turn prompt hook: charter's mid-session nudges ride …
-  codex
-      ↳ status-bar: `tui.status_line` takes a list of built-in segments, not a command …
-          → charter statusline --watch
-      ↳ session-lock: `shell_environment_policy.set` holds constants, so no per-session …
-      ↳ wiring-scope: no project-level config: hooks live only in `~/.codex/config.toml` …
-```
-
-The `*` is the harness this session is in, and those names are what `$CHARTER_HARNESS`
-holds. A harness charter has no record of is reported too, as a warning rather than a
-clean row — an unverified integration and a complete one must not read the same.
-
-`charter init` writes each harness's wiring into the plane, and `charter clone` /
-`charter worktree add` arm every tree as it is created, because a session starts in a
-clone and not in the plane root. Nothing to install per harness, with one exception.
-
-**What differs is not what charter enforces — it is what each harness lets charter
-offer**, and `charter doctor` prints the gap rather than leaving you to find it:
-
-| | how it is installed | what it cannot carry | what to do about it |
-| --- | --- | --- | --- |
-| Claude Code | the plugin (`claude plugin install charter@charter`) | — | — |
-| opencode | `charter init` — one plugin under opencode's config dir, read by every project | no status bar; no per-turn prompt hook | `charter statusline --watch`; mid-session notes ride tool output already |
-| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | no status bar; no command-pattern permissions | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
-
-One artifact per harness, installed once — nothing is written into the repos you work in.
-`charter doctor` and `charter harness list` print that fourth column against whichever
-harness you are in, each ceiling carrying its own answer. Where it is empty it stays empty:
-charter cannot conjure opencode a per-turn prompt hook, and a workaround that does not
-exist costs more to chase than an honest gap.
-
-**`charter statusline --watch`** is the one worth knowing. It repaints the plane state in
-place in any spare terminal — no status-bar socket, no multiplexer, the same render on
-every harness including the one that has a bar. It shows the plane, not the session, so
-the token and context columns are blank and it says so.
-
-Codex needs the extra command for one reason: its hooks arrive with the plugin, but
-nothing in a plugin can tell a shell which harness it is, so `charter harness install
-codex` writes that single line. If it finds hooks declared in `~/.codex/config.toml` it
-refuses and says so — those would run alongside the plugin's, and charter would fire twice
-a turn. Why the boundary sits where it does:
-**[docs/adr/0015-the-boundary-moves-with-the-harness.md](docs/adr/0015-the-boundary-moves-with-the-harness.md)**.
-
-## Why charter
-
-Each of these is something that went wrong often enough to get built around.
-
-### Dozens of repos, and several tasks in flight at once
+## Dozens of repos, several tasks in flight, one checkout
 
 A team's work doesn't sit in one repository, and an engineer rarely has one task open. Two
 features and a hotfix means three sets of branches across a shifting set of repos, and if
-they share a checkout you spend the day stashing. A **workspace** is one directory of
-clones per task (`workspaces/<task>/<repo>`), each repo on its own branch, so moving
-between tasks is `charter workspace use <name>` and nothing follows you across.
+they share a checkout you spend the day stashing.
 
-### Two sub-agents that need the same repo
+![A control plane holds an inventory of every repo in the org, personas each with their own memory and vault, and one workspace directory per task. Each workspace holds repo clones on their own branches, and a clone can be split into git worktrees so parallel sub-agents each get a branch of the same repo.](docs/assets/model.svg)
 
-Splitting a task across parallel sub-agents falls apart the moment both want the same
-repository on different branches. Cloning it twice wastes the disk and they still collide.
-A **worktree** splits one clone into several checkouts (`.worktrees/<repo>/<piece>`), a
-branch each, so the pieces genuinely run at the same time. `charter worktree remove`
-refuses if it would drop uncommitted or unpushed work.
+A **workspace** is one directory of clones per task (`workspaces/<task>/<repo>`), each repo
+on its own branch. Moving between tasks is `charter workspace use <name>` and nothing
+follows you across — no stash, no context bleed, no half-applied branch from yesterday.
 
-### You are always teaching the agent the same things
+**Two sub-agents that need the same repo** is the case that breaks everything else.
+Cloning it twice wastes the disk and they still collide. A **worktree** splits one clone
+into several checkouts (`.worktrees/<repo>/<piece>`), a branch each, so the pieces
+genuinely run at the same time. `charter worktree remove` refuses if it would drop
+uncommitted or unpushed work.
+
+**A workspace carries its own intent.** Claude Code's task list dies with the session;
+`charter ws todo` records what the task still means to do, and each workspace holds a
+one-line **Vision** that a fork inherits.
+
+**And it travels.** `charter workspace snapshot` writes repos and branches into a committed
+manifest, `restore` rebuilds the whole thing on another machine, and `fork` copies a
+workspace's charter, manifest and memory. A workspace marked **LIVE**
+(`charter workspace live`) commits its manifest and memory, so several engineers can work
+the same task and share what each session learned. Workspaces are `local` — fully private,
+nothing committed — until you say otherwise.
+
+**Its own repo, or yours.** A control plane is any directory holding `charter.toml`, so it
+can be a dedicated repo — a monorepo *for* your polyrepo — or `charter init` inside the
+monorepo you already have, which offers to clone that repo into `workspaces/default/`.
+Either way work happens in the workspace clones, **never in the plane root**: two sessions
+sharing one working tree thrash each other's branches, so the status line and `doctor` warn
+when the plane root is dirty or off its default branch.
+→ [docs/workspaces.md](docs/workspaces.md)
+
+---
+
+## One agent holding every credential and every context
+
+A single agent carrying every token, every convention and every repo's history is both a
+security problem and a quality one — it has access it doesn't need for the task in front of
+it, and a context full of things that don't apply.
+
+![charter persona list: three personas — devops, qa and reviewer — each with a role, a named vault and its status, with the active one marked.](docs/assets/personas.svg)
+
+A **persona** is a small named scope with its own charter, its own committed memory, its own
+vault, and a `delegate-when` line saying what should be handed to it. `charter persona
+sync-agents` turns each one into a real Claude Code sub-agent, so dispatching a role is
+ordinary delegation rather than a prompt trick.
+
+They compose the way people do: `extends:` inherits a parent's charter, `uses:` says this
+role routes work to that one, and `agent-tools` narrows what the generated sub-agent may
+touch. They are committed files, so a persona is a team artifact — your `reviewer` is your
+teammate's `reviewer`.
+→ [docs/personas.md](docs/personas.md)
+
+---
+
+## You are always teaching the agent the same things
 
 `CLAUDE.md` holds what you sat down and wrote. It doesn't hold what the agent worked out at
 2am — that the flaky checkout test is a DNS timeout rather than the code, that billing
@@ -161,25 +150,19 @@ flowchart LR
     r --> s["next session — yours,<br/>or a teammate's agent"]
 ```
 
-One fact per markdown file. `charter recall` searches the workspace's notes, the active
-role's own notes and the shared ones in a single pass — by keyword, or with `--since 2w`
-and `--all-workspaces` for when you remember roughly *when* something was decided but not
-where or in what words. They are ordinary committed files, so a teammate's agent can start
-where yours left off.
+Memory has three dimensions and they do different jobs: **a persona's own** (what this role
+knows), **shared** (what every role should know), and **the workspace's** (what this task
+established). One fact per markdown file.
 
-### One agent that holds every credential and every context
+`charter recall` searches all three in a single pass — by keyword, or with `--since 2w` and
+`--all-workspaces` for when you remember roughly *when* something was decided but not where
+or in what words. They are ordinary files, so how far a note travels — disk only,
+committed, or pushed to the team — is one setting, `[memory].share`, and it defaults to
+`local`.
 
-A single agent carrying every token, every convention and every repo's history is both a
-security problem and a quality one — it has access it doesn't need for the task in front of
-it, and a context full of things that don't apply. A **persona** is a small named scope
-(`devops`, `qa`, `reviewer`) with its own charter, its own committed memory, its own vault,
-and a `delegate-when` line saying what should be handed to it. `charter persona
-sync-agents` turns each one into a real Claude Code sub-agent, so dispatching a role is
-ordinary delegation rather than a prompt trick. They compose the way people do: `extends:`
-inherits a parent's charter, `uses:` says this role routes work to that one, and
-`agent-tools` narrows what the generated sub-agent may touch.
+---
 
-### Credentials that end up in the transcript
+## Credentials that end up in the transcript
 
 The moment an agent reads a token, that token is in the context window — and from there in
 the transcript, the logs, and any summary fed into a later prompt. A **vault** hands the
@@ -206,62 +189,66 @@ sequenceDiagram
 ```
 
 Reads are masked by default, `--reveal` refuses a non-interactive stdout, and the plugin's
-guard denies both that flag and `cat`-ing a vault file outright. Read
-**[docs/secrets.md](docs/secrets.md)** before storing anything real: the default provider
-is plaintext at mode 0600, so what this buys you is *the model never seeing the value* —
-not encryption at rest. The vault is not a password manager.
+guard denies both that flag and `cat`-ing a vault file outright.
 
-### Also in the box
+**Vaults are pluggable, and the provider is where the storage guarantee comes from.** Three
+ship today — `plain_file`, `reference` (point at a value that lives elsewhere) and
+**`1password`** — and more are coming. Read [docs/secrets.md](docs/secrets.md) before
+storing anything real: **`plain_file` is plaintext at mode 0600, with no encryption at
+rest.** What every provider buys you is the same and it is the point — *the model never
+sees the value*. What only a real backend buys you is encryption. The vault is not a
+password manager; 1Password is, and charter will read from it.
 
-- **An unattended run that stops to ask a question.** Every git operation authenticates
-  with that repo's own forge CLI token over HTTPS — never an SSH key, never signing —
-  because a passphrase prompt hangs an agent until it times out.
-  → [docs/git-policy.md](docs/git-policy.md)
-- **What the task still means to do.** Claude Code's task list dies with the session;
-  `charter ws todo` records intent against the workspace, and each workspace carries a
-  one-line **Vision** that a fork inherits.
-- **Coming back cold, or handing work over.** `charter workspace snapshot` writes repos and
-  branches into a committed manifest; `restore` rebuilds the whole thing on another
-  machine; `fork` copies a workspace's charter, manifest and memory.
-- **Everyone on a slightly different charter.** `[charter].version` in `charter.toml` pins
-  one version like a lockfile. The pin is measured against the **plugin**, which Claude Code
-  installs *per project* out of a cache holding every version at once — so two planes on one
-  laptop can sit on different charters, and `claude plugin update charter@charter` moves
-  this plane and no other.
-  → [docs/control-plane.md](docs/control-plane.md)
-- **Two planes fighting over one binary.** They no longer do. The `charter` CLI stays a
-  single machine-global install for your own terminal; the version a *plane* runs is its
-  plugin's. `charter version sync --cli` is still there for a machine with no plugin.
-- **A rule you want everyone prompted for.** `charter guard ask 'terraform apply *'` writes
-  a Claude Code `permissions.ask` rule into the plane's committed settings. charter keeps no
-  list of its own — one record, nothing to sync.
-  → [docs/adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md](docs/adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md)
-- **A tool that silently stopped existing.** After a rename removed the shim they launched
-  through, MCP servers failed with ENOENT and their tools simply vanished from the session.
-  `charter doctor` now names any registered launcher whose path does not exist, and the
-  one-line fix.
-- **Who is in which tree.** A repo or worktree row says which persona was last seen working
-  in it and how long ago — `▸steward now`, `▸forge 7m +1`. An observation with an age, never
-  a claim that anyone is still there.
-- **Seeing what any of it is doing.** `charter doctor` preflights, `charter trace` shows
-  guard denials and tool approvals and memory writes, and `charter persona stats` says
-  whether a role is actually being dispatched or whether that work is quietly routing to a
-  generic agent.
-- **A plane writing down charter's own rules, and getting them wrong later.** The plugin
-  ships the skills for its surface — `charter:secrets` (use a credential without its value
-  reaching the transcript), `charter:working-in-a-clone` (the boundary between the plane's
-  session and a repo's own `.claude/`), `charter:persona` (adopting a role, and routing
-  work to one instead of switching), and `charter:browser`. They version with the CLI, so a
-  plane no longer needs a copy that can drift out from under it.
-- **A browser login without the password in the transcript.** `charter:browser` bridges a
-  vault into Playwright, so a credential is referred to by name and redacted from output.
-  Charter ships the bridge and none of Playwright's own pages — those are Apache-2.0 and
-  move far faster than charter releases, so `charter browser install` generates them from
-  the tool that owns them, at whatever version you ask for.
+**A browser login, with the password never typed into the conversation.** `charter browser
+install` generates *Playwright's own* driving pages into the plane
+(`.claude/skills/playwright-cli/`) — charter vendors none of them, so a Playwright fix
+doesn't wait on a charter release. What charter ships is the two halves Playwright doesn't:
+the **credential bridge** (`charter secret exec --dotenv` resolves vault keys into one 0600
+temp file and points `PLAYWRIGHT_MCP_SECRETS_FILE` at it, so you refer to a password *by
+name* and Playwright substitutes and redacts it), and **per-worker session isolation**
+(`-s=<name>` gives each worker independent cookies, localStorage, IndexedDB and tabs — so
+N agents are logged in as N different users at once).
+
+---
+
+## Seeing what every agent is actually doing
+
+The status line at the top of this page is the whole point: one render, from disk, every
+turn. The active task and its open todos, every cloned repo with its branch, dirty and
+unpushed markers, CI status and open PRs pulled from each clone's own forge, and the
+personas with their vault and memory state.
+
+**Who is in which tree.** A repo or worktree row says which persona was last seen working
+in it and how long ago — `▸steward now`, `▸forge 7m +1`. An observation with an age, never
+a claim that anyone is still there. A piece that has said nothing for a while shows as
+exactly that: **silence, with an age**, because a worker that dies declares nothing.
+
+**Whether your roster is real.** `charter persona stats` reports each role's memory count,
+recency, a quality proxy, and how many times it was actually **dispatched** as a sub-agent
+— so you can see whether a persona is doing work or whether that work is quietly routing to
+a generic agent. `charter persona lint` catches dangling `uses:`, missing `delegate-when`,
+and stale generated agents.
+
+**What the guards did.** `charter trace` shows guard denials, tool approvals, secret
+warnings and memory writes for the session. `charter doctor` preflights the lot.
+
+---
+
+## No database, no server, no daemon
+
+Git is the state. Personas, memories, todos, manifests, inventory and config are ordinary
+committed files in ordinary git repos — which is why a teammate's agent can start where
+yours left off, why `git log` is the audit trail, and why there is nothing to deploy,
+migrate or back up separately.
+
+The wheel has **zero Python dependencies** (`dependencies = []`). What charter does need is
+what you already have: Python ≥3.11, `git`, and `gh` or `glab` authenticated for the forge
+you use. The browser lane additionally shells out to `npx`. That is the whole list —
+`charter doctor` checks every item of it and names what's missing.
+
+---
 
 ## The model
-
-![A control plane holds an inventory of every repo in the org, personas each with their own memory and vault, and one workspace directory per task. Each workspace holds repo clones on their own branches, and a clone can be split into git worktrees so parallel sub-agents each get a branch of the same repo.](docs/assets/model.svg)
 
 - **Control plane** — any directory marked by `charter.toml`. Not a fixed location: `cd`
   anywhere beneath one and commands resolve it by walking up, the way git resolves `.git`.
@@ -274,16 +261,50 @@ not encryption at rest. The vault is not a password manager.
   already arbitrates who wins the path; the worker later declares `done` or `abandoned`.
   There is deliberately no `failed` or `blocked` — a worker that dies declares nothing, and
   that **silence**, with an age, is what gets reported.
-  → [docs/adr/0011-the-record-holds-only-what-git-cannot-know.md](docs/adr/0011-the-record-holds-only-what-git-cannot-know.md)
+  → [ADR 0011](docs/adr/0011-the-record-holds-only-what-git-cannot-know.md)
 - **Persona** — a specialist role identity with a committed charter, persistent memory, and
   a named vault — dispatchable as an isolated Claude Code sub-agent. charter's
   differentiator; see [docs/personas.md](docs/personas.md).
 - **Memory** — durable notes a persona or workspace records as it works. How far a note
   travels — disk only, committed, or pushed to the team — is one setting, `[memory].share`,
   and it **defaults to `local`**.
-- **Vault** — where a persona's credentials live: plaintext JSON at mode 0600, with **no
-  encryption at rest**. What it protects is different and real — keeping the value out of
-  an agent's context and transcript.
+- **Vault** — where a persona's credentials live. The provider decides the storage
+  guarantee; the boundary is the same for all of them, and it is that the value never
+  enters an agent's context or transcript.
+
+## Also in the box
+
+- **Three harnesses, one set of rules.** charter runs inside `claude-code`, `opencode` and
+  `codex` — the names `$CHARTER_HARNESS` holds — and enforces the same invariants in each:
+  the plane-root guard, the one-credential rule, the secret-leak check, the persona's
+  declared tools. What differs is not what charter enforces but what each harness *lets*
+  charter offer, and `charter harness list` prints that gap rather than leaving you to find
+  it. Neither `opencode` nor `codex` has a status bar charter can render into, which is what
+  `charter statusline --watch` is for; `codex` needs one extra command
+  (`charter harness install codex`) because nothing in a plugin can tell a shell which
+  harness it is.
+  → [docs/harnesses.md](docs/harnesses.md)
+- **An unattended run that stops to ask a question.** Every git operation authenticates
+  with that repo's own forge CLI token over HTTPS — never an SSH key, never signing —
+  because a passphrase prompt hangs an agent until it times out.
+  → [docs/git-policy.md](docs/git-policy.md)
+- **Everyone on a slightly different charter.** `[charter].version` in `charter.toml` pins
+  one version like a lockfile, measured against the **plugin** — so two planes on one laptop
+  can sit on different charters, and `claude plugin update charter@charter` moves this plane
+  and no other.
+  → [docs/control-plane.md](docs/control-plane.md)
+- **A rule you want everyone prompted for.** `charter guard ask 'terraform apply *'` writes
+  a Claude Code `permissions.ask` rule into the plane's committed settings. charter keeps no
+  list of its own — one record, nothing to sync.
+  → [ADR 0014](docs/adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md)
+- **A tool that silently stopped existing.** After a rename removed the shim they launched
+  through, MCP servers failed with ENOENT and their tools simply vanished from the session.
+  `charter doctor` now names any registered launcher whose path does not exist, and the
+  one-line fix.
+- **A plane writing down charter's own rules, and getting them wrong later.** The plugin
+  ships the skills for its surface — `charter:secrets`, `charter:working-in-a-clone`,
+  `charter:persona` and `charter:browser`. They version with the CLI, so a plane no longer
+  needs a copy that can drift out from under it.
 
 ## Learn more
 
@@ -310,6 +331,8 @@ copy wins, is compared to nothing, and drifts unwatched in both directions.
   versus memory versus the manifest.
 - [docs/secrets.md](docs/secrets.md) — exactly what the vault does and does not protect
   against, `secret exec`, and feeding a tool that wants a dotenv file.
+- [docs/harnesses.md](docs/harnesses.md) — Claude Code, opencode and Codex: how each is
+  wired, what each cannot carry, and the one command Codex needs.
 - [docs/git-policy.md](docs/git-policy.md) — the one-credential rule, and why a denial from
   the plugin's guard is the rule working rather than a bug.
 - [docs/hooks.md](docs/hooks.md) — everything the plugin does without being asked: what

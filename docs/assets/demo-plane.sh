@@ -107,6 +107,13 @@ charter persona remember devops "billing deploys gate on the e2e suite, not the 
 charter persona remember qa "the flaky checkout test is a DNS timeout in CI, not the code" >/dev/null
 charter persona use devops >/dev/null
 
+# Vaults with something in them. Without this every row reads "not created yet", and the
+# capture shows charter's empty state beside prose about credentials it is holding. The
+# values are invented; what the render is claiming is the *count* and the provider.
+printf 'demo-not-a-real-value\n' | charter secret set devops KUBECONFIG --stdin >/dev/null
+printf 'demo-not-a-real-value\n' | charter secret set devops REGISTRY_TOKEN --stdin >/dev/null
+printf 'demo-not-a-real-value\n' | charter secret set qa E2E_PASSWORD --stdin >/dev/null
+
 # ── pieces (worktrees) ───────────────────────────────────────────────────────
 # The fleet story is invisible without these: nested worktree rows, a declared outcome,
 # and pieces that have said nothing for a while. Created through the real commands, AFTER

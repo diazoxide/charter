@@ -5,20 +5,27 @@ Two kinds of image live here, and the difference matters when one needs updating
 **Captures** are generated from real command output. None of them are mockups and none
 should ever be hand-edited — regenerate instead, so a screenshot cannot quietly drift from
 what charter actually prints. **Drawings** are authored by hand and say what they mean to
-say; they have no source to re-run.
+say; they have no source to re-run. **Composed** assets are drawings that embed a capture,
+so they inherit the capture's freshness and are regenerated the same way.
 
 | File | Kind | What it is | How to update |
 | --- | --- | --- | --- |
 | `statusline.svg` | capture | The status line, rendered against the demo plane below | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
 | `demo.svg` | capture | The quickstart, animated | `capture-demo.sh` → `ansi2svg.py --animate` |
+| `personas.svg` | capture | The persona roster, rendered against the demo plane below | `demo-plane.sh` → `charter persona list` → `ansi2svg.py` |
 | `model.svg` | drawing | The on-disk model | Edit by hand |
-| `social-card.svg` | drawing | GitHub's social preview — the image link previews show | Edit by hand |
+| `social-card.svg` | composed | GitHub's social preview — the image link previews show | `social-card.py` (re-reads `statusline.svg`) |
 | `social-card.png` | rendered | `social-card.svg` at 2560×1280 (2:1), for upload | See below; do not edit the PNG |
 
 `social-card.png` is the only asset here that is not used by the repo itself: GitHub stores
 the social preview separately, uploaded through **Settings → General → Social preview**,
 which has no CLI. The PNG is committed so the upload is reproducible rather than a one-off
-that exists only inside a settings page.
+that exists only inside a settings page. Regenerate both in order — the SVG re-reads
+`statusline.svg`, so a stale status line makes a stale card:
+
+```bash
+python3 docs/assets/social-card.py
+```
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
@@ -66,6 +73,13 @@ environment override, so a capture taken down a plain pipe comes out monochrome.
 does the same job in one word but needs the *parent* to already own a terminal, which an
 agent shell or a CI runner does not have.
 
+**`social-card.py`** composes the social preview: the wordmark and tagline over a crop of
+`statusline.svg`, embedded as a nested `<svg>` rather than re-rendered, so the card cannot
+disagree with the image the README leads with. It used to be a hand drawing that said only
+what could never go stale — a wordmark and three nouns — which also meant it never showed
+the one thing that actually argues for charter. The bottom fade is load-bearing: the footer
+sits on it, and a shallower one leaves the URL unreadable on live terminal rows.
+
 **`demo-plane.sh`** builds a throwaway control plane worth screenshotting: real `charter`
 commands, real git repos, real branches and real dirty/unpushed state. Only the *org* is
 invented, so a render can show a plausible multi-repo day without exposing anyone's actual
@@ -96,6 +110,23 @@ Three things in that command are load-bearing, and the previous capture had none
   is ever seen in. This is the one **drawing** inside a capture; everything above the box
   is still real output.
 
+
+`personas.svg` comes from the same plane, and needs no payload — it is one command's own
+output. `COLUMNS=96` because the roster is narrow; the plane's own `.charter/` state
+supplies the active persona, so the caller's session lock and active persona are unset
+first or the render shows *your* roster rather than the demo's:
+
+```bash
+cd /tmp/demo-plane
+env -u CHARTER_WORKSPACE -u CHARTER_PERSONA COLUMNS=96 \
+  python3 docs/assets/ptyrun.py charter persona list \
+  | python3 docs/assets/ansi2svg.py --title "charter persona list" \
+      -o docs/assets/personas.svg
+```
+
+The vault rows are the reason `demo-plane.sh` writes three secrets. Without them every row
+reads `not created yet`, and the capture shows charter's empty state beside prose about the
+credentials it is holding.
 
 ## Checking a change
 
