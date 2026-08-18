@@ -125,6 +125,115 @@ def _is_charter(prog: str, args: list[str]) -> bool:
     return False
 
 
+#: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, `<<-DELIM` — the start of a heredoc.
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _reader_of(line: str) -> bool:
+    """Whether *line* starts by invoking a program in :data:`_READERS`."""
+    toks = line.strip().split()
+    i = 0
+    while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
+        i += 1  # leading VAR=value assignments
+    return i < len(toks) and os.path.basename(toks[i]).lower() in _READERS
+
+
+def _strip_reader_heredocs(cmd: str) -> str:
+    """Remove heredoc BODIES fed to a reader — they are stdin data, never arguments.
+
+    `_segment_argv` shlex-splits the whole command string, so `cat > file <<'DOC' … DOC`
+    hands the body to the leak check as `cat`'s argv, and a document *describing* charter's
+    own layout is refused as a *read* of it (#258). Documentation about charter is exactly
+    the text most likely to name these paths.
+
+    Only a reader's heredoc. A body fed to `bash`/`python` is a script, not data, and
+    removing it would hide commands from a guard rather than prose — a distinction worth
+    the extra condition even though this guard does not scan such bodies today.
+    """
+    if "<<" not in cmd:
+        return cmd
+    lines = cmd.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        m = _HEREDOC_RE.search(line)
+        if m and _reader_of(line):
+            delim = m.group(2)
+            i += 1
+            while i < len(lines) and lines[i].strip() != delim:
+                i += 1  # drop the body
+            i += 1       # and the terminator
+            continue
+        i += 1
+    return "\n".join(out)
+
+
+#: Readers whose FIRST non-flag operand is a program or pattern rather than a file, and the
+#: flags that supply it instead (after which no positional is consumed for that purpose).
+#: Getting this wrong in the permissive direction costs a false negative, so the set is
+#: kept to the three tools where the operand is unambiguous.
+_SCRIPT_OPERAND = {
+    "sed": ("-e", "--expression", "-f", "--file"),
+    "awk": ("-f", "--file"),
+    "grep": ("-e", "--regexp", "-f", "--file"),
+    "rg": ("-e", "--regexp", "-f", "--file"),
+    "ag": ("-e", "--regexp", "-f", "--file"),
+}
+
+
+#: Flags whose VALUE is a separate token and is never a path. Per tool, because the same
+#: spelling differs: `head -n 5` takes a count, `sed -n` is "quiet" and takes nothing, and
+#: treating sed's `-n` as consuming a value swallows the script operand — which would let
+#: `sed -n 1p .charter/active-persona` through, a real read.
+_TAKES_VALUE = {
+    "head": ("-n", "-c", "--lines", "--bytes"),
+    "tail": ("-n", "-c", "--lines", "--bytes"),
+    "grep": ("-m", "-A", "-B", "-C", "--max-count", "--after-context", "--before-context"),
+    "rg": ("-m", "-A", "-B", "-C", "--max-count"),
+    "ag": ("-m", "-A", "-B", "-C", "--max-count"),
+    "od": ("-N", "-j", "-t"),
+    "xxd": ("-l", "-s", "-c"),
+}
+
+
+def _file_operands(prog: str, args: list[str]) -> list[str]:
+    """The arguments *prog* would actually open — its file operands.
+
+    The leak rule used to scan every token, which is true enough for `cat` and false for
+    every tool whose first operand is a program or a pattern: `sed -i 's|<path>|…|' f`
+    rewrites a mention, `grep -rn "<path>" docs/` searches for one. Neither opens the path,
+    and both were denied as reads of it.
+
+    Flag VALUES are skipped for the same reason — `grep -e <path> file` supplies the
+    pattern behind a flag — while the file that follows stays an operand, so hiding a real
+    read behind `-e` does not work.
+    """
+    base = os.path.basename(prog).lower()
+    flags = _SCRIPT_OPERAND.get(base)
+    # `_split_env` hands back argv WITH the program still at [0]; dropping it here is what
+    # makes "the first positional is the script" mean the first real operand.
+    argv = args[1:] if args and args[0] == prog else args
+    out, skip_next, script_taken = [], False, flags is None
+    for a in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if a.startswith("-"):
+            if flags and a in flags:
+                script_taken = True     # the pattern/program came from this flag
+                skip_next = "=" not in a
+            elif "=" not in a and a in _TAKES_VALUE.get(base, ()):
+                skip_next = True        # its value is a count, never a path
+            continue
+        if not script_taken:
+            script_taken = True         # this positional IS the script/pattern
+            continue
+        out.append(a)
+    return out
+
+
 def _leak_reason(cmd: str) -> str | None:
     """Deny a command that would print a secret into the transcript.
 
@@ -146,7 +255,7 @@ def _leak_reason(cmd: str) -> str | None:
     vault registered elsewhere is therefore still unguarded here — a separate finding,
     not something to half-fix on the hot path.
     """
-    for _toks in _segment_argv(cmd):
+    for _toks in _segment_argv(_strip_reader_heredocs(cmd)):
         prog, _env, args = _split_env(_toks)
         if not prog:
             continue
@@ -155,7 +264,7 @@ def _leak_reason(cmd: str) -> str | None:
             return ("would reveal a secret value into the conversation (--reveal). "
                     "Use `charter … secret exec`/`cp` — never --reveal for an agent")
         if os.path.basename(prog).lower() in _READERS and any(
-                _VAULT_PATH_RE.search(a) for a in args):
+                _VAULT_PATH_RE.search(a) for a in _file_operands(prog, args)):
             return ("reads a vault/secret file directly (would print plaintext). "
                     "Use `charter … secret exec`/`cp` instead of catting `.charter/`")
     return None
