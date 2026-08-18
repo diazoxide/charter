@@ -1726,10 +1726,65 @@ _DIAGNOSE_RE = re.compile(
     r"not\s+work|doesn'?t\s+work|stack\s?trace|500\b|502\b|422\b|403\b|timeout)", re.I)
 
 
+def _roster_block() -> str:
+    """Who else could take this work — facts only, never a verdict (ADR 0016).
+
+    Fires when the ACTING persona declares ``routing: advise`` or ``require``. charter
+    states what it owns: who exists, what each one's ``delegate-when`` claims, when each
+    was last dispatched. It does not say which of them owns *this* prompt, because a
+    keyword overlap between a request and a prose advert is not evidence of ownership —
+    and a confident wrong answer would cost this block the reader it needs, taking the
+    honest half of the message with it.
+
+    Silent when the roster minus the acting persona is empty: a plane whose only persona
+    is the one acting has nobody to route to, and a block saying so on every work-shaped
+    prompt is the purest wallpaper this design could ship.
+
+    Rides the commitment gate's trigger and cooldown — see the caller.
+    """
+    try:
+        from . import dispatch, persona
+        active = persona.resolve_active()
+        if not active:
+            return ""          # no identity, no declared posture — the plane opted out
+        level = persona.routing_level(active)
+        if level not in ("advise", "require"):
+            return ""
+        roster = persona.roster_for(active)
+        if not roster:
+            return ""
+        rows = []
+        for r in roster:
+            when = (f"last dispatched {r['last_dispatched']}" if r["last_dispatched"]
+                    else "**never dispatched**")
+            claim = r["delegate_when"] or f"{r['role']} work (no delegate-when declared)"
+            rows.append(f"   • `{r['name']}` — {claim} · {when}")
+        dispatch.record_advice()
+        return (
+            f"⬡ **Who else could take this.** `{active}` declares `routing: {level}`, and "
+            f"these personas advertise work of their own. charter is **not** saying which "
+            f"one owns this — it cannot know that, and will not guess it (docs/adr/0016). "
+            f"These are the facts; the routing call is yours:\n"
+            + "\n".join(rows) + "\n"
+            f"Nothing has been dispatched this turn. Hand it over with the Agent tool, or "
+            f"say in one line why it stays with `{active}` — a cross-cutting change that "
+            f"would be split across three personas is a good reason."
+        )
+    except Exception:
+        return ""
+
+
 def _commitment_nudge(prompt: str, sid: str | None) -> str:
     signals = _commitment_signals(prompt)
     if not signals or not _commit_gate_due(sid):
         return ""
+    # The roster goes FIRST and inside this same message, deliberately. First because
+    # "whose work is this" precedes "how should I scope it" — routing away makes the rest
+    # of the gate the sub-agent's problem, not this session's. Inside, because two blocks
+    # on one prompt is how wallpaper gets manufactured, which is the failure this gate's
+    # own history is about.
+    roster = _roster_block()
+    lead = roster + "\n\n" if roster else ""
     diagnosing = bool(_DIAGNOSE_RE.search(prompt or ""))
     if diagnosing:
         shape = ("this reads as a **symptom to diagnose**, not a design to choose, and it "
@@ -1747,7 +1802,7 @@ def _commitment_nudge(prompt: str, sid: str | None) -> str:
         method = ("`superpowers:brainstorming` before a creative build · "
                   "`superpowers:test-driven-development` for code · "
                   "`superpowers:verification-before-completion` always")
-    return (
+    return lead + (
         f"⬢ **Commitment point** — {shape} {' · '.join(signals)}. "
         f"Before you dispatch, plan, or edit code:\n"
         f"1. **Scout first.** Read the code / measure it / check what already exists — enough to "

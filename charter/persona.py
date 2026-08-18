@@ -309,6 +309,82 @@ def default_persona() -> str | None:
     return val if val and def_path(val).exists() else None
 
 
+#: The outbound postures a persona may declare, least → most insistent. `off` is what an
+#: absent or unrecognised `routing:` means: a typo must not silently switch a gate on, and
+#: an upgrade must change nothing for a plane that has declared nothing.
+ROUTING_LEVELS = ("off", "advise", "require")
+
+
+def routing_level(name: str) -> str:
+    """How insistently *name* hands work away — its ``routing:``, inheritance-merged.
+
+    ``delegate-when`` says what a persona accepts; this says when it should stop doing the
+    work itself. Two directions, two words, deliberately unalike: a field called
+    ``delegation`` beside ``delegate-when`` would be one letter and one glance apart from
+    its own opposite.
+
+    Read from the ACTING persona only — the one whose session this is. That is the whole
+    reason there is no plane-level setting to merge with here: a floor would apply to
+    personas that never declared anything, which is the action-at-a-distance this design
+    was reshaped to avoid.
+    """
+    try:
+        r = resolve(name)
+    except Exception:
+        return "off"
+    if not r:
+        return "off"
+    val = str(r["meta"].get("routing") or "").strip().lower()
+    return val if val in ROUTING_LEVELS else "off"
+
+
+def routes_to(name: str) -> list[str]:
+    """Personas *name* considers first — its ``routes-to:``, inheritance-merged.
+
+    Priority, never restriction: it reorders the roster and removes nobody. A restricting
+    form would silently hide every persona created after the line was written, and nothing
+    would report the omission — the same failure shape `lint` had to grow a dangling-`uses:`
+    check for.
+    """
+    r = resolve(name)
+    return _csv_list(r["meta"].get("routes-to")) if r else []
+
+
+def roster_for(active: str | None) -> list[dict]:
+    """Every persona this session could hand work to, as ``{name, role, delegate_when,
+    last_dispatched}`` — the facts charter owns, and nothing more.
+
+    charter does not decide which of these owns the prompt (ADR 0016). It states who
+    exists, what each one claims, and when each was last dispatched; the reader routes.
+
+    Excludes the acting persona (routing to yourself is noise in a block that cannot
+    afford any) and drafts (charter generates no sub-agent for a draft, so offering one
+    would advertise a route that does not exist).
+    """
+    from . import dispatch
+    rows = []
+    for n in list_personas():
+        if n == active or is_draft(n):
+            continue
+        try:
+            r = resolve(n) or {}
+            meta = r.get("meta", {})
+        except Exception:
+            continue
+        rows.append({
+            "name": n,
+            "role": meta.get("role") or n,
+            "delegate_when": (meta.get("delegate-when") or "").strip(),
+            "last_dispatched": dispatch.last_seen(n),
+        })
+    first = routes_to(active) if active else []
+    order = {n: i for i, n in enumerate(first)}
+    # Declared order first, then everyone else alphabetically — a stable order matters on a
+    # block that reappears: a roster that reshuffles between prompts reads as new content.
+    rows.sort(key=lambda r: (order.get(r["name"], len(order)), r["name"]))
+    return rows
+
+
 def declared_default() -> str | None:
     """The front door this control plane DECLARES — ``charter.toml``'s ``[persona] default``.
 

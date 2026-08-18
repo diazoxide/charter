@@ -11,8 +11,11 @@ Shape of the store::
 
 Three properties matter:
 
-* **Counts and dates only.** A line is ``{"ts": …, "agent": …}`` — never the prompt, the
-  description, or any tool input. There is no secret surface to scan.
+* **Counts and dates only.** A line is ``{"ts": …, "agent": …}`` for a dispatch, or
+  ``{"ts": …, "event": "advice"}`` for routing advice having been shown — never the
+  prompt, the description, or any tool input. There is no secret surface to scan, and the
+  second shape was added under exactly that constraint: it records that the roster
+  appeared, never what it appeared about.
 * **Parallel-writer safe.** Lines are small and opened ``O_APPEND``, so concurrent
   dispatches (a fan-out of 8 sub-agents) append atomically without a lock.
 * **Conflict-free across engineers.** The filename carries the host, so two people
@@ -82,6 +85,41 @@ def record(agent: str, when: datetime | None = None) -> Path | None:
         return None
 
 
+#: Marks a row that records ROUTING ADVICE being shown rather than a dispatch happening.
+#: Same store, same two-fields-only discipline: a timestamp and this word. The pair
+#: "advice shown" vs "dispatches that followed" is the only number that can falsify the
+#: bet the roster block rests on — that seeing the roster changes routing — and a bet
+#: shipped without it repeats the gap this module's docstring was written about.
+ADVICE = "advice"
+
+
+def record_advice(when: datetime | None = None) -> Path | None:
+    """Append one 'routing advice was shown' event. Best-effort, like :func:`record`."""
+    when = when or _now()
+    p = path_for(when)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({"event": ADVICE, "ts": when.isoformat(timespec="seconds")},
+                          sort_keys=True) + "\n"
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, line.encode())
+        finally:
+            os.close(fd)
+        return p
+    except OSError:
+        return None
+
+
+def advice_tally(days: int | None = None) -> int:
+    """How many times routing advice was shown, optionally within the last *days*."""
+    rows = [o for o in _read_all() if o.get("event") == ADVICE]
+    if days is not None:
+        cutoff = _now() - timedelta(days=days)
+        rows = [o for o in rows if (t := _ts(o)) and t >= cutoff]
+    return len(rows)
+
+
 def _read_all() -> list[dict]:
     d = _dir()
     if not d.exists():
@@ -97,7 +135,7 @@ def _read_all() -> list[dict]:
                     o = json.loads(ln)
                 except ValueError:
                     continue
-                if isinstance(o, dict) and o.get("agent"):
+                if isinstance(o, dict) and (o.get("agent") or o.get("event")):
                     out.append(o)
         except OSError:
             continue
@@ -118,7 +156,7 @@ def tally(days: int | None = None) -> Counter:
     if days is not None:
         cutoff = _now() - timedelta(days=days)
         rows = [o for o in rows if (t := _ts(o)) and t >= cutoff]
-    return Counter(o["agent"] for o in rows)
+    return Counter(o["agent"] for o in rows if o.get("agent"))
 
 
 def last_seen(agent: str) -> str | None:
@@ -183,8 +221,8 @@ def _live_keys() -> set[tuple[str, str]]:
                 t = _ts(o)
             except ValueError:
                 continue
-            if t:
-                keys.add((t.isoformat(timespec="seconds"), str(o.get("agent") or "")))
+            if t and o.get("agent"):
+                keys.add((t.isoformat(timespec="seconds"), str(o.get("agent"))))
     return keys
 
 

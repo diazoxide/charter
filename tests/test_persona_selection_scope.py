@@ -210,5 +210,21 @@ class TestUseReportsItsReach(SelectionScopeIso):
             out = self._use("forge")
         self.assertIn("steward", out)
 
+class TestCreateUseReportsItTheSameWay(SelectionScopeIso):
+    def test_create_use_says_how_far_the_selection_reaches(self):
+        """`create --use` and `use` select the same way, so they must report the same way —
+        two commands describing one act differently is how a reader learns to distrust both."""
+        import io
+        from contextlib import redirect_stderr
+        from types import SimpleNamespace
+        from charter import commands_persona
+        args = SimpleNamespace(name="fresh", role="Fresh", vault=None, extends=None,
+                               with_vault=False, use=True, force=False,
+                               delegate_when="fresh work")
+        buf = io.StringIO()
+        with self.env(CHARTER_SESSION_ID="s1"), redirect_stderr(buf):
+            commands_persona.cmd_persona_create(args)
+        self.assertIn("this session only", buf.getvalue().lower())
+
 if __name__ == "__main__":
     unittest.main()

@@ -260,6 +260,55 @@ no identity, rather than a broken one. Two surfaces say so rather than leaving y
 the absence: `charter doctor` reports it (`front door`, a warning, with the fix), and the
 status line carries one row naming the missing persona.
 
+## Routing: handing work to the persona that owns it
+
+`delegate-when` is **inbound** — the advert other agents read when choosing where to send
+work. `routing:` is the other direction: how insistently *this* persona, while acting,
+hands work away.
+
+```yaml
+routing: advise      # off | advise | require   (absent means off)
+routes-to: forge, release
+```
+
+| Level | What happens |
+| --- | --- |
+| `off` | nothing. The default when the key is absent. |
+| `advise` | on a work-shaped prompt, the commitment gate leads with the roster. |
+| `require` | the same today; a tool-time check lands in a later release. |
+
+There is **no plane-level routing setting**. The level is only ever read from the one
+persona acting in a session, so a plane-wide floor would apply to personas that never asked
+for it. A new plane gets a sensible posture because `charter init --front-door` generates a
+front door carrying `routing: advise` in its own frontmatter — config in a file you own,
+not a constant inside charter.
+
+### What the block says, and what it refuses to say
+
+It lists every other persona, its `delegate-when`, and when it was last dispatched — then
+states that nothing has been dispatched this turn and asks you to route or to say why the
+work stays put.
+
+It never names the owner. A keyword overlap between a prompt and a prose advert is not
+evidence of ownership, and the first confident wrong answer would cost the block the reader
+it needs. That decision, and its consequences, are recorded in `docs/adr/0016`.
+
+`routes-to:` puts named personas first. It **prioritises and never restricts** — a
+restriction would silently hide every persona created after the line was written.
+
+### When it stays quiet
+
+- the acting persona declares `off`, or declares nothing
+- there is no acting persona at all (`charter doctor` says so once, under `front door`)
+- the roster minus the acting persona is empty
+- the prompt is a question, or the gate's cooldown is still running
+
+### Whether it works
+
+`charter persona stats` prints how often advice fired against how many dispatches
+followed. Advice that fires and is never followed is the block failing — read it that way
+before adding more personas.
+
 ## Everyday commands
 
 ```
