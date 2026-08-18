@@ -1,7 +1,7 @@
 {
   "name": "charter",
   "description": "Personas, workspaces and memory for coding agents across many repos \u2014 Claude Code, opencode and Codex",
-  "version": "0.42.1",
+  "version": "0.43.0",
   "author": {
     "name": "Aaron Yordanyan"
   },

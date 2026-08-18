@@ -340,15 +340,18 @@ class OpenCodeHarness(Harness):
         the evidence.
         """
         g = global_dir()
-        out = [(ensure_shim(g), str(g / SHIM_PATH))]
+        # Labels are RELATIVE to the config dir, and say which harness they belong to.
+        # An absolute path here is unbounded — a deep home directory turned `init`'s
+        # summary into a 130-column line, which is the readability budget #231 set.
+        out = [(ensure_shim(g), f"opencode {SHIM_PATH}")]
         cmd = g / COMMAND_PATH
         if not cmd.exists():
             cmd.parent.mkdir(parents=True, exist_ok=True)
             cmd.write_text(COMMAND)
-            out.append(("created", str(g / COMMAND_PATH)))
+            out.append(("created", f"opencode {COMMAND_PATH}"))
         write_context(g)
         if ensure_instructions(g) == "created":
-            out.append(("created", f"{g / 'opencode.json'} (instructions)"))
+            out.append(("created", "opencode opencode.json (instructions)"))
         return out
 
     def ask_rule(self, pattern: str) -> tuple[str, str]:
