@@ -302,6 +302,27 @@ def source(explicit: str | None = None, session_id: str | None = None,
     return "default (nothing selected)"
 
 
+def _trace(event: str, session_id: str | None, **fields) -> None:
+    """Record one workspace-selection event, best-effort.
+
+    `persona.set_active` has recorded `persona-use` since the trace existed; the function
+    that writes both workspace pointers AND the session lock recorded nothing, so "who
+    moved my workspace" could only ever be answered from the pointer files themselves —
+    which say what they hold and never who wrote it, when, or why. #254 is what that costs:
+    two investigations, two confident wrong conclusions, settled in the end by a harness
+    transcript charter cannot rely on existing.
+
+    Swallows everything. Observability must never break the thing it observes, and a
+    selection that failed because its own audit line failed would be the worst possible
+    trade.
+    """
+    try:
+        from . import session as _session, trace as _trace_mod
+        _trace_mod.record(event, session=_session.current(session_id), **fields)
+    except Exception:
+        pass
+
+
 def _lock_file(sid: str) -> Path:
     return config.SESSIONS_DIR / f"{sid}.lock"
 
@@ -347,6 +368,7 @@ def set_active(name: str, session_id: str | None = None, force: bool = False) ->
     (``session`` | ``terminal`` | ``none``) on success, or ``"locked"`` when refused."""
     locked = is_locked(session_id)
     if locked and locked != name and not force:
+        _trace("workspace-refused", session_id, workspace=name, locked_to=locked)
         return "locked"
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
     tid = _terminal_id()
@@ -359,6 +381,9 @@ def set_active(name: str, session_id: str | None = None, force: bool = False) ->
         _session_file(sid).write_text(name + "\n")
         _lock_file(sid).write_text(name + "\n")  # confirming = locking for the session
     _prune()
+    _trace("workspace-use", session_id, workspace=name,
+           scope=("terminal" if tid else "session" if sid else "none"),
+           forced=True if force and locked and locked != name else None)
     # The scope is the REACH of what was written, so it names the longest-lived pointer
     # that actually landed — and the terminal one outlives the session one. These used to
     # be assigned in sequence, so the session branch overwrote the terminal branch and
@@ -382,6 +407,9 @@ def reconcile(session_id: str | None = None, terminal_id: str | None = None) -> 
     if val:
         config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         _session_file(sid).write_text(val + "\n")
+        # The one pointer write nobody typed. If any write is ever going to look as though
+        # it came from nowhere, it is this one — so it says where it came from.
+        _trace("workspace-seeded", session_id, workspace=val, **{"from": "terminal"})
     return val
 
 
