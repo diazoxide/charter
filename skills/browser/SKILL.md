@@ -32,7 +32,19 @@ npx @playwright/cli@<version> -s=owner close
 npx @playwright/cli@<version> kill-all      # reap stale processes
 ```
 
-Pin the version explicitly in every command. The tool is pre-1.0 and its behaviour moves.
+**Pin the version explicitly in every command** — and this is a hard requirement, not
+style. A session belongs to the *version* that opened it: state lives in
+`~/Library/Caches/ms-playwright/daemon/<hash>/<name>.session`, and that hash keys on the
+installation, not on your working directory. Two commands that resolve different versions
+therefore look at different daemons, and the second reports:
+
+```
+The browser 'owner' is not open, please run open first
+```
+
+…while the first browser is alive and still logged in. Drop the pin on one command in a
+flow — leaving `npx` to fetch whatever is latest — and you get exactly that. Sessions do
+cross directories; they do not cross versions.
 
 ## Credentials — never typed, never printed
 
