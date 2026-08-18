@@ -95,26 +95,28 @@ clone and not in the plane root. Nothing to install per harness, with one except
 **What differs is not what charter enforces — it is what each harness lets charter
 offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 
-| | wiring | what it cannot carry | what to do about it |
+| | how it is installed | what it cannot carry | what to do about it |
 | --- | --- | --- | --- |
-| Claude Code | the plugin, plus `.claude/settings.json` | — | — |
-| opencode | generated into every work tree by `charter init` | no status bar; no per-turn prompt hook | `charter statusline --watch`; mid-session notes ride tool output already |
-| Codex | **opt-in**: `charter harness install codex` | no status bar; no command-pattern permissions; config is machine-wide | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
+| Claude Code | the plugin (`claude plugin install charter@charter`) | — | — |
+| opencode | `charter init` — one plugin under opencode's config dir, read by every project | no status bar; no per-turn prompt hook | `charter statusline --watch`; mid-session notes ride tool output already |
+| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | no status bar; no command-pattern permissions | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
 
+One artifact per harness, installed once — nothing is written into the repos you work in.
 `charter doctor` and `charter harness list` print that fourth column against whichever
-harness you are in, each ceiling carrying its own answer. Where the last column is empty
-it stays empty: charter cannot conjure opencode a per-turn prompt hook, and a workaround
-that does not exist costs more to chase than an honest gap.
+harness you are in, each ceiling carrying its own answer. Where it is empty it stays empty:
+charter cannot conjure opencode a per-turn prompt hook, and a workaround that does not
+exist costs more to chase than an honest gap.
 
 **`charter statusline --watch`** is the one worth knowing. It repaints the plane state in
 place in any spare terminal — no status-bar socket, no multiplexer, the same render on
 every harness including the one that has a bar. It shows the plane, not the session, so
 the token and context columns are blank and it says so.
 
-Codex is the exception because it has no project-level config: its hooks live in
-`~/.codex/config.toml` and arming them affects **every repo on the machine**. `charter
-init` will not do that behind your back, and Codex trusts hooks by hash — so the block
-charter writes stays inert until you approve it. Why the boundary sits where it does:
+Codex needs the extra command for one reason: its hooks arrive with the plugin, but
+nothing in a plugin can tell a shell which harness it is, so `charter harness install
+codex` writes that single line. If it finds hooks declared in `~/.codex/config.toml` it
+refuses and says so — those would run alongside the plugin's, and charter would fire twice
+a turn. Why the boundary sits where it does:
 **[docs/adr/0015-the-boundary-moves-with-the-harness.md](docs/adr/0015-the-boundary-moves-with-the-harness.md)**.
 
 ## Why charter

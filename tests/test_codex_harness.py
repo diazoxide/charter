@@ -32,7 +32,7 @@ class CodexIsRegistered(unittest.TestCase):
 class CodexCeilings(unittest.TestCase):
     def test_its_ceilings_are_named(self):
         keys = {d.key for d in registry.get("codex").deficits}
-        self.assertEqual(keys, {"status-bar", "session-lock", "wiring-scope"})
+        self.assertEqual(keys, {"status-bar", "session-lock"})
 
     def test_the_prompt_hook_is_not_a_ceiling(self):
         """Unlike opencode, Codex implements `UserPromptSubmit` — its hook contract is

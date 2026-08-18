@@ -90,43 +90,42 @@ driving a live session, not just scripted from a terminal.
 
 ## 3. opencode and Codex
 
-Step 2 is Claude Code's. The other two harnesses charter supports need less, or need one
-deliberate command.
+Each harness gets **one installed artifact**, the same way Claude Code does. Nothing is
+written into the repos you work in.
 
-**opencode: nothing.** `charter init` writes the plugin, the session context and a
-`/charter` command into the plane, and `charter clone` / `charter worktree add` write them
-into every tree as it is created — because opencode reads its plugin from the session's
-own directory and does **not** search parent directories, so a session started in a clone
-would otherwise be unguarded. `charter doctor`'s `harness trees` row names any tree that
-is missing them; `charter reinit` backfills.
+**opencode — `charter init` does it.** The plugin goes to `~/.config/opencode/plugin/`
+(`$XDG_CONFIG_HOME` is honoured), which opencode reads for every project, along with a
+`/charter` command and the session context it reads at startup. `charter doctor`'s
+`harness` row reports it, and `charter reinit` reinstalls if you ever delete it.
 
-opencode has no status bar, so the plane state renders on demand through the `/charter`
-command charter writes into each tree — or ambiently, in any spare terminal:
+Earlier charters wrote a plugin into every clone and worktree instead, because opencode
+does not search parent directories for *project* plugins. It does read the config dir, so
+that was a lot of files in other people's repositories answering a question that did not
+need asking. If you have `.opencode/` directories lying around in clones, they are inert
+and safe to delete.
 
-```bash
-charter statusline --watch
-```
-
-That works on every harness, including Claude Code, and needs no multiplexer. It shows the
-plane rather than the session, so the token and context columns are blank and it says so.
-
-**Codex: one opt-in command.**
+**Codex — the plugin, plus one line.** Codex installs the same plugin charter ships for
+Claude Code, through `codex plugin`. That covers every hook. The one thing a plugin cannot
+do is tell a shell which harness it is, so:
 
 ```bash
 charter harness install codex
 ```
 
-`init` will not do this for you. Codex has no project-level config — its hooks live in
-`~/.codex/config.toml`, so arming them affects **every repo on this machine**, not just
-the plane. Charter's guards stay silent outside a control plane, but the hook processes do
-start. Running the command is the consent.
+writes exactly that into `~/.codex/config.toml`:
 
-Codex also trusts hooks by hash, so what charter writes is **inert until you approve it**:
-start Codex once, accept the prompt, and `charter doctor` will confirm it. Charter appends
-whole tables or nothing — a config already declaring `hooks` or `shell_environment_policy`
-is reported and left untouched, and an unparseable one is never repaired.
+```toml
+[shell_environment_policy]
+set = { CHARTER_HARNESS = "codex" }
+```
 
-## First control plane
+If it finds hooks declared in that file it **refuses and says so**. An earlier charter
+wrote them there before the plugin route was known, and both sets are trusted and both
+run — charter fires twice on every SessionStart, UserPromptSubmit and Bash call. Nothing
+is wrong; everything is doubled, which is harder to notice. Delete charter's block from
+`config.toml` and keep the plugin.
+
+## First control plane## First control plane
 
 ```bash
 mkdir my-control-plane && cd my-control-plane

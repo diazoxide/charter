@@ -42,13 +42,13 @@ class Install(unittest.TestCase):
         self.assertEqual(codex.install()[0], "created")
         self.assertTrue(self.cfg.is_file())
 
-    def test_what_it_writes_is_valid_toml_in_the_shape_the_parser_accepts(self):
+    def test_what_it_writes_is_valid_toml(self):
+        """It no longer writes hooks — the plugin declares those, and declaring them here
+        too ran charter twice per turn. See test_codex_install_defers_to_the_plugin."""
         codex.install()
         doc = tomllib.loads(self.cfg.read_text())
         self.assertEqual(doc["shell_environment_policy"]["set"]["CHARTER_HARNESS"], "codex")
-        entry = doc["hooks"]["PreToolUse"][0]["hooks"][0]
-        self.assertEqual(entry["type"], "command")
-        self.assertIn("charter hook pretooluse", entry["command"])
+        self.assertNotIn("hooks", doc)
 
     def test_a_second_install_changes_nothing(self):
         codex.install()
@@ -57,13 +57,12 @@ class Install(unittest.TestCase):
         self.assertEqual(self.cfg.read_text(), before)
 
     def test_an_operators_own_hooks_are_never_merged_into(self):
-        """Charter appends whole tables or nothing. Merging into someone's existing
-        `[hooks]` means rewriting TOML charter did not author — and `_load_settings`
-        already refuses that for the file charter half-owns, let alone this one."""
+        """Charter appends whole tables or nothing, and now reports the collision as
+        `doubled`: hooks declared here run alongside the plugin's."""
         self.cfg.write_text('[hooks]\n[[hooks.SessionStart]]\nmatcher = "mine"\n')
         before = self.cfg.read_text()
         status, detail = codex.install()
-        self.assertEqual(status, "present")
+        self.assertEqual(status, "doubled")
         self.assertEqual(self.cfg.read_text(), before)
         self.assertIn("hooks", detail)
 

@@ -13,7 +13,7 @@ to read. Decisions stay in Python, where they are tested.
 from __future__ import annotations
 
 import json
-import subprocess
+import os
 from pathlib import Path
 
 from .. import __version__
@@ -52,13 +52,28 @@ TOOL_NAMES = {
 #: This restriction is the price of opencode having no channel of its own.
 EFFECTFUL_TOOLS = ("bash", "edit", "write")
 
-#: Where opencode looks for project-local plugins.
-SHIM_PATH = Path(".opencode") / "plugin" / "charter.ts"
+def global_dir() -> Path:
+    """Where opencode reads plugins, commands and config for EVERY project.
+
+    Verified by putting a probe in `~/.config/opencode/plugin/` and booting `opencode
+    serve` from an unrelated directory, where it loaded. The per-tree design existed
+    because opencode does not walk upwards for *project* plugins — true, and irrelevant
+    once the plugin is installed where every project already looks.
+
+    `$XDG_CONFIG_HOME` first, for the same reason `$CODEX_HOME` is honoured: writing to a
+    path the tool does not read is indistinguishable from not installing at all.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".config") / "opencode"
+
+
+#: Relative to :func:`global_dir`.
+SHIM_PATH = Path("plugin") / "charter.ts"
 
 #: The on-demand status line. opencode has no status-bar socket, so the plane state is a
 #: command instead of an ambient row. `.opencode/command/<name>.md` is the location, from
 #: the binary's own docs table: "Project commands | `.opencode/command/<name>.md`".
-COMMAND_PATH = Path(".opencode") / "command" / "charter.md"
+COMMAND_PATH = Path("command") / "charter.md"
 
 #: A command body may embed shell output with ``!`…` ``, so `/charter` prints the REAL
 #: status line. Describing it to a model instead would spend a turn to get a worse answer.
@@ -76,7 +91,7 @@ Read it and continue; nothing here needs a reply.
 
 #: The session context, for the harness that has no SessionStart hook. Named in the
 #: tree's ``instructions`` so opencode reads it at startup.
-CONTEXT_PATH = Path(".opencode") / "charter-context.md"
+CONTEXT_PATH = Path("charter-context.md")
 
 #: The generated plugin. No imports, deliberately: `@opencode-ai/plugin` exists only for
 #: type checking, and depending on it would send Bun to the network before charter's own
@@ -248,77 +263,32 @@ def ensure_shim(root: Path) -> str:
     return "created"
 
 
-def _exclude_locally(tree: Path, *patterns: str) -> None:
-    """Keep charter's generated plugin out of the repo's ``git status``, locally.
-
-    ``.git/info/exclude`` rather than ``.gitignore``: the ignore file is the repo owners'
-    to maintain and is committed, so charter editing it would push its own housekeeping
-    into their history. The exclude file is untracked and per-checkout — the right place
-    for "this checkout has a tool's file in it".
-
-    **Git is asked where that file is, never told.** A linked worktree's ``.git`` is a
-    *file* pointing into the clone, so testing it as a directory skipped the exclude for
-    exactly the trees charter creates most — leaving the generated plugin as an untracked
-    change, which made `charter worktree remove` refuse to remove a piece that had done
-    nothing. ``--git-common-dir`` resolves to the clone's own git directory from a
-    worktree and from the clone alike, so one exclude covers a clone and every worktree
-    over it.
-
-    Best-effort and silent. A tree that is not a checkout, a git that is missing, or a
-    directory charter cannot write to still gets the plugin: failing to hide a file is
-    not a reason to leave the harness unwired.
-    """
-    try:
-        proc = subprocess.run(["git", "-C", str(tree), "rev-parse", "--git-common-dir"],
-                              capture_output=True, text=True, timeout=10)
-        if proc.returncode != 0:
-            return
-        common = Path((proc.stdout or "").strip())
-        if not common.is_absolute():
-            common = Path(tree) / common
-        info = common / "info"
-        info.mkdir(parents=True, exist_ok=True)
-        p = info / "exclude"
-        raw = p.read_text() if p.exists() else ""
-        add = [x for x in patterns if f"\n{x}\n" not in f"\n{raw}"]
-        if not add:
-            return
-        sep = "" if (not raw or raw.endswith("\n")) else "\n"
-        p.write_text(f"{raw}{sep}# charter's generated opencode files\n"
-                     + "".join(f"{x}\n" for x in add))
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return
-
-
-def write_context(tree: Path) -> str:
-    """Regenerate the session context inside *tree*. Always overwrites.
+def write_context(base: Path) -> str:
+    """Regenerate the session context under *base*. Always overwrites.
 
     The one generated file charter DOES repair, and the exception is the point: the shim
     is the operator's to edit, while this is derived state. A stale context file is a lie
     about which workspace you are standing in, and a lie is worse than a missing file
     because nothing about it looks wrong.
-
-    Written even when empty, so the `instructions` entry never points at a missing path.
     """
     from .. import hooks
 
-    p = Path(tree) / CONTEXT_PATH
+    p = Path(base) / CONTEXT_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
-    body = hooks.context_block(tree).strip()
+    body = hooks.context_block(None).strip()
     p.write_text("<!-- Generated by charter. Do not edit: rewritten whenever the plane's "
                  "state changes. -->\n\n" + (body or "_No control-plane context._") + "\n")
     return "created"
 
 
-def ensure_instructions(tree: Path) -> str:
-    """Name :data:`CONTEXT_PATH` in the tree's ``opencode.json`` ``instructions``.
+def ensure_instructions(base: Path) -> str:
+    """Name :data:`CONTEXT_PATH` in *base*'s ``opencode.json`` ``instructions``.
 
     IF ABSENT, and additively: opencode combines every entry, so somebody else's
     `AGENTS.md` keeps working beside charter's. An unparseable config is theirs to fix —
-    charter reports and never repairs, the restraint `_load_settings` keeps for the file
-    it half-owns.
+    charter reports and never repairs.
     """
-    p = Path(tree) / "opencode.json"
+    p = Path(base) / "opencode.json"
     doc: dict = {}
     if p.exists():
         try:
@@ -330,10 +300,11 @@ def ensure_instructions(tree: Path) -> str:
     entries = doc.setdefault("instructions", [])
     if not isinstance(entries, list):
         return "malformed"
-    want = str(CONTEXT_PATH)
+    want = str(Path(base) / CONTEXT_PATH)
     if want in entries:
         return "present"
     entries.append(want)
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(doc, indent=2) + "\n")
     return "created"
 
@@ -361,52 +332,24 @@ class OpenCodeHarness(Harness):
         return False
 
     def wire(self, root: Path) -> list[tuple[str, str]]:
-        return [(ensure_shim(root), str(SHIM_PATH))]
+        """Install once, where opencode reads for every project.
 
-    def wire_tree(self, tree: Path) -> list[tuple[str, str]]:
-        """The plugin, plus a local exclude so it stays out of the repo's `git status`.
-
-        opencode reads plugins from the session's own directory and **does not walk
-        upwards** — so this, not :meth:`wire`, is what actually arms charter where work
-        happens. The plane-root copy stays for the rare session started there.
+        *root* is ignored: nothing is written into the plane. A plane is somebody's repo,
+        and charter's housekeeping has no business in its `git status` — which is what the
+        per-tree design cost, along with a `.git/info/exclude` entry per checkout to hide
+        the evidence.
         """
-        cfg = Path(tree) / "opencode.json"
-        # Whether the config is CHARTER's matters for hiding it: a config the repo
-        # already had is theirs, tracked or not, and charter excluding it would hide a
-        # file somebody may be about to commit.
-        cfg_was_theirs = cfg.exists()
-        status = ensure_shim(tree)
-        out = [(status, f"{tree.name}/{SHIM_PATH}")]
-        # The context, and the line telling opencode to read it. Without these the guards
-        # fire but the session never learns which workspace it is in, which persona it is,
-        # or what the task still means to do — charter guarding instead of governing.
-        cmd = Path(tree) / COMMAND_PATH
+        g = global_dir()
+        out = [(ensure_shim(g), str(g / SHIM_PATH))]
+        cmd = g / COMMAND_PATH
         if not cmd.exists():
             cmd.parent.mkdir(parents=True, exist_ok=True)
             cmd.write_text(COMMAND)
-            out.append(("created", f"{tree.name}/{COMMAND_PATH}"))
-        write_context(tree)
-        if ensure_instructions(tree) == "created":
-            out.append(("created", f"{tree.name}/opencode.json (instructions)"))
-        hide = [".opencode/"] + ([] if cfg_was_theirs else ["opencode.json"])
-        _exclude_locally(tree, *hide)
+            out.append(("created", str(g / COMMAND_PATH)))
+        write_context(g)
+        if ensure_instructions(g) == "created":
+            out.append(("created", f"{g / 'opencode.json'} (instructions)"))
         return out
-
-    def wire_tree_missing(self, tree: Path) -> bool:
-        return not (Path(tree) / SHIM_PATH).is_file()
-
-    def refresh_tree(self, tree: Path) -> list[tuple[str, str]]:
-        status = refresh_shim(tree)
-        out = self.wire_tree(tree)          # context, command, instructions, exclude
-        return [(status, f"{tree.name}/{SHIM_PATH}")] + out[1:]
-
-    def wire_tree_stale(self, tree: Path) -> str:
-        if self.wire_tree_missing(tree):
-            return ""            # absent is a different row, already reported
-        got = shim_version(tree)
-        if got == __version__:
-            return ""
-        return got or "unstamped"
 
     def ask_rule(self, pattern: str) -> tuple[str, str]:
         """``(tool, glob)``. opencode's permissions are `{tool: {pattern: decision}}` with

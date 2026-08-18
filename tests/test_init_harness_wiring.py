@@ -23,12 +23,21 @@ class InitWiresBothHarnesses(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="charter-init-h-")).resolve()
         self.addCleanup(lambda: __import__("shutil").rmtree(self.root, True))
+        import os
+        home = self.root / "xdg"
+        home.mkdir(parents=True, exist_ok=True)
+        self.enterContext(mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(home)}))
         args = SimpleNamespace(forge="github", owner="acme", host=None)
         with mock.patch.object(config, "ROOT", self.root):
             commands.cmd_init(args)
 
-    def test_the_opencode_plugin_is_written(self):
-        self.assertTrue((self.root / opencode.SHIM_PATH).is_file())
+    def test_the_opencode_plugin_is_installed_not_dropped_in_the_plane(self):
+        """`init` installs opencode's plugin where opencode reads it for every project.
+        Writing it into the plane was the old shape, and it put a generated file in
+        somebody's repo for no gain — opencode never read it from there anyway unless the
+        session happened to start in that exact directory."""
+        self.assertTrue((opencode.global_dir() / opencode.SHIM_PATH).is_file())
+        self.assertFalse((self.root / ".opencode").exists())
 
     def test_claude_code_is_told_its_own_name(self):
         settings = json.loads((self.root / ".claude" / "settings.json").read_text())

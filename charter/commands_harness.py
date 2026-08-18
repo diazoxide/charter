@@ -47,17 +47,18 @@ def cmd_harness_install(args) -> int:
         util.err(f"{detail} is not valid TOML — left it completely untouched.")
         util.info("  Fix it by hand, then re-run. charter never repairs this file.")
         return 1
+    if status == "doubled":
+        util.err(f"{detail}")
+        util.info("  Both sets are trusted and both run: charter fires twice on every "
+                  "SessionStart, UserPromptSubmit and Bash call. Nothing is wrong; "
+                  "everything is doubled, which is harder to notice.")
+        return 1
     if status == "present":
-        util.info(f"Left alone: {detail}.")
-        util.info("  charter appends whole tables or nothing — merging would mean "
-                  "rewriting TOML it did not author. Remove or rename yours to let "
-                  "charter write its block, or add the hooks by hand.")
+        util.ok(f"Already named: {detail}.")
         return 0
 
-    util.ok(f"Wired charter into {detail}.")
-    util.warn("  This is MACHINE-WIDE. Codex has no project-level config, so these hooks "
-              "run in every repo on this machine — charter's guards stay silent outside a "
-              "control plane, but the processes do start.")
-    util.info("  Codex trusts hooks by hash: the block is INERT until you approve it. "
-              "Start Codex and accept the prompt, then `charter doctor` will confirm it.")
+    util.ok(f"Named the harness in {detail}.")
+    util.info("  Codex's hooks come from the charter plugin — `codex plugin` installs the "
+              "same artifact Claude Code uses. This only sets $CHARTER_HARNESS, which the "
+              "plugin cannot do, so a Codex shell can say which harness it is.")
     return 0

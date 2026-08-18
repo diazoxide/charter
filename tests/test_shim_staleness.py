@@ -52,24 +52,29 @@ class TheShimSaysWhoWroteIt(unittest.TestCase):
 
 
 class StaleIsNotWired(unittest.TestCase):
-    def test_doctor_names_a_tree_whose_shim_is_older(self):
-        tree = _tree(self)
-        opencode.ensure_shim(tree)
-        p = tree / opencode.SHIM_PATH
-        p.write_text(p.read_text().replace(__version__, "0.40.0"))
-        from unittest import mock
-        with mock.patch.object(doctor, "_work_trees", return_value=[tree]):
-            r = doctor.check_harness_trees()
-        self.assertEqual(r.status, doctor.WARN)
-        self.assertIn("0.40.0", r.detail)
-        self.assertIn("reinit", r.hint)
+    """One installed shim, so one thing to be stale about — reported on the harness row
+    rather than a row per tree, which is the simplification the global install bought."""
 
-    def test_a_current_shim_is_a_clean_row(self):
-        tree = _tree(self)
-        registry.get("opencode").wire_tree(tree)
+    def _installed(self, version: str | None) -> Path:
+        import os
         from unittest import mock
-        with mock.patch.object(doctor, "_work_trees", return_value=[tree]):
-            self.assertEqual(doctor.check_harness_trees().status, doctor.OK)
+        home = _tree(self)
+        self.env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(home)})
+        self.env.start(); self.addCleanup(self.env.stop)
+        g = opencode.global_dir()
+        opencode.ensure_shim(g)
+        if version is not None:
+            p = g / opencode.SHIM_PATH
+            p.write_text(p.read_text().replace(__version__, version))
+        return g
+
+    def test_a_shim_an_older_charter_wrote_is_named(self):
+        self._installed("0.40.0")
+        self.assertEqual(opencode.shim_version(opencode.global_dir()), "0.40.0")
+
+    def test_a_current_shim_reports_this_version(self):
+        self._installed(None)
+        self.assertEqual(opencode.shim_version(opencode.global_dir()), __version__)
 
 
 class RefreshingIsDeliberate(unittest.TestCase):
@@ -99,28 +104,3 @@ class RefreshingIsDeliberate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class ReinitMakesTheHintTrue(unittest.TestCase):
-    """`doctor` says "→ charter reinit". A hint that does not fix what it points at is
-    worse than no hint: it spends the operator's trust and leaves the guard inert."""
-
-    def test_reinit_refreshes_a_stale_tree(self):
-        from charter import commands
-
-        tree = _tree(self)
-        opencode.ensure_shim(tree)
-        p = tree / opencode.SHIM_PATH
-        p.write_text(p.read_text().replace(__version__, "0.40.0"))
-        commands.refresh_work_tree(tree)
-        self.assertEqual(opencode.shim_version(tree), __version__)
-
-    def test_reinit_does_not_overwrite_a_shim_someone_edited(self):
-        from charter import commands
-
-        tree = _tree(self)
-        p = tree / opencode.SHIM_PATH
-        p.parent.mkdir(parents=True)
-        p.write_text("// mine\n")
-        commands.refresh_work_tree(tree)
-        self.assertEqual(p.read_text(), "// mine\n")

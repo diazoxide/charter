@@ -626,14 +626,6 @@ def check_harness() -> Result:
     return Result(name, OK, detail=f"{current} — {len(gaps)} capability ceiling{plural}\n{listed}")
 
 
-def _work_trees() -> list[Path]:
-    """Every tree a session starts in. Thin on purpose — `workspace.all_trees` is the
-    single answer, shared with the backfill that writes the wiring this row checks."""
-    from . import config as _config, workspace as _ws
-
-    return _ws.all_trees() if _config.HAS_CONTROL_PLANE else []
-
-
 def check_guard_seen() -> Result:
     """Has a guard ever actually RUN here, and under which harness?
 
@@ -680,61 +672,6 @@ def _seen_age(ts) -> str:
     except (TypeError, ValueError):
         return "?"
     return _pieces.since(when, datetime.now(timezone.utc))
-
-
-def check_harness_trees() -> Result:
-    """Is every harness armed where sessions START, not just where the plane lives?
-
-    opencode reads plugins from the session's own directory and does not walk upwards —
-    checked by putting one in a parent and booting from a nested directory, where it never
-    loaded. Work happens in a clone or a worktree (ADR 0008), so a plane-root-only shim is
-    inert in every session that matters while `init` reports it as written.
-
-    That is the shape this repo keeps paying for (#177, #197), and it shipped here once
-    already — which is the argument for this check rather than for trusting the writer.
-    """
-    from .harness import registry as _harness
-
-    name = "harness trees"
-    trees = _work_trees()
-    if not trees:
-        return Result(name, OK, detail="no work trees yet")
-    harnesses = _harness.all()
-    bare = [t for t in trees if any(h.wire_tree_missing(t) for h in harnesses)]
-    # Stale is reported separately from absent, because they read differently and only one
-    # of them looks fine from the outside: a shim an older charter wrote sits exactly where
-    # a wired one belongs. 0.40.0's threw on every tool call and failed open.
-    stale: dict = {}
-    for t in trees:
-        if t in bare:
-            continue
-        for h in harnesses:
-            written_by = h.wire_tree_stale(t)
-            if written_by:
-                stale[t] = written_by
-                break
-    if not bare and not stale:
-        return Result(name, OK, detail=f"{len(trees)} tree(s) wired")
-    parts, hints = [], []
-    if bare:
-        listed = ", ".join(t.name for t in bare[:5]) + ("…" if len(bare) > 5 else "")
-        parts.append(f"{len(bare)} unwired: {listed}")
-        hints.append("A session started there gets no charter guards — the plugin is read "
-                     "from the session's own directory.")
-    if stale:
-        seen = sorted({v for v in stale.values()})
-        listed = ", ".join(t.name for t in list(stale)[:5]) + ("…" if len(stale) > 5 else "")
-        parts.append(f"{len(stale)} written by {'/'.join(seen)}: {listed}")
-        hints.append(f"charter is {_version()}; a shim an older one wrote is still a file "
-                     f"where a wired one belongs, and 0.40.0's guard never fired.")
-    return Result(name, WARN, detail=f"{len(trees)} tree(s) — " + "; ".join(parts),
-                  hint=" ".join(hints) + " → charter reinit")
-
-
-def _version() -> str:
-    from . import __version__
-
-    return __version__
 
 
 def check_nested_plane() -> Result:
@@ -1651,8 +1588,7 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_harness(), check_harness_trees(),
-                check_guard_wired(), check_guard_seen(), check_nested_plane(),
+                check_plane_root(), check_harness(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),

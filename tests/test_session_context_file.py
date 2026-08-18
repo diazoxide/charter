@@ -40,67 +40,77 @@ class ContextBlock(PersonaIso):
 
 
 class WiringWritesIt(PersonaIso):
+    """Written once, under opencode's global config dir — not into anybody's repo."""
+
     def _tree(self) -> Path:
-        t = self.tmp / "tree"
-        t.mkdir(parents=True, exist_ok=True)
-        return t
+        import os
+        from unittest import mock
+        home = self.tmp / "xdg"
+        home.mkdir(parents=True, exist_ok=True)
+        self.enterContext(mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(home)}))
+        registry.get("opencode").wire(self.tmp)
+        return opencode.global_dir()
 
     def test_the_tree_gets_a_context_file(self):
         tree = self._tree()
-        registry.get("opencode").wire_tree(tree)
         self.assertTrue((tree / opencode.CONTEXT_PATH).is_file())
 
     def test_opencode_is_told_to_read_it(self):
         tree = self._tree()
-        registry.get("opencode").wire_tree(tree)
         doc = json.loads((tree / "opencode.json").read_text())
-        self.assertIn(str(opencode.CONTEXT_PATH), doc["instructions"])
+        self.assertIn(str(tree / opencode.CONTEXT_PATH), doc["instructions"])
 
     def test_the_instruction_is_not_added_twice(self):
         tree = self._tree()
-        registry.get("opencode").wire_tree(tree)
-        registry.get("opencode").wire_tree(tree)
+        registry.get('opencode').wire(self.tmp)
         doc = json.loads((tree / "opencode.json").read_text())
-        self.assertEqual(doc["instructions"].count(str(opencode.CONTEXT_PATH)), 1)
+        self.assertEqual(doc["instructions"].count(str(tree / opencode.CONTEXT_PATH)), 1)
 
     def test_the_context_is_REGENERATED_unlike_the_shim(self):
         """The shim is the operator's to edit and charter never repairs it. The context
         file is derived state — a stale one is a lie about which workspace you are in, so
         this is the one generated file charter overwrites on purpose."""
         tree = self._tree()
-        registry.get("opencode").wire_tree(tree)
         (tree / opencode.CONTEXT_PATH).write_text("stale\n")
-        registry.get("opencode").wire_tree(tree)
+        registry.get('opencode').wire(self.tmp)
         self.assertNotEqual((tree / opencode.CONTEXT_PATH).read_text(), "stale\n")
 
     def test_someone_elses_instructions_survive(self):
         tree = self._tree()
         (tree / "opencode.json").write_text(json.dumps({"instructions": ["AGENTS.md"]}))
-        registry.get("opencode").wire_tree(tree)
+        registry.get('opencode').wire(self.tmp)
         doc = json.loads((tree / "opencode.json").read_text())
         self.assertIn("AGENTS.md", doc["instructions"])
 
     def test_a_malformed_config_is_left_alone(self):
-        tree = self._tree()
-        (tree / "opencode.json").write_text("{not json")
-        registry.get("opencode").wire_tree(tree)
-        self.assertEqual((tree / "opencode.json").read_text(), "{not json")
+        import os
+        from unittest import mock
+        home = self.tmp / "xdg2"
+        (home / "opencode").mkdir(parents=True, exist_ok=True)
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(home)}):
+            cfg = opencode.global_dir() / "opencode.json"
+            cfg.write_text("{not json")
+            registry.get("opencode").wire(self.tmp)
+            self.assertEqual(cfg.read_text(), "{not json")
 
 
 
 class StatuslineOnDemand(PersonaIso):
     """opencode has no status-bar socket, so the plane state is a command you run.
 
-    `.opencode/command/<name>.md` is the location (quoted from the binary's own docs
-    table), and a command body may embed shell output — so `/charter` shows the real
-    status line rather than asking a model to describe it.
+    `command/<name>.md` under opencode's config dir is the location, and a command body
+    may embed shell output — so `/charter` shows the real status line rather than asking a
+    model to describe it. Installed once, like the plugin beside it.
     """
 
-    def test_the_tree_gets_a_charter_command(self):
-        tree = self.tmp / "tree"
-        tree.mkdir(parents=True, exist_ok=True)
-        registry.get("opencode").wire_tree(tree)
-        cmd = tree / opencode.COMMAND_PATH
+    def test_installing_writes_the_charter_command(self):
+        import os
+        from unittest import mock
+        home = self.tmp / "xdg-cmd"
+        home.mkdir(parents=True, exist_ok=True)
+        self.enterContext(mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(home)}))
+        registry.get("opencode").wire(self.tmp)
+        cmd = opencode.global_dir() / opencode.COMMAND_PATH
         self.assertTrue(cmd.is_file())
         body = cmd.read_text()
         self.assertIn("charter statusline", body)

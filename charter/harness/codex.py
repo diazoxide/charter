@@ -60,20 +60,21 @@ def config_path() -> Path:
 
 
 def _block() -> str:
-    """The TOML charter appends. Whole tables only — see :func:`install`."""
-    lines = ["", "# --- charter (control plane) ---",
-             "# Written by `charter harness install codex`. Remove this block to unwire.",
-             "[shell_environment_policy]",
-             'set = { CHARTER_HARNESS = "codex" }', ""]
-    for event, matcher, command in _WIRING:
-        lines.append(f"[[hooks.{event}]]")
-        if matcher is not None:
-            lines.append(f'matcher = "{matcher}"')
-        lines.append(f"[[hooks.{event}.hooks]]")
-        lines.append(f'type = "{HOOK_TYPE}"')
-        lines.append(f'command = "{command}"')
-        lines.append("")
-    return "\n".join(lines)
+    """The TOML charter appends: the harness name, and nothing else.
+
+    Codex installs charter's **plugin** — the same artifact Claude Code uses — and the
+    plugin declares every hook. Declaring them here too ran charter twice on every
+    SessionStart, UserPromptSubmit and Bash call, which an earlier version of this file
+    did because its survey stopped at `config.toml` and never looked for a marketplace.
+
+    What is left is the one thing the plugin cannot do: tell a Codex shell which harness
+    it is, so `harness.current()` has something to read.
+    """
+    return "\n".join([
+        "", "# --- charter (control plane) ---",
+        "# Hooks come from the charter@charter plugin; this only names the harness.",
+        "[shell_environment_policy]",
+        'set = { CHARTER_HARNESS = "codex" }', ""])
 
 
 def install() -> tuple[str, str]:
@@ -101,9 +102,16 @@ def install() -> tuple[str, str]:
             doc = tomllib.loads(raw)
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
             return "malformed", str(p)
-        clashes = [k for k in ("hooks", "shell_environment_policy") if k in doc]
-        if clashes:
-            return "present", f"{p} already declares {', '.join(clashes)}"
+        hooks = doc.get("hooks") or {}
+        # `[hooks.state]` is Codex's own trust ledger, not a declaration — only actual
+        # event tables mean somebody (probably an older charter) declared hooks here.
+        declared = [k for k in hooks if k != "state"]
+        if declared:
+            return "doubled", (f"{p} declares hooks ({', '.join(sorted(declared))}) — the "
+                               f"charter plugin declares them too, so charter runs twice "
+                               f"per turn. Remove the charter block from that file.")
+        if "shell_environment_policy" in doc:
+            return "present", str(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     sep = "" if (not raw or raw.endswith("\n")) else "\n"
     p.write_text(raw + sep + _block())
@@ -124,10 +132,6 @@ class CodexHarness(Harness):
                 "`$CHARTER_SESSION_ID` reaches a shell; the workspace lock falls back to "
                 "the terminal-pane key. Hooks are unaffected — their payload carries "
                 "`session_id` directly."),
-        Deficit("wiring-scope",
-                "no project-level config: hooks live only in `~/.codex/config.toml`, so "
-                "charter's wiring here is machine-wide rather than per-plane, and cannot "
-                "be committed and shared with the team the way `.claude/settings.json` is."),
     )
 
     def detect(self) -> bool:

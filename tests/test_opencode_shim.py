@@ -18,7 +18,7 @@ class EnsureShim(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="charter-oc-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.root, True))
-        self.shim = self.root / ".opencode" / "plugin" / "charter.ts"
+        self.shim = self.root / opencode.SHIM_PATH
 
     def test_a_plane_with_no_opencode_dir_gets_the_plugin_written(self):
         self.assertEqual(opencode.ensure_shim(self.root), "created")
@@ -70,7 +70,7 @@ class GuardForwarding(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="charter-oc-g-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.root, True))
         opencode.ensure_shim(self.root)
-        self.src = (self.root / ".opencode" / "plugin" / "charter.ts").read_text()
+        self.src = (self.root / opencode.SHIM_PATH).read_text()
 
     def test_it_hooks_the_event_that_runs_before_the_tool(self):
         self.assertIn('"tool.execute.before"', self.src)
@@ -106,7 +106,7 @@ class MidSessionNudges(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="charter-oc-n-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.root, True))
         opencode.ensure_shim(self.root)
-        self.src = (self.root / ".opencode" / "plugin" / "charter.ts").read_text()
+        self.src = (self.root / opencode.SHIM_PATH).read_text()
 
     def test_it_hooks_the_event_that_runs_after_the_tool(self):
         self.assertIn('"tool.execute.after"', self.src)

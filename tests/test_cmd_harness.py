@@ -41,15 +41,15 @@ class HarnessInstall(unittest.TestCase):
         self.addCleanup(lambda: __import__("shutil").rmtree(self.home, True))
         self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.home)}))
 
-    def test_installing_codex_writes_its_config_and_says_it_is_untrusted(self):
-        """Codex trusts hooks by hash, so a written entry is inert until approved.
-        Reporting success without saying so is the "looks wired and is not" failure
-        (#177, #197) delivered by charter's own hand."""
+    def test_installing_codex_names_the_harness_and_points_at_the_plugin(self):
+        """The hooks come from the plugin. This writes the one thing the plugin cannot —
+        `$CHARTER_HARNESS` — and says where the rest comes from, so nobody adds a second
+        copy by hand."""
         rc, text = _run(commands_harness.cmd_harness_install,
                         SimpleNamespace(name="codex"))
         self.assertEqual(rc, 0)
         self.assertTrue((self.home / "config.toml").is_file())
-        self.assertIn("trust", text.lower())
+        self.assertIn("plugin", text.lower())
 
     def test_a_harness_that_needs_no_opt_in_says_so_rather_than_failing(self):
         rc, text = _run(commands_harness.cmd_harness_install,

@@ -107,25 +107,36 @@ and watching the config load anyway); hooks live only in `~/.codex/config.toml`.
 second axis this ADR did not anticipate, and it is not a capability ceiling — it is a
 question of *scope*:
 
-| | where charter writes its wiring | committed | blast radius |
-| --- | --- | --- | --- |
-| Claude Code | `.claude/settings.json` | yes | the plane |
-| opencode | `.opencode/` in **every work tree** | locally excluded | one tree |
-| Codex | `~/.codex/config.toml` | no | **every repo on the machine** |
+| | where charter installs | 
+| --- | --- |
+| Claude Code | the plugin, plus the plane's `.claude/settings.json` |
+| opencode | one plugin under opencode's config dir, read by every project |
+| Codex | the same plugin, plus one line naming the harness |
 
-opencode's row is per-tree for a reason discovered the hard way, after a plane-root-only
-version shipped: **it does not search parent directories for plugins**, checked by putting
-one in a parent and booting from a nested directory, where it never loaded. Work happens in
-a clone or a worktree (ADR 0008), so `clone` and `worktree add` arm each tree as it comes
-into being, `reinit` backfills, and `doctor check_harness_trees` names any still missing.
-Charter's generated files are hidden through `.git/info/exclude` — per-checkout and
-untracked, so charter never edits a `.gitignore` the repo's owners maintain — and only the
-files charter itself created are hidden.
+**Corrected, twice.** The first version wrote opencode's plugin at the plane root, where it
+was inert because opencode does not search parent directories for *project* plugins. The
+second wrote it into every clone and worktree, with a `.git/info/exclude` entry per
+checkout, a `doctor` row for trees missing it, per-tree staleness detection and a backfill
+in `reinit` — all correct, and all answering a question that does not need asking: opencode
+reads `~/.config/opencode/plugin/` for every project. Removing that branch deleted 255
+lines and a test file.
 
-So `CodexHarness.wire()` deliberately writes nothing, and `doctor` reports the gap rather
-than an integration that looks armed. `init` reaching outside the plane to arm hooks in
-repos that have no control plane is the failure ADR 0014 already paid for once — its
-credential guard "needs `config.HAS_CONTROL_PLANE` to stay silent outside a plane — a gate
+Codex was wrong in the same shape and for the same reason. `charter harness install codex`
+declared hooks in `~/.codex/config.toml` because the survey stopped there and never looked
+for a marketplace — while Codex was installing charter's plugin, which declares them all.
+Both were live on a real machine, 3 declarations against 12, so charter ran twice a turn.
+The command now writes only `shell_environment_policy.set`, which is the one thing a plugin
+cannot do, and refuses when it finds hooks it would be doubling.
+
+The lesson is not about either tool. **Twice the design was built on where charter could
+put a file, rather than on where the harness looks for one** — and both times the check
+that would have settled it was a single command.
+
+A plugin installed for every project does run charter's hooks in repos with no control
+plane. That is the objection this ADR raised against Codex's machine-wide config, and it
+survives — answered rather than dodged: the guards gate on `config.HAS_CONTROL_PLANE` and
+stay silent outside a plane. ADR 0014 paid for that gate once — its credential guard "needs
+`config.HAS_CONTROL_PLANE` to stay silent outside a plane — a gate
 added after it fired in unrelated repos and explained a control plane that did not exist
 there." Codex also trusts hooks by hash, so an entry written without approval is inert
 while looking wired, which is the shape #177 and #197 already cost this repo.
