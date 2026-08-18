@@ -699,14 +699,42 @@ def check_harness_trees() -> Result:
     trees = _work_trees()
     if not trees:
         return Result(name, OK, detail="no work trees yet")
-    bare = [t for t in trees if any(h.wire_tree_missing(t) for h in _harness.all())]
-    if not bare:
+    harnesses = _harness.all()
+    bare = [t for t in trees if any(h.wire_tree_missing(t) for h in harnesses)]
+    # Stale is reported separately from absent, because they read differently and only one
+    # of them looks fine from the outside: a shim an older charter wrote sits exactly where
+    # a wired one belongs. 0.40.0's threw on every tool call and failed open.
+    stale: dict = {}
+    for t in trees:
+        if t in bare:
+            continue
+        for h in harnesses:
+            written_by = h.wire_tree_stale(t)
+            if written_by:
+                stale[t] = written_by
+                break
+    if not bare and not stale:
         return Result(name, OK, detail=f"{len(trees)} tree(s) wired")
-    listed = ", ".join(t.name for t in bare[:5]) + ("…" if len(bare) > 5 else "")
-    return Result(name, WARN,
-                  detail=f"{len(bare)} of {len(trees)} tree(s) unwired: {listed}",
-                  hint="A session started there gets no charter guards — the plugin is "
-                       "read from the session's own directory. → charter reinit")
+    parts, hints = [], []
+    if bare:
+        listed = ", ".join(t.name for t in bare[:5]) + ("…" if len(bare) > 5 else "")
+        parts.append(f"{len(bare)} unwired: {listed}")
+        hints.append("A session started there gets no charter guards — the plugin is read "
+                     "from the session's own directory.")
+    if stale:
+        seen = sorted({v for v in stale.values()})
+        listed = ", ".join(t.name for t in list(stale)[:5]) + ("…" if len(stale) > 5 else "")
+        parts.append(f"{len(stale)} written by {'/'.join(seen)}: {listed}")
+        hints.append(f"charter is {_version()}; a shim an older one wrote is still a file "
+                     f"where a wired one belongs, and 0.40.0's guard never fired.")
+    return Result(name, WARN, detail=f"{len(trees)} tree(s) — " + "; ".join(parts),
+                  hint=" ".join(hints) + " → charter reinit")
+
+
+def _version() -> str:
+    from . import __version__
+
+    return __version__
 
 
 def check_nested_plane() -> Result:
