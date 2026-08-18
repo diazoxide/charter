@@ -52,6 +52,14 @@ class Harness:
         """
         return False
 
+    def stale_wiring(self) -> str:
+        """Which charter wrote this harness's installed wiring, when not the running one.
+
+        ``""`` for a harness whose wiring charter does not generate — Claude Code's plugin
+        is installed by the host and carries its own version check.
+        """
+        return ""
+
     def wire(self, root: Path) -> list[tuple[str, str]]:
         """Write what this harness needs under *root*, IF ABSENT.
 

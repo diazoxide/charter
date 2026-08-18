@@ -612,6 +612,17 @@ def check_harness() -> Result:
                             f"which surfaces {current} carries. Register it in "
                             f"`charter/harness/registry.py` (KINDS) with its own deficits, "
                             f"or unset $CHARTER_HARNESS if it was set by mistake."))
+    live = _harness.get(current)
+    stale = live.stale_wiring() if live else ""
+    if stale:
+        from . import __version__
+
+        return Result(name, WARN,
+                      detail=f"{current} — its plugin was written by {stale}, charter is "
+                             f"{__version__}",
+                      hint=("A plugin an older charter wrote is still a file where a "
+                            "working one belongs — 0.40.0's guard never fired. → charter "
+                            "reinit (an edited plugin is reported, never overwritten)"))
     gaps = _harness.deficits(current)
     if not gaps:
         return Result(name, OK, detail=current)

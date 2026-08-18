@@ -10,6 +10,7 @@ too, and a wrong workaround costs more than an honest gap.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 
 from charter import doctor
@@ -42,7 +43,12 @@ class DoctorShowsThem(unittest.TestCase):
     def test_the_row_carries_the_remedy_beside_the_ceiling(self):
         import os
         from unittest import mock
-        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "opencode"}, clear=True):
+        # `clear=True` wipes the suite-wide sandbox redirect too, so `global_dir()` would
+        # fall back to the developer's REAL ~/.config/opencode — which is both a leak and
+        # a flake, since a stale plugin there would fail this test.
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "opencode",
+                                          "XDG_CONFIG_HOME": tempfile.mkdtemp()},
+                             clear=True):
             r = doctor.check_harness()
         self.assertIn("charter statusline --watch", r.detail)
 

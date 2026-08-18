@@ -321,6 +321,19 @@ class OpenCodeHarness(Harness):
                 "effectful tools (write/edit/bash) instead of arriving beside them."),
     )
 
+    def stale_wiring(self) -> str:
+        """The version that wrote the installed plugin, when it is not this one.
+
+        ``""`` when current or absent — absent is `harness`'s other sentence, and two rows
+        saying the plane is unwired teaches people to skim. ``"unstamped"`` for a plugin
+        charter cannot vouch for, which includes every one written before the stamp.
+        """
+        g = global_dir()
+        if not (g / SHIM_PATH).is_file():
+            return ""
+        got = shim_version(g)
+        return "" if got == __version__ else (got or "unstamped")
+
     def detect(self) -> bool:
         """Nothing native to detect.
 
@@ -343,7 +356,11 @@ class OpenCodeHarness(Harness):
         # Labels are RELATIVE to the config dir, and say which harness they belong to.
         # An absolute path here is unbounded — a deep home directory turned `init`'s
         # summary into a 130-column line, which is the readability budget #231 set.
-        out = [(ensure_shim(g), f"opencode {SHIM_PATH}")]
+        # `refresh_shim`, not `ensure_shim`: an install that only ever creates is a
+        # one-shot, and a plugin an older charter wrote then survives every upgrade while
+        # `doctor` reports it wired. That was #233's bug per tree; moving to one global
+        # file took the refresh path with it and brought the bug back.
+        out = [(refresh_shim(g), f"opencode {SHIM_PATH}")]
         cmd = g / COMMAND_PATH
         if not cmd.exists():
             cmd.parent.mkdir(parents=True, exist_ok=True)

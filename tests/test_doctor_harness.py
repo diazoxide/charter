@@ -9,6 +9,7 @@ written for, one level up.
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -17,7 +18,12 @@ from charter import doctor, harness
 
 class DoctorHarness(unittest.TestCase):
     def test_the_opencode_row_names_every_ceiling(self):
-        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "opencode"}, clear=True):
+        # `clear=True` wipes the suite-wide sandbox redirect too, so `global_dir()` would
+        # fall back to the developer's REAL ~/.config/opencode — which is both a leak and
+        # a flake, since a stale plugin there would fail this test.
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "opencode",
+                                          "XDG_CONFIG_HOME": tempfile.mkdtemp()},
+                             clear=True):
             r = doctor.check_harness()
         self.assertEqual(r.status, doctor.OK)
         self.assertIn("opencode", r.detail)
