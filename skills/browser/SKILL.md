@@ -40,6 +40,13 @@ Pin the version explicitly in every command. The tool is pre-1.0 and its behavio
 `PLAYWRIGHT_MCP_SECRETS_FILE` at it. You then refer to a secret **by name**; Playwright
 substitutes the value and redacts it from output, so it never reaches the transcript.
 
+> **`not open` is not a cue to re-open.** A second `open` with the same `-s=<name>` starts
+> a *new* browser and orphans the first — which is the one that is logged in. Worse, the
+> new one cannot be authenticated: `charter secret exec` shreds its dotenv on exit, so
+> filling a secret into it means re-running the whole bridged flow. Check the session is
+> really gone first (a `snapshot` against it is cheap and answers the question); if it is,
+> re-run the flow rather than `open`.
+
 > **Open the session *inside* the bridge.** `playwright-cli` reads
 > `PLAYWRIGHT_MCP_SECRETS_FILE` once, when the session daemon starts. Setting it later, on
 > a `fill` against an already-open session, **fails silently** — the literal string `PASS`
