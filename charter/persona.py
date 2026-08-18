@@ -543,13 +543,46 @@ def uses_of(name: str) -> list[str]:
     return _csv_list(r["meta"].get("uses")) if r else []
 
 
+#: A `borrows:` value meaning "deliberately nothing" — the same spelling `vault: none`
+#: already uses for the same idea, so the vocabulary stays one vocabulary.
+BORROWS_NONE = "none"
+
+
+def borrows_of(name: str) -> list[str] | None:
+    """Personas whose tools and vault this one may use — its ``borrows:``, or ``None`` when
+    the key is absent.
+
+    ``None`` and ``[]`` are different answers and the difference is the whole feature:
+    absent means "I have not opted in, keep the legacy `uses:` grant", while
+    ``borrows: none`` means "I borrow nothing". Collapsing them would either break every
+    existing plane or make opting out unsayable.
+    """
+    r = resolve(name)
+    if not r or "borrows" not in r["meta"]:
+        return None
+    vals = _csv_list(r["meta"].get("borrows"))
+    return [v for v in vals if v != BORROWS_NONE]
+
+
 def effective_tools(name: str) -> set[str]:
-    """The persona's own auto-approved tools plus those of the personas it ``uses:``
-    (one level). Used by the tool-gate so an adopted persona can run a reused
-    persona's tools without a prompt."""
+    """The persona's own auto-approved tools, plus those it may borrow (one level).
+
+    Which personas those are depends on whether this persona has opted into the split:
+
+    * ``borrows:`` declared → its tools come from that list, and ``uses:`` is a routing
+      edge only. This is the point of the field. ``uses:`` granted vault access, tool
+      auto-approval and delegation in one word, and the middle grant is why delegating
+      always lost: a front door declaring ``uses: forge, release`` could do both personas'
+      work with both personas' tools and never pay a prompt, while handing the work over
+      cost a dispatch and the context with it (#257).
+    * ``borrows:`` absent → the legacy grant, unchanged. Fails toward no change, per
+      persona: opting one persona in must never alter another's permissions, which is
+      exactly what a plane-wide switch would have done.
+    """
     tools = tools_of(name)
-    for u in uses_of(name):
-        tools |= tools_of(u)
+    borrows = borrows_of(name)
+    for other in (uses_of(name) if borrows is None else borrows):
+        tools |= tools_of(other)
     return tools
 
 
@@ -697,6 +730,9 @@ def structural_errors(name: str, known: set[str] | None = None) -> list[tuple[st
     for u in uses_of(name):
         if u not in allnames:
             issues.append(("error", f"uses: '{u}' — no such persona (dangling)"))
+    for b in borrows_of(name) or ():
+        if b not in allnames:
+            issues.append(("error", f"borrows: '{b}' — no such persona (dangling)"))
     d = load(name)
     ext = ((d["meta"] if d else {}).get("extends") or "").strip()
     if ext and ext not in allnames:

@@ -184,6 +184,35 @@ it explicitly and visibly, not acquire a transitive reach nobody declared.
 one being removed, removal is refused and the dependents are named (`--force` overrides).
 Before that, a dangling reference was only discovered later, by `lint`.
 
+## Borrowing vs routing (`uses:` and `borrows:`)
+
+`uses:` historically granted three things in one word: read that persona's vault, run its
+tools without a permission prompt, and delegate to its sub-agent. The middle grant quietly
+decides how much delegation happens — a persona declaring `uses: forge, release` can do both
+their jobs with both their tools and never pay a prompt, while handing the work over costs a
+dispatch and the context that goes with it.
+
+`borrows:` separates them, **per persona**:
+
+```yaml
+uses: forge, release      # personas I may hand work to
+borrows: release          # …and whose tools/vault I may actually use
+```
+
+| Declared | What `uses:` means | Tools auto-approved from |
+| --- | --- | --- |
+| no `borrows:` | vault + tools + delegation (unchanged) | the `uses:` list |
+| `borrows: <names>` | delegation only | the `borrows:` list |
+| `borrows: none` | delegation only | nobody — own tools only |
+
+Nothing changes for a persona that does not declare `borrows:`, and one persona opting in
+never alters another's permissions — which is exactly why this is a frontmatter field and
+not a setting in `charter.toml`.
+
+The generated sub-agent charter says which is which, because that text is what a dispatched
+agent believes about itself: if it still read "run their tools" while the gate refused, the
+agent would have no way to find out why.
+
 ## Curating memory: `charter persona optimize`
 
 Memory grows, and growth is not a defect — but a base that has accumulated near-duplicates

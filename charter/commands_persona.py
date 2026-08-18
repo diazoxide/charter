@@ -536,7 +536,7 @@ _AGENT_PASSTHROUGH_KEYS = ("model", "color", "memory")
 _CHARTER_OWN_KEYS = (
     "name", "role", "vault", "extends", "uses", "delegate-when", "description",
     "agent-description", "agent-tools", "tools", "activity", "dispatch-isolation",
-    "draft", "skills", "disallowed-tools", "routing", "routes-to",
+    "draft", "skills", "disallowed-tools", "routing", "routes-to", "borrows",
 )
 
 
@@ -621,13 +621,35 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
         )
 
     uses = [u.strip() for u in (meta.get("uses") or "").split(",") if u.strip() and u.strip() != name]
+    borrows = persona.borrows_of(name)
     uses_note = ""
     if uses:
         joined = ", ".join(f"`{u}`" for u in uses)
-        uses_note = (
-            f"\n- **You may also use these personas: {joined}.** Read their vault "
-            f"(`charter persona secret list --persona <name>`), run their tools, or delegate a "
-            f"sub-task to their sub-agent (Agent tool, `subagent_type: <name>`)."
+        if borrows is None:
+            # Legacy: `uses:` still grants all three. Wording unchanged for a plane that
+            # has not opted into the split.
+            uses_note = (
+                f"\n- **You may also use these personas: {joined}.** Read their vault "
+                f"(`charter persona secret list --persona <name>`), run their tools, or delegate a "
+                f"sub-task to their sub-agent (Agent tool, `subagent_type: <name>`)."
+            )
+        else:
+            # Opted in: `uses:` is a routing edge. The charter must say so, because it is
+            # what a dispatched agent believes about itself — if it still read "run their
+            # tools", the tool-gate would refuse and the agent would have no idea why.
+            uses_note = (
+                f"\n- **You may delegate to these personas: {joined}.** Hand them a sub-task "
+                f"(Agent tool, `subagent_type: <name>`). You do NOT hold their credentials "
+                f"and their tools are not auto-approved for you — that is what `borrows:` is "
+                f"for, and it is deliberate: doing their work yourself should cost more than "
+                f"handing it over."
+            )
+    if borrows:
+        joined_b = ", ".join(f"`{b}`" for b in borrows)
+        uses_note += (
+            f"\n- **You borrow from: {joined_b}.** Read their vault "
+            f"(`charter persona secret list --persona <name>`) and run their tools without a "
+            f"prompt."
         )
 
     # Generic capability handoff — every persona gets this, so it hands work outside its
