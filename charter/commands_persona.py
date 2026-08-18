@@ -263,33 +263,60 @@ def cmd_persona_clear(args) -> int:
 
 
 def cmd_persona_default(args) -> int:
-    """Show / set / clear the committed team-wide default persona (personas/.default) —
-    the one adopted when no --persona / $CHARTER_PERSONA / `charter persona use` is set."""
-    f = config.PERSONAS_DIR / ".default"
+    """Show / set / clear the plane's declared front door — ``charter.toml``'s
+    ``[persona] default``, the persona adopted when no ``--persona`` / ``$CHARTER_PERSONA``
+    / ``charter persona use`` is set.
+
+    Writes ``charter.toml`` rather than the legacy ``personas/.default`` dotfile. Both
+    still resolve (a plane that adopted the dotfile keeps working), but only one of them is
+    in the file a consumer opens to read their plane, and the invisible one is the one that
+    shipped, tested green, and was adopted by nobody — including this repo (#255).
+    """
+    from . import instance as _instance
+
+    legacy = config.PERSONAS_DIR / ".default"
     if getattr(args, "clear", False):
-        if f.exists():
-            f.unlink()
-            util.ok("Cleared the committed default persona (commit with `charter save`).")
+        # Both rungs, or a plane would still declare a front door after being told it no
+        # longer does — the dotfile resolves whenever charter.toml is silent.
+        had = bool(persona.declared_default() or persona.default_persona())
+        _instance.set_default_persona(config.ROOT, None)
+        if legacy.exists():
+            legacy.unlink()
+        if had:
+            util.ok("Cleared the declared default persona (commit with `charter save`).")
         else:
-            util.info("No committed default persona was set.")
+            util.info("No default persona was declared.")
         return 0
     if getattr(args, "name", None):
         if not persona.load(args.name):
             util.err(f"no persona '{args.name}' — create it first (`charter persona create {args.name}`).")
             return 1
-        config.PERSONAS_DIR.mkdir(parents=True, exist_ok=True)
-        f.write_text(args.name + "\n")
-        util.ok(f"Committed default persona set to '{args.name}' → personas/.default (shared; "
-                "commit with `charter save`).")
+        if not _instance.set_default_persona(config.ROOT, args.name):
+            util.err(f"could not write {config.ROOT / 'charter.toml'} — is this a control plane?")
+            return 1
+        util.ok(f"Default persona declared: '{args.name}' → charter.toml [persona] default "
+                "(shared; commit with `charter save`).")
+        if legacy.exists():
+            # Say it at the moment it becomes true, not in a doctor run somebody may never
+            # do: from now on the two files disagree and the dotfile is the one that loses.
+            util.warn(f"personas/.default also exists (naming '{persona.default_persona() or '?'}') "
+                      "and is now IGNORED — charter.toml outranks it. Delete it: "
+                      "rm personas/.default")
         util.info("Overridden per-developer by `charter persona use` / $CHARTER_PERSONA / --persona.")
+        return 0
+    declared = persona.declared_default()
+    if declared:
+        print(declared)
+        util.info("declared front door (charter.toml [persona] default). "
+                  "Change: charter persona default <name>  ·  clear: --clear")
         return 0
     d = persona.default_persona()
     if d:
         print(d)
-        util.info("committed team-wide default (personas/.default). "
-                  "Change: charter persona default <name>  ·  clear: --clear")
+        util.info("committed team-wide default (personas/.default) — the legacy location. "
+                  f"Move it: charter persona default {d}")
     else:
-        util.info("No committed default persona. Set one: charter persona default <name>")
+        util.info("No default persona declared. Set one: charter persona default <name>")
     return 0
 
 

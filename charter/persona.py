@@ -309,33 +309,70 @@ def default_persona() -> str | None:
     return val if val and def_path(val).exists() else None
 
 
-def resolve_active(explicit: str | None = None) -> str | None:
-    """Active persona by precedence: ``--persona`` → ``$CHARTER_PERSONA`` → local
-    ``.charter/active-persona`` (``charter persona use``) → committed ``personas/.default`` → none."""
+def declared_default() -> str | None:
+    """The front door this control plane DECLARES — ``charter.toml``'s ``[persona] default``.
+
+    Outranks the legacy ``personas/.default`` dotfile, which keeps resolving so no plane
+    that adopted it breaks. The move is about findability, not capability: the dotfile is
+    invisible to ``ls``, appears in no documentation page, and was used by nobody —
+    including this repo, whose own front door resolved through a gitignored local file
+    instead (#255). ``charter.toml`` is the file a consumer already opens to understand
+    their plane, and ``[workspace] default`` is already in it.
+
+    Validated against what exists, exactly like :func:`default_persona`: a declaration
+    naming a persona that was renamed or deleted resolves to *nothing* rather than to a
+    broken identity. Saying so out loud is `doctor`'s job — silence here is the fail-toward-
+    no-change half, not the whole answer.
+
+    Never raises. A malformed or too-new ``charter.toml`` is a real error, and every actual
+    command surfaces it through :func:`instance.load`; but this rung is read by hooks on
+    every session start and every status-line paint, where the rule is that a hook may cost
+    a session its briefing and never its turn.
+    """
+    from . import instance as _instance
+    try:
+        val = _instance.default_persona_of(_instance.load(config.ROOT))
+    except Exception:
+        return None
+    return val if val and def_path(val).exists() else None
+
+
+def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
+    """``(persona, where it came from)`` — the whole precedence, decided ONCE.
+
+    :func:`resolve_active` and :func:`source` are two questions about a single decision,
+    and they used to walk the rungs separately. Two ladders answering one question is the
+    shape this repo's own convention warns about: adding a rung to one and forgetting the
+    other yields a session that adopts a persona while reporting it came from nowhere.
+    """
     if explicit:
-        return explicit
+        return explicit, "--persona"
     env = os.environ.get("CHARTER_PERSONA")
     if env:
-        return env.strip()
+        return env.strip(), "$CHARTER_PERSONA"
     f = config.ACTIVE_PERSONA_FILE
     if f.exists():
         val = f.read_text().strip()
         if val:
-            return val
-    return default_persona()
+            return val, "active-file"
+    declared = declared_default()
+    if declared:
+        return declared, "charter.toml"
+    committed = default_persona()
+    if committed:
+        return committed, "committed-default"
+    return None, "none"
+
+
+def resolve_active(explicit: str | None = None) -> str | None:
+    """Active persona by precedence: ``--persona`` → ``$CHARTER_PERSONA`` → local
+    ``.charter/active-persona`` (``charter persona use``) → declared ``charter.toml``
+    ``[persona] default`` → committed ``personas/.default`` → none."""
+    return _resolved(explicit)[0]
 
 
 def source(explicit: str | None = None) -> str:
-    if explicit:
-        return "--persona"
-    if os.environ.get("CHARTER_PERSONA"):
-        return "$CHARTER_PERSONA"
-    f = config.ACTIVE_PERSONA_FILE
-    if f.exists() and f.read_text().strip():
-        return "active-file"
-    if default_persona():
-        return "committed-default"
-    return "none"
+    return _resolved(explicit)[1]
 
 
 def set_active(name: str) -> None:

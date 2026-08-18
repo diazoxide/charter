@@ -83,6 +83,22 @@ def default_workspace_of(cfg: dict, fallback: str) -> str:
     return (cfg.get("workspace") or {}).get("default") or fallback
 
 
+def default_persona_of(cfg: dict) -> str | None:
+    """The persona this control plane declares as its front door — ``[persona] default``.
+
+    No fallback argument, unlike its workspace twin above: a plane with no declared
+    workspace still has to act on *some* workspace, while a plane with no declared persona
+    genuinely has no front door, and charter inventing one would be it choosing an identity
+    nobody asked for. Absence returns ``None`` and every caller treats that as "no persona".
+
+    A blank value is absence, not a persona named ``"   "`` — a half-edited key should
+    behave like the key that was there before it.
+    """
+    val = (cfg.get("persona") or {}).get("default")
+    val = str(val).strip() if val is not None else ""
+    return val or None
+
+
 #: How far a written memory travels. Ordered least → most public.
 SHARE_MODES = ("local", "commit", "push")
 
@@ -101,15 +117,39 @@ def locked_version(cfg: dict) -> str | None:
 
 def set_locked_version(root: Path, version: str) -> bool:
     """Write ``[charter] version`` into charter.toml, preserving the rest verbatim.
+    :func:`_set_key` owns the how, and the why it is a textual edit."""
+    return _set_key(root, "charter", "version", version)
+
+
+def set_default_persona(root: Path, name: str | None) -> bool:
+    """Declare (or, with ``name=None``, undeclare) ``[persona] default`` in charter.toml.
+
+    Same textual edit as the version lock, through the same helper: two callers writing a
+    key into a section of one hand-edited file is one behaviour, and hand-rolling it twice
+    is how the second copy learns a lesson the first already knows (here: that ``default``
+    also names a key under ``[workspace]``).
+    """
+    return _set_key(root, "persona", "default", name)
+
+
+def _set_key(root: Path, section: str, key_name: str, value: str | None) -> bool:
+    """Set — or with ``value=None`` remove — ``key_name`` inside ``[section]``.
 
     Edited as text rather than round-tripped: stdlib ``tomllib`` reads TOML but
     cannot write it, and re-emitting through any serialiser would strip every
     comment the file carries — unacceptable in a file people hand-edit.
 
-    The edit is confined to the ``[charter]`` section's own line span. An earlier
-    draft substituted the first ``version =`` line in the file, which happily
-    rewrote ``[[forge]] version = "api-v4"`` and left the lock untouched — silent
-    corruption of a committed config.
+    The edit is confined to the section's own line span. An earlier draft substituted the
+    first ``version =`` line in the file, which happily rewrote ``[[forge]] version =
+    "api-v4"`` and left the lock untouched — silent corruption of a committed config. The
+    span matters more now than it did then: ``default`` is a key under ``[workspace]``
+    *and* under ``[persona]``, so a file-wide substitution would swap a plane's workspace
+    for a persona name.
+
+    Removal leaves an emptied section header in place. Deleting it would mean deciding
+    whether a comment sitting under the header belonged to the key or to the section, and
+    an empty ``[persona]`` reads the same as no ``[persona]`` to every consumer of this
+    file — including :func:`default_persona_of`.
     """
     import re
     p = Path(root) / MARKER
@@ -118,22 +158,27 @@ def set_locked_version(root: Path, version: str) -> bool:
     except OSError:
         return False
 
-    header = re.compile(r"^[ \t]*\[charter\][ \t]*$")
+    header = re.compile(rf"^[ \t]*\[{re.escape(section)}\][ \t]*$")
     any_header = re.compile(r"^[ \t]*\[")
-    key = re.compile(r"^([ \t]*version[ \t]*=[ \t]*).*$")
+    key = re.compile(rf"^([ \t]*{re.escape(key_name)}[ \t]*=[ \t]*).*$")
 
     start = next((i for i, ln in enumerate(lines) if header.match(ln)), None)
     if start is None:
+        if value is None:
+            return True  # nothing declared, nothing to undeclare
         tail = "" if not lines or lines[-1].endswith("\n") else "\n"
-        lines += [tail, "\n", "[charter]\n", f'version = "{version}"\n']
+        lines += [tail, "\n", f"[{section}]\n", f'{key_name} = "{value}"\n']
     else:
         stop = next((i for i in range(start + 1, len(lines)) if any_header.match(lines[i])),
                     len(lines))
         hit = next((i for i in range(start + 1, stop) if key.match(lines[i])), None)
-        if hit is None:
-            lines.insert(start + 1, f'version = "{version}"\n')
+        if value is None:
+            if hit is not None:
+                del lines[hit]
+        elif hit is None:
+            lines.insert(start + 1, f'{key_name} = "{value}"\n')
         else:
-            lines[hit] = key.sub(lambda m: f'{m.group(1)}"{version}"', lines[hit])
+            lines[hit] = key.sub(lambda m: f'{m.group(1)}"{value}"', lines[hit])
     try:
         p.write_text("".join(lines))
     except OSError:
