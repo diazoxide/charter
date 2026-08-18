@@ -1255,6 +1255,105 @@ def _first_clone_step(root: Path, accepted: bool) -> int:
     return _clone_first_workspace(root)
 
 
+#: The front door `init` scaffolds. Generic by construction: it names no other persona,
+#: because on a fresh plane there are none, and it says so rather than pretending.
+#:
+#: Every line is a true statement about this persona — the same rule `_TEMPLATE` in
+#: commands_persona follows, and for the same reason: whatever is written here is read by
+#: an agent as its actual remit, not as advice to whoever edits the file later.
+#:
+#: The prose does the work the frontmatter cannot. A front door whose charter reads as
+#: though doing the work itself were normal would ship the exact failure this design
+#: exists to fix, pre-installed, in the file every consumer copies from. So it says: you
+#: have nobody to route to yet, here is how to get someone.
+_FRONT_DOOR = """---
+name: {name}
+role: {role}
+vault: none
+routing: advise
+delegate-when: routing work to the right persona, and scoping a request before code is written
+---
+
+# {role}
+
+You are the front door of this control plane. Your job is to understand what is actually
+being asked, then either do it or hand it to the persona that owns it — not to start
+editing the first file that looks relevant.
+
+## Routing
+
+This plane has no other personas yet, so there is nothing to route to. That is the first
+thing worth fixing, not a reason to do everything here:
+
+```
+charter persona create <name> --role "<Role>" \\
+  --delegate-when "<the work that should come to it>"
+```
+
+`delegate-when` is what makes a persona findable — it becomes the description whoever is
+routing reads. Create one the moment a second kind of work appears in this plane.
+
+Once others exist, `routing: advise` above puts them in front of you on work-shaped
+prompts: who exists, what each claims, when each was last dispatched. charter never says
+which one owns the request — that call is yours. Route on the *work*, not on the file a
+change happens to touch.
+
+Cross-cutting changes stay with you: splitting one coherent change across three personas
+costs more in lost context than it saves.
+
+## Scout before you scope
+
+Read the thing before proposing a change to it, and check what this plane already knows —
+`charter recall "<keywords>"` searches your memory, the shared namespace and the active
+workspace's journal at once.
+
+## What you own
+
+Personas, workspaces, memory and vaults — the shape of this plane. Definitions and memory
+are committed and shared; credentials never are.
+
+Record durable facts with `charter persona remember {name} "<fact>"`, and `--shared` for
+anything every persona needs.
+
+This file is yours: rename it, rewrite it, or delete it and declare a different front door
+with `charter persona default <name>`.
+"""
+
+
+def _ensure_front_door(root: Path, name: str | None) -> tuple[str, str] | None:
+    """Scaffold the generated front-door persona and declare it. Returns
+    ``(status, label)`` for init's created/present report, or ``None`` when it did nothing.
+
+    Skipped entirely when the plane already has ANY persona: `init` creates only what is
+    absent, and a roster is not absent because one particular name is. Skipped too when a
+    default is already declared — someone has already answered this question.
+
+    Writes through explicit paths under *root* rather than `config.PERSONAS_DIR`, like
+    every other writer in this command: `init` runs before the plane it is creating exists,
+    so the derived globals may still point somewhere else entirely.
+    """
+    if not name:
+        return None
+    personas = root / "personas"
+    if any(personas.glob("*/persona.md")) or any(personas.glob("*.md")):
+        return None
+    from . import instance as _instance, persona as _persona
+    if _instance.default_persona_of(_instance.load(root)):
+        return None
+    if not _persona.valid_name(name):
+        util.warn(f"--front-door {name!r} is not a valid persona name — skipped.")
+        return None
+    d = personas / name
+    d.mkdir(parents=True, exist_ok=True)
+    role = f"{name.replace('-', ' ').replace('_', ' ').title()}"
+    (d / "persona.md").write_text(_FRONT_DOOR.format(name=name, role=role))
+    for sub in ("memory", "refs"):
+        (d / sub).mkdir(parents=True, exist_ok=True)
+        (d / sub / ".gitkeep").touch()
+    _instance.set_default_persona(root, name)
+    return ("created", f"personas/{name}/ (front door, declared in charter.toml)")
+
+
 def cmd_init(args) -> int:
     """Scaffold a control plane from nothing — the first-run command a stranger needs
     and the one `root.py`'s own "no control plane found" error already points to.
@@ -1322,6 +1421,10 @@ def cmd_init(args) -> int:
     # safety feature that ships off by default stays off.
     for status, label in _wire_harnesses(root):
         (created if status == "created" else present).append(label)
+
+    fd = _ensure_front_door(root, getattr(args, "front_door", None))
+    if fd:
+        created.append(fd[1])
 
     gh_status, gh_detail = _ensure_guard_hook(root)
     if gh_status == "created":
