@@ -120,6 +120,34 @@ def advice_tally(days: int | None = None) -> int:
     return len(rows)
 
 
+def first_advice() -> datetime | None:
+    """When routing advice was FIRST shown here, or ``None`` if it never has."""
+    stamps = [t for o in _read_all() if o.get("event") == ADVICE and (t := _ts(o))]
+    return min(stamps) if stamps else None
+
+
+def dispatches_since_first_advice() -> int:
+    """Dispatches recorded at or after the first advice — the only count that can honestly
+    sit beside :func:`advice_tally`.
+
+    The pair is meant to read as fired-vs-followed, and a dispatch that happened before the
+    roster ever appeared cannot have followed it. Pairing advice against the LIFETIME total
+    is how this line came to claim, on the plane that shipped the feature, that five
+    dispatches followed one piece of advice — three of them four days older than the
+    feature. Same failure ADR 0016 forbids elsewhere: a conclusion stated with more
+    confidence than its provenance earns, here in the very line that exists to check
+    whether ADR 0016's mechanism works.
+
+    Still not proof of causation, and the report says "since" rather than "because" for
+    that reason. It is a window in which the claim is at least possible.
+    """
+    since = first_advice()
+    if since is None:
+        return 0
+    return sum(1 for o in _read_all()
+               if o.get("agent") and (t := _ts(o)) and t >= since)
+
+
 def _read_all() -> list[dict]:
     d = _dir()
     if not d.exists():

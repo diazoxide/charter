@@ -1090,15 +1090,26 @@ def cmd_persona_stats(args) -> int:
     # a line people learn to skip, and it takes the rest of the report with it.
     advice = dispatch.advice_tally()
     if advice:
-        util.info(f"Routing advice: fired {advice} time(s) · {total} dispatch(es) followed. "
-                  f"Advice that fires and is never followed is the block failing, not the "
-                  f"roster — read it that way before adding more personas.")
+        since = dispatch.first_advice()
+        followed = dispatch.dispatches_since_first_advice()
+        # SINCE the first advice, never the lifetime total: a dispatch older than the
+        # roster cannot have followed it, and pairing the two made this line claim five
+        # dispatches followed one piece of advice — three of them four days its senior.
+        # "since" rather than "because", because a window is all the data supports.
+        util.info(f"Routing advice: fired {advice} time(s) · {followed} dispatch(es) since "
+                  f"the first one ({since:%Y-%m-%d}). Advice that fires and is never "
+                  f"followed is the block failing, not the roster — read it that way "
+                  f"before adding more personas.")
     if drifted:
         util.info("SKILLS drift is named, not resolved: an unused declaration may be dead "
                   "weight or a skill whose moment has not come, and an undeclared one may "
                   "be a charter out of date or a persona reaching past its remit. Which it "
                   "is depends on intent charter cannot read.")
-    else:
+    if not total:
+        # Attached to the TALLY, not to the drift check above it. It was the `else` of
+        # `if drifted:` — so a roster whose skills all lined up was told its dispatch tally
+        # was empty, beside a table showing five. Invisible while every plane had some
+        # drift; surfaced the moment one stopped.
         util.info("No dispatches recorded yet — the tally starts filling as sub-agents are "
                   "dispatched (`charter persona dispatch-backfill` seeds it from past sessions).")
     # How complete this tally is, stated rather than implied. `PostToolUse(Task|Agent)`
