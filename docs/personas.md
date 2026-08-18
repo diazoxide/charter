@@ -206,12 +206,67 @@ edited one would make every charter suspect.
 The analysis is deterministic and stdlib-only. The judgement belongs to whoever reads the
 proposals.
 
+## The front door: which persona a session starts as
+
+A plane declares its default persona in `charter.toml`, beside `[workspace] default`:
+
+```toml
+[persona]
+default = "steward"
+```
+
+Set it with `charter persona default <name>` (or edit the file — it is yours). This is the
+persona a session adopts when nobody has chosen one, and it is the only thing charter knows
+about front doors: **no persona name appears anywhere in charter's own code.** The name is
+your plane's, and the persona is an ordinary file you can rename, rewrite or delete.
+
+`charter init` creates no personas at all, so a fresh plane has no front door until you
+declare one. That is deliberate — charter never invents an identity for you.
+
+### Precedence
+
+Six rungs, highest first. The first one that names an existing persona wins:
+
+| Rung | Where | Scope |
+| --- | --- | --- |
+| `--persona <name>` | the flag | one command |
+| `$CHARTER_PERSONA` | the environment | one shell / one launched session |
+| session pointer | `.charter/sessions/<id>.persona` | this session |
+| terminal pointer | `.charter/terminals/<id>.persona` | this pane, across restarts |
+| declared default | `charter.toml` `[persona] default` | the plane, committed |
+| legacy default | `personas/.default` | the plane, committed — see below |
+
+`charter persona use <name>` writes the session *and* terminal pointers, so two panes hold
+two personas and neither moves the other. Only the terminal pointer survives closing and
+reopening Claude, and only when your terminal reports a pane id — `use` says which of the
+two it got, because the difference is one you act on.
+
+A shell with neither a session id nor a pane id (a bare script, say) has nothing to key a
+pointer on. There `use` writes `.charter/active-persona`, the plane-wide local file, which
+is what that file is now for.
+
+### `personas/.default` (legacy)
+
+`personas/.default` is the older committed declaration. It still resolves, one rung below
+`charter.toml`, so a plane that adopted it keeps working. Prefer the TOML key: it lives in
+the file you already read to understand your plane, while a dotfile inside `personas/` is
+invisible to `ls` and was, in practice, adopted by nobody. When both exist, `charter persona
+default` tells you the dotfile is now ignored.
+
+### When the declaration goes stale
+
+Rename or delete the persona a plane declares and the declaration resolves to *nothing* —
+no identity, rather than a broken one. Two surfaces say so rather than leaving you to notice
+the absence: `charter doctor` reports it (`front door`, a warning, with the fix), and the
+status line carries one row naming the missing persona.
+
 ## Everyday commands
 
 ```
 charter persona list                       # who exists, who's active, vault status
 charter persona show devops                # effective (inheritance-merged) charter
-charter persona use devops                 # make it the active persona (this session)
+charter persona use devops                 # active persona for this session + this pane
+charter persona default devops             # the plane's front door (charter.toml)
 charter persona secret set API_TOKEN --stdin   # store a credential (never on argv)
 charter persona secret exec --env TOKEN=API_TOKEN -- some-cli   # use it without ever seeing it
 charter persona lint                       # dangling uses:/extends:, missing role/vault, drafts, stale agents

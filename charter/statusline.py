@@ -1214,6 +1214,17 @@ def _session_news(sid: str | None) -> list[str]:
     return out
 
 
+def _persona_exists(name: str) -> bool:
+    """Whether a persona definition is on disk. One `Path.exists`, so it is affordable on
+    a surface that renders every turn — and it asks `persona.def_path`, which owns where a
+    charter may live (directory layout, or the legacy flat file)."""
+    try:
+        from . import persona
+        return persona.def_path(name).exists()
+    except Exception:
+        return True   # unknown is not "missing": never manufacture an alert from a failure
+
+
 def _alerts(active: str) -> list[str]:
     """Full-width alert lines — a pinned-version mismatch, workspaces needing reinit,
     a nested plane, a plane root being worked in.
@@ -1235,6 +1246,14 @@ def _alerts(active: str) -> list[str]:
         if locked and locked != __version__:
             out.append(f"{_YELLOW}⚠{_R} {_DIM}charter{_R} {__version__} {_DIM}→ pinned{_R} "
                        f"{locked}{_DIM} · charter version sync{_R}")
+        # A declared front door that names nothing resolves to no persona at all, and
+        # every surface that would have shown one shows nothing instead — including this
+        # one, whose persona chip simply disappears. The absence is the symptom and it is
+        # unreadable; the row is what makes it a message. `doctor` has room to explain.
+        declared = _instance.default_persona_of(_instance.load(config.ROOT))
+        if declared and not _persona_exists(declared):
+            out.append(f"{_YELLOW}⚠{_R} {_DIM}front door{_R} {declared} {_DIM}— no such "
+                       f"persona · charter persona default <name>{_R}")
         stale = [w for w in _ws.list_workspaces() if w != active and _ws.needs_reinit(w)]
         if stale:
             out.append(f"{_YELLOW}⚠{_R} {_DIM}reinit{_R} {len(stale)} {_DIM}ws · "

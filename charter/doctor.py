@@ -1249,6 +1249,47 @@ def check_memory_indexes() -> Result:
                   detail=f"{dangling} dangling, {unindexed} unindexed", hint=hint)
 
 
+def check_front_door() -> Result:
+    """The plane's declared default persona still names a persona that exists.
+
+    Both rungs that can declare one — ``charter.toml``'s ``[persona] default`` and the
+    legacy ``personas/.default`` — validate their value and resolve to ``None`` when the
+    persona was renamed or deleted. That resolution is right (no identity beats a broken
+    one) and it used to be the whole response: the plane silently lost its front door, and
+    every surface that would have shown one simply showed nothing.
+
+    Silence is how ``personas/.default`` came to ship, test green, and be adopted by
+    nobody. The replacement does not get to inherit it.
+
+    WARN, never FAIL, on the same reasoning as :func:`check_personas`: doctor's blockers
+    mean "you cannot work", and a plane with no persona still clones, still reaches its
+    forge, still runs.
+    """
+    from . import config, instance as _instance, persona
+    name = "front door"
+    try:
+        declared = _instance.default_persona_of(_instance.load(config.ROOT))
+        legacy = (config.PERSONAS_DIR / ".default")
+        legacy_name = legacy.read_text().strip() if legacy.exists() else ""
+    except Exception as e:
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+
+    # charter.toml first: it is the rung that wins, so it is the one whose breakage
+    # actually costs the plane its identity.
+    for value, where in ((declared, "charter.toml [persona] default"),
+                         (legacy_name, "personas/.default")):
+        if not value:
+            continue
+        if persona.def_path(value).exists():
+            return Result(name, OK, detail=f"'{value}' via {where}")
+        return Result(
+            name, WARN,
+            detail=f"{where} names '{value}', which is not a persona — this plane has no "
+                   f"front door and every session starts with no identity",
+            hint=f"charter persona default <name>  (or `charter persona create {value}`)")
+    return Result(name, OK, detail="none declared")
+
+
 def check_personas() -> Result:
     """Roster config health — `persona lint` across every persona, summarised.
 
@@ -1631,7 +1672,8 @@ def _checks():
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
-                check_memory_indexes(), check_personas(), check_ask_rules(),
+                check_memory_indexes(), check_personas(), check_front_door(),
+                check_ask_rules(),
                 check_shadowed_knowledge(),
                 check_mcp_launchers(), check_plugin_skew()]
     return results
