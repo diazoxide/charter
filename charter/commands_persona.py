@@ -130,8 +130,8 @@ def cmd_persona_create(args) -> int:
                   f"charter vault add {vault} --provider plain-file --persona {args.name}")
 
     if args.use:
-        persona.set_active(args.name)
-        util.ok(f"Active persona set to '{args.name}'.")
+        scope = persona.set_active(args.name)
+        util.ok(f"Active persona set to '{args.name}'{_scope_note(scope)}.")
         _warn_env(args.name)
     return 0
 
@@ -536,7 +536,7 @@ _AGENT_PASSTHROUGH_KEYS = ("model", "color", "memory")
 _CHARTER_OWN_KEYS = (
     "name", "role", "vault", "extends", "uses", "delegate-when", "description",
     "agent-description", "agent-tools", "tools", "activity", "dispatch-isolation",
-    "draft", "skills", "disallowed-tools",
+    "draft", "skills", "disallowed-tools", "routing", "routes-to",
 )
 
 
@@ -1062,6 +1062,15 @@ def cmd_persona_stats(args) -> int:
         util.info(f"Routing: {total - gen}/{total} dispatches went to a persona · {gen} to a "
                   f"generic agent ({100 * gen // total}%). A high generic share means the work "
                   f"a persona owns is being done without it.")
+    # Fired-vs-followed. The roster block is a bet that showing who exists changes where
+    # work goes; this is the pair of numbers that can falsify it. Silent when advice has
+    # never fired — a "fired 0 · dispatched 0" row on every plane that has not opted in is
+    # a line people learn to skip, and it takes the rest of the report with it.
+    advice = dispatch.advice_tally()
+    if advice:
+        util.info(f"Routing advice: fired {advice} time(s) · {total} dispatch(es) followed. "
+                  f"Advice that fires and is never followed is the block failing, not the "
+                  f"roster — read it that way before adding more personas.")
     if drifted:
         util.info("SKILLS drift is named, not resolved: an unused declaration may be dead "
                   "weight or a skill whose moment has not come, and an undeclared one may "

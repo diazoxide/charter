@@ -59,7 +59,12 @@ since the session began.
 
 The `UserPromptSubmit` gate is narrower than it sounds. It fires when a prompt asks for
 work *and* carries a real fork — open-ended, broad, destructive, or multi-part — and its
-only effect is to say: scout first, then ask, before dispatching or editing.
+effect is to say: scout first, then ask, before dispatching or editing.
+
+When the acting persona declares `routing: advise` or `require`, the same message leads
+with the **roster** — who else exists, what each advertises, when each was last dispatched.
+One message, not two: two blocks on one prompt is how a nudge becomes wallpaper. charter
+never says which persona owns the prompt (ADR 0016); see `docs show personas`.
 
 ## What gets counted
 
@@ -69,6 +74,9 @@ parallel-writer safe with the host in the filename so two engineers never confli
 - **Dispatches** (`personas/_dispatch/`) — was this persona ever actually used, or did its
   work quietly route to a generic agent? Surfaces in `charter persona stats` as the
   `⚑ never dispatched` flag and the persona-vs-generic ratio.
+- **Routing advice** (`personas/_dispatch/`, as `{"ts", "event": "advice"}` rows) — how
+  often the roster was shown. Paired with dispatches in `charter persona stats`, it is the
+  number that can say the block is not working.
 - **Skill invocations** (`personas/_skills/`) — a persona's declared `skills:` are preloaded
   into every dispatch of it, so declaring one is cheap to write and expensive to keep. This
   says whether the equipment was worth carrying.

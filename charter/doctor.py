@@ -1287,6 +1287,20 @@ def check_front_door() -> Result:
             detail=f"{where} names '{value}', which is not a persona — this plane has no "
                    f"front door and every session starts with no identity",
             hint=f"charter persona default <name>  (or `charter persona create {value}`)")
+
+    # Nothing declared. Legitimate — charter never invents a front door — but on a plane
+    # that HAS personas it is worth saying once, here, that the roster block can never
+    # fire: the level is read from the acting persona, and there is none. Said in doctor
+    # rather than on every prompt, because a plane may mean exactly this.
+    try:
+        others = [n for n in persona.list_personas() if not n.startswith("_")]
+    except Exception:
+        others = []
+    if others:
+        return Result(name, OK,
+                      detail=f"none declared — {len(others)} persona(s) exist, so routing "
+                             f"advice is inert (no acting persona means no `routing:` level)",
+                      hint="charter persona default <name>")
     return Result(name, OK, detail="none declared")
 
 
