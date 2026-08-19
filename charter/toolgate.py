@@ -79,7 +79,40 @@ def decide(command: str):
         return None
     if _is_dangerous(binary, args):
         return None  # declared, but a destructive subcommand → fall back to a prompt
+    if not _provenance_ok(name, command, binary):
+        return None  # a name charter owns, invoked from somewhere charter did not put it
     return name, binary
+
+
+def _provenance_ok(name: str, command: str, binary: str) -> bool:
+    """True unless *binary* names one of the persona's own scripts and the command is
+    reaching a DIFFERENT file of that name.
+
+    `_parse` reduces a command to `os.path.basename`, which is right for `gh` or `kubectl`:
+    they are system binaries, the plane does not own them, and their location is not
+    charter's business. For a persona's own script it inverts the guarantee — the
+    declaration looks specific and the check is not, so `/tmp/site-health.sh` inherits the
+    auto-approval of `personas/seo/bin/site-health.sh`, including a `/tmp` copy an agent
+    wrote seconds earlier.
+
+    Tightened only where charter has ground truth. A declared name with no script behind it
+    is left exactly as it was: charter has nothing to compare against, and inventing a
+    restriction would break planes that declare an ordinary binary with a script-shaped
+    name.
+    """
+    from . import persona
+
+    scripts = persona.bin_scripts(name)
+    owned = scripts.get(binary)
+    if owned is None:
+        return True
+    token = next((t for t in command.strip().split() if os.path.basename(t) == binary), "")
+    if os.path.basename(token) == token:
+        return False  # a bare name resolves through PATH, which charter cannot vouch for
+    try:
+        return os.path.realpath(token) == os.path.realpath(owned)
+    except OSError:
+        return False
 
 
 def main(argv=None) -> int:
