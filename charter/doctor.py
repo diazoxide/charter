@@ -912,7 +912,7 @@ def check_ask_rules() -> Result:
 #: is installed from a wheel that contains no `skills/` — that directory belongs to the
 #: plugin artifact. A test asserts this equals the repo's `skills/`, so the two cannot part
 #: company without the suite saying so.
-SHIPPED_SKILLS = frozenset({"secrets", "working-in-a-clone", "persona", "browser"})
+SHIPPED_SKILLS = frozenset({"secrets", "working-in-a-clone", "persona", "browser", "update"})
 
 
 def _is_charter_checkout(root) -> bool:
