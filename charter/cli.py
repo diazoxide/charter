@@ -7,6 +7,7 @@ import os
 import sys
 
 from . import (
+    commands_update,
     __version__,
     commands,
     commands_harness,
@@ -216,6 +217,17 @@ def build_parser() -> argparse.ArgumentParser:
     # Hidden from help — nobody needs to run it, and it is not part of the UX.
     vc = sub.add_parser("_version-check")
     vc.set_defaults(func=commands.cmd_version_check)
+
+    up = sub.add_parser("update",
+                        help="Move charter to a newer version — CLI, this harness's "
+                             "artifact, and the pin — then say what the new version "
+                             "brings and what this plane has not adopted.")
+    up.add_argument("--to", help="Install exactly this version instead of the default "
+                                 "target (the pin, or the latest published).")
+    up.add_argument("--bump", action="store_true",
+                    help="Also move this plane's pin, which moves every teammate on their "
+                         "next session. Written only after the install is verified.")
+    up.set_defaults(func=commands_update.cmd_update)
 
     nw = sub.add_parser("news",
                         help="What a version brought, and what this plane has not adopted.")

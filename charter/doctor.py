@@ -1228,6 +1228,44 @@ def check_version_lock() -> Result:
                   hint=f"{update.SHARED_INSTALL_NOTE}{move}")
 
 
+def check_news_adoption() -> Result:
+    """What this version brought that this plane has not taken up.
+
+    The only surface besides `charter update` where a suggestion reaches somebody. NOT the
+    session-start hook: each probe is real work, and running every one of them on every
+    session start is the cost `update.py` exists to keep off the status line's clock.
+
+    WARN rather than OK for pending entries, and WARN rather than FAIL: an un-adopted
+    feature is not a broken plane (`cmd_doctor` exits non-zero only on FAIL), but a green
+    tick over "there are three things here for you" is a row nobody ever reads twice.
+    """
+    from . import news
+
+    try:
+        entries = news.released()
+    except Exception as e:
+        return Result("news", WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+    pending, unchecked = [], []
+    for e in entries:
+        status, _why = news.probe(e)
+        if status == news.PENDING:
+            pending.append(e)
+        elif status == news.UNKNOWN:
+            unchecked.append(e)
+    if not pending and not unchecked:
+        return Result("news", OK, detail="nothing to adopt")
+    bits = []
+    if pending:
+        bits.append(f"{len(pending)} not adopted here")
+    if unchecked:
+        # Named separately, never folded into the count. "Could not tell" and "you do not
+        # have it" are different answers, and merging them is how a probe that quietly
+        # stopped working reads as a feature you keep declining.
+        bits.append(f"{len(unchecked)} unchecked")
+    return Result("news", WARN, detail=", ".join(bits),
+                  hint="See them: charter news --pending")
+
+
 def check_memory_indexes() -> Result:
     """Every memory base's MEMORY.md must agree with the files beside it.
 
@@ -1748,6 +1786,7 @@ def _checks():
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(), check_front_door(),
+                check_news_adoption(),
                 check_ask_rules(),
                 check_shadowed_knowledge(),
                 check_mcp_launchers(), check_plugin_skew()]
