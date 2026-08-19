@@ -20,6 +20,12 @@ dist/
 /workspaces/*/*
 !/workspaces/.gitkeep
 # >>> charter live workspaces (managed by `charter workspace live`) >>>
+!/workspaces/autonomy/workspace.json
+!/workspaces/autonomy/workspace.md
+!/workspaces/autonomy/memory
+!/workspaces/autonomy/memory/**
+!/workspaces/autonomy/todos
+!/workspaces/autonomy/todos/**
 !/workspaces/plane-shape/workspace.json
 !/workspaces/plane-shape/workspace.md
 !/workspaces/plane-shape/memory
