@@ -624,17 +624,40 @@ def _installed_skills() -> dict[str, bool] | None:
     return _SKILLS_CACHE  # type: ignore[return-value]
 
 
-def _walk_installed_skills() -> dict[str, bool] | None:
-    """Map each installed skill's leaf-name → is it **model-invokable** (i.e. not
-    ``disable-model-invocation: true``), scanned from the local Claude plugin cache.
-    Returns None when no cache exists (plugins not installed in this checkout) so lint
-    can skip the check gracefully on a fresh clone / CI without plugins."""
+def _skill_roots() -> list:
+    """Every directory the harness resolves a skill from, in the order it reads them.
+
+    Three, not one. Walking only the plugin cache made two charter commands disagree about
+    what a skill is (#286): `charter browser install` writes
+    `.claude/skills/playwright-cli/` — that path chosen because the harness reads project
+    skills from there — and `persona lint` then called it "not installed here … Remove it or
+    install the plugin". There is no plugin to install; charter deliberately does not vendor
+    those pages, which is the whole reason `browser install` exists.
+
+    The lint's own justification is that a declared skill costs context on every dispatch, so
+    a dead entry is paid forever for nothing. That argues for accuracy about what EXISTS, not
+    about what happens to be packaged.
+    """
     from pathlib import Path as _P
-    base = _P.home() / ".claude" / "plugins"
-    if not base.exists():
+    home = _P.home() / ".claude"
+    return [home / "plugins", home / "skills", _P(config.ROOT) / ".claude" / "skills"]
+
+
+def _walk_installed_skills() -> dict[str, bool] | None:
+    """Map each available skill's leaf-name → is it **model-invokable** (i.e. not
+    ``disable-model-invocation: true``), scanned from :func:`_skill_roots`.
+
+    Returns None when the plugin cache is absent, so lint can skip gracefully on a fresh
+    clone / CI without plugins. Keyed on the PLUGIN cache specifically, even though project
+    skills are now walked too: without it charter cannot see plugin-provided skills at all,
+    so checking anyway would report every one of them as missing — confidently wrong, which
+    is worse than silent."""
+    from pathlib import Path as _P
+    roots = _skill_roots()
+    if not roots[0].exists():
         return None
     out: dict[str, bool] = {}
-    for sk in base.rglob("SKILL.md"):
+    for sk in [f for r in roots if r.exists() for f in r.rglob("SKILL.md")]:
         try:
             lines = sk.read_text().splitlines()
         except OSError:
@@ -775,7 +798,12 @@ def declared_skill_issues(name: str) -> list[tuple[str, str]]:
     Costs context on every dispatch, which is the part worth being strict about — `skills:`
     injects full content at startup, so a dead entry is paid forever for nothing.
     """
-    names = declared_skills(name)
+    return _declared_skill_issues(declared_skills(name))
+
+
+def _declared_skill_issues(names: list[str]) -> list[tuple[str, str]]:
+    """The check itself, over already-resolved names — so it can be tested against a
+    controlled skill tree rather than a persona that has to exist on disk."""
     if not names:
         return []
     skills = _installed_skills()
@@ -785,9 +813,13 @@ def declared_skill_issues(name: str) -> list[tuple[str, str]]:
     for ref in names:
         leaf = ref.split(":", 1)[-1]
         if leaf not in skills:
-            out.append(("error", f"declares skill `{ref}` — not installed here; it is "
+            # ADR 0009 — name what was actually checked. The old remedy ("install the
+            # plugin") was impossible for a skill charter generates INTO the plane, and sent
+            # the reader hunting for a package that does not exist (#286).
+            out.append(("error", f"declares skill `{ref}` — not found in ~/.claude/plugins, "
+                                 f"~/.claude/skills or this plane's .claude/skills. It is "
                                  f"preloaded into the agent, so this fails silently at "
-                                 f"dispatch. Remove it or install the plugin"))
+                                 f"dispatch. Install it, generate it, or drop the entry"))
         elif not skills[leaf]:
             out.append(("warn", f"declares skill `{ref}`, which is human-only "
                                 f"(disable-model-invocation) — preloading its text is "
