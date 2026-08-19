@@ -185,6 +185,49 @@ class TheCommand(NewsDir):
         self.assertIn("delegate-when", out)
 
 
+class OutsideAControlPlane(NewsDir):
+    """A probe asks "has THIS PLANE adopted it?" — a question with no subject here.
+
+    Running the probes anyway would answer a question nobody asked, slowly, and report
+    whatever a plane-less charter happens to exit with as though it meant something.
+    """
+
+    def _run(self, **kw) -> tuple[str, str]:
+        from charter import commands, config
+
+        out, err = io.StringIO(), io.StringIO()
+        args = SimpleNamespace(pending=False, since=None, until=None, for_version=None)
+        for k, v in kw.items():
+            setattr(args, k, v)
+        with mock.patch.object(config, "HAS_CONTROL_PLANE", False), \
+             redirect_stdout(out), redirect_stderr(err):
+            commands.cmd_news(args)
+        return out.getvalue(), err.getvalue()
+
+    def test_the_range_still_prints(self):
+        self.write("0.44.0-delegate-when.md", ENTRY)
+        out, _ = self._run(since="0.43.0", until="0.44.0")
+        self.assertIn("A persona says when it should hand work away", out)
+
+    def test_it_says_once_that_it_cannot_tell_what_you_have_adopted(self):
+        self.write("0.44.0-delegate-when.md", ENTRY)
+        _, err = self._run(since="0.43.0", until="0.44.0")
+        self.assertIn("no control plane", err)
+
+    def test_no_probe_is_run(self):
+        self.write("0.44.0-delegate-when.md", ENTRY)
+        with mock.patch.object(news, "_dispatch") as d:
+            self._run(since="0.43.0", until="0.44.0")
+        d.assert_not_called()
+
+    def test_pending_says_what_it_cannot_answer_rather_than_answering_it(self):
+        self.write("0.44.0-delegate-when.md", ENTRY)
+        with mock.patch.object(news, "_dispatch") as d:
+            out, err = self._run(pending=True)
+        d.assert_not_called()
+        self.assertIn("no control plane", err)
+
+
 class ShippedEntriesAreValid(unittest.TestCase):
     def test_every_shipped_action_resolves_against_the_live_parser(self):
         """A `check:` referencing a removed flag degrades to permanent silence, which is

@@ -256,5 +256,10 @@ def cmd_update(args) -> int:
         return 1
 
     if getattr(args, "bump", False) and target != locked:
-        _bump_pin(target)
+        if not config.HAS_CONTROL_PLANE:
+            # Nothing to pin TO. Writing a charter.toml here would conjure a control plane
+            # out of a version bump, in whatever directory the command was typed.
+            util.warn("no control plane here, so there is no pin to move.")
+        else:
+            _bump_pin(target)
     return 0

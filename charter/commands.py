@@ -1808,9 +1808,21 @@ def _news_line(e, status: str) -> str:
     return f"  {e.slug} · {e.headline}\n      {how}"
 
 
+#: Said once, where a probe would otherwise be run against nothing.
+#:
+#: "Has this plane adopted it?" has no subject outside a control plane. Running the probes
+#: anyway would spend a subprocess each to report whatever a plane-less charter happens to
+#: exit with — an answer to a question nobody asked, indistinguishable in the output from
+#: one that means something.
+_NO_PLANE = ("no control plane here, so charter cannot tell which of these this plane has "
+             "adopted — run `charter news --pending` from inside one")
+
+
 def cmd_news(args) -> int:
     """What a version brought, and what this plane has not taken up."""
     from . import news
+
+    planeless = not config.HAS_CONTROL_PLANE
 
     version = getattr(args, "for_version", None)
     if version:
@@ -1822,6 +1834,9 @@ def cmd_news(args) -> int:
         return 0
 
     if getattr(args, "pending", False):
+        if planeless:
+            util.warn(_NO_PLANE)
+            return 0
         shown = 0
         for e in news.released():
             status, why = news.probe(e)
@@ -1850,8 +1865,10 @@ def cmd_news(args) -> int:
     if not entries:
         util.ok(f"nothing new between {since} and {until}.")
         return 0
+    if planeless:
+        util.warn(_NO_PLANE)
     for e in entries:
-        status, _ = news.probe(e)
+        status, _ = (news.INFORMATIONAL, "") if planeless else news.probe(e)
         print(f"{e.version}  {e.headline}")
         # Only an entry with something to DO gets the action line. An informational entry
         # — a patch note, usually — exists to say there is nothing to take up, so printing

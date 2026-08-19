@@ -48,8 +48,15 @@ class UpdateCase(PersonaIso):
         pt.start(); self.addCleanup(pt.stop)
 
     def pin(self, version: str) -> None:
+        """Write the lock — and say so, because `HAS_CONTROL_PLANE` is DERIVED at config
+        load. Writing charter.toml afterwards leaves the flag reading False, which is a
+        control plane the code correctly does not believe in."""
+        from charter import config
+
         (self.tmp / "charter.toml").write_text(
             f'schema = 1\n\n[charter]\nversion = "{version}"\n')
+        pt = mock.patch.object(config, "HAS_CONTROL_PLANE", True)
+        pt.start(); self.addCleanup(pt.stop)
 
     def update(self, **kw) -> tuple[int, str]:
         args = SimpleNamespace(to=None, bump=False)
