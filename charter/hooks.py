@@ -1765,6 +1765,87 @@ def posttooluse_skill() -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# Agent id → persona. Local, gitignored, and learned rather than inferred.      #
+#                                                                              #
+# A resume (`SendMessage`) addresses an OPAQUE AGENT ID, not a persona name —   #
+# every resume in the session that motivated this did. The id is not something  #
+# charter can decode, but it is something charter WATCHED get created: the      #
+# Task result that created it carries it, beside the `subagent_type` that names #
+# the persona. So the mapping is an observation, not a guess (ADR 0009), and    #
+# when charter has no mapping it records nothing rather than attributing work   #
+# to a persona it cannot name.                                                  #
+#                                                                              #
+# Never committed: these ids are the harness's internal handles, and the        #
+# dispatch store's discipline is counts and dates. This is bookkeeping, like    #
+# `inflight`, and lives beside it under the state dir.                          #
+# --------------------------------------------------------------------------- #
+_AGENT_ID_RE = re.compile(r"\bagentId:\s*([0-9a-f]{6,})", re.I)
+#: Cap on remembered mappings — this is a lookup for live agents, not a history.
+_AGENT_MAP_MAX = 200
+
+
+def _agent_map_file() -> Path:
+    return config.STATE_DIR / "agent-personas.json"
+
+
+def _agent_map_remember(agent_id: str, persona_name: str) -> None:
+    try:
+        f = _agent_map_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[agent_id] = persona_name
+        if len(data) > _AGENT_MAP_MAX:                 # keep the newest, drop the tail
+            data = dict(list(data.items())[-_AGENT_MAP_MAX:])
+        f.write_text(json.dumps(data, sort_keys=True))
+    except OSError:
+        pass
+
+
+def _agent_map_lookup(target: str) -> str | None:
+    try:
+        data = json.loads(_agent_map_file().read_text())
+        val = data.get(target) if isinstance(data, dict) else None
+        return str(val) if val else None
+    except (OSError, ValueError):
+        return None
+
+
+def posttooluse_message() -> int:
+    """A resume — more work handed to a persona already running — recorded as such.
+
+    `posttooluse_dispatch` sees a sub-agent being CREATED and nothing after, so continuing
+    one was delegation the tally could not see. Recorded as its own event kind, never as a
+    second dispatch: `DISP` is read as "times dispatched as a sub-agent", and that column
+    is what personas get retired on.
+
+    Silent when the target is neither a known persona name nor an id charter watched get
+    created — `main`, another session, a teammate's agent. Attributing those would be
+    inventing a delegation that did not happen.
+    """
+    data = _read_stdin()
+    if (data.get("tool_name") or "") != "SendMessage":
+        return 0
+    target = ((data.get("tool_input") or {}).get("to") or "").strip()
+    if not target:
+        return 0
+    try:
+        from . import dispatch, persona
+        name = target if target in persona.list_personas() else _agent_map_lookup(target)
+        if not name:
+            return 0
+        dispatch.record_resume(name)
+        _trace("resume", data.get("session_id"), agent=name)
+    except Exception:
+        return 0  # a tally must never break a turn
+    return 0
+
+
 def posttooluse_dispatch() -> int:
     data = _read_stdin()
     if (data.get("tool_name") or "") not in ("Task", "Agent"):
@@ -1775,6 +1856,13 @@ def posttooluse_dispatch() -> int:
     try:
         from . import dispatch
         p = dispatch.record(agent)
+        # The result carries the id the harness just created. Remembering it here is what
+        # lets a later resume — which addresses that id and not the name — be attributed
+        # without guessing. Best-effort and after the tally: the dispatch record must not
+        # depend on a mapping that is only ever a convenience.
+        m = _AGENT_ID_RE.search(str(data.get("tool_response") or ""))
+        if m:
+            _agent_map_remember(m.group(1), agent)
         if not p:
             return 0
         _trace("dispatch", data.get("session_id"), agent=agent)
@@ -2216,6 +2304,7 @@ _HANDLERS = {
     "posttooluse": posttooluse,
     "posttooluse-skill": posttooluse_skill,
     "posttooluse-dispatch": posttooluse_dispatch,
+    "posttooluse-message": posttooluse_message,
 }
 
 
