@@ -25,6 +25,10 @@ A release moves **all four together**, or the drift ships:
    `pretooluse-edit`). Substitute globally, then re-grep for the OLD version across all
    four files — never work from a remembered count.
 
+Not five: `docs/news/` carries a version too, but it is *stamped* rather than edited — see
+the sequence. "A release has notes" is a different obligation from "the four numbers agree",
+and bolting it onto the lockstep test would blur one into the other.
+
 `tests/test_plugin.py::TestVersionsMoveInLockstep` pins all four and names them on failure.
 That test exists because they were **not** in lockstep for twelve releases: the CLI reached
 0.13.1 while both plugin artifacts still said 0.1.0, and a comment above
@@ -44,17 +48,35 @@ secrets. Consequences:
 - Land the version bump through a PR and let CI go green **before** tagging.
 - The tag must match `pyproject.toml` exactly; the `guard` job refuses the publish
   otherwise, which is the last safety net rather than the plan.
+- The same `guard` job refuses a version that ships **no news entry** — it asks
+  `charter news --for <X.Y.Z>`, the same call that renders the Release body, so "the guard
+  passed" and "the notes render" cannot disagree. Every published version needs one,
+  including a patch, whose entry may be a single line with no `check:`/`adopt:`.
 - Tag only from `main`, after the bump is merged.
 
 ## The sequence
 
 ```
-# 1. bump all four files on a branch, PR, green, merge
-# 2. sync main, then:
+# 1. on a branch: bump all four files, then
+charter news stamp <X.Y.Z>        # moves every docs/news/unreleased-*.md onto this
+                                  # version — renames the file AND rewrites `version:`
+# 2. PR, green, merge. Then sync main:
 git tag -a v<X.Y.Z> -m "<X.Y.Z> — <headline>"
 git push origin v<X.Y.Z>          # this is the publish; nothing else triggers it
 gh run watch <id> --exit-status
 ```
+
+**Why a command and not a fifth thing to remember.** A feature PR cannot name the version
+that will ship it — the next release may be a patch, or the PR may sit through three of
+them — so it stages `docs/news/unreleased-<slug>.md` and the bump stamps it. `stamp` is
+all-or-nothing: if one target name is already taken it renames *nothing* and says so,
+because a half-stamped release publishes with an entry silently missing from the notes and
+nothing anywhere reports it. It also reads back afterwards and fails if the version still
+has no entry — the guard would catch that too, but at the tag, which is the expensive end.
+
+Before you bump: read the merged PRs since the last tag, and check every user-visible one
+has an entry. That review is the gate; no CI check blocks a feature PR that ships none,
+because most PRs are refactors and a required entry per PR manufactures filler.
 
 Verify against PyPI's **version endpoint**, not the project endpoint — the latter is
 CDN-cached and lags by minutes, which reads as a failed publish when it is not:
@@ -62,6 +84,14 @@ CDN-cached and lags by minutes, which reads as a failed publish when it is not:
 ```
 https://pypi.org/pypi/charter-cp/<X.Y.Z>/json
 ```
+
+A successful publish is followed by one more job, which creates the **GitHub Release** with
+`gh release create v<X.Y.Z>` and a body generated from `charter news --for <X.Y.Z>`. Do not
+write release notes by hand: the shipped entry is the single source for both the public
+notes and the offline `charter news` suggestion, and hand-editing forks them. To change what
+a Release says, change the entry and the text follows. That job carries `contents: write`
+alone — the workflow's top-level grant stays `contents: read` — and it leaves an existing
+Release untouched, so a `workflow_dispatch` retry after a partial failure is safe to run.
 
 ## Then upgrade this machine — CLI first, pinned
 

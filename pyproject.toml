@@ -57,3 +57,10 @@ packages = ["charter"]
 "docs/personas.md" = "charter/_docs/personas.md"
 "docs/secrets.md" = "charter/_docs/secrets.md"
 "docs/workspaces.md" = "charter/_docs/workspaces.md"
+
+# News entries, mapped as a DIRECTORY rather than page by page. The listing above is
+# deliberate — it keeps `adr/`, `audits/` and `superpowers/` out of every user's
+# site-packages — and news has no such exclusion: every entry is meant to ship, and a
+# per-release edit here is one more thing a release can forget. `tests/test_news.py`
+# fails if what ships cannot be read back.
+"docs/news" = "charter/_news"

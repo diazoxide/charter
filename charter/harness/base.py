@@ -73,6 +73,25 @@ class Harness:
         """
         return []
 
+    def upgrade(self, root: Path) -> tuple[str, str]:
+        """Move THIS harness's installed charter artifact to the running CLI's version.
+
+        ``("moved", detail)`` — charter rewrote a file it authored.
+        ``("current", version)`` — already on this version, nothing to do.
+        ``("manual", command)`` — a host owns the artifact, so charter NAMES the command.
+        ``("absent", why)`` — charter does not know how this harness updates.
+
+        The default is ``absent`` rather than a plausible command, and that is the whole
+        reason this member exists on the base class. Two code paths used to answer this
+        question without knowing about each other — `update.plugin_version_here()` and
+        :meth:`stale_wiring` — and the caller consulted one, then printed a Claude Code
+        command to everybody. :class:`Deficit` already records why a guess is worse than a
+        gap ("sends somebody off to configure something that does not exist"); here the
+        guess would be *run*, not merely read.
+        """
+        return ("absent", f"charter has not pinned how {self.name or 'this harness'} "
+                          f"updates its charter artifact — `charter harness list`")
+
     def ask_rule(self, pattern: str):
         """*pattern* in this harness's own rule syntax, or ``None`` if it has none.
 

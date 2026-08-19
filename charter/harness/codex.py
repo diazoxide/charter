@@ -37,13 +37,19 @@ NAME = "codex"
 HOOK_ENTRY_KEYS = ("type", "command")
 HOOK_TYPE = "command"
 
-#: The hooks charter wires, mirroring what the Claude Code plugin's own `hooks.json`
-#: declares. `matcher` is carried only where Codex's contract uses one.
-_WIRING = (
-    ("SessionStart", None, "charter hook sessionstart"),
-    ("UserPromptSubmit", None, "charter hook userpromptsubmit"),
-    ("PreToolUse", "Bash", "charter hook pretooluse"),
-)
+#: How a Codex plugin moves, pinned against codex-cli 0.147.0.
+#:
+#: `codex plugin update` does NOT exist — the binary answers "error: unrecognized
+#: subcommand 'update'", which is the rejection this file treats as the only real
+#: evidence. What exists is add / list / marketplace / remove, and the snapshot a plugin
+#: installs FROM is refreshed at the marketplace level. So updating is two commands, and
+#: it is the same shape Claude Code has (`marketplace update` then the plugin) rather than
+#: a quirk worth explaining twice.
+#:
+#: Named, never run, for the reason every host command is: it mutates an install charter
+#: does not own, and `codex` may not be on the reader's PATH at all.
+PLUGIN_UPDATE_CMD = ("codex plugin marketplace upgrade charter && "
+                     "codex plugin add charter@charter")
 
 
 def config_path() -> Path:
@@ -133,6 +139,21 @@ class CodexHarness(Harness):
                 "the terminal-pane key. Hooks are unaffected — their payload carries "
                 "`session_id` directly."),
     )
+
+    def upgrade(self, root: Path) -> tuple[str, str]:
+        """Codex's own config block never needs moving; its PLUGIN does.
+
+        `_block()` writes only `shell_environment_policy` — a constant naming the harness,
+        with no version in it — so an upgraded CLI is served by the same block. The hooks
+        come from the charter plugin, installed by `codex plugin`, and the command that
+        moves THAT is a fact nobody has pinned against a real Codex.
+
+        Every fact in this file was pinned against codex-cli 0.147.0 rather than its
+        documentation, and this one the same way: `codex plugin update` — the command
+        everyone reaches for, including the first draft of this method — is rejected by the
+        binary, and the two-step in :data:`PLUGIN_UPDATE_CMD` is what it actually offers.
+        """
+        return "manual", PLUGIN_UPDATE_CMD
 
     def detect(self) -> bool:
         """Nothing native to detect, and saying so beats guessing.

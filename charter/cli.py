@@ -7,6 +7,7 @@ import os
 import sys
 
 from . import (
+    commands_update,
     __version__,
     commands,
     commands_harness,
@@ -216,6 +217,36 @@ def build_parser() -> argparse.ArgumentParser:
     # Hidden from help — nobody needs to run it, and it is not part of the UX.
     vc = sub.add_parser("_version-check")
     vc.set_defaults(func=commands.cmd_version_check)
+
+    up = sub.add_parser("update",
+                        help="Move charter to a newer version — CLI, this harness's "
+                             "artifact, and the pin — then say what the new version "
+                             "brings and what this plane has not adopted.")
+    up.add_argument("--to", help="Install exactly this version instead of the default "
+                                 "target (the pin, or the latest published).")
+    up.add_argument("--bump", action="store_true",
+                    help="Also move this plane's pin, which moves every teammate on their "
+                         "next session. Written only after the install is verified.")
+    up.set_defaults(func=commands_update.cmd_update)
+
+    nw = sub.add_parser("news",
+                        help="What a version brought, and what this plane has not adopted.")
+    nw.add_argument("--pending", action="store_true",
+                    help="Every entry, any version, whose probe says you have not adopted "
+                         "it yet.")
+    nw.add_argument("--since", help="Report entries newer than this version.")
+    nw.add_argument("--until", help="Stop at this version (default: the running one).")
+    nw.add_argument("--for", dest="for_version", metavar="VERSION",
+                    help="One version's entries, as the body of its release notes.")
+    nwsub = nw.add_subparsers(dest="news_cmd")
+    nw.set_defaults(func=commands.cmd_news)         # bare `charter news` = the range view
+    nst = nwsub.add_parser("stamp",
+                           help="Move every staged `unreleased-*` entry onto the version "
+                                "about to ship — the bump PR's step, beside the four "
+                                "files that carry a version number.")
+    nst.add_argument("version", help="The version about to be published, e.g. 0.45.0 — "
+                                     "the number alone, not the tag name.")
+    nst.set_defaults(func=commands.cmd_news_stamp)
 
     ver = sub.add_parser("version",
                          help="The control plane's charter version lock: show drift, "
@@ -810,6 +841,10 @@ def _add_persona_parser(sub) -> None:
     dd.set_defaults(func=commands_persona.cmd_persona_dedupe)
 
     lt = psub.add_parser("lint", help="Config eval: dangling uses:, missing role/vault/delegate-when, stale agents.")
+    lt.add_argument("--only", metavar="KEY",
+                    help="Report only findings mentioning KEY, and exit non-zero solely "
+                         "on those — what a news entry's probe needs to ask about one "
+                         "feature.")
     lt.add_argument("name", nargs="?", help="Only this persona (default: all).")
     lt.set_defaults(func=commands_persona.cmd_persona_lint)
 

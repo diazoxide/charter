@@ -1797,6 +1797,120 @@ def cmd_version_check(args) -> int:
     return 0
 
 
+def _news_line(e, status: str) -> str:
+    """One entry, one line, in the shape the reader acts on.
+
+    Deliberately not JSON. The skill is a Claude Code artifact and opencode gets none, so
+    this text is the only thing an agent on another harness has — a machine surface would
+    become the parsed one, and this the unchecked one.
+    """
+    how = f"adopt: charter {e.adopt}" if e.adopt else "adopt: manual (see the entry)"
+    return f"  {e.slug} · {e.headline}\n      {how}"
+
+
+#: Said once, where a probe would otherwise be run against nothing.
+#:
+#: "Has this plane adopted it?" has no subject outside a control plane. Running the probes
+#: anyway would spend a subprocess each to report whatever a plane-less charter happens to
+#: exit with — an answer to a question nobody asked, indistinguishable in the output from
+#: one that means something.
+_NO_PLANE = ("no control plane here, so charter cannot tell which of these this plane has "
+             "adopted — run `charter news --pending` from inside one")
+
+
+def cmd_news(args) -> int:
+    """What a version brought, and what this plane has not taken up."""
+    from . import news
+
+    planeless = not config.HAS_CONTROL_PLANE
+
+    version = getattr(args, "for_version", None)
+    if version:
+        body = news.render_body(version)
+        if not body:
+            util.err(f"no news entry for {version}.")
+            return 1
+        print(body)
+        return 0
+
+    if getattr(args, "pending", False):
+        if planeless:
+            util.warn(_NO_PLANE)
+            return 0
+        shown = 0
+        for e in news.released():
+            status, why = news.probe(e)
+            if status == news.PENDING:
+                print(_news_line(e, status))
+                shown += 1
+            elif status == news.UNKNOWN:
+                # Said, not swallowed. A probe that could not run is the one case where
+                # silence would be read as "nothing to adopt" — the shape ADR 0013 and
+                # `doctor`'s not-checked hint both exist to refuse.
+                util.warn(f"{e.slug}: {why}")
+        if not shown:
+            util.ok("nothing pending — every entry with a probe reports adopted.")
+        return 0
+
+    since = (getattr(args, "since", None) or "").strip()
+    until = (getattr(args, "until", None) or _installed_version()).strip()
+    if not since:
+        # No baseline is not a range. Replaying every entry ever written as though it were
+        # news would be charter presenting old text as new — so it says what it can and
+        # points at the view that IS honest without one.
+        util.info("no baseline recorded, so there is no range to report.")
+        util.info("  what this plane has not adopted:  charter news --pending")
+        return 0
+    entries = news.between(since, until)
+    if not entries:
+        util.ok(f"nothing new between {since} and {until}.")
+        return 0
+    if planeless:
+        util.warn(_NO_PLANE)
+    for e in entries:
+        status, _ = (news.INFORMATIONAL, "") if planeless else news.probe(e)
+        print(f"{e.version}  {e.headline}")
+        # Only an entry with something to DO gets the action line. An informational entry
+        # — a patch note, usually — exists to say there is nothing to take up, so printing
+        # "adopt: manual" beneath it invents a chore out of the line that denies one.
+        if status == news.PENDING:
+            print(_news_line(e, status))
+    return 0
+
+
+def cmd_news_stamp(args) -> int:
+    """Move every staged entry onto the version about to ship.
+
+    The bump PR's one mechanical step, beside the four files that carry a version number.
+    A command rather than a fifth thing to remember, for the reason the release charter
+    gives about `hooks.json`: never work from a remembered count.
+    """
+    from . import news
+
+    version = (getattr(args, "version", "") or "").strip()
+    renamed, blocked = news.stamp(version)
+    for why in blocked:
+        util.err(why)
+    if blocked:
+        return 1
+    for src, dst in renamed:
+        util.ok(f"{src.name} → {dst.name}")
+    if not renamed:
+        util.info(f"no staged entries — nothing to move onto {version}.")
+
+    # Read back what is on disk rather than trusting the run. Nothing staged is a
+    # legitimate state (the entry may already name the version), and an entry missing
+    # altogether is not — the two are indistinguishable from the rename count alone, and
+    # only one of them publishes a version with no notes. Naming it here costs a line;
+    # letting the tag find it costs a release (ADR 0013).
+    if not news.stamped(version):
+        util.err(f"no entry names {version}. Every published version needs one, including "
+                 f"a patch — write docs/news/{version}-<slug>.md before tagging, or the "
+                 f"release guard refuses to publish.")
+        return 1
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # version lock — `[charter] version` in charter.toml                          #
 # --------------------------------------------------------------------------- #
@@ -1874,16 +1988,32 @@ def cmd_version_sync(args) -> int:
         return 0
 
     if not getattr(args, "cli", False):
-        plugin = _update.plugin_version_here()
-        if plugin == locked:
-            util.ok(f"the plugin serving this project is already on the lock ({locked}).")
+        # ASK THE HARNESS. This branch used to read `$CLAUDE_PLUGIN_ROOT` and then print
+        # `claude plugin update charter@charter` unconditionally — so an opencode user,
+        # for whom that variable is always absent, was told to run a command belonging to
+        # a harness they are not in. `Harness.upgrade` makes it one question with one
+        # answer, and charter moves only the artifacts it authored.
+        from . import harness as _harness
+
+        h = _harness.get(_harness.current())
+        if h is None:
+            util.warn("no harness detected, so charter cannot say how this plane's "
+                      "artifact moves — `charter harness list`.")
+            util.info("  the machine-global binary instead: charter version sync --cli")
             return 0
-        where = f"{plugin} → {locked}" if plugin else f"→ {locked}"
-        util.info(f"this plane's version is the plugin's ({where}).")
-        # Named, not run. `claude` may be absent, may prompt for a scope, and the command
-        # mutates the reader's editor install — charter says exactly what to run and lets
-        # them run it, the same restraint the MCP launcher check keeps.
-        util.info(f"  run: {_update.PLUGIN_SYNC_CMD}")
+        status, detail = h.upgrade(config.ROOT)
+        if status == "current":
+            util.ok(f"the {h.name} artifact serving this project is already on {detail}.")
+        elif status == "moved":
+            util.ok(f"moved: {detail}")
+        elif status == "manual":
+            # Named, not run. The host owns the artifact: its command may be absent, may
+            # prompt for a scope, and it mutates the reader's editor install — the same
+            # restraint the MCP launcher check keeps.
+            util.info(f"this plane's version is its {h.name} artifact's (→ {locked}).")
+            util.info(f"  run: {detail}")
+        else:
+            util.warn(detail)
         util.info(f"  the machine-global binary instead: charter version sync --cli")
         return 0
 

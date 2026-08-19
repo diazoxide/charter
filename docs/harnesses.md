@@ -34,14 +34,18 @@ row — an unverified integration and a complete one must not read the same.
 **What differs is not what charter enforces — it is what each harness lets charter
 offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 
-| | how it is installed | what it cannot carry | what to do about it |
-| --- | --- | --- | --- |
-| Claude Code | the plugin (`claude plugin install charter@charter`) | — | — |
-| opencode | `charter init` — one plugin under opencode's config dir, read by every project | no status bar; no per-turn prompt hook | `charter statusline --watch`; mid-session notes ride tool output already |
-| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | no status bar; no command-pattern permissions | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
+| | how it is installed | how it updates | what it cannot carry | what to do about it |
+| --- | --- | --- | --- | --- |
+| Claude Code | the plugin (`claude plugin install charter@charter`) | `claude plugin update charter@charter` | — | — |
+| opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, stamped | no status bar; no per-turn prompt hook | `charter statusline --watch`; mid-session notes ride tool output already |
+| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
+
+You never have to remember that third column — `charter update` asks the harness you are in
+and names its command (or, for opencode, just moves it). It is written down because a
+column charter fills in from one place is a column that cannot quietly go stale in three.
 
 One artifact per harness, installed once — nothing is written into the repos you work in.
-`charter doctor` and `charter harness list` print that fourth column against whichever
+`charter doctor` and `charter harness list` print that last column against whichever
 harness you are in, each ceiling carrying its own answer. Where it is empty it stays empty:
 charter cannot conjure opencode a per-turn prompt hook, and a workaround that does not
 exist costs more to chase than an honest gap.

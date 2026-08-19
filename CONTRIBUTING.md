@@ -39,6 +39,21 @@ command.
   machine is not the runner* below, which this keeps turning out to be a case of.
 - **Docs move with the code.** A flag that is not in `docs/` does not exist. If you change
   what a command does, update the page that describes it in the same PR.
+- **A user-visible change ships a news entry.** One file, `docs/news/unreleased-<slug>.md`,
+  in the shape of [`docs/news/0.44.0-delegate-when.md`](docs/news/0.44.0-delegate-when.md):
+  flat frontmatter with a `headline`, plus an optional `check:` (a charter subcommand that
+  exits 0 where the thing is already adopted) and `adopt:` (the one that adopts it). It
+  says `version: unreleased` because your PR cannot know which release will carry it — the
+  next one may be a patch, or your PR may sit through three of them — and the release runs
+  `charter news stamp <version>` to move it onto the version that ships it. Entries travel
+  inside the wheel, so `charter news` works offline on any harness.
+
+  Write it in the PR that builds the thing: you are the only person who knows why it
+  matters and what would prove somebody has taken it up, and reconstructing that from
+  commit titles at release time is how notes become a changelog nobody reads. Nothing in CI
+  blocks a PR that ships none — most PRs are refactors, and a required entry per PR
+  manufactures filler. The gate is at the release, where a version with no entry does not
+  publish at all.
 
 ## Your machine is not the runner
 

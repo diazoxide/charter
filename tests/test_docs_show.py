@@ -87,11 +87,19 @@ class TestPagesShip(unittest.TestCase):
 
     def test_nothing_else_is_force_included(self):
         """Keeps `adr/`, `audits/` and `superpowers/` — internal record and working
-        notes — out of every user's site-packages."""
+        notes — out of every user's site-packages.
+
+        `docs/news` is the one directory mapping, and it is deliberate: every news entry is
+        meant to ship (that is what makes `charter update` work offline), so listing them
+        one by one would add a per-release edit here for no exclusion in return. The
+        allowlist stays exact — a second directory mapping still fails this test.
+        """
         pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
         forced = (pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]
                   .get("force-include", {}))
-        self.assertEqual(sorted(forced), sorted(f"docs/{n}.md" for n in _page_names()))
+        expected = [f"docs/{n}.md" for n in _page_names()] + ["docs/news"]
+        self.assertEqual(sorted(forced), sorted(expected))
+        self.assertEqual(forced["docs/news"], "charter/_news")
 
 
 class TestDocsCli(unittest.TestCase):

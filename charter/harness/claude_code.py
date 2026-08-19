@@ -51,6 +51,17 @@ class ClaudeCodeHarness(Harness):
         status, _path = commands.ensure_env_var(root, "CHARTER_HARNESS", self.name)
         return [(status, ".claude/settings.json (env)")]
 
+    def upgrade(self, root: Path) -> tuple[str, str]:
+        """Named, never run — the restraint `cmd_version_sync` already keeps.
+
+        `claude` may be absent, may prompt for a scope, and the command mutates the
+        reader's editor install. What changes here is only that this answer is now Claude
+        Code's answer rather than the answer charter gave every harness.
+        """
+        from .. import update
+
+        return "manual", update.PLUGIN_SYNC_CMD
+
     def ask_rule(self, pattern: str) -> str:
         from .. import commands
 
