@@ -67,13 +67,90 @@ def _deny(event: str, reason: str) -> None:
     }})
 
 
-def _ask(event: str, reason: str) -> None:
-    """Surface a nudge and let the developer decide (not a hard block)."""
+#: The one host permission mode that means NOBODY IS WATCHING. Deliberately not a set that
+#: also holds `auto`: auto mode usually does have a human at the keyboard, and a nudge
+#: silently swallowed there is a guard lost. Being wrong toward asking costs one prompt;
+#: being wrong toward silence costs the guard. So this fails toward the prompt — an absent,
+#: unknown, or future mode is treated as attended.
+#:
+#: The field is the HOST's own (`permission_mode` in the hook payload; Codex requires the
+#: same name). charter reads it and never holds a copy: an autonomy flag charter owned would
+#: be a second source of truth for a question the host already answers, and it could drift.
+UNATTENDED_MODE = "bypassPermissions"
+
+
+def _unattended(data: dict) -> bool:
+    """True when the host says there is nobody to answer a prompt."""
+    return (data or {}).get("permission_mode") == UNATTENDED_MODE
+
+
+def _ask(event: str, reason: str, data: dict | None = None) -> bool:
+    """Surface a nudge and let the developer decide (not a hard block).
+
+    Pass ``data`` (the hook payload) to make the outcome countable: it leaves a marker
+    keyed by this call's ``tool_use_id``, which :func:`posttooluse_bash` clears if the tool
+    actually runs. Without it an ask is unmeasurable — which is how 231 clone-commit
+    prompts accumulated with no evidence for or against keeping the guard (#290).
+
+    Returns whether it actually ASKED. Callers trace their own event name, so they must not
+    also record an "ask" that never reached anybody — an unattended nudge was briefly
+    counted twice, which is precisely the confusion `ask-unattended` exists to remove.
+    """
+    if data is not None and _unattended(data):
+        # Nobody is there to answer, and a hook `ask` FLOORS the decision at a prompt —
+        # the host cannot lift it, so this would hang the run rather than nudge anybody.
+        # Allowed, never denied: every one of these sites is a workflow preference, and
+        # the floor (the `deny` guards above) is untouched by permission mode.
+        _emit({"hookSpecificOutput": {
+            "hookEventName": event,
+            "permissionDecision": "allow",
+            "permissionDecisionReason": f"charter nudge (unattended, not blocking): {reason}",
+        }})
+        # Suppressed is not invisible. The nudge still fired and is still counted, under its
+        # own event so the tally can separate "asked" from "would have asked".
+        _trace("ask-unattended", data.get("session_id"), reason=reason[:70])
+        return False
+    if data is not None:
+        _ask_mark_set(data.get("session_id"), data.get("tool_use_id"))
     _emit({"hookSpecificOutput": {
         "hookEventName": event,
         "permissionDecision": "ask",
         "permissionDecisionReason": f"charter nudge: {reason}",
     }})
+    return True
+
+
+def _ask_mark(sid, tuid):
+    """One file per PENDING ask. Same shape as `_route_mark` — a marker in the sessions
+    dir, named by ids only. No prompt text, no command, nothing but the correlation key."""
+    if not sid or not tuid:
+        return None
+    safe = lambda v: re.sub(r"[^A-Za-z0-9._-]", "", str(v))  # noqa: E731 — becomes a filename
+    return config.SESSIONS_DIR / f"{safe(sid)}.{safe(tuid)}.ask-pending"
+
+
+def _ask_mark_set(sid, tuid) -> None:
+    f = _ask_mark(sid, tuid)
+    if f is None:
+        return
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.touch()
+    except OSError:
+        pass
+
+
+def _ask_mark_take(sid, tuid) -> bool:
+    """True exactly once per pending ask — the unlink IS the idempotency, so a replayed
+    PostToolUse cannot inflate the approval count."""
+    f = _ask_mark(sid, tuid)
+    if f is None or not f.exists():
+        return False
+    try:
+        f.unlink()
+        return True
+    except OSError:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -660,14 +737,31 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     return None
 
 
-def _single_credential_reason(cmd: str) -> str | None:
-    """Deny a git action that would depend on SSH or commit signing instead of that
-    repo's own forge's credential (its token over HTTPS) — golden rule 0, per forge.
-    Inspects only segments that actually invoke ``git``/``ssh``; returns the reason +
-    the remedy, naming the actual host involved."""
-    fix = ("The control plane is **token-only**: git auth is each forge's own CLI token "
-           "over HTTPS (`charter git-policy --apply` configures every clone; `charter save` "
-           "/ `charter workspace save` already use it). ")
+#: The remedy, identical for every trigger — which is exactly why it cannot double as the
+#: traced label: the first 70 characters are the same no matter what matched. That is how
+#: the tally came to hold 335 denials nobody could attribute (issue #289).
+_SINGLE_CREDENTIAL_FIX = (
+    "The control plane is **token-only**: git auth is each forge's own CLI token "
+    "over HTTPS (`charter git-policy --apply` configures every clone; `charter save` "
+    "/ `charter workspace save` already use it). ")
+
+
+def _single_credential_hit(cmd: str) -> tuple[str, str] | None:
+    """``(shape, detail)`` for the first golden-rule violation in *cmd*, else ``None``.
+
+    ONE scanner behind both things the guard produces: the prose the operator reads
+    (:func:`_single_credential_reason`) and the label the trace records. They were allowed
+    to drift apart once — the trace hardcoded ``reason="single-credential"`` while the prose
+    carried the real detail — and the cost was a guard whose own docstring claims it "only
+    catches a DELIBERATE bypass" against 335 denials in ten days that nobody could break
+    down. Two code paths answering "what tripped this" is the failure; this is the fix.
+
+    **The shape names the TRIGGER, never the OPERAND.** ``git <ssh-url>``, not the URL;
+    ``GIT_SSH_COMMAND=``, not the command it was set to. This is a guard that exists to keep
+    secrets out of the transcript, so a trace that recorded the matched text would rebuild
+    the leak in a file — one that outlives the conversation. Everything here is a fixed
+    string or a variable/flag NAME; no value from the command line reaches it.
+    """
     forges = _known_forges()
     ssh_prefix_hosts = _ssh_prefix_hosts(forges)
     # git treats hostnames case-insensitively (`GITHUB.COM` == `github.com` on the wire),
@@ -681,36 +775,47 @@ def _single_credential_reason(cmd: str) -> str | None:
         base = prog.rsplit("/", 1)[-1]
         if base == "git":
             args = argv[1:]
-            if any(_GIT_SSH_ENV_RE.match(e) for e in env):
-                return fix + ("This forces git through an SSH transport "
-                              "(GIT_SSH/GIT_SSH_COMMAND) — drop it.")
+            hit = next((e for e in env if _GIT_SSH_ENV_RE.match(e)), None)
+            if hit is not None:
+                # the variable NAME only — its value is an arbitrary shell command and may
+                # carry a key path, a host, or a secret.
+                return (f"git {hit.split('=', 1)[0]}=",
+                        "This forces git through an SSH transport "
+                        "(GIT_SSH/GIT_SSH_COMMAND) — drop it.")
             if _has_git_config_env_sshcommand(env):
-                return fix + ("`GIT_CONFIG_KEY_n=core.sshCommand`/`GIT_CONFIG_VALUE_n=…` "
-                              "forces the same SSH transport override, spelled entirely "
-                              "through environment variables (git's GIT_CONFIG_COUNT "
-                              "mechanism) — drop it.")
+                return ("git GIT_CONFIG_KEY_n=core.sshCommand",
+                        "`GIT_CONFIG_KEY_n=core.sshCommand`/`GIT_CONFIG_VALUE_n=…` "
+                        "forces the same SSH transport override, spelled entirely "
+                        "through environment variables (git's GIT_CONFIG_COUNT "
+                        "mechanism) — drop it.")
             if _has_ssh_command_config(args):
-                return fix + ("`-c core.sshCommand=…` forces the same SSH transport "
-                              "override as GIT_SSH_COMMAND (its git-config twin) — drop it.")
+                return ("git -c core.sshCommand=",
+                        "`-c core.sshCommand=…` forces the same SSH transport "
+                        "override as GIT_SSH_COMMAND (its git-config twin) — drop it.")
             if _has_config_env_sshcommand(args):
-                return fix + ("`--config-env=core.sshCommand=VAR` is `-c`'s documented "
-                              "twin — it reads the SSH override's VALUE from an "
-                              "environment variable instead of the command line — drop it.")
+                return ("git --config-env=core.sshCommand",
+                        "`--config-env=core.sshCommand=VAR` is `-c`'s documented "
+                        "twin — it reads the SSH override's VALUE from an "
+                        "environment variable instead of the command line — drop it.")
             if _git_subcommand(args) == "config" and _is_sshcommand_config_write(args):
-                return fix + ("`git config core.sshCommand …` PERSISTS the SSH override "
-                              "into this repo's config — afterwards a plain `git fetch`/"
-                              "`push` goes over SSH with nothing on the command line to "
-                              "see. Drop it (a read, `git config --get core.sshCommand`, "
-                              "stays allowed).")
+                return ("git config core.sshCommand",
+                        "`git config core.sshCommand …` PERSISTS the SSH override "
+                        "into this repo's config — afterwards a plain `git fetch`/"
+                        "`push` goes over SSH with nothing on the command line to "
+                        "see. Drop it (a read, `git config --get core.sshCommand`, "
+                        "stays allowed).")
             # a URL only counts when the token IS the URL (a bare argument) — not when it's
             # mentioned inside a longer quoted string such as a commit message
             bad = next((a for a in _url_args(args) if a.lower().startswith(lower_prefixes)), None)
             if bad is not None:
                 low = bad.lower()
                 host = next(h for p, h in lower_prefix_hosts.items() if low.startswith(p))
-                return fix + (f"This hands git an SSH {host} URL — use the HTTPS form "
-                              f"(`https://{host}/<group>/<repo>.git`); SSH remotes are "
-                              "auto-rewritten, so you never need to type one.")
+                # `<ssh-url>`, not the URL: it carries the group and repo name, which is
+                # exactly the private detail the trace has no business keeping.
+                return ("git <ssh-url>",
+                        f"This hands git an SSH {host} URL — use the HTTPS form "
+                        f"(`https://{host}/<group>/<repo>.git`); SSH remotes are "
+                        "auto-rewritten, so you never need to type one.")
             # signing: `--gpg-sign` / `-c (commit|tag).gpgsign=true` always deny; `-S` denies
             # only on an ACTUAL committing subcommand (`_git_subcommand`, not positional
             # membership — `git log -S commit` is the pickaxe content search, and the word
@@ -718,21 +823,41 @@ def _single_credential_reason(cmd: str) -> str | None:
             # `-s`/`--sign` deny only for `tag` specifically (`git commit -s`/`--signoff` is
             # an unrelated Signed-off-by trailer, not GPG signing, and must stay allowed).
             subcommand = _git_subcommand(args)
-            if any(a == "--gpg-sign" or a.startswith("--gpg-sign=") for a in args) or \
-               any(re.fullmatch(r"(?:commit|tag)\.gpgsign=true", a) for a in args) or \
-               (subcommand in _SIGN_VERBS and "-S" in args) or \
-               (subcommand == "tag" and any(a in ("-s", "--sign") for a in args)):
-                return fix + ("Commit/tag signing is disabled on purpose (a signer prompt hangs "
-                              "an agent) — commit unsigned; `charter save` handles control-plane "
-                              "commits.")
+            flag = None
+            if any(a == "--gpg-sign" or a.startswith("--gpg-sign=") for a in args):
+                flag = "--gpg-sign"
+            elif any(re.fullmatch(r"(?:commit|tag)\.gpgsign=true", a) for a in args):
+                flag = "-c gpgsign=true"
+            elif subcommand in _SIGN_VERBS and "-S" in args:
+                flag = "-S"
+            elif subcommand == "tag" and any(a in ("-s", "--sign") for a in args):
+                flag = next(a for a in args if a in ("-s", "--sign"))
+            if flag is not None:
+                return (f"git {subcommand or '?'} {flag}",
+                        "Commit/tag signing is disabled on purpose (a signer prompt hangs "
+                        "an agent) — commit unsigned; `charter save` handles control-plane "
+                        "commits.")
         elif base == "ssh":
             host = next((h for h in forges
                         if any(f"git@{h}".lower() in a.lower() for a in argv[1:])), None)
             if host is not None:
                 cli = forges[host].cli
-                return fix + (f"SSH to {host} isn't used — check the credential with "
-                              f"`{cli} auth status` instead.")
+                return ("ssh <forge>",
+                        f"SSH to {host} isn't used — check the credential with "
+                        f"`{cli} auth status` instead.")
     return None
+
+
+def _single_credential_reason(cmd: str) -> str | None:
+    """Deny a git action that would depend on SSH or commit signing instead of that
+    repo's own forge's credential (its token over HTTPS) — golden rule 0, per forge.
+    Inspects only segments that actually invoke ``git``/``ssh``; returns the reason +
+    the remedy, naming the actual host involved.
+
+    A thin wrapper over :func:`_single_credential_hit` since #289 — the scanner is shared
+    with the traced shape so the two can never disagree about what matched."""
+    hit = _single_credential_hit(cmd)
+    return None if hit is None else _SINGLE_CREDENTIAL_FIX + hit[1]
 
 
 # --------------------------------------------------------------------------- #
@@ -936,6 +1061,24 @@ def _piece_announcement(data: dict) -> str | None:
         return None
 
 
+def _trace_head(cmd: str) -> str:
+    """The command's first token, with any env-assignment VALUE stripped.
+
+    `cmd.split()[0]` looks like it records a binary name, and for `git push` it does. For
+    `VAR=value git push` the first token is the whole assignment — so the trace kept
+    values the operator typed. Observed in this plane's own records, holding absolute
+    paths (`D=/private/tmp/.../demo-plane;`), and a `GIT_SSH_COMMAND=/keys/id_rsa` would
+    have landed there the same way.
+
+    That is the leak the guard beside it exists to prevent, written to a file that outlives
+    the conversation. `shape` states the rule explicitly — trigger, never operand — and this
+    is the same rule applied to the field that predates it. The variable NAME is kept: it is
+    the useful half and it is not a value.
+    """
+    tok = cmd.split()[0] if cmd.split() else ""
+    return f"{tok.split('=', 1)[0]}=" if _ENV_ASSIGN_RE.match(tok) else tok
+
+
 def pretooluse() -> int:
     data = _read_stdin()
     # Reaching this handler at all is the proof no configuration can give: the guard is
@@ -947,7 +1090,7 @@ def pretooluse() -> int:
     cmd = ti.get("command", "") or ""
     cwd = data.get("cwd") or ""
     sid = data.get("session_id")
-    head = cmd.split()[0] if cmd.split() else ""
+    head = _trace_head(cmd)
     # Recording a memory via the CLI (`charter workspace/persona remember|note`) is invisible to
     # PostToolUse (it's Bash, not a Write) → reset the record-memory cadence here on intent.
     if _MEM_RECORD_RE.search(cmd):
@@ -970,10 +1113,15 @@ def pretooluse() -> int:
     # `_leak_reason` above stays unconditional on purpose: not printing a secret into the
     # transcript is a safety invariant, not a policy this plane happens to hold.
     from . import config as _cfg
-    cred = _single_credential_reason(cmd) if _cfg.HAS_CONTROL_PLANE else None
-    if cred:
-        _deny("PreToolUse", cred)
-        _trace("deny", sid, reason="single-credential", cmd=head)
+    hit = _single_credential_hit(cmd) if _cfg.HAS_CONTROL_PLANE else None
+    if hit:
+        shape, detail = hit
+        _deny("PreToolUse", _SINGLE_CREDENTIAL_FIX + detail)
+        # `reason` stays the stable tally key it has always been; `shape` is the new field
+        # that says WHICH trigger matched (#289). Additive on purpose — an existing trace
+        # reader keeps working, and the question "what tripped this 335 times" becomes
+        # answerable from the same records.
+        _trace("deny", sid, reason="single-credential", shape=shape, cmd=head)
         return 0
     # A3: the plane root is one shared working tree — refuse a branch move in it (#157).
     # Same gate as A2, and for the same reason: outside a plane there is no plane root, and
@@ -990,8 +1138,8 @@ def pretooluse() -> int:
     # about a plane, so it has nothing to say where there is none.
     clone = _clone_commit_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
     if clone:
-        _ask("PreToolUse", clone)
-        _trace("ask", sid, reason=clone[:70], cmd=head)
+        if _ask("PreToolUse", clone, data):
+            _trace("ask", sid, reason=clone[:70], cmd=head)
         return 0
     # fall through to the allow-only persona tool-gate (unchanged behaviour)
     try:
@@ -1053,7 +1201,7 @@ def _uncommitted_memory_nudge() -> str:
     return ""
 
 
-def _workspace_confirm_nudge(session_id: str | None) -> str:
+def _workspace_confirm_nudge(session_id: str | None, unattended: bool = False) -> str:
     """At session start, unless the workspace is hard-pinned via ``$CHARTER_WORKSPACE`` or
     already **locked** (confirmed) for this session, tell the agent to ask the user which
     workspace to use *before* any repo work — create a new one or use an existing one.
@@ -1066,6 +1214,20 @@ def _workspace_confirm_nudge(session_id: str | None) -> str:
         current = workspace.resolve(session_id=session_id)
         names = workspace.list_workspaces()
         existing = ", ".join(f"`{n}`" for n in names) if names else "none yet"
+        if unattended:
+            # The ONE block that does not get an "assume and continue" rewrite. Every other
+            # nudge names a preference; this one names a missing input. An unattended run
+            # that picks a workspace for itself writes into somebody else's job and locks
+            # the choice for the whole session — the silent-move failure `session.terminal`
+            # was rewritten to prevent, with nobody watching to catch it.
+            return (
+                "⬢ **STOP — this run has no workspace and nobody to ask.** It is running "
+                f"unattended (`permission_mode: {UNATTENDED_MODE}`) with no workspace locked "
+                f"and none pinned via `$CHARTER_WORKSPACE`. **Do not guess one** — it would "
+                f"silently claim `{current}` and lock it for the session. Do no repo work. "
+                f"Say plainly that the run is misconfigured and stop; whoever launched it "
+                f"should re-launch with `CHARTER_WORKSPACE=<name>` set (existing: {existing})."
+            )
         return (
             "⬢ **Confirm the workspace before any repo work.** No workspace is locked for this "
             f"session yet (it would otherwise default to `{current}`). Ask the user — via a quiz "
@@ -1336,7 +1498,7 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
         sync = _autosync_version_lock()
         if sync:
             parts.append(sync)
-    ws = _workspace_confirm_nudge(sid)
+    ws = _workspace_confirm_nudge(sid, _unattended(data))
     if ws:
         parts.append(ws)  # first: the start-of-session action gate
 
@@ -1730,10 +1892,36 @@ def pretooluse_dispatch() -> int:
              f"`{agent}` writes code and {peers} "
              f"{'is' if len(others) == 1 else 'are'} already running. They share one "
              f"working tree, so parallel edits interleave silently. Dispatch this one "
-             f"with `isolation: worktree`, or let the other finish first.")
+             f"with `isolation: worktree`, or let the other finish first.", data)
         del token
     except Exception:
         return 0  # a nudge must never break a turn
+    return 0
+
+
+def posttooluse_bash() -> int:
+    """Record that an `ask` was APPROVED — the other half of every nudge charter emits.
+
+    A hook `ask` blocks the tool, so a `PostToolUse` for the same ``tool_use_id`` is proof
+    it ran, which is proof a human said yes. A declined ask never produces one, and its
+    marker simply stays behind; that asymmetry is what makes "asked N times, approved M"
+    countable at all (#290).
+
+    **Kept to a stat() on the common path.** This is registered against every Bash call, so
+    the overwhelming majority of invocations must find no marker and return having written
+    nothing — no trace line, no read of the trace, no import beyond what is already loaded.
+    The cost that remains is the process spawn itself; narrowing the matcher with the host's
+    `if:` condition (e.g. ``Bash(git *)``) is the obvious next reduction, deferred only
+    because it would raise charter's minimum supported host version.
+    """
+    data = _read_stdin()
+    try:
+        sid, tuid = data.get("session_id"), data.get("tool_use_id")
+        if not _ask_mark_take(sid, tuid):
+            return 0
+        _trace("ask-approved", sid)
+    except Exception:
+        return 0  # bookkeeping must never break a turn
     return 0
 
 
@@ -2094,11 +2282,11 @@ def pretooluse_edit() -> int:
     if not names:
         return 0
     who = ", ".join(f"`{n}`" for n in names)
-    _ask("PreToolUse",
-         f"the roster was shown this turn and nothing was dispatched — you are editing as "
-         f"the acting persona. Available: {who}. charter is not saying this is theirs; "
-         f"approve to carry on, or dispatch instead. (`routing: require`)")
-    _trace("routing-ask", data.get("session_id"))
+    if _ask("PreToolUse",
+            f"the roster was shown this turn and nothing was dispatched — you are editing "
+            f"as the acting persona. Available: {who}. charter is not saying this is "
+            f"theirs; approve to carry on, or dispatch instead. (`routing: require`)", data):
+        _trace("routing-ask", data.get("session_id"))
     return 0
 
 
@@ -2152,7 +2340,7 @@ def _roster_block(sid: str | None) -> str:
         return ""
 
 
-def _commitment_nudge(prompt: str, sid: str | None) -> str:
+def _commitment_nudge(prompt: str, sid: str | None, unattended: bool = False) -> str:
     signals = _commitment_signals(prompt)
     if not signals or not _commit_gate_due(sid):
         return ""
@@ -2177,6 +2365,15 @@ def _commitment_nudge(prompt: str, sid: str | None) -> str:
         step2 = ("2. **Then quiz** (AskUserQuestion) with 2–4 *concrete* options at the fork you "
                  "found — a decision the engineer owns, recommendation first. Not a confirmation "
                  "prompt, and not a question the code could have answered for you.\n")
+        if unattended:
+            # The substance survives; only the consultation verb is wrong. Scouting the fork
+            # is still correct with nobody watching — what changes is that the answer has to
+            # be decided and written down instead of asked for.
+            step2 = ("2. **Then decide at the fork you found** — there is nobody to quiz. Pick "
+                     "the option you would have recommended, state the assumption in one line, "
+                     "and record it (`charter ws note \"…\"`) so the call is reviewable "
+                     "afterwards. Do NOT call AskUserQuestion: this run has no one to answer "
+                     "it, and it would block until the run is killed.\n")
         method = ("`superpowers:brainstorming` before a creative build · "
                   "`superpowers:test-driven-development` for code · "
                   "`superpowers:verification-before-completion` always")
@@ -2188,10 +2385,15 @@ def _commitment_nudge(prompt: str, sid: str | None) -> str:
         f"for the wrong job.\n"
         f"{step2}"
         f"3. **Name the method** in the brief: {method}.\n"
-        f"4. Fuzzy or spanning repos? **Offer the human-only framing pre-step as a quiz option** "
-        f"(`/grill-with-docs` → `/to-spec` → `/to-tickets`, or `mattpocock-skills:grilling` run "
-        f"with the engineer). **No agent can invoke those** — if you don't offer them, nobody "
-        f"does.\n"
+        + (f"4. Fuzzy or spanning repos? The human-only framing pre-step (`/grill-with-docs` "
+           f"→ `/to-spec` → `/to-tickets`) **cannot run here** — no agent can invoke those and "
+           f"there is no one to offer them to. Record that the framing step was skipped, and "
+           f"scope conservatively.\n"
+           if unattended else
+           f"4. Fuzzy or spanning repos? **Offer the human-only framing pre-step as a quiz "
+           f"option** (`/grill-with-docs` → `/to-spec` → `/to-tickets`, or "
+           f"`mattpocock-skills:grilling` run with the engineer). **No agent can invoke "
+           f"those** — if you don't offer them, nobody does.\n") +
         f"Feather-weight once you've scouted? Say so and just do it — this is a gate, not a ritual."
     )
 
@@ -2213,7 +2415,7 @@ def userpromptsubmit() -> int:
         parts.append(msg)
         _trace("config-update", sid)
     try:
-        gate = _commitment_nudge(data.get("prompt") or "", sid)
+        gate = _commitment_nudge(data.get("prompt") or "", sid, _unattended(data))
     except Exception:
         gate = ""
     if gate:
@@ -2302,6 +2504,7 @@ _HANDLERS = {
     "pretooluse-dispatch": pretooluse_dispatch,
     "pretooluse-edit": pretooluse_edit,
     "posttooluse": posttooluse,
+    "posttooluse-bash": posttooluse_bash,
     "posttooluse-skill": posttooluse_skill,
     "posttooluse-dispatch": posttooluse_dispatch,
     "posttooluse-message": posttooluse_message,

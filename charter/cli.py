@@ -267,6 +267,15 @@ def build_parser() -> argparse.ArgumentParser:
     gl = gsub.add_parser("list", help="Show this plane's force-prompt rules.")
     gl.set_defaults(func=commands.cmd_guard_list)
 
+    # The mirror of `guard ask`. charter could only ever make a command prompt MORE; this
+    # is the other direction, written into the same host file by the same registry (#291).
+    gw = gsub.add_parser("allow",
+                         help="Stop the harness prompting for a command pattern "
+                              "(writes the host's own allow rule).")
+    gw.add_argument("pattern", nargs="?", default="",
+                    help="e.g. 'git status *'. Bare patterns are wrapped as Bash rules.")
+    gw.set_defaults(func=commands.cmd_guard_allow)
+
     vsy = vsub.add_parser("sync",
                           help="Move THIS plane to the version it pins. A plugin is "
                                "installed per project, so no other plane moves.")

@@ -12,13 +12,20 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 
-from . import config
+from . import config, session as _sessions
 
 
 def _session(session: str | None = None) -> str:
-    return (session or os.environ.get("CLAUDE_CODE_SESSION_ID") or "nosession").strip() or "nosession"
+    """Delegate to the ONE resolver (`session.bucket`) rather than re-deriving it.
+
+    This function used to read `CLAUDE_CODE_SESSION_ID` itself. `charter.session` exists
+    because three implementations of that question disagreed, and this was a fourth — the
+    one that never learned the neutral `CHARTER_SESSION_ID`, so under any harness setting
+    only that name every trace line landed in the shared `nosession` bucket. Observability
+    that is silently harness-specific is worse than none, because it still looks present.
+    """
+    return _sessions.bucket(session)
 
 
 def _file(session: str | None = None):
