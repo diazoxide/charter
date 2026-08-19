@@ -1797,6 +1797,66 @@ def cmd_version_check(args) -> int:
     return 0
 
 
+def _news_line(e, status: str) -> str:
+    """One entry, one line, in the shape the reader acts on.
+
+    Deliberately not JSON. The skill is a Claude Code artifact and opencode gets none, so
+    this text is the only thing an agent on another harness has — a machine surface would
+    become the parsed one, and this the unchecked one.
+    """
+    how = f"adopt: charter {e.adopt}" if e.adopt else "adopt: manual (see the entry)"
+    return f"  {e.slug} · {e.headline}\n      {how}"
+
+
+def cmd_news(args) -> int:
+    """What a version brought, and what this plane has not taken up."""
+    from . import news
+
+    version = getattr(args, "for_version", None)
+    if version:
+        body = news.render_body(version)
+        if not body:
+            util.err(f"no news entry for {version}.")
+            return 1
+        print(body)
+        return 0
+
+    if getattr(args, "pending", False):
+        shown = 0
+        for e in news.released():
+            status, why = news.probe(e)
+            if status == news.PENDING:
+                print(_news_line(e, status))
+                shown += 1
+            elif status == news.UNKNOWN:
+                # Said, not swallowed. A probe that could not run is the one case where
+                # silence would be read as "nothing to adopt" — the shape ADR 0013 and
+                # `doctor`'s not-checked hint both exist to refuse.
+                util.warn(f"{e.slug}: {why}")
+        if not shown:
+            util.ok("nothing pending — every entry with a probe reports adopted.")
+        return 0
+
+    since = (getattr(args, "since", None) or "").strip()
+    until = (getattr(args, "until", None) or _installed_version()).strip()
+    if not since:
+        # No baseline is not a range. Replaying every entry ever written as though it were
+        # news would be charter presenting old text as new — so it says what it can and
+        # points at the view that IS honest without one.
+        util.info("no baseline recorded, so there is no range to report.")
+        util.info("  what this plane has not adopted:  charter news --pending")
+        return 0
+    entries = news.between(since, until)
+    if not entries:
+        util.ok(f"nothing new between {since} and {until}.")
+        return 0
+    for e in entries:
+        status, _ = news.probe(e)
+        mark = "" if status in (news.ADOPTED,) else _news_line(e, status)
+        print(f"{e.version}  {e.headline}" if not mark else f"{e.version}  {e.headline}\n{mark}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # version lock — `[charter] version` in charter.toml                          #
 # --------------------------------------------------------------------------- #

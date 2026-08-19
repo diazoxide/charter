@@ -217,6 +217,17 @@ def build_parser() -> argparse.ArgumentParser:
     vc = sub.add_parser("_version-check")
     vc.set_defaults(func=commands.cmd_version_check)
 
+    nw = sub.add_parser("news",
+                        help="What a version brought, and what this plane has not adopted.")
+    nw.add_argument("--pending", action="store_true",
+                    help="Every entry, any version, whose probe says you have not adopted "
+                         "it yet.")
+    nw.add_argument("--since", help="Report entries newer than this version.")
+    nw.add_argument("--until", help="Stop at this version (default: the running one).")
+    nw.add_argument("--for", dest="for_version", metavar="VERSION",
+                    help="One version's entries, as the body of its release notes.")
+    nw.set_defaults(func=commands.cmd_news)
+
     ver = sub.add_parser("version",
                          help="The control plane's charter version lock: show drift, "
                               "conform this machine to it, or move the pin.")
@@ -810,6 +821,10 @@ def _add_persona_parser(sub) -> None:
     dd.set_defaults(func=commands_persona.cmd_persona_dedupe)
 
     lt = psub.add_parser("lint", help="Config eval: dangling uses:, missing role/vault/delegate-when, stale agents.")
+    lt.add_argument("--only", metavar="KEY",
+                    help="Report only findings mentioning KEY, and exit non-zero solely "
+                         "on those — what a news entry's probe needs to ask about one "
+                         "feature.")
     lt.add_argument("name", nargs="?", help="Only this persona (default: all).")
     lt.set_defaults(func=commands_persona.cmd_persona_lint)
 

@@ -50,6 +50,13 @@ Workspace-scoped intent that expires: it stops being true the moment it is done 
 abandoned, which is why it lives beside memory rather than inside it (ADR 0004).
 _Avoid_: task, ticket, item
 
+**News**:
+A shipped, per-item note that a version introduced something, carrying an optional probe
+for whether this plane has adopted it. Not a changelog: an entry exists to be *acted on*,
+and one with nothing to adopt is one line. Staged as `unreleased-<slug>.md` until a release
+stamps it, so an entry never names a version that was not true.
+_Avoid_: changelog, release notes, announcement
+
 ### Parallel work
 
 **Plan**:

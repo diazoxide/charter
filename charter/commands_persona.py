@@ -990,9 +990,18 @@ def cmd_persona_lint(args) -> int:
     if not names:
         util.info("No personas to lint.")
         return 0
+    # `--only` narrows to ONE finding so an exit code can answer one question. A news
+    # entry's probe needs exactly that: bare `lint` fails for dangling `uses:` too, and a
+    # probe that fires on unrelated findings tells a plane to adopt what it already has.
+    only = (getattr(args, "only", None) or "").strip()
     errors = 0
     for n in names:
         issues = list(persona.lint(n)) + _agent_sync_issues(n)
+        if only:
+            issues = [(lvl, msg) for lvl, msg in issues if only in msg]
+            # Every match is an error under `--only`: the caller asked about one thing, so
+            # "present but only as a warning" is still the answer "not adopted".
+            issues = [("error", msg) for _lvl, msg in issues]
         if not issues:
             util.ok(f"{n}: ok")
             continue
