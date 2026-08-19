@@ -318,6 +318,9 @@ Deliberate properties:
   there would hit 1Password on every listing and could prompt for re-auth.
 - **A failed resolve reports status, not output** — a resolver's stderr can echo what it
   fetched.
+- **A resolve is bounded** (60s) and a timeout is reported as a named cause rather than a
+  traceback. Unattended runs are the reason: a CLI sitting on an authentication prompt with
+  nowhere to render it does not fail, it stops — silently, for as long as the session lasts.
 - You still need the CLI installed and authenticated; charter shells out to it and says
   so plainly when it is missing.
 
