@@ -1857,6 +1857,39 @@ def cmd_news(args) -> int:
     return 0
 
 
+def cmd_news_stamp(args) -> int:
+    """Move every staged entry onto the version about to ship.
+
+    The bump PR's one mechanical step, beside the four files that carry a version number.
+    A command rather than a fifth thing to remember, for the reason the release charter
+    gives about `hooks.json`: never work from a remembered count.
+    """
+    from . import news
+
+    version = (getattr(args, "version", "") or "").strip()
+    renamed, blocked = news.stamp(version)
+    for why in blocked:
+        util.err(why)
+    if blocked:
+        return 1
+    for src, dst in renamed:
+        util.ok(f"{src.name} → {dst.name}")
+    if not renamed:
+        util.info(f"no staged entries — nothing to move onto {version}.")
+
+    # Read back what is on disk rather than trusting the run. Nothing staged is a
+    # legitimate state (the entry may already name the version), and an entry missing
+    # altogether is not — the two are indistinguishable from the rename count alone, and
+    # only one of them publishes a version with no notes. Naming it here costs a line;
+    # letting the tag find it costs a release (ADR 0013).
+    if not news.stamped(version):
+        util.err(f"no entry names {version}. Every published version needs one, including "
+                 f"a patch — write docs/news/{version}-<slug>.md before tagging, or the "
+                 f"release guard refuses to publish.")
+        return 1
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # version lock — `[charter] version` in charter.toml                          #
 # --------------------------------------------------------------------------- #

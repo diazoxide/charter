@@ -238,7 +238,15 @@ def build_parser() -> argparse.ArgumentParser:
     nw.add_argument("--until", help="Stop at this version (default: the running one).")
     nw.add_argument("--for", dest="for_version", metavar="VERSION",
                     help="One version's entries, as the body of its release notes.")
-    nw.set_defaults(func=commands.cmd_news)
+    nwsub = nw.add_subparsers(dest="news_cmd")
+    nw.set_defaults(func=commands.cmd_news)         # bare `charter news` = the range view
+    nst = nwsub.add_parser("stamp",
+                           help="Move every staged `unreleased-*` entry onto the version "
+                                "about to ship — the bump PR's step, beside the four "
+                                "files that carry a version number.")
+    nst.add_argument("version", help="The version about to be published, e.g. 0.45.0 — "
+                                     "the number alone, not the tag name.")
+    nst.set_defaults(func=commands.cmd_news_stamp)
 
     ver = sub.add_parser("version",
                          help="The control plane's charter version lock: show drift, "

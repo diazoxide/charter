@@ -84,6 +84,17 @@ def _dir() -> Path | None:
     return None
 
 
+def checkout_dir() -> Path | None:
+    """The repo's own ``docs/news``, or ``None`` when this is not a checkout.
+
+    Deliberately not :func:`_dir`. Reading prefers the packaged copy; *writing* has only
+    one legitimate target, because ``charter/_news`` is force-included from ``docs/news``
+    on every build. A stamp applied to the packaged copy is discarded by the next wheel —
+    silently, and after the release engineer was told it worked.
+    """
+    return _CHECKOUT if _CHECKOUT.is_dir() and _is_checkout(_CHECKOUT) else None
+
+
 def _read(p: Path) -> Entry | None:
     try:
         meta, body = persona.parse(p.read_text())
@@ -219,3 +230,116 @@ def probe(entry: Entry) -> tuple[str, str]:
 def pending() -> list[Entry]:
     """Every entry, any version, whose probe says this plane has not adopted it."""
     return [e for e in released() if probe(e)[0] == PENDING]
+
+
+# --------------------------------------------------------------------------- #
+# stamping — the bump PR's one mechanical step                                #
+# --------------------------------------------------------------------------- #
+def _is_version(v: str) -> bool:
+    """Is *v* a version number, rather than the tag that carries it?
+
+    ``v0.45.0`` is the tag; ``0.45.0`` is what frontmatter holds. Stamping the tag name
+    would produce an entry whose ``version:`` can never equal ``__version__``, so both
+    release catches pass and `charter news` still shows the user nothing — the exact
+    class of silent wrongness staging exists to remove. Refused rather than tidied up,
+    because guessing which of the two the caller meant is how the guess gets shipped.
+    """
+    parts = v.strip().split(".")
+    if len(parts) < 2:
+        return False
+    # A loop, not `all(...)`: this module's own `all()` shadows the builtin.
+    for part in parts:
+        if not part.isdigit():
+            return False
+    return True
+
+
+def unstamped() -> list[Path]:
+    """Entry files in the repo still waiting for a version."""
+    d = checkout_dir()
+    return sorted(d.glob(f"{UNRELEASED}-*.md")) if d else []
+
+
+def stamped(version: str) -> list[Path]:
+    """Entry files in the repo naming *version*.
+
+    The read-back for :func:`stamp`, and it reads the directory that was *written*:
+    :func:`all` prefers the packaged copy, so on a tree that has been built in place it
+    would answer the same question from a different, staler file.
+    """
+    d = checkout_dir()
+    return sorted(d.glob(f"{version}-*.md")) if d else []
+
+
+def _restamp(text: str, version: str) -> str | None:
+    """*text* with its frontmatter ``version:`` rewritten, byte-for-byte otherwise.
+    ``None`` when there is no frontmatter version line to rewrite.
+
+    Not `persona.parse` followed by re-serialisation: that parser is lossy by design — it
+    flattens frontmatter into a dict and strips the body — so a round trip would rewrite
+    the author's file, reordering keys and dropping whatever a flat parser does not keep.
+    A rename must not become an edit.
+    """
+    if not text.startswith("---"):
+        return None
+    lines = text.splitlines(keepends=True)
+    out, found = list(lines), False
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            break
+        key, sep, _ = lines[i].partition(":")
+        if sep and key.strip() == "version":
+            out[i] = f"version: {version}\n"
+            found = True
+    else:
+        return None                      # unterminated frontmatter: not an entry
+    return "".join(out) if found else None
+
+
+def stamp(version: str) -> tuple[list[tuple[Path, Path]], list[str]]:
+    """Move every staged entry onto *version*: rename the file, rewrite the field.
+
+    Returns ``(renamed, blocked)``. ``renamed`` is ``(from, to)`` pairs; ``blocked`` is
+    reasons, each already a sentence a release engineer can act on.
+
+    **All or nothing.** A partially stamped release is the one outcome worse than a
+    failed stamp: the guard asks only whether *some* entry names the version, so a run
+    that stamped two of three entries publishes with the third missing from both the
+    release body and `charter news`, and nothing anywhere reports it. A blocked run
+    leaves every entry staged, which fails loudly at the next catch.
+    """
+    if not _is_version(version):
+        return [], [f"{version!r} is not a version — pass the number alone, as in 0.45.0, "
+                    f"not the tag name"]
+    d = checkout_dir()
+    if d is None:
+        return [], ["news entries are stamped in the repo, and this is not a charter "
+                    "checkout — run it from a clone (`python3 -m charter news stamp …`)"]
+
+    plan: list[tuple[Path, Path, str]] = []
+    blocked: list[str] = []
+    for src in unstamped():
+        slug = src.stem.split("-", 1)[1]
+        dst = d / f"{version}-{slug}.md"
+        if dst.exists():
+            blocked.append(f"{src.name} → {dst.name}: that name is already taken, and "
+                           f"charter will not overwrite an entry that already shipped")
+            continue
+        text = _restamp(src.read_text(), version)
+        if text is None:
+            blocked.append(f"{src.name}: no `version:` line in its frontmatter to stamp")
+            continue
+        plan.append((src, dst, text))
+    if blocked:
+        return [], blocked
+
+    renamed: list[tuple[Path, Path]] = []
+    for src, dst, text in plan:
+        # Write the new file BEFORE dropping the old one. The reverse order can leave a
+        # file renamed but not rewritten — a filename saying 0.45.0 over frontmatter
+        # still saying `unreleased`, which is invisible to every view. A leftover staged
+        # copy, the failure mode of this order, blocks the next stamp and says so.
+        dst.write_text(text)
+        src.unlink()
+        renamed.append((src, dst))
+    return renamed, []
