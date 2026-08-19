@@ -110,3 +110,18 @@ class Harness:
         naming that limit and staying quiet is the difference between a limit and a lie.
         """
         return "unsupported", f"{self.name} has no command-pattern permissions"
+
+    def allow_rule(self, pattern: str):
+        """*pattern* as an ALLOW rule in this harness's syntax, or ``None``.
+
+        Defaults to :meth:`ask_rule`, because every harness charter knows encodes the
+        pattern the same way for both verbs — only the decision differs. A harness where
+        that stops being true overrides this; sharing the default is what keeps one
+        operator sentence from acquiring two spellings.
+        """
+        return self.ask_rule(pattern)
+
+    def apply_allow_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+        """Write the allow rule under *root*. ``(status, detail)``, as
+        :meth:`apply_ask_rule`."""
+        return "unsupported", f"{self.name} has no command-pattern permissions"

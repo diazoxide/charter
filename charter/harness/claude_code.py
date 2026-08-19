@@ -71,3 +71,8 @@ class ClaudeCodeHarness(Harness):
         from .. import commands
 
         return commands.add_ask_rule(root, self.ask_rule(pattern))
+
+    def apply_allow_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+        from .. import commands
+
+        return commands.add_allow_rule(root, self.allow_rule(pattern))

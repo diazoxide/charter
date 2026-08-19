@@ -106,6 +106,11 @@ class TestPluginManifest(unittest.TestCase):
             # it would fire on the scouting the gate asks for two lines earlier.
             ("PreToolUse", "charter hook pretooluse-edit --plugin-version"),
             ("PostToolUse", "charter hook posttooluse --plugin-version"),
+            # The other half of every `ask`: a PostToolUse for the asked-about tool_use_id
+            # is proof the tool ran, i.e. that a human approved it. Registered for Bash
+            # because that is where charter's asks are emitted — 231 of them went out with
+            # no outcome ever recorded, which is what made the guard unarguable (#290).
+            ("PostToolUse", "charter hook posttooluse-bash --plugin-version"),
             # The skill tally: which skills a persona actually invokes, against the ones its
             # charter declares and the host preloads on every dispatch.
             ("PostToolUse", "charter hook posttooluse-skill --plugin-version"),

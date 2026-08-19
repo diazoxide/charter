@@ -833,14 +833,18 @@ def _load_settings(root: Path) -> tuple[dict | None, Path]:
     return (doc if isinstance(doc, dict) else None), p
 
 
-def add_ask_rule(root: Path, rule: str) -> tuple[str, str]:
-    """Append *rule* to `permissions.ask` in the plane's `.claude/settings.json`.
+def add_permission_rule(root: Path, rule: str, bucket: str) -> tuple[str, str]:
+    """Append *rule* to ``permissions.<bucket>`` in the plane's `.claude/settings.json`.
 
     Extracted from `cmd_guard_ask` when a second harness needed the same command: the
     command now asks each registered harness to write its own file in its own syntax,
     and this is Claude Code's half. Refuses a malformed file rather than repairing it,
-    and a `permissions` or `ask` of the wrong type is somebody's deliberate structure —
+    and a `permissions` or bucket of the wrong type is somebody's deliberate structure —
     charter reports it and stops.
+
+    Parameterised over the bucket when `guard allow` arrived: `ask` and `allow` are the
+    same job with opposite verbs, and two copies of this function would eventually
+    disagree about what "malformed" means — in a file charter only half-owns.
     """
     settings, path = _load_settings(root)
     if settings is None:
@@ -848,15 +852,70 @@ def add_ask_rule(root: Path, rule: str) -> tuple[str, str]:
     perms = settings.setdefault("permissions", {})
     if not isinstance(perms, dict):
         return "malformed", f"{path} (`permissions` is not an object)"
-    ask = perms.setdefault("ask", [])
-    if not isinstance(ask, list):
-        return "malformed", f"{path} (`permissions.ask` is not a list)"
-    if rule in ask:
+    entries = perms.setdefault(bucket, [])
+    if not isinstance(entries, list):
+        return "malformed", f"{path} (`permissions.{bucket}` is not a list)"
+    if rule in entries:
         return "present", str(path)
-    ask.append(rule)
+    entries.append(rule)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n")
     return "added", str(path)
+
+
+def add_ask_rule(root: Path, rule: str) -> tuple[str, str]:
+    """`permissions.ask` — force a prompt for *rule*."""
+    return add_permission_rule(root, rule, "ask")
+
+
+def add_allow_rule(root: Path, rule: str) -> tuple[str, str]:
+    """`permissions.allow` — stop prompting for *rule*."""
+    return add_permission_rule(root, rule, "allow")
+
+
+def cmd_guard_allow(args) -> int:
+    """Add a stop-prompting rule to `permissions.allow` in the plane's settings.
+
+    The mirror of `cmd_guard_ask`, and deliberately its twin rather than its variation:
+    same ADR 0014 reasoning, same harness registry, same "charter is the editor, not the
+    author" boundary — the operator named the rule and the command that writes it.
+
+    It exists because charter could only ever make a command prompt MORE. `toolgate` is
+    allow-only but keyed on the active persona's declared `tools:`, which is the right
+    instrument for "this persona may run `glab`" and the wrong one for "this plane never
+    needs to be asked about `git status`". That gap is why routine git felt hook-guarded
+    when charter denies only three narrow things (#291).
+    """
+    pattern = (getattr(args, "pattern", "") or "").strip()
+    if not pattern:
+        util.err("Nothing to add. Example: charter guard allow 'git status *'")
+        return 2
+    from .harness import registry
+
+    root = Path(config.ROOT)
+    rc, wrote = 0, False
+    for h in registry.all():
+        status, detail = h.apply_allow_rule(root, pattern)
+        if status == "added":
+            util.ok(f"{h.name}: allowing {h.allow_rule(pattern)} → {detail}")
+            wrote = True
+        elif status == "present":
+            util.ok(f"{h.name}: already allowing {h.allow_rule(pattern)}.")
+            wrote = True
+        elif status == "malformed":
+            util.err(f"{h.name}: {detail} is not valid — left untouched.")
+            util.info("  Fix it by hand, then re-run. charter never repairs these files.")
+            rc = 1
+        else:
+            util.info(f"  {h.name}: {detail} — nothing to relax there.")
+    if not wrote and rc == 0:
+        util.warn("  No harness took the rule.")
+    if wrote:
+        util.info("  These files are committed, so the rule applies to everyone on this "
+                  "repo — no sync step, and nothing that can drift (ADR 0014).")
+        util.info("  charter's own guards are unaffected: an allow rule relaxes the HOST's "
+                  "prompt, never the secret, credential or plane-root denials.")
+    return rc
 
 
 def cmd_guard_ask(args) -> int:

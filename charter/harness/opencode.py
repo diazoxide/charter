@@ -403,11 +403,21 @@ class OpenCodeHarness(Harness):
         return "bash", p
 
     def apply_ask_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+        return self._apply_rule(root, pattern, "ask")
+
+    def apply_allow_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+        return self._apply_rule(root, pattern, "allow")
+
+    def _apply_rule(self, root: Path, pattern: str, decision: str) -> tuple[str, str]:
         """Write it into `opencode.json`, IF ABSENT and never repairing.
 
         A `permission` block of the wrong shape is somebody's deliberate structure, and
         an unparseable file is theirs to fix — the same restraint `_load_settings` keeps
         for the file charter half-owns.
+
+        One writer for both verbs: opencode's model is `{tool: {glob: decision}}`, so
+        `ask` and `allow` differ by a single string and a second copy would only be a
+        place for the two to drift.
         """
         tool, glob = self.ask_rule(pattern)
         p = Path(root) / "opencode.json"
@@ -425,9 +435,9 @@ class OpenCodeHarness(Harness):
         block = perms.setdefault(tool, {})
         if not isinstance(block, dict):
             return "malformed", f"{p} (`permission.{tool}` is not an object)"
-        if block.get(glob) == "ask":
+        if block.get(glob) == decision:
             return "present", str(p)
-        block[glob] = "ask"
+        block[glob] = decision
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(doc, indent=2) + "\n")
         return "added", str(p)
