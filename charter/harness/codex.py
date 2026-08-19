@@ -37,6 +37,21 @@ NAME = "codex"
 HOOK_ENTRY_KEYS = ("type", "command")
 HOOK_TYPE = "command"
 
+#: How a Codex plugin moves, pinned against codex-cli 0.147.0.
+#:
+#: `codex plugin update` does NOT exist — the binary answers "error: unrecognized
+#: subcommand 'update'", which is the rejection this file treats as the only real
+#: evidence. What exists is add / list / marketplace / remove, and the snapshot a plugin
+#: installs FROM is refreshed at the marketplace level. So updating is two commands, and
+#: it is the same shape Claude Code has (`marketplace update` then the plugin) rather than
+#: a quirk worth explaining twice.
+#:
+#: Named, never run, for the reason every host command is: it mutates an install charter
+#: does not own, and `codex` may not be on the reader's PATH at all.
+PLUGIN_UPDATE_CMD = ("codex plugin marketplace upgrade charter && "
+                     "codex plugin add charter@charter")
+
+
 def config_path() -> Path:
     """Codex's config file. There is **no project-level one**: a `.codex/config.toml` or
     `codex.toml` planted in a project directory is ignored, checked by putting a
@@ -134,13 +149,11 @@ class CodexHarness(Harness):
         moves THAT is a fact nobody has pinned against a real Codex.
 
         Every fact in this file was pinned against codex-cli 0.147.0 rather than its
-        documentation. A `codex plugin update` written from memory would be the first line
-        here that is a guess, and unlike the rest it would be executed by whoever read it.
+        documentation, and this one the same way: `codex plugin update` — the command
+        everyone reaches for, including the first draft of this method — is rejected by the
+        binary, and the two-step in :data:`PLUGIN_UPDATE_CMD` is what it actually offers.
         """
-        return ("absent",
-                "charter has not pinned how a Codex plugin updates — its hooks come from "
-                "the charter@charter plugin, so update it the way you installed it; "
-                "`charter harness list` will say when charter knows")
+        return "manual", PLUGIN_UPDATE_CMD
 
     def detect(self) -> bool:
         """Nothing native to detect, and saying so beats guessing.

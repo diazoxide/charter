@@ -101,15 +101,26 @@ class OpenCode(unittest.TestCase):
 
 
 class Codex(unittest.TestCase):
-    def test_admits_it_does_not_know_rather_than_guessing(self):
-        """`codex.py` pins every fact against the binary, never its documentation. A
-        `codex plugin update` nobody has run would be the first line in it that is a
-        guess — and this one gets EXECUTED by a reader, not merely read."""
+    def test_names_the_two_step_codex_actually_has(self):
+        """Pinned against codex-cli 0.147.0 the way every other fact in `codex.py` was.
+
+        `codex plugin --help` offers add / list / marketplace / remove, and the snapshot a
+        plugin installs from is refreshed at the MARKETPLACE level — so updating is two
+        commands, the same shape as Claude Code's marketplace-then-plugin pair.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             status, detail = harness.get(harness.CODEX).upgrade(Path(tmp))
-        self.assertEqual(status, "absent")
+        self.assertEqual(status, "manual")
+        self.assertIn("codex plugin marketplace upgrade", detail)
+        self.assertIn("codex plugin add charter@charter", detail)
+
+    def test_it_does_not_name_the_subcommand_codex_rejects(self):
+        """`codex plugin update` is the command everyone reaches for and the one codex
+        does not have: it exits with "unrecognized subcommand 'update'". A rejection is
+        the only kind of evidence this file accepts, and this is the rejection."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _status, detail = harness.get(harness.CODEX).upgrade(Path(tmp))
         self.assertNotIn("codex plugin update", detail)
-        self.assertIn("charter harness list", detail)
 
     def test_the_dead_wiring_table_is_gone(self):
         """`_WIRING` declared hooks charter stopped writing when `_block()` narrowed to
@@ -145,10 +156,10 @@ class VersionSyncRoutesThroughTheHarness(unittest.TestCase):
         out = self._sync({"CHARTER_HARNESS": "claude-code"})
         self.assertIn(update.PLUGIN_SYNC_CMD, out)
 
-    def test_codex_is_told_what_charter_does_not_know(self):
+    def test_codex_gets_its_own_two_step_not_claude_code_s_command(self):
         out = self._sync({"CHARTER_HARNESS": "codex"})
         self.assertNotIn("claude plugin update", out)
-        self.assertIn("has not pinned", out)
+        self.assertIn("codex plugin add charter@charter", out)
 
 
 class DoctorNamesTheRightHarnessToo(PersonaIso):
