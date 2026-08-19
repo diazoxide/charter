@@ -9,3 +9,5 @@ Written by the persona as it learns; committed and shared.
 - [Version bumps can be defeated by stale bytecode: 0.32.0 -> 0.33.0 is the](version-bumps-can-be-defeated-by-stale-bytecode-.md)
 - [tests/test_asset_freshness.py sets MAX_MINOR_LAG = 1, so a capture may l](tests-test-asset-freshness-py-sets-max-minor-lag.md)
 - [The PyPI version endpoint going 200 does NOT mean the install will work:](the-pypi-version-endpoint-going-200-does-not-mea.md)
+- [The simple-index poll is necessary but NOT sufficient: at 0.44.1 curl sa](the-simple-index-poll-is-necessary-but-not-suffi.md)
+- [`claude plugin list` shows each install's SCOPE but never which project](claude-plugin-list-shows-each-install-s-scope-bu.md)
