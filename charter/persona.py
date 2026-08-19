@@ -207,9 +207,9 @@ def bin_scripts(name: str) -> dict:
     """
     out = {}
     # REVERSED: `lineage()` is child-first, so iterating it directly would let the most
-    # distant ancestor overwrite the child — the opposite of the rule. (`mcp_servers` has
-    # this exact bug; filed separately rather than changed here, since flipping a
-    # precedence is a behaviour change that deserves its own PR.)
+    # distant ancestor overwrite the child — the opposite of the rule. `mcp_servers` below
+    # had exactly that bug (#296); this is the shape both now share, and the reason to reach
+    # for `reversed()` in any future union along the chain.
     for anc in reversed(lineage(name)):
         d = bin_dir(anc)
         if not d.is_dir():
@@ -243,7 +243,12 @@ def mcp_servers(name: str) -> dict:
     `sync-agents` for every persona in the plane.
     """
     out = {}
-    for anc in lineage(name):
+    # REVERSED, and that is the whole fix for #296. `lineage()` is child-first, so feeding it
+    # straight into `dict.update` — last write wins — let the most distant ancestor overwrite
+    # the child: the exact inversion of the rule stated above. Nothing surfaced it, because
+    # the child's entry was parsed and applied and then thrown away, so `sync-agents`
+    # succeeded and the generated agent simply carried somebody else's server.
+    for anc in reversed(lineage(name)):
         try:
             doc = json.loads((dir_of(anc) / MCP_FILE).read_text())
             servers = doc.get("mcpServers") or {}
