@@ -37,15 +37,6 @@ NAME = "codex"
 HOOK_ENTRY_KEYS = ("type", "command")
 HOOK_TYPE = "command"
 
-#: The hooks charter wires, mirroring what the Claude Code plugin's own `hooks.json`
-#: declares. `matcher` is carried only where Codex's contract uses one.
-_WIRING = (
-    ("SessionStart", None, "charter hook sessionstart"),
-    ("UserPromptSubmit", None, "charter hook userpromptsubmit"),
-    ("PreToolUse", "Bash", "charter hook pretooluse"),
-)
-
-
 def config_path() -> Path:
     """Codex's config file. There is **no project-level one**: a `.codex/config.toml` or
     `codex.toml` planted in a project directory is ignored, checked by putting a
@@ -133,6 +124,23 @@ class CodexHarness(Harness):
                 "the terminal-pane key. Hooks are unaffected — their payload carries "
                 "`session_id` directly."),
     )
+
+    def upgrade(self, root: Path) -> tuple[str, str]:
+        """Codex's own config block never needs moving; its PLUGIN does.
+
+        `_block()` writes only `shell_environment_policy` — a constant naming the harness,
+        with no version in it — so an upgraded CLI is served by the same block. The hooks
+        come from the charter plugin, installed by `codex plugin`, and the command that
+        moves THAT is a fact nobody has pinned against a real Codex.
+
+        Every fact in this file was pinned against codex-cli 0.147.0 rather than its
+        documentation. A `codex plugin update` written from memory would be the first line
+        here that is a guess, and unlike the rest it would be executed by whoever read it.
+        """
+        return ("absent",
+                "charter has not pinned how a Codex plugin updates — its hooks come from "
+                "the charter@charter plugin, so update it the way you installed it; "
+                "`charter harness list` will say when charter knows")
 
     def detect(self) -> bool:
         """Nothing native to detect, and saying so beats guessing.

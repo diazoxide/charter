@@ -344,6 +344,26 @@ class OpenCodeHarness(Harness):
         """
         return False
 
+    def upgrade(self, root: Path) -> tuple[str, str]:
+        """The one harness charter can move itself — via the writer that already exists.
+
+        `refresh_shim` is `wire`'s writer, and it already encodes the only judgement that
+        matters: the stamp says whether the file is charter's to rewrite. Answering this
+        with a second writer would be two code paths for one question, which is the shape
+        this whole member was added to remove.
+
+        ``not-ours`` becomes ``manual`` rather than ``absent``: charter knows exactly how
+        this moves, it is declining to overwrite an operator's edit (additive-only).
+        """
+        g = global_dir()
+        got = refresh_shim(g)
+        if got == "current":
+            return "current", __version__
+        if got in ("refreshed", "created"):
+            return "moved", f"opencode {SHIM_PATH} → {__version__}"
+        return "manual", (f"{g / SHIM_PATH} carries no charter stamp, so charter will not "
+                          f"overwrite it — move it aside and run `charter reinit`")
+
     def wire(self, root: Path) -> list[tuple[str, str]]:
         """Install once, where opencode reads for every project.
 

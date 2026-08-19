@@ -1874,16 +1874,32 @@ def cmd_version_sync(args) -> int:
         return 0
 
     if not getattr(args, "cli", False):
-        plugin = _update.plugin_version_here()
-        if plugin == locked:
-            util.ok(f"the plugin serving this project is already on the lock ({locked}).")
+        # ASK THE HARNESS. This branch used to read `$CLAUDE_PLUGIN_ROOT` and then print
+        # `claude plugin update charter@charter` unconditionally — so an opencode user,
+        # for whom that variable is always absent, was told to run a command belonging to
+        # a harness they are not in. `Harness.upgrade` makes it one question with one
+        # answer, and charter moves only the artifacts it authored.
+        from . import harness as _harness
+
+        h = _harness.get(_harness.current())
+        if h is None:
+            util.warn("no harness detected, so charter cannot say how this plane's "
+                      "artifact moves — `charter harness list`.")
+            util.info("  the machine-global binary instead: charter version sync --cli")
             return 0
-        where = f"{plugin} → {locked}" if plugin else f"→ {locked}"
-        util.info(f"this plane's version is the plugin's ({where}).")
-        # Named, not run. `claude` may be absent, may prompt for a scope, and the command
-        # mutates the reader's editor install — charter says exactly what to run and lets
-        # them run it, the same restraint the MCP launcher check keeps.
-        util.info(f"  run: {_update.PLUGIN_SYNC_CMD}")
+        status, detail = h.upgrade(config.ROOT)
+        if status == "current":
+            util.ok(f"the {h.name} artifact serving this project is already on {detail}.")
+        elif status == "moved":
+            util.ok(f"moved: {detail}")
+        elif status == "manual":
+            # Named, not run. The host owns the artifact: its command may be absent, may
+            # prompt for a scope, and it mutates the reader's editor install — the same
+            # restraint the MCP launcher check keeps.
+            util.info(f"this plane's version is its {h.name} artifact's (→ {locked}).")
+            util.info(f"  run: {detail}")
+        else:
+            util.warn(detail)
         util.info(f"  the machine-global binary instead: charter version sync --cli")
         return 0
 

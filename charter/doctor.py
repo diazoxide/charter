@@ -1212,10 +1212,20 @@ def check_version_lock() -> Result:
     if locked == __version__:
         return Result("version lock", OK,
                       detail=f"pinned {locked}, CLI in sync (plugin not visible from here)")
+    # "To move THIS plane only" is the harness's answer, not one command for everybody.
+    # Naming the Claude Code plugin here told every opencode and Codex reader — and every
+    # bare terminal, which is what this branch IS — to run a command belonging to a
+    # harness they are not in. Same defect as `cmd_version_sync`'s, same fix.
+    from . import harness as _harness
+
+    h = _harness.get(_harness.current())
+    status, detail = h.upgrade(_config.ROOT) if h else ("absent", "")
+    move = (f". To move THIS plane only: {detail}" if status == "manual"
+            else f". {detail}" if status == "absent" and detail
+            else "")
     return Result("version lock", WARN,
                   detail=f"pinned {locked}, CLI is {__version__}",
-                  hint=f"{update.SHARED_INSTALL_NOTE}. To move THIS plane only: "
-                       f"{update.PLUGIN_SYNC_CMD}")
+                  hint=f"{update.SHARED_INSTALL_NOTE}{move}")
 
 
 def check_memory_indexes() -> Result:
