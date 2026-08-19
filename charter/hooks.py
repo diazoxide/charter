@@ -861,6 +861,83 @@ def _single_credential_reason(cmd: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
+# A4: RELEASE FLOOR — an unattended run may not publish (#299)                 #
+# --------------------------------------------------------------------------- #
+#: Forge CLI subcommand pairs that publish or land code. `gh pr merge` and `gh release
+#: create` are no kind of `git`, so `_GIT_WRITE_RE` never saw them and nothing else did
+#: either — they were unguarded in every mode.
+_PUBLISH_FORGE = {
+    ("gh", "release", "create"), ("gh", "pr", "merge"),
+    ("glab", "release", "create"), ("glab", "mr", "merge"),
+}
+#: `git tag` flags that only READ or act locally. An autonomous run legitimately needs to
+#: know what the tags are, and deleting a local tag publishes nothing.
+_TAG_HARMLESS = {"-l", "--list", "-d", "--delete", "-n", "--contains", "--points-at",
+                 "--merged", "--no-merged", "-v", "--verify"}
+
+
+def _release_floor_reason(cmd: str, data: dict) -> str | None:
+    """Deny a publish when the host says nobody is watching.
+
+    **Why this exists at all.** 0.46.0 taught `_ask` to fall back to `allow` under
+    ``bypassPermissions`` so a workflow nudge cannot hang an unattended run. That is right
+    for a nudge, and it silently removed the only thing standing between an autonomous
+    agent and an irreversible release: `_clone_commit_reason` matches `_GIT_WRITE_RE`,
+    which includes ``tag`` and ``push``, so tagging from a clone used to return `ask` — and
+    a hook `ask` floors the host's decision at a prompt in EVERY permission mode. It
+    stopped things by accident. Now it allows them.
+
+    **Deny, not ask**, deliberately: an unattended ask is now an allow, so an ask here
+    would be indistinguishable from no guard at all. Deny is also the only verdict that
+    cannot hang — the run gets an immediate refusal naming a remedy, exactly as every other
+    floor guard does.
+
+    **Attended is untouched.** A person keeps whatever they had before (nothing at the
+    plane, the clone nudge inside a clone). A guard that made releases harder for the
+    operator is the cage `_plane_root_branch_reason` warns about, and the fix people reach
+    for then is to switch it off permanently.
+
+    Keyed on TAGGING rather than on a ``v*`` shape. Shape-matching is narrower and reads
+    more correct — `release.yml` triggers on ``v*`` — but it is walked past by naming the
+    tag ``release-1``, and tagging attended costs nothing. The asymmetry favours bluntness:
+    a false stop costs one re-run, a false pass costs a version number that can never be
+    reused.
+    """
+    if not _unattended(data):
+        return None
+    fix = ("Publishing is on charter's floor: a run with nobody watching may not cut a "
+           "release. `bypassPermissions` means *stop asking me*, not *stop knowing "
+           "things*. Re-run this step **attended**, or have a person do it. ")
+    for _toks in _segment_argv(cmd):
+        prog, _env, argv = _split_env(_toks)
+        base = prog.rsplit("/", 1)[-1]
+        args = argv[1:]
+        words = [a for a in args if not a.startswith("-")]
+        if base == "git":
+            sub = _git_subcommand(args)
+            if sub == "tag":
+                # `git tag` alone lists; a bare name is a CREATION — the choke point, since
+                # a tag that does not exist locally cannot be pushed.
+                if any(a in _TAG_HARMLESS for a in args):
+                    return None
+                if len(words) > 1:
+                    return fix + "Creating a tag is the first step of a publish."
+            if sub == "push":
+                if any(a in ("--tags", "--follow-tags") for a in args):
+                    return fix + "`--tags`/`--follow-tags` pushes tags."
+                # defence in depth: a tag that already existed locally
+                if any(a.startswith("refs/tags/") for a in args):
+                    return fix + "This pushes a tag ref."
+                if any(re.fullmatch(r"v?\d+\.\d+(?:\.\d+)?[\w.-]*", w)
+                       for w in words[1:]):
+                    return fix + "This pushes what looks like a version tag."
+        elif base in ("gh", "glab") and len(words) >= 2:
+            if (base, words[0], words[1]) in _PUBLISH_FORGE:
+                return fix + f"`{base} {words[0]} {words[1]}` publishes or lands code."
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # B: clone-boundary guard — deny git-write inside a clone from the control plane #
 # --------------------------------------------------------------------------- #
 _GIT_WRITE_RE = re.compile(r"\bgit\b[^|;&]*?\b(?:commit|push|add|am|cherry-pick|tag|rebase|merge)\b")
@@ -1130,6 +1207,14 @@ def pretooluse() -> int:
     if branch:
         _deny("PreToolUse", branch)
         _trace("deny", sid, reason="plane-root-branch", cmd=head)
+        return 0
+    # A4: an unattended run may not publish (#299). Checked BEFORE the clone nudge, which
+    # is where the hole was: that nudge matches `tag`/`push`, and 0.46.0 turned its
+    # unattended `ask` into an `allow` — so a release walked straight through it.
+    pub = _release_floor_reason(cmd, data) if _cfg.HAS_CONTROL_PLANE else None
+    if pub:
+        _deny("PreToolUse", pub)
+        _trace("deny", sid, reason="release-floor", cmd=head)
         return 0
     # B: committing inside a clone → ASK, not deny. A repo-rooted session is usually better
     # (the repo's own hooks/conventions apply), but it's a preference, not a safety rule —
