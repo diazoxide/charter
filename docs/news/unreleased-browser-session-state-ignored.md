@@ -22,5 +22,9 @@ it belongs. The rule charter is
 following, and the narrow trigger that keeps it from managing your `.gitignore` generally,
 is written down in [ADR 0017](../adr/0017-charter-ignores-what-carries-credentials.md).
 
+`charter doctor` now reports the same condition, so a plane that installed the lane before
+this — or lost the line in a merge — is told rather than left to find out when `git add -A`
+takes somebody's live cookies.
+
 Re-run `charter browser install` on any plane that already has the lane — it is idempotent,
 and it will add the line it should have added the first time.

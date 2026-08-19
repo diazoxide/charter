@@ -91,13 +91,9 @@ def _unignored_plaintext(configured: str):
         p.resolve().relative_to(_P(config.ROOT).resolve())
     except (ValueError, OSError):
         return None                                   # outside the plane
-    if util.run(["git", "-C", str(config.ROOT), "rev-parse", "--git-dir"],
-                check=False).returncode != 0:
-        return None                                   # not a repo; nothing to commit to
-    ignored = util.run(["git", "-C", str(config.ROOT), "check-ignore", "-q", str(p)],
-                       check=False).returncode == 0
-    if ignored:
-        return None
+    ignored = util.git_ignores(config.ROOT, p)
+    if ignored is None or ignored:
+        return None                # not a repo (nothing to commit to), or already ignored
     try:
         return str(p.resolve().relative_to(_P(config.ROOT).resolve()))
     except (ValueError, OSError):
