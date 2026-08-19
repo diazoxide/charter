@@ -29,3 +29,4 @@ Written by the persona as it learns; committed and shared.
 - [Guard-denial volume investigation (2026-08-19), two hypotheses KILLED —](guard-denial-volume-investigation-2026-08-19-two.md)
 - [The '.playwright-cli/' directory is @playwright/cli's OUTPUT dir (coreBu](the-playwright-cli-directory-is-playwright-cli-s.md)
 - [Charter's inheritance union has a trap I hit twice on 2026-08-19: person](charter-s-inheritance-union-has-a-trap-i-hit-twi.md)
+- [0.46.0's ask->allow under bypassPermissions has a sharp edge found by as](0-46-0-s-ask-allow-under-bypasspermissions-has-a.md)
