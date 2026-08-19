@@ -11,3 +11,7 @@ Written by the persona as it learns; committed and shared.
 - [The PyPI version endpoint going 200 does NOT mean the install will work:](the-pypi-version-endpoint-going-200-does-not-mea.md)
 - [The simple-index poll is necessary but NOT sufficient: at 0.44.1 curl sa](the-simple-index-poll-is-necessary-but-not-suffi.md)
 - [`claude plugin list` shows each install's SCOPE but never which project](claude-plugin-list-shows-each-install-s-scope-bu.md)
+- [Editing personas/release/persona.md in a workspace clone: regenerate .cl](editing-personas-release-persona-md-in-a-workspa.md)
+- [A release now moves five things, not four: the four version files plus '](a-release-now-moves-five-things-not-four-the-fou.md)
+- [Release mechanics corrections found cutting 0.46.0 (2026-08-19). (1) hoo](release-mechanics-corrections-found-cutting-0-46.md)
+- [CORRECTION to the PyPI-verification memory (observed cutting 0.46.0, 202](correction-to-the-pypi-verification-memory-obser.md)

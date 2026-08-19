@@ -24,3 +24,8 @@ Written by the persona as it learns; committed and shared.
 - [The per-session workspace lock IS reliable — this corrects a memory reco](the-per-session-workspace-lock-is-reliable-this-.md)
 - [Persona resolution as of charter 0.44.0 — SIX rungs, first that names an](persona-resolution-as-of-charter-0-44-0-six-rung.md)
 - [Stacked-PR mechanics, learned the hard way merging 7 chained PRs on 2026](stacked-pr-mechanics-learned-the-hard-way-mergin.md)
+- [Dispatching a subagent into the SAME clone you are committing from costs](dispatching-a-subagent-into-the-same-clone-you-a.md)
+- [The 'is this generic or a special case' test that settled two charter is](the-is-this-generic-or-a-special-case-test-that-.md)
+- [Guard-denial volume investigation (2026-08-19), two hypotheses KILLED —](guard-denial-volume-investigation-2026-08-19-two.md)
+- [The '.playwright-cli/' directory is @playwright/cli's OUTPUT dir (coreBu](the-playwright-cli-directory-is-playwright-cli-s.md)
+- [Charter's inheritance union has a trap I hit twice on 2026-08-19: person](charter-s-inheritance-union-has-a-trap-i-hit-twi.md)
