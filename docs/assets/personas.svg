@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="481" height="179" viewBox="0 0 480.60 178.90" role="img" aria-label="charter persona list">
-<rect x="0.5" y="0.5" width="479.60" height="177.90" rx="9" fill="#0d1117" stroke="#30363d"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="481" height="199" viewBox="0 0 480.60 199.05" role="img" aria-label="charter persona list">
+<rect x="0.5" y="0.5" width="479.60" height="198.05" rx="9" fill="#0d1117" stroke="#30363d"/>
 <path d="M0.5 9.5a9 9 0 0 1 9-9h461.60a9 9 0 0 1 9 9v21.00h-479.60z" fill="#161b22" stroke="#30363d"/>
 <circle cx="18" cy="15.0" r="5" fill="#ff5f57"/>
 <circle cx="34" cy="15.0" r="5" fill="#febc2e"/>
@@ -10,7 +10,7 @@
 <text x="72.60 80.40 88.20 96.00 103.80 111.60 119.40 127.20" y="57.00" fill="#c9d1d9">persona:</text>
 <text x="142.80 150.60 158.40 166.20 174.00 181.80" y="57.00" fill="#c9d1d9">devops</text>
 <text x="205.20 213.00 220.80 228.60" y="57.00" fill="#c9d1d9">(via</text>
-<text x="244.20 252.00 259.80 267.60 275.40 283.20 291.00 298.80 306.60 314.40 322.20 330.00" y="57.00" fill="#c9d1d9">active-file)</text>
+<text x="244.20 252.00 259.80 267.60 275.40 283.20 291.00 298.80 306.60 314.40 322.20 330.00 337.80" y="57.00" fill="#c9d1d9">charter.toml)</text>
 <text x="33.60 41.40 49.20 57.00 64.80 72.60 80.40" y="97.30" fill="#c9d1d9">PERSONA</text>
 <text x="111.60 119.40 127.20 135.00" y="97.30" fill="#c9d1d9">ROLE</text>
 <text x="244.20 252.00 259.80 267.60 275.40" y="97.30" fill="#c9d1d9">VAULT</text>
@@ -37,4 +37,9 @@
 <text x="353.40 361.20 369.00" y="157.75" fill="#c9d1d9">set</text>
 <text x="384.60 392.40" y="157.75" fill="#c9d1d9">up</text>
 <text x="408.00 415.80 423.60 431.40 439.20 447.00 454.80" y="157.75" fill="#c9d1d9">(local)</text>
+<text x="33.60 41.40 49.20 57.00 64.80 72.60 80.40" y="177.90" fill="#c9d1d9">steward</text>
+<text x="111.60 119.40 127.20 135.00 142.80 150.60 158.40" y="177.90" fill="#c9d1d9">Steward</text>
+<text x="244.20" y="177.90" fill="#c9d1d9">—</text>
+<text x="322.20 330.00" y="177.90" fill="#c9d1d9">no</text>
+<text x="345.60 353.40 361.20 369.00 376.80" y="177.90" fill="#c9d1d9">vault</text>
 </g></svg>

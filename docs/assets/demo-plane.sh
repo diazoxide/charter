@@ -105,7 +105,13 @@ done
 charter persona remember devops "prod kubeconfig lives in the devops vault, key KUBECONFIG" >/dev/null
 charter persona remember devops "billing deploys gate on the e2e suite, not the unit suite" >/dev/null
 charter persona remember qa "the flaky checkout test is a DNS timeout in CI, not the code" >/dev/null
-charter persona use devops >/dev/null
+# `persona use` writes a per-SESSION pointer, so it names the active persona only for the
+# shell that ran this script. Every other session — anyone regenerating these assets — falls
+# through to charter.toml, which `charter init` now seeds with the scaffolded `steward`. The
+# capture then showed `steward` active for its author and `devops` for nobody else, silently
+# depending on the operator's session id. Declaring the default is the same fix
+# `[workspace] default` above already applies, one noun over.
+charter persona default devops >/dev/null
 
 # Vaults with something in them. Without this every row reads "not created yet", and the
 # capture shows charter's empty state beside prose about credentials it is holding. The
