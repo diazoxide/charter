@@ -45,6 +45,18 @@ def init_repo(path: Path, branch: str = "main") -> Path:
                    check=True, capture_output=True)
     git(path, "config", "user.email", "t@example.com")
     git(path, "config", "user.name", "t")
+    # Background maintenance races the teardown. `git maintenance run --auto` fires after
+    # ordinary commands, takes `.git/maintenance.lock`, and releases it — while
+    # `shutil.rmtree` is walking that directory, which then dies on a name that existed
+    # when it was listed and not when it was unlinked. Seen on CI as
+    # `FileNotFoundError: 'maintenance.lock'` in a test that only deletes a fixture, on one
+    # Python job while the others passed the same commit.
+    #
+    # Disabled at the source rather than tolerated in each teardown: a fixture repo has
+    # nothing to maintain, and `ignore_errors=True` on the rmtree would hide real breakage
+    # in tests whose whole subject is what is on disk.
+    git(path, "config", "gc.auto", "0")
+    git(path, "config", "maintenance.auto", "false")
     (path / "README.md").write_text("hello\n")
     git(path, "add", "README.md")
     git(path, "-c", "commit.gpgsign=false", "commit", "-qm", "init")
