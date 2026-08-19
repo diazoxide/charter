@@ -47,6 +47,7 @@ packages = ["charter"]
 # tests/test_docs_show.py fails on a `docs/*.md` that is not force-included, because the
 # gap is invisible from a checkout, where the fallback reads the repo and looks fine.
 [tool.hatch.build.targets.wheel.force-include]
+"docs/browser.md" = "charter/_docs/browser.md"
 "docs/control-plane.md" = "charter/_docs/control-plane.md"
 "docs/forges.md" = "charter/_docs/forges.md"
 "docs/git-policy.md" = "charter/_docs/git-policy.md"

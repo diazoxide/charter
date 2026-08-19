@@ -259,3 +259,34 @@ def detach_self(args: list[str]) -> bool:
     except Exception:
         return False
     return True
+
+
+def append_gitignore(root, lines, header: str) -> list[str]:
+    """Append the ignore *lines* a plane's ``.gitignore`` is missing. Returns the ones
+    actually written, so a caller can report what it changed rather than what it asked for
+    (ADR 0013).
+
+    **Append-only, and that is a hard requirement rather than politeness.** The file is not
+    free-form: ``workspace.set_live()`` splices its managed block at the literal anchor line
+    ``!/workspaces/.gitkeep``, so a writer that rewrote or reordered would break live
+    workspaces from across the codebase, with a symptom pointing nowhere near here.
+
+    Whole-line matching, never a substring. ``_ensure_gitignore``'s docstring records what
+    the substring version cost: ``"workspaces/" in body`` matched a pre-existing
+    ``build/workspaces/output/`` and skipped writing the anchor the splice depends on.
+
+    One writer, deliberately. ``charter init`` had the only implementation, inlined, and the
+    second command needing to ignore a path it creates would otherwise have grown a rival —
+    which is how a plane ends up with one rule twice.
+    """
+    from pathlib import Path
+
+    p = Path(root) / ".gitignore"
+    body = p.read_text() if p.exists() else ""
+    present = {ln.strip() for ln in body.splitlines()}
+    missing = [ln for ln in lines if ln not in present]
+    if not missing:
+        return []
+    prefix = (body.rstrip("\n") + "\n\n") if body.strip() else ""
+    p.write_text(prefix + f"# {header}\n" + "".join(f"{ln}\n" for ln in missing))
+    return missing
