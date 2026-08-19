@@ -101,7 +101,8 @@ class Harness:
         """
         return None
 
-    def apply_ask_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+    def apply_ask_rule(self, root: Path, pattern: str,
+                       local: bool = False) -> tuple[str, str]:
         """Write the rule under *root*. ``(status, detail)``.
 
         ``"added"``, ``"present"``, ``"malformed"`` (refused, never repaired), or
@@ -121,7 +122,15 @@ class Harness:
         """
         return self.ask_rule(pattern)
 
-    def apply_allow_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+    def apply_allow_rule(self, root: Path, pattern: str,
+                         local: bool = False) -> tuple[str, str]:
         """Write the allow rule under *root*. ``(status, detail)``, as
-        :meth:`apply_ask_rule`."""
+        :meth:`apply_ask_rule`.
+
+        ``local=True`` asks for the harness's MACHINE-LOCAL file — a rule that is one
+        person's, on one machine. A harness with no such file must return ``unsupported``
+        and say why rather than falling back to a shared one: an `allow` rule widens what
+        runs unprompted, so a silent fallback would publish a personal trust decision to
+        everybody, which is the failure the flag exists to prevent.
+        """
         return "unsupported", f"{self.name} has no command-pattern permissions"
