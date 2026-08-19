@@ -1091,15 +1091,15 @@ def cmd_persona_stats(args) -> int:
     advice = dispatch.advice_tally()
     if advice:
         since = dispatch.first_advice()
-        followed = dispatch.dispatches_since_first_advice()
+        followed = dispatch.handoffs_since_first_advice()
         # SINCE the first advice, never the lifetime total: a dispatch older than the
         # roster cannot have followed it, and pairing the two made this line claim five
         # dispatches followed one piece of advice — three of them four days its senior.
         # "since" rather than "because", because a window is all the data supports.
-        util.info(f"Routing advice: fired {advice} time(s) · {followed} dispatch(es) since "
-                  f"the first one ({since:%Y-%m-%d}). Advice that fires and is never "
-                  f"followed is the block failing, not the roster — read it that way "
-                  f"before adding more personas.")
+        util.info(f"Routing advice: fired {advice} time(s) · work handed to a persona "
+                  f"{followed} time(s) since the first one ({since:%Y-%m-%d}). Advice that "
+                  f"fires and is never followed is the block failing, not the roster — "
+                  f"read it that way before adding more personas.")
     if drifted:
         util.info("SKILLS drift is named, not resolved: an unused declaration may be dead "
                   "weight or a skill whose moment has not come, and an undeclared one may "

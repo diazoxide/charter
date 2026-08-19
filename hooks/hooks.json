@@ -112,6 +112,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "charter hook posttooluse-message --plugin-version 0.44.1",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Stop": [

@@ -110,6 +110,9 @@ class TestPluginManifest(unittest.TestCase):
             # charter declares and the host preloads on every dispatch.
             ("PostToolUse", "charter hook posttooluse-skill --plugin-version"),
             ("PostToolUse", "charter hook posttooluse-dispatch --plugin-version"),
+            # Resumes: more work handed to a persona already running. Its own matcher
+            # because `Task|Agent` fires when a sub-agent is CREATED and never again.
+            ("PostToolUse", "charter hook posttooluse-message --plugin-version"),
             ("Stop", "charter workspace _autosave"),             # debounced auto-save
             ("SubagentStop", "charter workspace _autosave"),     # ditto, per dispatch
         ]

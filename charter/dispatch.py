@@ -120,13 +120,55 @@ def advice_tally(days: int | None = None) -> int:
     return len(rows)
 
 
+#: Marks a row where work was handed to a persona that was ALREADY running — a resume,
+#: not a new sub-agent. Its own kind because `DISP` answers "times dispatched as a
+#: sub-agent", and folding resumes into that inflates the answer to a question nobody
+#: asked, in the column people retire personas on.
+RESUME = "resume"
+
+
+def record_resume(agent: str, when: datetime | None = None) -> Path | None:
+    """Append one 'more work handed to a running persona' event. Best-effort.
+
+    `posttooluse_dispatch` fires on Task/Agent, so it sees a sub-agent being CREATED and
+    nothing after. Continuing that agent is delegation the tally could not see: on the day
+    the roster block shipped, one persona cut two releases and ran a sweep, and the sweep —
+    a resume — was invisible to the pair of numbers that exist to measure exactly that.
+    """
+    agent = (agent or "").strip()
+    if not agent:
+        return None
+    when = when or _now()
+    p = path_for(when)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({"agent": agent, "event": RESUME,
+                           "ts": when.isoformat(timespec="seconds")}, sort_keys=True) + "\n"
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, line.encode())
+        finally:
+            os.close(fd)
+        return p
+    except OSError:
+        return None
+
+
+def resume_tally(days: int | None = None) -> int:
+    rows = [o for o in _read_all() if o.get("event") == RESUME]
+    if days is not None:
+        cutoff = _now() - timedelta(days=days)
+        rows = [o for o in rows if (t := _ts(o)) and t >= cutoff]
+    return len(rows)
+
+
 def first_advice() -> datetime | None:
     """When routing advice was FIRST shown here, or ``None`` if it never has."""
     stamps = [t for o in _read_all() if o.get("event") == ADVICE and (t := _ts(o))]
     return min(stamps) if stamps else None
 
 
-def dispatches_since_first_advice() -> int:
+def handoffs_since_first_advice() -> int:
     """Dispatches recorded at or after the first advice — the only count that can honestly
     sit beside :func:`advice_tally`.
 
@@ -140,10 +182,16 @@ def dispatches_since_first_advice() -> int:
 
     Still not proof of causation, and the report says "since" rather than "because" for
     that reason. It is a window in which the claim is at least possible.
+
+    Boundary, stated rather than hidden: rows are stamped to the second, so a handoff in
+    the SAME second as the first advice counts as after it. It can only over-count, by at
+    most the handoffs sharing one second with the moment advice first appeared.
     """
     since = first_advice()
     if since is None:
         return 0
+    # Dispatches AND resumes: the pair measures whether the roster moved work to a persona,
+    # and it does not care whether that persona was already running.
     return sum(1 for o in _read_all()
                if o.get("agent") and (t := _ts(o)) and t >= since)
 
@@ -184,11 +232,15 @@ def tally(days: int | None = None) -> Counter:
     if days is not None:
         cutoff = _now() - timedelta(days=days)
         rows = [o for o in rows if (t := _ts(o)) and t >= cutoff]
-    return Counter(o["agent"] for o in rows if o.get("agent"))
+    # A resume row carries an agent too, and must NOT land here: this column is read as
+    # "times dispatched as a sub-agent", and it is what personas get retired on.
+    return Counter(o["agent"] for o in rows if o.get("agent") and not o.get("event"))
 
 
 def last_seen(agent: str) -> str | None:
-    """ISO date of the most recent dispatch of *agent*, or None if never dispatched."""
+    """ISO date this persona was last WORKED, or None. Counts resumes as well as
+    dispatches — it feeds the roster block's "last dispatched" line, and a persona that was
+    handed work an hour ago has not been idle since whenever it was first created."""
     best = None
     for o in _read_all():
         if o.get("agent") != agent:
