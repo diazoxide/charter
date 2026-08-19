@@ -856,7 +856,24 @@ def _load_settings(root: Path) -> tuple[dict | None, Path]:
     return (doc if isinstance(doc, dict) else None), p
 
 
-def add_permission_rule(root: Path, rule: str, bucket: str) -> tuple[str, str]:
+def _load_json_settings(path: Path):
+    """`(doc, path)` for a settings file, or `(None, path)` when it is not usable.
+
+    `_load_settings` answers this for the plane's committed file specifically. This is the
+    same restraint for any path: a missing file is an empty document, an unparseable one is
+    somebody's to fix and charter reports it rather than overwriting it.
+    """
+    if not path.exists():
+        return {}, path
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, path
+    return (doc, path) if isinstance(doc, dict) else (None, path)
+
+
+def add_permission_rule(root: Path, rule: str, bucket: str,
+                        local: bool = False) -> tuple[str, str]:
     """Append *rule* to ``permissions.<bucket>`` in the plane's `.claude/settings.json`.
 
     Extracted from `cmd_guard_ask` when a second harness needed the same command: the
@@ -868,8 +885,14 @@ def add_permission_rule(root: Path, rule: str, bucket: str) -> tuple[str, str]:
     Parameterised over the bucket when `guard allow` arrived: `ask` and `allow` are the
     same job with opposite verbs, and two copies of this function would eventually
     disagree about what "malformed" means — in a file charter only half-owns.
+
+    `local=True` targets `.claude/settings.local.json` instead — gitignored by `charter
+    init`, so the rule is one person's, on one machine. Same reasoning one level down: the
+    two files differ only in blast radius, so they must not differ in how carefully they
+    are parsed or how firmly a malformed one is refused.
     """
-    settings, path = _load_settings(root)
+    settings, path = (_load_json_settings(Path(root) / LOCAL_SETTINGS) if local
+                      else _load_settings(root))
     if settings is None:
         return "malformed", str(path)
     perms = settings.setdefault("permissions", {})
@@ -886,14 +909,20 @@ def add_permission_rule(root: Path, rule: str, bucket: str) -> tuple[str, str]:
     return "added", str(path)
 
 
-def add_ask_rule(root: Path, rule: str) -> tuple[str, str]:
+#: The plane's MACHINE-LOCAL settings — gitignored by `charter init`, so a rule written here
+#: is one person's decision on one machine. `.claude/settings.json`, its committed sibling,
+#: carries the same key names and a completely different blast radius.
+LOCAL_SETTINGS = Path(".claude") / "settings.local.json"
+
+
+def add_ask_rule(root: Path, rule: str, local: bool = False) -> tuple[str, str]:
     """`permissions.ask` — force a prompt for *rule*."""
-    return add_permission_rule(root, rule, "ask")
+    return add_permission_rule(root, rule, "ask", local=local)
 
 
-def add_allow_rule(root: Path, rule: str) -> tuple[str, str]:
+def add_allow_rule(root: Path, rule: str, local: bool = False) -> tuple[str, str]:
     """`permissions.allow` — stop prompting for *rule*."""
-    return add_permission_rule(root, rule, "allow")
+    return add_permission_rule(root, rule, "allow", local=local)
 
 
 def cmd_guard_allow(args) -> int:
@@ -910,6 +939,7 @@ def cmd_guard_allow(args) -> int:
     when charter denies only three narrow things (#291).
     """
     pattern = (getattr(args, "pattern", "") or "").strip()
+    local = bool(getattr(args, "local", False))
     if not pattern:
         util.err("Nothing to add. Example: charter guard allow 'git status *'")
         return 2
@@ -918,7 +948,7 @@ def cmd_guard_allow(args) -> int:
     root = Path(config.ROOT)
     rc, wrote = 0, False
     for h in registry.all():
-        status, detail = h.apply_allow_rule(root, pattern)
+        status, detail = h.apply_allow_rule(root, pattern, local=local)
         if status == "added":
             util.ok(f"{h.name}: allowing {h.allow_rule(pattern)} → {detail}")
             wrote = True
@@ -934,8 +964,15 @@ def cmd_guard_allow(args) -> int:
     if not wrote and rc == 0:
         util.warn("  No harness took the rule.")
     if wrote:
-        util.info("  These files are committed, so the rule applies to everyone on this "
-                  "repo — no sync step, and nothing that can drift (ADR 0014).")
+        if local:
+            util.info("  Machine-local (gitignored) — this rule is yours, on this machine.")
+        else:
+            # Deliberately not the reassuring ADR 0014 line `guard ask` prints. An ASK rule
+            # narrows what happens without a human, so sharing it is conservative. An ALLOW
+            # rule widens it, and sharing extends one person's trust decision to everyone
+            # who clones the repo, on machines and under identities they did not choose.
+            util.warn("  COMMITTED — this stops the prompt for everyone on this repo, not "
+                      "just you. Use `--local` for a rule that is yours alone.")
         util.info("  charter's own guards are unaffected: an allow rule relaxes the HOST's "
                   "prompt, never the secret, credential or plane-root denials.")
     return rc
@@ -957,6 +994,7 @@ def cmd_guard_ask(args) -> int:
     is the editor rather than the author.
     """
     pattern = (getattr(args, "pattern", "") or "").strip()
+    local = bool(getattr(args, "local", False))
     if not pattern:
         util.err("Nothing to add. Example: charter guard ask 'terraform apply *'")
         return 2
@@ -965,7 +1003,7 @@ def cmd_guard_ask(args) -> int:
     root = Path(config.ROOT)
     rc, wrote = 0, False
     for h in registry.all():
-        status, detail = h.apply_ask_rule(root, pattern)
+        status, detail = h.apply_ask_rule(root, pattern, local=local)
         if status == "added":
             util.ok(f"{h.name}: asking for {h.ask_rule(pattern)} → {detail}")
             wrote = True
@@ -984,8 +1022,11 @@ def cmd_guard_ask(args) -> int:
     if not wrote and rc == 0:
         util.warn("  No harness took the rule.")
     if wrote:
-        util.info("  These files are committed, so the rule applies to everyone on this "
-                  "repo — no sync step, and nothing that can drift (ADR 0014).")
+        if local:
+            util.info("  Machine-local (gitignored) — this rule is yours, on this machine.")
+        else:
+            util.info("  These files are committed, so the rule applies to everyone on this "
+                      "repo — no sync step, and nothing that can drift (ADR 0014).")
         _warn_if_shadowing(registry.get(registry.CLAUDE_CODE).ask_rule(pattern))
     return rc
 

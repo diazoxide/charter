@@ -263,6 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     ga = gsub.add_parser("ask", help="Always prompt before this command runs.")
     ga.add_argument("pattern", help="e.g. 'terraform apply *' — wrapped as Bash(...) "
                                     "unless it already names a tool.")
+    ga.add_argument("--local", action="store_true", help="Write this machine's own file (`.claude/settings.local.json`, gitignored) instead of the plane's committed settings — the rule is yours alone.")
     ga.set_defaults(func=commands.cmd_guard_ask)
     gl = gsub.add_parser("list", help="Show this plane's force-prompt rules.")
     gl.set_defaults(func=commands.cmd_guard_list)
@@ -274,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
                               "(writes the host's own allow rule).")
     gw.add_argument("pattern", nargs="?", default="",
                     help="e.g. 'git status *'. Bare patterns are wrapped as Bash rules.")
+    gw.add_argument("--local", action="store_true", help="Write this machine's own file (`.claude/settings.local.json`, gitignored) instead of the plane's committed settings — the rule is yours alone.")
     gw.set_defaults(func=commands.cmd_guard_allow)
 
     vsy = vsub.add_parser("sync",

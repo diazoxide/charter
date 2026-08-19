@@ -402,10 +402,25 @@ class OpenCodeHarness(Harness):
                     return oc_id, p[len(prefix):-1]
         return "bash", p
 
-    def apply_ask_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+    #: Declined deliberately, not unimplemented. opencode's only uncommitted config is
+    #: `global_dir()` (`~/.config/opencode`), which applies to EVERY project on the machine.
+    #: Trading a team-wide rule for an all-my-projects-wide one is not narrower, and an
+    #: `allow` written there would silently widen every other repo this person opens. Saying
+    #: so is the same restraint `apply_ask_rule` keeps for a harness with no patterns at all.
+    _NO_LOCAL = ("opencode has no project-local uncommitted config — its only uncommitted "
+                 "config is ~/.config/opencode, which applies to every project on this "
+                 "machine, so charter will not narrow a team rule into a broader one")
+
+    def apply_ask_rule(self, root: Path, pattern: str,
+                       local: bool = False) -> tuple[str, str]:
+        if local:
+            return "unsupported", self._NO_LOCAL
         return self._apply_rule(root, pattern, "ask")
 
-    def apply_allow_rule(self, root: Path, pattern: str) -> tuple[str, str]:
+    def apply_allow_rule(self, root: Path, pattern: str,
+                         local: bool = False) -> tuple[str, str]:
+        if local:
+            return "unsupported", self._NO_LOCAL
         return self._apply_rule(root, pattern, "allow")
 
     def _apply_rule(self, root: Path, pattern: str, decision: str) -> tuple[str, str]:
