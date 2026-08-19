@@ -56,6 +56,21 @@ def _vault_argv(uri: str) -> tuple[list[str], str]:
 #: scheme → (argv builder, CLI name). Argv, never a shell string.
 _RESOLVERS = {"op": _op_argv, "vault": _vault_argv}
 
+#: How long one reference may take to resolve before charter stops waiting on it.
+#:
+#: `util.run`'s docstring records the failure this bounds, by example: "every un-timeouted
+#: path could hang indefinitely: a 1Password session needing re-auth stalled the SessionStart
+#: preflight". This call is that exact CLI, and it had no bound at all.
+#:
+#: The hang costs more here than there, because of where a resolve happens. A reference is
+#: read inside `charter secret exec`, which an agent runs unattended — so a CLI waiting on a
+#: prompt nobody will see does not fail, it stops, silently, for as long as the session lasts.
+#:
+#: Sixty seconds: long enough for a real re-authentication (a biometric prompt someone has
+#: to walk back to their desk for is already lost, whatever the number), short enough that
+#: the failure arrives while the operator still remembers running the command.
+RESOLVE_TIMEOUT = 60.0
+
 
 def scheme_of(value: str) -> str | None:
     """The reference scheme of *value*, or None if it isn't a supported reference."""
@@ -141,7 +156,22 @@ class ReferenceProvider(VaultProvider):
         if not shutil.which(cli):
             raise VaultError(f"'{key}' needs the '{cli}' CLI to resolve {uri} — it is not "
                              f"on PATH. Install it and authenticate, then retry.")
-        proc = self.runner(argv, check=False, env=self.env_overlay())
+        try:
+            proc = self.runner(argv, check=False, env=self.env_overlay(),
+                               timeout=RESOLVE_TIMEOUT)
+        except util.ProcTimeout:
+            # ADR 0009 — a cause charter recognised, not one it inferred. A bare "timed
+            # out" sends the reader to look at the network, which is almost never it: the
+            # CLI is far more likely to be sitting on an authentication prompt that has
+            # nowhere to render. Same withholding rule as the exit-status path below —
+            # nothing the resolver produced goes into the message.
+            raise VaultError(
+                f"resolving '{key}' via {cli} did not finish within "
+                f"{RESOLVE_TIMEOUT:g}s and was stopped{self.identity_note()}.\n"
+                f"  Almost always this is {cli} waiting on an authentication prompt that "
+                f"an unattended run has nowhere to display — re-authenticate in a terminal "
+                f"({cli} sign-in), then retry.\n"
+                f"  (Resolver output withheld — it can contain the secret.)")
         if proc.returncode != 0:
             raise VaultError(
                 f"resolving '{key}' via {cli} failed (exit {proc.returncode}) for {uri}"
