@@ -297,6 +297,12 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
   a Claude Code `permissions.ask` rule into the plane's committed settings. charter keeps no
   list of its own — one record, nothing to sync.
   → [ADR 0014](docs/adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md)
+- **A live browser session sitting untracked in your tree.** `charter browser install`
+  gitignores `.playwright-cli/` and says that it did — a session directory is cookies, and
+  cookies are the credential in another form. The generated Playwright reference beside it
+  carries no credential, so charter names the cost of committing it either way and leaves
+  the choice to the plane.
+  → [ADR 0017](docs/adr/0017-charter-ignores-what-carries-credentials.md)
 - **A tool that silently stopped existing.** After a rename removed the shim they launched
   through, MCP servers failed with ENOENT and their tools simply vanished from the session.
   `charter doctor` now names any registered launcher whose path does not exist, and the

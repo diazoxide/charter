@@ -250,6 +250,21 @@ def cmd_browser_install(args) -> int:
         return 1
     util.info("It is Playwright's, not charter's — regenerate it with this command "
               "rather than editing it.")
+
+    # The paths this command leaves behind are different in kind, and #278 was filed because
+    # saying nothing about any of them left every plane to re-derive the lot, in silence.
+    # `.playwright-cli/` is where traces land, and a trace records network requests with
+    # their headers and bodies — so a trace of a bridged login holds the credential the
+    # bridge exists to protect. That one charter ignores (ADR 0017). The generated pages and
+    # `.playwright/cli.config.json` carry no credential, so whether they are committed is a
+    # real trade-off the plane owns; charter owes it the costs, not a decision taken while
+    # nobody was looking.
+    for line in _browser.ensure_output_ignored(config.ROOT):
+        util.ok(f"Ignored {line} — traces and snapshots of authenticated runs, not source.")
+    util.info(f"{_browser.SKILL_DIR} and {_browser.CONFIG_DIR}/ are left tracked-or-not as "
+              f"you choose: commit the pages and a fresh clone needs no npx round trip, at "
+              f"the cost of a tree a later `install` rewrites under you. Both answers are "
+              f"fine — docs/browser.md states them; charter does not pick for you.")
     return 0
 
 
@@ -651,12 +666,20 @@ def _ensure_gitignore(root: Path) -> bool:
     existing_lines = {line.strip() for line in body.splitlines()}
     missing = []
     if "!/workspaces/.gitkeep" not in existing_lines:
-        missing.append("/workspaces/*/*\n!/workspaces/.gitkeep\n")
+        missing += ["/workspaces/*/*", "!/workspaces/.gitkeep"]
     if ".charter/" not in body:
-        missing.append("/.charter/\n")
+        missing.append("/.charter/")
     if not missing:
         return False
-    p.write_text(body.rstrip("\n") + "\n\n# added by `charter init`\n" + "\n".join(missing))
+    # The write itself goes through the one shared appender — `charter browser install`
+    # needs the same append-only, idempotent, whole-line behaviour, and a second
+    # implementation of it is how a plane ends up with one rule twice. The DETECTION above
+    # stays here on purpose: the `.charter/` substring test and the `!/workspaces/.gitkeep`
+    # whole-line test each record a specific bug, and neither generalises. Passing only the
+    # lines this already decided are missing makes the two equivalent — a line the
+    # substring test finds is never handed over, and one it does not find is absent as a
+    # whole line too.
+    util.append_gitignore(root, missing, "added by `charter init`")
     return True
 
 

@@ -17,6 +17,11 @@ Two halves, owned by different projects:
   Charter ships none of those pages: they are Apache-2.0 and they change far more often
   than charter releases. Regenerate with that command rather than editing them.
 
+  That command also gitignores `.playwright-cli/` — where traces and snapshots land, and a
+  trace holds the network traffic of whatever it recorded, logins included — and states,
+  without deciding, whether the generated reference and `.playwright/cli.config.json` should
+  be committed. All three postures are in `docs/browser.md`.
+
 - **Where credentials come from, and how parallel workers stay isolated** — this skill.
 
 ## One session per worker
@@ -118,4 +123,7 @@ To avoid re-authenticating on every run, save the logged-in state once and reloa
   keep the value out of the conversation; reading it back defeats both.
 - Never type a credential in directly, even "just once to test". Use the bridge.
 - Never commit a session directory or a storage-state file — they carry live cookies, which
-  are the credential in another form.
+  are the credential in another form. The same goes for traces: a trace records requests
+  with their headers and bodies, so tracing a bridged login writes the credential to disk
+  even though it never reached your transcript. `charter browser install` gitignores
+  `.playwright-cli/` for exactly this.

@@ -33,6 +33,23 @@ PINNED = "0.1.18"
 #: the vendor's choice as much as ours — named so the caller can be told what to expect.
 SKILL_DIR = Path(".claude") / "skills" / "playwright-cli"
 
+#: The CLI's OUTPUT directory — `cliOutputDir` in the vendor's own source, with traces under
+#: `.playwright-cli/trace` and snapshots, screenshots and PDFs beside them. Created when
+#: something is written there, not by `install`, which is why an operator meets it as a
+#: surprise `??` entry with nothing on screen to connect it to the command that caused it.
+#:
+#: Not the session store, despite the name: a session lives in
+#: `~/Library/Caches/ms-playwright/daemon/<hash>/<name>.session`, outside any repo, as the
+#: `browser` skill already says. #278 reported this directory as "per-machine session state";
+#: it is artifacts, and that turns out to matter MORE rather than less — see `ensure_output_ignored`.
+OUTPUT_DIR = Path(".playwright-cli")
+
+#: The workspace directory `install` itself creates (`initWorkspace`), for
+#: `.playwright/cli.config.json`. Project configuration, not credentials and not generated
+#: output — so ADR 0017 puts it on the "state it, do not decide it" side of the line, and
+#: charter says nothing about whether you commit it beyond naming it in `docs/browser.md`.
+CONFIG_DIR = Path(".playwright")
+
 
 #: How long the generator may take before charter stops waiting on it.
 #:
@@ -83,3 +100,29 @@ def install(root: Path, version: str) -> tuple[int, str]:
                    f"waiting; try the command by hand:\n"
                    f"  {' '.join(install_argv(version))}")
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+def ensure_output_ignored(root: Path) -> list[str]:
+    """Ignore the CLI's output directory in *root*'s `.gitignore`. Returns what was added.
+
+    The reason is traces, and it is sharper than the "live session" #278 described. A
+    Playwright trace records the **network**: requests with their headers and bodies, plus
+    DOM snapshots of the pages that produced them. So a trace taken during a `charter secret
+    exec` login captures the login POST — the exact thing the credential bridge exists to
+    keep out of reach. Charter redacts the value from its own output and Playwright
+    substitutes it into the page without printing it; a trace then writes the authenticated
+    traffic to disk beside your source, where `git add -A` is waiting.
+
+    That is charter's rule already, not a new opinion: `commands_secrets` refuses a vault
+    file git would take, and the `browser` skill's hard rules forbid committing session or
+    storage-state files "because they carry live cookies, which are the credential in
+    another form". A trace carries more.
+
+    Deliberately silent about `SKILL_DIR` and `CONFIG_DIR`. Generated pages and a project
+    config file carry no credential, so whether a plane commits them is a real trade-off with
+    two defensible answers — and charter's job there is to state them, not settle them by
+    writing a line while nobody is looking (ADR 0017).
+    """
+    from . import util
+    return util.append_gitignore(root, [f"{OUTPUT_DIR}/"],
+                                 "added by `charter browser install`")

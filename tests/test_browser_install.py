@@ -122,3 +122,91 @@ class TestTheGeneratorCannotHangOrPromptInvisibly(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("did not finish", out)
         self.assertIn("npx", out)
+
+
+class TestTheOutputDirectoryIsIgnored(unittest.TestCase):
+    """`.playwright-cli/` is the CLI's OUTPUT directory — `cliOutputDir` in the vendor's
+    source, holding traces under `trace/` plus snapshots and screenshots. #278 called it
+    "per-machine session state"; it is not (a session lives under
+    `~/Library/Caches/ms-playwright/daemon/`), and the truth is worse. A trace records
+    network requests with their headers and bodies, so a trace taken during a
+    `charter secret exec` login holds the login POST — the one thing the credential bridge
+    exists to keep out of reach.
+
+    So the ignore line is charter enforcing a rule it had already written down, not a new
+    opinion: `commands_secrets` already refuses a vault file git would take.
+
+    The generated skill and `.playwright/` are deliberately NOT covered. Neither carries a
+    credential, so committing them is a plane's call, and charter states the trade-off
+    instead of quietly deciding it (ADR 0017).
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+        self.root = Path(tempfile.mkdtemp(prefix="charter-browser-"))
+
+    def test_the_output_dir_is_the_vendors_cli_output_dir(self):
+        """Pinned against the vendor's `cliOutputDir`, not against the name in the report
+        that prompted this — the two disagreed, and the source won."""
+        self.assertEqual(browser.OUTPUT_DIR, Path(".playwright-cli"))
+
+    def test_the_config_dir_is_known_but_not_ignored(self):
+        """`install` creates it (`initWorkspace`, for cli.config.json). Charter names it so
+        the operator is not surprised, and ignores nothing about it."""
+        self.assertEqual(browser.CONFIG_DIR, Path(".playwright"))
+
+    def test_it_ignores_the_output_directory(self):
+        added = browser.ensure_output_ignored(self.root)
+        body = (self.root / ".gitignore").read_text()
+        self.assertIn(".playwright-cli/", body.splitlines())
+        self.assertEqual(added, [".playwright-cli/"])
+
+    def test_it_ignores_neither_the_generated_skill_nor_the_config_dir(self):
+        """The opinionated half, pinned so a later "while we're here" cannot quietly
+        take either decision away from the plane."""
+        browser.ensure_output_ignored(self.root)
+        body = (self.root / ".gitignore").read_text()
+        self.assertNotIn("playwright-cli/", body.replace(".playwright-cli/", ""))
+        self.assertNotIn(str(browser.SKILL_DIR), body)
+        self.assertNotIn(f"{browser.CONFIG_DIR}/", body)
+
+    def test_running_it_twice_changes_nothing(self):
+        browser.ensure_output_ignored(self.root)
+        self.assertEqual(browser.ensure_output_ignored(self.root), [])
+
+
+class TestTheInstallStatesBothPostures(unittest.TestCase):
+    """The whole complaint in #278 is that the command said nothing about either path, so
+    every plane re-decided both in silence. Silence is the regression to guard against."""
+
+    def _run_install(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest import mock
+        import tempfile
+        from charter import commands, config
+
+        root = Path(tempfile.mkdtemp(prefix="charter-install-"))
+        (root / browser.SKILL_DIR).mkdir(parents=True)
+        (root / browser.SKILL_DIR / "page.md").write_text("x")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(config, "ROOT", root), \
+             mock.patch.object(config, "HAS_CONTROL_PLANE", True), \
+             mock.patch.object(browser, "npx_available", lambda: True), \
+             mock.patch.object(browser, "install", lambda r, v: (0, "")), \
+             redirect_stdout(out), redirect_stderr(err):
+            code = commands.cmd_browser_install(mock.Mock(version=None))
+        return code, out.getvalue() + err.getvalue(), root
+
+    def test_it_reports_the_ignore_line_it_wrote(self):
+        code, said, root = self._run_install()
+        self.assertEqual(code, 0)
+        self.assertIn(".playwright-cli/", said)
+        self.assertIn(".playwright-cli/", (root / ".gitignore").read_text().splitlines())
+
+    def test_it_states_the_undecided_paths_are_the_planes_call(self):
+        """Not "commit it" and not "do not" — the costs, and whose decision it is."""
+        _, said, _ = self._run_install()
+        self.assertIn(str(browser.SKILL_DIR), said)
+        self.assertIn(str(browser.CONFIG_DIR), said)
+        self.assertIn("docs/browser.md", said)
