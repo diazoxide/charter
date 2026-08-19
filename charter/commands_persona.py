@@ -185,6 +185,13 @@ def cmd_persona_show(args) -> int:
     tools = persona.tools_of(args.name)
     if tools:
         print(f"tools:   {', '.join(sorted(tools))}  (auto-approved when this persona is active)")
+    scripts = persona.bin_scripts(args.name)
+    if scripts:
+        # Disclosure, not a warning. A LIVE persona is committed and synced, so these reach
+        # a teammate's disk and run with their credentials — worth stating plainly wherever
+        # somebody inspects the persona (ADR 0017's "state it" half).
+        print(f"scripts: {', '.join(sorted(scripts))}  "
+              f"(executables this persona carries — run by path)")
     print(f"file:    {persona.path(args.name).relative_to(config.ROOT)}")
     _print_memory_summary(args.name)
     print()
@@ -540,6 +547,15 @@ _CHARTER_OWN_KEYS = (
 )
 
 
+def _rel(path) -> str:
+    """Plane-relative when it can be, absolute when it cannot — a path outside the plane is
+    still better than a name the reader has to resolve."""
+    try:
+        return str(path.relative_to(config.ROOT))
+    except ValueError:
+        return str(path)
+
+
 def _render_agent(name: str, meta: dict, charter: str) -> str:
     role = meta.get("role") or name.title()
     desc = meta.get("agent-description") or meta.get("description") or _agent_description(name, meta)
@@ -618,6 +634,23 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
             f"`personas/{name}/memory/` and is reached with `charter recall`. **Search "
             f"charter's first**; write there for anything a teammate would want, and keep "
             f"the generic store to what isn't already in it."
+        )
+
+    # A script the dispatched agent never learns about is the same as no script at all.
+    # PATH would have made these discoverable by habit — but a PreToolUse hook decides
+    # whether a Bash call runs, not what environment it runs in, so the brief has to name
+    # them outright (#283). Paths, not just names: without one the agent has to guess, and
+    # a bare name resolves through PATH, which the tool guard deliberately refuses.
+    scripts = persona.bin_scripts(name)
+    bin_note = ""
+    if scripts:
+        listed = "\n".join(
+            f"  - `{_rel(path)}`" for _n, path in sorted(scripts.items()))
+        bin_note = (
+            f"\n- **You carry your own executables.** Run them by path, not by name:\n"
+            f"{listed}\n"
+            f"  A bare name is refused by the tool guard — it resolves through PATH, which "
+            f"charter cannot vouch for."
         )
 
     uses = [u.strip() for u in (meta.get("uses") or "").split(",") if u.strip() and u.strip() != name]
@@ -718,7 +751,7 @@ isolated context. Adopt the charter below as your role.
 {charter}
 
 ## As a persona sub-agent
-- {_credential_rule()}{creds}{uses_note}{memory_note}{handoff}
+- {_credential_rule()}{creds}{bin_note}{uses_note}{memory_note}{handoff}
 - Follow the control plane's conventions (see CLAUDE.md); report results concisely to the caller.
 {mem}
 """

@@ -12,8 +12,42 @@ A persona lives in a **committed** directory, `personas/<name>/`:
 personas/devops/
 ├── persona.md     # frontmatter (role, vault, tools, …) + the charter itself (prose)
 ├── memory/        # persistent, committed knowledge — MEMORY.md index + one file per fact
-└── refs/          # curated docs/links/snippets for the role, also committed
+├── refs/          # curated docs/links/snippets for the role, also committed
+└── bin/           # optional: executables this persona carries (see below)
 ```
+
+### `bin/` — executables the persona carries
+
+A persona that needs its own scripts puts them in `personas/<name>/bin/` and makes them
+executable. They are committed like everything else, and they are **inherited down the
+`extends:` chain** (child wins on a name collision), exactly as `mcp.json` servers are.
+
+```bash
+charter persona show devops      # lists them under `scripts:`
+```
+
+They are **not** put on `PATH`, and cannot be: a `PreToolUse` hook decides *whether* a Bash
+call runs, not what environment it runs in, and wrapping every Bash call to inject one would
+be charter taking over a mechanism the host owns ([ADR 0014](adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md)).
+Call them by path. Charter names each script's path in the persona's generated sub-agent, so
+a dispatched agent knows what it is carrying without being told twice.
+
+Declare the ones the persona should run without a prompt, the same as any other tool:
+
+```
+tools: site-health.sh, gh
+```
+
+**Provenance is checked for these, unlike system binaries.** The tool guard matches a command
+by basename, which is right for `gh` — the plane does not own it. For a script the persona
+*does* own, the same rule would auto-approve any file of that name, including one an agent
+had just written elsewhere. So a declared name that matches a script in the persona's `bin/`
+is approved only when the command reaches **that file**; a bare name (which resolves through
+`PATH`) and any other copy both fall back to a prompt.
+
+`bin/` travels with the persona, so on a LIVE persona it reaches teammates' machines and runs
+with their credentials. That is disclosed wherever the persona is inspected rather than
+gated: anyone who can commit `bin/` can commit an `mcp.json` pointing at the same file.
 
 Definitions, memory, and refs are all **committed and shared** with the team — every
 engineer (and every agent) sees the same devops persona and everything it has learned.

@@ -172,6 +172,65 @@ def _csv_list(v) -> list[str]:
 #: snippet unchanged, which is the form these arrive in.
 MCP_FILE = "mcp.json"
 
+#: A persona's own executables. The fifth capability, alongside memory, refs, ephemeral
+#: scratch and `mcp.json` — and the one whose absence kept a whole Claude Code plugin alive
+#: as a file carrier (#283).
+#:
+#: Deliberately NOT put on PATH, because it cannot be: a `PreToolUse` hook decides whether a
+#: Bash call runs, not what environment it runs in, and wrapping every Bash call to inject
+#: one is the takeover of a host mechanism ADR 0014 exists to refuse. Scripts are invoked by
+#: path — which already worked; what was missing is charter knowing they are there, so it can
+#: surface them to the agent and vouch for them at the guard.
+BIN_DIR = "bin"
+
+
+def bin_dir(name: str) -> Path:
+    """Where *name*'s own executables live. Not created eagerly — an empty `bin/` in every
+    persona is noise in a directory a human reads."""
+    return dir_of(name) / BIN_DIR
+
+
+def bin_scripts(name: str) -> dict:
+    """``{script_name: path}`` this persona can run, inheritance applied.
+
+    Unioned along ``lineage()`` — the same chain ``mcp_servers`` uses, and for the same
+    reason: a child that silently lost what its parent declared would be a surprise. Child
+    wins on a name collision, so a persona can override an inherited script.
+
+    ``uses:``/``borrows:`` deliberately do NOT carry scripts. Borrowing is a grant to run
+    another persona's *declared tools*; shipping its code is a different thing, and conflating
+    them is how #257 got the tool grant wrong in the first place.
+
+    Executable files only. Git preserves the mode bit, so a file committed without ``+x``
+    reaches every clone unable to run — failing at the moment somebody needs it, with a
+    shell error that points nowhere near here. `lint` names those separately.
+    """
+    out = {}
+    # REVERSED: `lineage()` is child-first, so iterating it directly would let the most
+    # distant ancestor overwrite the child — the opposite of the rule. (`mcp_servers` has
+    # this exact bug; filed separately rather than changed here, since flipping a
+    # precedence is a behaviour change that deserves its own PR.)
+    for anc in reversed(lineage(name)):
+        d = bin_dir(anc)
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if f.is_file() and os.access(f, os.X_OK):
+                out[f.name] = f
+    return out
+
+
+def bin_issues(name: str) -> list[tuple[str, str]]:
+    """A file in `bin/` that cannot run. Its own check because the failure is invisible
+    until dispatch and reads as a broken script rather than a missing mode bit."""
+    d = bin_dir(name)
+    if not d.is_dir():
+        return []
+    return [("warn", f"`{BIN_DIR}/{f.name}` is not executable — it will fail at the moment "
+                     f"it is needed; `chmod +x {f.relative_to(config.ROOT)}`")
+            for f in sorted(d.iterdir())
+            if f.is_file() and not os.access(f, os.X_OK)]
+
 
 def mcp_servers(name: str) -> dict:
     """``{server_name: config}`` a persona declares, inheritance applied.
@@ -870,6 +929,7 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
         issues.append(("warn", f"frontmatter key '{key}' is neither read by charter nor "
                                f"emitted into the sub-agent — it does nothing (typo?)"))
     issues += structural_errors(name)
+    issues += bin_issues(name)
     if deep:
         issues += _skill_ref_issues(d["charter"])
     # A declared MCP server whose `secrets` cannot be resolved. Reported rather than
