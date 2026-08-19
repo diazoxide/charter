@@ -163,25 +163,30 @@ def _bump_pin(target: str) -> bool:
     return True
 
 
-def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | None, bool]:
-    """``(target, proposed)``. *proposed* means charter stopped and asked.
+def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | None, bool, str | None]:
+    """``(target, proposed, latest)``. *proposed* means charter stopped and asked.
 
     Moving the machine PAST a pin manufactures the drift `charter version` reports as an
     error, so the pin decides the target rather than being an afterthought to it.
+
+    *latest* travels back out because :func:`_latest` is a LIVE read — this is a command a
+    person is waiting on, not the status line's cached glance — and the caller needs the
+    same number to explain what it is proposing. Asking PyPI twice to answer one question
+    doubles that wait for nothing.
     """
     explicit = (getattr(args, "to", None) or "").strip()
     if explicit:
-        return explicit, False
+        return explicit, False, None
     if locked and _parse(installed) < _parse(locked):
-        return locked, False          # conforming to a pin somebody chose affects nobody
-    if not locked:
-        return _latest() or installed, False
+        return locked, False, None    # conforming to a pin somebody chose affects nobody
     latest = _latest()
+    if not locked:
+        return latest or installed, False, latest
     if latest and _parse(latest) > _parse(installed):
         if not getattr(args, "bump", False):
-            return None, True         # moving past the pin moves the TEAM
-        return latest, False
-    return installed, False
+            return None, True, latest  # moving past the pin moves the TEAM
+        return latest, False, latest
+    return installed, False, latest
 
 
 def cmd_update(args) -> int:
@@ -199,9 +204,9 @@ def cmd_update(args) -> int:
 
     installed = _installed_version()
     locked = instance.locked_version(instance.load(config.ROOT))
-    target, proposed = _resolve_target(args, installed, locked)
+    target, proposed, latest = _resolve_target(args, installed, locked)
     if proposed:
-        util.info(f"this plane pins {locked}, and {_latest()} is published.")
+        util.info(f"this plane pins {locked}, and {latest} is published.")
         util.info("  moving past the pin moves every teammate on their next session.")
         util.info("  do it:  charter update --bump")
         return 0

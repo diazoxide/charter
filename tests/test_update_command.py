@@ -97,6 +97,23 @@ class ThePinDecidesTheTarget(UpdateCase):
         self.assertEqual(self.moved, ["0.43.0"])
 
 
+class TheNetworkIsReadOnce(PersonaIso):
+    """`_latest` is a LIVE read — an explicit command a person is waiting on, unlike the
+    status line's cached one. Asking twice to answer one question doubles that wait for
+    nothing, and the propose path (pin == installed, something newer published) is the
+    one most likely to be run repeatedly."""
+
+    def test_proposing_a_bump_reads_pypi_once(self):
+        (self.tmp / "charter.toml").write_text(
+            f'schema = 1\n\n[charter]\nversion = "{INSTALLED}"\n')
+        with mock.patch("charter.commands_update._installed_version", return_value=INSTALLED), \
+             mock.patch("charter.update.fetch_and_store") as fetch, \
+             mock.patch("charter.update.load", return_value={"latest": "0.46.0"}), \
+             redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            cu.cmd_update(SimpleNamespace(to=None, bump=False))
+        self.assertEqual(fetch.call_count, 1)
+
+
 class ThingsItRefusesOrDegrades(UpdateCase):
     def test_it_refuses_inside_a_charter_checkout(self):
         """`CONTRIBUTING.md` tells contributors to run `python3 -m charter` from the
