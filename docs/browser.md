@@ -48,6 +48,10 @@ Charter appends it to the plane's `.gitignore` and says so. Committing it would 
 everyone's clone, and into the forge's history, where a later `git rm` does not reach it.
 That is credential material, so charter does not ask.
 
+`charter doctor` checks the same thing, because the install-time write only helps a plane
+that runs the install *after* this landed — and the directory appears well after the command
+that caused it, so it reads as ordinary untracked noise until something commits it.
+
 ### `.claude/skills/playwright-cli/` and `.playwright/` — stated, entirely your call
 
 The generated reference, and the workspace config directory `install` creates for

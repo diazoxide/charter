@@ -290,3 +290,19 @@ def append_gitignore(root, lines, header: str) -> list[str]:
     prefix = (body.rstrip("\n") + "\n\n") if body.strip() else ""
     p.write_text(prefix + f"# {header}\n" + "".join(f"{ln}\n" for ln in missing))
     return missing
+
+
+def git_ignores(root, path) -> bool | None:
+    """Whether git would ignore *path* inside *root*. ``None`` when the question does not
+    apply — *root* is not a repository, so there is nothing for a credential to be committed
+    to.
+
+    Asked of ``git check-ignore`` rather than read out of ``.gitignore``: nested ignore
+    files, negations and global excludes all count, and the question is only ever "would git
+    take this file", where git is the authority and a hand-rolled parser is a second opinion
+    that will eventually differ.
+    """
+    if run(["git", "-C", str(root), "rev-parse", "--git-dir"], check=False).returncode != 0:
+        return None
+    return run(["git", "-C", str(root), "check-ignore", "-q", str(path)],
+               check=False).returncode == 0

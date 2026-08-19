@@ -1667,6 +1667,75 @@ def _launcher_missing(command: str) -> bool:
         return False
 
 
+#: Paths a charter command causes to exist that carry credential material, with the command
+#: that (re-)ignores each. ADR 0017: charter ignores what carries credentials; everything
+#: else it states and leaves to the plane. Grown by adding a row — a path that is merely
+#: generated, or merely noisy, does not belong here and gets a sentence in some command's
+#: output instead.
+CREDENTIAL_PATHS = (
+    (Path(".playwright-cli"), "traces and snapshots of authenticated runs",
+     "charter browser install"),
+)
+
+
+def check_credential_paths() -> Result:
+    """Credential-bearing paths charter created, that git would still take.
+
+    `charter browser install` writes the ignore line, so a plane that runs it today is fine.
+    This is for the ones that are not: a plane that installed the lane *before* that landed,
+    or whose line lost a merge. Nothing else would say so — the directory appears only once a
+    trace or snapshot is written, well after the command that caused it, and it reads as
+    ordinary untracked noise right up until `git add -A` commits it. A trace records network
+    requests with their headers and bodies, so tracing a bridged login puts the credential on
+    disk even though it never reached the transcript.
+
+    That is the shape #278 was actually about. The missing `.gitignore` line was the symptom;
+    the cost was every plane working the same thing out again, in silence, and this is the
+    half that reaches planes charter has already touched.
+
+    FAIL, not WARN: `vault add` already exits non-zero for the identical condition —
+    credential material inside the plane that git would take — and two answers to one
+    question is worse than either.
+
+    Only paths that EXIST are considered. Most planes never open a browser, and a row that is
+    permanently yellow on an ordinary machine costs the findings that matter
+    (`check_workspace_clones` records the same concern).
+    """
+    from . import config as _config
+
+    name = "credential paths"
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail="no control plane found")
+
+    exposed: list[tuple[str, str, str]] = []
+    checked = 0
+    for rel, what, fix in CREDENTIAL_PATHS:
+        target = Path(_config.ROOT) / rel
+        if not target.exists():
+            continue
+        ignored = util.git_ignores(_config.ROOT, target)
+        if ignored is None:
+            # Not a repository. Nothing to commit to, so no risk to report — reporting one
+            # would be inventing a finding, which is the direction ADR 0009 forbids.
+            return Result(name, OK, detail="plane is not a git repository")
+        checked += 1
+        if not ignored:
+            exposed.append((str(rel), what, fix))
+
+    if not exposed:
+        return Result(name, OK,
+                      detail=f"{checked} present and gitignored" if checked
+                      else "none present")
+
+    first = exposed[0]
+    detail = ", ".join(f"{p}/ — {what}" for p, what, _ in exposed)
+    return Result(name, FAIL,
+                  detail=f"{detail}: git would take {'them' if len(exposed) > 1 else 'this'}",
+                  hint=f"`{first[2]}` adds the line (it is idempotent, and re-running it is "
+                       f"safe). Committing this publishes a live credential to everyone with "
+                       f"the clone — see ADR 0017.")
+
+
 def check_mcp_launchers() -> Result:
     """An MCP server whose launcher does not exist can never start — and says nothing.
 
@@ -1789,6 +1858,7 @@ def _checks():
                 check_news_adoption(),
                 check_ask_rules(),
                 check_shadowed_knowledge(),
+                check_credential_paths(),
                 check_mcp_launchers(), check_plugin_skew()]
     return results
 
