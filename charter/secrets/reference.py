@@ -33,7 +33,7 @@ from .. import util
 from .base import SecretNotFound, VaultError, VaultProvider
 
 
-def _op_argv(uri: str) -> tuple[list[str], str]:
+def _op_argv(uri: str, config: dict) -> tuple[list[str], str]:
     """``op://vault/item/field`` → the 1Password CLI reads the whole URI itself."""
     parts = urlsplit(uri)
     if not parts.netloc or len(parts.path.strip("/").split("/")) < 2:
@@ -42,7 +42,7 @@ def _op_argv(uri: str) -> tuple[list[str], str]:
     return ["op", "read", "--no-newline", uri], "op"
 
 
-def _vault_argv(uri: str) -> tuple[list[str], str]:
+def _vault_argv(uri: str, config: dict) -> tuple[list[str], str]:
     """``vault://secret/data/app#FIELD`` → ``vault kv get -field=FIELD secret/data/app``."""
     parts = urlsplit(uri)
     path = (parts.netloc + parts.path).strip("/")
@@ -53,8 +53,42 @@ def _vault_argv(uri: str) -> tuple[list[str], str]:
     return ["vault", "kv", "get", f"-field={field}", path], "vault"
 
 
+def _browser_argv(uri: str, config: dict) -> tuple[list[str], str]:
+    """``browser://<session>/localstorage/<key>`` — one value out of a logged-in browser.
+
+    A session is a place a credential lives, the same way a 1Password item is, and the half
+    charter owns is identical in both cases: resolve by name, never print, never put the
+    value in argv. What made this worth a scheme rather than a shell snippet is that the
+    vendor's own documented idiom is ``TOKEN=$(playwright-cli --raw cookie-get session_id)``
+    — command substitution straight into a transcript, with nothing redacting it, which is
+    the outcome the browser lane exists to prevent (#277).
+
+    The version comes from the vault's config (``{"version": "0.1.19"}``), defaulting to
+    charter's pin — ``account`` already sets the precedent for provider-specific config on a
+    shared provider. It has to be overridable: a session opened at another version is
+    invisible at this one, and the symptom is ``not open`` against a browser that is alive
+    and still logged in.
+    """
+    from .. import browser
+
+    parts = urlsplit(uri)
+    session = parts.netloc
+    # `partition`, not `split`: a localStorage key may itself contain a slash, and the key
+    # is the rest of the path verbatim — including a trailing one.
+    source, sep, name = parts.path.lstrip("/").partition("/")
+    if not session or not source or not sep or not name:
+        raise VaultError(f"malformed browser reference '{uri}' — expected "
+                         f"browser://<session>/<{'|'.join(browser.SESSION_SOURCES)}>/<name>")
+    if source not in browser.SESSION_SOURCES:
+        raise VaultError(f"'{source}' is not a readable browser source in '{uri}' — "
+                         f"charter reads {', '.join(browser.SESSION_SOURCES)}. Whole storage "
+                         f"state is deliberately not among them: a dump is a credential blob "
+                         f"nobody declared, and the redactor cannot scrub what it cannot name.")
+    return browser.session_read_argv(session, source, name, config.get("version")), "npx"
+
+
 #: scheme → (argv builder, CLI name). Argv, never a shell string.
-_RESOLVERS = {"op": _op_argv, "vault": _vault_argv}
+_RESOLVERS = {"op": _op_argv, "vault": _vault_argv, "browser": _browser_argv}
 
 #: How long one reference may take to resolve before charter stops waiting on it.
 #:
@@ -128,7 +162,7 @@ class ReferenceProvider(VaultProvider):
                 f"      charter secret set <name> {key} --from-file <path>\n"
                 f"  To keep the value on this machine instead: --provider plain-file.\n"
                 f"  To register an item you created elsewhere: pass its URI here.")
-        _RESOLVERS[scheme_of(value)](value)  # validate shape now, not at read time
+        _RESOLVERS[scheme_of(value)](value, self.config)  # validate now, not at read time
         data = self._load()
         data[key] = value
         self._save(data)
@@ -152,7 +186,7 @@ class ReferenceProvider(VaultProvider):
         if not scheme:
             raise VaultError(f"'{key}' in vault '{self.name}' is not a supported reference: "
                              f"'{uri}'")
-        argv, cli = _RESOLVERS[scheme](uri)
+        argv, cli = _RESOLVERS[scheme](uri, self.config)
         if not shutil.which(cli):
             raise VaultError(f"'{key}' needs the '{cli}' CLI to resolve {uri} — it is not "
                              f"on PATH. Install it and authenticate, then retry.")
@@ -214,10 +248,11 @@ class ReferenceProvider(VaultProvider):
             return True, "no references yet"
         needed = sorted({s for s in (scheme_of(v) for v in data.values()) if s})
         missing = [s for s in needed if not shutil.which(_RESOLVERS[s](
-            next(v for v in data.values() if scheme_of(v) == s))[1])]
+            next(v for v in data.values() if scheme_of(v) == s), self.config)[1])]
         n = len(data)
         if missing:
             clis = ", ".join(sorted({_RESOLVERS[s](
-                next(v for v in data.values() if scheme_of(v) == s))[1] for s in missing}))
+                next(v for v in data.values() if scheme_of(v) == s), self.config)[1]
+                for s in missing}))
             return False, f"{n} reference(s), but not on PATH: {clis}"
         return True, f"{n} reference(s) via {', '.join(needed)}"
