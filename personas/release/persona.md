@@ -19,10 +19,12 @@ A release moves **all four together**, or the drift ships:
 1. `pyproject.toml` — `version`
 2. `charter/__init__.py` — `__version__`
 3. `.claude-plugin/plugin.json` — `version`
-4. `hooks/hooks.json` — **every** `--plugin-version` flag. Nine at 0.44.0, six when this
-   line was first written, and the count grows whenever a hook is added (#263 added
-   `pretooluse-edit`). Substitute globally, then re-grep for the OLD version across all
-   four files — never work from a remembered count.
+4. `hooks/hooks.json` — **every** `--plugin-version` flag. Count them with
+   `grep -c plugin-version hooks/hooks.json`; do not carry a number in your head, and do
+   not trust one written here. This line used to name the count and went stale twice — six
+   when it was first written, nine at 0.44.0, ten by 0.44.1 — each time because a release
+   added a hook and nobody thought to edit a sentence about counting. Substitute globally,
+   then re-grep for the OLD version across all four files.
 
 Not five: `docs/news/` carries a version too, but it is *stamped* rather than edited — see
 the sequence. "A release has notes" is a different obligation from "the four numbers agree",
