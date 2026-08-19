@@ -293,6 +293,41 @@ The distinction is who owns the item, not which CLI is involved — both end up 
 1Password. Reach for `reference` when a human or another system should stay in charge of
 rotating the credential, and for `1password` when charter should.
 
+#### `browser://` — the token a logged-in session is holding
+
+A browser session is a place a credential lives, so it is a reference like any other. This
+closes the step after a bridged login: check that the UI and the API agree, by calling the
+API **as the user you just logged in**.
+
+```bash
+charter secret set qa API_TOKEN --value 'browser://owner/localstorage/access_token'
+charter secret exec qa --env TOKEN=API_TOKEN -- \
+  curl -sH "Authorization: Bearer $TOKEN" https://api.example.test/me
+```
+
+The value never reaches your transcript. That matters more here than it looks, because the
+obvious alternative is the idiom Playwright's own reference documents:
+
+```bash
+TOKEN=$(playwright-cli --raw cookie-get session_id)   # ← the leak
+```
+
+Command substitution puts the token in a shell variable, in a transcript, with nothing
+redacting it — the outcome the whole browser lane exists to prevent. Through a reference it
+is resolved at the moment of use, injected into the child, and scrubbed from the output that
+comes back.
+
+Two things charter needs to be right about, and one it will not do:
+
+- **The session must be open**, and `charter secret exec` does not open it. Read the token
+  inside the same flow that logged in; a resolve against a closed session fails with the
+  vendor's `not open`.
+- **The version is charter's pin** unless the vault overrides it with
+  `{"version": "0.1.19"}` in its config. A session belongs to the version that opened it, so
+  a mismatch reports `not open` against a browser that is alive and still logged in.
+- **Whole storage state is not readable this way.** A dump is a credential blob nobody
+  declared, and the redactor cannot scrub what it cannot name — name the one key you want.
+
 Every consuming path works unchanged — the value is resolved only when something
 actually needs it:
 
@@ -305,6 +340,8 @@ charter secret exec team --dotenv F=TOKEN:DEPLOY_TOKEN -- some-tool
 | --- | --- |
 | `op://<vault>/<item>/<field>` | `op read --no-newline <uri>` |
 | `vault://<path>#<FIELD>` | `vault kv get -field=<FIELD> <path>` |
+| `browser://<session>/localstorage/<key>` | `playwright-cli -s=<session> --raw localstorage-get <key>` |
+| `browser://<session>/cookie/<name>` | `playwright-cli -s=<session> --raw cookie-get <name>` |
 
 Deliberate properties:
 
@@ -314,6 +351,10 @@ Deliberate properties:
   type it, not at 3am when something tries to read it.
 - **Resolvers are invoked as argv, never a shell string**, so a reference can never be
   command injection whatever it contains.
+- **Redaction covers what comes back, not what the child does with it.** `secret exec`
+  scrubs the value from captured output, so a `curl -v` that echoes an `Authorization`
+  header is masked. `--exec` and `--stream` capture nothing by design, and therefore redact
+  nothing — that trade-off is the same for every scheme.
 - **`health()` never resolves.** `vault list` and `doctor` call it routinely; resolving
   there would hit 1Password on every listing and could prompt for re-auth.
 - **A failed resolve reports status, not output** — a resolver's stderr can echo what it

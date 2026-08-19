@@ -116,6 +116,32 @@ one. A different fixture account is a different pair of keys, not a different me
 To avoid re-authenticating on every run, save the logged-in state once and reload it — see
 `storage-state` in the generated Playwright reference.
 
+## Reading the token the session is holding
+
+The step after logging in: call the API **as the user you just logged in**, so the UI and
+the API can be checked against each other.
+
+Do not read it into a shell variable. Playwright's own reference documents
+`TOKEN=$(playwright-cli --raw cookie-get session_id)`, and that is command substitution
+into a transcript with nothing redacting it — the outcome this whole lane exists to
+prevent. Register it as a reference instead and let the bridge carry it:
+
+```bash
+charter secret set <vault> API_TOKEN --value 'browser://owner/localstorage/access_token'
+charter secret exec <vault> --env TOKEN=API_TOKEN -- \
+  curl -sH "Authorization: Bearer $TOKEN" https://api.example.test/me
+```
+
+`browser://<session>/localstorage/<key>` and `browser://<session>/cookie/<name>` are the two
+forms. Charter builds the invocation, so the version pin is right by construction. The
+session must already be open — resolving does not open one — so do this in the same flow
+that logged in.
+
+This is not an exception to the hard rule below. That rule forbids reading back a secret
+**you filled in**; the value here is one the *session* minted, it is never printed, and it
+reaches the API through the same bridge the password came in on. Reading it any other way —
+`eval`, a screenshot, a bare `cookie-get` — is still out.
+
 ## Hard rules
 
 - **Never read a filled secret back.** No evaluating `el.value`, no screenshot of a filled

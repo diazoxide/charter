@@ -126,3 +126,28 @@ def ensure_output_ignored(root: Path) -> list[str]:
     from . import util
     return util.append_gitignore(root, [f"{OUTPUT_DIR}/"],
                                  "added by `charter browser install`")
+
+#: The two places a logged-in session keeps a token, and the only two this reads. Both are
+#: `--raw` reads of ONE named value: charter never dumps whole storage state, because a
+#: dump is a credential blob whose contents nobody declared and the redactor cannot know.
+SESSION_SOURCES = ("localstorage", "cookie")
+
+
+def session_read_argv(session: str, source: str, name: str,
+                      version: str | None = None) -> list[str]:
+    """The invocation that reads one named value out of an open session.
+
+    `--raw` is not optional. Without it the reply carries page status and generated-code
+    sections, so the "secret" charter injected downstream would be a decorated blob — and
+    the redactor would then be scrubbing a string that never appears in the API call the
+    value was fetched for. The vendor documents `--raw` for exactly this: "returning only
+    the result value. Use it to pipe command output into other tools."
+
+    The version is the whole reason this belongs to charter rather than to a shell script.
+    A session belongs to the version that opened it — state is keyed on the installation —
+    so an unpinned `npx` talks to a different daemon and reports `not open` while the first
+    browser is alive and still logged in. Charter knows the pin; a hand-written `$(...)` is
+    precisely where an operator forgets it.
+    """
+    return ["npx", "--yes", f"@playwright/cli@{version or PINNED}", f"-s={session}",
+            "--raw", f"{source}-get", name]
