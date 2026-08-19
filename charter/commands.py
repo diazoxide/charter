@@ -1852,8 +1852,12 @@ def cmd_news(args) -> int:
         return 0
     for e in entries:
         status, _ = news.probe(e)
-        mark = "" if status in (news.ADOPTED,) else _news_line(e, status)
-        print(f"{e.version}  {e.headline}" if not mark else f"{e.version}  {e.headline}\n{mark}")
+        print(f"{e.version}  {e.headline}")
+        # Only an entry with something to DO gets the action line. An informational entry
+        # — a patch note, usually — exists to say there is nothing to take up, so printing
+        # "adopt: manual" beneath it invents a chore out of the line that denies one.
+        if status == news.PENDING:
+            print(_news_line(e, status))
     return 0
 
 

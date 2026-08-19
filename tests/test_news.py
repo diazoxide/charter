@@ -162,6 +162,22 @@ class TheCommand(NewsDir):
             out = self._run(pending=True)
         self.assertIn("manual", out)
 
+    def test_an_informational_entry_is_not_dressed_up_as_work(self):
+        """An entry with no probe and no adopt command has nothing for the reader to do —
+        a patch note, usually. Printing "adopt: manual (see the entry)" under it invents a
+        chore out of a line that exists to say there is none."""
+        self.write("0.44.1-patch.md",
+                   "---\nversion: 0.44.1\nheadline: Fixes a crash\n---\nnothing to do\n")
+        out = self._run(since="0.44.0", until="0.44.1")
+        self.assertIn("Fixes a crash", out)
+        self.assertNotIn("adopt:", out)
+
+    def test_a_pending_entry_in_the_range_still_says_how_to_take_it_up(self):
+        self.write("0.44.0-delegate-when.md", ENTRY)
+        with mock.patch.object(news, "_dispatch", return_value=1):
+            out = self._run(since="0.43.0", until="0.44.0")
+        self.assertIn("persona sync-agents", out)
+
     def test_for_a_version_prints_the_release_body(self):
         self.write("0.44.0-delegate-when.md", ENTRY)
         out = self._run(for_version="0.44.0")
