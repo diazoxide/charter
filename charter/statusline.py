@@ -1127,8 +1127,8 @@ def _mem_badge(persistent: int, ephemeral: int = 0) -> str:
     return (" " + " ".join(parts)) if parts else ""
 
 
-def _inflight_by_persona() -> dict[str, tuple[int, float]]:
-    """``persona → (dispatches in flight, epoch start of the OLDEST)``.
+def _inflight_by_persona() -> dict[str, tuple[int, float, bool]]:
+    """``persona → (dispatches held, epoch start of the OLDEST, oldest presumed dead)``.
 
     Computed once per render and handed to every chip: `inflight.live_records` is a
     directory glob, which is affordable on a surface that draws every turn, but not
@@ -1136,21 +1136,26 @@ def _inflight_by_persona() -> dict[str, tuple[int, float]]:
 
     The oldest wins because the newest answers nothing. Three dispatches out, the
     freshest a minute old, is not news; three out with one at ``2h`` is the whole
-    reason the age is on screen.
+    reason the age is on screen. The flag rides with the oldest for the same reason:
+    it qualifies the age that gets drawn, and the oldest is the record that crosses
+    the presumed-dead threshold first.
     """
     try:
         from . import inflight
-        out: dict[str, tuple[int, float]] = {}
-        for name, started in inflight.live_records():
-            n, oldest = out.get(name, (0, started))
-            out[name] = (n + 1, min(oldest, started))
+        out: dict[str, tuple[int, float, bool]] = {}
+        for name, started, dead in inflight.live_records():
+            n, oldest, oldest_dead = out.get(name, (0, started, dead))
+            if started < oldest:
+                oldest, oldest_dead = started, dead
+            out[name] = (n + 1, oldest, oldest_dead)
         return out
     except Exception:
         return {}
 
 
-def _inflight_badge(entry: tuple[int, float] | None) -> str:
-    """``⚡2 4m`` for a persona with dispatches in flight, '' for one without.
+def _inflight_badge(entry: tuple[int, float, bool] | None) -> str:
+    """``⚡2 4m`` for a persona with dispatches in flight, ``⚡ 45m?`` when the oldest has
+    outlived every expectation, '' for a persona with none.
 
     **Count only above one.** A lone ``⚡1`` is the same non-fact as `todo 0` or `✎0`,
     both of which render as nothing here: presence is the signal, and the digit only
@@ -1161,16 +1166,29 @@ def _inflight_badge(entry: tuple[int, float] | None) -> str:
     correct, reads as broken) renders as ``now`` for the same reason it does there.
     Coarse on purpose: this line refreshes every ten seconds, so a seconds figure would
     be a number nobody could trust to be current.
+
+    **``?`` past the presumed-dead threshold** (#308). The age keeps climbing — the record
+    is no longer deleted, so this is where `2h` and `3d` become reachable at all — and the
+    mark says *presumed dead, not confirmed*, which is the whole of what charter knows: it
+    cannot tell a killed process from a sub-agent still grinding. Hence a question mark and
+    not `✗`, and hence no colour escalation: it stays in the age's dim, because a red mark
+    would claim the certainty the mark exists to disclaim. ``?`` is ASCII and East-Asian
+    *Narrow*, unlike the Ambiguous glyphs that have broken this column twice.
+
+    It reads with the only other `?` on this line rather than against it: `pieces` draws a
+    bare `?` where a presence age is unreadable, and both mean *charter cannot vouch for
+    this number*. They are never confusable — that one replaces an age, this one trails one.
     """
     if not entry:
         return ""
     try:
         from datetime import datetime, timezone
         from . import pieces
-        n, started = entry
+        n, started, presumed_dead = entry
         age = pieces._presence_age(datetime.fromtimestamp(started, timezone.utc),
                                    datetime.now(timezone.utc))
-        return f" {_YELLOW}⚡{n if n > 1 else ''}{_R} {_DIM}{age}{_R}"
+        mark = "?" if presumed_dead else ""
+        return f" {_YELLOW}⚡{n if n > 1 else ''}{_R} {_DIM}{age}{mark}{_R}"
     except Exception:
         return ""
 

@@ -434,3 +434,11 @@ A persona with sub-agents in flight carries `⚡` on its own chip, with the coun
 there is more than one and the age of the oldest dispatch always — `▸ devops ⚡2 12m`.
 The session strip keeps the bare total (`⚡ 3`), because the persona column caps at
 fourteen rows and disappears on a narrow pane.
+
+After thirty minutes a dispatch is **presumed dead** and the age takes a `?` —
+`▫ forge ✎3 ⚡ 45m?`. The age keeps climbing; the mark says *presumed dead, not
+confirmed*, which is all charter can honestly claim — it cannot tell a killed process
+from a sub-agent that is genuinely still working. The record itself survives for a day
+before it is discarded, so a stuck dispatch escalates instead of quietly vanishing. It
+still counts on the strip's total; the chip is where live and presumed-dead are told
+apart.

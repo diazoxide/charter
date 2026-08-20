@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 import unittest
 from contextlib import redirect_stdout
@@ -24,6 +25,29 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from charter import config, hooks, inflight
+
+
+def _age(path: Path, seconds: float) -> Path:
+    """Backdate one record by *seconds* — both its ``ts`` and its mtime.
+
+    The two thresholds read different fields on purpose (the prune horizon reads mtime
+    before parsing, so a corrupt stray is still cleaned; presumed-dead reads the ``ts``
+    the age is rendered from, so the mark and the number can never disagree). A fixture
+    that moved only one of them could therefore pass a test that a real record fails.
+    """
+    when = time.time() - seconds
+    try:
+        rec = json.loads(path.read_text())
+        rec["ts"] = when
+        path.write_text(json.dumps(rec))
+    except (OSError, ValueError):
+        pass
+    os.utime(path, (when, when))
+    return path
+
+
+def _only_record() -> Path:
+    return next((config.STATE_DIR / "dispatch-inflight").glob("*.json"))
 
 
 class _Stdin:
@@ -72,19 +96,95 @@ class InflightStore(unittest.TestCase):
         inflight.finish("coder")
         self.assertEqual(inflight.live(), ["coder"])
 
-    def test_a_stale_record_is_pruned(self):
-        """A killed process leaves a record behind; it must not warn forever."""
+    def test_a_record_past_the_prune_horizon_is_removed(self):
+        """A killed process leaves a record behind; it must not accumulate forever."""
         inflight.start("coder")
-        p = next((config.STATE_DIR / "dispatch-inflight").glob("*.json"))
-        old = time.time() - inflight.TTL_SECONDS - 60
-        import os
-        os.utime(p, (old, old))
+        p = _age(_only_record(), inflight.PRUNE_SECONDS + 60)
         self.assertEqual(inflight.live(), [])
-        self.assertFalse(p.exists(), "a stale record should be removed, not just ignored")
+        self.assertFalse(p.exists(), "a stray should be removed, not just ignored")
 
     def test_a_fresh_record_is_not_pruned(self):
         inflight.start("coder")
         self.assertEqual(inflight.live(), ["coder"])
+
+
+class PresumedDead(unittest.TestCase):
+    """The record outliving every reasonable expectation is the *most* interesting thing
+    this tracker can hold, and deleting it rendered it as nothing at all — "presumed dead"
+    and "never happened" were indistinguishable, irreversibly (#308).
+
+    So one threshold became two: past `PRESUMED_DEAD_SECONDS` a record is still returned,
+    flagged; only past `PRUNE_SECONDS` does it go away.
+    """
+
+    def setUp(self) -> None:
+        self._td = TemporaryDirectory()
+        self._orig = config.STATE_DIR
+        config.STATE_DIR = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+        self.addCleanup(lambda: setattr(config, "STATE_DIR", self._orig))
+
+    def test_a_fresh_record_is_not_flagged(self):
+        inflight.start("coder")
+        self.assertEqual([r[2] for r in inflight.live_records()], [False])
+
+    def test_a_record_past_the_threshold_is_kept_and_flagged(self):
+        inflight.start("coder")
+        p = _age(_only_record(), inflight.PRESUMED_DEAD_SECONDS + 60)
+        recs = inflight.live_records()
+        self.assertEqual([(r[0], r[2]) for r in recs], [("coder", True)])
+        self.assertTrue(p.exists(), "a presumed-dead record must survive being read")
+
+    def test_reading_twice_does_not_consume_it(self):
+        """The old deletion was irreversible: the first render after the threshold was
+        the last one that could ever mention it."""
+        inflight.start("coder")
+        _age(_only_record(), inflight.PRESUMED_DEAD_SECONDS + 60)
+        inflight.live_records()
+        self.assertEqual([r[2] for r in inflight.live_records()], [True])
+
+    def test_the_age_keeps_climbing_past_the_threshold(self):
+        inflight.start("coder")
+        _age(_only_record(), 3 * 60 * 60)
+        started = inflight.live_records()[0][1]
+        self.assertAlmostEqual(started, time.time() - 3 * 60 * 60, delta=5)
+
+    def test_live_still_names_a_presumed_dead_dispatch(self):
+        """`_session_news` counts what `live()` returns, and the strip's aggregate counts
+        every record the tracker holds — the chips are where the distinction lives."""
+        inflight.start("coder")
+        _age(_only_record(), inflight.PRESUMED_DEAD_SECONDS + 60)
+        self.assertEqual(inflight.live(), ["coder"])
+
+    def test_the_prune_horizon_is_the_far_one(self):
+        self.assertGreater(inflight.PRUNE_SECONDS, inflight.PRESUMED_DEAD_SECONDS)
+
+    def test_finish_retires_a_live_record_before_a_presumed_dead_one(self):
+        """`finish` retires the OLDEST record for a name. Once the oldest can be a
+        presumed-dead stray, that rule alone would clear the stuck record and leave the
+        one that just finished behind — re-creating #308 through the back door."""
+        inflight.start("coder")
+        stuck = _age(_only_record(), inflight.PRESUMED_DEAD_SECONDS + 60)
+        inflight.start("coder")
+        inflight.finish("coder")
+        self.assertTrue(stuck.exists(), "the stuck record must survive a peer finishing")
+        self.assertEqual([r[2] for r in inflight.live_records()], [True])
+
+    def test_finish_retires_a_presumed_dead_record_when_nothing_else_is_live(self):
+        """A genuinely long dispatch does finish eventually, and when it does its record
+        must go — otherwise every run over the threshold leaks one."""
+        inflight.start("coder")
+        _age(_only_record(), inflight.PRESUMED_DEAD_SECONDS + 60)
+        inflight.finish("coder")
+        self.assertEqual(inflight.live(), [])
+
+    def test_finish_still_retires_the_oldest_of_several_live_records(self):
+        inflight.start("coder")
+        first = _age(_only_record(), 5 * 60)
+        inflight.start("coder")
+        inflight.finish("coder")
+        self.assertFalse(first.exists())
+        self.assertEqual(len(inflight.live_records()), 1)
 
     def test_an_agent_name_with_path_characters_is_made_safe(self):
         inflight.start("../../etc/passwd")
@@ -151,6 +251,16 @@ class DispatchNudge(unittest.TestCase):
     def test_silent_again_once_the_peer_finishes(self):
         self._run("coder")
         inflight.finish("coder")
+        self.assertEqual(self._run("coder").strip(), "")
+
+    def test_a_presumed_dead_peer_does_not_nudge(self):
+        """The nudge claims a peer *is already running*, and past the presumed-dead
+        threshold charter no longer knows that. Keeping the record so a stuck dispatch
+        stays visible (#308) must not turn into a nag that outlives the process by a day
+        — the window this asserts on is the one the old TTL pruning gave it.
+        """
+        self._run("coder")
+        _age(_only_record(), inflight.PRESUMED_DEAD_SECONDS + 60)
         self.assertEqual(self._run("coder").strip(), "")
 
     def test_an_unknown_agent_does_not_raise(self):

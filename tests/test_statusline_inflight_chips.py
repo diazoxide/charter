@@ -82,14 +82,7 @@ class Chips(PersonaIso):
 
     def test_the_age_is_the_oldest_dispatch(self):
         """The newest is the least interesting: what a reader wants to know is how long
-        the longest-running one has been out.
-
-        Aged in minutes rather than hours because nothing older than
-        `inflight.TTL_SECONDS` can be observed at all — `live_records` prunes it as a
-        killed process. That the *most* alarming dispatch is the one that vanishes is
-        real and deliberately not fixed here (diazoxide/charter#308): it changes what
-        `inflight` means, not what this line draws.
-        """
+        the longest-running one has been out."""
         _start_aged("devops", 60)
         _start_aged("devops", 25 * 60)
         _start_aged("devops", 6 * 60)
@@ -113,6 +106,45 @@ class Chips(PersonaIso):
         `pieces._presence_age` already made, reused rather than re-litigated."""
         inflight.start("devops")
         self.assertIn("now", self._chip("devops"))
+
+    def test_a_live_dispatch_carries_no_question_mark(self):
+        _start_aged("devops", 4 * 60)
+        self.assertNotIn("?", self._chip("devops"))
+
+    def test_a_presumed_dead_dispatch_is_marked_after_its_age(self):
+        """`?` is the honest claim: charter cannot know whether the process died or is
+        genuinely still working, only that it has outlived every expectation (#308)."""
+        _start_aged("devops", inflight.PRESUMED_DEAD_SECONDS + 15 * 60)
+        self.assertIn("45m?", self._chip("devops"))
+
+    def test_the_age_can_now_reach_hours(self):
+        """Before #308 the badge's `2h`/`3d` vocabulary was unreachable: the record was
+        pruned at thirty minutes, so nothing older could ever be drawn."""
+        _start_aged("devops", 3 * 60 * 60)
+        self.assertIn("3h?", self._chip("devops"))
+
+    def test_one_presumed_dead_among_the_live_marks_the_chip(self):
+        """The count covers both, the age is the oldest — which is the presumed-dead one
+        by definition — so the mark belongs to the number beside it."""
+        _start_aged("devops", 60)
+        _start_aged("devops", inflight.PRESUMED_DEAD_SECONDS + 15 * 60)
+        chip = self._chip("devops")
+        self.assertIn("⚡2", chip)
+        self.assertIn("45m?", chip)
+
+    def test_a_presumed_dead_dispatch_still_counts_on_the_strip(self):
+        """The strip's aggregate counts every record the tracker holds; the chips are
+        where live and presumed-dead are told apart."""
+        _start_aged("devops", inflight.PRESUMED_DEAD_SECONDS + 60)
+        _start_aged("release", 60)
+        self.assertIn("⚡ 2", _plain(" ".join(statusline._session_news(None))))
+
+    def test_the_mark_is_the_only_new_character(self):
+        """`?` is ASCII and narrow. Every glyph this line already speaks is East-Asian
+        Neutral or Wide by deliberate choice — an Ambiguous one has broken the column
+        twice, so a new mark has to be checked, not assumed."""
+        import unicodedata
+        self.assertEqual(unicodedata.east_asian_width("?"), "Na")
 
     def test_a_broken_inflight_store_never_breaks_the_chips(self):
         orig = inflight.live_records
@@ -148,10 +180,13 @@ class RowsStayTrue(PersonaIso):
         self.addCleanup(lambda: setattr(update, "maybe_spawn", spawn))
         # A roster where every conditional badge is both present and absent: `flying`
         # declares a vault this machine has never registered (`◦`) and is in flight;
-        # `quiet` declares no vault at all (nothing) and is not.
+        # `stuck` is in flight past the presumed-dead threshold, so it carries the `?`
+        # too; `quiet` declares no vault at all (nothing) and is not in flight.
         self.make_persona("flying", role="F", vault="nowhere", **{"delegate-when": "x"})
+        self.make_persona("stuck", role="S", **{"delegate-when": "x"})
         self.make_persona("quiet", role="Q", **{"delegate-when": "x"})
         _start_aged("flying", 4 * 60)
+        _start_aged("stuck", 3 * 60 * 60)
 
     def _rendered(self, width=200):
         os.environ["COLUMNS"] = str(width)
@@ -193,12 +228,13 @@ class RowsStayTrue(PersonaIso):
         self.assertEqual(len(starts), 1,
                          f"right-column text starts at differing columns: {sorted(starts)}")
 
-    def test_the_column_shows_both_signals_at_once(self):
+    def test_the_column_shows_every_signal_at_once(self):
         """Guards the fixture: a width assertion over rows that carry no badges proves
         nothing."""
         col = "\n".join(_plain(c) for c in statusline._persona_chips())
         self.assertIn("◦", col)
         self.assertIn("⚡", col)
+        self.assertIn("3h?", col)
 
 
 class Records(PersonaIso):
@@ -208,7 +244,7 @@ class Records(PersonaIso):
     def test_records_carry_a_start_time(self):
         _start_aged("devops", 90)
         recs = inflight.live_records()
-        self.assertEqual([n for n, _ in recs], ["devops"])
+        self.assertEqual([n for n, _, _ in recs], ["devops"])
         self.assertAlmostEqual(recs[0][1], time.time() - 90, delta=5)
 
     def test_records_preserve_duplicates(self):
@@ -217,7 +253,7 @@ class Records(PersonaIso):
         self.assertEqual(len(inflight.live_records()), 2)
 
     def test_records_prune_the_stale_like_live_does(self):
-        _start_aged("devops", inflight.TTL_SECONDS + 60)
+        _start_aged("devops", inflight.PRUNE_SECONDS + 60)
         self.assertEqual(inflight.live_records(), [])
 
     def test_live_still_answers_with_names(self):
@@ -226,8 +262,10 @@ class Records(PersonaIso):
         self.assertEqual(inflight.live(), ["devops", "release"])
 
     def test_a_record_written_without_a_timestamp_falls_back_to_mtime(self):
-        """Records written by an older charter carry no ``ts``. A chip that renders `?`
-        for one is worse than one that uses the mtime, which is the same instant."""
+        """Records written by an older charter carry no ``ts``. Dropping one, or drawing
+        it with no age at all, would be worse than using the mtime — the same instant.
+        And since the presumed-dead flag is measured from whatever start time comes back,
+        a two-minute-old record still reads as live."""
         token = _start_aged("devops", 120)
         p = Path(config.STATE_DIR) / "dispatch-inflight" / f"{token}.json"
         when = p.stat().st_mtime
@@ -235,6 +273,7 @@ class Records(PersonaIso):
         os.utime(p, (when, when))
         recs = inflight.live_records()
         self.assertAlmostEqual(recs[0][1], when, delta=5)
+        self.assertFalse(recs[0][2])
 
 
 if __name__ == "__main__":
