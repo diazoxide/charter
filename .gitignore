@@ -38,6 +38,12 @@ dist/
 !/workspaces/relations-and-delegations/memory/**
 !/workspaces/relations-and-delegations/todos
 !/workspaces/relations-and-delegations/todos/**
+!/workspaces/statusline-improvements/workspace.json
+!/workspaces/statusline-improvements/workspace.md
+!/workspaces/statusline-improvements/memory
+!/workspaces/statusline-improvements/memory/**
+!/workspaces/statusline-improvements/todos
+!/workspaces/statusline-improvements/todos/**
 !/workspaces/todos/workspace.json
 !/workspaces/todos/workspace.md
 !/workspaces/todos/memory

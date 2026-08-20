@@ -31,3 +31,4 @@ Written by the persona as it learns; committed and shared.
 - [Charter's inheritance union has a trap I hit twice on 2026-08-19: person](charter-s-inheritance-union-has-a-trap-i-hit-twi.md)
 - [0.46.0's ask->allow under bypassPermissions has a sharp edge found by as](0-46-0-s-ask-allow-under-bypasspermissions-has-a.md)
 - [Process lessons from the 'autonomy' workspace (2026-08-19/20), earned th](process-lessons-from-the-autonomy-workspace-2026.md)
+- [charter's SessionStart preflight only prints when doctor EXITS NON-ZERO](charter-s-sessionstart-preflight-only-prints-whe.md)
