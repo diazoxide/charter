@@ -1995,7 +1995,7 @@ def cmd_news(args) -> int:
         if planeless:
             util.warn(_NO_PLANE)
             return 0
-        shown = 0
+        shown, unchecked = 0, 0
         for e in news.released():
             status, why = news.probe(e)
             if status == news.PENDING:
@@ -2006,8 +2006,17 @@ def cmd_news(args) -> int:
                 # silence would be read as "nothing to adopt" — the shape ADR 0013 and
                 # `doctor`'s not-checked hint both exist to refuse.
                 util.warn(f"{e.slug}: {why}")
+                unchecked += 1
         if not shown:
-            util.ok("nothing pending — every entry with a probe reports adopted.")
+            if unchecked:
+                # NOT the ✓ line, which claims every probe reported adopted — the one
+                # thing an unchecked entry did not say. A green tick printed under the
+                # warning it contradicts is how the warning stops being read.
+                util.warn(f"nothing pending, but {unchecked} entr"
+                          f"{'y' if unchecked == 1 else 'ies'} could not be checked — "
+                          f"which is not the same as nothing to adopt.")
+            else:
+                util.ok("nothing pending — every entry with a probe reports adopted.")
         return 0
 
     since = (getattr(args, "since", None) or "").strip()
