@@ -4,7 +4,7 @@ A *news entry* is a shipped, per-item note that a version introduced something, 
 an optional probe for whether this plane has adopted it. Not a changelog: an entry exists
 to be **acted on**, and one with nothing to adopt is one line.
 
-Three properties are load-bearing.
+Four properties are load-bearing.
 
 **It ships in the wheel.** Entries travel with the code that implements them, resolved the
 way :mod:`charter.docsrc` resolves documentation — packaged copy first, the repo's
@@ -23,6 +23,13 @@ no argv is ever handed to one, so an entry cannot become an arbitrary-command pr
 primitive wearing a documentation command" — and the stakes are higher here, because this
 one runs rather than prints. Being in-process is also what makes a dozen probes cheap
 enough for `doctor` to run on demand.
+
+**A probe never runs from inside a probe.** Some charter commands probe every entry
+themselves — `doctor` does, and so does `charter news --pending` — so an entry naming one
+puts the dispatcher inside itself, a full sweep at every level, forever (#311). The guard
+in :func:`_dispatch` refuses the nested call AND withholds the outer command's exit code,
+because the two halves fix different things: refusing bounds it, withholding is what keeps
+the answer honest.
 """
 
 from __future__ import annotations
@@ -51,6 +58,17 @@ _SHELLISH = set(";|&<>$`()\\\n\"'")
 
 _PACKAGED = Path(__file__).resolve().parent / "_news"
 _CHECKOUT = Path(__file__).resolve().parents[1] / "docs" / "news"
+
+#: How many :func:`_dispatch` calls are in flight, and whether one of them was refused for
+#: re-entry. Plain module state rather than a :class:`~contextvars.ContextVar`: a ContextVar
+#: reads its default in every new thread, so a probing command that fanned its own work out
+#: to a pool would walk straight past the guard — which is the one failure this exists to
+#: make impossible. The global's failure mode is the opposite and far cheaper: two probes
+#: racing in different threads would make each other `unknown`, which is wrong but bounded,
+#: honest, and not reachable today — `doctor` and `charter news` each walk their entries in
+#: one thread.
+_depth = 0
+_reentered = False
 
 
 class Entry(NamedTuple):
@@ -193,37 +211,80 @@ def resolves(parser, argv: str) -> bool:
 
 
 def _dispatch(argv: str) -> int | None:
-    """Run ``charter <argv>`` in this process. Exit code, or ``None`` if it could not run.
+    """Run ``charter <argv>`` in this process. Exit code, or ``None`` if there is no
+    usable one.
 
     ``None`` is the whole reason this returns an Optional rather than an int: a probe that
-    did not run must not be reported as an answer.
+    did not run — or that ran and answered a different question — must not be reported as
+    an answer.
+
+    **The guard is two halves, and only one of them is about the loop.** Refusing the
+    nested call bounds the recursion; clearing the outer call's exit code is what keeps the
+    result honest. A `doctor` inside a `doctor` exits 0 whenever nothing is broken, so an
+    outer probe that read that code would report the entry ADOPTED and never offer it
+    again — the entry would be hidden by the very bug it triggers. Bounded is not the same
+    as correct (ADR 0013).
     """
+    global _depth, _reentered
+    if not _depth:
+        # Cleared on the way IN, not on the way out, and before the early returns below:
+        # every top-level dispatch has to start clean, or a refusal recorded while probing
+        # the previous entry is read as this entry's answer.
+        _reentered = False
     tokens = _tokens(argv)
     if tokens is None:
         return None
+    if _depth:
+        _reentered = True
+        return None
     from . import cli
 
+    _depth += 1
     try:
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             args = cli.build_parser().parse_args(tokens)
             func = getattr(args, "func", None)
             if func is None:
                 return None
-            return int(func(args) or 0)
+            code = int(func(args) or 0)
     except SystemExit:
         return None
     except Exception:
         return None
+    finally:
+        # In a `finally` because this function swallows everything above: released only on
+        # the happy path, the guard would stay armed for the life of the process the first
+        # time a `check:` raised — and argparse raises `SystemExit` for every malformed
+        # one — turning every later probe into `unknown` with no way to tell why.
+        _depth -= 1
+    return None if _reentered else code
+
+
+#: Three ways to have no answer, said three ways. "Did not run here" points the reader at
+#: their own machine, which is right for a check this CLI could not resolve and wrong for
+#: an entry whose `check:` can never run anywhere — folding those together hides the second
+#: behind the first, and the second is a defect in the entry that somebody has to fix.
+_NOT_RUN = ("`charter {check}` did not run here, so this entry is unchecked — neither "
+            "adopted nor pending")
+_PROBES = ("`charter {check}` probes news itself, so its exit code answers a different "
+           "question than this entry's — unchecked, neither adopted nor pending. A "
+           "`check:` has to name a command that does not probe")
+_IN_FLIGHT = ("`charter {check}` was not run: a probe is already in flight, and a probe "
+              "never runs from inside a probe — unchecked here")
 
 
 def probe(entry: Entry) -> tuple[str, str]:
     """Has this plane adopted *entry*? ``(status, why)``."""
     if not entry.check:
         return INFORMATIONAL, ""
+    # Read before dispatching: inside another probe, this one is refused before it runs,
+    # and blaming THIS entry's `check:` for probing would be a guess — the command already
+    # in flight is the one that probes, and it may not be this one.
+    in_flight = _depth > 0
     code = _dispatch(entry.check)
     if code is None:
-        return UNKNOWN, (f"`charter {entry.check}` did not run here, so this entry is "
-                         f"unchecked — neither adopted nor pending")
+        why = _IN_FLIGHT if in_flight else (_PROBES if _reentered else _NOT_RUN)
+        return UNKNOWN, why.format(check=entry.check)
     return (ADOPTED if code == 0 else PENDING), ""
 
 
