@@ -2576,6 +2576,136 @@ def skew_message(plugin_version: str | None) -> str | None:
     )
 
 
+def plugin_ids(root) -> tuple[str, str]:
+    """``(plugin, marketplace)`` from the manifests the installed plugin carries.
+
+    Both files sit in the directory ``CLAUDE_PLUGIN_ROOT`` already names, so the id is exact
+    without parsing Claude Code's cache path — a layout charter does not own and must not
+    depend on. Either being absent falls back to a placeholder: the id is a convenience,
+    while naming the two *steps* is the part that was missing.
+
+    Lives here rather than in `doctor` because both surfaces now need it, and the upgrade
+    instructions must not be able to disagree with each other.
+    """
+    from pathlib import Path as _P
+
+    def name(filename: str, fallback: str) -> str:
+        try:
+            doc = json.loads((_P(root) / ".claude-plugin" / filename).read_text())
+            return (doc.get("name") or "").strip() or fallback
+        except (OSError, ValueError, AttributeError):
+            return fallback
+
+    return name("plugin.json", "<plugin>"), name("marketplace.json", "<marketplace>")
+
+
+_HOOK_CMD_RE = re.compile(r"\bcharter\s+hook\s+([A-Za-z0-9_-]+)")
+
+
+def dispatched_handlers(root) -> set | None:
+    """Handler names the INSTALLED manifest actually invokes, or None if it cannot be read.
+
+    None rather than an empty set, and the distinction is load-bearing: "I could not look"
+    rendered as "it dispatches nothing" would report every handler in the CLI as missing and
+    produce exactly the confidently-wrong output this whole check exists to prevent.
+
+    Only ``charter hook <name>`` counts. The manifest also runs `charter workspace
+    _autosave`, `charter doctor` and others; those are work the plugin schedules, not the
+    handler table.
+    """
+    from pathlib import Path as _P
+    try:
+        doc = json.loads((_P(root) / "hooks" / "hooks.json").read_text())
+    except (OSError, ValueError):
+        return None
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "command" and isinstance(v, str):
+                    found.update(_HOOK_CMD_RE.findall(v))
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(doc)
+    return found
+
+
+def stale_plugin_message(root) -> str | None:
+    """A message naming the handlers this CLI ships that the installed plugin never
+    dispatches — the direction `skew_message` deliberately does not cover (#306).
+
+    **Handler sets, not version numbers.** `hooks/hooks.json` is what decides which handlers
+    run at all, so an older manifest simply runs fewer of them, silently. Comparing what the
+    manifest invokes against what the CLI ships removes a judgement call the version
+    comparison would have forced — whether a plugin one PATCH behind should say anything —
+    because a patch that adds no handler produces an empty diff and stays quiet. It also
+    measures the thing that actually breaks rather than a proxy for it.
+
+    Why this direction was worth covering at all: it fails SOFTLY, and it is the one that
+    happens by default, since `uv tool install charter-cp --force` moves the CLI and touches
+    no plugin. Observed: a plane on plugin 0.44.1 against CLI 0.46.3 recorded 299 `ask`
+    events and 0 `ask-approved`, because `posttooluse-bash` — the handler that records
+    approvals — was never dispatched. The honest conclusion from that tally ("nobody ever
+    approves an ask") is the opposite of the truth, which is what makes a silent miss worse
+    than a loud break.
+
+    Returns None for a plugin that dispatches everything, including one carrying handlers
+    this CLI does not have: that is the NEWER-plugin case, `skew_message` already hard-fails
+    on it, and saying it twice in two voices with two different remedies is worse than
+    either.
+    """
+    dispatched = dispatched_handlers(root)
+    if dispatched is None:
+        return None
+    missing = sorted(set(_HANDLERS) - dispatched)
+    if not missing:
+        return None
+    plugin, marketplace = plugin_ids(root)
+    return (
+        f"⬢ charter plugin is behind this CLI (v{MIN_PLUGIN_VERSION}): its hooks.json does "
+        f"not dispatch {', '.join(missing)}, so {'those handlers are' if len(missing) > 1 else 'that handler is'} "
+        f"not running here. Nothing is broken — some things are simply not happening, which "
+        f"is why the tallies they write look empty rather than absent. Refresh the plugin: "
+        f"`claude plugin marketplace update {marketplace}` (skip it and the next is a "
+        f"no-op), then `claude plugin update {plugin}@{marketplace} --scope "
+        f"<project|user, see: claude plugin list>`."
+    )
+
+
+def _queue_plugin_notices(name: str, plugin_version: str | None) -> None:
+    """Both skew directions, on the one hook where saying it is useful.
+
+    **sessionstart only, and that is the gate.** `pretooluse` fires on every Bash call, so
+    emitting there would print the same warning dozens of times a session and teach people
+    to scroll past it — which is how a guard stops working even once it is finally visible.
+
+    The newer-plugin message keeps its stderr line on other hooks (it hard-fails, and the
+    debug log is worth having); the behind-plugin one does not. It describes a standing
+    condition rather than a failure of this call, and repeating it per Bash invocation would
+    be noise about something that has not changed since the session began.
+    """
+    msg = skew_message(plugin_version)
+    if msg:
+        if name == "sessionstart":
+            _pending_system.append(msg)
+        else:
+            print(msg, file=sys.stderr)
+        return
+    if name != "sessionstart":
+        return
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if not root:
+        return  # not running under the plugin; there is no manifest to be behind
+    stale = stale_plugin_message(root)
+    if stale:
+        _pending_system.append(stale)
+
+
 #: Every hook the plugin's `hooks/hooks.json` dispatches into, by the name it passes as
 #: `charter hook <name>`. Each handler still reads stdin and returns an exit code exactly
 #: as it always did when the umbrella wired it directly (`from edm.hooks import <fn>`) —
@@ -2601,26 +2731,16 @@ def dispatch(name: str, plugin_version: str | None) -> int:
     actually invokes (the plugin ships no Python, so it can't import these handlers
     directly the way the umbrella's inline `python3 -c "from edm.hooks import …"` does).
 
-    Runs the skew check first — the one place this module speaks up rather than
-    swallowing — then the named handler, unchanged.
+    Runs the skew checks first — the one place this module speaks up rather than
+    swallowing — then the named handler, unchanged. Both directions live in
+    `_queue_plugin_notices`, including the gate that keeps them to sessionstart.
 
     The skew message used to go to stderr and stop there: Claude Code routes a zero-exit
     hook's stderr to the debug log, so neither the user nor the model ever saw it, while
     README.md promised "a plugin newer than the CLI says so loudly at session start". It
     now rides out as `systemMessage`, which renders at exit 0 and blocks nothing.
-
-    Surfaced on **sessionstart only**, and that is the gate. `pretooluse` fires on every
-    Bash call, so emitting there would print the same warning dozens of times a session
-    and teach people to scroll past it — which is how the guard stops working even when it
-    is finally visible. Once, at the start, is what the README already promised. Other
-    hooks keep the stderr line for the debug log.
     """
-    msg = skew_message(plugin_version)
-    if msg:
-        if name == "sessionstart":
-            _pending_system.append(msg)
-        else:
-            print(msg, file=sys.stderr)
+    _queue_plugin_notices(name, plugin_version)
     fn = _HANDLERS.get(name)
     if fn is None:
         print(f"charter hook: unknown hook '{name}' (known: {', '.join(sorted(_HANDLERS))})",

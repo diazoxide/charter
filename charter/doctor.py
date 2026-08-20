@@ -1520,21 +1520,11 @@ def check_vault_registry_divergence() -> Result:
 
 
 def _plugin_ids(root: Path) -> tuple[str, str]:
-    """``(plugin, marketplace)`` from the manifests the installed plugin carries.
-
-    Both files sit in the directory ``CLAUDE_PLUGIN_ROOT`` already names, so the id is
-    exact without parsing Claude Code's cache path — a layout charter does not own and
-    must not depend on. Either being absent falls back to a placeholder: the id is a
-    convenience, while naming the two *steps* is the part that was missing.
-    """
-    def name(filename: str, fallback: str) -> str:
-        try:
-            doc = json.loads((root / ".claude-plugin" / filename).read_text())
-            return (doc.get("name") or "").strip() or fallback
-        except (OSError, ValueError, AttributeError):
-            return fallback
-
-    return name("plugin.json", "<plugin>"), name("marketplace.json", "<marketplace>")
+    """``(plugin, marketplace)`` — see :func:`hooks.plugin_ids`, which owns this now that
+    the hook surface prints the same upgrade instructions. Two copies could disagree about
+    what to type, which is the one thing this string exists to get right."""
+    from . import hooks
+    return hooks.plugin_ids(root)
 
 
 def check_plugin_skew() -> Result:
@@ -1589,12 +1579,30 @@ def check_plugin_skew() -> Result:
     # per project, which fails outright rather than silently. Observed together: a plugin
     # two minor versions behind, with `doctor` run repeatedly throughout.
     plugin_name, marketplace = _plugin_ids(Path(root))
+    # Version lag on its own is not a finding — an older plugin that still dispatches every
+    # handler behaves identically, and warning about it would train people to scroll past
+    # the row, which costs the case below. What matters is whether `hooks/hooks.json`
+    # actually invokes what this CLI ships: a handler the manifest never names simply does
+    # not run, and the tally it would have written reads as empty rather than absent (#306).
+    #
+    # WARN, not FAIL: nothing is broken, and `cmd_doctor` exits non-zero only on FAIL, which
+    # would turn a benign lag into a blocked preflight. Reaching the session is not this
+    # row's job either — `hooks.stale_plugin_message` rides out as `systemMessage` at
+    # sessionstart, because a WARN here prints through no surface at all (see the FAIL
+    # branch above, which records exactly that).
+    stale = hooks.stale_plugin_message(Path(root))
+    upgrade = (f"`claude plugin marketplace update {marketplace}` (skip it and the next is "
+               f"a no-op), then `claude plugin update {plugin_name}@{marketplace} --scope "
+               f"<project|user, see: claude plugin list>`")
+    if stale:
+        missing = sorted(set(hooks._HANDLERS) - (hooks.dispatched_handlers(Path(root)) or set()))
+        return Result("plugin", WARN,
+                      detail=f"v{plugin_version} (CLI v{hooks.MIN_PLUGIN_VERSION}) — not "
+                             f"dispatching {', '.join(missing)}",
+                      hint=f"those handlers ship with this CLI and never run here. {upgrade}")
     return Result("plugin", OK,
                   detail=f"v{plugin_version} (CLI v{hooks.MIN_PLUGIN_VERSION}) — older "
-                         f"plugin, supported. Upgrade: `claude plugin marketplace update "
-                         f"{marketplace}` (skip it and the next is a no-op), then `claude "
-                         f"plugin update {plugin_name}@{marketplace} --scope "
-                         f"<project|user, see: claude plugin list>`")
+                         f"plugin, dispatching every handler. Upgrade: {upgrade}")
 
 
 #: Launcher basenames charter itself removed, so it can name the replacement instead of
