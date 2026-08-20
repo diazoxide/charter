@@ -33,3 +33,4 @@ Written by the persona as it learns; committed and shared.
 - [Process lessons from the 'autonomy' workspace (2026-08-19/20), earned th](process-lessons-from-the-autonomy-workspace-2026.md)
 - [charter's SessionStart preflight only prints when doctor EXITS NON-ZERO](charter-s-sessionstart-preflight-only-prints-whe.md)
 - [charter's status line NEVER touches the forge on the render path — this](charter-s-status-line-never-touches-the-forge-on.md)
+- [Release 0.47.0 (2026-08-20) shipped #309+#310+#307 in ONE bump — the bat](release-0-47-0-2026-08-20-shipped-309-310-307-in.md)

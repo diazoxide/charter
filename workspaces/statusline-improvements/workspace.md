@@ -35,7 +35,11 @@ the 30-minute mark and flag it `presumed dead` (chip renders `⚡ 45m?`, age sti
 still cannot accumulate. Mark over colour escalation, and `?` because every other chip glyph
 is taken. One release carries #309 + #308 together.
 
-**Release 0.47.0** (#309 + #310 + #307) prepared and PR'd as diazoxide/charter#312. Minor, not
+**Release 0.47.0 — SHIPPED.** PR diazoxide/charter#312 merged as `96401f8`, tag `v0.47.0`
+pushed, `release.yml` green, live on PyPI (2 artifacts), this machine upgraded: CLI 0.47.0 and
+plugin 0.44.1 → 0.47.0 (project scope; a restart applies it). Smoke-tested against the INSTALLED
+CLI, not the clone: `reddit` renders with no vault mark, `forge ◦`, strip reads
+`ctx 31% · cache 92%`, `doctor` 1.9s. Minor, not
 patch: two changes alter default rendering / add a diagnostic surface. Preparing it surfaced a
 landmine — #307's news entry carried `check: doctor`, and `charter doctor` runs every RELEASED
 entry's `check:` in-process through `news._dispatch`, which has no re-entrancy guard. Dormant on
