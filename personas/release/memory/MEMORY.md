@@ -15,3 +15,4 @@ Written by the persona as it learns; committed and shared.
 - [A release now moves five things, not four: the four version files plus '](a-release-now-moves-five-things-not-four-the-fou.md)
 - [Release mechanics corrections found cutting 0.46.0 (2026-08-19). (1) hoo](release-mechanics-corrections-found-cutting-0-46.md)
 - [CORRECTION to the PyPI-verification memory (observed cutting 0.46.0, 202](correction-to-the-pypi-verification-memory-obser.md)
+- [Verification lesson from 0.46.2 -> 0.46.3 (2026-08-20): a feature whose](verification-lesson-from-0-46-2-0-46-3-2026-08-2.md)
