@@ -27,6 +27,14 @@ Asks 1 + 2 are **DELIVERED** — PR diazoxide/charter#309 squash-merged to `main
 back on `main` and the manifest re-snapshotted. Ask 3 (cadence) remains deferred by
 decision, with its own todo.
 
+**In flight now:** #308 (branch `inflight-presumed-dead`) — decided 2026-08-20 to fix it here
+after all, *before* releasing, because #309's age vocabulary is unreachable without it and
+release-per-fix is the pattern that put a broken 0.46.2 on PyPI. Design: keep the record past
+the 30-minute mark and flag it `presumed dead` (chip renders `⚡ 45m?`, age still climbing,
+`?` = charter cannot know whether the process died); pruning moves to a 24h horizon so strays
+still cannot accumulate. Mark over colour escalation, and `?` because every other chip glyph
+is taken. One release carries #309 + #308 together.
+
 Known gaps carried forward, both deliberate:
 - `docs/assets/statusline.svg` + `social-card.svg` still show `⚡92%` and the pre-`▪/▸/▫`
   markers. They are captured renders with hand-positioned per-glyph `x` coordinates, so
