@@ -26,6 +26,12 @@ dist/
 !/workspaces/autonomy/memory/**
 !/workspaces/autonomy/todos
 !/workspaces/autonomy/todos/**
+!/workspaces/news-dispatch-guard/workspace.json
+!/workspaces/news-dispatch-guard/workspace.md
+!/workspaces/news-dispatch-guard/memory
+!/workspaces/news-dispatch-guard/memory/**
+!/workspaces/news-dispatch-guard/todos
+!/workspaces/news-dispatch-guard/todos/**
 !/workspaces/plane-shape/workspace.json
 !/workspaces/plane-shape/workspace.md
 !/workspaces/plane-shape/memory
