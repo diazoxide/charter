@@ -11,7 +11,7 @@ Four zones now, each answering one question:
     ⬢ umbrella-improvements · ws 9                      WHERE I am
     ◫ repos 2/38            │ ◈ personas 13 · vaults 6  what each column holds
     ├─ …repo rows…          │ …persona chips…           WHAT I'm on × WHO I am
-    ctx 22% · ⚡100% · ⛊1 denied            ⬢ charter    THIS session · the tool
+    ctx 22% · cache 100% · ⛊1 denied         ⬢ charter    THIS session · the tool
 
 The rule to keep: a count lives next to what it counts.
 """
@@ -121,7 +121,10 @@ class Zones(PersonaIso):
     def test_session_gauges_live_on_the_last_content_line(self):
         ls = [ln for ln in _lines(_USAGE) if ln.strip()]
         self.assertIn("ctx", ls[-1])
-        self.assertIn("⚡", ls[-1])
+        # `cache`, not `⚡`: the bolt belongs to a running dispatch now, and the two
+        # gauges read as a pair because both carry a word.
+        self.assertIn("cache", ls[-1])
+        self.assertNotIn("⚡", ls[-1])
 
     def test_the_brand_sits_at_the_end_of_the_session_strip(self):
         ls = [ln for ln in _lines(_USAGE) if ln.strip()]
@@ -135,7 +138,7 @@ class Zones(PersonaIso):
         last = max(i for i, ln in enumerate(ls) if ln.strip())
         for ln in ls[head:last]:
             left = ln.split("│", 1)[0] if "│" in ln[40:] else ln
-            for token in ("denied", "recorded", "dispatched", "ctx", "⚡"):
+            for token in ("denied", "recorded", "dispatched", "ctx", "cache", "⚡"):
                 self.assertNotIn(token, left, f"session news leaked into the repo column: {ln}")
 
 
@@ -320,7 +323,10 @@ class Framed(PersonaIso):
     def test_session_gauges_live_on_the_last_content_line(self):
         ls = [ln for ln in _lines(_USAGE) if ln.strip()]
         self.assertIn("ctx", ls[-1])
-        self.assertIn("⚡", ls[-1])
+        # `cache`, not `⚡`: the bolt belongs to a running dispatch now, and the two
+        # gauges read as a pair because both carry a word.
+        self.assertIn("cache", ls[-1])
+        self.assertNotIn("⚡", ls[-1])
 
     def test_the_brand_sits_at_the_end_of_the_session_strip(self):
         ls = [ln for ln in _lines(_USAGE) if ln.strip()]
@@ -334,7 +340,7 @@ class Framed(PersonaIso):
         last = max(i for i, ln in enumerate(ls) if ln.strip())
         for ln in ls[head:last]:
             left = ln.split("│", 1)[0] if "│" in ln[40:] else ln
-            for token in ("denied", "recorded", "dispatched", "ctx", "⚡"):
+            for token in ("denied", "recorded", "dispatched", "ctx", "cache", "⚡"):
                 self.assertNotIn(token, left, f"session news leaked into the repo column: {ln}")
 
 

@@ -41,3 +41,13 @@ ten-second refresh, a seconds figure would be a number nobody could trust.
 
 The session strip keeps a bare `⚡ 3`. The persona column caps at fourteen rows and
 disappears entirely on a narrow pane, so the aggregate is what survives cropping.
+
+**The prompt-cache gauge now reads `cache NN%`, not `⚡NN%`.** With the chips speaking, the
+bolt means *a dispatch is running* in two places at once — on the chip that owns it and as
+the strip's aggregate — and the cache rate was sitting on the same strip wearing the same
+glyph, the two told apart only by a `%`. The bolt stays with the fact that renders twice
+and has to read the same in both. The gauge takes a word, which is what its neighbour
+`ctx NN%` always had and what a ratio nobody can guess from a symbol always wanted; its
+colour thresholds and every diagnostic behind it (`↻N`, the rebuild warning) are unchanged.
+
+The strip now reads `ctx 22% · cache 100% · ⚡ 3`.

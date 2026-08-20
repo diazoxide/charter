@@ -378,9 +378,9 @@ always sits next to the thing it counts:
 ```
 ⬢ umbrella-improvements · todo 3 · ws 9                           ← WHERE am I
 ◫ repos 2/38                    │ ◈ personas 13 · vaults 6 · shared ✎130
-├─ easysender-ui-workspace  main  ✗ failed │ ◆ steward · ✎2       ← WHAT I'm on × WHO I am
-└─ iam-service ⑂2           main  ✓ passed │ ○ devops ✓ ✎192
-ctx 22% · ⚡90% · ⛊1 denied · ✎1 recorded            ⬢ charter 0.10.0   ← THIS session
+├─ easysender-ui-workspace  main  ✗ failed │ ◆ steward ✎2         ← WHAT I'm on × WHO I am
+└─ iam-service ⑂2           main  ✓ passed │ ○ devops ✎192 ⚡ 4m
+ctx 22% · cache 90% · ⚡ 1 · ⛊1 denied · ✎1 recorded  ⬢ charter 0.10.0   ← THIS session
 ```
 
 - **Top — identity and navigation.** The active workspace, how many todos it still has
@@ -391,12 +391,17 @@ ctx 22% · ⚡90% · ⛊1 denied · ✎1 recorded            ⬢ charter 0.10.0 
   when the count is zero, like everything else that would otherwise render every turn.
 - **Columns — the Role × Task axes.** Left is the *task* (repos cloned into this
   workspace, their branch, CI and MRs); right is the *role* (the persona roster, each
-  chip carrying its vault state and memory counts). Personas are global, repos are
+  chip carrying its memory counts, a `⚡` while it has sub-agents running, and a vault
+  mark only when its vault cannot be used). Personas are global, repos are
   workspace-scoped — two independent axes, two columns.
-- **Bottom — this session.** Context and prompt-cache health, plus counters for what has
-  happened: in-flight sub-agents, guard denials, memories recorded, dispatches. Absent
-  entirely when there is nothing to report, so a denial appearing there is *news*.
-  The brand and version sit at its right edge.
+- **Bottom — this session.** Context and prompt-cache health (`ctx NN%`, `cache NN%`),
+  plus counters for what has happened: in-flight sub-agents, guard denials, memories
+  recorded, dispatches. Absent entirely when there is nothing to report, so a denial
+  appearing there is *news*. The brand and version sit at its right edge.
+
+  `⚡` is the one glyph left on that strip and it means one thing — a dispatch is
+  running — the same thing it means on a persona chip. The gauges carry words for
+  exactly that reason: the bolt belongs to the fact that renders in two places.
 - **Alerts** (a pinned-version mismatch, workspaces needing `reinit`) get their own
   full-width lines above the strip — actionable problems carrying the command that
   fixes them, not telemetry.

@@ -283,9 +283,15 @@ def _context_gauge(payload: dict) -> list[str]:
     stable; if cache *creation* stays high turn after turn, something keeps changing the prefix
     (a model/effort switch, an MCP server connecting, a plugin toggle, `/compact`).
 
-    Renders ``ctx NN%`` (context window used) and ``⚡NN%`` (share of this turn's input served
-    from cache). Both are absent early in a session and right after `/compact`, when the payload
-    has no usage yet — we simply show nothing rather than a misleading 0."""
+    Renders ``ctx NN%`` (context window used) and ``cache NN%`` (share of this turn's input
+    served from cache). Both are absent early in a session and right after `/compact`, when the
+    payload has no usage yet — we simply show nothing rather than a misleading 0.
+
+    The cache figure wore a ``⚡`` until the persona chips gave that glyph a meaning of its own
+    — *a dispatch is running* — which then rendered on the same strip as the chips' aggregate,
+    two bolts apart only by a ``%``. The bolt went to the fact that has two rendering sites and
+    needs them to read as one thing; the gauge took a word, which is what its sibling ``ctx``
+    already had and what a rate nobody can guess from a symbol always wanted."""
     cw = (payload or {}).get("context_window") or {}
     out: list[str] = []
     pct = cw.get("used_percentage")
@@ -299,7 +305,9 @@ def _context_gauge(payload: dict) -> list[str]:
         hit = round(100 * read / (read + write))
         # <50% sustained = the prefix is churning; that's the expensive failure mode.
         col = _GREEN if hit >= 80 else (_YELLOW if hit >= 50 else _RED)
-        out.append(f"{col}⚡{hit}%{_R}")
+        # Dim label, coloured number — the exact shape `ctx NN%` above uses, so the two
+        # session gauges read as a pair rather than as a word and a symbol.
+        out.append(f"{_DIM}cache{_R} {col}{hit}%{_R}")
         try:
             sid = payload.get("session_id") or ""
             trend = _record_turn(sid, hit, read, write)
@@ -1584,10 +1592,15 @@ def _root_marker() -> str:
 def _session_strip(payload: dict, sid: str | None) -> str:
     """The bottom zone: everything true of **this session**, on one line.
 
-    ``ctx``/``⚡`` (context + cache health) sit here rather than in the top line
-    because they describe the session, not the workspace — the top line answers
-    *where am I*, and mixing a session gauge into it was most of why the old header
-    read as unrelated items in a row.
+    ``ctx``/``cache`` (context window + prompt-cache health) sit here rather than in
+    the top line because they describe the session, not the workspace — the top line
+    answers *where am I*, and mixing a session gauge into it was most of why the old
+    header read as unrelated items in a row.
+
+    Every gauge here carries a word; the one glyph on the strip is ``⚡``, and it means
+    exactly what it means on a persona chip — a dispatch is running. That is the whole
+    reason the cache rate gave the bolt up: a fact rendered in two places has to read
+    the same in both, and a second meaning beside it on one line erases both.
 
     Empty string when there is nothing to report (a fresh session or one just past
     ``/compact`` has no usage yet): the brand alone does not justify a row.
@@ -1764,7 +1777,7 @@ def render(payload: dict | None = None) -> str:
         reinit = f"{_YELLOW}⚠ reinit: {_BOLD}charter ws reinit{_R}" if _stale_structure(active) else None
         # Zone 1 — WHERE I am. Identity and navigation only: which workspace is active,
         # what it still means to do, and how many others exist to switch to. Everything
-        # that used to ride along here (repo count, vault count, ctx/⚡) described
+        # that used to ride along here (repo count, vault count, ctx/cache) described
         # something else and now sits with the thing it describes.
         #
         # Open todos are a property of the ACTIVE WORKSPACE, so the layout's one rule —
