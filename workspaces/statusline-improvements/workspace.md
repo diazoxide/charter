@@ -39,8 +39,10 @@ Known gaps carried forward, both deliberate:
 - `docs/assets/statusline.svg` + `social-card.svg` still show `⚡92%` and the pre-`▪/▸/▫`
   markers. They are captured renders with hand-positioned per-glyph `x` coordinates, so
   they cannot be text-edited — regenerating them is a capture run against a specific plane.
-- The age badge can never render `2h`/`3d` in practice: `inflight` prunes at its 30-minute
-  TTL first. That is diazoxide/charter#308.
+- ~~The age badge can never render `2h`/`3d` in practice: `inflight` prunes at its 30-minute
+  TTL first.~~ **Fixed** — diazoxide/charter#308, PR #310 (`inflight-presumed-dead`).
+  A record past 30 min is now kept and flagged rather than deleted; pruning moved to 24h,
+  and the chip appends `?` to a climbing age (`⚡2 47m?`). Ships with #309 in one bump.
 
 ### Facts found while scoping (2026-08-20)
 

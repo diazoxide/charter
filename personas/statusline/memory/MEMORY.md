@@ -11,3 +11,4 @@ Written by the persona as it learns; committed and shared.
 - [Glyph vocabulary already spoken for on a persona CHIP in charter/statusl](glyph-vocabulary-already-spoken-for-on-a-persona.md)
 - [A source edit that RESTORES a file to its exact previous size within the](a-source-edit-that-restores-a-file-to-its-exact-.md)
 - [One glyph, one meaning — and the tiebreak when two surfaces want the sam](one-glyph-one-meaning-and-the-tiebreak-when-two-.md)
+- [A statusline surface that DELETES the record it draws from turns the mos](a-statusline-surface-that-deletes-the-record-it-.md)
