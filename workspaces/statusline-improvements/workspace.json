@@ -4,9 +4,9 @@
   "repos": [
     {
       "name": "charter",
-      "branch": "statusline-persona-chip-signals"
+      "branch": "main"
     }
   ],
-  "updated_at": "2026-08-20T09:25:52+00:00",
+  "updated_at": "2026-08-20T10:11:24+00:00",
   "updated_by": "Aaron Yordanyan"
 }

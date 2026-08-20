@@ -22,10 +22,10 @@ Improve the charter status line's UX — how the plane's state reads at a glance
 
 ### Status (2026-08-20)
 
-Asks 1 + 2 are **built, reviewed and green** — PR diazoxide/charter#309 on branch
-`statusline-persona-chip-signals`: 2848 tests OK locally (2827 on `main`), CI green on
-3.11-3.14, `MERGEABLE`. **Not merged** — `gh pr merge` was denied by this session's
-permission classifier, so the merge is the operator's to run.
+Asks 1 + 2 are **DELIVERED** — PR diazoxide/charter#309 squash-merged to `main` as
+`bdb0031` on 2026-08-20. 2848 tests OK (2827 before), CI green on 3.11-3.14. The clone is
+back on `main` and the manifest re-snapshotted. Ask 3 (cadence) remains deferred by
+decision, with its own todo.
 
 Known gaps carried forward, both deliberate:
 - `docs/assets/statusline.svg` + `social-card.svg` still show `⚡92%` and the pre-`▪/▸/▫`

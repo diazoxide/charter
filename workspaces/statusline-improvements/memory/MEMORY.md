@@ -5,3 +5,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Grilled the three statusline asks with the operator (2026-08-20). Asks 1](20260820-125834-grilled-the-three-statusline-asks-with-the-opera.md)
 - [Persona chip signals shipped in diazoxide/charter#309 (branch statusline](20260820-132545-persona-chip-signals-shipped-in-diazoxide-charte.md)
 - [Statusline glyph rule settled (diazoxide/charter#309, commit 8c93847): ⚡](20260820-134827-statusline-glyph-rule-settled-diazoxide-charter-.md)
+- [Closed todo: Ship the persona-chip changes: vault silent-when-fine (◦/!)](20260820-141101-closed-todo-ship-the-persona-chip-changes-vault-.md)
