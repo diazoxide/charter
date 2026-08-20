@@ -35,6 +35,16 @@ the 30-minute mark and flag it `presumed dead` (chip renders `⚡ 45m?`, age sti
 still cannot accumulate. Mark over colour escalation, and `?` because every other chip glyph
 is taken. One release carries #309 + #308 together.
 
+**Release 0.47.0** (#309 + #310 + #307) prepared and PR'd as diazoxide/charter#312. Minor, not
+patch: two changes alter default rendering / add a diagnostic surface. Preparing it surfaced a
+landmine — #307's news entry carried `check: doctor`, and `charter doctor` runs every RELEASED
+entry's `check:` in-process through `news._dispatch`, which has no re-entrancy guard. Dormant on
+`main` (`version: unreleased` is never probed), armed by the stamp, and CI could not have caught
+it before the tag burned (the news + tag guards pass in 0.1s; only `test` fails, after the tag
+push has already fired PyPI). Reproduced at a 20s cap vs 2.1s fixed. Line removed here; the
+missing guard is filed as diazoxide/charter#311. **Asset-freshness gate passes at lag exactly 1
+— 0.48.0 WILL fail it until the captures are regenerated.**
+
 Known gaps carried forward, both deliberate:
 - `docs/assets/statusline.svg` + `social-card.svg` still show `⚡92%` and the pre-`▪/▸/▫`
   markers. They are captured renders with hand-positioned per-glyph `x` coordinates, so
