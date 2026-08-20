@@ -8,3 +8,4 @@ Written by the persona as it learns; committed and shared.
 - [_TREE_WT (╰─) must stay textually distinct from _TREE_END (└─): render's](tree-wt-must-stay-textually-distinct-from-tree-e.md)
 - [The status line renders on EVERY turn and is fast, but it is NOT subproc](the-status-line-renders-on-every-turn-and-is-fas.md)
 - [Regenerating docs/assets captures: the render's ACTIVE PERSONA is as ses](regenerating-docs-assets-captures-the-render-s-a.md)
+- [Glyph vocabulary already spoken for on a persona CHIP in charter/statusl](glyph-vocabulary-already-spoken-for-on-a-persona.md)

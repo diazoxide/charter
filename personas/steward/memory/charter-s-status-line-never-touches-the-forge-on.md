@@ -1,0 +1,5 @@
+# charter's status line NEVER touches the forge on the render path — this
+
+_2026-08-20 12:58 · persistent_
+
+charter's status line NEVER touches the forge on the render path — this kills the common assumption that 'the statusline is slow because it calls GitHub/GitLab'. glstate.read_for() reads a disk cache; glstate.maybe_spawn() kicks a DETACHED 'charter gl-refresh' at most once per 120s (SPAWN_COOLDOWN) when entries exceed a 300s REFRESH_TTL, and a cached value displays for up to 2h (DISPLAY_TTL). The 10-second cadence is Claude Code's statusLine.refreshInterval in .claude/settings.json, written by charter init (commands.py _STATUSLINE) and ENFORCED by tests/test_statusline_refresh.py to stay in 5..30. The real cost of 1Hz is the render itself: ~190ms wall on this plane, of which ~50ms is Python interpreter startup + imports — ~20% of a core continuously. Claude Code's refreshInterval floor is 1s, so the fastest possible 'animation' is 1 frame per second. Any real sub-second work means pre-rendering the line to a file and making the statusLine command a near-instant read.
