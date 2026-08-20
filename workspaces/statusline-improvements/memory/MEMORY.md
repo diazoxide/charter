@@ -6,3 +6,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Persona chip signals shipped in diazoxide/charter#309 (branch statusline](20260820-132545-persona-chip-signals-shipped-in-diazoxide-charte.md)
 - [Statusline glyph rule settled (diazoxide/charter#309, commit 8c93847): ⚡](20260820-134827-statusline-glyph-rule-settled-diazoxide-charter-.md)
 - [Closed todo: Ship the persona-chip changes: vault silent-when-fine (◦/!)](20260820-141101-closed-todo-ship-the-persona-chip-changes-vault-.md)
+- [Closed todo: Watch diazoxide/charter#308 (stuck sub-agent disappears at ](20260820-144908-closed-todo-watch-diazoxide-charter-308-stuck-su.md)
