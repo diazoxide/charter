@@ -130,7 +130,7 @@ fixing anything else.
   Mitigated by restricting any generated allow-list to read-only verbs, which is safe
   under either answer.
 
-## Implementation status — SHIPPED · 0.46.0 and 0.46.1 released
+## Implementation status — CLOSED · shipped across 0.46.0 – 0.46.3
 
 | # | What landed | Where |
 | --- | --- | --- |
@@ -193,6 +193,33 @@ by naming the tag `release-1`. Attended behaviour asserted unchanged, as hard as
 **The durable lesson: when converting an `ask` into an `allow`, enumerate what that ask was
 INCIDENTALLY covering.** We reasoned carefully about what the nudge was *for*, and never asked
 what else it was catching.
+
+## Closing note — what this workspace actually covered, and what it should not have
+
+**Delivered (autonomy, its real subject):** #288–#292 in 0.46.0, and #299 in 0.46.1 — the
+release floor, found by asking what an autonomous agent would do with the task that produced
+0.46.0.
+
+**Absorbed but off-subject, recorded so a reader is not misled:** #301 `guard allow --local`
+(0.46.2) and its follow-up defect #305 (0.46.3) are permissions ergonomics; #302 was a flaky
+test unrelated to any of it. They arrived through a genuine causal chain — each was found by
+verifying the one before — but they are not autonomy, and a charter that describes a grab-bag
+is worse at its only job.
+
+**Deliberately not carried here:** #306, the one-directional plugin-skew guard. It wants its
+own workspace and a clean charter.
+
+### Process lessons, worth more than the code
+
+* **Batch releases.** Four in one day meant three hurried verification passes instead of one
+  careful one, and 0.46.2 shipped broken.
+* **Route release cycles to the `release` persona.** It holds exactly the knowledge that bit
+  us — the PyPI index-lag lie, the five version points, the asset-freshness gate.
+* **Split by subject, not by discovery.** The causal chain belonged in one session; the
+  workspace should have forked when the chain left the vision.
+* **Verify in the field, not only in tests.** Every finding that mattered came from running
+  the published thing: the `cmd` operand leak, #299, the `--local` gitignore defect, and the
+  plugin sitting two minors behind while `doctor` ticked green.
 
 ## Glossary
 

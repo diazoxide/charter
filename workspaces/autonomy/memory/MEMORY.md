@@ -9,3 +9,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Closed todo: #292 — _ask() falls back to allow under bypassPermissions O](20260819-182206-closed-todo-292-ask-falls-back-to-allow-under-by.md)
 - [Closed todo: #299 — release verbs on the floor: DENY (not ask) under byp](20260819-190042-closed-todo-299-release-verbs-on-the-floor-deny-.md)
 - [Closed todo: #301 — guard allow --local: write the harness's machine-loc](20260820-094429-closed-todo-301-guard-allow-local-write-the-harn.md)
+- [Closed out. #306 (one-directional skew guard) is deliberately NOT carrie](20260820-095932-closed-out-306-one-directional-skew-guard-is-del.md)
