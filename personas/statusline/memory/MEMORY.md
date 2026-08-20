@@ -9,3 +9,5 @@ Written by the persona as it learns; committed and shared.
 - [The status line renders on EVERY turn and is fast, but it is NOT subproc](the-status-line-renders-on-every-turn-and-is-fas.md)
 - [Regenerating docs/assets captures: the render's ACTIVE PERSONA is as ses](regenerating-docs-assets-captures-the-render-s-a.md)
 - [Glyph vocabulary already spoken for on a persona CHIP in charter/statusl](glyph-vocabulary-already-spoken-for-on-a-persona.md)
+- [A source edit that RESTORES a file to its exact previous size within the](a-source-edit-that-restores-a-file-to-its-exact-.md)
+- [One glyph, one meaning — and the tiebreak when two surfaces want the sam](one-glyph-one-meaning-and-the-tiebreak-when-two-.md)

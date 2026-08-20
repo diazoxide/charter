@@ -1,0 +1,12 @@
+{
+  "name": "statusline-improvements",
+  "description": "",
+  "repos": [
+    {
+      "name": "charter",
+      "branch": "statusline-persona-chip-signals"
+    }
+  ],
+  "updated_at": "2026-08-20T09:25:52+00:00",
+  "updated_by": "Aaron Yordanyan"
+}

@@ -20,6 +20,20 @@ Improve the charter status line's UX — how the plane's state reads at a glance
 2. **Running-persona indicator on the persona rows** — ship here.
 3. **Render cadence / animation** — *deferred by decision*, see "Cadence" below.
 
+### Status (2026-08-20)
+
+Asks 1 + 2 are **built, reviewed and green** — PR diazoxide/charter#309 on branch
+`statusline-persona-chip-signals`: 2848 tests OK locally (2827 on `main`), CI green on
+3.11-3.14, `MERGEABLE`. **Not merged** — `gh pr merge` was denied by this session's
+permission classifier, so the merge is the operator's to run.
+
+Known gaps carried forward, both deliberate:
+- `docs/assets/statusline.svg` + `social-card.svg` still show `⚡92%` and the pre-`▪/▸/▫`
+  markers. They are captured renders with hand-positioned per-glyph `x` coordinates, so
+  they cannot be text-edited — regenerating them is a capture run against a specific plane.
+- The age badge can never render `2h`/`3d` in practice: `inflight` prunes at its 30-minute
+  TTL first. That is diazoxide/charter#308.
+
 ### Facts found while scoping (2026-08-20)
 
 - The persona **chips** (`statusline._persona_chips`, right column) are the real surface.
@@ -62,6 +76,15 @@ Improve the charter status line's UX — how the plane's state reads at a glance
   related real bug — `inflight` prunes at 30 min, so a *stuck* agent disappears rather than
   escalating — was filed upstream as diazoxide/charter#308 and deliberately not fixed here:
   it changes `inflight` semantics, not what the line displays.
+
+- **`⚡` belongs to work in flight, not to the cache gauge.** Found only after the first
+  implementation landed: `_context_gauge` already rendered `⚡NN%` for the prompt-cache hit
+  rate on the SAME session strip, so dropping the "in flight" label produced
+  `ctx 22% · ⚡100% · ⚡ 3` — two meanings, one glyph, told apart by a `%`. Resolved by
+  retiring the bolt from the cache gauge (`cache NN%`, matching its labelled sibling
+  `ctx NN%`) rather than by re-labelling the count: the chips give ⚡ a second rendering
+  site, so the strip's aggregate has to keep it to read as the same fact. Lesson for the
+  next glyph: check the *strip's* vocabulary too, not just the chip's.
 
 ### Cadence (deferred — re-grill after the display changes ship)
 
