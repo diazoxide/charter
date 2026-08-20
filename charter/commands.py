@@ -637,6 +637,10 @@ _GITIGNORE_BASELINE = """\
 # NEVER commit this — it holds credentials.
 /.charter/
 
+# This machine's own harness permissions (`charter guard ask|allow --local`). Its committed
+# sibling `.claude/settings.json` is deliberately NOT ignored — that one is the team's.
+/.claude/settings.local.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -669,6 +673,8 @@ def _ensure_gitignore(root: Path) -> bool:
         missing += ["/workspaces/*/*", "!/workspaces/.gitkeep"]
     if ".charter/" not in body:
         missing.append("/.charter/")
+    if LOCAL_SETTINGS_IGNORE not in existing_lines:
+        missing.append(LOCAL_SETTINGS_IGNORE)
     if not missing:
         return False
     # The write itself goes through the one shared appender — `charter browser install`
@@ -891,6 +897,8 @@ def add_permission_rule(root: Path, rule: str, bucket: str,
     two files differ only in blast radius, so they must not differ in how carefully they
     are parsed or how firmly a malformed one is refused.
     """
+    if local:
+        _ensure_local_settings_ignored(root)
     settings, path = (_load_json_settings(Path(root) / LOCAL_SETTINGS) if local
                       else _load_settings(root))
     if settings is None:
@@ -909,10 +917,37 @@ def add_permission_rule(root: Path, rule: str, bucket: str,
     return "added", str(path)
 
 
-#: The plane's MACHINE-LOCAL settings — gitignored by `charter init`, so a rule written here
-#: is one person's decision on one machine. `.claude/settings.json`, its committed sibling,
-#: carries the same key names and a completely different blast radius.
+#: The plane's MACHINE-LOCAL settings — a rule written here is one person's decision on one
+#: machine. `.claude/settings.json`, its committed sibling, carries the same key names and a
+#: completely different blast radius.
 LOCAL_SETTINGS = Path(".claude") / "settings.local.json"
+
+#: The `.gitignore` line that makes :data:`LOCAL_SETTINGS` actually local. Written by the
+#: baseline for a fresh plane AND ensured by `_ensure_local_settings_ignored` at the moment a
+#: local rule is written, because a plane created before this existed has neither.
+LOCAL_SETTINGS_IGNORE = "/.claude/settings.local.json"
+
+
+def _ensure_local_settings_ignored(root: Path) -> None:
+    """Make `--local`'s promise true in THIS plane before relying on it.
+
+    The flag shipped claiming `charter init` gitignored the file. It did not — charter's own
+    repo has that line by hand, and checking there and generalising is how the claim was
+    made. In a fresh plane the file was committable, so the one command the flag exists for,
+    `charter guard allow --local 'gh pr merge *'`, would have landed in the next commit as
+    the team-wide rule it was chosen to avoid.
+
+    Fixing the baseline alone would leave every plane created before today broken, which is
+    precisely where somebody reaches for `--local` and is silently let down. So the guarantee
+    lives at the point of use as well: additive, idempotent, and never rewriting a line
+    anybody else put there.
+    """
+    p = Path(root) / ".gitignore"
+    body = p.read_text() if p.exists() else ""
+    if LOCAL_SETTINGS_IGNORE in {ln.strip() for ln in body.splitlines()}:
+        return
+    util.append_gitignore(root, [LOCAL_SETTINGS_IGNORE],
+                          "added by `charter guard --local`")
 
 
 def add_ask_rule(root: Path, rule: str, local: bool = False) -> tuple[str, str]:

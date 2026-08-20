@@ -168,8 +168,12 @@ class TestGitignorePresenceCheckIsPrecise(InitIso):
         self.assertIn("!/workspaces/.gitkeep", body)
 
     def test_the_real_anchor_is_still_recognised_as_present(self):
+        """Nothing is re-added when every baseline rule is already there. The fixture
+        lists them all deliberately — a rule missing from it would make this assert
+        idempotence while actually exercising the append path."""
         (self.root / ".gitignore").write_text(
-            "/workspaces/*/*\n!/workspaces/.gitkeep\n/.charter/\n")
+            "/workspaces/*/*\n!/workspaces/.gitkeep\n/.charter/\n"
+            f"{commands.LOCAL_SETTINGS_IGNORE}\n")
         before = (self.root / ".gitignore").read_text()
         self._init()
         after = (self.root / ".gitignore").read_text()
