@@ -40,27 +40,48 @@ def _safe_name(agent: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in agent)[:64]
 
 
+def live_records(exclude_token: str | None = None) -> list[tuple[str, float]]:
+    """``(agent, started_at)`` per live dispatch, duplicates preserved, stale pruned.
+
+    The start time is what separates "two agents are out" from "two agents have been
+    out for forty minutes", and only the second is worth interrupting for. It is read
+    from the record's own ``ts``, falling back to the file's mtime — the same instant,
+    and the only answer available for a record written by a charter that predates the
+    field.
+
+    :func:`live` is a projection of this rather than a second walk of the directory:
+    one glob, one pruning rule. A caller that wants the names only should keep calling
+    it — the extra element is a cost the aggregate has no use for.
+    """
+    d = _dir()
+    if not d.exists():
+        return []
+    out: list[tuple[str, float]] = []
+    now = time.time()
+    for p in d.glob("*.json"):
+        try:
+            mtime = p.stat().st_mtime
+            if now - mtime > TTL_SECONDS:
+                p.unlink(missing_ok=True)      # dead: killed process, or no PostToolUse
+                continue
+            if exclude_token and p.stem == exclude_token:
+                continue
+            rec = json.loads(p.read_text())
+            ts = rec.get("ts")
+            out.append((rec.get("agent") or p.stem,
+                        float(ts) if isinstance(ts, (int, float)) else mtime))
+        except (OSError, TypeError, ValueError):
+            continue
+    return out
+
+
 def live(exclude_token: str | None = None) -> list[str]:
     """Agent names currently in flight, stale entries pruned.
 
     ``exclude_token`` drops one specific record — the caller's own, so a dispatch
     never reports itself as a concurrent peer.
     """
-    d = _dir()
-    if not d.exists():
-        return []
-    out, now = [], time.time()
-    for p in d.glob("*.json"):
-        try:
-            if now - p.stat().st_mtime > TTL_SECONDS:
-                p.unlink(missing_ok=True)      # dead: killed process, or no PostToolUse
-                continue
-            if exclude_token and p.stem == exclude_token:
-                continue
-            out.append(json.loads(p.read_text()).get("agent") or p.stem)
-        except (OSError, ValueError):
-            continue
-    return sorted(out)
+    return sorted(name for name, _ in live_records(exclude_token))
 
 
 def start(agent: str) -> str | None:

@@ -939,7 +939,10 @@ def _persona_line() -> str | None:
         seg = f"{_MAGENTA}◆{_R} {_BOLD}{active}{_R}"
         vault = persona.vault_of(active)
         if vault:
-            seg += f"{_DIM} · vault {_R}{vault}{_vault_glyph(vault)}"
+            # Same mark as the chips, from the same function rather than a second one
+            # applying "the same" rule: this renderer is the fallback, so a divergence
+            # here would only ever be seen on the day the layout is already broken.
+            seg += f"{_DIM} · vault {_R}{vault}{_vault_dot(vault)}"
         # The other personas, on the same line — each dispatchable as a sub-agent.
         others = [n for n in names if n != active]
         if others:
@@ -1001,42 +1004,44 @@ def _vault_health(vault: str) -> tuple[bool, str]:
     return ok, detail
 
 
-def _vault_glyph(vault: str) -> str:
-    try:
-        from .secrets import registry
-        if vault not in registry.vaults():
-            return f" {_YELLOW}(set up){_R}"
-        ok, _ = _vault_health(vault)
-        return f" {_GREEN}✓{_R}" if ok else f" {_YELLOW}!{_R}"
-    except Exception:
-        return ""
-
-
 def _vault_dot(vault: str | None) -> str:
-    """Compact vault mark for persona chips — four states, matching what
-    ``charter persona list`` reports in words:
+    """Compact vault mark for persona chips — **only when the vault cannot be used**.
 
-    * ``✓`` healthy — registered, readable, holding secrets;
-    * ``◦`` registered, but the file does not exist yet;
-    * ``!`` registered and unhealthy (unreadable, bad provider config);
-    * ``·`` not set up locally at all — the *normal* state across most of a committed
-      roster, since personas are committed and vaults are private.
+    * nothing — no vault declared, or one that is registered and healthy;
+    * ``◦`` dim — declared but not usable *here*: this machine has no vault by that
+      name, or it has one whose file does not exist yet;
+    * ``!`` yellow — registered and unhealthy (unreadable, bad provider config).
 
-    The ``◦`` state used to render as a green ``✓``: ``plain-file.health()`` returns
-    ``ok=True`` with the detail "not created yet (<path>)", and this read only ``ok``.
-    `persona list` prints the detail and so was honest; the status line was claiming a
-    vault existed when it did not.
+    Silence is the point, and it is the same argument :func:`_health_mark` is built on:
+    a ✓ on every chip on every turn is furniture within a day, after which a real fault
+    inside the column reads like a zero. The four-state version spent a character per
+    persona per render to say "fine".
+
+    Worse, its two dim ``·`` states were different facts wearing one glyph — a persona
+    that needs no vault, and a persona *declaring* ``vault: X`` that this machine has
+    never registered. The second is the only vault fact worth a character, and it was
+    the one you could not see.
+
+    The two unusable reasons deliberately collapse into one ``◦``. Their fixes differ
+    (`charter vault add` vs `charter secret set`), a chip can carry neither, and
+    `charter persona list` already prints both in words — so a third glyph would buy a
+    distinction the reader still has to leave the status line to act on.
     """
     try:
         from .secrets import registry
-        if not vault or vault not in registry.vaults():
-            return f" {_DIM}·{_R}"
+        if not vault:
+            return ""
+        if vault not in registry.vaults():
+            return f" {_DIM}◦{_R}"
         ok, detail = _vault_health(vault)
         if not ok:
             return f" {_YELLOW}!{_R}"
+        # `plain-file.health()` returns ok=True with "not created yet (<path>)" for a
+        # registered vault holding nothing. Reading only `ok` once painted a green ✓ on
+        # a vault that did not exist; it now reads as unusable, which it is.
         if "not created yet" in (detail or ""):
             return f" {_DIM}◦{_R}"
-        return f" {_GREEN}✓{_R}"
+        return ""
     except Exception:
         return ""
 
@@ -1114,6 +1119,54 @@ def _mem_badge(persistent: int, ephemeral: int = 0) -> str:
     return (" " + " ".join(parts)) if parts else ""
 
 
+def _inflight_by_persona() -> dict[str, tuple[int, float]]:
+    """``persona → (dispatches in flight, epoch start of the OLDEST)``.
+
+    Computed once per render and handed to every chip: `inflight.live_records` is a
+    directory glob, which is affordable on a surface that draws every turn, but not
+    once per persona on a thirty-persona roster.
+
+    The oldest wins because the newest answers nothing. Three dispatches out, the
+    freshest a minute old, is not news; three out with one at ``2h`` is the whole
+    reason the age is on screen.
+    """
+    try:
+        from . import inflight
+        out: dict[str, tuple[int, float]] = {}
+        for name, started in inflight.live_records():
+            n, oldest = out.get(name, (0, started))
+            out[name] = (n + 1, min(oldest, started))
+        return out
+    except Exception:
+        return {}
+
+
+def _inflight_badge(entry: tuple[int, float] | None) -> str:
+    """``⚡2 4m`` for a persona with dispatches in flight, '' for one without.
+
+    **Count only above one.** A lone ``⚡1`` is the same non-fact as `todo 0` or `✎0`,
+    both of which render as nothing here: presence is the signal, and the digit only
+    starts carrying information once there is more than one of them.
+
+    **Age always**, in `pieces._presence_age`'s vocabulary — so a dispatch ages in the
+    same units as the `silent 12m` a couple of rows away, and so ``0m`` (technically
+    correct, reads as broken) renders as ``now`` for the same reason it does there.
+    Coarse on purpose: this line refreshes every ten seconds, so a seconds figure would
+    be a number nobody could trust to be current.
+    """
+    if not entry:
+        return ""
+    try:
+        from datetime import datetime, timezone
+        from . import pieces
+        n, started = entry
+        age = pieces._presence_age(datetime.fromtimestamp(started, timezone.utc),
+                                   datetime.now(timezone.utc))
+        return f" {_YELLOW}⚡{n if n > 1 else ''}{_R} {_DIM}{age}{_R}"
+    except Exception:
+        return ""
+
+
 def _persona_chips(session: str | None = None) -> list[str]:
     """One chip per persona (active first) for the status-line right column, each
     tagged with its memory counts (``✎`` persistent + ``◌`` ephemeral). Every
@@ -1126,12 +1179,14 @@ def _persona_chips(session: str | None = None) -> list[str]:
         active = persona.resolve_active()
         order = ([active] if active in names else []) + [n for n in names if n != active]
         known = set(names)   # computed once for the whole column, not once per persona
+        flying = _inflight_by_persona()   # one glob for the column, not one per chip
         chips = []
         flagged_names: set[str] = set()
         for n in order:
             dot = _vault_dot(persona.vault_of(n))
             badge = _mem_badge(_mem_count(n), _mem_count(n, ephemeral=True, session=session))
             health = _health_mark(n, known=known)
+            flight = _inflight_badge(flying.get(n))
             if health:
                 # `_health_mark` speaks ONLY when something is wrong, so its presence is
                 # the signal — recorded here rather than recovered from the rendered chip,
@@ -1142,10 +1197,17 @@ def _persona_chips(session: str | None = None) -> list[str]:
             # header carries `_MARK_HEAD` for exactly that reason. All three markers are
             # East-Asian Neutral, so no font gets to disagree about that width. Badges
             # trail the name, where nothing after them has to line up.
+            #
+            # `flight` goes LAST of the badges because it is the only one that changes
+            # while you watch: its count moves and its age ticks, and every character
+            # after a badge that changes moves with it. Behind it there is nothing to
+            # move. `⚡` is East-Asian *Wide* — two cells, unambiguously, unlike the
+            # Ambiguous glyphs that have broken this layout twice — and it is trailing,
+            # so its width never reaches a name.
             if n == active:
-                chips.append(f"{_MAGENTA}{_MARK_ACTIVE} {_BOLD}{n}{_R}{dot}{badge}{health}")
+                chips.append(f"{_MAGENTA}{_MARK_ACTIVE} {_BOLD}{n}{_R}{dot}{badge}{health}{flight}")
             else:
-                chips.append(f"{_DIM}{_MARK_IDLE} {n}{_R}{dot}{badge}{health}")
+                chips.append(f"{_DIM}{_MARK_IDLE} {n}{_R}{dot}{badge}{health}{flight}")
         if len(chips) > _MAX_PERSONA_LINES:
             # Which ones survive matters more than how many. Keeping the first N
             # alphabetically would drop exactly the personas worth seeing, so the order is
@@ -1190,8 +1252,15 @@ def _session_news(sid: str | None) -> list[str]:
         from . import inflight
         live = inflight.live()
         if live:
-            who = ", ".join(live[:3]) + (", …" if len(live) > 3 else "")
-            out.append(f"{_YELLOW}⚡{_R}{_DIM}in flight{_R} {len(live)} {_DIM}· {who}{_R}")
+            # A bare count. The names moved onto the persona chips, beside the personas
+            # they are about — here they made the reader match a name against a roster
+            # ten rows above to learn anything, and cost the width to do it.
+            #
+            # The aggregate stays because the chips are croppable: that column caps at
+            # `_MAX_PERSONA_LINES` and disappears entirely below `_LEFT_W + _RIGHT_MIN_W`,
+            # so this is what survives a narrow pane — the same contract `_repo_rows`
+            # keeps with its own "(+N more)" row.
+            out.append(f"{_YELLOW}⚡ {len(live)}{_R}")
     except Exception:
         pass
 

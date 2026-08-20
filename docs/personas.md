@@ -418,7 +418,19 @@ Two rules keep this honest:
   zero. Soft findings (no role, no `delegate-when`) stay in `lint`/`doctor`, which have
   room to explain them.
 
-The vault dot beside each chip has four states, matching what `persona list` says in
-words: `✓` healthy · `◦` registered but not created yet · `!` unhealthy · `·` not set
-up locally (the *normal* state for most of a committed roster — personas are committed,
-vaults are private).
+The vault mark beside each chip follows the same rule, so it appears only when the vault
+**cannot be used**: `◦` dim — declared but not usable here (no vault of that name is
+registered on this machine, or one is and its file does not exist yet) · `!` yellow —
+registered and unhealthy. A persona that needs no vault, or whose vault is registered and
+healthy, gets no mark at all.
+
+The two unusable cases share one glyph deliberately. Their fixes differ (`charter vault
+add` versus `charter secret set`), a chip can carry neither, and `charter persona list`
+prints both in words. What the chip is for is the distinction that used to be missing:
+a persona *declaring* a vault this machine has never registered is not the same as a
+persona that needs none, and both used to render as a dim `·`.
+
+A persona with sub-agents in flight carries `⚡` on its own chip, with the count when
+there is more than one and the age of the oldest dispatch always — `▸ devops ⚡2 12m`.
+The session strip keeps the bare total (`⚡ 3`), because the persona column caps at
+fourteen rows and disappears on a narrow pane.
