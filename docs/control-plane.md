@@ -391,9 +391,10 @@ ctx 22% · cache 90% · ⚡ 1 · ⛊1 denied · ✎1 recorded  ⬢ charter 0.10.
   when the count is zero, like everything else that would otherwise render every turn.
 - **Columns — the Role × Task axes.** Left is the *task* (repos cloned into this
   workspace, their branch, CI and MRs); right is the *role* (the persona roster, each
-  chip carrying its memory counts, a `⚡` while it has sub-agents running, and a vault
-  mark only when its vault cannot be used). Personas are global, repos are
-  workspace-scoped — two independent axes, two columns.
+  chip carrying its memory counts, a `⚡` while it has sub-agents running — with a `?`
+  once one has outlived every reasonable expectation — and a vault mark only when its
+  vault cannot be used). Personas are global, repos are workspace-scoped — two
+  independent axes, two columns.
 - **Bottom — this session.** Context and prompt-cache health (`ctx NN%`, `cache NN%`),
   plus counters for what has happened: in-flight sub-agents, guard denials, memories
   recorded, dispatches. Absent entirely when there is nothing to report, so a denial

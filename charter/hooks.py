@@ -1965,7 +1965,12 @@ def pretooluse_dispatch() -> int:
         return 0
     try:
         from . import inflight, persona
-        others = inflight.live()
+        # `still_running`, not `live`: a record past the presumed-dead threshold is kept
+        # now (#308) so a stuck dispatch stays on screen, but this nudge asserts a peer
+        # "is already running" — which charter stops knowing at exactly that threshold.
+        # Nudging on one would nag for a day after a killed process, and a warning people
+        # learn to dismiss is worse than the overlap it reports.
+        others = inflight.still_running()
         token = inflight.start(agent)
         if not others:
             return 0
