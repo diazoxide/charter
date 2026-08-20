@@ -18,3 +18,4 @@ Written by the persona as it learns; committed and shared.
 - [Verification lesson from 0.46.2 -> 0.46.3 (2026-08-20): a feature whose](verification-lesson-from-0-46-2-0-46-3-2026-08-2.md)
 - [Stamping news entries ACTIVATES their 'check:' probes, and that makes a](stamping-news-entries-activates-their-check-prob.md)
 - [A news entry's 'check:' front-matter is a RELEASE LANDMINE that arms its](a-news-entry-s-check-front-matter-is-a-release-l.md)
+- [A news entry's `check:` is dispatched in-process, so a `check:` naming a](a-news-entry-s-check-is-dispatched-in-process-so.md)
