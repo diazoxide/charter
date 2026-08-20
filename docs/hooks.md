@@ -92,9 +92,22 @@ Neither has a secret surface to scan, by construction.
 Hooks swallow their exceptions. A tally that breaks a turn is worse than a tally that
 misses a row, and none of this is load-bearing for the work itself.
 
-The deliberate exception is version skew: a stale CLI would stop firing the gate while
-everything still looked installed. That is the failure shape this project keeps paying for,
-so it is the one thing a hook says out loud.
+The deliberate exception is version skew, in **both** directions — that is the failure shape
+this project keeps paying for, so it is the one thing a hook says out loud, once, at session
+start.
+
+- **Plugin newer than the CLI** — the manifest dispatches `charter hook <name>` for a handler
+  this CLI does not have, so it errors. `doctor` FAILs, which is what makes the SessionStart
+  preflight print at all.
+- **Plugin older than the CLI** — the manifest never *names* the newer handlers, so they
+  simply do not run. Nothing errors; the tallies they would have written read as empty rather
+  than absent, which is the more expensive kind of wrong. charter compares what the installed
+  `hooks/hooks.json` invokes against what the CLI ships and names the handlers that are not
+  being dispatched.
+
+The second is measured by **handler sets, not version numbers**. A plugin one patch behind
+that adds no handler behaves identically, so it says nothing — a row that fires on every
+version lag is a row people learn to scroll past.
 
 Seeing what actually happened: `charter trace` reports guard denials, tool approvals, secret
 warnings and memory writes for the session.
