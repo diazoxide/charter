@@ -51,11 +51,11 @@ class ContextGaugeCase(unittest.TestCase):
 
     def test_cache_hit_rate_is_read_over_total_input(self):
         # 48000 read / (48000 + 1200 written) ≈ 98%
-        self.assertIn("⚡98%", _plain(statusline._context_gauge(_payload(read=48000, write=1200))))
+        self.assertIn("cache 98%", _plain(statusline._context_gauge(_payload(read=48000, write=1200))))
 
     def test_churning_prefix_reads_low(self):
         # cache creation dominating = the expensive failure mode
-        self.assertIn("⚡11%", _plain(statusline._context_gauge(_payload(read=5000, write=40000))))
+        self.assertIn("cache 11%", _plain(statusline._context_gauge(_payload(read=5000, write=40000))))
 
     def test_silent_before_first_api_call(self):
         # current_usage is null at session start and right after /compact — show nothing
@@ -68,15 +68,15 @@ class ContextGaugeCase(unittest.TestCase):
             {"context_window": {"current_usage": {}}}), [])
 
     def test_full_cache_hit_is_100(self):
-        self.assertIn("⚡100%", _plain(statusline._context_gauge(_payload(read=10000, write=0))))
+        self.assertIn("cache 100%", _plain(statusline._context_gauge(_payload(read=10000, write=0))))
 
     def test_cold_cache_is_zero_not_a_crash(self):
-        self.assertIn("⚡0%", _plain(statusline._context_gauge(_payload(read=0, write=10000))))
+        self.assertIn("cache 0%", _plain(statusline._context_gauge(_payload(read=0, write=10000))))
 
     def test_context_and_cache_are_independent(self):
         # a payload with only cache data still renders the cache part
         out = _plain(statusline._context_gauge(_payload(read=100, write=100)))
-        self.assertIn("⚡50%", out)
+        self.assertIn("cache 50%", out)
         self.assertNotIn("ctx", out)
 
     def test_gauge_appears_on_the_session_strip(self):
@@ -90,8 +90,38 @@ class ContextGaugeCase(unittest.TestCase):
         # the frame's own verticals.
         lines = [l.strip("│ ") for l in lines if set(l) - set("┌─┐└┘├┤")]
         self.assertIn("ctx 42%", lines[-1])
-        self.assertIn("⚡90%", lines[-1])
+        self.assertIn("cache 90%", lines[-1])
         self.assertNotIn("ctx", lines[0])
+
+    def test_the_cache_gauge_is_labelled_not_a_glyph(self):
+        """`⚡` used to mean "prompt-cache hit rate" here — a meaning nobody could guess
+        from the character, on a strip where its labelled sibling `ctx NN%` sits two
+        items away. The word was always the consistent choice; the bolt became actively
+        wrong once the persona chips gave it a meaning of their own."""
+        out = _plain(statusline._context_gauge(_payload(pct=42, read=900, write=100)))
+        self.assertIn("cache 90%", out)
+        self.assertNotIn("⚡", out)
+
+    def test_the_bolt_on_the_strip_means_a_dispatch_and_nothing_else(self):
+        """The assertion that keeps the rename from silently regressing.
+
+        `⚡` is one fact — *a dispatch is running* — rendered in two places: on the
+        persona chip that owns it, and as the aggregate here, which is what survives
+        when the chip column is cropped away. Two of them on one line, told apart only
+        by a `%`, and neither reads as anything.
+        """
+        from charter import inflight, update
+        spawn = update.maybe_spawn          # never fork a network child from the suite
+        update.maybe_spawn = lambda: None
+        self.addCleanup(lambda: setattr(update, "maybe_spawn", spawn))
+        inflight.start("coder")
+        out = statusline.render({"session_id": "t", **_payload(pct=42, read=900, write=100)})
+        lines = [re.sub(r"\033\[[0-9;]*m", "", l) for l in out.splitlines() if l.strip()]
+        strip = [l.strip("│ ") for l in lines if set(l) - set("┌─┐└┘├┤")][-1]
+        self.assertIn("ctx 42%", strip)
+        self.assertIn("cache 90%", strip)
+        self.assertIn("⚡ 1", strip)
+        self.assertEqual(strip.count("⚡"), 1, strip)
 
     def test_render_survives_a_malformed_payload(self):
         # the status line must never crash the footer

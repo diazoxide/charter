@@ -46,18 +46,24 @@ class Silence(unittest.TestCase):
     def test_no_session_id_renders_nothing(self):
         self.assertEqual(statusline._session_news(None), [])
 
-    def test_in_flight_dispatch_appears(self):
+    def test_in_flight_dispatch_appears_as_a_bare_count(self):
         from charter import inflight
         inflight.start("coder")
+        inflight.start("coder")
         out = _plain(statusline._session_news(None))
-        self.assertTrue(any("in flight" in l and "coder" in l for l in out), out)
+        self.assertIn("⚡ 2", out)
 
-    def test_many_in_flight_are_truncated_not_wrapped(self):
+    def test_the_strip_no_longer_names_who_is_in_flight(self):
+        """The names moved onto the persona chips, next to the personas they describe.
+        What stays here is the aggregate — the chips cap at `_MAX_PERSONA_LINES` and
+        vanish altogether on a narrow pane, so the count is what survives cropping,
+        the same contract `_repo_rows` keeps with its "(+N more)" row."""
         from charter import inflight
         for n in ("a", "b", "c", "d", "e"):
             inflight.start(n)
         out = _plain(statusline._session_news(None))
-        self.assertTrue(any("…" in l for l in out), out)
+        bolt = [l for l in out if "⚡" in l]
+        self.assertEqual(bolt, ["⚡ 5"])
 
     def test_version_drift_appears_with_its_fix(self):
         from charter import instance

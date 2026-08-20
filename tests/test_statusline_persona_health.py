@@ -110,10 +110,18 @@ class NeverExpensive(PersonaIso):
 
 
 class VaultDot(PersonaIso):
-    """Three states, not two. `plain-file.health()` returns ``ok=True`` with the detail
-    "not created yet (<path>)" for a vault that is registered but has no file — so
-    reading only ``ok`` painted a green ✓ on a vault that does not exist, while
-    `charter persona list` (which prints the detail) correctly said otherwise.
+    """Silence means fine — three states, two glyphs.
+
+    The four-state version painted a mark on every chip on every turn, and on a healthy
+    roster three of the four were ✓ or ·: furniture, by the same argument `_health_mark`
+    is built on. Worse, the two dim `·` states were *different facts wearing one glyph* —
+    a persona needing no vault at all, and a persona DECLARING ``vault: X`` that this
+    machine has never registered. "Required and absent" was the one thing the chip could
+    not say, and it is the only one worth a character.
+
+    The two unusable reasons collapse into one ``◦`` on purpose: their fixes differ
+    (`charter vault add` vs `charter secret set`), a chip cannot carry either, and
+    `charter persona list` already prints both in words.
     """
 
     def _dot(self, ok, detail, registered=True):
@@ -132,22 +140,35 @@ class VaultDot(PersonaIso):
         finally:
             registry.vaults, registry.provider_for = vaults, provider_for
 
-    def test_healthy_vault_is_a_check(self):
-        self.assertIn("✓", self._dot(True, "3 secret(s)"))
+    def test_a_healthy_vault_renders_nothing(self):
+        self.assertEqual("", self._dot(True, "3 secret(s)"))
 
-    def test_registered_but_absent_is_distinct_from_healthy(self):
-        dot = self._dot(True, "not created yet (/x/y.json)")
-        self.assertNotIn("✓", dot)
-        self.assertIn("◦", dot)
+    def test_no_vault_declared_renders_nothing(self):
+        self.assertEqual("", _plain(statusline._vault_dot(None)))
+
+    def test_declared_but_unregistered_is_a_ring(self):
+        """The state that used to be invisible: the persona says it needs a vault and
+        this machine has none by that name."""
+        self.assertIn("◦", self._dot(True, "", registered=False))
+
+    def test_registered_but_never_created_is_a_ring(self):
+        """`plain-file.health()` returns ``ok=True`` with "not created yet (<path>)" —
+        reading only ``ok`` once painted a green ✓ on a vault that does not exist."""
+        self.assertIn("◦", self._dot(True, "not created yet (/x/y.json)"))
+
+    def test_both_unusable_reasons_share_one_glyph(self):
+        self.assertEqual(self._dot(True, "", registered=False),
+                         self._dot(True, "not created yet (/x/y.json)"))
 
     def test_unhealthy_vault_is_a_bang(self):
         self.assertIn("!", self._dot(False, "unreadable"))
 
-    def test_unregistered_vault_is_a_dim_dot(self):
-        self.assertIn("·", self._dot(True, "", registered=False))
-
-    def test_no_vault_named_is_a_dim_dot(self):
-        self.assertIn("·", _plain(statusline._vault_dot(None)))
+    def test_an_unusable_vault_never_borrows_a_health_glyph(self):
+        """`⚑` (draft) and `✗` (broken config) already sit on this chip and mean
+        something else entirely."""
+        for dot in (self._dot(True, "", registered=False), self._dot(False, "unreadable")):
+            self.assertNotIn("⚑", dot)
+            self.assertNotIn("✗", dot)
 
 
 if __name__ == "__main__":

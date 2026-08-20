@@ -102,7 +102,7 @@ Three things in that command are load-bearing, and the previous capture had none
   inner columns. At 110 the layout correctly falls back to stacking personas as rows, so
   the capture showed charter's narrow-terminal behaviour while the prose described the
   wide one.
-* **`context_window` in the payload.** `ctx 38% · ⚡92%` is read from there and from
+* **`context_window` in the payload.** `ctx 38% · cache 92%` is read from there and from
   nowhere else. Without it `_session_strip` is empty, the whole bottom row disappears, and
   the brand collapses onto the last persona row.
 * **`--compose`.** The status line never appears alone — it renders directly beneath

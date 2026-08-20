@@ -258,7 +258,7 @@ class AlignmentSurvivesIt(TodoIso):
         """The count is about the workspace named on this row. Nothing else may follow
         it in — the repo count describes the left column, the gauges the session."""
         top = _top(_USAGE)
-        for foreign in ("repos", "vaults", "personas", "ctx", "⚡"):
+        for foreign in ("repos", "vaults", "personas", "ctx", "cache", "⚡"):
             self.assertNotIn(foreign, top, top)
 
 
