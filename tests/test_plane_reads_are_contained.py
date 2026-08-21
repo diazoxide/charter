@@ -43,7 +43,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from charter import commands_persona, config, memstore, persona, recall
+from charter import commands_persona, config, contain, memstore, persona, recall
 from tests._isolation import PersonaIso
 
 #: The issue's own canary, kept verbatim so a grep from the report lands here.
@@ -178,6 +178,17 @@ class PlaneReadsAreContained(PersonaIso):
         self.assertTrue(
             any("outside the directories" in msg for _level, msg in printed),
             f"lint must say WHY it did not load, got {printed}")
+
+    def test_a_refusal_never_raises(self):
+        """`contain`'s standing promise — "Nothing here raises", because these run under
+        `doctor`, the status line and SessionStart. `os.lstat` answers a bad path with
+        `ValueError`, not `OSError`, so catching only the latter turned a refusal into a
+        crash on the one input designed to reach past a check (`segment_ok` refuses NUL
+        for exactly this reason, and it is not on this path)."""
+        for bad in ("a\x00b", ""):
+            with self.subTest(path=bad):
+                self.assertIsNotNone(contain.file_refusal(bad))
+                self.assertIsNotNone(contain.dir_refusal(bad))
 
     # ------------------------------------------------------------ (a) the benign half
     def test_a_persona_directory_symlinked_inside_the_plane_still_loads(self):

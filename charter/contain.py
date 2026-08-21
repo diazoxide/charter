@@ -212,7 +212,7 @@ def within_data(path) -> bool:
         roots = [os.path.abspath(r) for r in data_roots()]
         if os.path.dirname(target) in roots and not stat.S_ISLNK(os.lstat(target).st_mode):
             return True
-    except OSError:
+    except (OSError, ValueError):
         pass                                   # vanished or unreadable — ask the slow path
     try:
         target = os.path.realpath(path)
@@ -221,14 +221,18 @@ def within_data(path) -> bool:
             # `+ os.sep` so a sibling named like a root ("personas-old") is not a child.
             if target == root or target.startswith(root + os.sep):
                 return True
-    except OSError:
+    except (OSError, ValueError):
         return False
     return False
 
 
 def _not_plane_data(path) -> str:
     roots = ", ".join(sorted(Path(r).name for r in data_roots()))
-    return NOT_PLANE_DATA.format(name=path, target=os.path.realpath(path), roots=roots)
+    try:
+        target = os.path.realpath(path)
+    except (OSError, ValueError):
+        target = path            # unresolvable — say what was asked for, never raise here
+    return NOT_PLANE_DATA.format(name=path, target=target, roots=roots)
 
 
 def dir_refusal(directory) -> str | None:
@@ -274,6 +278,11 @@ def file_refusal(path) -> str | None:
             st = os.stat(path)
     except OSError as e:
         return UNREADABLE.format(name=path, error=e.strerror or e)
+    except ValueError as e:
+        # `os.lstat` raises ValueError, NOT OSError, on a path holding a NUL — the one
+        # input shaped to get past a check (`segment_ok` refuses it for the same reason).
+        # "Nothing here raises" is this module's promise; catching only OSError broke it.
+        return UNREADABLE.format(name=path, error=e)
     if not stat.S_ISREG(st.st_mode):
         kind = next((k for test, k in _KINDS if test(st.st_mode)), "not a file")
         return NOT_A_FILE.format(name=path, kind=kind)
