@@ -26,6 +26,16 @@ PANELS = dict(session="charter-demo-1234", socket="charter",
               charter_argv=["charter"], harness_pane="%0")
 
 
+def _direction(cmd: list[str]) -> str:
+    """`-v` (splits along rows) or `-h` (splits along columns) — whichever is present."""
+    return "-v" if "-v" in cmd else "-h"
+
+
+def _size(cmd: list[str]) -> str:
+    """The value passed to `-l`, as the literal string tmux would see on argv."""
+    return cmd[cmd.index("-l") + 1]
+
+
 class VisibleSlots(unittest.TestCase):
     def test_a_wide_tall_terminal_keeps_every_slot(self):
         self.assertEqual(
@@ -129,6 +139,68 @@ class PanelArgvs(unittest.TestCase):
         cmds = layout.panel_argvs(slots=["top", "bottom", "left", "right"], **PANELS)
         targets = {cmd[cmd.index("-t") + 1] for cmd in cmds}
         self.assertEqual(targets, {"%0"})
+
+
+class PanelGeometry(unittest.TestCase):
+    """Pins the one property nothing else in this file checks: each slot's actual shape.
+
+    `visible_slots` decides WHICH slots appear and `panel_argvs`' targeting tests pin
+    WHERE the split lands, but nothing until now pinned the split itself — direction,
+    `-b`, and `-l <size>` are three independent pieces of code (a membership check, a
+    second membership check, and a dict lookup) that happen to agree with the intended
+    frame only because each was written correctly, not because anything forces them to
+    agree. Swap two `SLOT_SIZE` values, or transpose the two membership checks, and every
+    other test in this file stays green while the frame ships sideways.
+    """
+
+    def test_horizontal_edges_split_vertically_and_top_goes_before_the_harness(self):
+        """`top` and `bottom` are full-width, one-row strips, so both are cut with a
+        VERTICAL split (`-v` divides the terminal along its rows — the axis that makes a
+        one-row strip; `-h`, used by `left`/`right` below, divides it into side-by-side
+        columns instead, which is the wrong shape for either of these). `top` is placed
+        BEFORE the harness pane (`-b`); `bottom`, asserted right alongside it for
+        contrast, goes after (no `-b`) — that contrast is what makes this one test with
+        `bottom` in it rather than an isolated claim about `top`. Both are exactly
+        `SLOT_SIZE["top"] == SLOT_SIZE["bottom"] == 1` row, asserted as the literal
+        `"1"` rather than read back through `layout.SLOT_SIZE`: reading it back would
+        still pass after `SLOT_SIZE` is swapped to `{"top": 22, ...}`, since the emitted
+        `-l` always equals whatever the dict currently says — the literal is what makes
+        the swap visible.
+
+        Catches (verified by hand, see fix-round section of the task report): mutation 1
+        (direction inverted and `-b` membership swapped) — `top`'s direction flips to
+        `-h` and its `-b` disappears, both asserted here. Catches mutation 2 (`SLOT_SIZE`
+        rows/cols swapped to 22/1) via the literal `"1"`.
+        """
+        top, bottom = layout.panel_argvs(slots=["top", "bottom"], **PANELS)
+        self.assertEqual(_direction(top), "-v")
+        self.assertEqual(_direction(bottom), "-v")
+        self.assertIn("-b", top)
+        self.assertNotIn("-b", bottom)
+        self.assertEqual(_size(top), "1")
+        self.assertEqual(_size(bottom), "1")
+
+    def test_vertical_edges_split_horizontally_and_left_goes_before_the_harness(self):
+        """Mirror of the test above, for the other axis. `left` and `right` are the side
+        columns, so both are cut with a HORIZONTAL split (`-h` — the axis that makes a
+        column; `-v`, used by `top`/`bottom` above, would instead slice off a row).
+        `left` goes BEFORE the harness (`-b`); `right`, alongside it for the same
+        contrast, goes after (no `-b`). Both are `SLOT_SIZE["left"] == SLOT_SIZE["right"]
+        == 22` columns, again the literal `"22"` rather than read back through
+        `layout.SLOT_SIZE`, for the reason given above.
+
+        Catches: mutation 1 on `left` (direction flips to `-v`, `-b` disappears — both
+        asserted here) and, together with the test above, rules out a fix that inverts
+        direction correctly on one axis but not the other. Catches mutation 2 via the
+        literal `"22"`.
+        """
+        left, right = layout.panel_argvs(slots=["left", "right"], **PANELS)
+        self.assertEqual(_direction(left), "-h")
+        self.assertEqual(_direction(right), "-h")
+        self.assertIn("-b", left)
+        self.assertNotIn("-b", right)
+        self.assertEqual(_size(left), "22")
+        self.assertEqual(_size(right), "22")
 
 
 if __name__ == "__main__":
