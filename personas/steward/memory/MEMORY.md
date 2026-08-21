@@ -39,3 +39,5 @@ Written by the persona as it learns; committed and shared.
 - [charter validates a name when a human types it (valid_name at persona.py](charter-validates-a-name-when-a-human-types-it-v.md)
 - [Two coordination lessons from running PARALLEL sweeps on 2026-08-21, bot](two-coordination-lessons-from-running-parallel-s.md)
 - [ISSUE GRANULARITY IS A DECISION TO PUT TO THE OPERATOR, not one to deleg](issue-granularity-is-a-decision-to-put-to-the-op.md)
+- [An allowlist only closes a data-reaches-execution hole when the field na](an-allowlist-only-closes-a-data-reaches-executio.md)
+- [#331(a) ruling, with evidence: do NOT contain a vault 'file' path. comma](331-a-ruling-with-evidence-do-not-contain-a-vaul.md)

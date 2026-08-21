@@ -32,6 +32,12 @@ dist/
 !/workspaces/autonomy/memory/**
 !/workspaces/autonomy/todos
 !/workspaces/autonomy/todos/**
+!/workspaces/harness-wrapper/workspace.json
+!/workspaces/harness-wrapper/workspace.md
+!/workspaces/harness-wrapper/memory
+!/workspaces/harness-wrapper/memory/**
+!/workspaces/harness-wrapper/todos
+!/workspaces/harness-wrapper/todos/**
 !/workspaces/news-dispatch-guard/workspace.json
 !/workspaces/news-dispatch-guard/workspace.md
 !/workspaces/news-dispatch-guard/memory

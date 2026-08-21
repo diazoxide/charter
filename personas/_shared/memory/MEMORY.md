@@ -10,3 +10,5 @@ Written by the persona as it learns; committed and shared.
 - [git check-ref-format ACCEPTS refs/heads/-b — a leading dash is legal ins](git-check-ref-format-accepts-refs-heads-b-a-lead.md)
 - [Repo names come from a FORGE, not charter: org/.github is real and commo](repo-names-come-from-a-forge-not-charter-org-git.md)
 - [charter/contain.py (added 0.47.x) is the ONE containment helper for name](charter-contain-py-added-0-47-x-is-the-one-conta.md)
+- [A pure-Python terminal component cannot host a harness at usable speed,](a-pure-python-terminal-component-cannot-host-a-h.md)
+- [tmux argv, pinned against 3.7c by rejection: passing a command to new-se](tmux-argv-pinned-against-3-7c-by-rejection-passi.md)

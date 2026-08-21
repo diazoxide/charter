@@ -7,3 +7,5 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Forge-data security audit (surface 2): filed #323 (gh -F @-filename via ](20260821-175329-forge-data-security-audit-surface-2-filed-323-gh.md)
 - [Closed todo: Fix #328 — containment helper at every parse boundary (bran](20260821-184431-closed-todo-fix-328-containment-helper-at-every-.md)
 - [#328 + #325/#334/#335/#337 closed by PR #342 (6f385ed): new charter/cont](20260821-184432-328-325-334-335-337-closed-by-pr-342-6f385ed-new.md)
+- [Closed todo: Wave 1: #330/#331/#332 (secrets surface, authority-audit cl](20260822-001231-closed-todo-wave-1-330-331-332-secrets-surface-a.md)
+- [Wave 1 done: #324/#326 (PR 344) and #330/#331/#332 (PR 346) merged; 3043](20260822-001231-wave-1-done-324-326-pr-344-and-330-331-332-pr-34.md)
