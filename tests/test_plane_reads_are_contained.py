@@ -43,7 +43,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from charter import commands_persona, config, contain, memstore, persona, recall
+from charter import (commands_persona, config, contain, curate, memstore, persona,
+                     recall)
 from tests._isolation import PersonaIso
 
 #: The issue's own canary, kept verbatim so a grep from the report lands here.
@@ -118,6 +119,21 @@ class PlaneReadsAreContained(PersonaIso):
 
         hits = recall.recall("canary", persona_name="reader", scopes=("persona",)).hits
         self.assertEqual([], [h.path.name for h in hits])
+
+    def test_curation_does_not_read_a_memory_that_escapes(self):
+        """`curate` never calls the filesystem itself — it reads through `memstore.entries`,
+        which is why one gate in `files()` covers it. Asserted rather than reasoned: this
+        is the module in #336's list with no reader of its own, and "it inherits it" is
+        exactly the claim that stops being true when somebody adds a glob here."""
+        self.make_persona("reader")
+        mem = persona.memory_dir("reader")
+        (mem / "kept.md").write_text("# a real memory\n\nbadger\n")
+        self.escaping_link(mem / "leak.md", self.vault)
+        self.assertIn(CANARY, (mem / "leak.md").read_text(), "precondition: link is live")
+
+        rep = curate.report(mem)
+        self.assertEqual(1, rep["total"])
+        self.assertNotIn("leak.md", str(rep))
 
     def test_a_ref_directory_symlinked_out_of_the_plane_is_not_a_source(self):
         self.make_persona("reader")
