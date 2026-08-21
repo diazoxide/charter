@@ -83,9 +83,18 @@ sits on it, and a shallower one leaves the URL unreadable on live terminal rows.
 **`demo-plane.sh`** builds a throwaway control plane worth screenshotting: real `charter`
 commands, real git repos, real branches and real dirty/unpushed state. Only the *org* is
 invented, so a render can show a plausible multi-repo day without exposing anyone's actual
-work. Two things it writes directly rather than fetching — `inventory/repos.json` and the
-forge-state cache — are the files `charter discover` and `charter gl-refresh` would have
-written, in exactly their shape; the demo has no forge to query.
+work. A few things it writes directly rather than fetching — `inventory/repos.json`, the
+forge-state cache, the `pieces/seen/` heartbeats and an in-flight dispatch record — are
+the files `charter discover`, `charter gl-refresh`, the every-turn hook and
+`inflight.start` would have written, in exactly their shape; the demo has no forge to
+query and no live session to dispatch anything.
+
+That last one is the trap to remember when adding a status-line surface. Anything drawn
+from **live** state renders as nothing in a capture unless this script fabricates the
+state first — the running badge (`⚡2 4m`) draws only while a dispatch is actually out, so
+a plane without a record shows a roster where nobody is working, beside prose about the
+badge. Add the fixture in the same change as the feature, or the next regeneration comes
+back quietly half-stale.
 
 ```bash
 ./docs/assets/demo-plane.sh /tmp/demo-plane
