@@ -34,7 +34,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, config, doctor, news
+from charter import commands, commands_persona, config, doctor, news
+
+#: A `check:` a probe is allowed to run, standing in for whatever an entry names
+#: (#317: an entry picks from `news._PROBEABLE`, not from the whole CLI). Its
+#: handler is replaced per test, so what it does here is the test's business and
+#: not `persona lint`'s — what matters is that a real entry could name it.
+STAND_IN, STAND_IN_FN = "persona lint", "cmd_persona_lint"
 
 #: How many doctor sweeps a test tolerates before it breaks the loop itself. Two is the
 #: guarded answer (the outer sweep, plus the one nested dispatch that is then refused);
@@ -158,8 +164,8 @@ class ARefusedProbe(NewsDir):
     def test_pending_still_ticks_when_every_probe_did_answer(self):
         """And the tick survives where it is true — a guard that removed the good news
         along with the false claim would be a worse trade than the bug."""
-        e = self.write("version", slug="fine")
-        with mock.patch.object(commands, "cmd_version", lambda args: 0):
+        e = self.write(STAND_IN, slug="fine")
+        with mock.patch.object(commands_persona, STAND_IN_FN, lambda args: 0):
             self.assertEqual(news.probe(e)[0], news.ADOPTED)
             self.assertIn("every entry with a probe reports adopted", self._pending())
 
@@ -169,14 +175,14 @@ class TheGuardDoesNotBreakProbing(NewsDir):
     would pass every test above and report nothing to anybody."""
 
     def _probe(self, code: int):
-        e = self.write("version")
+        e = self.write(STAND_IN)
         ran = []
 
         def cmd(args):
             ran.append(True)
             return code
 
-        with mock.patch.object(commands, "cmd_version", cmd):
+        with mock.patch.object(commands_persona, STAND_IN_FN, cmd):
             status, why = news.probe(e)
         self.assertEqual(len(ran), 1, "the probe did not actually run the subcommand")
         return status, why
@@ -200,29 +206,29 @@ class TheGuardIsReleasedOnFailure(NewsDir):
         """`_dispatch` swallows every exception, so a command that blows up is a normal
         outcome here — and the one path where a guard set outside a `finally` stays armed
         for the life of the process, turning every later probe into `unknown`."""
-        e = self.write("version")
+        e = self.write(STAND_IN)
 
         def boom(args):
             raise RuntimeError("probe exploded")
 
-        with mock.patch.object(commands, "cmd_version", boom):
+        with mock.patch.object(commands_persona, STAND_IN_FN, boom):
             self.assertEqual(news.probe(e)[0], news.UNKNOWN)
 
-        with mock.patch.object(commands, "cmd_version", lambda args: 0):
+        with mock.patch.object(commands_persona, STAND_IN_FN, lambda args: 0):
             self.assertEqual(news.probe(e)[0], news.ADOPTED)
 
     def test_a_probe_that_exits_leaves_nothing_armed(self):
         """`SystemExit` is not an `Exception`, so it takes a different path out of
         `_dispatch` — and argparse raises it for every malformed `check:`."""
-        e = self.write("version")
+        e = self.write(STAND_IN)
 
         def bail(args):
             raise SystemExit(2)
 
-        with mock.patch.object(commands, "cmd_version", bail):
+        with mock.patch.object(commands_persona, STAND_IN_FN, bail):
             self.assertEqual(news.probe(e)[0], news.UNKNOWN)
 
-        with mock.patch.object(commands, "cmd_version", lambda args: 0):
+        with mock.patch.object(commands_persona, STAND_IN_FN, lambda args: 0):
             self.assertEqual(news.probe(e)[0], news.ADOPTED)
 
 

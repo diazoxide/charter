@@ -17,15 +17,27 @@ not "pending". Reporting it as pending invents work; reporting it as adopted hid
 entry forever. This is `doctor`'s ``_NOT_CHECKED_HINT`` in another costume: the absence of
 information is not evidence of health (ADR 0013).
 
-**Actions are charter subcommands, dispatched in-process.** No shell is ever involved and
-no argv is ever handed to one, so an entry is meant not to be an arbitrary-command
-primitive. `docsrc._TOPIC` keeps the same restraint for `docs show` — "must not be a
-file-read primitive wearing a documentation command" — and the stakes are higher here,
-because this one runs rather than prints. Being in-process is also what makes a dozen
-probes cheap enough for `doctor` to run on demand. That restraint currently leaks: `secret
-exec` takes a pass-through argv, so a `check:` naming it reaches any binary, with a vault's
-credential in its environment (#317). Said out loud here rather than left as a claim this
-module does not keep.
+**A probe reads, and its argv is charter's rather than the entry's.** That is the whole
+restraint, and it is a property of the *command* — being dispatched in-process is not it.
+`_tokens` refusing shell syntax and an unregistered first token was, and the claim built on
+it was false for as long as it stood: `secret exec` takes the rest of the line as a
+pass-through argv, so a `check:` naming it reached any binary on the machine with a vault's
+credential in the child's environment, on every plane that upgraded, from a SessionStart
+hook (#317). So an entry now chooses from :data:`_PROBEABLE` — command paths a human has
+confirmed — rather than from the whole CLI.
+
+A list, and not a rule derived from the parser, because only one half of the restraint is
+derivable. argparse can be asked whether a command takes a pass-through positional; it
+cannot be asked whether the command writes to the disk, and `check: update …` reaching a
+real `uv tool install` is the same defect wearing no argv at all. What the parser can
+answer is asserted over the list instead of at runtime — entries, list and parser ship in
+one wheel, so a test across the three is a proof rather than a sample, and the SessionStart
+path stays free of a walk through argparse's internals.
+
+`docsrc._TOPIC` keeps the same restraint for `docs show` — "must not be a file-read
+primitive wearing a documentation command" — and the stakes are higher here, because this
+one runs rather than prints. Being in-process is what makes a dozen probes cheap enough for
+`doctor` to run on demand; it was never what made them safe.
 
 **A probe never runs from inside a probe.** Some charter commands probe every entry
 themselves — `doctor` does, and so does `charter news --pending` — so an entry naming one
@@ -47,10 +59,16 @@ half of #314 was never in the child: `check: update …` runs a real `uv tool in
 process that IS the probe, at the depth the counter permits by design. So the mutation
 declines on its own account — :func:`probing` is public for exactly that, and refusing is
 only half of it, because a command that declined has no exit code worth reading.
+
+`update` is not in :data:`_PROBEABLE`, so an entry naming it is now refused before any of
+that. Both stay, because they answer different questions: the list says what an entry may
+*name*, and :func:`probing` says what a command does when it finds itself inside a probe —
+which a command reached from a listed one still is.
 """
 
 from __future__ import annotations
 
+import argparse
 import io
 import os
 import tempfile
@@ -214,12 +232,23 @@ def render_body(version: str) -> str:
     return "\n\n".join(parts)
 
 
-def _tokens(argv: str) -> list[str] | None:
+def _parser():
+    """A fresh parser. Never cached: the suite replaces command functions and every call
+    site here has to see the replacement, which a parser built once at import would not."""
+    from . import cli
+
+    return cli.build_parser()
+
+
+def _tokens(argv: str, parser=None) -> list[str] | None:
     """*argv* as a charter subcommand's tokens, or ``None`` if it is not one.
 
     Two refusals, both structural rather than advisory: anything a shell would read as
     syntax, and any first token that is not a registered subcommand. `charter` is implied
     and must not be written, so an entry cannot reach a different binary.
+
+    *parser* is optional and is threaded through rather than rebuilt because building one
+    is ~6ms and this module runs on the `doctor` and SessionStart paths, once per entry.
     """
     if not argv or set(argv) & _SHELLISH:
         return None
@@ -228,9 +257,132 @@ def _tokens(argv: str) -> list[str] | None:
         return None
     from . import cli
 
-    if tokens[0] not in cli._subcommand_names(cli.build_parser()):
+    if tokens[0] not in cli._subcommand_names(parser if parser is not None else _parser()):
         return None
     return tokens
+
+
+#: Every command path a ``check:`` may name.
+#:
+#: An entry chooses from here rather than from the whole CLI, because what makes a probe
+#: safe is a property of the command: it reads rather than acts, and any argv it hands to
+#: another program is charter's rather than the entry's. Neither half can be read off the
+#: parser — argparse cannot be asked whether a command writes — so this is a list a human
+#: keeps, and `tests/test_news_probeable.py` pins the half the parser *can* answer: nothing
+#: listed here takes a pass-through positional, and everything listed here is a command
+#: that exists.
+#:
+#: A path is the subcommand tokens and nothing else. Flags are the entry's to choose; a
+#: deeper subcommand is a different command and needs its own line, or listing ``news``
+#: would silently list ``news stamp``, which renames files.
+#:
+#: Adding one is a deliberate act with two questions to answer, and the second is the one
+#: that gets skipped: does it change this machine, and does its exit code actually mean
+#: "this plane has the thing?". ``version`` fails the second — it always exits 0, so an
+#: entry naming it would report adopted everywhere, forever — which is why the most
+#: obviously harmless command in the CLI is not here.
+_PROBEABLE = frozenset({
+    ("doctor",),           # reads the plane and reports on it
+    ("news",),             # reads entries; the ones that probe are #311's guard to answer
+    ("persona", "lint"),   # reads the persona files — every shipped probe today
+})
+
+
+def _subparsers(parser) -> argparse._SubParsersAction | None:
+    """*parser*'s subcommands, or ``None`` if it is a leaf.
+
+    ``_SubParsersAction`` is nominally private and has been stable for the life of
+    argparse; `cli._subcommand_names` reads it the same way and for the same reason.
+    """
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    return None
+
+
+def _parser_at(path: tuple[str, ...], parser=None):
+    """The parser ``charter <path>`` reaches, or ``None`` when there is no such command."""
+    parser = _parser() if parser is None else parser
+    for name in path:
+        sub = _subparsers(parser)
+        if sub is None or name not in sub.choices:
+            return None
+        parser = sub.choices[name]
+    return parser
+
+
+def _pass_through(parser) -> list[str]:
+    """*parser*'s positionals that swallow an open-ended list of words.
+
+    The shape #317 was: ``secret exec``'s ``command`` is ``nargs="*"``, so everything after
+    the vault name became an argv for :func:`subprocess.run`. Read off the parser rather
+    than named, so it cannot come back under a different command's name.
+    """
+    if parser is None:
+        return []
+    return [a.dest for a in parser._actions
+            if not a.option_strings and a.nargs in ("*", argparse.REMAINDER)]
+
+
+def _all_command_paths(parser=None, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    """Every subcommand path the CLI accepts, depth first. For the suite, not the hot path."""
+    parser = _parser() if parser is None else parser
+    sub = _subparsers(parser)
+    if sub is None:
+        return [path] if path else []
+    found = [path] if path else []
+    for name, child in sub.choices.items():
+        found.extend(_all_command_paths(child, path + (name,)))
+    return found
+
+
+def _command_path(tokens: list[str], parser=None) -> tuple[str, ...] | None:
+    """The subcommand path *tokens* names, or ``None`` when it cannot be read off.
+
+    Leading tokens are consumed while they name a subcommand at the level reached so far,
+    which is where argparse would find them too. The walk then stops at the first token
+    that does not — a flag, or an argument — and that is the case worth stating: argparse
+    reads *past* a flag to find the subcommand behind it, so `news --pending stamp 9.9.9`
+    runs `news stamp`. A walk that just stopped would score it as plain `news` and let a
+    rename through a list that never named it. So a subcommand sighted anywhere further
+    along means this walk cannot say what the tokens name, and ``None`` is the honest
+    answer — refused, because every caller reads ``None`` as "not probeable".
+    """
+    parser = _parser() if parser is None else parser
+    path: list[str] = []
+    rest = list(tokens)
+    while rest:
+        sub = _subparsers(parser)
+        if sub is None:
+            break
+        if rest[0] in sub.choices:
+            parser = sub.choices[rest[0]]
+            path.append(rest.pop(0))
+            continue
+        if any(t in sub.choices for t in rest):
+            return None
+        break
+    return tuple(path)
+
+
+def probeable(argv: str, parser=None) -> bool:
+    """May a ``check:`` name ``charter <argv>``?
+
+    Public because it is the entry author's rule, not only the dispatcher's: the suite
+    holds every shipped ``check:`` to it, so an entry naming a command a probe may not run
+    fails the PR that adds it rather than the machine that installs it.
+
+    ``adopt:`` is deliberately NOT held to this. It is the line a human is told to run,
+    once, on purpose — `adopt: browser install` installs a browser, which is the point —
+    where ``check:`` runs unprompted on every plane that upgrades. Same grammar, opposite
+    rules, and reading one as the other is how the restraint gets widened back out.
+    """
+    parser = _parser() if parser is None else parser
+    tokens = _tokens(argv, parser)
+    if tokens is None:
+        return False
+    path = _command_path(tokens, parser)
+    return path is not None and path in _PROBEABLE
 
 
 def resolves(parser, argv: str) -> bool:
@@ -238,8 +390,15 @@ def resolves(parser, argv: str) -> bool:
 
     Used by the suite over every shipped entry, so a flag removed by some future PR fails
     that PR's tests rather than degrading a probe to permanent `unknown` in the field.
+
+    Parsing only — whether a ``check:`` is *allowed* to name the command is
+    :func:`probeable`, and the two are kept apart because this one also runs over
+    ``adopt:``, where a mutating command is correct.
     """
-    tokens = _tokens(argv)
+    # The caller's parser, not another one: it was passed in so that the answer is about
+    # THAT parser, and a first-token check against a freshly built one would quietly
+    # disagree with it.
+    tokens = _tokens(argv, parser)
     if tokens is None:
         return False
     try:
@@ -348,6 +507,12 @@ def _dispatch(argv: str) -> int | None:
     Re-entry is refused by :func:`probing`, not by the counter alone, so it is refused the
     same way whether it came back up this stack or through a process charter spawned on the
     way (#314).
+
+    Three refusals now, and they are not the same question. Is this a charter subcommand at
+    all (:func:`_tokens`); is a probe already running (:func:`probing`); and is this a
+    command a ``check:`` may name at all (:func:`probeable`, #317). Each returns ``None``,
+    and each records its own reason, because the entry a reader has to go and fix is a
+    different entry in each case.
     """
     global _depth, _refused
     if not _depth:
@@ -355,14 +520,23 @@ def _dispatch(argv: str) -> int | None:
         # every top-level dispatch has to start clean, or a refusal recorded while probing
         # the previous entry is read as this entry's answer.
         _refused = None
-    tokens = _tokens(argv)
+    # One parser, threaded through every use below. Building it is ~6ms and this runs once
+    # per entry on the `doctor` and SessionStart paths.
+    parser = _parser()
+    tokens = _tokens(argv, parser)
     if tokens is None:
         return None
     if probing():
         _refused = _PROBES
         _mark_refusal()
         return None
-    from . import cli
+    if not probeable(argv, parser):
+        # After the re-entrancy guard rather than before it, so #318's marking is reached
+        # on exactly the paths it was reached on before. Which of the two speaks first only
+        # decides which reason is recorded, and inside a nested sweep `probe` prefers
+        # `_IN_FLIGHT` over either.
+        _refused = _UNLISTED
+        return None
 
     _depth += 1
     outer = os.environ.get(_ENV)
@@ -372,7 +546,7 @@ def _dispatch(argv: str) -> int | None:
     os.environ[_ENV] = f"{os.getpid()}:{mark}"
     try:
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            args = cli.build_parser().parse_args(tokens)
+            args = parser.parse_args(tokens)
             func = getattr(args, "func", None)
             if func is None:
                 return None
@@ -403,7 +577,7 @@ def _dispatch(argv: str) -> int | None:
     return None if _refused else code
 
 
-#: Four ways to have no answer, said four ways. "Did not run here" points the reader at
+#: Five ways to have no answer, said five ways. "Did not run here" points the reader at
 #: their own machine, which is right for a check this CLI could not resolve and wrong for
 #: an entry whose `check:` can never run anywhere — folding those together hides the second
 #: behind the first, and the second is a defect in the entry that somebody has to fix.
@@ -417,6 +591,10 @@ _IN_FLIGHT = ("`charter {check}` was not run: a probe is already in flight, and 
 _MUTATES = ("`charter {check}` changes this machine rather than reading it, so it was not "
             "run — a `check:` asks whether this plane already has something and cannot be "
             "the thing that goes and gets it. Unchecked, neither adopted nor pending")
+_UNLISTED = ("`charter {check}` is not a command a `check:` may name. A probe reads, and "
+             "the argv it hands anything else is charter's rather than this entry's, so an "
+             "entry picks from a short list of read-only commands instead of from the whole "
+             "CLI. Unchecked, neither adopted nor pending")
 
 
 def probe(entry: Entry) -> tuple[str, str]:
