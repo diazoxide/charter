@@ -33,7 +33,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import config
+from . import config, contain
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
@@ -41,6 +41,31 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 def valid_name(name: str) -> bool:
     # A leading '_' is reserved (the shared namespace) and rejected by the regex.
     return bool(name) and _NAME_RE.match(name) is not None
+
+
+def reference_ok(ref: str) -> bool:
+    """Can *ref*, read out of a committed file, name a persona at all?
+
+    **The one place that answers this**, so the resolver and the operator's own check
+    cannot disagree — which they did, and that divergence is #328's tell rather than a
+    detail of it. `structural_errors` tested membership in a *name* set while `lineage`
+    resolved a *path*, so `charter persona lint` printed
+
+        ✗ frontdoor: uses: '<relative path>' — no such persona (dangling)
+
+    about a reference `resolve()` loaded without complaint and whose `tools:` the
+    PreToolUse gate then honoured. The signal an operator would actively check said the
+    grant was inert while it was live (#329, #337).
+
+    `valid_name` is the right rule here and a *forge* name would not be: charter mints
+    persona names itself — `persona create` already enforces exactly this — so a reference
+    outside that alphabet cannot name a persona this plane contains. That makes lint and
+    the resolver agree by construction instead of by two checks kept in step by hand.
+
+    The containment join is belt and braces on top, per :mod:`charter.contain`: it is the
+    half that still holds if `_NAME_RE` is ever widened.
+    """
+    return valid_name(ref) and contain.child(config.PERSONAS_DIR, ref) is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -142,7 +167,18 @@ def parse(text: str) -> tuple[dict, str]:
 
 def load(name: str) -> dict | None:
     """The persona's OWN (unmerged) definition. For the effective persona with
-    inheritance applied, use :func:`resolve`."""
+    inheritance applied, use :func:`resolve`.
+
+    **The choke point for every reference read out of a file.** `lineage`, `resolve`,
+    `tools_of`, `vault_of` and `effective_tools` all reach a definition through here, so
+    refusing a non-name here is what stops `extends:`/`uses:`/`borrows:` naming a file
+    outside `personas/` — rather than four guards at four call sites, three of which stay
+    correct. Returns None for a refused reference exactly as it does for one that names
+    nothing: the caller has no reason to tell a typo from an escape, and
+    `structural_errors` is where the difference is spelled out for the human.
+    """
+    if not reference_ok(name):
+        return None
     p = def_path(name)
     if not p.exists():
         return None
@@ -370,7 +406,9 @@ def default_persona() -> str | None:
         val = (config.PERSONAS_DIR / ".default").read_text().strip()
     except OSError:
         return None
-    return val if val and def_path(val).exists() else None
+    # `reference_ok` before `.exists()`: this dotfile is committed, so the value is a
+    # teammate's, and "a path that exists" was never the question being asked (#337).
+    return val if val and reference_ok(val) and def_path(val).exists() else None
 
 
 #: The outbound postures a persona may declare, least → most insistent. `off` is what an
@@ -474,7 +512,11 @@ def declared_default() -> str | None:
         val = _instance.default_persona_of(_instance.load(config.ROOT))
     except Exception:
         return None
-    return val if val and def_path(val).exists() else None
+    # Same as `default_persona`: `charter.toml` is committed, so this rung picks the
+    # session's acting identity out of a teammate-authorable file. Existence of a path was
+    # the wrong question — a reference climbing out of `personas/` named a file the plane
+    # does not contain, and `resolve()` merged its `vault:`, `role:` and `tools:` (#337).
+    return val if val and reference_ok(val) and def_path(val).exists() else None
 
 
 def _pointer_files() -> tuple[Path | None, Path | None]:
@@ -799,6 +841,26 @@ def is_draft(name: str) -> bool:
     return str(d["meta"].get("draft", "")).strip().lower() in _DRAFT_TRUE
 
 
+def _reference_problem(field: str, ref: str, known: set[str]) -> tuple[str, str] | None:
+    """Why *ref* cannot be used as a persona reference, or None when it can.
+
+    Two failures, said two ways, because they send the reader to two different places. A
+    name that is simply absent is a typo or a rename — "dangling" is right, and hunting
+    for the persona is the fix. A reference that is a *path* is not a name at all: no
+    amount of looking for that persona will help, and the fix is in the file. #328's whole
+    shape is a distinction like this one being collapsed, so it gets its own sentence.
+
+    Shares :func:`reference_ok` with :func:`load`, which is what makes lint and the
+    resolver structurally unable to disagree again — the property whose absence let the
+    gate honour a grant `lint` was calling dangling in the same run.
+    """
+    if not reference_ok(ref):
+        return ("error", f"{field}: {contain.refusal(ref)}")
+    if ref not in known:
+        return ("error", f"{field}: '{ref}' — no such persona (dangling)")
+    return None
+
+
 def structural_errors(name: str, known: set[str] | None = None) -> list[tuple[str, str]]:
     """The ``error``-level half of :func:`lint`: references that do not resolve.
 
@@ -815,15 +877,19 @@ def structural_errors(name: str, known: set[str] | None = None) -> list[tuple[st
     allnames = known if known is not None else set(list_personas())
     issues: list[tuple[str, str]] = []
     for u in uses_of(name):
-        if u not in allnames:
-            issues.append(("error", f"uses: '{u}' — no such persona (dangling)"))
+        problem = _reference_problem("uses", u, allnames)
+        if problem:
+            issues.append(problem)
     for b in borrows_of(name) or ():
-        if b not in allnames:
-            issues.append(("error", f"borrows: '{b}' — no such persona (dangling)"))
+        problem = _reference_problem("borrows", b, allnames)
+        if problem:
+            issues.append(problem)
     d = load(name)
     ext = ((d["meta"] if d else {}).get("extends") or "").strip()
-    if ext and ext not in allnames:
-        issues.append(("error", f"extends: '{ext}' — no such persona (dangling)"))
+    if ext:
+        problem = _reference_problem("extends", ext, allnames)
+        if problem:
+            issues.append(problem)
     cycle = _inherits_cycle(name)
     if cycle:
         issues.append(("error", f"extends: inheritance cycle ({cycle})"))

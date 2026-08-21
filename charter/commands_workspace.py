@@ -16,7 +16,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-from . import config, gitpolicy, util, workspace, worktree
+from . import config, contain, gitpolicy, util, workspace, worktree
 from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory_reactive,
                        commit_push)
 
@@ -517,13 +517,40 @@ def cmd_workspace_restore(args) -> int:
             util.info(f"  on-demand: {r['name']} @ {r['branch']} (clone when you enter it)")
         util.info("Enter the workspace and clone as you go: charter clone <repo> -w " + name)
         return 0
-    missing = [r["name"] for r in repos
-               if not workspace.is_git_repo(workspace.workspace_dir(name) / r["name"])]
+    # #325/#334/#328 all describe this join and each frames it as another's: #325 claims
+    # it as the clone-destination half, #334 disclaims it as "the join #325 already
+    # names", and #328's bullet assigns it to #334. Three issues, one line, nobody's — so
+    # it is fixed HERE, explicitly, rather than left for whichever ticket closes last.
+    #
+    # `workspace.json` is committed precisely so a teammate can restore someone else's
+    # workspace; that is the feature, and it is what makes every field in it untrusted.
+    # `is_git_repo` below is an existence check, never a containment one, so without this
+    # a name with parent components selected a repository the operator never named — and
+    # `git checkout` plus a CREDENTIALED `git pull` then ran inside it (#334, confirmed on
+    # 0.47.2 by the target repository's own reflog).
+    wd = workspace.workspace_dir(name)
+    contained, refused = [], []
+    for r in repos:
+        d = contain.child(wd, str(r.get("name") or ""))
+        if d is None:
+            refused.append(r)
+        else:
+            contained.append((r, d))
+    for r in refused:
+        util.err(f"  {str(r.get('name'))!r}: refused — {contain.refusal(str(r.get('name') or ''))}. "
+                 f"Fix workspaces/{name}/workspace.json.")
+    # Per-entry, never per-file: a manifest is shared and committed, so rejecting the whole
+    # thing would let one bad row deny the other eight repos to the whole team — an attack
+    # in its own right. `restore` already skips repos it cannot reach and says so.
+    repos = [r for r, _ in contained]
+    if not repos:
+        util.err(f"No usable repos in '{name}'s manifest.")
+        return 1
+    missing = [r["name"] for r, d in contained if not workspace.is_git_repo(d)]
     if missing:
         cmd_clone(SimpleNamespace(repos=missing, workspace=name))
     ok = 0
-    for r in repos:
-        d = workspace.workspace_dir(name) / r["name"]
+    for r, d in contained:
         if not workspace.is_git_repo(d):
             util.warn(f"  {r['name']}: not cloned (no access?) — skipped.")
             continue
@@ -534,7 +561,27 @@ def cmd_workspace_restore(args) -> int:
             util.warn(f"  {r['name']}: origin host isn't a known/declared forge — skipped.")
             continue
         cred = _cred_flag(forge)
-        if _git(["checkout", r["branch"]], cwd=d).returncode == 0:
+        # #334's second half. A branch is a REF, not a path segment — `feature/x` is the
+        # convention most teams use — so no name rule applies here and the treatment is
+        # argv position instead. Without a guard, a manifest branch beginning with a dash
+        # is read by `git checkout` as an option, and `checkout` has options that write:
+        # `-b`, `-B`, `--orphan`, `--pathspec-from-file`.
+        #
+        # A leading dash is the whole check, and `git check-ref-format` is deliberately
+        # NOT used: verified against git 2.50.1, `check-ref-format refs/heads/-b` ACCEPTS
+        # `-b`, because a leading dash is legal inside a ref. Ref grammar answers a
+        # different question than argv safety, and reaching for it here would have cost a
+        # subprocess per repo while closing nothing.
+        branch = str(r.get("branch") or "")
+        if branch.startswith("-"):
+            util.err(f"  {r['name']}: refused branch {branch!r} — a branch read from a "
+                     f"committed manifest may not begin with '-', which git would read as "
+                     f"an option rather than a ref. Fix workspaces/{name}/workspace.json.")
+            continue
+        # `--` after the ref, so git cannot reinterpret it as a pathspec even if the guard
+        # above is ever loosened. (`checkout -- <x>` means the opposite: it forces the
+        # PATHSPEC reading, which is why the separator goes after the branch, not before.)
+        if _git(["checkout", branch, "--"], cwd=d).returncode == 0:
             _git([*cred, "pull", "--ff-only"], cwd=d)  # latest of the recorded branch
             util.ok(f"  {r['name']} @ {r['branch']}")
             ok += 1
