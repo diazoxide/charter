@@ -18,11 +18,14 @@ entry forever. This is `doctor`'s ``_NOT_CHECKED_HINT`` in another costume: the 
 information is not evidence of health (ADR 0013).
 
 **Actions are charter subcommands, dispatched in-process.** No shell is ever involved and
-no argv is ever handed to one, so an entry cannot become an arbitrary-command primitive.
-`docsrc._TOPIC` keeps the same restraint for `docs show` — "must not be a file-read
-primitive wearing a documentation command" — and the stakes are higher here, because this
-one runs rather than prints. Being in-process is also what makes a dozen probes cheap
-enough for `doctor` to run on demand.
+no argv is ever handed to one, so an entry is meant not to be an arbitrary-command
+primitive. `docsrc._TOPIC` keeps the same restraint for `docs show` — "must not be a
+file-read primitive wearing a documentation command" — and the stakes are higher here,
+because this one runs rather than prints. Being in-process is also what makes a dozen
+probes cheap enough for `doctor` to run on demand. That restraint currently leaks: `secret
+exec` takes a pass-through argv, so a `check:` naming it reaches any binary, with a vault's
+credential in its environment (#317). Said out loud here rather than left as a claim this
+module does not keep.
 
 **A probe never runs from inside a probe.** Some charter commands probe every entry
 themselves — `doctor` does, and so does `charter news --pending` — so an entry naming one
@@ -30,11 +33,27 @@ puts the dispatcher inside itself, a full sweep at every level, forever (#311). 
 in :func:`_dispatch` refuses the nested call AND withholds the outer command's exit code,
 because the two halves fix different things: refusing bounds it, withholding is what keeps
 the answer honest.
+
+**And that guard has to survive `exec`.** Some charter commands start another charter —
+`commands_update._handoff` runs `charter news --since` in a fresh process of the newly
+installed binary — so re-entry does not have to come back up this module's stack. A depth
+counter is blind to that, which is why one also travels in the environment (:data:`_ENV`):
+a charter started underneath a probe is inside that probe, whatever spawned it (#314). Both
+halves cross with it — the refusal going down, and word of it coming back up, so an entry
+whose command spawned a charter that declined is unchecked rather than adopted.
+
+**A probe reads; it does not act.** The marker only ever reaches a CHILD, and the frightening
+half of #314 was never in the child: `check: update …` runs a real `uv tool install` in the
+process that IS the probe, at the depth the counter permits by design. So the mutation
+declines on its own account — :func:`probing` is public for exactly that, and refusing is
+only half of it, because a command that declined has no exit code worth reading.
 """
 
 from __future__ import annotations
 
 import io
+import os
+import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import NamedTuple
@@ -59,16 +78,39 @@ _SHELLISH = set(";|&<>$`()\\\n\"'")
 _PACKAGED = Path(__file__).resolve().parent / "_news"
 _CHECKOUT = Path(__file__).resolve().parents[1] / "docs" / "news"
 
-#: How many :func:`_dispatch` calls are in flight, and whether one of them was refused for
-#: re-entry. Plain module state rather than a :class:`~contextvars.ContextVar`: a ContextVar
-#: reads its default in every new thread, so a probing command that fanned its own work out
-#: to a pool would walk straight past the guard — which is the one failure this exists to
-#: make impossible. The global's failure mode is the opposite and far cheaper: two probes
-#: racing in different threads would make each other `unknown`, which is wrong but bounded,
-#: honest, and not reachable today — `doctor` and `charter news` each walk their entries in
-#: one thread.
+#: How many :func:`_dispatch` calls are in flight, and — when the outermost one has no
+#: answer to give — why. Plain module state rather than a :class:`~contextvars.ContextVar`:
+#: a ContextVar reads its default in every new thread, so a probing command that fanned its
+#: own work out to a pool would walk straight past the guard — which is the one failure this
+#: exists to make impossible. The global's failure mode is the opposite and far cheaper: two
+#: probes racing in different threads would make each other `unknown`, which is wrong but
+#: bounded, honest, and not reachable today — `doctor` and `charter news` each walk their
+#: entries in one thread.
 _depth = 0
-_reentered = False
+_refused: str | None = None
+
+#: The same guard, in a form that survives `exec`. :func:`_dispatch` sets this for the
+#: length of a probe, so every process started underneath one inherits it and declines to
+#: probe: `commands_update._handoff` starts a fresh `charter news --since`, and `secret exec`
+#: will start whatever an entry names. A counter in this module's memory sees none of that.
+#:
+#: The value is ``<pid>:<path>``, and it carries both halves of the guard.
+#:
+#: **The PID** is the process running the probe, which is what keeps the marker from
+#: becoming the worse bug. An environment belongs to a process, so this cannot escape into
+#: the shell that started charter; it is restored in the same `finally` that releases the
+#: counter, so a probe that raises leaves nothing behind; and if a copy ever does turn up
+#: somewhere charter did not put it, it names a process — one that no longer exists guards
+#: nothing, and is ignored rather than believed. Believed, a scrap of stale environment
+#: would turn every probe on that machine into `unknown` for good and say nothing about why.
+#:
+#: **The path** is where a descendant that was refused leaves a mark, because bounding the
+#: loop is not the same as answering honestly. A child cannot reach into the memory of the
+#: process probing, and its exit code belongs to whatever it was actually asked to do — so
+#: without a way back up, a `check:` whose command exits 0 while the charter it spawned
+#: quietly declined would report the entry ADOPTED. That is #311's second half, one process
+#: further away.
+_ENV = "CHARTER_NEWS_PROBE"
 
 
 class Entry(NamedTuple):
@@ -210,6 +252,84 @@ def resolves(parser, argv: str) -> bool:
     return True
 
 
+def _outer_probe() -> int | None:
+    """The PID of a process ABOVE this one that is running a probe, or ``None``.
+
+    Three ways the marker means nothing, and each of them is a defect if believed. It is
+    not a PID at all — debris, or somebody's guess at the name. It is **this** process's:
+    :func:`_dispatch` sets the marker for its children to inherit, and a process that read
+    its own marker back as an ancestor's would refuse the very probe it is running. Or it
+    names a process that has exited, in which case the probe it stood for is gone too.
+    """
+    raw = os.environ.get(_ENV, "").partition(":")[0]
+    if not raw.isdigit():
+        return None
+    pid = int(raw)
+    if pid <= 0 or pid == os.getpid():
+        return None
+    if os.name != "posix":
+        # `os.kill(pid, 0)` is a question on POSIX and an ANSWER on Windows, where it maps
+        # to TerminateProcess and would kill whatever the marker named. So off POSIX the
+        # marker is taken at its word: a stale one costs `unknown` — which is loud, and
+        # says why — where getting this wrong costs somebody else's process.
+        return pid
+    try:
+        os.kill(pid, 0)   # signal 0 asks whether it exists; it sends nothing
+    except ProcessLookupError:
+        return None
+    except OSError:
+        pass              # alive, and not ours to signal — still a probe
+    return pid
+
+
+def probing() -> bool:
+    """Is an entry's ``check:`` running right now — here, or in a process above this one?
+
+    Public, because the answer is not only this module's business. A probe asks whether
+    this plane has something; anything that would answer by CHANGING the machine has to
+    decline, and say so through :func:`refuse_mutation` so the entry comes back unchecked
+    rather than pending. `commands_update.cmd_update` is the one that does today: its
+    installer is a real `uv tool install`, and it runs in the process that IS the probe —
+    at the depth the counter permits, where no marker in a child's environment reaches.
+    """
+    return _depth > 0 or _outer_probe() is not None
+
+
+def _mark_refusal() -> None:
+    """Leave word, for the process whose probe this is, that a descendant was refused.
+
+    The only channel there is. Never raises: a temporary directory that cannot be written
+    costs the outer probe its honesty — it falls back to reading an exit code — and must
+    not cost the caller anything at all, which is the rule `news` is held to on the
+    `doctor` and SessionStart paths.
+    """
+    if _outer_probe() is None:
+        # This process's own probe. It already knows — the flag it reads is in memory, and
+        # writing a file to tell ourselves would put the `doctor` path through the disk to
+        # learn what it just decided.
+        return
+    _, _, mark = os.environ.get(_ENV, "").partition(":")
+    if not mark:
+        return
+    try:
+        Path(mark).touch()
+    except OSError:
+        pass
+
+
+def refuse_mutation() -> None:
+    """Record that a command declined to run because a probe is in flight.
+
+    Stopping the mutation is the easy half. The command still has to return SOMETHING, and
+    whatever it returns is not an answer to "has this plane adopted this entry?" — so the
+    exit code is withheld here exactly as a re-entered one is, and the entry reports
+    `unknown`. Reporting `pending` instead would invent a chore on a plane that may well
+    have adopted the entry already.
+    """
+    global _refused
+    _refused = _MUTATES
+
+
 def _dispatch(argv: str) -> int | None:
     """Run ``charter <argv>`` in this process. Exit code, or ``None`` if there is no
     usable one.
@@ -224,22 +344,32 @@ def _dispatch(argv: str) -> int | None:
     outer probe that read that code would report the entry ADOPTED and never offer it
     again — the entry would be hidden by the very bug it triggers. Bounded is not the same
     as correct (ADR 0013).
+
+    Re-entry is refused by :func:`probing`, not by the counter alone, so it is refused the
+    same way whether it came back up this stack or through a process charter spawned on the
+    way (#314).
     """
-    global _depth, _reentered
+    global _depth, _refused
     if not _depth:
         # Cleared on the way IN, not on the way out, and before the early returns below:
         # every top-level dispatch has to start clean, or a refusal recorded while probing
         # the previous entry is read as this entry's answer.
-        _reentered = False
+        _refused = None
     tokens = _tokens(argv)
     if tokens is None:
         return None
-    if _depth:
-        _reentered = True
+    if probing():
+        _refused = _PROBES
+        _mark_refusal()
         return None
     from . import cli
 
     _depth += 1
+    outer = os.environ.get(_ENV)
+    mark = Path(tempfile.gettempdir()) / f"charter-probe-{os.getpid()}"
+    mark.unlink(missing_ok=True)   # a PID gets reused; a mark from its last owner is not
+                                   # this probe's answer
+    os.environ[_ENV] = f"{os.getpid()}:{mark}"
     try:
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             args = cli.build_parser().parse_args(tokens)
@@ -255,12 +385,25 @@ def _dispatch(argv: str) -> int | None:
         # In a `finally` because this function swallows everything above: released only on
         # the happy path, the guard would stay armed for the life of the process the first
         # time a `check:` raised — and argparse raises `SystemExit` for every malformed
-        # one — turning every later probe into `unknown` with no way to tell why.
+        # one — turning every later probe into `unknown` with no way to tell why. The
+        # marker is put back rather than deleted, for the same reason: charter is not the
+        # only thing that may have set a variable in its own environment.
         _depth -= 1
-    return None if _reentered else code
+        if mark.exists():
+            # Some charter below this one declined to probe, so the exit code about to be
+            # returned is not this entry's answer — it is whatever the command did while a
+            # descendant of it was refused. Same withholding as an in-process re-entry, and
+            # for the same reason: bounded is not correct (ADR 0013).
+            _refused = _PROBES
+            mark.unlink(missing_ok=True)
+        if outer is None:
+            os.environ.pop(_ENV, None)
+        else:
+            os.environ[_ENV] = outer
+    return None if _refused else code
 
 
-#: Three ways to have no answer, said three ways. "Did not run here" points the reader at
+#: Four ways to have no answer, said four ways. "Did not run here" points the reader at
 #: their own machine, which is right for a check this CLI could not resolve and wrong for
 #: an entry whose `check:` can never run anywhere — folding those together hides the second
 #: behind the first, and the second is a defect in the entry that somebody has to fix.
@@ -271,19 +414,23 @@ _PROBES = ("`charter {check}` probes news itself, so its exit code answers a dif
            "`check:` has to name a command that does not probe")
 _IN_FLIGHT = ("`charter {check}` was not run: a probe is already in flight, and a probe "
               "never runs from inside a probe — unchecked here")
+_MUTATES = ("`charter {check}` changes this machine rather than reading it, so it was not "
+            "run — a `check:` asks whether this plane already has something and cannot be "
+            "the thing that goes and gets it. Unchecked, neither adopted nor pending")
 
 
 def probe(entry: Entry) -> tuple[str, str]:
     """Has this plane adopted *entry*? ``(status, why)``."""
     if not entry.check:
         return INFORMATIONAL, ""
-    # Read before dispatching: inside another probe, this one is refused before it runs,
-    # and blaming THIS entry's `check:` for probing would be a guess — the command already
-    # in flight is the one that probes, and it may not be this one.
-    in_flight = _depth > 0
+    # Read before dispatching: inside another probe — this process's, or one it was
+    # spawned by — this one is refused before it runs, and blaming THIS entry's `check:`
+    # for probing would be a guess. The command already in flight is the one that probes,
+    # and it may not be this one; across a process boundary it is not even in this list.
+    in_flight = probing()
     code = _dispatch(entry.check)
     if code is None:
-        why = _IN_FLIGHT if in_flight else (_PROBES if _reentered else _NOT_RUN)
+        why = _IN_FLIGHT if in_flight else (_refused or _NOT_RUN)
         return UNKNOWN, why.format(check=entry.check)
     return (ADOPTED if code == 0 else PENDING), ""
 

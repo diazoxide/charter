@@ -131,6 +131,18 @@ def _handoff(target: str, baseline: str) -> tuple[bool, str]:
     `cmd_version_sync` already says out loud — and a binary that answers with the target
     version IS the proof the install took. Without that, an install that succeeded against
     a cached index reports success while leaving you where you started.
+
+    **This is the charter process that made #314 a loop**, and what used to bound it is
+    worth naming rather than leaving to be rediscovered. `charter news --since` probes, and
+    a probe can dispatch `update`, so the chain comes back here — in a new interpreter,
+    where a counter in `news` starts at zero again. It terminated only because `cmd_update`
+    stamps its baseline BEFORE it moves and hands the pre-install version down as *baseline*:
+    once the target is installed the child asks for `between(installed, installed)`, which
+    is empty because `news.between` is exclusive at the low end, so it probes nothing. True,
+    and an accident — arithmetic in another module, one refactor from silently going away.
+    The guard no longer rests on it: `news._ENV` marks the environment for the length of a
+    probe and the charter started here inherits it, so it declines to probe whatever its
+    range says. `tests/test_news_cross_process.py` pins both.
     """
     binary = shutil.which("charter")
     if not binary:
@@ -190,7 +202,21 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
 
 
 def cmd_update(args) -> int:
-    from . import doctor, harness, instance
+    from . import doctor, harness, instance, news
+
+    if news.probing():
+        # FIRST, before the checkout refusal below and before anything is read, because
+        # this one is true wherever it is typed. A news entry's `check:` is dispatched as a
+        # charter subcommand, so `check: update --to X` reaches the installer below and
+        # reinstalls the machine to answer a question about it (#314) — a probe that
+        # installs software is a worse bug than a probe that hangs. The environment marker
+        # cannot stop this: it only reaches processes charter SPAWNS, and this one is the
+        # probe itself, running at the depth the guard permits by design.
+        news.refuse_mutation()
+        util.err("refusing to update from inside a news probe — a `check:` asks whether "
+                 "this plane already has something; it cannot be the thing that gets it.")
+        util.info("  the entry naming `update` is the defect:  charter news --pending")
+        return 2
 
     if doctor._is_charter_checkout(config.ROOT):
         # `CONTRIBUTING.md` tells contributors to run `python3 -m charter …` from the
