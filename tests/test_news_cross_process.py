@@ -40,7 +40,14 @@ from pathlib import Path
 from unittest import mock
 
 import charter
-from charter import commands, commands_update, doctor, harness, instance, news
+from charter import (commands, commands_persona, commands_update, doctor, harness,
+                     instance, news)
+
+#: The `check:` every test here plants, and the handler it stands on. A `check:` may
+#: only name a command `news._PROBEABLE` lists (#317), so the stand-in has to be one
+#: an entry could really carry; each test replaces the handler with whatever it needs
+#: the probe to do.
+STAND_IN, STAND_IN_FN = "persona lint", "cmd_persona_lint"
 
 #: What `charter update` would refuse for reasons that are not this test's. Left in place,
 #: they stop the command before it reaches an installer — which is indistinguishable from
@@ -69,14 +76,14 @@ SRC = str(Path(charter.__file__).resolve().parents[1])
 
 #: One hop. Points a fresh charter at the same throwaway news directory, probes the same
 #: entry, appends what it saw, and — standing in for `cmd_update`'s handoff — spawns the
-#: next hop from inside the probe. `check: version` is dispatched to this, exactly as
+#: next hop from inside the probe. The entry's `check:` is dispatched to this, exactly as
 #: `check: update` is dispatched to a command that spawns charter.
 HOP = '''
 import json, os, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, os.environ["PROBE_SRC"])
-from charter import commands, config, news
+from charter import commands_persona, config, news
 
 news._PACKAGED = Path(os.environ["PROBE_NEWSDIR"])
 hop = int(os.environ["PROBE_HOP"])
@@ -96,7 +103,7 @@ def spawn(args):
     return done.returncode
 
 
-commands.cmd_version = spawn
+commands_persona.cmd_persona_lint = spawn
 entries = [e for e in news.released() if e.slug == "loop"]
 record = {"hop": hop, "released": len(news.released())}
 if entries:
@@ -118,7 +125,7 @@ class CrossProcessReentry(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         (self.dir / "0.44.0-loop.md").write_text(
-            "---\nversion: 0.44.0\nheadline: h\ncheck: version\nadopt: version\n---\nbody\n")
+            "---\nversion: 0.44.0\nheadline: h\ncheck: persona lint\nadopt: version\n---\nbody\n")
         patch = mock.patch.object(news, "_PACKAGED", self.dir)
         patch.start()
         self.addCleanup(patch.stop)
@@ -132,7 +139,7 @@ class CrossProcessReentry(unittest.TestCase):
         # The counterfactual this suite has been burned by: a tree where `news.all()` comes
         # back empty makes every unguarded run finish instantly and look guarded. Nothing
         # below is trustworthy unless the planted entry is really there to be probed.
-        self.assertEqual(self.entry.check, "version")
+        self.assertEqual(self.entry.check, STAND_IN)
         self.assertEqual(len(news.released()), 1)
 
     def _env(self, hop: int) -> dict:
@@ -151,7 +158,7 @@ class CrossProcessReentry(unittest.TestCase):
         return [json.loads(line) for line in self.log.read_text().splitlines() if line]
 
     def _probe(self) -> tuple[str, str]:
-        with mock.patch.object(commands, "cmd_version", self._spawn):
+        with mock.patch.object(commands_persona, STAND_IN_FN, self._spawn):
             started = time.monotonic()
             status, why = news.probe(self.entry)
             self.elapsed = time.monotonic() - started
@@ -197,7 +204,7 @@ class CrossProcessReentry(unittest.TestCase):
         """
         status, why = self._probe()
         self.assertEqual(status, news.UNKNOWN)
-        self.assertIn("version", why)
+        self.assertIn(STAND_IN, why)
 
     def test_it_finishes_in_bounded_time(self):
         """A wall clock is never the assertion — the hop count is — but a guard that let
@@ -215,7 +222,7 @@ class TheMarkerIsCleanedUp(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         (self.dir / "0.44.0-x.md").write_text(
-            "---\nversion: 0.44.0\nheadline: h\ncheck: version\nadopt: version\n---\nbody\n")
+            "---\nversion: 0.44.0\nheadline: h\ncheck: persona lint\nadopt: version\n---\nbody\n")
         patch = mock.patch.object(news, "_PACKAGED", self.dir)
         patch.start()
         self.addCleanup(patch.stop)
@@ -226,7 +233,7 @@ class TheMarkerIsCleanedUp(unittest.TestCase):
             seen.append(os.environ.get(news._ENV))
             return 0
 
-        with mock.patch.object(commands, "cmd_version", cmd):
+        with mock.patch.object(commands_persona, STAND_IN_FN, cmd):
             return news.probe(self.entry)
 
     def test_the_marker_names_this_process_while_the_probe_runs(self):
@@ -280,7 +287,7 @@ class TheMarkerIsCleanedUp(unittest.TestCase):
             marks.append(mark)
             return 0
 
-        with mock.patch.object(commands, "cmd_version", cmd):
+        with mock.patch.object(commands_persona, STAND_IN_FN, cmd):
             status, why = news.probe(self.entry)
         self.assertEqual(status, news.UNKNOWN, "an exit code from underneath a refusal is "
                                                "not this entry's answer")
@@ -298,6 +305,12 @@ class AProbeDoesNotInstallSoftware(unittest.TestCase):
     which the counter permits by design. The marker only ever reaches a CHILD, so it bounds
     the loop and leaves the reinstall untouched. The mutation therefore refuses on its own
     account.
+
+    Since #317 there is a layer in front: `update` is not a command a `check:` may name, so
+    the shipped configuration never reaches `cmd_update` at all. That is asserted in
+    `test_news_probeable.py`. Here the list is opened deliberately, because a class that
+    passed only because something else refused first would be a guard nobody is testing —
+    which is how `refuse_mutation` would quietly rot into dead code.
     """
 
     def setUp(self):
@@ -309,6 +322,13 @@ class AProbeDoesNotInstallSoftware(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.entry, = news.released()
+
+        # The layer in front, stood down for the length of this class. Left in place it
+        # refuses the entry before `cmd_update` runs, and every assertion below would pass
+        # with the guard they are about never reached.
+        p = mock.patch.object(news, "_PROBEABLE", news._PROBEABLE | {("update",)})
+        p.start()
+        self.addCleanup(p.stop)
 
         # Recorded, never raised: `_dispatch` swallows every exception, so a `self.fail()`
         # in here would be eaten and the test would pass while the machine was reinstalled.
@@ -338,6 +358,10 @@ class AProbeDoesNotInstallSoftware(unittest.TestCase):
         status, why = news.probe(self.entry)
         self.assertEqual(status, news.UNKNOWN)
         self.assertIn("update --to 9.9.9", why)
+        # Which refusal, not just that there was one: the reason separates "the mutation
+        # declined" from "the entry named a command it may not name", and the second one
+        # arriving here would mean this class had stopped testing the first.
+        self.assertIn("changes this machine", why)
 
     def test_a_human_running_update_outside_a_probe_is_untouched(self):
         """The guard must be invisible to everyone it is not for."""
