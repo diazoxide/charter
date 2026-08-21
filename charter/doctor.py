@@ -1164,7 +1164,21 @@ def check_vaults() -> Result:
     # the command you run BECAUSE something is wrong, so a green line about the broken
     # subsystem does not merely fail to help, it steers you away from the cause. It cost
     # the reporter forty minutes mid-incident.
-    return Result("vaults", OK, detail=f"{len(vs)} reachable (references not resolved)",
+    # Named on the green line rather than raised to a WARN, and that is the whole
+    # judgement. A committed `vaults.json` deciding which path on this machine is a vault
+    # is worth an operator's eye once (#331) — but pointing `--file` outside the plane is
+    # a SUPPORTED configuration that `commands_secrets` recommends by name, so warning
+    # about it every session start would be a check crying wolf at a working plane, which
+    # this file has already paid for twice (#171, #55). State it; do not resolve it.
+    notes = []
+    outside = registry.shared_files_outside_plane()
+    if outside:
+        notes.append(f"vaults.json points outside the plane: {', '.join(outside)}")
+    malformed = registry.malformed_shared()
+    if malformed:
+        notes.append(f"vaults.json entries ignored (not an object): {', '.join(malformed)}")
+    detail = f"{len(vs)} reachable (references not resolved)"
+    return Result("vaults", OK, detail="; ".join([detail, *notes]),
                   hint="Resolve them for real: charter vault verify")
 
 
