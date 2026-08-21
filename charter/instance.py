@@ -320,34 +320,32 @@ def drift(root: Path) -> list[str]:
 #: reach a tmux argv — so an unknown one is dropped rather than passed through.
 FRAME_SLOTS = ("top", "bottom", "left", "right")
 
-FRAME_DEFAULTS = {
-    "slots": ["top", "bottom"],
+#: Every ``[frame]`` setting, keyed by the name :func:`frame_of` returns it under
+#: (underscore — reads better at the call site, e.g. ``frame["history_limit"]``) and
+#: paired with ``(default, toml_key)``: the shipped default, and the name charter.toml
+#: actually spells it with. Three of the six differ — ``history-limit``, ``min-cols``,
+#: ``min-rows`` use a hyphen, per docs/frame.md — so the TOML spelling travels right next
+#: to the default it belongs to instead of living in a second dict a reader has to keep
+#: in sync by hand. Two dicts keyed apart, as an earlier draft of this had it, meant a key
+#: added to one and not the other was a ``KeyError`` raised from inside :func:`frame_of` —
+#: in a module every charter command imports. One structure makes that failure mode
+#: impossible by construction rather than merely unlikely. Only the ``toml_key`` spelling
+#: is ever honoured — the underscore form is not accepted as a second, undocumented alias.
+FRAME_FIELDS = {
+    "slots": (["top", "bottom"], "slots"),
     #: Off by default: tmux's `set -g mouse on` takes over drag-select, so turning this on
     #: trades the operator's terminal text-selection for clickable panels. That trade
     #: belongs to a later release that actually ships clickable panels, not this one.
-    "mouse": False,
-    "hotkey": "F2",
-    "history_limit": 50000,
-    "min_cols": 100,
-    "min_rows": 20,
+    "mouse": (False, "mouse"),
+    "hotkey": ("F2", "hotkey"),
+    "history_limit": (50000, "history-limit"),
+    "min_cols": (100, "min-cols"),
+    "min_rows": (20, "min-rows"),
 }
 
-#: charter.toml spells these three with a hyphen (``history-limit``, ``min-cols``,
-#: ``min-rows`` — the spelling documented in docs/frame.md), while the dict this module
-#: returns uses an underscore, which reads better at the call site
-#: (``frame["history_limit"]``). The mapping is written out explicitly, one
-#: operator-facing name per dict key, rather than derived by swapping characters: the
-#: TOML names are a published interface and belong in the source where a reader can see
-#: them. Only the spelling listed here is ever honoured — the underscore form is not
-#: accepted in charter.toml as a second, undocumented alias.
-FRAME_TOML_KEYS = {
-    "slots": "slots",
-    "mouse": "mouse",
-    "hotkey": "hotkey",
-    "history_limit": "history-limit",
-    "min_cols": "min-cols",
-    "min_rows": "min-rows",
-}
+#: The plain ``{key: default}`` view of :data:`FRAME_FIELDS`, for callers (and the
+#: ``config.FRAME`` docstring) that only want the shipped defaults, not the TOML mapping.
+FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.items()}
 
 
 def frame_of(cfg: dict) -> dict:
@@ -361,8 +359,7 @@ def frame_of(cfg: dict) -> dict:
     section = cfg.get("frame")
     if not isinstance(section, dict):
         return out
-    for key, default in FRAME_DEFAULTS.items():
-        toml_key = FRAME_TOML_KEYS[key]
+    for key, (default, toml_key) in FRAME_FIELDS.items():
         if toml_key not in section:
             continue
         value = section[toml_key]
@@ -372,12 +369,15 @@ def frame_of(cfg: dict) -> dict:
                 if kept:
                     out[key] = kept
             continue
-        # `bool` is a subclass of `int` in Python, so `isinstance(1, int)` is True even
-        # though `1` was never meant to stand in for a bool default, and
-        # `isinstance(True, int)` is True even though `True` was never meant to stand in
-        # for an int default. Both directions have to be ruled out explicitly, or
-        # `mouse = 1` and `history-limit = true` would silently pass as valid instead of
-        # being dropped.
+        # `bool` is a subclass of `int` in Python, so `isinstance(True, int)` is True even
+        # though `True` was never meant to stand in for an int default — without this
+        # guard, `history-limit = true` would silently pass `isinstance(True, int)` and be
+        # accepted as a (nonsensical) history limit. The reverse can't happen through
+        # plain `isinstance` alone (an `int` like `1` is never an instance of `bool`, so
+        # `mouse = 1` is already rejected without this line) but the check is written to
+        # cover both directions, since "a value must be an instance of the default's own
+        # type" is the contract this function documents, not "…unless int and bool are
+        # involved, in which case it depends which one is the default."
         if isinstance(value, bool) != isinstance(default, bool):
             continue
         if isinstance(value, type(default)):
