@@ -17,7 +17,26 @@ charter doctor must never be able to hang: a news entry's check: probe cannot be
 ### Status — DELIVERED (2026-08-20)
 
 diazoxide/charter#311 fixed and closed by PR #313, squash-merged as `c7a665a`. 2876 tests OK
-(2864 before). Unreleased — the news entry rides the next version bump; nothing was tagged.
+(2864 before).
+
+**Released as 0.47.1** on 2026-08-21 — PR #315 merged as `8ec78b4`, tag `v0.47.1`, both workflows
+green, live on PyPI (2 artifacts). Machine upgraded: CLI 0.47.1, plugin 0.47.0 → 0.47.1 (project
+scope; restart applies it). Smoke-tested on the INSTALLED CLI: `doctor` rc=0 in 1.19s.
+
+Patch, not minor: both halves are fixes adding no surface, and the only altered output corrects a
+self-contradicting message. The freshness gate's arithmetic was run against both candidates
+(`0.47.1: lag=1 pass` / `0.48.0: lag=2 FAIL`) and deliberately did NOT decide the version — stated
+in the commit and PR so it is not later read as expedience. **The asset slack is now spent: 0.48.0
+will fail `test_asset_freshness` until `demo.svg`, `personas.svg` and `statusline.svg` are
+regenerated.**
+
+Two near-misses caught during the cut, both worth more than the release: a counterfactual that was
+**vacuous and looked like a pass** (`news._is_checkout` needs a `pyproject.toml` two levels above
+`docs/news`; a scratch tree without one makes `news.all()` empty, so unguarded code "passes" in
+0.78s printing `✓ nothing to adopt` — indistinguishable from a working guard; assert the planted
+entry is in `released()` before trusting any timing), and a **void baseline suite run** caused by
+editing version files while a run was in flight (module cached at the old version against a freshly
+written `plugin.json` produces five failures that look exactly like real drift).
 
 ### The defect
 

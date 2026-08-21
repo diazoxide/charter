@@ -34,3 +34,4 @@ Written by the persona as it learns; committed and shared.
 - [charter's SessionStart preflight only prints when doctor EXITS NON-ZERO](charter-s-sessionstart-preflight-only-prints-whe.md)
 - [charter's status line NEVER touches the forge on the render path — this](charter-s-status-line-never-touches-the-forge-on.md)
 - [Release 0.47.0 (2026-08-20) shipped #309+#310+#307 in ONE bump — the bat](release-0-47-0-2026-08-20-shipped-309-310-307-in.md)
+- [The asset-freshness gate is now the binding constraint on charter's next](the-asset-freshness-gate-is-now-the-binding-cons.md)
