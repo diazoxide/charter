@@ -12,8 +12,15 @@ zero). Overflow is truncated with an ellipsis, never wrapped — a single
 wrapped line shears every column below it. Rendered lines also never carry
 trailing whitespace, even when it hides behind trailing colour escapes.
 
+That guarantee is about the terminal, so it cannot be computed from a string the
+terminal reads differently: **SGR is the only escape this module passes through**, and
+`sanitize` drops everything else — a cursor move, an erase, an OSC title string, a bare
+control character — before anything is measured or clamped. Charter's markup is charter's
+own; the values interpolated into it (a forge's JSON, a directory name) are not (#326).
+
 Vocabulary::
 
+    sanitize                  drop everything that is not charter's own markup
     width / truncate / pad    ANSI-aware string primitives
     Text                      markup line(s), clamped at render time
     Cell + Row                one line of fixed/natural-width cells
@@ -38,13 +45,78 @@ _SGR = re.compile(r"\x1b\[[0-9;]*m")
 #: Trailing whitespace hiding *behind* trailing SGR escapes ("a \x1b[0m").
 _HIDDEN_TRAIL = re.compile(r"[ \t]+((?:\x1b\[[0-9;]*m)+)$")
 
+#: Everything this module may be handed, split into "charter's own markup" and "not".
+#: Alternation order is the whole design: SGR is matched FIRST and handed back
+#: untouched, so the catch-all `\x1b` at the end can delete a stray introducer without
+#: decapitating a colour span and spilling `[32m` onto the screen as text.
+#:
+#: The rest, in the order a terminal would parse it. The *string* sequences (OSC, DCS,
+#: APC, PM, SOS) come before the single-character forms because they must go whole: drop
+#: only the introducer and the payload — `0;pwned` — prints as ordinary text, which is
+#: worse than the escape because it looks like data. An unterminated one is removed to
+#: the end of the string for that same reason.
+#:
+#: `\x1b[^\x1b]` catches every remaining two-character escape, `ESC c` (RIS, a full
+#: terminal reset) among them, and stops short of a following ESC so that `ESC ESC [32m`
+#: loses the stray introducer and keeps the colour — which is what a terminal does with
+#: it too.
+_MARKUP_OR_CONTROL = re.compile(
+    r"(\x1b\[[0-9;]*m)"                            # 1 — SGR: charter's own, kept
+    r"|\x1b[\]P^_X][^\x1b\x07]*(?:\x07|\x1b\\|$)"  # OSC/DCS/APC/PM/SOS … ST | BEL | end
+    r"|\x1b\[[0-?]*[ -/]*[@-~]"                    # any other CSI (cursor, erase, …)
+    r"|\x1b[^\x1b]"                                # other two-character escapes
+    r"|\x1b"                                       # a lone/trailing ESC
+    r"|([\t\n\r\v\f])"                             # 2 — whitespace controls → a space
+    r"|[\x00-\x1f\x7f-\x9f]"                       # other C0, DEL, C1: removed
+)
+
+
+def _keep(m: "re.Match[str]") -> str:
+    if m.group(1):
+        return m.group(1)
+    # A tab jumps to the next tab stop and a newline ends the line — both shear the
+    # columns below, which is the one thing this module promises not to do. They keep
+    # their separation as a single space rather than vanishing, so `a\tb` stays two
+    # words instead of becoming one.
+    return " " if m.group(2) else ""
+
 
 # --------------------------------------------------------------------------
 # String primitives
 # --------------------------------------------------------------------------
 
+def sanitize(s: str) -> str:
+    """Return *s* with everything that is not charter's own colour markup removed.
+
+    `tui` measures and clamps *markup*, and its contract has always been that markup
+    is charter's: SGR escapes, which cost zero columns, and text, which costs one
+    column per character. Nothing enforced that. A forge's JSON, a directory name off
+    the filesystem — anything that reaches a `Cell` — could carry an erase-in-display,
+    an OSC title string or a bare BEL, and the module would count it as visible
+    columns, pad around a width the terminal disagreed with, and copy it to a surface
+    that repaints every ten seconds with no human in the loop (#326).
+
+    Deliberately kept as a *narrow* removal rather than a whitelist of printable text.
+    This module exists to emit SGR — a blanket strip would fight the colour it is built
+    to produce — so SGR is matched first and passed through untouched, and only what a
+    terminal would interpret as a command rather than as content is dropped. Sanitising
+    here rather than at each call site is what makes the guarantee hold for a value
+    nobody has thought about yet, including the next field somebody adds.
+
+    Not a substitute for validating at the boundary: `glstate` still refuses a change
+    identifier that is not a number, because a value with the wrong *type* is a defect
+    worth catching where it enters, not a rendering detail. This is the second half.
+    """
+    # `isprintable()` is a C-level scan and false only for a control character (ASCII
+    # space excepted), so the overwhelmingly common case never touches the regex.
+    return s if s.isprintable() else _MARKUP_OR_CONTROL.sub(_keep, s)
+
+
 def strip_ansi(s: str) -> str:
-    """Return *s* with ANSI SGR (colour/style) escapes removed."""
+    """Return *s* as the plain text a terminal would show: SGR escapes removed, and —
+    since anything else that claims to be an escape is not charter's markup either —
+    :func:`sanitize` applied first."""
+    s = sanitize(s)
     return _SGR.sub("", s) if "\x1b" in s else s
 
 
@@ -75,6 +147,9 @@ def truncate(s: str, w: int, ellipsis: str = ELLIPSIS) -> str:
     """
     if w <= 0:
         return ""
+    # Before the fits-already fast path, not after: returning *s* unchanged is exactly
+    # how an escape reached the screen without anything ever having looked at it (#326).
+    s = sanitize(s)
     if width(s) <= w:
         return s
     keep = max(0, w - width(ellipsis))

@@ -27,6 +27,37 @@ SPAWN_COOLDOWN = 120  # at most one background refresh per this many seconds
 _EMPTY = {"change": None, "ci": None, "sigil": ""}
 
 
+def _change_or_none(v):
+    """A change identifier as :meth:`base.Forge.open_change` promises it — ``int`` or
+    ``None`` — whatever the forge actually returned.
+
+    ``change`` was the one forge field that reached the rendered status line unchecked
+    (#326). ``ci`` is pinned to seven literals by each backend's ``_CI_MAP`` and
+    ``sigil`` is a class constant, so both are safe by construction; this was whatever
+    the JSON ``number`` (GitHub) or ``iid`` (GitLab) field happened to hold, stored
+    verbatim, cached verbatim, and interpolated into a line a terminal interprets. A
+    self-hosted or compromised instance, an altered response, or an edit to the cache
+    file — which nothing signs — could put an escape sequence there.
+
+    Coerced rather than type-checked, because a forge that serialises its id as ``"42"``
+    is answering the question and only its JSON type is off; dropping that would blank a
+    real change number over a detail. Anything `int()` refuses, and anything that is not
+    a positive identifier on any forge charter speaks to, becomes ``None`` — the same
+    thing "no open change" already looks like, which the render path draws as an empty
+    cell.
+
+    Never raises: this runs under `state_for_repo`, whose contract is that a status line
+    rendering every turn cannot be given a way to fail.
+    """
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def _cache_file() -> Path:
     return config.STATE_DIR / "cache" / "glstate.json"
 
@@ -60,6 +91,12 @@ def read_for(dirs, branches: dict) -> dict:
     are read with a fallback so a stale on-disk cache still renders after an upgrade
     rather than raising a ``KeyError``. ``sigil`` falls back to ``""`` here; the render
     path is what turns an absent sigil into the display default (``!``).
+
+    ``change`` is re-validated here and not only where it was written: an entry written
+    by the charter that had #326 renders for up to ``DISPLAY_TTL`` (two hours) after the
+    upgrade that fixed it, and the cache is an ordinary writable JSON file that nothing
+    signs. Same reason `charter.contain` asserts at every join rather than trusting the
+    identity layer — a check the value can be written past is not a check.
     """
     cache = load()
     now = time.time()
@@ -70,7 +107,7 @@ def read_for(dirs, branches: dict) -> dict:
             continue
         if now - ent.get("ts", 0) > DISPLAY_TTL:
             continue
-        out[d] = {"change": ent.get("change", ent.get("mr")),
+        out[d] = {"change": _change_or_none(ent.get("change", ent.get("mr"))),
                   "ci": ent.get("ci"),
                   "sigil": ent.get("sigil") or ""}
     return out
@@ -160,7 +197,7 @@ def state_for_repo(d: Path, branch: str) -> dict:
         forge = registry.resolve_host(url, config.ROOT)
         if forge is None:
             return dict(_EMPTY)
-        return {"change": forge.open_change(path, branch),
+        return {"change": _change_or_none(forge.open_change(path, branch)),
                 "ci": forge.ci_status(path, branch),
                 "sigil": forge.change_sigil}
     except Exception:
