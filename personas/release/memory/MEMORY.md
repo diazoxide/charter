@@ -22,3 +22,5 @@ Written by the persona as it learns; committed and shared.
 - [Smoke-testing news probes in a scratch tree: news._is_checkout(d) requir](smoke-testing-news-probes-in-a-scratch-tree-news.md)
 - [Never run the release baseline suite concurrently with the version bump](never-run-the-release-baseline-suite-concurrentl.md)
 - [0.47.1 (2026-08-21) shipped #313/#311, the news re-entrancy guard, as a](0-47-1-2026-08-21-shipped-313-311-the-news-re-en.md)
+- [A news probe's guard must cross process boundaries AND come back: news._](a-news-probe-s-guard-must-cross-process-boundari.md)
+- [The frightening half of a re-entrant news probe is not the loop: check:](the-frightening-half-of-a-re-entrant-news-probe-.md)

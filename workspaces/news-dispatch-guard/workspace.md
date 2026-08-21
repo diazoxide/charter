@@ -73,14 +73,37 @@ in 0.1s; only the `test` job fails, after the tag push has fired PyPI).
   entry with a probe reports adopted` *directly beneath* its own warning that an entry could not
   be checked. A green tick under the warning it contradicts is how the warning stops being read.
 
+### The cross-process hole — #314, fixed by PR #318 (open, CI green)
+
+`commands_update._handoff` spawns a FRESH charter running `charter news --since`, which
+probes, so a `check: update …` re-entered where a process-local counter is blind. Measured
+on 0.47.1: **four** process boundaries crossed, every hop reporting `adopted`, stopped only
+by the test's own cap. Guarded: one spawned charter, refused, `unknown`, 0.086s.
+
+- **The guard travels in `CHARTER_NEWS_PROBE`**, value `<pid>:<markpath>`, set for the
+  length of a probe. Down: any charter started underneath one declines to probe. **Back up**:
+  a refused descendant touches `<markpath>` so the outer probe withholds its exit code —
+  without that the loop is bounded and the entry still comes back `adopted`, one process
+  further out than #311. Both halves cross, or only the cheap one does.
+- **The PID is what stops the marker being the worse bug.** An environment belongs to a
+  process, it is restored in the same `finally` as the counter, and a marker naming a dead
+  process is debris — ignored, not believed. Liveness via `os.kill(pid, 0)` **on POSIX only**:
+  on Windows that maps to TerminateProcess and would kill whatever the marker named.
+- **No marker can reach the frightening half.** `check: update` runs `uv tool install` in the
+  process that IS the probe (depth 1, permitted by design), never in a child. So `cmd_update`
+  asks `news.probing()` itself and calls `news.refuse_mutation()` → `unknown`, not `pending`
+  (pending invents a chore on a plane that may already have adopted the entry).
+- **The accident is written down.** `_stamp_baseline` before the move makes the child's
+  `between(installed, installed)` empty. True, and arithmetic two modules away — named in
+  `_handoff`'s docstring and pinned by `TheHandoffBound`, as the second line now.
+
 ### Known gap, filed not fixed
 
-diazoxide/charter#314 — `commands_update._handoff` spawns a FRESH charter process running
-`charter news --since <baseline>`, which probes. So a `check: update …` re-enters across a
-process boundary where a process-local counter is blind, and the probe would run a real
-`uv tool install` on the way. It terminates today only by accident (`_stamp_baseline` runs
-first, so the child's `between(installed, installed)` is empty) and nothing asserts that.
-Everything else self-spawning is bounded by fixed argv with no back-edge.
+diazoxide/charter#317 — `secret exec` takes a pass-through argv, so a `check:` naming it
+reaches ANY binary with a vault's credential in its environment (`news._tokens` only rejects
+shell metacharacters and an unregistered first token; verified `secret exec v curl …`
+resolves). That contradicts news.py's own docstring, which #318 corrects to say so. #318's
+marker closes the re-entrancy half (the spawned charter declines to probe); the argv is #317's.
 
 ## Glossary
 
