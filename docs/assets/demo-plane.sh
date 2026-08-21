@@ -155,6 +155,37 @@ beat("checkout-ui",      None,               "reviewer", 3)
 beat("payments-service", None,               "devops",   22)
 PYP
 
+# ── dispatches in flight ─────────────────────────────────────────────────────
+# charter writes one of these when a persona sub-agent STARTS and clears it when the agent
+# returns (charter/inflight.py), so the record only exists while work is genuinely out.
+# Written directly here for the same reason as the two blocks above: the demo has no live
+# session to dispatch anything, and these are the files a dispatch would have left, in
+# exactly their shape. Without them the persona column cannot draw the running badge at
+# all, and the capture shows a plane where nobody is working beside prose about the badge.
+# TWO records for one persona because the count renders only above one — a lone `⚡1` is
+# deliberately drawn as `⚡`, so a single record would not show the number at all.
+python3 - <<'PY'
+import json, pathlib, subprocess, tempfile, time
+root = pathlib.Path.cwd()
+state = json.loads(subprocess.run(
+    ["python3", "-c",
+     "import charter.config as c; import json; print(json.dumps(str(c.STATE_DIR)))"],
+    capture_output=True, text=True, cwd=root).stdout or '""')
+state = pathlib.Path(state) if state else root / ".charter"
+d = state / "dispatch-inflight"
+d.mkdir(parents=True, exist_ok=True)
+# Back-dated four minutes: a plausible mid-run age, and far inside the 30-minute
+# presumed-dead threshold, so the badge renders `⚡2 4m` and not the `?` of a stuck run.
+started = time.time() - 4 * 60
+for _ in range(2):
+    # Same naming as inflight.start: the agent name in the prefix, a unique suffix, so
+    # two concurrent dispatches of one persona are two records rather than one overwrite.
+    fd, path = tempfile.mkstemp(prefix="devops.", suffix=".json", dir=d)
+    with open(fd, "w") as fh:
+        json.dump({"agent": "devops", "ts": started}, fh)
+print(f"dispatch-inflight → {d}")
+PY
+
 # ── forge state ──────────────────────────────────────────────────────────────
 # `charter gl-refresh` writes this from gh/glab. The demo has no forge, so the same
 # cache is written directly — same schema, same TTL fields the renderer reads.
