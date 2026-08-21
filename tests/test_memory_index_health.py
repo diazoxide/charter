@@ -16,17 +16,19 @@ from the SessionStart hook, which must never block a session.
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from charter import doctor, memstore
+from charter import doctor, memstore, persona
+from tests._isolation import PersonaIso
 
 
-class IndexDrift(unittest.TestCase):
+class IndexDrift(PersonaIso):
     def setUp(self) -> None:
-        self._td = TemporaryDirectory()
-        self.d = Path(self._td.name)
-        self.addCleanup(self._td.cleanup)
+        # A memory base is a directory inside a plane; since #336 `memstore.files`
+        # refuses one that resolves outside the plane's data, so the fixture is a real
+        # base rather than a bare temp dir (see the header of `tests/test_memstore.py`).
+        super().setUp()
+        self.d = persona.memory_dir("indexhealth")
+        self.d.mkdir(parents=True, exist_ok=True)
 
     def _mem(self, name: str, body: str = "a fact") -> Path:
         p = self.d / name
@@ -104,7 +106,7 @@ class DoctorCheck(unittest.TestCase):
 
 
 
-class IndexGrowthSignal(unittest.TestCase):
+class IndexGrowthSignal(PersonaIso):
     """#2: an index only ever appends, and nothing said when it got long.
 
     Not a truncation guard — charter injects a bounded digest at SessionStart, so a
@@ -113,9 +115,12 @@ class IndexGrowthSignal(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self._td = TemporaryDirectory()
-        self.d = Path(self._td.name)
-        self.addCleanup(self._td.cleanup)
+        # A memory base is a directory inside a plane; since #336 `memstore.files`
+        # refuses one that resolves outside the plane's data, so the fixture is a real
+        # base rather than a bare temp dir (see the header of `tests/test_memstore.py`).
+        super().setUp()
+        self.d = persona.memory_dir("indexhealth")
+        self.d.mkdir(parents=True, exist_ok=True)
 
     def test_index_size_counts_memories_not_index_lines(self):
         """Files are the truth: a base mid-drift must not report a number that

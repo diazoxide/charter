@@ -18,6 +18,8 @@ import datetime
 import re
 from pathlib import Path
 
+from . import contain
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -99,10 +101,25 @@ def memory_date(text: str, filename: str = ""):
 
 
 def files(mem_dir: Path) -> list[Path]:
-    """Every memory file in *mem_dir* (sorted — chronological when timestamped)."""
-    if not mem_dir.exists():
+    """Every memory file in *mem_dir* charter may read (sorted — chronological when
+    timestamped).
+
+    **The one gate.** Everything that reaches a memory, a todo or a ref goes through here
+    — :func:`entries`, :func:`search`, :func:`resolve`, `index_drift`, `curate.report`,
+    `todos.count_open` — so containment is asserted once rather than at six callers, five
+    of which stay correct. A file this refuses is not "a memory that failed to load": it
+    is not a memory, and the count, the index-drift report and the search all agree about
+    that because they ask the same function (#336).
+
+    Two questions, both from :mod:`charter.contain`: the *directory* must resolve inside
+    the plane's data (paid once — it is what catches a linked ``memory/`` whose contents
+    are all ordinary files), and each entry must be a plain contained file (one ``lstat``
+    each).
+    """
+    if not mem_dir.exists() or contain.dir_refusal(mem_dir):
         return []
-    return sorted(p for p in mem_dir.glob("*.md") if p.name != "MEMORY.md")
+    return sorted(p for p in mem_dir.glob("*.md")
+                  if p.name != "MEMORY.md" and not contain.file_refusal(p))
 
 
 #: A memory FILENAME is a bare slug — no slash, space or colon. Matching only that
@@ -252,7 +269,10 @@ def resolve(mem_dir: Path, ident: str) -> Path | None:
     timestamped store, ``<prefix>-<slug>.md``. First match wins."""
     name = ident if ident.endswith(".md") else f"{ident}.md"
     p = mem_dir / name
-    if p.exists():
+    # The direct hit asks the filesystem rather than the listing, so it needs the listing's
+    # gate spelled out: without it `forget`/`show` would reach a file `files()` refuses,
+    # which is the same read arriving by a shorter route (#336).
+    if p.exists() and not (contain.dir_refusal(mem_dir) or contain.file_refusal(p)):
         return p
     hits = [q for q in files(mem_dir) if q.name == name or q.name.endswith(f"-{name}")]
     return hits[0] if hits else None

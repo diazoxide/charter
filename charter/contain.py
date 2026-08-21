@@ -32,14 +32,26 @@ charter's creation-time alphabet on someone else's forge would refuse to clone b
 :func:`segment_ok` is therefore the permissive rule: it forbids traversal and separators
 and nothing else.
 
-**Containment is lexical, and does not follow symlinks.** :func:`docsrc.read` resolves its
-page precisely to catch a symlink pointing out of the directory, and copying that here
-would be a mistake in two directions. It would do half of #336 — whose containment half is
-about symlinks in *every* file charter reads, not only the ones named by a name — while
-claiming none of it; and it would refuse a plane that legitimately symlinks a persona
-directory today, which is a working plane broken in exchange for a hole that stays open
-anyway. Traversal and absoluteness are what these five issues are about. Symlinks are
-filed, and stay filed.
+**Two layers, and the second one resolves.** :func:`segment_ok` and :func:`child` stay
+lexical: they answer a question about a *string*, and asking the filesystem would make a
+traversal succeed exactly when the attacker's target happens to exist. That left every
+read charter performs — not only the ones named by a name — open to a committed symlink,
+which is #336 and is now :func:`file_refusal` / :func:`dir_refusal` below. The two are
+deliberately separate functions: a name is refused before anything is opened, and a *path*
+is refused before it is read, and neither can stand in for the other.
+
+**What "inside the plane" had to mean.** The obvious rule — refuse a path whose `realpath`
+leaves ROOT — admits #336's own demonstration unchanged, because ``.charter/`` sits
+*under* ROOT (:func:`config._migrate_state_dir`), so ``personas/x/persona.md`` →
+``../../.charter/vaults/devops.json`` never leaves the plane while doing precisely what the
+`pretooluse-read` guard exists to stop. The boundary is therefore the directories a plane
+keeps its **data** in — :func:`data_roots` — which excludes the secrets home and includes
+the one part of it that is data (ephemeral memory, which lives inside ``.charter/``).
+
+**Links are followed; escapes are refused.** Refusing every symlink would close the hole
+and break a plane that legitimately links a persona directory. Resolving keeps that plane
+working, and #342's reason for staying lexical was never that symlinks are acceptable —
+only that doing half of this while claiming all of it would be worse than filing it.
 
 **Nothing here raises.** These checks sit under `doctor`, the status line and SessionStart,
 where the rule is that a hook may cost a session its briefing and never its turn. A refused
@@ -52,6 +64,7 @@ has to fix it.
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 #: Said once, so every site refuses in the same words. A reader who hits this has a defect
@@ -117,3 +130,112 @@ def child(base, name: str) -> Path | None:
 def refusal(name: str) -> str:
     """The one sentence every site uses to say why *name* was refused."""
     return NOT_A_SEGMENT.format(name=name)
+
+
+# --------------------------------------------------------------------------- #
+# the resolving layer — a PATH charter is about to read (#336)                 #
+# --------------------------------------------------------------------------- #
+
+#: Said once, like :data:`NOT_A_SEGMENT`, and for the same reason: the reader has a defect
+#: in a committed file. It names both ends because "refused" without the target is
+#: unactionable — the whole point is that the path charter opened is not the path it read.
+NOT_PLANE_DATA = ("'{name}' resolves to '{target}', outside the directories a control "
+                  "plane keeps its data in ({roots}). A committed symlink there redirects "
+                  "the read, so charter follows a link that lands inside them and refuses "
+                  "one that leaves")
+
+#: A path charter cannot examine at all (vanished mid-listing, a broken link, no
+#: permission). Refused rather than raised — every caller here is on a path that must not
+#: crash — and said in its own words so it is not read as a containment failure.
+UNREADABLE = "'{name}' cannot be examined ({error})"
+
+
+def data_roots() -> tuple[Path, ...]:
+    """The directories a control plane keeps readable data in.
+
+    Read from :mod:`charter.config` **at call time**, never captured at import: the test
+    harness re-points the plane with `config.use`, and a root captured at import would
+    quietly contain against the developer's real checkout.
+
+    ``PERSONA_STATE_DIR`` is here because ephemeral memory is data charter is *supposed* to
+    read, and it lives under the secrets home. That is the whole reason this is a list of
+    data directories rather than "the plane, minus ``.charter/``".
+    """
+    from . import config
+    return (config.PERSONAS_DIR, config.WORKSPACES_DIR, config.PERSONA_STATE_DIR)
+
+
+def within_data(path) -> bool:
+    """True when *path* **resolves** inside one of :func:`data_roots`.
+
+    Both ends are resolved. The roots have to be too: on macOS a temp plane lives under
+    ``/var/folders/…``, which is itself a link to ``/private/var/…``, so comparing a
+    resolved path against an unresolved root refuses every read in the test harness and
+    on any plane behind a linked mount. Resolving the roots is also what keeps a plane
+    that *relocates* ``personas/`` or ``workspaces/`` behind a link working, which is the
+    same legitimate case :func:`file_refusal` preserves one level down.
+
+    **The fast path is one ``lstat``, and it is exact.** ``persona.load`` asks this of
+    ``personas/<name>`` on every call, and four ``realpath``s (20µs) there doubled a
+    status-line sweep. When a path's own parent *is* a data root and the path itself is
+    not a link, it cannot have moved relative to that root — whatever the root resolves
+    to, this resolves inside it — so the answer is already known. Anything else (a deeper
+    base, a link, a lexical outsider) still pays the full resolve.
+    """
+    try:
+        target = os.path.abspath(path)
+        roots = [os.path.abspath(r) for r in data_roots()]
+        if os.path.dirname(target) in roots and not stat.S_ISLNK(os.lstat(target).st_mode):
+            return True
+    except OSError:
+        pass                                   # vanished or unreadable — ask the slow path
+    try:
+        target = os.path.realpath(path)
+        for r in data_roots():
+            root = os.path.realpath(r)
+            # `+ os.sep` so a sibling named like a root ("personas-old") is not a child.
+            if target == root or target.startswith(root + os.sep):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _not_plane_data(path) -> str:
+    roots = ", ".join(sorted(Path(r).name for r in data_roots()))
+    return NOT_PLANE_DATA.format(name=path, target=os.path.realpath(path), roots=roots)
+
+
+def dir_refusal(directory) -> str | None:
+    """Why charter must not list *directory*, or ``None``.
+
+    Separate from :func:`file_refusal` because a listing pays this **once** while paying
+    the per-file check N times, and because it is what catches the variant the file check
+    structurally cannot see: when the *directory* is the link, every file inside it is an
+    ordinary regular file that no per-file check has anything to object to.
+    """
+    if not within_data(directory):
+        return _not_plane_data(directory)
+    return None
+
+
+def file_refusal(path) -> str | None:
+    """Why charter must not read *path*, or ``None``.
+
+    One ``lstat`` in the common case, and that is deliberate — these run under the status
+    line and SessionStart, where the read is already the cheapest thing in the frame and a
+    guard that costs more than it guards would be reverted the first time somebody
+    profiles it. The expensive answer (:func:`within_data`, which resolves) is only asked
+    when the entry **is** a link, because a path that is not a link cannot have moved
+    relative to the directory it was listed from — which the caller checked once.
+
+    Not a TOCTOU guard, and not sold as one: the attacker here holds a commit, not a
+    process racing the read.
+    """
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        return UNREADABLE.format(name=path, error=e.strerror or e)
+    if stat.S_ISLNK(st.st_mode) and not within_data(path):
+        return _not_plane_data(path)
+    return None

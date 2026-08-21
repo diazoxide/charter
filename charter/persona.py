@@ -165,6 +165,26 @@ def parse(text: str) -> tuple[dict, str]:
     return meta, body.strip()
 
 
+def definition_refusal(name: str) -> str | None:
+    """Why this persona's definition file must not be read, or ``None``.
+
+    The path half of what :func:`reference_ok` does for the name half, and split out for
+    the same reason: :func:`load` and :func:`structural_errors` must not be able to
+    disagree about it. When they did — lint calling a live grant dangling — the signal an
+    operator would actively check was the one that lied (#329, #337).
+
+    Both questions are asked, because they catch different links. The *directory* resolving
+    out of the plane's data is the case where `persona.md` is an ordinary file and there is
+    nothing about it to object to; the *file* resolving out is #336's demonstration,
+    ``persona.md`` → ``../../.charter/vaults/…``, which `sync-agents` then writes into a
+    sub-agent's system prompt while `pretooluse-read` denies the agent that same read.
+    """
+    p = def_path(name)
+    if not p.exists():
+        return None
+    return contain.dir_refusal(p.parent) or contain.file_refusal(p)
+
+
 def load(name: str) -> dict | None:
     """The persona's OWN (unmerged) definition. For the effective persona with
     inheritance applied, use :func:`resolve`.
@@ -180,7 +200,7 @@ def load(name: str) -> dict | None:
     if not reference_ok(name):
         return None
     p = def_path(name)
-    if not p.exists():
+    if not p.exists() or definition_refusal(name):
         return None
     meta, charter = parse(p.read_text())
     meta.setdefault("name", name)
@@ -914,6 +934,13 @@ def structural_errors(name: str, known: set[str] | None = None) -> list[tuple[st
     """
     allnames = known if known is not None else set(list_personas())
     issues: list[tuple[str, str]] = []
+    refused = definition_refusal(name)
+    if refused:
+        # First, and on its own terms: every check below reads through `load`, which
+        # returns None for this persona, so without this line a definition charter
+        # DECLINED to read is indistinguishable from one that says nothing — and the
+        # operator is looking straight at the signal that would have told them (#336).
+        issues.append(("error", f"persona.md: {refused}"))
     for u in uses_of(name):
         problem = _reference_problem("uses", u, allnames)
         if problem:
