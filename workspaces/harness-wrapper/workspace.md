@@ -20,7 +20,18 @@ _Nothing yet._
 
 <!-- Task/domain vocabulary so a teammate or a fork isn't lost: `term` — definition. -->
 
-_Nothing yet._
+- `Harness.cli_name` — the word an operator types after `charter` to run this harness in
+  a frame (e.g. `claude`). Distinct from `Harness.name`, the harness's identity in
+  `$CHARTER_HARNESS` (e.g. `claude-code`).
+- `Harness.binary` — the executable `launch_argv` execs. Currently equal to `cli_name`
+  for every registered harness, but kept as a separate attribute because they are
+  allowed to differ.
+- `Harness.launch_argv(extra)` — returns the full argv (`[binary, *extra]`) to hand to
+  tmux for starting the harness. Always a `list`, never a joined string: tmux does not
+  shell-interpret separate argv (pinned against tmux 3.7c), and a joined string would
+  reintroduce command injection from operator-supplied arguments. Task 1 of the plan
+  (issue #345); a later task reads these off `harness.all()`/`registry.KINDS` to build
+  the `charter <harness>` launcher.
 
 ## Log
 
