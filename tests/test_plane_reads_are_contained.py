@@ -171,6 +171,14 @@ class PlaneReadsAreContained(PersonaIso):
             any(level == "error" and "persona.md" in msg for level, msg in issues),
             f"lint must report the refused definition, got {issues}")
 
+        # And through `lint`, which is what `charter persona lint` actually prints. Its
+        # early return said only "persona 'reader' does not load" — true, and it sends the
+        # reader to look for a file that is right there.
+        printed = persona.lint("reader", deep=False)
+        self.assertTrue(
+            any("outside the directories" in msg for _level, msg in printed),
+            f"lint must say WHY it did not load, got {printed}")
+
     # ------------------------------------------------------------ (a) the benign half
     def test_a_persona_directory_symlinked_inside_the_plane_still_loads(self):
         """#342 kept containment lexical partly to avoid breaking this plane. A resolving

@@ -1046,7 +1046,12 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     """
     d = load(name)
     if not d:
-        return [("error", f"persona '{name}' does not load")]
+        # WHY, when there is a why. "does not load" about a `persona.md` sitting right
+        # there sends the reader looking for a missing file; the refusal names the path
+        # charter actually resolved to, which is the whole defect (#336).
+        refused = definition_refusal(name)
+        return [("error", f"persona.md: {refused}" if refused
+                 else f"persona '{name}' does not load")]
     meta = d["meta"]
     issues: list[tuple[str, str]] = []
     if deep:
