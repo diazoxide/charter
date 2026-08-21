@@ -19,6 +19,40 @@ from typing import Protocol, runtime_checkable
 CI_STATES = frozenset({"success", "failed", "running", "pending",
                        "manual", "canceled", "skipped"})
 
+# --------------------------------------------------------------------------------- #
+# How long one forge CLI invocation may take                                          #
+# --------------------------------------------------------------------------------- #
+# `util.run` has taken a `timeout` since the day its docstring named `gh api` and
+# `glab api` as paths that "could hang indefinitely", and no forge call site passed one
+# (#324). The bound lives here rather than at each site so a new backend inherits it.
+#
+# #324 left the number open, on the grounds that a status refresh, a `discover` paging
+# through hundreds of repos and a `doctor` preflight have different budgets. They do —
+# but that is a difference in TOTAL, not per call. Every site below is one CLI
+# invocation making one API request; `discover`'s hundreds of repos are hundreds of
+# separate invocations, each of which should still answer promptly. So the split that
+# earns two numbers is not caller-by-caller, it is the permissive/strict split both
+# backends already draw, because the two differ in what being WRONG costs.
+
+#: The best-effort path (`_api`, `ci_status`) — what the status line renders from.
+#: Being wrong is nearly free: a blank column, retried at the next `REFRESH_TTL`. This
+#: is also the path that runs detached, holding the forge credential, on a surface that
+#: asks for another refresh every two minutes, so a generous bound here is the expensive
+#: mistake. Ten seconds is roughly an order of magnitude over a healthy call (a CLI
+#: start plus one HTTPS round trip) and still covers a cold handshake to a self-hosted
+#: instance over a VPN. It sits in charter's existing scale for a network call on a
+#: rendering path — `doctor.CHECK_TIMEOUT` is 5s, `update.NET_TIMEOUT` 5s — and below
+#: `glstate.SPAWN_COOLDOWN`, so one call can never on its own outlive the cooldown.
+STATUS_TIMEOUT = 10.0
+
+#: The strict path (`_paged_strict`, `_api_strict`, `repo_tree_strict`) — human-invoked,
+#: and a failure aborts the whole `discover` rather than blanking a cell, so a bound
+#: tight enough for the status line would trade a cheap wrong answer for an expensive
+#: one. One page here is a hundred records with descriptions and topics, not a single
+#: `per_page=1` lookup. Sixty seconds is the same number `secrets.reference` already
+#: uses for "a human is waiting and this is allowed to be slow".
+LIST_TIMEOUT = 60.0
+
 
 class ForgeError(Exception):
     """A forge CLI is missing, unauthenticated, or returned something unusable."""

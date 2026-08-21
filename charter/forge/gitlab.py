@@ -5,7 +5,7 @@ import json
 import urllib.parse
 
 from .. import util
-from .base import CI_STATES, ForgeError
+from .base import CI_STATES, LIST_TIMEOUT, STATUS_TIMEOUT, ForgeError
 
 #: GitLab pipeline status → the neutral vocabulary. Anything unlisted becomes None
 #: rather than being invented, so a new upstream state degrades to "unknown", not a lie.
@@ -27,19 +27,30 @@ class GitLabForge:
         self.host = host
 
     # --- plumbing -----------------------------------------------------------------
-    def _glab(self, args, check: bool = True):
+    def _glab(self, args, check: bool = True, timeout: float = STATUS_TIMEOUT):
         """Every invocation is explicit about ITS OWN host (``--hostname``) — mirrors
         `GitHubForge`, which has always passed `--hostname self.host` on every call.
         Before this, a declared self-hosted GitLab (``host = "git.internal"``) silently
         queried gitlab.com instead (glab's ambient default host), and `check_auth`
         reported success for `git.internal` merely because gitlab.com happened to be
-        logged in — a false green on the auth axis (FINDING I2)."""
-        return util.run([self.cli, "--hostname", self.host, *args], check=check)
+        logged in — a false green on the auth axis (FINDING I2).
+
+        Bounded by ``timeout`` at every caller, defaulting to the tighter of the two
+        budgets: this is the single chokepoint for `glab`, so an unbounded default here
+        would be an unbounded call anywhere a future method forgets to say otherwise
+        (#324)."""
+        return util.run([self.cli, "--hostname", self.host, *args],
+                        check=check, timeout=timeout)
 
     def _api(self, path: str):
         """Best-effort JSON GET. Returns None on any failure — callers feed the status
-        line, which renders every turn and must never crash."""
-        p = self._glab(["api", path], check=False)
+        line, which renders every turn and must never crash. A timeout is one of those
+        failures: `ProcTimeout` is a `RuntimeError` and would otherwise escape this path
+        as a traceback (#324)."""
+        try:
+            p = self._glab(["api", path], check=False, timeout=STATUS_TIMEOUT)
+        except util.ProcTimeout:
+            return None
         if p.returncode != 0:
             return None
         try:
@@ -53,8 +64,12 @@ class GitLabForge:
         never look the same, because collapsing them is how a `list_repos` failure
         silently wipes the inventory. Raises :class:`ForgeError` (naming the failing path
         and glab's own error text) on a non-zero exit or unparsable JSON; a clean empty
-        body is returned as ``[]``, which is a legal, successful result."""
-        p = self._glab(["api", path], check=False)
+        body is returned as ``[]``, which is a legal, successful result. A timeout is
+        reported the same way, for the same reason (#324)."""
+        try:
+            p = self._glab(["api", path], check=False, timeout=LIST_TIMEOUT)
+        except util.ProcTimeout as e:
+            raise ForgeError(f"GitLab API call ({path}) {e}") from e
         if p.returncode != 0:
             detail = (p.stderr or p.stdout or "").strip() or f"glab exited {p.returncode}"
             raise ForgeError(f"GitLab API call failed ({path}): {detail}")
@@ -67,7 +82,10 @@ class GitLabForge:
 
     # --- protocol -----------------------------------------------------------------
     def check_auth(self) -> None:
-        p = self._glab(["auth", "status"], check=False)
+        try:
+            p = self._glab(["auth", "status"], check=False, timeout=STATUS_TIMEOUT)
+        except util.ProcTimeout as e:
+            raise ForgeError(f"glab did not answer for {self.host}: {e}") from e
         blob = (p.stdout or "") + (p.stderr or "")
         if p.returncode != 0 or "Logged in" not in blob:
             raise ForgeError(
