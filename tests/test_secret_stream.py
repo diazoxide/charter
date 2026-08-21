@@ -29,7 +29,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 
-from charter import persona
+from charter import mcpseen, persona
 from charter import commands_secrets as cs
 from charter.secrets import registry
 from tests._isolation import PersonaIso
@@ -59,18 +59,29 @@ class StreamCase(PersonaIso):
 
 
 class TestTheRendererEmitsTheRightMode(PersonaIso):
+    def render(self, name, vault, entry):
+        """Render an entry whose command the operator has approved.
+
+        The wrapper is only emitted for a command this machine consented to, because the
+        committed `mcp.json` chooses it (#330). These tests are about which MODE the
+        wrapper uses, so they consent first; the withholding half is asserted in
+        tests/test_committed_config_and_credentials.py.
+        """
+        mcpseen.approve(name, [mcpseen.fingerprint(vault, entry)])
+        return persona.mcp_render_entry(name, vault, entry)
+
     def test_an_env_only_server_still_execs(self):
         """Unchanged for every server that already worked — `--exec` is still right when
         there is no file to clean up."""
         e = {"command": "npx", "args": ["posthog-mcp"], "secrets": {"TOKEN": "k"}}
-        got = persona.mcp_render_entry("growth", "vlt", e)
+        got = self.render("growth", "vlt", e)
         self.assertIn("--exec", got["args"])
         self.assertNotIn("--stream", got["args"])
 
     def test_a_file_credential_server_streams(self):
         e = {"command": "uvx", "args": ["ga4-mcp"],
              "secret_files": {"GOOGLE_APPLICATION_CREDENTIALS": "sa-json"}}
-        got = persona.mcp_render_entry("growth", "vlt", e)
+        got = self.render("growth", "vlt", e)
         self.assertIn("--stream", got["args"])
         self.assertNotIn("--exec", got["args"])
         self.assertIn("--file", got["args"])
@@ -81,14 +92,14 @@ class TestTheRendererEmitsTheRightMode(PersonaIso):
         mixed server must not exec."""
         e = {"command": "uvx", "args": ["x"], "secrets": {"TOKEN": "k"},
              "secret_files": {"GOOGLE_APPLICATION_CREDENTIALS": "sa"}}
-        got = persona.mcp_render_entry("growth", "vlt", e)
+        got = self.render("growth", "vlt", e)
         self.assertIn("--stream", got["args"])
         self.assertIn("--env", got["args"])
         self.assertIn("--file", got["args"])
 
     def test_the_declaration_keys_do_not_leak_into_the_agent(self):
         e = {"command": "uvx", "secret_files": {"G": "sa"}}
-        got = persona.mcp_render_entry("growth", "vlt", e)
+        got = self.render("growth", "vlt", e)
         self.assertNotIn("secret_files", got)
         self.assertNotIn("secrets", got)
 

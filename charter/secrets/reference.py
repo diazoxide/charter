@@ -17,8 +17,20 @@ Supported today::
     vault://<path>#<field>               → HashiCorp Vault (`vault kv get`)
 
 Adding a scheme is one entry in :data:`_RESOLVERS`. Each entry maps a URI to an
-**argv list** — never a shell string — so a reference can never be command
-injection, whatever it contains.
+**argv list** — never a shell string — so no character in a URI is a shell
+metacharacter here, whatever it contains.
+
+**That is a claim about the URI, and it used to be written as a claim about the
+whole reference.** It was not one. A resolver also reads the VAULT'S CONFIG, and
+`vaults.json` at the plane root is the committed half of the registry — so a
+file in git supplied values that landed in an argv beside the URI's. `version`
+reached an `npx` package spec, where npm accepts a git URL as readily as a
+version, which is code execution without a shell ever being involved (#332).
+Argv-not-a-shell-string is a real guard and it never bounded that.
+
+So the rule each resolver owes, in full: **every value that enters the argv is
+validated, wherever it came from.** `_browser_argv` validates the session, the
+source, the name — and now the config's `version`.
 """
 
 from __future__ import annotations
@@ -84,7 +96,15 @@ def _browser_argv(uri: str, config: dict) -> tuple[list[str], str]:
                          f"charter reads {', '.join(browser.SESSION_SOURCES)}. Whole storage "
                          f"state is deliberately not among them: a dump is a credential blob "
                          f"nobody declared, and the redactor cannot scrub what it cannot name.")
-    return browser.session_read_argv(session, source, name, config.get("version")), "npx"
+    # The config is committed data too — see this module's docstring. Validated here,
+    # beside the three URI fields above, because this is where a reader looks for "what is
+    # checked before the argv is built"; `session_read_argv` re-checks and raises
+    # `ValueError`, which is the belt to this braces rather than the gate.
+    version = config.get("version")
+    if version is not None and not browser.version_ok(version):
+        raise VaultError(f"vault config for '{uri}': "
+                         + browser.NOT_A_VERSION.format(version=version))
+    return browser.session_read_argv(session, source, name, version), "npx"
 
 
 #: scheme → (argv builder, CLI name). Argv, never a shell string.

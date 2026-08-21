@@ -21,6 +21,25 @@ class ProviderUnavailable(VaultError):
     """The provider isn't implemented yet, or its backend/CLI is missing."""
 
 
+def vault_file_path(configured):
+    """Where a vault's ``file`` config actually lands: absolute as given, relative to the
+    plane root otherwise.
+
+    A module function rather than only a property because `doctor` has to ask the same
+    question — "does this vault's file lie outside the plane?" (#331) — about a vault it
+    has no reason to instantiate. `VaultProvider.file_path` already records why two
+    implementations of "where is this file" is the wrong number: `plain-file` and
+    `reference` had byte-identical `path` properties, and that is how one of them quietly
+    keeps resolving the old way. A third copy in `doctor` would be the same mistake with a
+    fresh coat of paint.
+    """
+    from pathlib import Path
+    from .. import config as _config
+
+    p = Path(configured).expanduser()
+    return p if p.is_absolute() else (Path(_config.ROOT) / p)
+
+
 class VaultProvider(ABC):
     """One configured vault, backed by a concrete provider.
 
@@ -108,15 +127,28 @@ class VaultProvider(ABC):
         plane. Resolution lives here rather than in each provider because `plain-file` and
         `reference` had byte-identical `path` properties, and two implementations of "where
         is this file" is how one of them quietly keeps resolving the old way.
-        """
-        from pathlib import Path
-        from .. import config as _config
 
+        **Say the consequence out loud, because it was only ever implied (#331).**
+        `vaults.json` at the plane root is the COMMITTED half of the registry, and `file`
+        is not a local-only key — so a file in git can name any path on this machine as a
+        vault, with no containment check and no confirmation. That is working as designed
+        and it stays that way: `commands_secrets` tells the operator to "point --file
+        outside the plane" as the remedy for a plain-file vault git would otherwise commit,
+        so a containment rule here would refuse the configuration charter itself
+        recommends. What bounds it instead:
+
+        * `get()`/`set()` on such a vault need an operator to run a `charter secret`
+          command naming a vault they did not register. Nothing unattended reads it.
+        * **Nothing unattended WRITES it, either** — `PlainFileProvider.health()` used to
+          chmod this path from the SessionStart hook and no longer does; see
+          `PlainFileProvider._tighten`.
+        * `doctor` names a shared-half vault whose file lands outside the plane, on its
+          green line, so the configuration is visible rather than merely legal.
+        """
         p = self.config.get("file")
         if not p:
             raise VaultError(f"vault '{self.name}' has no 'file' configured")
-        p = Path(p).expanduser()
-        return p if p.is_absolute() else (_config.ROOT / p)
+        return vault_file_path(p)
 
     @abstractmethod
     def get(self, key: str) -> str:

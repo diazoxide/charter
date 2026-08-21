@@ -116,6 +116,33 @@ Three things it does on your behalf:
 Servers are **inherited and unioned** along `extends:`, parent first, child winning a name
 collision — the rule `tools` and `uses` already follow.
 
+### The wrapper is emitted only for a command you approved
+
+`mcp.json` is committed, and it names the `command` that receives the vault's value. So
+the wrapper above is emitted only once you have said, on this machine, that *this* command
+may have *these* keys from *that* vault:
+
+```bash
+charter persona sync-agents               # writes the agents; names anything unapproved
+charter persona sync-agents --approve-mcp # after reading the command it printed
+```
+
+Until then the server is still declared in the generated agent — unchanged, minus the
+vault wrapper — so the persona keeps working and the server fails at authentication rather
+than silently running with a credential nobody sanctioned. `sync-agents` prints the exact
+command it withheld from, which is the thing worth looking at.
+
+The approval covers the vault, the command, its args and the `secrets`/`secret_files`
+mappings together. **Change any of them and it lapses**, because the approval is of a
+command and not of a server name — a teammate re-pointing an existing server at a new
+binary is the case this exists for. The record is machine-local under `.charter/`: if it
+travelled in git, the same commit that declares a server could declare it approved.
+
+There is deliberately no allowlist of permitted commands. An MCP `command` is an arbitrary
+binary followed by arbitrary args, so any list containing the launchers real servers use
+(`npx`, `uvx`, `docker`) is walked straight past by the args alone, and a list excluding
+them refuses every server anyone actually runs.
+
 ### A missing vault does not block the sync
 
 The charter is committed and shared; a vault is machine-local by design. A teammate cloning

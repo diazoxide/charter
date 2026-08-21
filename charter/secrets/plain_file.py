@@ -41,10 +41,10 @@ class PlainFileProvider(VaultProvider):
         return self.file_path      # shared resolution — see VaultProvider.file_path
 
     def _load(self) -> dict:
+        """Read the vault. **Never writes** — see :meth:`_tighten` for why that matters."""
         p = self.path
         if not p.exists():
             return {}
-        self._tighten(p)  # a vault file that arrived world/group-readable is a leak
         try:
             data = json.loads(p.read_text() or "{}")
         except json.JSONDecodeError as e:
@@ -68,7 +68,26 @@ class PlainFileProvider(VaultProvider):
         """Force a vault file to 0600 if any group/other bit is set (tighten only,
         never loosen). Self-heals a file created outside ``set`` — e.g. hand-authored
         JSON, which inherits the umask default (often 0644) — so plaintext secrets are
-        never left readable once charter touches the vault. Best-effort; never raises."""
+        never left readable once charter touches the vault. Best-effort; never raises.
+
+        **Called from the value paths, never from `_load`** (#331). It used to sit in
+        `_load`, which put it under `health()` — and `health()` is called by `doctor` from
+        the SessionStart hook and by the status line behind a TTL cache. A committed
+        `vaults.json` can point a vault at any path on the machine, so charter chmod-ed a
+        file outside the control plane, unprompted, with nobody watching, and reported the
+        vault green while doing it. A health check that writes is the defect regardless of
+        which file it writes to.
+
+        Moving it here keeps the protection where the plaintext actually is: `get` takes
+        secret values out of the file, and a vault charter has read the secrets of is one
+        charter has to leave at 0600. `set`/`delete` need no call — `_save` recreates the
+        file at 0600 with `O_CREAT` and chmods it again.
+
+        The read-only paths — `health`, `keys`, `ages` — now REPORT a loose mode instead
+        of silently fixing it. `health()` already had that branch; `_tighten` running
+        first is what made it unreachable, because the file was 0600 by the time the mode
+        was read.
+        """
         try:
             if stat.S_IMODE(p.stat().st_mode) & 0o077:
                 os.chmod(p, 0o600)
@@ -76,6 +95,9 @@ class PlainFileProvider(VaultProvider):
             pass
 
     def get(self, key: str) -> str:
+        # Before the read, not after: the point is that the plaintext is not sitting in a
+        # group-readable file while charter is handing it out.
+        self._tighten(self.path)
         data = self._load()
         if key not in data:
             raise SecretNotFound(f"secret '{key}' not found in vault '{self.name}'")

@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from charter import persona
+from charter import mcpseen, persona
 from tests._isolation import PersonaIso
 
 
@@ -45,6 +45,12 @@ class McpBase(PersonaIso):
                           **{"delegate-when": "reddit things", **meta})
         if servers is not None:
             (persona.dir_of(name) / "mcp.json").write_text(json.dumps(servers))
+        # `mcp_render_entry` hands the vault's value to the command a COMMITTED file
+        # names, so it now renders the wrapper only for a command this operator has
+        # approved (#330). Everything below is about the SHAPE of that wrapper, so the
+        # fixture consents and the tests assert what consent produces. The refusing half
+        # lives in tests/test_committed_config_and_credentials.py.
+        mcpseen.approve(name, [fp for _s, _e, fp in persona.mcp_credentialed(name)])
         return name
 
 

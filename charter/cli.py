@@ -822,6 +822,10 @@ def _add_persona_parser(sub) -> None:
     sa = psub.add_parser("sync-agents",
                          help="Generate a Claude Code sub-agent (.claude/agents/<name>.md) per persona.")
     sa.add_argument("--persona", help="Only sync this persona (default: all).")
+    sa.add_argument("--approve-mcp", action="store_true",
+                    help="Approve the MCP server commands the personas' mcp.json files "
+                         "name, so they receive the persona's vault value. Re-approve "
+                         "after any change to a server's command, args or secrets.")
     sa.set_defaults(func=commands_persona.cmd_persona_sync_agents)
 
     mig = psub.add_parser("migrate",

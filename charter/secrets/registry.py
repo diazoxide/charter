@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 from .. import config
 from .base import VaultError, VaultNotConfigured, VaultProvider
@@ -78,8 +79,19 @@ def load_registry() -> dict:
     merged = {}
     shared, local = load_shared(), load_local()
     for name, entry in shared.get("vaults", {}).items():
+        # A vault entry that is not an object is not a vault entry. `vaults.json` is
+        # COMMITTED and hand-editable, and `provider_for` reached straight for
+        # `entry.get("provider")` — so a string there raised `AttributeError` out of
+        # `doctor.check_vaults`, which runs from the SessionStart hook and catches only
+        # `VaultError`. Dropping it here rather than defending in each reader is the
+        # single-source rule: this function IS the merged view every reader gets.
+        # `doctor` names what was dropped (see `malformed_shared`), so nothing is hidden.
+        if not isinstance(entry, dict):
+            continue
         merged[name] = json.loads(json.dumps(entry))          # deep copy, no aliasing
     for name, entry in local.get("vaults", {}).items():
+        if not isinstance(entry, dict):
+            continue
         if name not in merged:
             merged[name] = json.loads(json.dumps(entry))
             continue
@@ -90,6 +102,55 @@ def load_registry() -> dict:
             elif v is not None:
                 base[k] = v
     return {"vaults": merged}
+
+
+def malformed_shared() -> list[str]:
+    """Names in the COMMITTED half whose entry is not an object, and was therefore
+    dropped from the merged view. Never raises — a corrupt file reads as none."""
+    try:
+        return sorted(n for n, e in load_shared().get("vaults", {}).items()
+                      if not isinstance(e, dict))
+    except VaultError:
+        return []
+
+
+def shared_files_outside_plane() -> list[str]:
+    """Vaults whose ``file`` is decided by the COMMITTED half and lands outside the plane.
+
+    Absolute is legal and stays legal: `VaultProvider.file_path` blesses it for "a vault
+    deliberately kept outside the plane" (#21), and `commands_secrets` actively tells the
+    operator to "point --file outside the plane" as the remedy for a plaintext vault git
+    would otherwise commit. Refusing it here would break the configuration charter's own
+    error message recommends.
+
+    What was missing is that the committed half can decide it and nothing said so (#331) —
+    so this NAMES it and refuses nothing. The local half is excluded on purpose: that is
+    where a human typed the path, and nothing committed chose it.
+    """
+    from .base import vault_file_path
+
+    try:
+        shared = load_shared().get("vaults", {})
+        local = load_local().get("vaults", {})
+    except VaultError:
+        return []
+    out = []
+    for name, entry in sorted(shared.items()):
+        if not isinstance(entry, dict):
+            continue
+        # A local override of `file` means this machine's path was chosen locally, so the
+        # committed value is not what resolves and there is nothing to report.
+        if ((local.get(name) or {}).get("config") or {}).get("file"):
+            continue
+        configured = (entry.get("config") or {}).get("file")
+        if not configured:
+            continue
+        try:
+            p = vault_file_path(configured).resolve()
+            p.relative_to(Path(config.ROOT).resolve())
+        except (ValueError, OSError):
+            out.append(name)
+    return out
 
 
 def _write(path, doc: dict, mode: int) -> None:

@@ -149,6 +149,16 @@ defaults to `local` so a control plane never publishes by accident. It matters m
 a registry names which personas hold credentials and where their files live, which is a
 useful map even without the values.
 
+**A shared `file` may be absolute, and that is on purpose** — a team that provisions the
+file out of band wants the pointer to travel, and pointing `--file` outside the plane is
+what charter tells you to do when a plain-file vault would otherwise land somewhere git
+tracks. The consequence is worth stating plainly: the committed half can name any path on
+the machine as a vault. Nothing unattended reads or writes it — `charter doctor` and the
+status line ask a vault whether it is reachable and no longer touch it — but `charter
+secret get`/`set` against that vault name would. `doctor` names a shared vault whose file
+lands outside the plane on its vaults line, so the configuration is visible rather than
+merely legal.
+
 `--account` never travels, even with `--share`. It is the one field that genuinely differs
 per machine, so it is split off and written locally.
 
@@ -324,7 +334,11 @@ Two things charter needs to be right about, and one it will not do:
   vendor's `not open`.
 - **The version is charter's pin** unless the vault overrides it with
   `{"version": "0.1.19"}` in its config. A session belongs to the version that opened it, so
-  a mismatch reports `not open` against a browser that is alive and still logged in.
+  a mismatch reports `not open` against a browser that is alive and still logged in. It
+  must be an **exact version** — `1.2.3`, or `1.2.3-rc.1`. Not a range and not `latest`:
+  that string is interpolated into an npm package spec, where npm would also accept a
+  dist-tag, an alias or a git URL, and a spec that resolves to something new tomorrow is
+  the `not open` symptom this override exists to prevent.
 - **Whole storage state is not readable this way.** A dump is a credential blob nobody
   declared, and the redactor cannot scrub what it cannot name — name the one key you want.
 
