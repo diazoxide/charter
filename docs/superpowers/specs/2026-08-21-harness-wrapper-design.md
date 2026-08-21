@@ -74,7 +74,7 @@ Arguments after the name reach the harness verbatim.
 charter claude
  ├─ resolve harness → argv, probe `tmux -V` (floor 3.2)
  ├─ write .charter/frame/<frame-id>/tmux.conf   (never ~/.tmux.conf)
- └─ exec tmux -L charter -f <conf> …
+ └─ run (NOT exec — see Exit code) tmux -L charter -f <conf> …
       ├─ pane: charter panel top
       ├─ pane: <harness>      ← charter never draws or parses this
       ├─ pane: charter panel left / right
@@ -173,8 +173,14 @@ terminal" report.
 
 ## Lifecycle
 
-- **Exit code.** `charter claude` must be a transparent substitute for `claude`, so the
-  harness's status is re-raised via `remain-on-exit` and `#{pane_dead_status}`.
+- **Exit code.** `charter claude` must be a transparent substitute for `claude`. Probed:
+  an attached `tmux new-session` returns **0** whatever its command exited with, so the
+  status has to be carried out of band. `remain-on-exit on` plus a `pane-died` hook
+  writing `#{pane_dead_status}` records it correctly (42 in, 42 recorded). The launcher
+  therefore **forks and waits rather than `exec`ing** tmux, then exits with the recorded
+  status. `exec` remains correct only on the `--no-frame`/non-TTY bypass, where there is
+  no frame in the way. The hook must be scoped to the harness pane — `pane-died` fires for
+  any pane, and an unscoped hook would report a dead *panel* as the agent's exit.
 - **Detach** is allowed and prints how to reattach; an agent surviving a closed lid is a
   feature, and returning silently to a shell with it still running is not.
 - **A dead panel** stays visible with its error, respawns with backoff, and gives up after
@@ -225,14 +231,17 @@ Ships with `docs/frame.md` (force-included in `pyproject.toml`, which is not opt
 `tests/test_docs_show.py` fails otherwise) and a news entry whose `check:` probe is
 read-only, uses charter's own argv, and cannot hang.
 
-## Not pinned yet
+## Pinned against tmux 3.7c
 
-Two facts are assumed and must be probed before the code depends on them, because this
-repo's rule is that only a rejection is evidence:
+Both assumptions were probed rather than trusted, and one of them was wrong.
 
-1. Whether `tmux new-session` given separate argv ever hands the command to a shell.
-2. Whether `remain-on-exit` plus `#{pane_dead_status}` reliably carries the exit code out
-   through an attached client. Neither could be tested in a sandbox without a terminal.
+**Separate argv is not shell-interpreted; a joined string is.** `new-session … printf
+'hello;touch INJ1'` as separate arguments created no file; the same text as one string
+created it. The rejection is the evidence, so the safe form is confirmed safe *and* the
+unsafe form is confirmed unsafe — argv never gets joined anywhere in this feature.
 
-If either fails, the harness gets spawned through a small charter shim that owns both
-answers itself.
+**An attached tmux does not carry the exit code**, which the earlier draft of this spec
+assumed it could be made to. It returns 0 regardless. `remain-on-exit` plus a `pane-died`
+hook does record `#{pane_dead_status}` faithfully, so the status travels through the
+frame's state directory and the launcher waits rather than `exec`s. This is why the
+process model above says run, not exec.
