@@ -4,9 +4,15 @@ A *harness* is the agent runtime charter runs inside — Claude Code, opencode, 
 whatever comes next — as distinct from a *host*, which in this codebase is a forge
 (``github.com``, a self-hosted GitLab). ADR 0015.
 
-The interface is deliberately three members wide. Charter does not model a harness; it
-models the three things it needs from one: what it calls itself, what it cannot carry,
-and what has to be written on disk for charter to work inside it.
+Charter does not model a harness; it models what it needs from one, and the interface
+grows only when that need does. Three members answered while charter only lived inside a
+harness: what it calls itself, what it cannot carry, and what has to be written on disk
+for charter to work inside it. `charter <harness>` adds a fourth, because charter now
+runs the harness rather than only living inside it, so it also needs to know how to
+start one — what an operator types, and what argv to exec (ADR 0018, issue #345). That
+fact lives here, on the harness, for the same reason the first three do: anywhere else
+it is a hardcoded literal per harness, the exact failure `registry.py` iterating
+``KINDS`` exists to end. A fifth member needs the same kind of argument, not just a use.
 """
 
 from __future__ import annotations
