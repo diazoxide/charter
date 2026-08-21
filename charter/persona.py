@@ -33,7 +33,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import config, contain
+from . import config, contain, mcpseen
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
@@ -323,6 +323,20 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     files = entry.get("secret_files") or {}
     if not (secrets or files) or not vault:
         return out
+    # The committed sidecar chooses `command`, and this function is where that choice
+    # becomes "…and it receives the vault's value" (#330). The gate belongs HERE rather
+    # than in `sync-agents`, even though `sync-agents` is the only caller today: the
+    # decision being guarded is this one, and a guard sitting one frame above the decision
+    # is a guard the next caller forgets to ask for.
+    #
+    # NOT an allowlist of commands, which is how #317 was closed on a news `check:`. That
+    # worked because a `check:` names a charter subcommand — a closed grammar with an
+    # enumerable answer. An MCP `command` is an arbitrary binary followed by arbitrary
+    # `args`, so a list holding the launchers real servers use (`npx`, `uvx`, `docker`) is
+    # walked straight past by `args` alone, and a list excluding them refuses every server
+    # anyone actually runs. See `mcpseen` for the full argument.
+    if mcpseen.fingerprint(vault, entry) not in mcpseen.approved(name):
+        return out
     args = ["secret", "exec", vault]
     for env_name, key in secrets.items():
         args += ["--env", f"{env_name}={key}"]
@@ -339,6 +353,30 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     out["command"] = "charter"
     out["args"] = args
     return out
+
+
+def mcp_credentialed(name: str) -> list[tuple[str, dict, str]]:
+    """``(server, entry, fingerprint)`` for every server of *name* that would carry a
+    credential — i.e. declares ``secrets``/``secret_files`` against a real vault.
+
+    The list `sync-agents --approve-mcp` records and the list it reports on are both
+    derived from this one, so "what you were shown" and "what got approved" cannot drift
+    apart — which is the failure mode of a consent prompt that computes its own list.
+    """
+    vault = (resolve(name) or {}).get("meta", {}).get("vault")
+    out = []
+    for server, entry in sorted(mcp_servers(name).items()):
+        fp = mcpseen.fingerprint(vault, entry)
+        if fp:
+            out.append((server, entry, fp))
+    return out
+
+
+def mcp_withheld(name: str) -> list[tuple[str, dict]]:
+    """The credentialed servers this operator has NOT approved — what `mcp_render_entry`
+    is about to render without its vault wrapper."""
+    ok = mcpseen.approved(name)
+    return [(s, e) for s, e, fp in mcp_credentialed(name) if fp not in ok]
 
 
 def lineage(name: str) -> list[str]:

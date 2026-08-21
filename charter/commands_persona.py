@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import commands_secrets, config, persona, trace, util
+from . import commands_secrets, config, mcpseen, persona, trace, util
 from .secrets import base, registry
 
 #: The scaffold a new persona starts from.
@@ -1383,9 +1383,25 @@ def cmd_persona_sync_agents(args) -> int:
         util.info("No personas to sync. Create one first: charter persona create <name>.")
         return 0
 
+    # BEFORE the render, because the render is what consults the record: approving after
+    # it would write this run's agents without their credentials and only take effect on
+    # the next run, which reads as the flag not working.
+    if getattr(args, "approve_mcp", False):
+        for n in names:
+            declared = persona.mcp_credentialed(n)
+            if not declared:
+                continue
+            mcpseen.approve(n, [fp for _s, _e, fp in declared])
+            for server, entry, _fp in declared:
+                # Printed, not merely recorded: an approval nobody can see in the
+                # transcript is not consent, it is a flag that was typed.
+                util.info(f"  approved {n}/{server} → {mcpseen.describe(entry)}")
+
     outcomes = {n: _write_agent(n) for n in names}
     written = [n for n, o in outcomes.items() if o == "written"]
     drafts = [n for n, o in outcomes.items() if o == "draft"]
+    withheld = {n: persona.mcp_withheld(n) for n in written}
+    withheld = {n: v for n, v in withheld.items() if v}
 
     removed = []
     if not one and _agents_dir().exists():  # full sync also prunes orphaned generated agents
@@ -1403,6 +1419,19 @@ def cmd_persona_sync_agents(args) -> int:
                   "Finish it, drop the `draft: true` line, then re-run.")
     if removed:
         util.info("Removed stale generated agents: " + ", ".join(removed))
+    if withheld:
+        # A warning, not an error: the agents were written and the personas still work.
+        # What did not happen is the credential hand-off, and saying so in the words of
+        # the command that would restore it is the whole point — a silent downgrade here
+        # would surface as an MCP server failing to authenticate, three layers away.
+        util.warn(f"Withheld the vault from {sum(len(v) for v in withheld.values())} MCP "
+                  f"server(s): the committed `mcp.json` names the command that would "
+                  f"receive it, and this one has not been approved on this machine.")
+        for n, servers in sorted(withheld.items()):
+            for server, entry in servers:
+                util.info(f"  {n}/{server} → {mcpseen.describe(entry)}")
+        util.info("  Read the command above. If it is what you expect, approve it with:")
+        util.info("    charter persona sync-agents --approve-mcp")
     for n in written:
         util.info(f"  invoke '{n}' via the Agent/Task tool (subagent_type: {n})")
     if written:
