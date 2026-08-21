@@ -7,3 +7,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [0.47.1 cut and tagged (2026-08-21): patch carrying #313 only — the news ](20260821-104805-0-47-1-cut-and-tagged-2026-08-21-patch-carrying-.md)
 - [Closed todo: Close #314 — cross-process probe guard (branch probe-guard-](20260821-122126-closed-todo-close-314-cross-process-probe-guard-.md)
 - [Closed todo: Close #317 — a check: can reach arbitrary argv via 'secret ](20260821-125139-closed-todo-close-317-a-check-can-reach-arbitrar.md)
+- [0.47.2 shipped (2026-08-21): #318 cross-process probe guard + #319 check](20260821-133144-0-47-2-shipped-2026-08-21-318-cross-process-prob.md)

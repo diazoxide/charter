@@ -24,3 +24,7 @@ Written by the persona as it learns; committed and shared.
 - [0.47.1 (2026-08-21) shipped #313/#311, the news re-entrancy guard, as a](0-47-1-2026-08-21-shipped-313-311-the-news-re-en.md)
 - [A news probe's guard must cross process boundaries AND come back: news._](a-news-probe-s-guard-must-cross-process-boundari.md)
 - [The frightening half of a re-entrant news probe is not the loop: check:](the-frightening-half-of-a-re-entrant-news-probe-.md)
+- [hooks/hooks.json carried 11 --plugin-version flags at 0.47.2, not the 9](hooks-hooks-json-carried-11-plugin-version-flags.md)
+- [docs/assets/captured.json is NOT a fifth version point — it records when](docs-assets-captured-json-is-not-a-fifth-version.md)
+- [Proving a news-probe fix needs an OLD-CODE counterfactual, and 'git work](proving-a-news-probe-fix-needs-an-old-code-count.md)
+- [0.47.2 (2026-08-21) cut as a PATCH carrying #318 (cross-process probe gu](0-47-2-2026-08-21-cut-as-a-patch-carrying-318-cr.md)

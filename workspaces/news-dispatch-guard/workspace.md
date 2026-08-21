@@ -97,7 +97,42 @@ by the test's own cap. Guarded: one spawned charter, refused, `unknown`, 0.086s.
   `between(installed, installed)` empty. True, and arithmetic two modules away — named in
   `_handoff`'s docstring and pinned by `TheHandoffBound`, as the second line now.
 
-### Known gap, filed not fixed
+### Follow-on work — all closed (2026-08-21)
+
+The guard shipped in 0.47.1 turned out to be one third of the job. Both remaining holes were
+found by surveying for the SAME SHAPE rather than waiting for a report, and both are closed:
+
+- **#314 → PR #318 (`7c059f4`), released in 0.47.2.** The guard was a module-level counter, so
+  blind to `commands_update._handoff` spawning a fresh charter process that probes. Fixed with a
+  `<pid>:<markpath>` env marker — ignored when the pid is gone, so it self-heals rather than
+  silently disabling probing forever (POSIX only: `os.kill` is a question on POSIX and an ANSWER
+  on Windows). Two corrections to the original framing: the `uv tool install` runs in the process
+  that IS the probe, at depth 1, so no marker in a child could reach it — `cmd_update` asks
+  `news.probing()` itself; and bounding alone left the OUTER probe reading the spawner's exit code
+  as `adopted`, so the refusal travels back up through a mark file.
+- **#317 → PR #319 (`021c239`), released in 0.47.2.** `news.py`'s docstring claimed an entry
+  "cannot become an arbitrary-command primitive". False: `secret` is registered with a bare
+  `nargs="*"`, so `check: secret exec <vault> curl …` handed entry-controlled argv to
+  `subprocess.run` WITH THE VAULT'S SECRET in the child env — and `doctor` runs every released
+  entry's `check:` unprompted on a SessionStart hook. Now held to
+  `_PROBEABLE = {doctor, news, persona lint}`.
+- **#321 filed, not fixed** — a shell-syntax `check:` is refused a gate earlier and reports
+  `_NOT_RUN` ("did not run *here*"), blaming the reader's machine for a defect in the entry.
+  Cosmetic; no process starts either way.
+
+**Why an allow-list and not a structural argparse rule.** The invariant has TWO clauses — *a probe
+is read-only, AND its argv is charter's, never the entry's*. argparse can be asked whether a
+command takes a pass-through positional; it cannot be asked whether a command WRITES.
+`check: update --to X` reaching a real installer has no pass-through positional at all, so a
+structural rule waves it through. The structural check still exists, moved to CI where it is total
+instead of partial: entries, list and parser ship in one wheel, so a test across the three is a
+proof rather than a sample — and it fails the PR that adds the drift, not the machine that installs
+it. Two traps found alongside: `version` must NOT be listed (always exits 0 → reports adopted
+everywhere forever), and argparse READS PAST A FLAG to find a subcommand, so
+`news --pending stamp 9.9.9` really reached `cmd_news_stamp` — demonstrated on 0.47.1 by a canary
+file that was actually renamed on disk.
+
+### Superseded gap (kept for the reasoning)
 
 diazoxide/charter#317 — `secret exec` takes a pass-through argv, so a `check:` naming it
 reaches ANY binary with a vault's credential in its environment (`news._tokens` only rejects
