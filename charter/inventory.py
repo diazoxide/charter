@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import config
+from . import config, contain
 
 
 def classify_kind(name: str) -> str:
@@ -225,6 +225,19 @@ def merge(batches: list[list[dict]]) -> list[dict]:
     for batch in batches:
         for r in batch:
             name = r["name"]
+            # #325/#328: the bare name is already load-bearing here — that is why the
+            # collision logic below exists — and the on-disk clone path derives from it.
+            # A name that cannot be one directory entry is not an identity, so it is
+            # refused where identity is settled rather than only where a path is joined.
+            #
+            # This does NOT make the checks at the joins redundant, and neither one is
+            # safe to delete. `inventory/repos.json` is a tracked file: a hand-edited or
+            # PR-modified inventory never passes through this function, so an
+            # identity-layer check alone is a guard that gets walked around. The joins
+            # assert independently; this stops a bad identity from being carried in the
+            # inventory and reported by `status` and `discover` as though it were a repo.
+            if not contain.segment_ok(name):
+                continue        # per-entry: one bad row must not deny the rest
             identity = (r.get("forge"), r["path_with_namespace"])
             prev_identity = owner_of_name.get(name)
             if prev_identity is not None and prev_identity != identity:

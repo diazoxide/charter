@@ -7,7 +7,8 @@ import json
 import re
 from pathlib import Path
 
-from . import config, docsrc, doctor, inventory, render, util, workspace, worktree
+from . import (config, contain, docsrc, doctor, inventory, render, util, workspace,
+               worktree)
 # One committer for the control plane, in charter/planegit.py. Re-exported rather
 # than moved-and-updated so every existing caller and test keeps working — the point
 # of the extraction is that there is ONE implementation, not that callers churn.
@@ -45,7 +46,21 @@ def _https_url(r: dict) -> str:
     for prefix in ssh_forms:
         if ssh.startswith(prefix):
             return https_base + ssh[len(prefix):]
-    return ssh
+    # Returns NOTHING rather than the value it was handed (#335). The fallthrough used to
+    # be unconditional, so anything that matched no known SSH form went to `git clone`
+    # verbatim — and `inventory/repos.json` is a tracked file. `ext::sh -c '…'` is a
+    # transport that runs a command; `--upload-pack=…` is not a URL at all but an option
+    # git reads off the argv; `/etc/passwd` is a path git will happily try to clone.
+    # Confirmed on 0.47.2: all three came back unchanged.
+    #
+    # The only thing stopping the first one today is git's own `protocol.*.allow`, which
+    # charter neither sets nor owns — people relax it for `ext` helpers, and a plane that
+    # has is unprotected. A function whose entire purpose is producing a URL that uses the
+    # right credential should not be able to return something that is not a URL, so this
+    # is an allowlist: HTTPS, or an SSH form `insteadof()` actually recognised. Refusing
+    # the shape rather than blacklisting `ext::` also means the next transport, and the
+    # leading-dash argv case, need no further thought.
+    return ""
 
 
 def _build_repo(forge, p: dict, no_probe: bool) -> tuple[dict, bool]:
@@ -364,6 +379,13 @@ def cmd_clone(args) -> int:
     failures = 0
     for res in results:
         r, dest = res["repo"], res["dest"]
+        if res["status"] == "refused":
+            # Named, never silently skipped: a refusal here means a committed file in this
+            # plane carries something that is not a name, and the person who can fix it is
+            # reading this output.
+            failures += 1
+            util.err(f"{r['name']!r}: not cloned — {res['reason']}.")
+            continue
         if res["status"] == "exists":
             util.info(f"{r['name']}: already cloned in '{ws}'")
         elif res["status"] == "ok":
@@ -398,12 +420,28 @@ def _clone_one(r: dict, wd) -> dict:
     from . import gitpolicy
     from .forge import registry
 
-    dest = wd / r["name"]
+    # #325: the destination is a name out of `inventory/repos.json`, a TRACKED file, and
+    # this join had nothing between the two. A name with parent components put the clone
+    # — and `gitpolicy.apply`'s write to `.git/config` — outside the workspace entirely.
+    # `contain.child` rather than `workspace.valid_name`: a forge mints these names, and
+    # `org/.github` is a real repo GitHub tells organisations to create.
+    dest = contain.child(wd, r.get("name") or "")
+    if dest is None:
+        return {"repo": r, "dest": wd, "status": "refused",
+                "reason": contain.refusal(str(r.get("name") or ""))}
     if dest.exists():
         return {"repo": r, "dest": dest, "status": "exists"}
     forge = registry.for_repo(r)
+    # #335: refusing the URL has to mean refusing the clone. Handing "" to `git clone`
+    # would be the same defect wearing this fix.
+    url = _https_url(r)
+    if not url:
+        return {"repo": r, "dest": dest, "status": "refused",
+                "reason": "its inventory record carries no HTTPS clone URL, and the "
+                          "`ssh_url` it does carry is not a form this forge recognises — "
+                          "charter will not hand git a string it did not build"}
     proc = _git([*_cred_flag(forge), "clone", "--branch", r["default_branch"],
-                 _https_url(r), str(dest)])
+                 "--", url, str(dest)])
     if proc.returncode != 0:
         return {"repo": r, "dest": dest, "status": "failed", "forge": forge,
                 "stderr": (proc.stderr or "").strip()}
