@@ -35,3 +35,4 @@ Written by the persona as it learns; committed and shared.
 - [charter's status line NEVER touches the forge on the render path — this](charter-s-status-line-never-touches-the-forge-on.md)
 - [Release 0.47.0 (2026-08-20) shipped #309+#310+#307 in ONE bump — the bat](release-0-47-0-2026-08-20-shipped-309-310-307-in.md)
 - [The asset-freshness gate is now the binding constraint on charter's next](the-asset-freshness-gate-is-now-the-binding-cons.md)
+- [The 'a probe is read-only AND its argv is charter's' invariant has TWO c](the-a-probe-is-read-only-and-its-argv-is-charter.md)
