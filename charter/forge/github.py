@@ -119,12 +119,18 @@ class GitHubForge:
                 f"gh is not authenticated for {self.host}. Run: gh auth login")
 
     def list_repos(self, owner: str) -> list[dict]:
+        # Encoded like every other URL segment here (#323). `owner` comes from a
+        # `[[forge]]` block rather than from a forge response, so this is the ordinary
+        # discipline rather than a fix for a reachable hole — but "which values happen to
+        # be trusted today" is exactly the distinction that let `ci_status` drift away
+        # from `open_change`, so the treatment is uniform instead of case-by-case.
+        enc = urllib.parse.quote(owner, safe="")
         try:
-            out = self._paged_strict(f"orgs/{owner}/repos", owner, org_probe=True)
+            out = self._paged_strict(f"orgs/{enc}/repos", owner, org_probe=True)
         except _NotAnOrg:
             # A 404 on the org endpoint is expected for a personal account — not a
             # ForgeError. A failure of *this* call, though, is a genuine failure.
-            out = self._paged_strict(f"users/{owner}/repos", owner)
+            out = self._paged_strict(f"users/{enc}/repos", owner)
         return [self._normalize(r) for r in out]
 
     def _normalize(self, r: dict) -> dict:
@@ -182,10 +188,25 @@ class GitHubForge:
 
     def ci_status(self, path: str, branch: str) -> str | None:
         owner, _, name = path.partition("/")
+        # `-f/--raw-field`, never `-F/--field` (#323). These three values are not charter's:
+        # `branch` is read out of the tree's `.git/HEAD` and `path` out of `git remote
+        # get-url origin`, so both are written by whoever wrote the repo. `-F` gives a
+        # value magic meaning — from `gh api --help`, "if the value starts with `@`, the
+        # rest of the value is interpreted as a filename to read the value from. Pass `-`
+        # to read from standard input" — which turned a status refresh into an arbitrary
+        # local file read by a process holding the forge token, on a surface that renders
+        # every 10s with no human in the loop. `-f` sends the value as a literal string.
+        #
+        # NOT percent-encoded, deliberately, and this is the one place that differs from
+        # `open_change` above. Those are URL path/query segments, which the server decodes
+        # again; these are GraphQL variables, which are JSON strings GitHub never decodes.
+        # Encoding here would send `feature%2Fx` for `feature/x`, match no ref, and blank
+        # the CI column for every branch with a slash in it. The flag is the fix, not the
+        # value.
         p = util.run([self.cli, "api", "graphql", "--hostname", self.host,
                       "-f", f"query={_ROLLUP_QUERY}",
-                      "-F", f"owner={owner}", "-F", f"name={name}",
-                      "-F", f"ref={branch}"], check=False)
+                      "-f", f"owner={owner}", "-f", f"name={name}",
+                      "-f", f"ref={branch}"], check=False)
         if p.returncode != 0:
             return None
         try:

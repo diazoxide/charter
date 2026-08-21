@@ -105,7 +105,9 @@ class GitLabForge:
         }
 
     def repo_tree(self, repo: dict, ref: str | None = None) -> list[str]:
-        rid = repo.get("id")
+        # `id` comes off a forge response, same as `ref` beside it — encoded for the same
+        # reason (#323), rather than trusted because it is "normally an integer".
+        rid = urllib.parse.quote(str(repo.get("id")), safe="")
         ref_q = f"&ref={urllib.parse.quote(str(ref), safe='')}" if ref else ""
         out, page = [], 1
         while True:
@@ -123,7 +125,7 @@ class GitLabForge:
         """See :meth:`base.Forge.repo_tree_strict` — same pagination as :meth:`repo_tree`,
         but through :meth:`_api_strict` so a failure raises instead of degrading (FINDING
         I5)."""
-        rid = repo.get("id")
+        rid = urllib.parse.quote(str(repo.get("id")), safe="")
         ref_q = f"&ref={urllib.parse.quote(str(ref), safe='')}" if ref else ""
         out, page = [], 1
         while True:
