@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
-from . import config, memstore
+from . import config, contain, memstore
 
 #: The selectable scopes, in the order they're assembled/displayed.
 SCOPES = ("workspace", "persona", "shared", "ephemeral", "refs")
@@ -133,11 +133,19 @@ def _ref_dirs(base: Path) -> list[Path]:
     searches), each subdirectory is offered as its own source. `memstore.search` already
     takes a list of dirs, so recursion falls out of the assembly step where the shape
     difference actually lives.
+
+    Every directory offered here is one `memstore.files` will list, so each is contained
+    first. ``rglob`` does not descend *into* a symlinked directory, but it still yields the
+    link itself and ``is_dir()`` follows it — so an escape needs no depth: one committed
+    link at the top of `refs/` is enough, and the label this module derives for anything
+    read out of it degrades to ``?``, which is the provenance the reader would most want to
+    be right (#336).
     """
-    if not base.exists():
+    if not base.exists() or contain.dir_refusal(base):
         return []
     try:
-        return [base, *(d for d in sorted(base.rglob("*")) if d.is_dir())]
+        return [base, *(d for d in sorted(base.rglob("*"))
+                        if d.is_dir() and not contain.dir_refusal(d))]
     except OSError:
         return [base]
 

@@ -30,7 +30,7 @@ import re
 import time
 from pathlib import Path
 
-from . import config, util
+from . import config, contain, util
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SESSION_MAX_AGE = 30 * 86400  # prune per-session pointers older than this
@@ -890,6 +890,11 @@ def set_vision(name: str, text: str) -> None:
 
 def read_charter(name: str) -> str:
     cf = charter_file(name)
+    # `workspace.md` is committed, and the SessionStart digest reads one per workspace on
+    # this plane for its vision line — so an entry that blocks costs every session its
+    # briefing, and one that never ends costs more than that (#336).
+    if contain.file_refusal(cf):
+        return ""
     return cf.read_text() if cf.exists() else ""
 
 

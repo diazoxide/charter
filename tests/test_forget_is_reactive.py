@@ -52,21 +52,21 @@ class TestMemstoreReportsWhatItRemoved(PersonaIso):
     """The commands can only stage a deletion they are told about."""
 
     def test_it_returns_the_removed_path(self):
-        d = self.tmp / "mem"
-        d.mkdir()
+        d = persona.memory_dir("forgettest")
+        d.mkdir(parents=True, exist_ok=True)
         (d / "a-fact.md").write_text("x")
         self.assertEqual(memstore.forget(d, "a-fact.md"), d / "a-fact.md")
 
     def test_a_miss_is_still_falsy(self):
         """Callers test the result for truthiness; a Path is truthy and None is not, so
         the change of type must not change the branch anyone takes."""
-        d = self.tmp / "mem"
-        d.mkdir()
+        d = persona.memory_dir("forgettest")
+        d.mkdir(parents=True, exist_ok=True)
         self.assertFalse(memstore.forget(d, "nope"))
 
     def test_the_file_is_actually_gone(self):
-        d = self.tmp / "mem"
-        d.mkdir()
+        d = persona.memory_dir("forgettest")
+        d.mkdir(parents=True, exist_ok=True)
         (d / "a-fact.md").write_text("x")
         memstore.forget(d, "a-fact.md")
         self.assertFalse((d / "a-fact.md").exists())

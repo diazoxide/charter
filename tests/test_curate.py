@@ -6,20 +6,21 @@ No LLM, fully deterministic — the semantic judgment stays in the steward agent
 from __future__ import annotations
 
 import datetime
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-from charter import curate, memstore
+from charter import curate, memstore, persona
+from tests._isolation import PersonaIso
 
 TODAY = datetime.date(2026, 7, 24)
 
 
-class CurateCase(unittest.TestCase):
+class CurateCase(PersonaIso):
     def setUp(self):
-        self.d = Path(tempfile.mkdtemp(prefix="charter-curate-"))
-        self.addCleanup(lambda: shutil.rmtree(self.d, ignore_errors=True))
+        # Inside a plane, because `memstore.files` refuses a store that resolves outside
+        # the plane's data since #336 — see the header of `tests/test_memstore.py`.
+        super().setUp()
+        self.d = persona.memory_dir("curatetest")
+        self.d.mkdir(parents=True, exist_ok=True)
 
     def _w(self, title, body, days_ago=0):
         stamp = datetime.datetime(2026, 7, 24, 12, 0) - datetime.timedelta(days=days_ago)

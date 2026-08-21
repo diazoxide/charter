@@ -1,22 +1,31 @@
 """The shared per-file memory engine: one file per fact + MEMORY.md index, optional
 timestamp-prefixed filenames for chronological ordering, keyword search, near-dup
-detection, and forget-by-slug (matching the timestamp prefix too)."""
+detection, and forget-by-slug (matching the timestamp prefix too).
+
+**The store lives inside a plane, and that is not incidental.** These cases used to run
+against a bare `mkdtemp`, which no production caller ever produces — every one of them
+derives its directory from `persona.memory_dir`, `workspace.memory_dir`, `todos_dir` or
+`refs_dir`. Since #336 `memstore.files` refuses a directory that resolves outside the
+plane's data (a linked `memory/` is how a read of memory becomes a read of a vault), so a
+store in an unrelated temp directory now lists nothing. Keep the fixture inside
+`config.PERSONAS_DIR`: reverting it to `mkdtemp` makes every case here fail on an empty
+listing, which reads like a search bug and is not one.
+"""
 
 from __future__ import annotations
 
 import datetime
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-from charter import memstore
+from charter import memstore, persona
+from tests._isolation import PersonaIso
 
 
-class MemstoreCase(unittest.TestCase):
+class MemstoreCase(PersonaIso):
     def setUp(self):
-        self.d = Path(tempfile.mkdtemp(prefix="edm-memstore-"))
-        self.addCleanup(lambda: shutil.rmtree(self.d, ignore_errors=True))
+        super().setUp()
+        self.d = persona.memory_dir("memtest")
+        self.d.mkdir(parents=True, exist_ok=True)
 
     def _stamp(self, s):
         return datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
@@ -82,7 +91,7 @@ class MemstoreCase(unittest.TestCase):
         self.assertFalse(memstore.forget(self.d, "nope"))
 
 
-class SearchFindsShortAndDistinctiveTerms(unittest.TestCase):
+class SearchFindsShortAndDistinctiveTerms(PersonaIso):
     """`_terms` discarded every token of two characters or fewer.
 
     So `recall "S3"`, `"CI"`, `"db"`, `"PR"`, `"TZ"`, `"v2"` each returned a confident
@@ -93,8 +102,9 @@ class SearchFindsShortAndDistinctiveTerms(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.d = Path(tempfile.mkdtemp(prefix="memsearch-"))
-        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        super().setUp()
+        self.d = persona.memory_dir("memsearch")
+        self.d.mkdir(parents=True, exist_ok=True)
 
     def _write(self, name: str, title: str, body: str = "") -> None:
         (self.d / f"{name}.md").write_text(f"# {title}\n\n{body}\n")

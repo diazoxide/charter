@@ -26,12 +26,13 @@ names, and `org/.github` is both real and common — so repo names get the more 
 `contain.segment_ok`, which forbids separators and traversal without inventing an
 alphabet charter has no business imposing on someone else's forge.
 
-**Containment here is lexical, not `realpath`-based, and that is deliberate.**
-`docsrc.read` resolves its page specifically to catch a symlink pointing out of the
-directory. Following that lead here would quietly do half of #336 — whose containment
-half is about symlinks in *every* file charter reads, not just names — and would refuse a
-plane that legitimately symlinks a persona directory today. Traversal and absoluteness are
-what these five issues are about; symlinks are filed separately and stay filed.
+**Containment here is lexical, not `realpath`-based, and that is deliberate.** A name is
+refused for its *shape*, before anything is opened; asking the filesystem would make a
+traversal succeed exactly when the attacker's target happens to exist. The resolving half
+— every *path* charter reads, whether or not a name chose it — is #336, and lives in
+`contain.file_refusal`/`dir_refusal` with its own cases in
+`tests/test_plane_reads_are_contained.py`. The two are complements, not alternatives:
+neither file's cases pass under the other's rule.
 
 **Preconditions are asserted, not assumed.** Each traversal case plants a real canary at
 the path the hostile name resolves to and asserts it is there *before* asking charter to
