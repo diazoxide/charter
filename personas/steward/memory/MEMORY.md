@@ -36,3 +36,5 @@ Written by the persona as it learns; committed and shared.
 - [Release 0.47.0 (2026-08-20) shipped #309+#310+#307 in ONE bump — the bat](release-0-47-0-2026-08-20-shipped-309-310-307-in.md)
 - [The asset-freshness gate is now the binding constraint on charter's next](the-asset-freshness-gate-is-now-the-binding-cons.md)
 - [The 'a probe is read-only AND its argv is charter's' invariant has TWO c](the-a-probe-is-read-only-and-its-argv-is-charter.md)
+- [charter validates a name when a human types it (valid_name at persona.py](charter-validates-a-name-when-a-human-types-it-v.md)
+- [Two coordination lessons from running PARALLEL sweeps on 2026-08-21, bot](two-coordination-lessons-from-running-parallel-s.md)

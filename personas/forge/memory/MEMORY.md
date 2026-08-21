@@ -5,3 +5,4 @@ Written by the persona as it learns; committed and shared.
 - [The forge is resolved per CLONE from its own origin, not from the plane'](the-forge-is-resolved-per-clone-from-its-own-ori.md)
 - [Display sigils differ by forge: GitLab merge requests render !123, GitHu](display-sigils-differ-by-forge-gitlab-merge-requ.md)
 - [Anything the status line draws a row for must also be in gl-refresh's fe](anything-the-status-line-draws-a-row-for-must-al.md)
+- [gh api: -F/--field gives a value magic meaning (leading @ = read that fi](gh-api-f-field-gives-a-value-magic-meaning-leadi.md)
