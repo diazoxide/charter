@@ -149,6 +149,31 @@ NOT_PLANE_DATA = ("'{name}' resolves to '{target}', outside the directories a co
 #: crash — and said in its own words so it is not read as a containment failure.
 UNREADABLE = "'{name}' cannot be examined ({error})"
 
+#: Not a file at all: a FIFO, a device, a socket, a directory. Named for what it is,
+#: because "could not be read" would send the reader looking for a permissions problem
+#: when what they have is a path that blocks for ever or yields for ever.
+NOT_A_FILE = ("'{name}' is not a regular file (it is {kind}). Charter reads plane data by "
+              "listing a directory and opening what it finds, so an entry that blocks or "
+              "never ends would take the read with it")
+
+#: The bound on one plane file charter reads whole. **1 MiB, and it is meant never to fire
+#: on anything a human wrote**: the largest persona charter in charter's own plane is
+#: 6.8 KB, its largest memory index 5 KB, its largest document under `docs/` 34 KB. The
+#: number is not tuned to those — a cap sitting just above real content fires on the first
+#: long runbook somebody curates — it is set where nothing an editor produces can reach it
+#: and no single read can cost anything. `os.lstat` reports it in the syscall the
+#: containment check already makes, so the bound is free.
+MAX_BYTES = 1_048_576
+
+TOO_LARGE = ("'{name}' is {size} bytes, over the {cap}-byte bound on one plane file. "
+             "Nothing a memory, todo, ref or persona charter is meant to hold comes near "
+             "that, so this is a defect in the file rather than a limit to raise")
+
+#: `stat` module names for the shapes that are not files, so a refusal says which.
+_KINDS = ((stat.S_ISDIR, "a directory"), (stat.S_ISFIFO, "a FIFO"),
+          (stat.S_ISSOCK, "a socket"), (stat.S_ISCHR, "a character device"),
+          (stat.S_ISBLK, "a block device"))
+
 
 def data_roots() -> tuple[Path, ...]:
     """The directories a control plane keeps readable data in.
@@ -222,20 +247,36 @@ def dir_refusal(directory) -> str | None:
 def file_refusal(path) -> str | None:
     """Why charter must not read *path*, or ``None``.
 
-    One ``lstat`` in the common case, and that is deliberate — these run under the status
-    line and SessionStart, where the read is already the cheapest thing in the frame and a
-    guard that costs more than it guards would be reverted the first time somebody
-    profiles it. The expensive answer (:func:`within_data`, which resolves) is only asked
-    when the entry **is** a link, because a path that is not a link cannot have moved
-    relative to the directory it was listed from — which the caller checked once.
+    Three questions, **one syscall**, and that is why both halves of #336 close at the
+    same gate. ``lstat`` says whether this is a link (containment), whether it is a
+    regular file (a FIFO blocks the read for ever, a device never ends) and how big it is
+    (the bound) — and it says all of it *without opening anything*, which is the property
+    a deadline around the read could never have given: there is nothing to time out,
+    because nothing is opened.
+
+    Cheap on purpose. These run under the status line and SessionStart, where the read is
+    already the cheapest thing in the frame and a guard costing more than it guards gets
+    reverted the first time somebody profiles it. The expensive answer
+    (:func:`within_data`, which resolves) is asked only when the entry **is** a link — a
+    path that is not one cannot have moved relative to the directory it was listed from,
+    which the caller checked once with :func:`dir_refusal`.
 
     Not a TOCTOU guard, and not sold as one: the attacker here holds a commit, not a
     process racing the read.
     """
     try:
         st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
+            if not within_data(path):
+                return _not_plane_data(path)
+            # Follows the link. Still a `stat`, so a FIFO on the other end answers here
+            # rather than blocking; a broken link raises and is refused as unreadable.
+            st = os.stat(path)
     except OSError as e:
         return UNREADABLE.format(name=path, error=e.strerror or e)
-    if stat.S_ISLNK(st.st_mode) and not within_data(path):
-        return _not_plane_data(path)
+    if not stat.S_ISREG(st.st_mode):
+        kind = next((k for test, k in _KINDS if test(st.st_mode)), "not a file")
+        return NOT_A_FILE.format(name=path, kind=kind)
+    if st.st_size > MAX_BYTES:
+        return TOO_LARGE.format(name=path, size=st.st_size, cap=MAX_BYTES)
     return None

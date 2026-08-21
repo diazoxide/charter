@@ -305,8 +305,11 @@ def mcp_servers(name: str) -> dict:
     # the child's entry was parsed and applied and then thrown away, so `sync-agents`
     # succeeded and the generated agent simply carried somebody else's server.
     for anc in reversed(lineage(name)):
+        declaration = dir_of(anc) / MCP_FILE
+        if contain.file_refusal(declaration):
+            continue          # same promise as the `except` below, kept before the open
         try:
-            doc = json.loads((dir_of(anc) / MCP_FILE).read_text())
+            doc = json.loads(declaration.read_text())
             servers = doc.get("mcpServers") or {}
         except (OSError, ValueError, AttributeError):
             continue
@@ -460,8 +463,13 @@ def default_persona() -> str | None:
     """The committed, team-wide default persona (``personas/.default``) — adopted when
     nothing else is selected. Shared/versioned (unlike the local ``.charter/active-persona``);
     ignored if it names a persona that no longer exists."""
+    p = config.PERSONAS_DIR / ".default"
+    # Gated like every other committed file charter reads: this one answers "who am I" on
+    # every turn, so a FIFO here hangs the status line rather than costing a briefing.
+    if contain.file_refusal(p):
+        return None
     try:
-        val = (config.PERSONAS_DIR / ".default").read_text().strip()
+        val = p.read_text().strip()
     except OSError:
         return None
     # `reference_ok` before `.exists()`: this dotfile is committed, so the value is a

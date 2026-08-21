@@ -1498,7 +1498,10 @@ def _other_workspaces_digest(session_id: str | None) -> str:
             except Exception:
                 vision = ""
             try:
-                n = len(todos.open_todos(w))
+                # `count_open`, not `len(open_todos(...))`: the same question the status
+                # line asks, answered by the same function. The other spelling read every
+                # todo of every workspace in full to print a number, at SessionStart.
+                n = todos.count_open(w)
             except Exception:
                 n = 0
             rows.append((workspace.last_active(w) or 0, w, vision, n))
