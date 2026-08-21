@@ -9,3 +9,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Closed todo: Watch diazoxide/charter#308 (stuck sub-agent disappears at ](20260820-144908-closed-todo-watch-diazoxide-charter-308-stuck-su.md)
 - [Closed todo: Cut ONE release carrying #309 + #308 — dispatch the 'releas](20260820-160436-closed-todo-cut-one-release-carrying-309-308-dis.md)
 - [0.47.0 shipped end to end on 2026-08-20: #309 (vault silence + running b](20260820-160704-0-47-0-shipped-end-to-end-on-2026-08-20-309-vaul.md)
+- [Closed todo: Regenerate captured assets before 0.48.0 (branch refresh-ca](20260821-114559-closed-todo-regenerate-captured-assets-before-0-.md)

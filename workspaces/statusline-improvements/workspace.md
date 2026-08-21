@@ -50,9 +50,18 @@ missing guard is filed as diazoxide/charter#311. **Asset-freshness gate passes a
 — 0.48.0 WILL fail it until the captures are regenerated.**
 
 Known gaps carried forward, both deliberate:
-- `docs/assets/statusline.svg` + `social-card.svg` still show `⚡92%` and the pre-`▪/▸/▫`
-  markers. They are captured renders with hand-positioned per-glyph `x` coordinates, so
-  they cannot be text-edited — regenerating them is a capture run against a specific plane.
+- ~~`docs/assets/statusline.svg` + `social-card.svg` still show `⚡92%` and the pre-`▪/▸/▫`
+  markers.~~ **Done** — PR #316 (`a4bde1b`) re-captured them at 0.47.1; the strip now reads
+  `ctx 38% · cache 92% · ⚡ 2` and the chips carry `devops ✎2 ⚡2 4m` / `reviewer ◦`, with no
+  healthy `✓` surviving. Freshness lag 1 → **0**, restoring a full release of slack.
+  Two findings worth keeping: (1) `demo-plane.sh` had to gain a fabricated in-flight record,
+  because `⚡N age` draws only while a dispatch is genuinely out — without it the regeneration
+  would have come back half-stale on the very change that motivated it. That is consistent
+  with what the script already fabricates (`inventory/repos.json`, `pieces/seen/*.json`, the
+  forge-state cache). (2) `personas.svg` and `demo.svg` came back BYTE-IDENTICAL and that is
+  honest, not a failed capture: they capture `charter persona list` (a word table) and
+  `init`/`discover`/`clone`/`status`, none of which 0.47.x touched. Verified by the version
+  banner — only `statusline.svg` carries one, and it now reads `0.47.1`.
 - ~~The age badge can never render `2h`/`3d` in practice: `inflight` prunes at its 30-minute
   TTL first.~~ **Fixed** — diazoxide/charter#308, PR #310 (`inflight-presumed-dead`).
   A record past 30 min is now kept and flagged rather than deleted; pruning moved to 24h,

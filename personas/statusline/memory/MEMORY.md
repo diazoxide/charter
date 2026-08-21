@@ -12,3 +12,5 @@ Written by the persona as it learns; committed and shared.
 - [A source edit that RESTORES a file to its exact previous size within the](a-source-edit-that-restores-a-file-to-its-exact-.md)
 - [One glyph, one meaning — and the tiebreak when two surfaces want the sam](one-glyph-one-meaning-and-the-tiebreak-when-two-.md)
 - [A statusline surface that DELETES the record it draws from turns the mos](a-statusline-surface-that-deletes-the-record-it-.md)
+- [Regenerating docs/assets captures: a statusline feature that renders onl](regenerating-docs-assets-captures-a-statusline-f.md)
+- [Regenerating charter's captured README assets (docs/assets/): the pipeli](regenerating-charter-s-captured-readme-assets-do.md)
