@@ -140,6 +140,9 @@ class CodexHarness(Harness):
                 "`session_id` directly."),
     )
 
+    cli_name = "codex"
+    binary = "codex"
+
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Codex's own config block never needs moving; its PLUGIN does.
 

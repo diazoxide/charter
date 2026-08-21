@@ -41,6 +41,25 @@ class Harness:
     #: harness carries everything, and `doctor` prints that as a clean row.
     deficits: tuple[Deficit, ...] = ()
 
+    #: The word an operator types after ``charter`` to run this harness in a frame.
+    #: Distinct from :attr:`name`, which is the harness's own identity in
+    #: ``$CHARTER_HARNESS``: ``claude-code`` names the harness, ``claude`` is the binary
+    #: and what a hand types. Empty means charter cannot launch this harness.
+    cli_name: str = ""
+
+    #: The binary to exec. Separate from :attr:`cli_name` because they differ.
+    binary: str = ""
+
+    def launch_argv(self, extra: list[str]) -> list[str]:
+        """Argv for starting this harness, with the operator's arguments appended.
+
+        A **list**, never a joined string, and that is a security property rather than a
+        style preference: tmux does not shell-interpret separate arguments and does
+        interpret a joined one (pinned against 3.7c). Returning a string here would put
+        command injection back into every launch.
+        """
+        return [self.binary, *extra]
+
     def detect(self) -> bool:
         """Is this harness live, judged by its own native evidence?
 

@@ -23,6 +23,9 @@ class ClaudeCodeHarness(Harness):
     #: that happens to have no gaps recorded yet.
     deficits = ()
 
+    cli_name = "claude"
+    binary = "claude"
+
     def detect(self) -> bool:
         """``$CLAUDE_PLUGIN_ROOT`` is set for the plugin's own processes.
 
