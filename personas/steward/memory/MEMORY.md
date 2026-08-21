@@ -38,3 +38,4 @@ Written by the persona as it learns; committed and shared.
 - [The 'a probe is read-only AND its argv is charter's' invariant has TWO c](the-a-probe-is-read-only-and-its-argv-is-charter.md)
 - [charter validates a name when a human types it (valid_name at persona.py](charter-validates-a-name-when-a-human-types-it-v.md)
 - [Two coordination lessons from running PARALLEL sweeps on 2026-08-21, bot](two-coordination-lessons-from-running-parallel-s.md)
+- [ISSUE GRANULARITY IS A DECISION TO PUT TO THE OPERATOR, not one to deleg](issue-granularity-is-a-decision-to-put-to-the-op.md)
