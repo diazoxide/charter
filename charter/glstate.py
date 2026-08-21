@@ -23,6 +23,13 @@ from . import config, util
 DISPLAY_TTL = 7200    # show a cached value for up to 2h
 REFRESH_TTL = 300     # try to refresh entries older than 5 min
 SPAWN_COOLDOWN = 120  # at most one background refresh per this many seconds
+#: How long a refresh may claim to be in flight before it is presumed wedged and
+#: replaced. Three times `REFRESH_TTL`: a refresh still running after this would land
+#: data that was already stale several times over, so waiting on it is worse than
+#: starting a fresh one even if it IS alive. This is also what stops a recycled pid from
+#: suppressing refreshes indefinitely — the failure it bounds is a slightly stale CI
+#: column, never a stuck status line, since `read_for` keeps serving up to `DISPLAY_TTL`.
+STUCK_AFTER = 900
 
 _EMPTY = {"change": None, "ci": None, "sigil": ""}
 
@@ -63,7 +70,72 @@ def _cache_file() -> Path:
 
 
 def _lock_file() -> Path:
+    """The spawn lock: its CONTENT is the pid of an in-flight refresh (empty when none),
+    and its MTIME is when that last changed — spawned, or finished.
+
+    Two facts rather than one because #324 needed both and the file carried neither. The
+    mtime alone said "a refresh was STARTED 120s ago", which is not a reason to start
+    another; what suppresses a second refresh is that the first is still running, and
+    what starts the cooldown is that it stopped.
+    """
     return config.STATE_DIR / "cache" / "glstate.refreshing"
+
+
+def _write_lock(pid: int | None) -> None:
+    """Record an in-flight refresh (*pid*), or that none is (``None``). Bumps the mtime
+    either way. Never raises — every caller is on a path that must not fail."""
+    try:
+        lock = _lock_file()
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(str(pid) if pid else "")
+    except Exception:
+        pass
+
+
+def _read_lock():
+    """``(pid_or_None, age_in_seconds)``, or ``None`` when there is no lock at all.
+
+    Deliberately tolerant of the content: a truncated write, a hand edit or a pid from
+    another machine all read as "no pid", which degrades to the plain cooldown rather
+    than to an exception on the render path.
+    """
+    lock = _lock_file()
+    try:
+        age = max(0.0, time.time() - lock.stat().st_mtime)
+    except OSError:
+        return None
+    try:
+        txt = lock.read_text().strip()
+    except OSError:
+        txt = ""
+    return (int(txt) if txt.isdigit() else None), age
+
+
+def _alive(pid: int | None) -> bool:
+    """Whether *pid* is a live process. Signal 0 checks for existence without delivering
+    anything; ``PermissionError`` means it exists and belongs to somebody else, which is
+    still "in flight" for our purposes."""
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+    return True
+
+
+def _mark_done() -> None:
+    """Called by the refresh itself when the work is OVER.
+
+    This is what moves the cooldown from the spawn to the completion. `maybe_spawn`
+    cannot do it — it returns the instant `Popen` forks, which is precisely the mistake
+    #324 records — so the process that knows the work finished is the one that says so.
+    """
+    _write_lock(None)
 
 
 def load() -> dict:
@@ -121,11 +193,24 @@ def maybe_spawn(dirs, workspace: str | None = None) -> None:
     session's active workspace on its own.
     """
     now = time.time()
-    lock = _lock_file()
     try:
-        if lock.exists() and now - lock.stat().st_mtime < SPAWN_COOLDOWN:
-            return
+        state = _read_lock()
+        if state is not None:
+            pid, age = state
+            # Cooled down since the last spawn OR the last completion, whichever the
+            # mtime records.
+            if age < SPAWN_COOLDOWN:
+                return
+            # Past the cooldown, but the previous refresh is STILL RUNNING. This is the
+            # case #324 is about: the old code had already forgotten the child existed,
+            # so a wedged refresh invited a replacement every 120s for as long as the
+            # session stayed open, each one holding the forge credential.
+            if _alive(pid) and age < STUCK_AFTER:
+                return
     except Exception:
+        # Suppress rather than spawn on an unreadable lock: the cost of skipping a
+        # refresh is a stale column, and the cost of getting this wrong is the pile-up
+        # this function exists to prevent.
         return
     cache = load()
     stale = any(
@@ -142,8 +227,7 @@ def maybe_spawn(dirs, workspace: str | None = None) -> None:
     if workspace:
         cmd += ["--workspace", workspace]
     try:
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
         )
@@ -151,10 +235,15 @@ def maybe_spawn(dirs, workspace: str | None = None) -> None:
         # Spawn never happened — don't start the cooldown, so a transient failure
         # (rather than a real refresh) doesn't suppress the next render's retry.
         return
+    # Record WHICH process is refreshing, not merely that one was started. The child
+    # rewrites this to empty when it finishes (`_mark_done`), which is what makes the
+    # cooldown run from completion. A `Popen` stand-in that reports no usable pid still
+    # arms the cooldown — a spawn that happened must never invite another in 120s.
     try:
-        lock.touch()
+        pid = int(proc.pid)
     except Exception:
-        pass
+        pid = None
+    _write_lock(pid)
 
 
 # --------------------------------------------------------------------------- #
@@ -170,6 +259,10 @@ def refresh(dirs) -> dict:
         state = state_for_repo(d, branch) if branch and branch != "?" else dict(_EMPTY)
         cache[str(d)] = {"branch": branch, "ts": now, **state}
     _save(cache)
+    # The work is over — start the cooldown from HERE, and stop claiming to be in
+    # flight (#324). Last, so a refresh that dies partway leaves its pid behind and is
+    # recognised as crashed rather than as finished.
+    _mark_done()
     return cache
 
 
