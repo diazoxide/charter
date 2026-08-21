@@ -131,6 +131,9 @@ def run(
 
     ``input`` is written to the child's stdin. That is how a secret reaches a CLI
     without ever appearing in argv — where `ps` and the shell's history can see it.
+    Without it the child gets ``DEVNULL``: charter's own stdin is never inherited, so a
+    CLI that reads it gets EOF instead of blocking on a descriptor nobody will write to
+    (#324). See the comment on the ``stdin`` argument below for the audit behind that.
 
     ``timeout`` bounds the child in seconds, raising :class:`ProcTimeout` — a *charter*
     error, so a caller can render it rather than let `subprocess.TimeoutExpired` reach the
@@ -149,8 +152,10 @@ def run(
     overlay = dict(env or {})
     if cmd and cmd[0] == "git":
         # git falls back to prompting on the TERMINAL when a credential helper produces
-        # nothing — and this function captures stdout/stderr while leaving stdin
-        # INHERITED, so that prompt is invisible and the call simply waits, forever.
+        # nothing — and this function captures stdout/stderr, so that prompt is invisible
+        # and the call simply waits, forever. (Stdin is `DEVNULL` now too, which stops
+        # git READING an answer; this stops it ASKING, so the failure is reported as an
+        # auth error rather than as whatever git makes of an empty response.)
         #
         # charter's auth design (see `planegit`) says a prompt is never the path: every
         # git operation authenticates with its forge CLI's token over HTTPS. So this
@@ -175,6 +180,34 @@ def run(
             timeout=timeout,
             stdout=subprocess.PIPE if capture else None,
             stderr=subprocess.PIPE if capture else None,
+            # A child charter runs never inherits charter's stdin. This function
+            # redirected stdout and stderr and left stdin alone, so a CLI that decided to
+            # read it blocked on whatever the parent had — forever, and invisibly, since
+            # its output was captured out of sight (#324). `gh api` does exactly that for
+            # a field value naming standard input (#323), which is how a status refresh
+            # was observed still running after 10s.
+            #
+            # For EVERY caller, not just the forge path, because "who reads stdin" is not
+            # a property of the caller — it is a property of a CLI's argv, which is
+            # sometimes built from a forge response. The audit that makes this safe:
+            # nothing passes `capture=False`, so every call already captures stdout AND
+            # stderr, and a child whose output nobody sees cannot conduct a dialogue with
+            # the terminal anyway. Its prompt would be buffered out of sight and the call
+            # would simply wait — which is the failure, not a feature. charter's one
+            # genuinely interactive path, `secret --exec`, replaces this process with
+            # `os.execvpe` and never comes through here.
+            #
+            # This generalises a rule this function already applied to one CLI:
+            # `GIT_TERMINAL_PROMPT=0` above says a prompt is never charter's path. That
+            # covered git's own prompts and, as its comment notes, not "a GUI credential
+            # manager, [or] an SSH signing agent, which is a separate way for a captured
+            # git call to hang". Closing the descriptor closes those too.
+            #
+            # Conditional because `subprocess.run` opens the pipe itself when `input` is
+            # given and rejects being handed both — and that is the correct semantics as
+            # well as the required one: `input=` is how a secret reaches a CLI without
+            # passing through argv, and it must still arrive.
+            stdin=subprocess.DEVNULL if input is None else None,
         )
     except subprocess.TimeoutExpired:
         raise ProcTimeout(cmd, timeout) from None
