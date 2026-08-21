@@ -24,7 +24,7 @@ import json
 import urllib.parse
 
 from .. import util
-from .base import CI_STATES, ForgeError
+from .base import CI_STATES, LIST_TIMEOUT, STATUS_TIMEOUT, ForgeError
 
 #: GitHub rollup state → the neutral vocabulary. Anything unlisted becomes None.
 _CI_MAP = {
@@ -60,8 +60,16 @@ class GitHubForge:
     # --- plumbing -----------------------------------------------------------------
     def _api(self, path: str):
         """Best-effort JSON GET. Returns None on any failure — callers feed the status
-        line, which renders every turn and must never crash."""
-        p = util.run([self.cli, "api", "--hostname", self.host, path], check=False)
+        line, which renders every turn and must never crash.
+
+        A timeout is one of those failures. `ProcTimeout` is a `RuntimeError`, so left
+        to escape it would reach `cli.main` — which catches only `KeyboardInterrupt` —
+        as a traceback, from the one path documented never to crash (#324)."""
+        try:
+            p = util.run([self.cli, "api", "--hostname", self.host, path],
+                         check=False, timeout=STATUS_TIMEOUT)
+        except util.ProcTimeout:
+            return None
         if p.returncode != 0:
             return None
         try:
@@ -88,7 +96,14 @@ class GitHubForge:
         out, page = [], 1
         while True:
             path = f"{base_path}?per_page=100&page={page}"
-            p = util.run([self.cli, "api", "--hostname", self.host, path], check=False)
+            try:
+                p = util.run([self.cli, "api", "--hostname", self.host, path],
+                             check=False, timeout=LIST_TIMEOUT)
+            except util.ProcTimeout as e:
+                # Reported in this path's own vocabulary rather than let a RuntimeError
+                # traceback stand in for "the forge did not answer" (#324).
+                raise ForgeError(
+                    f"listing repos for GitHub owner '{owner}' {e}") from e
             if p.returncode != 0:
                 if org_probe and page == 1 and self._is_not_found(p):
                     raise _NotAnOrg()
@@ -113,7 +128,11 @@ class GitHubForge:
 
     # --- protocol -----------------------------------------------------------------
     def check_auth(self) -> None:
-        p = util.run([self.cli, "auth", "status", "--hostname", self.host], check=False)
+        try:
+            p = util.run([self.cli, "auth", "status", "--hostname", self.host],
+                         check=False, timeout=STATUS_TIMEOUT)
+        except util.ProcTimeout as e:
+            raise ForgeError(f"gh did not answer for {self.host}: {e}") from e
         if p.returncode != 0:
             raise ForgeError(
                 f"gh is not authenticated for {self.host}. Run: gh auth login")
@@ -164,8 +183,12 @@ class GitHubForge:
         ref = ref or repo.get("default_branch") or "HEAD"
         enc_owner, enc_name = urllib.parse.quote(owner, safe=""), urllib.parse.quote(name, safe="")
         enc_ref = urllib.parse.quote(ref, safe="")
-        p = util.run([self.cli, "api", "--hostname", self.host,
-                      f"repos/{enc_owner}/{enc_name}/git/trees/{enc_ref}"], check=False)
+        try:
+            p = util.run([self.cli, "api", "--hostname", self.host,
+                          f"repos/{enc_owner}/{enc_name}/git/trees/{enc_ref}"],
+                         check=False, timeout=LIST_TIMEOUT)
+        except util.ProcTimeout as e:
+            raise ForgeError(f"listing tree for {path}@{ref} {e}") from e
         if p.returncode != 0:
             detail = (p.stderr or p.stdout or "").strip() or f"gh exited {p.returncode}"
             raise ForgeError(f"listing tree for {path}@{ref} failed: {detail}")
@@ -203,10 +226,14 @@ class GitHubForge:
         # Encoding here would send `feature%2Fx` for `feature/x`, match no ref, and blank
         # the CI column for every branch with a slash in it. The flag is the fix, not the
         # value.
-        p = util.run([self.cli, "api", "graphql", "--hostname", self.host,
-                      "-f", f"query={_ROLLUP_QUERY}",
-                      "-f", f"owner={owner}", "-f", f"name={name}",
-                      "-f", f"ref={branch}"], check=False)
+        try:
+            p = util.run([self.cli, "api", "graphql", "--hostname", self.host,
+                          "-f", f"query={_ROLLUP_QUERY}",
+                          "-f", f"owner={owner}", "-f", f"name={name}",
+                          "-f", f"ref={branch}"],
+                         check=False, timeout=STATUS_TIMEOUT)
+        except util.ProcTimeout:
+            return None      # status-line path: a blank CI cell, never a raise (#324)
         if p.returncode != 0:
             return None
         try:
