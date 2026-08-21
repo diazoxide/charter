@@ -248,6 +248,12 @@ def cmd_browser_install(args) -> int:
         return 1
 
     version = getattr(args, "version", None) or _browser.PINNED
+    # Same rule as the vault-config path (#332). A human typed this one, so it is a
+    # refusal with a message rather than a traceback — but it is the SAME predicate, since
+    # two answers to "is this a version" is how the looser one survives.
+    if not _browser.version_ok(version):
+        util.err(_browser.NOT_A_VERSION.format(version=version))
+        return 1
     util.info(f"Generating the Playwright driving surface (@playwright/cli@{version})…")
     code, output = _browser.install(config.ROOT, version)
     if code != 0:

@@ -21,6 +21,7 @@ writes the host's files and keeps no copy of its own.
 """
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -28,6 +29,50 @@ from pathlib import Path
 #: is pre-1.0 and publishes often, so this is "known to work with the `browser` skill"
 #: rather than a claim about what is current. `--version` exists because it will age.
 PINNED = "0.1.18"
+
+#: A version, and nothing else that npm would also accept there (#332).
+#:
+#: **The right-hand side of `pkg@spec` is not a version slot.** npm resolves it as a
+#: version, a range, a dist-tag, an alias (`npm:other@1`) or a **git URL** — so
+#: `@playwright/cli@github:attacker/x` is a package spec npm will happily fetch and run,
+#: and `--yes` suppresses the confirmation by design (see `install_argv`). The version
+#: reaches here from a vault's `config`, and `vaults.json` at the plane root is the
+#: COMMITTED half of the registry, so a file in git chose it.
+#:
+#: Exact versions only — deliberately tighter than "a version or a range". A range or a
+#: dist-tag defeats the one reason this field exists: a session belongs to the version
+#: that opened it, so `latest` resolving to something new tomorrow reproduces the exact
+#: `not open`-against-a-live-browser symptom that `session_read_argv` is pinned to avoid.
+#: The official semver.org grammar, so a prerelease pin like `0.2.0-rc.1` still works.
+_VERSION = re.compile(
+    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-(?:(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?"
+    r"(?:\+(?:[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$")
+
+
+def version_ok(version) -> bool:
+    """True when *version* is a version rather than some other thing npm accepts.
+
+    A question about the STRING, never about the registry: asking npm would make a hostile
+    spec legal exactly when the attacker's package happens to exist.
+    """
+    return isinstance(version, str) and bool(_VERSION.match(version))
+
+
+#: One sentence, so the two argv builders and the reference resolver refuse alike.
+NOT_A_VERSION = ("'{version}' is not a version. It is interpolated into the npm package "
+                 "spec `@playwright/cli@<version>`, where npm would also accept a "
+                 "dist-tag, an alias or a git URL — so this slot takes an exact version "
+                 "(1.2.3, or 1.2.3-rc.1) and nothing else")
+
+
+def _checked_version(version: str) -> str:
+    """*version*, or ``ValueError``. The last gate before an npm package spec."""
+    if not version_ok(version):
+        raise ValueError(NOT_A_VERSION.format(version=version))
+    return version
+
 
 #: Where the generator puts its pages. Claude Code reads project skills from here, so it is
 #: the vendor's choice as much as ours — named so the caller can be told what to expect.
@@ -72,7 +117,8 @@ def install_argv(version: str) -> list[str]:
     was printed to, and the operator sees an unexplained pause while something waits on an
     answer they were never shown.
     """
-    return ["npx", "--yes", f"@playwright/cli@{version}", "install", "--skills"]
+    return ["npx", "--yes", f"@playwright/cli@{_checked_version(version)}", "install",
+            "--skills"]
 
 
 def npx_available() -> bool:
@@ -149,5 +195,5 @@ def session_read_argv(session: str, source: str, name: str,
     browser is alive and still logged in. Charter knows the pin; a hand-written `$(...)` is
     precisely where an operator forgets it.
     """
-    return ["npx", "--yes", f"@playwright/cli@{version or PINNED}", f"-s={session}",
-            "--raw", f"{source}-get", name]
+    return ["npx", "--yes", f"@playwright/cli@{_checked_version(version or PINNED)}",
+            f"-s={session}", "--raw", f"{source}-get", name]
