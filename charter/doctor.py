@@ -1591,8 +1591,16 @@ def check_vault_registry_divergence() -> Result:
     from .secrets import base, registry
 
     try:
-        shared = registry.load_shared().get("vaults", {})
-        local = registry.load_local().get("vaults", {})
+        # Through `usable_vaults`, which is the same drop rule `load_registry` applies —
+        # not a raw read. Reading the halves raw did two wrong things at once (#363): it
+        # counted entries the merged view had already dropped, one line below the `vaults`
+        # check that named them as ignored, and it handed this loop the malformed entry
+        # itself. A non-empty string is truthy, so `shared[name] or {}` did not catch it
+        # and `.get` raised `AttributeError` — out of a preflight that has no per-check
+        # guard, so one hand-edited line in a committed file cost the whole briefing.
+        # That is #347's mechanism exactly, in the check next door to the one it fixed.
+        shared = registry.usable_vaults(registry.load_shared())
+        local = registry.usable_vaults(registry.load_local())
     except base.VaultError as e:
         return Result("vault registry", WARN, hint=str(e))
 
@@ -1616,9 +1624,14 @@ def check_vault_registry_divergence() -> Result:
             # warns about in this file ("it must not claim agreement it hasn't checked").
             return Result("vault registry", OK,
                           detail="no vaults registered — nothing to compare")
+        # DISTINCT vaults, not entries summed. A vault declared in both halves — the very
+        # case this check is about — is one vault, and `len(shared) + len(local)` called
+        # it two. "Entries" was the word doing the hiding: a reader looking at a vault
+        # registry counts vaults, so the plural has to be the thing being counted (#363).
+        n = len(set(shared) | set(local))
         return Result("vault registry", OK,
-                      detail=f"shared and local halves agree ({len(shared) + len(local)} "
-                             f"entr{'y' if len(shared) + len(local) == 1 else 'ies'})")
+                      detail=f"shared and local halves agree "
+                             f"({n} vault{'' if n == 1 else 's'})")
     shown = "; ".join(clashes[:3])
     if len(clashes) > 3:
         shown += f" (+{len(clashes) - 3} more)"
