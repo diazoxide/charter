@@ -10,17 +10,28 @@ quote styles.
 So the command tmux runs is always `charter frame-action a<N>`, and charter looks the real
 argv up in its own state — never re-derives it, never re-quotes it.
 
-**A label is a tmux FORMAT, not inert text — it is drawn, but "drawn" still means
-tmux expands it first.** `display-menu`'s own docs: "The name and command are formats,
-see the FORMATS and STYLES sections." `#(shell command)` runs the command and substitutes
-its output; `#{variable}` substitutes a value — both fire the moment tmux RENDERS the
-menu, no selection needed. Verified by hand against tmux 3.7c, in a real frame: a label of
-`#(touch CANARY)` created `CANARY` the instant the menu was drawn, and the hostile row
-itself was invisible in the rendered menu — nothing about the menu LOOKED wrong. An
-earlier version of this module's docstring said "a label is drawn, never executed"; that
-was false, and a wrong invariant asserted by a passing test is worse than no test at all
-— see `_safe_label` for the fix (`#` -> `##`, tmux's own escape for a literal `#`) and
-`tests/test_frame_menu.py` for the canary that proves it closed.
+**A label is a tmux FORMAT, not inert text.** `display-menu`'s own docs: "The name and
+command are formats, see the FORMATS and STYLES sections." `#(shell command)` runs the
+command and substitutes its output; `#{variable}` substitutes a value — both fire during
+FORMAT EVALUATION, which happens whether or not the resulting menu goes on to display
+successfully. Verified through the real production path (`bind` -> `run-shell` ->
+`charter frame-menu` -> `display-menu`), not a lab stand-in, including with a real git
+branch literally named `#(id>/tmp/...)` — a shape `git checkout -b` accepts without
+complaint and `.git/HEAD` holds unchanged: the job ran and the branch name itself never
+appeared anywhere in the rendered menu. A label that is ENTIRELY a silent `#(...)` job
+(nothing visible before or after it, and the command itself writes no stdout — `touch`,
+say) expands to an EMPTY string, and `display-menu` treats an empty name as a separator
+line, which desyncs this module's own `label key command` triples and REFUSES THE WHOLE
+MENU outright ("too few arguments") — but the job still ran; that refusal is decided
+only after evaluation, not instead of it, so it is not a defence, only a different-
+looking failure mode. An earlier version of this module's docstring said "a label is
+drawn, never executed"; that was false, and a wrong invariant asserted by a passing test
+is worse than no test at all — see `_safe_label` for the fix (`#` -> `##`, tmux's own
+escape for a literal `#`, applied before tmux ever sees the label, which closes it
+regardless of how many times it is later collapsed for display — pre-doubled payloads
+(`##(...)`, `####(...)`) were tried by hand against the fix and found no hole) and
+`tests/test_frame_menu.py`/`tests/test_frame_tmux_integration.py` for the canaries that
+prove it closed.
 
 **`charter frame-action`, not `charter frame action`.** `charter/cli.py`'s
 `_split_frame_argv` treats every `charter frame ...` invocation as the launcher's own
@@ -121,6 +132,16 @@ def build(fid: str) -> list[tuple[str, str]]:
     Any key not shaped `a<N>` is dropped rather than passed through — see
     `_ACTION_ID_RE`'s own docstring for why this is checked here, at the join, and not
     only trusted from `record`.
+
+    A label that is missing, not a string, or empty gets `record`'s own `"(untitled)"`
+    placeholder rather than being passed through as-is: `record` only writes a `str`
+    today (`or "(untitled)"` already guards the empty case there), but `build` reads
+    whatever is actually on disk, and a hand-edited or otherwise corrupted table is not
+    bound by what `record` would have written. `{"label": 123}` reaching `menu_argv`
+    unguarded raised `AttributeError` there (`int` has no `.replace`) — the SAME class
+    of defect `_ACTION_ID_RE` exists to close for the key, applied consistently to the
+    value next to it, so a corrupted label degrades the one row it belongs to rather
+    than crashing the hotkey for the whole menu.
     """
     path = _table(fid)
     if path is None:
@@ -131,8 +152,13 @@ def build(fid: str) -> list[tuple[str, str]]:
         return []
     if not isinstance(data, dict):
         return []
-    return [(v.get("label", ""), k) for k, v in data.items()
-            if isinstance(v, dict) and _ACTION_ID_RE.fullmatch(k)]
+    out = []
+    for k, v in data.items():
+        if not isinstance(v, dict) or not _ACTION_ID_RE.fullmatch(k):
+            continue
+        label = v.get("label")
+        out.append((label if isinstance(label, str) and label else "(untitled)", k))
+    return out
 
 
 def resolve(fid: str, action_id: str) -> list[str] | None:
@@ -170,11 +196,16 @@ def _safe_label(label: str) -> str:
        occurrence closes it the same way `_pane_died_write_hook_argv` closes `$`/`"` in a
        hook action: escape every occurrence, not a scan for "looks like a format".
 
-    2. **A leading `-` disables the item.** `display-menu`'s own docs: a name starting
-       with `-` is "shown dim and may not be chosen" — the whole row, not merely its
-       first character, becomes something else. That is exactly correction 4's "truncated
-       into something misleading" failure, reached through a menu instead of a status
-       line. A leading space keeps the text intact and un-disables the row.
+    2. **A leading `-` refuses the WHOLE menu, not just that row.** `display-menu`'s
+       own docs describe a name starting with `-` as merely "shown dim and may not be
+       chosen" — verified by hand that this is not what actually happens: tmux's own
+       argument parser reads a name beginning with `-` as an unrecognised FLAG of its
+       own (`command display-menu: unknown flag -m` for a label starting `-my-branch`,
+       confirmed against a real, attached client), and refuses the entire `display-menu`
+       call outright (rc 1) — no item in the menu opens, not only the one whose name
+       triggered it. Worse than the docs suggest, and this guard is correspondingly more
+       necessary than its own comment once claimed. A leading space keeps the text
+       intact and stops it from ever reaching tmux's own flag position.
 
     3. **A label ending in `#` gets a trailing space.** Cosmetic only — nothing here
        executes either way — but worth closing: verified by hand that a label doubled

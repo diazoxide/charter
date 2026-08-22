@@ -20,6 +20,7 @@ cannot prove tmux's own format parser was actually defeated.
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from charter.frame import menu, state
@@ -105,7 +106,6 @@ class OpaqueIds(PersonaIso, unittest.TestCase):
         write to, bypassing `record`'s own minting, to prove the guard is at `build`,
         not only at the one writer that happens to behave today."""
         d = state.frame_dir("f-1", create=True)
-        import json
         (d / "actions.json").write_text(json.dumps({
             "a0": {"label": "fine", "argv": ["true"]},
             "a0'; run-shell \"touch /tmp/pwned": {"label": "hostile key",
@@ -170,6 +170,27 @@ class OpaqueIds(PersonaIso, unittest.TestCase):
         (d / "actions.json").write_text("{not json")
         self.assertEqual(menu.build("f-1"), [])
         self.assertIsNone(menu.resolve("f-1", "a0"))
+
+    def test_a_non_string_label_in_a_corrupted_table_does_not_crash_the_hotkey(self):
+        """`build` used to return `v.get("label", "")` unvalidated — a value that
+        EXISTS but is the wrong type (`{"label": 123}`) is not caught by that default
+        (the default only ever applies when the KEY is missing), and `123.replace(...)`
+        inside `_safe_label` raised `AttributeError` the moment `menu_argv` tried to
+        escape it. Only `record` writes a `str` today, so this is defence in depth —
+        the same class of guard `_ACTION_ID_RE` already applies to the key next to it,
+        written directly to bypass `record`'s own minting, the same way that test
+        does."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "actions.json").write_text(json.dumps({"a0": {"label": 123, "argv": ["true"]}}))
+        self.assertEqual(menu.build("f-1"), [("(untitled)", "a0")])
+        # Must not raise, and must not embed the id where the label was expected.
+        argv = menu.menu_argv("f-1", "charter", client="/dev/ttys0")
+        self.assertEqual(argv[-3], "(untitled)")
+
+    def test_a_missing_label_key_also_gets_the_placeholder(self):
+        d = state.frame_dir("f-1", create=True)
+        (d / "actions.json").write_text(json.dumps({"a0": {"argv": ["true"]}}))
+        self.assertEqual(menu.build("f-1"), [("(untitled)", "a0")])
 
 
 class LabelSafety(PersonaIso, unittest.TestCase):

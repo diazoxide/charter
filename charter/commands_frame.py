@@ -171,18 +171,32 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     carries none of the risk `_EXIT_PATH_ENV`'s docstring describes for `status_path`.
 
     `hotkey` opens this frame's own menu: `bind -n {hotkey} run-shell 'charter
-    frame-menu'`. A key BINDING has no per-session form the way `status`/`mouse`/
-    `history-limit` above do — key tables are server-wide in tmux, so every frame on
-    `SOCKET` ends up sharing this exact bind text, "last launched wins" exactly like
-    `escape-time`/`remain-on-exit`/the `WheelUpPane` bind two lines down already do. That
-    is only safe here because the action itself carries no frame identity: `charter
-    frame-menu` (`cmd_menu`) resolves the CURRENT session from `$CHARTER_SESSION_ID` —
-    carried out of band via `set-environment`, see `_session_id_env_argv` — at the moment
-    the key actually fires, never from anything baked into this text. A bind that
-    embedded one frame's own id here would start opening the WRONG frame's menu the
-    instant a second frame launched, the same trap this function's own docstring already
-    names for `mouse`/`history-limit`, just reached through a binding instead of a
-    session-scoped `set`.
+    frame-menu "#{client_name}"'`. A key BINDING has no per-session form the way
+    `status`/`mouse`/`history-limit` above do — key tables are server-wide in tmux, so
+    every frame on `SOCKET` ends up sharing this exact bind text, "last launched wins"
+    exactly like `escape-time`/`remain-on-exit`/the `WheelUpPane` bind two lines down
+    already do. That is only safe here because the action itself carries no frame
+    identity: `charter frame-menu` (`cmd_menu`) resolves the CURRENT session from
+    `$CHARTER_SESSION_ID` — carried out of band via `set-environment`, see
+    `_session_id_env_argv` — at the moment the key actually fires, never from anything
+    baked into this text. A bind that embedded one frame's own id here would start
+    opening the WRONG frame's menu the instant a second frame launched, the same trap
+    this function's own docstring already names for `mouse`/`history-limit`, just
+    reached through a binding instead of a session-scoped `set`.
+
+    `"#{client_name}"` is a SECOND thing this same bind carries, for a DIFFERENT
+    reason: which of possibly several clients attached to one frame should see the
+    menu. Format expansion resolves `#{client_name}` in the context of whoever's
+    keypress is firing the bind — verified by hand with two real ptys attached to one
+    session, pressing the hotkey from each in turn: each press's own `run-shell`
+    resolved its OWN presser's client name, never the other one's, regardless of which
+    was attached first. `charter frame-menu` receives it as a plain argv value (`args
+    .client` in `cmd_menu`) and hands it straight to `display-menu -c`. Earlier, this
+    module queried `list-clients` and guessed the first one reported when several
+    clients were attached — confirmed wrong: pressing the hotkey on the SECOND-attached
+    client drew the menu on the FIRST client's screen, worse than tmux's own unscoped
+    default single-client guess this module was replacing. Carrying the presser by name
+    removes the guess entirely rather than making it a better one.
 
     This also satisfies correction 2's "only in charter's own server" rule by
     construction rather than by discipline at each call site: `conf_text`'s only caller
@@ -204,7 +218,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
         f"set -t {session} history-limit {int(history_limit)}",
         "set -g escape-time 0",
         "set -g remain-on-exit on",
-        f"bind -n {hotkey} run-shell 'charter frame-menu'",
+        f"bind -n {hotkey} run-shell 'charter frame-menu \"#{{client_name}}\"'",
         "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
         "",
@@ -388,25 +402,6 @@ def _live_sessions(socket: str) -> set[str]:
     except (OSError, subprocess.SubprocessError):
         return set()
     return {line.strip() for line in out.stdout.splitlines() if line.strip()}
-
-
-def _menu_clients(socket: str, session: str) -> list[str]:
-    """Every client `tmux -L socket list-clients -t session` reports for *session*, now.
-
-    `cmd_menu`'s own query for `-c`'s answer (see `menu.menu_argv`'s docstring for why
-    `-t` alone cannot choose the client) — same shape as `_live_sessions` above, and for
-    the same reason: `list-clients` exits non-zero with nothing on stdout for the
-    ordinary "nothing attached right now" case, which `splitlines()` already turns into
-    an empty list with no special-casing needed. The `except` guards tmux vanishing
-    between calls, not that ordinary case.
-    """
-    try:
-        out = subprocess.run(["tmux", "-L", socket, "list-clients", "-t", session,
-                              "-F", "#{client_name}"],
-                             capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return []
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
 
 def _report_tmux_failure(action: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:
@@ -795,34 +790,50 @@ def cmd_launch(args) -> int:
 
 
 def cmd_menu(args) -> int:
-    """Open this frame's own menu. The hotkey bind's only action — see `conf_text`.
+    """Open this frame's own menu, on the screen of whoever actually pressed the hotkey.
 
-    `args` is unused; this exists purely so `cli.py` has a handler to point `charter
-    frame-menu` (registered as a top-level command — see `menu.py`'s own docstring for
-    why not `frame menu`) at. `fid` is resolved from `$CHARTER_SESSION_ID`, carried
-    session-scoped via `_session_id_env_argv` rather than baked into the bind's own text
-    (see `conf_text`'s docstring for why that split is load-bearing, not incidental):
-    the SAME bind text is shared by every frame on `SOCKET`, so the frame it opens a menu
+    `fid` is resolved from `$CHARTER_SESSION_ID`, carried session-scoped via
+    `_session_id_env_argv` rather than baked into the bind's own text (see
+    `conf_text`'s docstring for why that split is load-bearing, not incidental): the
+    SAME bind text is shared by every frame on `SOCKET`, so the frame it opens a menu
     FOR has to be resolved here, at the moment the key actually fires, never earlier.
 
-    Resolves the CLIENT to draw the menu on before ever calling `display-menu` — `-t`
-    alone does not choose it (verified by hand against tmux 3.7c with two frames attached
-    in two terminals: `-t fid` rendered the WRONG frame's menu on the wrong screen; see
-    `menu.menu_argv`'s own docstring). `_menu_clients` asks `list-clients` directly,
-    scoped to this session, rather than ever falling back to tmux's own "most recently
-    active" default. Zero clients (nothing attached right now — a keypress landing mid
-    detach, say) is a quiet no-op: `display-menu` would just fail with tmux's own "no
-    current client", and there is no screen left to report that failure on anyway.
-    Several clients (the same session open in two terminals at once) picks the FIRST one
-    reported — any client actually watching THIS session is correct by construction,
-    `display-menu -c` only ever accepts one, and there is no way to show a menu on two
-    screens at the same time.
+    `args.client` is `#{client_name}`, expanded by tmux INSIDE the bind's own
+    `run-shell` text before this process ever starts (see `conf_text`'s docstring) — not
+    queried here. An earlier version queried `list-clients` and picked the first client
+    reported when several were attached to one frame; confirmed WRONG by observation,
+    not merely suboptimal: with two real ptys attached to one session, pressing the
+    hotkey on the SECOND-attached client drew the menu on the FIRST client's screen,
+    and the presser saw nothing — worse than tmux's own unscoped single-client default
+    this module was built to replace, which happened to guess right in that same
+    two-client, one-frame setup when given no `-c` at all (also verified by hand,
+    separately). Carrying the presser's own name through the bind removes the guess
+    rather than making it a better one — confirmed against the same two-pty setup:
+    each press now resolves to its OWN presser, never the other one's, regardless of
+    attach order (see `tests/test_frame_tmux_integration.py`'s
+    `MenuClientIntegration`). This is the one property actually verified for the
+    ORIGINAL single-frame bug this whole mechanism exists to fix: nobody ever directly
+    reproduced tmux's default guess failing for a single frame with several clients —
+    only the two-FRAME case (`display-menu -t <session>` alone, no `-c`, resolving to
+    whichever session was "current" server-wide) was. `#{client_name}` closes both
+    regardless, by construction, rather than leaving the single-frame case resting on
+    an inference.
+
+    A missing client (`args.client` empty — `#{client_name}` failed to expand, or this
+    was invoked some other way) is a quiet no-op: there is no screen to draw on, and no
+    screen left to report that on either. So is an EMPTY menu (`not menu.build(fid)`):
+    `display-menu` requires at least one `name key command` triple and fails outright
+    ("too few arguments") without one — reachable with a genuine `$CHARTER_SESSION_ID`
+    whose frame has recorded nothing yet, and, before this guard, WOULD have been
+    reachable with none at all (`menu.build("")` is always empty — `state.frame_dir`
+    refuses an empty id — so a keypress arriving with no session id would otherwise
+    have gone on to build a zero-item `display-menu` call and fail loudly for no
+    reason the operator could see).
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
-    clients = _menu_clients(SOCKET, fid)
-    if not clients:
+    if not args.client or not menu.build(fid):
         return 0
-    return subprocess.run(menu.menu_argv(fid, SOCKET, client=clients[0])).returncode
+    return subprocess.run(menu.menu_argv(fid, SOCKET, client=args.client)).returncode
 
 
 def cmd_action(args) -> int:

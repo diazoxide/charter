@@ -648,19 +648,18 @@ class MenuFormatIntegration(unittest.TestCase):
         never issues `display-menu` directly either, it always goes through a bind (see
         `commands_frame.cmd_menu`).
 
-        `F2`'s own two escape sequences (`\\x1bOQ` application mode, `\\x1b[OQ` normal
-        mode) are written with a pause between them because this pty's terminal mode is
-        not otherwise known — sending both covers whichever one the attached client is
-        actually in, harmlessly duplicating the keypress if it is in neither exclusively
-        (redundant, not incorrect: two menus would just draw and one waits behind the
-        other, and only ONE F2 is ever ACTUALLY interpreted per mode in practice).
+        `\x1bOQ` (application-mode F2) is the ONLY sequence written — a second one
+        (`\x1b[OQ`, normal-mode F2) was tried "for safety" in an earlier version of
+        this helper and is exactly the mistake it looks like: its own leading ESC can
+        dismiss the menu the first sequence just opened, and the trailing `[OQ` then
+        leaks into the pane as literal text instead of being interpreted as a key at
+        all. It passed five runs in a row before this was caught — a single, correct
+        sequence is what actually works, not a second one "just in case".
         """
         bind_cmd = ["tmux", "-L", SOCKET, "bind", "-n", "F2"] + cmd[3:]
         r = subprocess.run(bind_cmd, capture_output=True, text=True, timeout=5)
         self.assertEqual(r.returncode, 0, r.stderr)
         os.write(fd, b"\x1bOQ")
-        time.sleep(0.3)
-        os.write(fd, b"\x1b[OQ")
         time.sleep(0.8)
 
     def _short_canary(self, name: str) -> str:
@@ -767,6 +766,211 @@ class MenuFormatIntegration(unittest.TestCase):
                         "its real, opaque-id-resolved action")
         self.assertFalse(os.path.exists(format_canary),
                          "selecting the item must not retroactively execute the label")
+
+
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class MenuClientIntegration(unittest.TestCase):
+    """Fix round 2, IMPORTANT-1, proved with two real ptys attached to ONE frame at
+    once: the hotkey must open the menu on the PRESSER's own screen, never a
+    different attached client's — the defect an earlier version of this mechanism
+    introduced by picking `list-clients`'s first-reported client instead of asking
+    the bind itself who pressed. See `commands_frame.cmd_menu`'s own docstring for
+    what was, and was not, directly observed before the fix.
+
+    Drives the REAL production chain end to end — `conf_text`'s own bind text,
+    `source-file`'d for real, firing a REAL `charter frame-menu` subprocess via
+    `run-shell`, which calls the REAL `cmd_menu` -> `menu.menu_argv` ->
+    `display-menu`. Two things a hand-rolled stand-in could not exercise:
+
+    1. `commands_frame.SOCKET` is a hardcoded module constant ("charter", the real
+       production socket) — this suite never uses that socket (every OTHER class
+       here runs on its own pid-scoped one, precisely to avoid `kill-server` ever
+       reaching a real, unrelated frame). A subprocess spawned bare cannot be told
+       a different socket via any argv this module controls. `_charter_shim` is a
+       tiny executable Python script, standing in for `charter` on `$PATH`, that
+       monkeypatches `commands_frame.SOCKET` to this class's own socket before
+       dispatching to the real `cli.main` — the one substitution that has to happen
+       BEFORE `cmd_menu`/`cmd_action` run, not on a command string built inside
+       them (unlike `MenuIntegration`/`MenuFormatIntegration` above, which construct
+       the command themselves and can rewrite `charter` -> `sys.executable -m
+       charter` directly; `cmd_menu` builds ITS OWN `display-menu` call internally,
+       leaving no string here to rewrite after the fact).
+    2. `tmux display-menu`, issued directly rather than from a binding, does not
+       reliably wire itself to a target client's own key input the same way a
+       key-bound one does — confirmed by hand while building this: calling
+       `cmd_menu` in-process, in a background thread, with `SOCKET` mocked and no
+       subprocess involved at all, returned immediately, and no keypress from
+       either client could select anything afterward. The same "direct invocation
+       behaves differently from a bind" property `MenuFormatIntegration` above
+       already documents for label rendering, evidently not limited to format
+       expansion. The REAL bind is not a nicety here; it is the only path observed
+       to work at all.
+    """
+
+    def setUp(self) -> None:
+        self.addCleanup(_tmux, "kill-server")
+        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
+                        .unlink(missing_ok=True))
+
+    def _charter_shim_env(self) -> dict:
+        """A `$PATH` entry standing in for `charter` — see the class docstring for
+        why a string substitution (as `MenuIntegration`/`MenuFormatIntegration`
+        above use) cannot reach the command `cmd_menu` builds internally. `#!` uses
+        `sys.executable` directly (not `/usr/bin/env python3`) so the shim runs
+        under the SAME interpreter this test process does, and `sys.path` is set
+        explicitly inside the shim rather than relied on from the environment: a
+        script executed by its own shebang gets ITS OWN directory as `sys.path[0]`,
+        not this checkout's, so `import charter` would otherwise fail
+        (`ModuleNotFoundError`) — confirmed by hand while building this.
+        """
+        repo_root = str(Path(__file__).resolve().parent.parent)
+        shim_dir = Path(tempfile.mkdtemp(prefix="charter-integ-shim-"))
+        self.addCleanup(shutil.rmtree, shim_dir, True)
+        shim = shim_dir / "charter"
+        shim.write_text(
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            f"sys.path.insert(0, {repo_root!r})\n"
+            "import charter.commands_frame\n"
+            f"charter.commands_frame.SOCKET = {SOCKET!r}\n"
+            "from charter.cli import main\n"
+            "sys.exit(main(sys.argv[1:]))\n"
+        )
+        shim.chmod(0o755)
+        return dict(os.environ, PATH=f"{shim_dir}:{os.environ.get('PATH', '')}")
+
+    def _new_session(self, fid: str) -> None:
+        """The one `new-session` call that starts this class's fresh server —
+        carries the `charter` shim's `$PATH` (see `_charter_shim_env`). `run-shell`
+        (no explicit `-t`, matching both the bind's own action and every per-item
+        action) falls back to the SERVER's own starting process environment (see
+        `_session_id_env_argv`'s own docstring), so this is the only call in this
+        class that needs the special environment at all.
+
+        Kills both the pane's own process AND the server's own process directly
+        (`#{pid}`, tmux's own server-PID format) rather than relying on `setUp`'s
+        `kill-server` alone: confirmed by hand that this class's own heavier setup
+        (two attached ptys, a `charter` shim subprocess per keypress) left a bare,
+        childless, PPID-1 server behind `kill-server` more than once — the same
+        "kill-server does not reliably reap in time" property `_kill_pid`'s own
+        docstring already names for a session's PANE process, evidently reachable
+        for the SERVER process too under this class's own load. `kill-server`
+        stays in `setUp` as a harmless, already-a-no-op-by-then fallback."""
+        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "cat",
+                 env=self._charter_shim_env())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        server_pid = _tmux("display-message", "-p", "-t", fid, "#{pid}").stdout.strip()
+        self.addCleanup(_kill_pid, server_pid)
+        pid = _tmux("display-message", "-p", "-t", fid, "#{pane_pid}").stdout.strip()
+        self.addCleanup(_kill_pid, pid)
+
+    def _attach_pty(self, session: str, exclude: frozenset = frozenset()) -> tuple[str, int]:
+        """Same shape as `MenuFormatIntegration`'s own helper, extended for a SECOND
+        client on the same session: `list-clients -t session` lists every client
+        attached to it, not only the one just forked, so a second pty here has to
+        pick its OWN name out from among possibly several already there — *exclude*
+        names the ones a caller already knows about."""
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execvp("tmux", ["tmux", "-L", SOCKET, "attach", "-t", session])
+
+        def _reap():
+            _kill_pid(str(pid))
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self.addCleanup(_reap)
+
+        deadline = time.monotonic() + 3
+        name = ""
+        while time.monotonic() < deadline:
+            out = _tmux("list-clients", "-t", session, "-F", "#{client_name}")
+            names = {n.strip() for n in out.stdout.splitlines() if n.strip()}
+            fresh = names - exclude
+            if fresh:
+                name = next(iter(fresh))
+                break
+            time.sleep(0.1)
+        self.assertTrue(name, "the pty-attached client never registered with tmux")
+        return name, fd
+
+    def _install_real_bind(self, fid: str) -> None:
+        """`conf_text`'s own bind line, `source-file`'d for real — no substitution
+        needed here (see the class docstring): the `charter` shim on `$PATH`
+        already makes the bare `charter` this embeds resolve correctly, against
+        THIS class's own socket."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session=fid)
+        conf = Path(tempfile.mkdtemp(prefix="charter-integ-clientconf-")) / "tmux.conf"
+        self.addCleanup(shutil.rmtree, conf.parent, True)
+        conf.write_text(text)
+        r = _tmux("source-file", str(conf))
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def _short_canary(self, name: str) -> str:
+        path = f"/tmp/chci-{os.getpid()}-{name}"
+
+        def _cleanup():
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self.addCleanup(_cleanup)
+        return path
+
+    def test_each_presser_gets_their_own_menu_not_the_others(self):
+        fid = f"menu-client-integ-{os.getpid()}"
+        self._new_session(fid)
+        clientA, fdA = self._attach_pty(fid)
+        clientB, fdB = self._attach_pty(fid, exclude=frozenset({clientA}))
+        self.assertNotEqual(clientA, clientB)
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=SOCKET, session=fid)).returncode, 0)
+        self._install_real_bind(fid)
+
+        # -- A presses: only A's own keystream may select what A's own press opened --
+        canary_a = self._short_canary("a")
+        menu.record(fid=fid, entries=[
+            ("Detach", [sys.executable, "-c", f"open({canary_a!r}, 'w').close()"]),
+        ])
+        os.write(fdA, b"\x1bOQ")
+        time.sleep(0.8)
+        os.write(fdB, b"1")
+        time.sleep(0.8)
+        self.assertFalse(os.path.exists(canary_a),
+                         "client B's own keystream selected an item in the menu A's "
+                         "own hotkey opened — the menu did not open specifically on "
+                         "A's screen (the exact regression this round fixes)")
+        os.write(fdA, b"1")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not os.path.exists(canary_a):
+            time.sleep(0.2)
+        self.assertTrue(os.path.exists(canary_a),
+                        "A's own hotkey press must open A's own, selectable menu")
+
+        # -- Now B presses: the reverse must hold too, not just one direction --
+        canary_b = self._short_canary("b")
+        menu.record(fid=fid, entries=[
+            ("Detach", [sys.executable, "-c", f"open({canary_b!r}, 'w').close()"]),
+        ])
+        os.write(fdB, b"\x1bOQ")
+        time.sleep(0.8)
+        os.write(fdA, b"1")
+        time.sleep(0.8)
+        self.assertFalse(os.path.exists(canary_b),
+                         "client A's own keystream selected an item in the menu B's "
+                         "own hotkey opened")
+        os.write(fdB, b"1")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not os.path.exists(canary_b):
+            time.sleep(0.2)
+        self.assertTrue(os.path.exists(canary_b),
+                        "B's own hotkey press must open B's own, selectable menu")
 
 
 if __name__ == "__main__":

@@ -669,7 +669,13 @@ def _add_frame_parsers(sub) -> None:
     # alone and ordinary top-level dispatch applies. Both are fired by tmux via
     # `run-shell` (the hotkey bind in `conf_text`, and one menu item's own action built
     # by `charter.frame.menu.menu_argv`) — never typed by an operator.
+    #
+    # `frame-menu`'s own `client` argument is `#{client_name}`, expanded by tmux INSIDE
+    # the bind's `run-shell` text before this process starts — never queried after the
+    # fact (see `cmd_menu`'s own docstring for why: `list-clients` cannot tell WHO
+    # pressed the key, only who is attached, and picking among several guessed wrong).
     mn = sub.add_parser("frame-menu")
+    mn.add_argument("client")
     mn.set_defaults(func=commands_frame.cmd_menu)
 
     act = sub.add_parser("frame-action")

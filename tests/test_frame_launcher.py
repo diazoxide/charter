@@ -107,7 +107,8 @@ class Conf(unittest.TestCase):
         (a different literal token) is what `cli.py` actually registers."""
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
-        self.assertIn("bind -n F2 run-shell 'charter frame-menu'", text)
+        self.assertIn('bind -n F2 run-shell \'charter frame-menu "#{client_name}"\'',
+                      text)
         self.assertNotIn("frame menu", text)
 
     def test_the_hotkey_bind_is_global_not_session_scoped(self):
@@ -1314,91 +1315,81 @@ class MainDeliversFrameRest(unittest.TestCase):
         self.assertEqual(rc, 0)
 
     def test_charter_frame_menu_reaches_cmd_menu_via_main(self):
+        """`client` (`#{client_name}`, expanded by tmux inside the bind's own text —
+        see `conf_text`'s docstring) is a required positional now, not queried after
+        the fact."""
         from charter import cli
         with mock.patch("charter.commands_frame.cmd_menu", return_value=0) as cm:
-            rc = cli.main(["frame-menu"])
+            rc = cli.main(["frame-menu", "/dev/ttys7"])
         cm.assert_called_once()
+        self.assertEqual(cm.call_args[0][0].client, "/dev/ttys7")
         self.assertEqual(rc, 0)
-
-
-def _fake_list_clients(*names: str):
-    """A `subprocess.run` `side_effect` distinguishing `list-clients` (answers *names*,
-    one per line, tmux's own `-F` output shape) from any other command (answers an empty,
-    successful `CompletedProcess`) — `cmd_menu` issues two DIFFERENT tmux commands now
-    (`_menu_clients`'s query, then `display-menu` itself), so a single flat mock return
-    value can no longer stand in for both."""
-    def _run(cmd, **kwargs):
-        if "list-clients" in cmd:
-            return SimpleNamespace(returncode=0, stdout="\n".join(names))
-        return SimpleNamespace(returncode=0)
-    return _run
 
 
 class MenuCommands(PersonaIso, unittest.TestCase):
     """`cmd_menu`/`cmd_action` — the handlers `charter frame-menu`/`charter frame-action`
-    dispatch to. Both resolve the frame purely from `$CHARTER_SESSION_ID`; neither ever
-    takes a frame id as an argument (see `menu.py`'s own docstring for why the id stays
-    out of the bind's own text)."""
+    dispatch to. `cmd_menu`'s `args.client` is `#{client_name}`, expanded by tmux INSIDE
+    the bind's own text before this process ever starts (see `conf_text`'s docstring) —
+    never queried here, so these tests supply it directly rather than mocking a
+    `list-clients` call that no longer exists. `fid` is still resolved purely from
+    `$CHARTER_SESSION_ID`; neither function ever takes a frame id as an argument (see
+    `menu.py`'s own docstring for why the id stays out of the bind's own text)."""
 
     def test_cmd_menu_opens_the_current_frames_own_menu_on_its_own_client(self):
         """`-c` — not merely `-t` — is what the fix for IMPORTANT-1 added: `-t fid`
         alone does not choose WHICH terminal sees the menu (verified by hand: it
-        rendered frame B's menu on frame A's screen). `cmd_menu` must ask `list-clients`
-        first and pass whatever it learns straight through to `-c`."""
+        rendered frame B's menu on frame A's screen). `cmd_menu` must pass
+        `args.client` straight through to `-c`, unmodified."""
         menu.record(fid="f-menu", entries=[("Detach", ["true"])])
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
-             mock.patch("charter.commands_frame.subprocess.run",
-                        side_effect=_fake_list_clients("/dev/ttys7")) as run:
-            rc = commands_frame.cmd_menu(SimpleNamespace())
+             mock.patch("charter.commands_frame.subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0)
+            rc = commands_frame.cmd_menu(SimpleNamespace(client="/dev/ttys7"))
         self.assertEqual(rc, 0)
-        calls = [c.args[0] for c in run.call_args_list]
-        list_clients_cmd = next(c for c in calls if "list-clients" in c)
-        self.assertEqual(list_clients_cmd,
-                         ["tmux", "-L", "charter", "list-clients", "-t", "f-menu",
-                          "-F", "#{client_name}"])
-        menu_cmd = next(c for c in calls if "display-menu" in c)
+        run.assert_called_once()
+        menu_cmd = run.call_args[0][0]
         self.assertEqual(menu_cmd[:9],
                          ["tmux", "-L", "charter", "display-menu", "-t", "f-menu",
                           "-c", "/dev/ttys7", "-T"])
 
-    def test_cmd_menu_with_zero_clients_is_a_quiet_no_op(self):
-        """Nothing attached to this session right now (a keypress landing mid-detach,
-        say) — `display-menu` would just fail with tmux's own "no current client", and
-        there is no screen left to report that failure on anyway. `cmd_menu` must not
-        even attempt it."""
+    def test_cmd_menu_with_an_empty_client_is_a_quiet_no_op(self):
+        """`#{client_name}` failing to expand (or `charter frame-menu` invoked some
+        other way with nothing supplied) leaves no screen to draw on and none to
+        report that on either — `display-menu` must never even be attempted."""
         menu.record(fid="f-menu", entries=[("Detach", ["true"])])
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
-             mock.patch("charter.commands_frame.subprocess.run",
-                        side_effect=_fake_list_clients()) as run:
-            rc = commands_frame.cmd_menu(SimpleNamespace())
+             mock.patch("charter.commands_frame.subprocess.run") as run:
+            rc = commands_frame.cmd_menu(SimpleNamespace(client=""))
         self.assertEqual(rc, 0)
-        self.assertFalse(any("display-menu" in c.args[0] for c in run.call_args_list),
-                         "display-menu must never be attempted with no client to draw on")
+        run.assert_not_called()
 
-    def test_cmd_menu_with_several_clients_picks_the_first_reported(self):
-        """The same session open in two terminals at once — `display-menu -c` only ever
-        accepts one, and there is no way to show a menu on two screens simultaneously;
-        picking the first `list-clients` reports is at least a client actually watching
-        THIS session, which a bare `-t fid` never guaranteed (see the test above)."""
-        menu.record(fid="f-menu", entries=[("Detach", ["true"])])
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
-             mock.patch("charter.commands_frame.subprocess.run",
-                        side_effect=_fake_list_clients("/dev/ttys1", "/dev/ttys2")) as run:
-            rc = commands_frame.cmd_menu(SimpleNamespace())
-        self.assertEqual(rc, 0)
-        menu_cmd = next(c.args[0] for c in run.call_args_list if "display-menu" in c.args[0])
-        self.assertEqual(menu_cmd[menu_cmd.index("-c") + 1], "/dev/ttys1")
-
-    def test_cmd_menu_with_no_session_id_finds_no_clients_and_does_nothing(self):
-        """No `$CHARTER_SESSION_ID` at all (the frame died between the bind firing and
-        this process starting, say) must not raise — `list-clients -t ""` reports no
-        clients, and `cmd_menu` treats that the same as any other zero-clients case."""
+    def test_cmd_menu_with_no_session_id_is_a_quiet_no_op_not_a_failed_display_menu(self):
+        """Real tmux 3.7c: `list-clients -t ""` (the query an EARLIER version of this
+        module made) does NOT report zero clients — with a client attached it reports
+        the CURRENT session's client, same as an unscoped query would. The prior test
+        for this case asserted the opposite and passed anyway, because its mock hard
+        -coded the convenient wrong answer — the exact "wrong invariant pinned by a
+        passing test" this fix round exists to remove. `cmd_menu` no longer queries
+        `list-clients` at all, so that specific fiction cannot recur, but the SAME
+        real hazard remains from a different angle: `menu.build("")` is always empty
+        (`state.frame_dir` refuses an empty id), so a real `display-menu` call with no
+        `$CHARTER_SESSION_ID` would still have ZERO items and fail outright ("too few
+        arguments") if `cmd_menu` did not check for that deliberately."""
         with mock.patch.dict(os.environ, {}, clear=True), \
-             mock.patch("charter.commands_frame.subprocess.run",
-                        side_effect=_fake_list_clients()) as run:
-            rc = commands_frame.cmd_menu(SimpleNamespace())
+             mock.patch("charter.commands_frame.subprocess.run") as run:
+            rc = commands_frame.cmd_menu(SimpleNamespace(client="/dev/ttys7"))
         self.assertEqual(rc, 0)
-        self.assertFalse(any("display-menu" in c.args[0] for c in run.call_args_list))
+        run.assert_not_called()
+
+    def test_cmd_menu_with_a_real_session_but_an_empty_menu_is_also_a_quiet_no_op(self):
+        """The same empty-menu guard, reached a different way: a genuine
+        `$CHARTER_SESSION_ID` whose frame has recorded no entries yet (nothing has
+        called `menu.record` for it, or `cmd_launch` has not reached that point)."""
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-empty"}), \
+             mock.patch("charter.commands_frame.subprocess.run") as run:
+            rc = commands_frame.cmd_menu(SimpleNamespace(client="/dev/ttys7"))
+        self.assertEqual(rc, 0)
+        run.assert_not_called()
 
     def test_cmd_action_runs_the_resolved_argv_as_a_list_never_a_shell(self):
         menu.record(fid="f-act", entries=[("Detach", ["tmux", "-L", "charter",
