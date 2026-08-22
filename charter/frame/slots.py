@@ -56,7 +56,14 @@ def _top(fid: str) -> str:
 
 
 def _bottom(fid: str) -> str:
-    """What still wants attention, and how to act on it."""
+    """What still wants attention, and how to act on it.
+
+    Only the first alert, deliberately: bottom is a fixed single-row pane, and
+    `_alerts()` already returns its entries in priority order, so this picks which one
+    survives rather than leaving it to whichever one happens to fit before
+    `tui.truncate`'s ellipsis — the same truncation-order reasoning `statusline.py`
+    names inline wherever a row has to choose what to drop.
+    """
     from .. import statusline, workspace
     ws = workspace.resolve()
     todos = statusline._todo_count(ws)

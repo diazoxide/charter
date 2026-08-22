@@ -100,5 +100,26 @@ class RenderFollowsThePane(PersonaIso, unittest.TestCase):
                         self.assertLessEqual(tui.width(line), 10)
 
 
+class WideGlyphs(PersonaIso, unittest.TestCase):
+    """`tui.width` counts display cells, not `len()` — every other test in this file
+    uses pure-ASCII content, where the two coincide, so none of them would notice a
+    future edit that swapped `tui.truncate` for character slicing (`x[:w]`). Caught in
+    review by a hand-built probe: a workspace name of CJK glyphs measuring 57 display
+    cells rendered untouched into a 30-cell pane. This pins the same shape with an
+    assertion, not a probe: 30 CJK characters are 60 display cells (two each) but only
+    30 *characters* — half the false margin `len()`-based slicing would report as safe
+    against a pane this narrow.
+    """
+
+    def test_a_cjk_workspace_name_still_fits_a_narrow_pane(self):
+        cjk = "測" * 30  # 30 characters, 60 display cells
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": cjk}), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch("os.get_terminal_size",
+                         return_value=os.terminal_size((20, 3))):
+            line = slots.render("top", "f-1")
+        self.assertLessEqual(tui.width(line), 20)
+
+
 if __name__ == "__main__":
     unittest.main()
