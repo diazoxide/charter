@@ -51,6 +51,23 @@ optionally with a port; a block that fails it is skipped and reported, and every
 declared host and class default still resolves — the same handling a typo'd `kind` has had
 for a while.
 
+**And the last ungated read of a plane file is gated.** `MEMORY.md` is excluded from the
+memory store's own reader *by name* — correctly, since the index is not a memory — which
+left it the one plane file that neither the read gate nor the write gate covered. The
+session-start briefing opened it directly. It is checked now, like every other read, and a
+refused index is **named** rather than rendered as an absence: the memory count beside it
+comes from a separately gated read and is still true, so silence would make a committed
+symlink where the index should be look exactly like a persona with nothing recorded lately.
+
+```
+**own (12)** — index unreadable:
+   ⚠ '…/memory/MEMORY.md' is not a regular file (it is a FIFO). …
+```
+
+A FIFO there is the reason this could not be left: it raises no error, it waits — so the
+`except OSError` that looked like a guard was none, and the briefing would have hung with
+the turn behind it.
+
 **Two more were checked and left alone**, and are named so the guard is on the record
 rather than rediscovered later. `[memory] share` switches on an unattended commit-and-push,
 and `clamp_share` already fails to `local` on anything it does not recognise.

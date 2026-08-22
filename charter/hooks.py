@@ -34,7 +34,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config
+from . import __version__, config, contain
 
 
 def _read_stdin() -> dict:
@@ -1375,24 +1375,48 @@ def _one_line(text: str, cap: int = _COMMITTED_LINE_CAP) -> str:
 _INDEX_LINE_RE = re.compile(r"^(- \[)(.*)(\]\(.*\))$")
 
 
-def _index_titles(idx_path) -> list[str]:
-    """The `- [title](file.md)` lines of a MEMORY.md index, oldest→newest (append order).
+def _read_index(idx_path) -> tuple[list[str], str | None]:
+    """``(index lines, refusal)`` for a MEMORY.md, oldest→newest (append order).
 
-    The **title** is bounded here (:data:`_COMMITTED_LINE_CAP`), not the whole line: the
-    link is what `charter recall` exists to be reached by, and truncating a line mid-link
-    would leave the reader a pointer to nothing. A line that is not an index line at all
-    is passed through as-is — it is already filtered to `- [` prefixes, and rewriting
-    something this does not recognise would be inventing content rather than bounding it.
+    **The one plane file neither gate covered.** #336 put `contain.file_refusal` in front
+    of every read of plane data, and `memstore.files()` — which implements it — excludes
+    `MEMORY.md` **by name**, correctly, because the index is not a memory. #349 did the
+    same for the writes. This function then opened that exact filename with nothing in
+    front of it, on a hook that runs at every session start. A committed symlink there
+    redirects the read into whatever it points at, including the vault files
+    `pretooluse-read` exists to keep out of a system prompt — and a FIFO does not raise
+    `OSError` at all, it *waits*, so the guard's own `except OSError` was no guard: the
+    first test written against this hung for two minutes rather than failing.
+
+    **A refusal is returned, not swallowed.** The memory *count* beside these titles comes
+    from `memstore.files()`, which is gated separately and still answers — so a persona
+    with a refused index and one with an empty index would otherwise render identically,
+    and the reader would conclude there is nothing to see rather than that there is a
+    defect in a committed file. :func:`_memory_digest` renders the sentence in place of the
+    titles. `charter recall` is unaffected either way: it reads the memories, not the index.
+
+    The **title** is bounded (:data:`_COMMITTED_LINE_CAP`), not the whole line: the link is
+    what `charter recall` is reached by, and truncating a line mid-link would leave a
+    pointer to nothing. A line this does not recognise is passed through bounded but
+    otherwise as-is — rewriting it would be inventing content rather than limiting it.
     """
+    why = contain.file_refusal(idx_path)
+    if why:
+        return [], why
     try:
         lines = [ln for ln in idx_path.read_text().splitlines() if ln.startswith("- [")]
-    except OSError:
-        return []
+    except OSError as e:
+        return [], contain.UNREADABLE.format(name=idx_path, error=e.strerror or e)
     out = []
     for ln in lines:
         m = _INDEX_LINE_RE.match(ln)
         out.append(f"{m.group(1)}{_one_line(m.group(2))}{m.group(3)}" if m else _one_line(ln))
-    return out
+    return out, None
+
+
+def _index_titles(idx_path) -> list[str]:
+    """Just the lines of :func:`_read_index` — for callers with nowhere to put a refusal."""
+    return _read_index(idx_path)[0]
 
 
 def _memory_digest(name: str) -> str:
@@ -1402,23 +1426,36 @@ def _memory_digest(name: str) -> str:
     Why bounded: the full `_shared` index reached 94 entries (~3,068 tok) growing ~5/day, and
     was injected into every session *and* re-read on every sub-agent dispatch — while
     `charter recall` already fetches the same memories on demand. Cost now stays flat as the
-    corpus grows; nothing is lost, it's retrieved instead of preloaded."""
+    corpus grows; nothing is lost, it's retrieved instead of preloaded.
+
+    A **refused** index (:func:`_read_index`) is named rather than rendered as an absence.
+    The count beside it comes from `memstore.files()` and is still true, so silence here
+    would make "this plane has a committed symlink where its index should be" look exactly
+    like "nothing has been recorded lately" — and only one of those needs somebody to act.
+    """
     from . import persona
     own = persona.memories(name)
     shared = persona.memories(name, shared=True)
     if not own and not shared:
         return ""
     lines = []
+
+    def _store(label: str, count: int, idx_path) -> None:
+        titles, why = _read_index(idx_path)
+        titles = titles[-_MEM_DIGEST_N:]
+        if why:
+            lines.append(f"**{label} ({count})** — index unreadable:")
+            lines.append(f"   ⚠ {why}")
+            return
+        lines.append(f"**{label} ({count})** — newest:" if titles
+                     else f"**{label} ({count})**")
+        lines.extend(titles)
+
     if own:
-        titles = _index_titles(persona.index_of(persona.memory_dir(name)))[-_MEM_DIGEST_N:]
-        lines.append(f"**own ({len(own)})** — newest:" if titles else f"**own ({len(own)})**")
-        lines += titles
+        _store("own", len(own), persona.index_of(persona.memory_dir(name)))
     if shared:
-        titles = _index_titles(
-            persona.index_of(persona.memory_dir(name, shared=True)))[-_MEM_DIGEST_N:]
-        lines.append(f"**shared ({len(shared)})** — newest:" if titles else
-                     f"**shared ({len(shared)})**")
-        lines += titles
+        _store("shared", len(shared),
+               persona.index_of(persona.memory_dir(name, shared=True)))
     body = "\n".join(lines)
     return (
         f"\n\n## Memory — {len(own)} own · {len(shared)} shared (newest shown; **search the rest**)\n"
