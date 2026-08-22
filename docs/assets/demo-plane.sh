@@ -61,6 +61,13 @@ mk() { # <repo> <branch> <dirty?> <ahead>
   local d="workspaces/billing-migration/$1"
   mkdir -p "$d" && git -C "$d" init -q -b main
   git -C "$d" config user.email demo@acme.test && git -C "$d" config user.name Demo
+  # For the same reason the identity is pinned above: a throwaway demo repo must not
+  # inherit the operator's git. An operator with `commit.gpgsign=true` and a 1Password
+  # (or gpg-agent) signer fails every commit here with "failed to write commit object"
+  # the moment no one is there to unlock it, and `set -e` takes the whole capture down
+  # halfway through the plane. charter's own repos are token-only and unsigned by policy
+  # (`charter git-policy`); these fixtures hold that line too.
+  git -C "$d" config commit.gpgsign false
   echo "# $1" > "$d/README.md"
   git -C "$d" add -A && git -C "$d" commit -qm "initial commit"
   # A bare "remote" so ahead/behind is genuinely computed against an upstream.
