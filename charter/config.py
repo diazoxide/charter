@@ -55,12 +55,30 @@ def worktrees_root_for(root: "Path", cfg: dict) -> "Path | None":
     rest. When this read the globals directly it defaulted to the REAL repo's sibling in
     every test — outside the tmp tree — so the suite wrote worktrees into the developer's
     checkout and accumulated them across cases.
+
+    **The two sources are not the same kind of input** (#339). ``$CHARTER_WORKTREES`` is
+    set by the person at the machine, on their own machine, and takes anything. ``[plane]
+    worktrees`` is committed and shared — a teammate writes it, `git worktree add` then
+    creates directories wherever it points, and on 0.47.2 ``"~/../../etc/charter-worktrees"``
+    resolved to ``/private/etc/charter-worktrees`` with nothing between the two. A committed
+    value is now held to :func:`contain.plane_adjacent`: the plane, or one sibling of it,
+    which is exactly the ``"../charter.worktrees"`` shape this docstring documents.
+
+    A refused value falls back to ``None`` — the standard in-plane layout — because this
+    runs inside :func:`derive`, on every import, where raising would cost the CLI rather
+    than the setting. Falling back silently would be its own defect, so
+    ``doctor.check_control_plane_config`` asks :func:`contain.plane_adjacent_refusal` the
+    same question and names it.
     """
-    declared = os.environ.get("CHARTER_WORKTREES") or _instance.worktrees_of(cfg)
+    from . import contain
+    env = os.environ.get("CHARTER_WORKTREES")
+    declared = env or _instance.worktrees_of(cfg)
     if not declared:
         return None
     p = Path(declared).expanduser()
     p = p if p.is_absolute() else (root / p)
+    if not env and not contain.plane_adjacent(root, p):
+        return None
     try:
         return p.resolve()
     except (OSError, RuntimeError):

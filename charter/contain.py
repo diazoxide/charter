@@ -265,6 +265,63 @@ def _not_plane_data(path, verb: str = "read") -> str:
     return NOT_PLANE_DATA.format(name=path, target=target, roots=roots, verb=verb)
 
 
+#: Said once, like the two above. Names the resolved target because that is the whole
+#: point: `"~/../../etc/charter-worktrees"` reads as a home-relative path and resolves to
+#: `/private/etc/charter-worktrees`, and a reader who is only shown what they wrote cannot
+#: see what they got.
+NOT_PLANE_ADJACENT = ("'{name}' resolves to '{target}', which is neither inside the "
+                      "control plane ({root}) nor beside it. This is read from a committed "
+                      "file and directories get created there, so it may name a place "
+                      "under the plane or a single sibling of it — '../charter.worktrees', "
+                      "the documented shape — and nothing further afield")
+
+
+def plane_adjacent(root, path) -> bool:
+    """True when *path* is at/under *root*, or a **direct child** of *root*'s parent.
+
+    A different boundary from :func:`within_data`, and deliberately so. That one answers
+    "may charter READ this", and its roots are the directories a plane keeps data in.
+    This one answers "may a committed file send charter's directory CREATION here", and
+    the honest answer cannot be "inside the plane": relocating the worktree root exists
+    precisely to get worktrees out of anywhere a build tool globs from, and the shape
+    ``config.worktrees_root_for`` documents is ``"../charter.worktrees"`` — a sibling.
+
+    So the boundary is the plane and its own doorstep. A direct child of the parent, not
+    anything under the parent: a plane usually lives beside other checkouts, and "under
+    the parent" would let a committed value plant a worktree root inside a colleague's
+    repo. One sibling directory is the documented case and the whole of it.
+
+    Never raises, like everything here — an unresolvable path is simply not adjacent.
+    """
+    try:
+        target = Path(os.path.realpath(path))
+        base = Path(os.path.realpath(root))
+    except (OSError, ValueError):
+        return False
+    if target == base or base in target.parents:
+        return True
+    return target.parent == base.parent and target != base.parent
+
+
+def plane_adjacent_refusal(root, declared) -> str | None:
+    """Why a committed *declared* path may not be used as a root under *root*, or ``None``.
+
+    Takes the value **as written** so the message can show both what was declared and what
+    it resolved to — the gap between the two is usually the defect.
+    """
+    if not declared:
+        return None
+    p = Path(str(declared)).expanduser()
+    p = p if p.is_absolute() else (Path(root) / p)
+    if plane_adjacent(root, p):
+        return None
+    try:
+        target = os.path.realpath(p)
+    except (OSError, ValueError):
+        target = str(p)
+    return NOT_PLANE_ADJACENT.format(name=declared, target=target, root=root)
+
+
 def dir_refusal(directory, verb: str = "read") -> str | None:
     """Why charter must not list — or write inside — *directory*, or ``None``.
 

@@ -1,8 +1,12 @@
 """`[charter] version` — the opt-in version lock, and the auto-sync that honours it.
 
-Shared like a lockfile: committed, exact (so it downgrades too — pinning a team
-back to a known-good release is the case you most want automatic), and opt-in. A
-control plane that pins nothing keeps today's behaviour exactly.
+Shared like a lockfile: committed, exact (so a pin-back to a known-good release is
+expressible), and opt-in. A control plane that pins nothing keeps today's behaviour
+exactly.
+
+**Only the UPGRADE direction is applied unattended** — the pin is committed data, and
+`tests/test_a_version_lock_does_not_downgrade_unattended.py` (#333) owns that rule and
+the argument for it. This file keeps the parts that direction does not touch.
 
 **No test here installs anything.** `commands.sync_to` is stubbed throughout; a
 suite that reinstalls the CLI it is testing would be both slow and destructive —
@@ -118,12 +122,14 @@ class AutoSync(unittest.TestCase):
         self.assertEqual(self.installs, ["9.9.9"])
         self.assertIn("9.9.9", msg)
 
-    def test_it_downgrades_too(self):
-        """Exact, not a floor — pinning back to a known-good release is the case you
-        most want automatic."""
+    def test_a_downgrade_is_reported_rather_than_installed(self):
+        """The pin is committed data and this site is unattended, so the direction that
+        can only remove guards is said, not done (#333 — full argument, and the attended
+        path that still downgrades, in `test_a_version_lock_does_not_downgrade_unattended`)."""
         self._lock("0.0.1")
-        hooks._autosync_version_lock()
-        self.assertEqual(self.installs, ["0.0.1"])
+        msg = hooks._autosync_version_lock()
+        self.assertEqual(self.installs, [])
+        self.assertIn("0.0.1", msg)
 
     def test_the_message_says_the_running_process_is_still_the_old_build(self):
         """It cannot replace itself mid-call; without saying so, a user sees

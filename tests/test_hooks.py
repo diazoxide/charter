@@ -114,7 +114,7 @@ class TestSessionStart(PersonaIso):  # C
         with mock.patch.dict(os.environ, {"CHARTER_PERSONA": "dev", "CHARTER_WORKSPACE": "default"}):
             ctx = _context(run_hook(hooks.sessionstart, {"session_id": "t"}))
         self.assertIn("dev", ctx)
-        self.assertIn("acting as", ctx)
+        self.assertIn("`dev` persona for this session", ctx)
         self.assertIn("dev tasks", ctx)  # the remit (delegate-when) is surfaced
 
     def test_no_active_persona_is_silent(self):

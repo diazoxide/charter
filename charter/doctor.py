@@ -241,6 +241,25 @@ def check_control_plane_config() -> Result:
             hint="Fix or remove charter.toml, then re-run. Falling back to empty "
                  "group/exclude/workspace defaults until it does.",
         )
+    # A committed `[plane] worktrees` that points outside the plane is IGNORED rather than
+    # honoured (`config.worktrees_root_for`, #339) — and a setting silently ignored is a
+    # plane whose declared layout is not the layout it has. This is the only place that
+    # can say so; the resolver itself runs inside `derive`, where there is nobody to tell.
+    from . import contain, instance as _instance
+    try:
+        _declared = _instance.worktrees_of(_instance.load(_config.ROOT))
+    except Exception:
+        _declared = None
+    why = contain.plane_adjacent_refusal(_config.ROOT, _declared)
+    if why:
+        return Result(
+            "charter.toml",
+            WARN,
+            detail="[plane] worktrees points outside the plane and is being ignored",
+            hint=f"{why}. Worktrees are in the default layout "
+                 f"(workspaces/<ws>/.worktrees/) until the key is fixed or removed; "
+                 f"$CHARTER_WORKTREES sets a per-machine root without editing the file.",
+        )
     _forges, forge_errors = registry.known_forges_report(_config.ROOT)
     if forge_errors:
         shown = "; ".join(forge_errors[:3]) + (" …" if len(forge_errors) > 3 else "")

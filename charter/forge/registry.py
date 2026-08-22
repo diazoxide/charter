@@ -21,11 +21,42 @@ class CollisionError(Exception):
     """Two forges expose a repo with the same bare name."""
 
 
+#: A hostname, optionally with a port. Deliberately not a URL and deliberately not an
+#: allowlist of hosts: a self-hosted forge is the whole reason ``host`` exists, so charter
+#: cannot know the set — but it can know the SHAPE. Labels of letters/digits/hyphens
+#: separated by dots, no scheme, no path, no userinfo, no whitespace.
+_HOST_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*"
+    r"(?::\d{1,5})?$")
+
+NOT_A_HOST = ("host {host!r} is not a hostname. It is read from a committed charter.toml "
+              "and reaches both the SSH guard's deny set and the "
+              "`url.https://<host>/.insteadOf` that `charter git-policy --apply` writes "
+              "into a clone's git config, so it takes a bare host (optionally :port) — no "
+              "scheme, no path, no '@'")
+
+
+def host_ok(host) -> bool:
+    """True when *host* is a hostname rather than something else that fits in the slot.
+
+    Uppercase is accepted and NOT normalised: git treats hostnames case-insensitively and
+    ``hooks._single_credential_hit`` already lowercases at match time, while rewriting the
+    value here would give one forge two identities — the thing `contain` refuses names for.
+    """
+    return isinstance(host, str) and bool(_HOST_RE.match(host))
+
+
 def _build(kind: str, host: str | None) -> Forge:
     cls = KINDS.get(kind)
     if cls is None:
         raise ValueError(
             f"unknown forge kind {kind!r} — known kinds: {', '.join(sorted(KINDS))}")
+    if host and not host_ok(host):
+        # Raised, because every caller that can be reached from a committed file already
+        # catches per block: `declared_forges` records the message and keeps every other
+        # block, which is the machinery a typo'd `kind` has used since it was written.
+        raise ValueError(NOT_A_HOST.format(host=host))
     return cls(host) if host else cls()
 
 

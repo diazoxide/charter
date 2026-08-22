@@ -53,6 +53,12 @@ worktrees = "../plane.worktrees" # Where worktrees live. A relative path resolve
                                   # Default: per-workspace, under
                                   # workspaces/<ws>/.worktrees/ — see "Where worktrees
                                   # live" below.
+                                  # This file is committed and `git worktree add` creates
+                                  # directories here, so the value must land inside the
+                                  # plane or in a single sibling of it (the shape above).
+                                  # Anywhere further afield is ignored and `charter doctor`
+                                  # says so; $CHARTER_WORKTREES — your machine, your
+                                  # choice — is not restricted.
 
 # One [[forge]] block per code-hosting forge this control plane tracks. A single-forge
 # control plane (the common case) declares exactly one; see "Mixed-forge" below for more
@@ -64,6 +70,11 @@ group = "my-org"                 # the GitLab group (or GitHub org/user) this fo
 host = "gitlab.com"              # optional: a self-hosted forge's host (GitLab Enterprise,
                                   # GitHub Enterprise Server). Default: the forge's own public
                                   # host (gitlab.com / github.com). See docs/forges.md.
+                                  # A bare hostname, optionally :port — no scheme, no path,
+                                  # no "@". It widens the SSH guard's deny set and becomes
+                                  # the `url.https://<host>/.insteadOf` that
+                                  # `charter git-policy --apply` writes, so a block whose
+                                  # host is not a hostname is skipped and reported.
 exclude = ["this-control-plane"] # repo names never written into the inventory — typically
                                   # the control plane's own repo, so `discover` doesn't list
                                   # itself as a clone target.
@@ -329,16 +340,34 @@ version = "0.7.1"
 | `charter version sync` | Installs the locked version on this machine |
 | `charter version bump [--to X] [--push]` | Moves the pin, after verifying the target installs |
 
-**It is exact, not a floor — so it downgrades.** That is the point: pinning a team back to a
-known-good release is precisely the case you want to be automatic.
+**It is exact, not a floor — so it downgrades.** Pinning a team back to a known-good
+release is precisely the case the pin exists for. `charter version sync --cli` performs it.
 
-**Auto-conformance runs once per session.** The `SessionStart` hook installs the locked
-version when it differs from what is running, and says so:
+**The pin must be an exact `X.Y.Z`.** It becomes the right-hand side of a pip requirement,
+`charter-cp==<pin>`, where a wildcard (`0.*`), a range (`>=0.47`) or a dist-name would also
+be accepted — and would resolve to whatever is published, which is the one thing a lock
+exists to prevent. Anything else is refused by name rather than installed.
+
+**Auto-conformance runs once per session, and only upwards.** The `SessionStart` hook
+installs the locked version when it is *newer* than what is running, and says so:
 
 ```
 ⬢ charter: auto-updated 0.7.1 → 0.8.0 to match this control plane's lock.
   The next `charter …` call uses it.
 ```
+
+A pin **older** than what is running is reported and not installed:
+
+```
+⬢ charter: this control plane pins 0.7.1, which is OLDER than the 0.8.0 you are
+  running. charter did not install it: a downgrade replaces the binary that enforces
+  the credential guard with one that knows less, and session start has nobody to ask.
+```
+
+`charter.toml` is committed, so the pin is data a teammate can change — and an unattended
+downgrade past a fix would re-open it on every teammate's next session. An upgrade can only
+add guards; a downgrade can only remove them, so only one of the two directions happens by
+itself. The pin-back stays one deliberate command, run by the person who read the message.
 
 That wording is literal — a running process cannot replace itself mid-call, so *this*
 invocation finishes on the old build and every later `charter …` in the session uses the

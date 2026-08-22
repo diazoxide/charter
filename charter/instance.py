@@ -9,6 +9,7 @@ zero-dependency promise that YAML would have ended.
 """
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -106,11 +107,49 @@ SHARE_MODES = ("local", "commit", "push")
 # --------------------------------------------------------------------------- #
 # version lock — `[charter] version`, an OPT-IN pin shared like a lockfile.    #
 # Absent means charter does nothing: committing the key is the act of opting a  #
-# team into conformance. Exact, not a floor, so it downgrades too — pinning     #
-# back to a known-good release is the case you most want to be automatic.      #
+# team into conformance. Exact, not a floor, so a pin-back to a known-good      #
+# release is expressible — but only an UPGRADE is applied unattended (#333);    #
+# see `hooks._autosync_version_lock` for why the two directions differ.         #
 # --------------------------------------------------------------------------- #
+#: An exact three-part version and nothing else PEP 440 would also accept there (#333).
+#:
+#: **The right-hand side of ``pkg==spec`` is not a version slot.** ``commands._sync_cmd``
+#: builds ``charter-cp==<pin>``, which is a *requirement specifier*: ``0.*`` is a legal
+#: prefix match, and `uv pip compile` resolves ``charter-cp==0.*`` to the latest 0.x. A pin
+#: that reads as exact would silently mean "whatever is published", which is the one thing
+#: a lock exists to prevent — and, because it is not a version, no comparison of the two
+#: versions can speak for it either. This is #332's finding one file over.
+#:
+#: **Anchored, and exactly three parts.** ``hooks._parse_version`` deliberately PREFIX-
+#: matches (it orders a plugin version it does not control, and ``0.47.2-CANARY`` orders
+#: fine as ``(0, 47, 2)``); a gate cannot, or ``0.47.2-CANARY`` passes shape and then
+#: installs something else. Three parts because the *direction* check has to be decidable
+#: against a three-part installed version, and ``0.47`` is not orderable against ``0.47.2``.
+#: Every charter release has had this shape. If one ever ships a pre-release, this is the
+#: line to widen — and widening it means making :func:`hooks._parse_version` able to ORDER
+#: the new shape, not merely accept it.
+_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+
+NOT_A_VERSION = ("'{version}' is not a version. It is interpolated into the pip "
+                 "requirement `charter-cp=={version}`, where a wildcard, a range, a "
+                 "marker or a dist-name would also be accepted — so `[charter] version` "
+                 "takes an exact X.Y.Z and nothing else")
+
+
+def version_ok(version) -> bool:
+    """True when *version* is a version rather than some other thing a specifier accepts."""
+    return isinstance(version, str) and bool(_VERSION.match(version.strip()))
+
+
 def locked_version(cfg: dict) -> str | None:
-    """The version this control plane pins, or None when it does not pin one."""
+    """The version this control plane pins, or None when it does not pin one.
+
+    Reports the pin **as written**, including one that is not a version. Refusing here
+    would fold "pinned something malformed" into "pinned nothing", and a plane that opted
+    into conformance would then behave exactly like one that never did — silently, which
+    is the failure this whole area is about. :func:`version_ok` is what the acting sites
+    ask, so the refusal happens where the action is and can name the value.
+    """
     v = (cfg.get("charter") or {}).get("version")
     return v.strip() if isinstance(v, str) and v.strip() else None
 
