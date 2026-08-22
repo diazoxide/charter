@@ -82,7 +82,7 @@ import subprocess
 import sys
 
 from . import config, harness, util, workspace
-from .frame import layout, state, tmuxctl
+from .frame import layout, menu, state, tmuxctl
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -170,9 +170,33 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     plain `set -t <session> ...` config text, never into a shell command string, so it
     carries none of the risk `_EXIT_PATH_ENV`'s docstring describes for `status_path`.
 
-    `hotkey` is accepted and never bound to anything here on purpose: binding the key AND
-    populating the menu it opens both belong to the task that makes the menu reachable,
-    and half of that wiring (a key bound to nothing) would be worse than none of it.
+    `hotkey` opens this frame's own menu: `bind -n {hotkey} run-shell 'charter
+    frame-menu'`. A key BINDING has no per-session form the way `status`/`mouse`/
+    `history-limit` above do — key tables are server-wide in tmux, so every frame on
+    `SOCKET` ends up sharing this exact bind text, "last launched wins" exactly like
+    `escape-time`/`remain-on-exit`/the `WheelUpPane` bind two lines down already do. That
+    is only safe here because the action itself carries no frame identity: `charter
+    frame-menu` (`cmd_menu`) resolves the CURRENT session from `$CHARTER_SESSION_ID` —
+    carried out of band via `set-environment`, see `_session_id_env_argv` — at the moment
+    the key actually fires, never from anything baked into this text. A bind that
+    embedded one frame's own id here would start opening the WRONG frame's menu the
+    instant a second frame launched, the same trap this function's own docstring already
+    names for `mouse`/`history-limit`, just reached through a binding instead of a
+    session-scoped `set`.
+
+    This also satisfies correction 2's "only in charter's own server" rule by
+    construction rather than by discipline at each call site: `conf_text`'s only caller
+    (`cmd_launch`) sources this text against `SOCKET`, charter's own private server —
+    never the operator's own default socket (see this module's own docstring, "Never the
+    operator's own default socket").
+
+    No `-t` on the `run-shell` itself, unlike `_exit_path_env_argv`'s callers (which
+    target a session by NAME): verified by hand against tmux 3.7c that `run-shell -t =`
+    — the idiom the `WheelUpPane` bind below already uses for `if-shell -F` — does NOT
+    carry a session's own `set-environment` values into the shell it spawns, while
+    OMITTING `-t` entirely does. `-t =` resolves for FORMAT evaluation (`if-shell -F`,
+    which never spawns a process); it is not the same mechanism a spawned shell's
+    environment goes through, and the two do not behave alike.
     """
     return "\n".join([
         f"set -t {session} status off",
@@ -180,6 +204,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
         f"set -t {session} history-limit {int(history_limit)}",
         "set -g escape-time 0",
         "set -g remain-on-exit on",
+        f"bind -n {hotkey} run-shell 'charter frame-menu'",
         "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
         "",
@@ -197,6 +222,36 @@ def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[
     """
     return ["tmux", "-L", socket, "set-environment", "-t", session, _EXIT_PATH_ENV,
            status_path]
+
+
+def _session_id_env_argv(*, socket: str, session: str) -> list[str]:
+    """`set-environment`: makes *session* resolvable from its own `run-shell` calls.
+
+    `cmd_menu` and `cmd_action` (the hotkey bind's own action, and every menu item's own
+    action) both read `$CHARTER_SESSION_ID` back out of a `run-shell`-spawned process's
+    environment — the same out-of-band shape `_exit_path_env_argv` already uses for
+    `status_path`, and for the identical reason: this is what lets `conf_text`'s bind
+    stay a single, frame-agnostic line shared by every session on `SOCKET` (see its own
+    docstring) while still resolving the RIGHT frame at the moment the key fires.
+
+    Without this call, `run-shell` fired from a LATER frame sharing `SOCKET` does not
+    fall back to "no id" — it falls back to the FIRST frame's own id, silently. Verified
+    by hand against tmux 3.7c: a second session started on an already-running server,
+    `run-shell`'d with no override of its own, reported the FIRST frame's
+    `$CHARTER_SESSION_ID` (present in the SERVER's own starting process environment,
+    inherited from whichever `new-session` call happened to start it) rather than an
+    empty string — `show-environment -t <session>` confirmed the value was never tracked
+    per-session at all until a call exactly like this one ties it there explicitly. Left
+    unfixed, every frame after the first would open the FIRST frame's own menu and run
+    its actions against the wrong session's state.
+
+    The value IS the session's own name (`state.frame_id`'s own restricted alphabet —
+    see its docstring — so there is nothing here for this call's own text to sanitise),
+    which is why this hands the session right back to itself rather than taking a
+    separate value the way `_exit_path_env_argv` takes `status_path`.
+    """
+    return ["tmux", "-L", socket, "set-environment", "-t", session, "CHARTER_SESSION_ID",
+           session]
 
 
 def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
@@ -530,6 +585,30 @@ def cmd_launch(args) -> int:
         util.warn("charter frame: continuing without it — the exit code may not be "
                   "recorded for this frame")
 
+    # Ties this session to its own id BEFORE anything else can ask for it — the hotkey
+    # bind's action (`charter frame-menu`) and every menu item's own action (`charter
+    # frame-action <id>`) both resolve `$CHARTER_SESSION_ID` from a `run-shell`-spawned
+    # process's environment, and without this call a frame beyond the first sharing
+    # `SOCKET` would silently resolve the FIRST frame's id instead of its own (see
+    # `_session_id_env_argv`'s own docstring for what was verified by hand).
+    sid_cmd = _session_id_env_argv(socket=SOCKET, session=fid)
+    sid_set = subprocess.run(sid_cmd, env=env, capture_output=True, text=True, timeout=15)
+    if sid_set.returncode != 0:
+        _report_tmux_failure("carrying the frame id to its own hotkey menu", sid_cmd, sid_set)
+        util.warn("charter frame: continuing without it — the hotkey menu may not find "
+                  "this frame's own actions")
+
+    # The menu itself: what the hotkey actually opens. A single "Detach" entry — the
+    # spec's own words, "Detach is allowed and prints how to reattach" — proves the
+    # mechanism end to end (bind → menu → opaque id → real command) without inventing a
+    # feature this task was never asked to build. `-s fid` (not `-t`): `detach-client`'s
+    # `-s` targets every client attached to a SESSION, `-t` a single CLIENT — this frame
+    # normally has exactly one attached client, but `-s` is correct even if it ever has
+    # more than one.
+    menu.record(fid=fid, entries=[
+        ("Detach", ["tmux", "-L", SOCKET, "detach-client", "-s", fid]),
+    ])
+
     write_hook_cmd = _pane_died_write_hook_argv(socket=SOCKET, harness_pane=harness_pane)
     write_hook = subprocess.run(write_hook_cmd, env=env, capture_output=True, text=True, timeout=15)
     if write_hook.returncode != 0:
@@ -694,3 +773,36 @@ def cmd_launch(args) -> int:
         _report_tmux_failure("attaching to the frame", attach_cmd, attach)
         return attach.returncode
     return 0
+
+
+def cmd_menu(args) -> int:
+    """Open this frame's own menu. The hotkey bind's only action — see `conf_text`.
+
+    `args` is unused; this exists purely so `cli.py` has a handler to point `charter
+    frame-menu` (registered as a top-level command — see `menu.py`'s own docstring for
+    why not `frame menu`) at. `fid` is resolved from `$CHARTER_SESSION_ID`, carried
+    session-scoped via `_session_id_env_argv` rather than baked into the bind's own text
+    (see `conf_text`'s docstring for why that split is load-bearing, not incidental):
+    the SAME bind text is shared by every frame on `SOCKET`, so the frame it opens a menu
+    FOR has to be resolved here, at the moment the key actually fires, never earlier.
+    """
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    return subprocess.run(menu.menu_argv(fid, SOCKET)).returncode
+
+
+def cmd_action(args) -> int:
+    """Run one menu entry by its opaque id. The only path from a menu to a real command.
+
+    `args.action_id` is never anything but `a<N>` shaped text arriving on `charter
+    frame-action`'s own command line (see `menu.py`'s module docstring for why that is a
+    top-level command rather than `frame action`) — `menu.resolve` is the one place an id
+    turns back into the argv it names, and `subprocess.run` below takes that argv as a
+    LIST, never a shell string, so nothing an id could ever resolve to is re-parsed by
+    anything on the way to running.
+    """
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    argv = menu.resolve(fid, args.action_id)
+    if not argv:
+        util.err(f"charter frame-action: unknown action {args.action_id!r}")
+        return 2
+    return subprocess.run(argv).returncode

@@ -655,6 +655,23 @@ def _add_frame_parsers(sub) -> None:
     pn.add_argument("--session", dest="session", required=True)
     pn.set_defaults(func=lambda args: frame_panel.run(args.slot, args.session))
 
+    # Internal, same reason `panel` above is a TOP-LEVEL sibling of `frame` rather than
+    # nested under it: `_split_frame_argv` (below) treats `argv[0] == "frame"` as the
+    # launcher's own escape hatch and grafts EVERYTHING past it onto the harness's own
+    # verbatim argv before `argparse` ever gets a chance to route a subcommand — a
+    # `frsub = fr.add_subparsers(...)` nested under `fr` would never be reached, because
+    # `_split_frame_argv` runs first and unconditionally. `frame-menu` and
+    # `frame-action` are different literal tokens, so `_split_frame_argv` leaves them
+    # alone and ordinary top-level dispatch applies. Both are fired by tmux via
+    # `run-shell` (the hotkey bind in `conf_text`, and one menu item's own action built
+    # by `charter.frame.menu.menu_argv`) — never typed by an operator.
+    mn = sub.add_parser("frame-menu")
+    mn.set_defaults(func=commands_frame.cmd_menu)
+
+    act = sub.add_parser("frame-action")
+    act.add_argument("action_id")
+    act.set_defaults(func=commands_frame.cmd_action)
+
 
 def _add_harness_parser(sub) -> None:
     h = sub.add_parser("harness",

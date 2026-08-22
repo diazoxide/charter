@@ -35,7 +35,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import commands_frame, hooks, todos
-from charter.frame import notify, state
+from charter.frame import menu, notify, state
 
 from tests._isolation import PersonaIso, run_hook
 
@@ -264,6 +264,61 @@ class TmuxIntegration(unittest.TestCase):
                              f"the panel drifted to {height} rows after resizing to "
                              f"{cols}x{rows} — the hook did not hold")
 
+    # -- 5. Session-scoped id delivery for the hotkey menu --------------------------- #
+
+    def test_a_second_frames_own_id_does_not_leak_the_firsts(self):
+        """The exact bug `_session_id_env_argv` exists to close, verified against a
+        real server rather than only asserted about: a `run-shell` with NO explicit
+        `-t` of its own, fired against a session sharing this class's server, does not
+        fall back to "unset" — it falls back to whatever tmux resolves as "the current
+        session" absent one, which is NOT necessarily the session the caller meant
+        (confirmed by hand: it tracked whichever session was created most recently, not
+        the one named in the failing call). `cmd_launch` calls this for EVERY frame it
+        launches, so both sessions below get their own call — mirroring that — and
+        `sid-one` is seeded with a THIRD value neither call is expected to produce, so a
+        version of `_session_id_env_argv` that dropped its own `-t` would show up as
+        `sid-one` and `sid-two` BOTH reporting whichever session tmux's un-targeted
+        default happened to prefer, not their own two distinct ids.
+
+        `run-shell`, unlike `if-shell -F -t = ...` (`WheelUpPane`'s own idiom), needs a
+        target NAME here to inherit a session's own tracked environment at all — `-t =`
+        does not carry it (also verified by hand; see `conf_text`'s own docstring) — so
+        this targets each session by its literal name, matching what firing from a live
+        keypress inside that session's own pane does."""
+        tmp = tempfile.mkdtemp(prefix="charter-integ-sid-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        first_out = os.path.join(tmp, "first")
+        second_out = os.path.join(tmp, "second")
+
+        r1 = _tmux("new-session", "-d", "-s", "sid-one", "-x", "80", "-y", "24", "cat",
+                  env=dict(os.environ, CHARTER_SESSION_ID="neither-frames-own-id"))
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        r2 = _tmux("new-session", "-d", "-s", "sid-two", "-x", "80", "-y", "24", "cat")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+
+        # Both calls, in the order `cmd_launch` would issue them across two launches:
+        # the OLDER frame's own id first, seeded before the newer one ever existed.
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=SOCKET, session="sid-one")).returncode, 0)
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=SOCKET, session="sid-two")).returncode, 0)
+
+        _tmux("run-shell", "-t", "sid-one",
+             f"env | grep CHARTER_SESSION_ID > {first_out} 2>&1 || echo NONE > {first_out}")
+        _tmux("run-shell", "-t", "sid-two",
+             f"env | grep CHARTER_SESSION_ID > {second_out} 2>&1 || echo NONE > {second_out}")
+        time.sleep(0.5)
+
+        with open(first_out) as f:
+            self.assertEqual(f.read().strip(), "CHARTER_SESSION_ID=sid-one",
+                             "the OLDER frame's own hotkey menu must still resolve its "
+                             "own id after a second frame launches, not whichever "
+                             "session tmux would pick as \"current\" by default")
+        with open(second_out) as f:
+            self.assertEqual(f.read().strip(), "CHARTER_SESSION_ID=sid-two",
+                             "the second frame's own hotkey menu must resolve its own "
+                             "id, not fall through to whatever the server started with")
+
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
 class PanelIntegration(PersonaIso, unittest.TestCase):
@@ -420,6 +475,89 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
                          f"(stderr: {after.stderr!r})")
         self.assertEqual(after.stdout.strip(), "0",
                          "the panel died reading a corrupt version file")
+
+
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class MenuIntegration(PersonaIso, unittest.TestCase):
+    """`charter frame-action` end to end: a REAL subprocess, spawned by a REAL `tmux
+    run-shell` fired against a REAL session, resolving a menu entry whose LABEL is the
+    task brief's own hostile string — through `menu.menu_argv`'s exact id-lookup
+    mechanism, never a hand-simulated stand-in for it.
+
+    `display-menu` itself needs an ATTACHED CLIENT to render to at all (confirmed by
+    hand: `tmux display-menu -t <session> ...` against a session with none returns 1,
+    `"no current client"`, before ever looking at an item) — every other test in this
+    file, including this one, avoids attaching a client, so this drives the exact
+    command text `menu_argv` embeds for ONE item directly, the same way firing it from
+    inside a live `display-menu -t fid` would (see `menu_argv`'s own docstring for why
+    `-t fid` is what supplies that scoping normally).
+
+    Uses `sys.executable -m charter` rather than the bare `charter` text `menu_argv`
+    itself embeds: this developer machine's own `$PATH` may resolve `charter` to an
+    entirely different install than this checkout (confirmed on the machine this test
+    was written on), and `PanelIntegration` above avoids the identical trap the same
+    way, for `charter panel`."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.addCleanup(_tmux, "kill-server")
+        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
+                        .unlink(missing_ok=True))
+        (self.tmp / "charter.toml").write_text("")
+        self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
+        self.env.pop("CHARTER_HOME", None)
+
+    def test_a_hostile_label_never_reaches_what_the_resolved_action_runs(self):
+        fid = state.frame_id("menu-integ", os.getpid())
+        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "cat", env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # `_kill_pid` on the pane's OWN pid, not just `kill-server` (already in
+        # `setUp`): `_kill_pid`'s own docstring names the failure mode this closes —
+        # `kill-server` reliably ends the SERVER's acceptance of new commands but does
+        # not reliably reap a session's still-running pane process in time, which left
+        # this exact "cat" leaking past `kill-server` (confirmed by hand: `pgrep -f
+        # 'tmux -L charter-integration-test'` still matched after the first version of
+        # this test ran without this line).
+        pid = _tmux("display-message", "-p", "-t", fid, "#{pane_pid}").stdout.strip()
+        self.addCleanup(_kill_pid, pid)
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=SOCKET, session=fid)).returncode, 0)
+
+        tmp = tempfile.mkdtemp(prefix="charter-integ-menu-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        canary = os.path.join(tmp, "canary")
+        pwned = os.path.join(tmp, "pwned")
+        hostile_label = f'x" ; run-shell "touch {pwned}'
+
+        menu.record(fid=fid, entries=[
+            (hostile_label, [sys.executable, "-c",
+                             f"open({canary!r}, 'w').close()"]),
+        ])
+        action_id = menu.build(fid)[0][1]
+        self.assertRegex(action_id, r"^a[0-9]+$")
+
+        # The exact template `menu_argv` embeds for this item, `charter` swapped for
+        # `sys.executable -m charter` (see the class docstring) — everything else,
+        # including the absence of any label text, matches byte for byte.
+        real_command = menu.menu_argv(fid, SOCKET)[-1]
+        self.assertNotIn("pwned", real_command,
+                         "sanity: the hostile label must not have leaked into the "
+                         "action text this integration test is about to run for real")
+        action = f"{sys.executable} -m charter frame-action {action_id}"
+        r = _tmux("run-shell", "-t", fid, action)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not os.path.exists(canary):
+            time.sleep(0.2)
+
+        self.assertTrue(os.path.exists(canary),
+                        "the real, opaque-id-resolved action never ran — a real "
+                        "`charter frame-action` subprocess, given the real id and a "
+                        "real $CHARTER_SESSION_ID, must resolve the real stored argv")
+        self.assertFalse(os.path.exists(pwned),
+                         "the hostile LABEL text must never execute, even though it "
+                         "sat right next to the real id in the same menu table")
 
 
 if __name__ == "__main__":
