@@ -69,6 +69,29 @@ def load_local() -> dict:
     return _read(config.VAULTS_REGISTRY)
 
 
+def usable_vaults(half: dict) -> dict:
+    """The entries in one half of the registry that are vault entries at all.
+
+    A vault entry that is not an object is not a vault entry. `vaults.json` is COMMITTED
+    and hand-editable, and `provider_for` reached straight for `entry.get("provider")` —
+    so a string there raised `AttributeError` out of `doctor.check_vaults`, which runs
+    from the SessionStart hook and catches only `VaultError` (#347).
+
+    **The one place that decides what a half contains**, so a reader that *counts* entries
+    and a reader that *resolves* them cannot disagree about which ones exist. They did:
+    `load_registry` dropped the malformed entry while `doctor.check_vault_registry_
+    divergence` read the halves raw — which is both why it counted an entry the line above
+    it had just called ignored, and why it was handed the string it crashed on (#363).
+    Defending here rather than in each reader is the same single-source rule that put the
+    drop in `load_registry` in the first place; the mistake was having two implementations
+    of "what is in this file", not where the first one lived.
+
+    Nothing is hidden by the drop: `doctor` names what was dropped (see
+    :func:`malformed_shared`).
+    """
+    return {n: e for n, e in (half or {}).get("vaults", {}).items() if isinstance(e, dict)}
+
+
 def load_registry() -> dict:
     """The merged view every reader gets: shared as the base, local layered over it.
 
@@ -78,20 +101,9 @@ def load_registry() -> dict:
     """
     merged = {}
     shared, local = load_shared(), load_local()
-    for name, entry in shared.get("vaults", {}).items():
-        # A vault entry that is not an object is not a vault entry. `vaults.json` is
-        # COMMITTED and hand-editable, and `provider_for` reached straight for
-        # `entry.get("provider")` — so a string there raised `AttributeError` out of
-        # `doctor.check_vaults`, which runs from the SessionStart hook and catches only
-        # `VaultError`. Dropping it here rather than defending in each reader is the
-        # single-source rule: this function IS the merged view every reader gets.
-        # `doctor` names what was dropped (see `malformed_shared`), so nothing is hidden.
-        if not isinstance(entry, dict):
-            continue
+    for name, entry in usable_vaults(shared).items():
         merged[name] = json.loads(json.dumps(entry))          # deep copy, no aliasing
-    for name, entry in local.get("vaults", {}).items():
-        if not isinstance(entry, dict):
-            continue
+    for name, entry in usable_vaults(local).items():
         if name not in merged:
             merged[name] = json.loads(json.dumps(entry))
             continue
@@ -106,10 +118,15 @@ def load_registry() -> dict:
 
 def malformed_shared() -> list[str]:
     """Names in the COMMITTED half whose entry is not an object, and was therefore
-    dropped from the merged view. Never raises — a corrupt file reads as none."""
+    dropped from the merged view. Never raises — a corrupt file reads as none.
+
+    The complement of :func:`usable_vaults` rather than its own `isinstance` test, so the
+    names `doctor` reports as ignored are exactly the ones the merged view left out.
+    """
     try:
-        return sorted(n for n, e in load_shared().get("vaults", {}).items()
-                      if not isinstance(e, dict))
+        half = load_shared()
+        kept = usable_vaults(half)
+        return sorted(n for n in half.get("vaults", {}) if n not in kept)
     except VaultError:
         return []
 

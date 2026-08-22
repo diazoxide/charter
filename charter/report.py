@@ -510,14 +510,73 @@ def gh_available() -> bool:
     return p.returncode == 0
 
 
+#: A Markdown ATX heading opening the first line of a described report. Stripped before
+#: that line becomes an issue title, because a heading marker is a **block** marker — it
+#: was never part of the reporter's sentence — where backticks and bold are inline markup
+#: the reporter chose. Charter un-marks the line; it does not rewrite the words.
+#:
+#: The body of a report *is* Markdown, so opening with a heading is the natural thing to
+#: write, and #322 on this tracker is titled ``# `charter secret list` reports …`` because
+#: nothing removed it. The trailing group is CommonMark's *closed* form (``## Title ##``).
+#: The whitespace CommonMark requires after the marker is load-bearing here: without it,
+#: "#331 is still open" — an issue reference in the reporter's own sentence — would be
+#: read as a heading and silently lose the number.
+_ATX_HEADING = re.compile(r"^#{1,6}[ \t]+(.*?)[ \t]*#*[ \t]*$")
+
+#: The longest an issue title may be, ellipsis included. A forge allows far more; this is
+#: about the maintainer's issue list, where a title that wraps stops being scannable.
+_TITLE_MAX = 72
+
+#: The earliest index at which a word break is worth taking. Below it, breaking throws away
+#: more of the sentence than a tidy ending is worth, so charter cuts mid-word instead.
+#:
+#: Hand-rolled rather than :func:`textwrap.shorten` for exactly that case: `shorten`
+#: returns **only** the placeholder when the first word exceeds the width, so a first line
+#: that is one long unbroken token — a URL, a path, a stack frame — would arrive on the
+#: tracker as an issue titled "…". The obvious helper is wrong in the one case a floor is
+#: for, and it would have looked right in review.
+_BREAK_FLOOR = 40
+
+
 def title(rec: dict) -> str:
     """The upstream issue title. Crashes lead with exception type and subcommand so
-    duplicates collide visually in the issue list."""
+    duplicates collide visually in the issue list.
+
+    A *described* report has no exception to lead with, so its title is its first line —
+    un-marked and bounded at a word. That line is also what :func:`search_duplicates`
+    searches on, so a marker left in place degrades duplicate detection as well as the
+    title (#360).
+
+    The heading is deliberately **not** removed from the body. :func:`render` serves both
+    the Reporter's review and the issue body so that what is shown and what is sent cannot
+    drift (docs/adr/0003); dropping a line here would make the sent thing differ from the
+    approved thing, and would need `render` and this function to agree about which line
+    became the title. One repeated heading is the cheaper failure.
+    """
     p = rec["payload"]
     if p.get("exception_type"):
         return f"{p['exception_type']} in `charter {p.get('subcommand', '?')}`"
-    first = (p.get("text") or "").strip().splitlines()[0]
-    return first[:72] + ("…" if len(first) > 72 else "")
+    lines = (p.get("text") or "").strip().splitlines()
+    if not lines:
+        # `splitlines()` on empty or whitespace-only text is the EMPTY list, and the
+        # verbatim `[0]` raised `IndexError`. `commands_report._draft` refuses an empty
+        # body one layer up, so no CLI path reaches this — but `title` is called on stored
+        # records, and the one function whose job is to describe a report must never be the
+        # thing that raises.
+        return ""
+    first = lines[0].strip()
+    heading = _ATX_HEADING.match(first)
+    if heading:
+        first = heading.group(1).strip()
+    # Measured AFTER the marker is stripped: a line whose words fit once the "# " is gone
+    # must not be truncated for two characters charter itself removed.
+    if len(first) <= _TITLE_MAX:
+        return first
+    cut = first[:_TITLE_MAX - 1]                       # leave room for the ellipsis
+    space = cut.rfind(" ")
+    if space >= _BREAK_FLOOR:
+        cut = cut[:space]
+    return cut.rstrip() + "…"
 
 
 def search_duplicates(rec: dict) -> list[dict]:
