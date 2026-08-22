@@ -240,6 +240,17 @@ def _parser():
     return cli.build_parser()
 
 
+def _shell_syntax(argv: str) -> bool:
+    """Would a shell read anything in *argv* as syntax?
+
+    Its own function because two callers need the same answer and they need it for
+    different purposes: :func:`_tokens` refuses on it, and :func:`_dispatch` has to know
+    *which* of `_tokens`' two refusals fired to say whose defect it is (#321). A second
+    ``set(argv) & _SHELLISH`` at the second call site is how the two would drift.
+    """
+    return bool(argv) and bool(set(argv) & _SHELLISH)
+
+
 def _tokens(argv: str, parser=None) -> list[str] | None:
     """*argv* as a charter subcommand's tokens, or ``None`` if it is not one.
 
@@ -247,10 +258,15 @@ def _tokens(argv: str, parser=None) -> list[str] | None:
     syntax, and any first token that is not a registered subcommand. `charter` is implied
     and must not be written, so an entry cannot reach a different binary.
 
+    They are not the same defect, and :func:`_dispatch` tells them apart before it reports
+    one. Shell syntax can never run on any machine in any version; an unregistered first
+    token is a command *this* charter does not have. ``None`` is the right answer to both,
+    which is exactly why the reason cannot be read off it.
+
     *parser* is optional and is threaded through rather than rebuilt because building one
     is ~6ms and this module runs on the `doctor` and SessionStart paths, once per entry.
     """
-    if not argv or set(argv) & _SHELLISH:
+    if not argv or _shell_syntax(argv):
         return None
     tokens = argv.split()
     if not tokens:
@@ -513,6 +529,11 @@ def _dispatch(argv: str) -> int | None:
     command a ``check:`` may name at all (:func:`probeable`, #317). Each returns ``None``,
     and each records its own reason, because the entry a reader has to go and fix is a
     different entry in each case.
+
+    The first of those is really two, and reading its bare ``None`` as one was #321.
+    Shell syntax is the entry's defect and reports as such; an unregistered first token is
+    this machine's news about itself and keeps ``_NOT_RUN``. So the reason is taken from
+    :func:`_shell_syntax` rather than from the ``None``, which cannot carry it.
     """
     global _depth, _refused
     if not _depth:
@@ -525,6 +546,18 @@ def _dispatch(argv: str) -> int | None:
     parser = _parser()
     tokens = _tokens(argv, parser)
     if tokens is None:
+        if _shell_syntax(argv):
+            # `_tokens` refuses two things and this is the one that is the ENTRY's defect:
+            # a `check:` carrying shell syntax can never run — not here, not on any machine,
+            # not in any version — so "did not run here" sends its author to look at a
+            # laptop that has nothing wrong with it (#321). The other refusal, a first
+            # token this CLI does not register, really is a fact about here: an entry
+            # written against a charter this one is not. It keeps `_NOT_RUN`.
+            #
+            # Same reason as an unlisted command rather than a sixth string, because it is
+            # the same finding — the entry names something a probe cannot run — and the fix
+            # is the same one: pick from the short list.
+            _refused = _UNLISTED
         return None
     if probing():
         _refused = _PROBES
