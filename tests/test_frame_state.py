@@ -44,6 +44,19 @@ class Version(PersonaIso, unittest.TestCase):
         self.assertEqual(state.version("never-bumped"), "0")
         self.assertFalse(state.frame_dir("never-bumped").exists())
 
+    def test_a_non_utf8_version_file_degrades_to_the_sentinel_rather_than_raising(self):
+        """Fix round 2, item 1: `read_text()` on bytes that are not valid UTF-8 raises
+        `UnicodeDecodeError` — a `ValueError` subclass, never caught by an `except
+        OSError` alone. `panel._tick` reads this function directly with nothing of its
+        own guarding the call, so an uncaught decode error here used to reach a real
+        panel's run loop and kill the pane — exactly the failure this module's own
+        docstring already promised could not happen ("nothing here raises... a missing
+        frame answers with the sentinel"). A corrupt file is treated the same as a
+        missing one: the sentinel, not an exception."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "version").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+        self.assertEqual(state.version("f-1"), "0")
+
     def test_reap_then_version_does_not_resurrect_the_directory(self):
         """If `version()` ever called `bump()` on a miss, this would fight `reap()`
         forever: reap deletes, the next poll recreates, reap deletes again."""

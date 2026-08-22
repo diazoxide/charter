@@ -66,15 +66,31 @@ _DEFAULT_ROWS = 24
 
 
 def should_redraw(seen: str, fid: str) -> bool:
-    """Has the frame changed since *seen*? Never raises: a panel that dies checking a
-    version file leaves a hole in the frame — the same failure `state.version` and
-    `slots.render` are already built not to cause, so this must not reintroduce it on
-    top of them.
+    """Has the frame changed since *seen*?
+
+    The plain, PUBLIC form of the question this module's whole run loop answers — part
+    of `panel.py`'s own interface (the plan's Task 7 contract names it alongside `run`)
+    and the direct oracle several tests assert against, including the one pinning
+    `_tick`'s read-before-paint ordering (`Tick.test_a_bump_landing_during_the_paint_is_
+    not_marked_seen`). `_tick` itself does NOT call this: it needs the actual current
+    version anyway, to remember as the next `seen`, and calling this first would mean
+    two `state.version` reads to answer one question — see `_tick`'s own docstring for
+    why it inlines the equivalent comparison against a value it already has. This
+    function exists for every OTHER caller: tests that want a yes/no without needing
+    the value, and any future one with the same need.
+
+    Trusts `state.version` never to raise, the same way `_paint` trusts `slots.render`
+    — no `try/except` here duplicating a guarantee the callee already makes. That
+    guarantee used to be incomplete (a non-UTF-8 version file escaped `state.version`'s
+    own `except OSError` and crashed whichever caller reached it) and this function's
+    own `try/except Exception: return True` was, for a while, the only thing standing
+    between that bug and a live panel — which is exactly the kind of promise this
+    module must not make unless the production path actually goes through it. Fixed at
+    the source instead (`state.version`'s own docstring), so every caller — this
+    function, `_tick`, anything future — is safe without needing its own copy of the
+    guard.
     """
-    try:
-        return state.version(fid) != seen
-    except Exception:
-        return True
+    return state.version(fid) != seen
 
 
 def _rows() -> int:

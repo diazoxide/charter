@@ -77,6 +77,7 @@ did before either hook existed. See `_pane_died_teardown_hook_argv`'s own docstr
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 
@@ -254,6 +255,19 @@ def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str
 #: own `-v`/`-h` split direction already encodes for the same slots, read here rather
 #: than re-derived a third way.
 _RESIZE_FLAG = {"top": "-y", "bottom": "-y", "left": "-x", "right": "-x"}
+
+#: Every real pane id tmux's own `-P -F '#{pane_id}'` has ever reported (`%<digits>`,
+#: confirmed against tmux 3.7c and never observed otherwise). Checked before a value
+#: read off `split-window`'s stdout is trusted as a pane id, because `_resize_hook_argv`
+#: interpolates it directly into a hook ACTION STRING tmux later re-parses as a command
+#: line — the exact construction the module docstring's "constant string" section bans
+#: for `status_path`, for the same reason: something interpolated into an action must be
+#: safe BY CONSTRUCTION, not merely safe because the one program that currently produces
+#: it (tmux itself) happens to be well-behaved. A value that fails this check is treated
+#: the same as `split-window` reporting no id at all (see the empty-string check right
+#: below this) — that one panel simply gets no resize-hook entry, rather than gambling
+#: that whatever the string actually was cannot corrupt the action tmux re-parses.
+_PANE_ID_RE = re.compile(r"%\d+")
 
 
 def _resize_hook_argv(*, socket: str, harness_pane: str, panes: dict[str, str]) -> list[str]:
@@ -574,10 +588,23 @@ def cmd_launch(args) -> int:
                     _report_tmux_failure("drawing a panel", cmd, p)
                     continue
                 pane_id = p.stdout.strip()
-                if pane_id:
+                if pane_id and _PANE_ID_RE.fullmatch(pane_id):
                     panes[slot] = pane_id
 
-            if panes:
+            if panes and v < tmuxctl.RESIZE_HOOK_FLOOR:
+                # Below RESIZE_HOOK_FLOOR, `window-resized` is not a hook name THIS
+                # tmux recognises at all — `set-hook` fails with `invalid option:
+                # <name>` for any name it does not know (see RESIZE_HOOK_FLOOR's own
+                # docstring for exactly what was, and was not, confirmed by hand) —
+                # skip the attempt rather than printing that confusing text on every
+                # single launch. One quiet, honest note instead, naming the real
+                # consequence (item 4's own standard: every degrade in this launcher
+                # says what it costs).
+                util.warn(f"charter frame: tmux {v[0]}.{v[1]} predates the "
+                         f"resize-recovery hook (needs "
+                         f"{tmuxctl.RESIZE_HOOK_FLOOR[0]}.{tmuxctl.RESIZE_HOOK_FLOOR[1]}+)"
+                         f" — panels may drift out of shape if this terminal is resized")
+            elif panes:
                 # Only once any panel actually exists — a resize hook with nothing to
                 # resize would just be a wasted `set-hook` call, and (per the module
                 # docstring's "belt and braces" framing) every pane already measures its
@@ -589,6 +616,8 @@ def cmd_launch(args) -> int:
                                         timeout=15)
                 if resize.returncode != 0:
                     _report_tmux_failure("installing the resize hook", resize_cmd, resize)
+                    util.warn("charter frame: continuing without it — panels may "
+                             "drift out of shape if this terminal is resized")
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —

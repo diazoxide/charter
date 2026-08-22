@@ -14,6 +14,23 @@ import subprocess
 #: model uses both. Floor at the higher one and degrade below it rather than refuse.
 FLOOR = (3, 2)
 
+#: The first tmux release with a `window-resized` hook AT ALL — the VERSION is read
+#: from tmux's own published CHANGES file (github.com/tmux/tmux, "CHANGES FROM 3.2a
+#: TO 3.3"): "Add a window-resized hook which is fired when the window is actually
+#: resized which may be later than the client resize." (No pre-3.3 tmux binary was
+#: available on this machine to install one directly and confirm it refuses the name;
+#: the ERROR SHAPE below — "invalid option: <name>", rc 1 — WAS confirmed by hand
+#: against a real tmux 3.7c, using a fabricated hook name it does not recognise, which
+#: is generic `set-hook` argument-parsing text rather than anything specific to this
+#: one hook's name.) HIGHER than `FLOOR` itself — not folded into it — because an
+#: operator on 3.2 or 3.2a is explicitly still allowed to launch (`below_floor_message`
+#: warns, does not refuse) and would otherwise see `set-hook … window-resized …` fail
+#: with that same "invalid option" text on every single launch. Raising `FLOOR` itself
+#: would refuse the whole frame over a gap that only costs cosmetic resize-drift, not
+#: the menu `FLOOR` protects — the two floors mean two different things and must stay
+#: two constants.
+RESIZE_HOOK_FLOOR = (3, 3)
+
 _VERSION = re.compile(r"^tmux (\d+)\.(\d+)")
 
 

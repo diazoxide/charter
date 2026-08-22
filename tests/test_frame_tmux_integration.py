@@ -305,6 +305,39 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
                                "#{pane_dead}").stdout.strip(), "0",
                          "the pane died sometime after its first paint")
 
+    def test_a_corrupt_version_file_does_not_kill_a_live_panel(self):
+        """Fix round 2, item 1: a non-UTF-8 `version` file used to reach a real panel's
+        run loop as an uncaught `UnicodeDecodeError` and kill the pane — confirmed by
+        hand before this fix (`#{pane_dead}` reported `1`, status `1`, the traceback
+        visible in the pane itself). `remain-on-exit` is deliberately NOT armed for
+        this session (see `setUp`): a crash here means the whole SESSION vanishes, not
+        just the pane, so the `display-message` calls below would fail outright
+        ("session not found") rather than merely answering `pane_dead=1` — a stronger
+        signal than checking the pane alone would give.
+        """
+        fid = state.frame_id("panel-integ-corrupt", os.getpid())
+        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
+        r = _tmux("new-session", "-d", "-s", "panel-corrupt", "-x", "40", "-y", "5",
+                  "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        time.sleep(1)
+        alive = _tmux("display-message", "-p", "-t", "panel-corrupt", "#{pane_dead}")
+        self.assertEqual(alive.returncode, 0, "the panel never even started")
+        self.assertEqual(alive.stdout.strip(), "0")
+
+        frame_dir = state.frame_dir(fid, create=True)
+        (frame_dir / "version").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+
+        time.sleep(1)
+        after = _tmux("display-message", "-p", "-t", "panel-corrupt", "#{pane_dead}")
+        self.assertEqual(after.returncode, 0,
+                         "the session vanished — the panel crashed reading the "
+                         "corrupt version file, and remain-on-exit is not armed here "
+                         f"(stderr: {after.stderr!r})")
+        self.assertEqual(after.stdout.strip(), "0",
+                         "the panel died reading a corrupt version file")
+
 
 if __name__ == "__main__":
     unittest.main()

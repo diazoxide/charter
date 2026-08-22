@@ -724,6 +724,24 @@ class Launch(PersonaIso, unittest.TestCase):
         _launch(fake)
         self.assertFalse(any("window-resized" in c for c in fake.calls))
 
+    def test_a_pane_id_of_the_wrong_shape_is_never_interpolated_into_the_resize_hook(self):
+        """Fix round 2, item 3: `_resize_hook_argv` interpolates the pane id directly
+        into a hook ACTION STRING tmux later re-parses as a command line — the exact
+        construction the module docstring's "constant string" section bans for
+        `status_path`, for the same reason: something interpolated into an action must
+        be safe BY CONSTRUCTION, not merely safe because tmux happens to always report
+        `%<digits>` today. A value of any other shape must be treated the same as no id
+        at all — that one slot gets no resize-hook entry, and every OTHER (validly
+        shaped) slot still does."""
+        fake = _FakeTmux(exit_code=0,
+                         panel_pane_ids={"top": "not-a-pane-id", "bottom": "%12"})
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        resize_cmd = next(c for c in fake.calls if "window-resized" in c)
+        action = resize_cmd[-1]
+        self.assertNotIn("not-a-pane-id", action)
+        self.assertIn("%12", action)
+
     def test_a_failed_resize_hook_install_is_reported_but_not_fatal(self):
         """Same "report, don't kill an already-running pane" treatment every other
         cosmetic tmux command in this launcher gets (correction 2) — every pane already
@@ -736,6 +754,38 @@ class Launch(PersonaIso, unittest.TestCase):
             rc = _launch(fake)
         self.assertEqual(rc, 0)
         self.assertTrue(any("resize hook" in m for m in buf), buf)
+
+    def test_a_failed_resize_hook_install_names_its_consequence(self):
+        """Fix round 2, item 4: `_report_tmux_failure` prints the command and tmux's
+        own stderr, but not what the failure COSTS the operator — every other degrade
+        in this launcher (`source-file`, `set-environment`) pairs its failure report
+        with a `util.warn` naming the consequence; the resize hook's own failure was
+        missing that second half."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"},
+                         resize_hook_rc=1)
+        buf = []
+        with mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("continuing without it" in m and "drift" in m for m in buf),
+                        buf)
+
+    def test_the_resize_hook_is_skipped_quietly_below_its_own_version_floor(self):
+        """Fix round 2, item 5: `window-resized` was added in tmux 3.3
+        (`tmuxctl.RESIZE_HOOK_FLOOR`) — ABOVE `tmuxctl.FLOOR` (3.2), a version this
+        launcher explicitly still allows to launch (degraded, not refused — see
+        `test_below_the_tmux_floor_degrades_instead_of_refusing`). Below
+        RESIZE_HOOK_FLOOR the hook must never even be ATTEMPTED — confirmed by hand
+        that installing it on an unrecognised hook name fails with `invalid option:
+        window-resized` — one quiet note instead, naming the real version gap."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
+        buf = []
+        with mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake, version=(3, 2))
+        self.assertEqual(rc, 0)
+        self.assertFalse(any("window-resized" in c for c in fake.calls),
+                         "the hook must not even be attempted below its own floor")
+        self.assertTrue(any("3.2" in m and "resize" in m for m in buf), buf)
         self.assertTrue(any("attach" in c for c in fake.calls))
 
     def test_below_the_tmux_floor_degrades_instead_of_refusing(self):

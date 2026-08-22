@@ -140,13 +140,26 @@ def version(fid: str) -> str:
     rather than creating one by calling :func:`bump`. Doing that on a read would make
     every panel's poll resurrect a directory :func:`reap` had just deleted, and the two
     would fight forever over whether the frame still exists.
+
+    ``except (OSError, ValueError)``, not just ``OSError``: a version file holding bytes
+    that are not valid UTF-8 makes ``read_text()`` raise ``UnicodeDecodeError`` — a
+    ``ValueError`` subclass, never caught by ``OSError`` alone — and this module's own
+    docstring already promises "nothing here raises... a missing frame answers with the
+    sentinel rather than an exception." A panel polls this function several times a
+    second and has nothing of its own guarding the call (`panel._tick` reads it
+    directly); an uncaught decode error here used to reach the run loop uncaught and
+    kill the pane it was drawn in — precisely the hole this whole module exists to
+    close, just reached through content corruption rather than a missing file.
+    ``exit_code`` below already caught this shape (``int()`` raises ``ValueError`` for
+    unparseable text, which happens to catch a decode error too); this brings
+    ``version`` in line with it rather than leaving the two read paths inconsistent.
     """
     d = frame_dir(fid)
     if d is None:
         return "0"
     try:
         return (d / "version").read_text().strip() or "0"
-    except OSError:
+    except (OSError, ValueError):
         return "0"
 
 
