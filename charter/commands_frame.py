@@ -64,6 +64,14 @@ teardown hook — sharing no text with it — still fired and ended the session 
 Belt and braces over the constant-action fix above: it means a *future* bug in the write
 hook's own construction can degrade to "the wrong exit code was recorded" and never
 regress all the way back to "the session never ends."
+
+**The two hooks must be installed in this order — write, then teardown — and that is
+load-bearing, not incidental.** Verified against tmux 3.7c: an UNINDEXED `set-hook -p -t
+<pane> pane-died '<action>'` call does not overwrite index 0 of an existing hook array;
+it REPLACES THE WHOLE ARRAY, silently deleting `[1]` if it was already there. Installing
+the write hook second would wipe out the teardown hook the moment it lands — reproduced
+end to end by swapping the two `cmd_launch` calls: the session hung exactly the way it
+did before either hook existed. See `_pane_died_teardown_hook_argv`'s own docstring.
 """
 
 from __future__ import annotations
@@ -215,7 +223,22 @@ def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
 def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`pane-died[1]`: ends the session. Nothing else — see the module docstring's
     "Teardown is its own hook" section for why this is never combined with the write
-    hook above."""
+    hook above.
+
+    **Must be installed AFTER `_pane_died_write_hook_argv`, never before — this is not
+    a style preference, it is the entire fix.** Verified by hand against tmux 3.7c: an
+    UNINDEXED `set-hook -p -t <pane> pane-died '<action>'` call does not merely overwrite
+    index 0 of an existing array — it REPLACES THE WHOLE ARRAY, silently deleting any
+    `[1]` that was already there. So installing this hook first and the write hook
+    second wipes teardown before the harness ever runs, and the exact hang this pair of
+    hooks exists to close comes back — reproduced end to end (`RESULT: TIMEOUT`, session
+    left attached) by swapping the two calls in `cmd_launch`. `cmd_launch`'s own call
+    order (write, then this one) is the only thing enforcing the requirement; nothing in
+    the type system does, which is why it is pinned by a dedicated ordering test
+    (`Launch.test_the_write_hook_is_installed_before_the_teardown_hook`) as well as by
+    `tests/test_frame_tmux_integration.py`'s own test of this exact array-replacement
+    behaviour against a real server.
+    """
     return ["tmux", "-L", socket, "set-hook", "-p", "-t", harness_pane, "pane-died[1]",
            "kill-session"]
 
@@ -438,6 +461,7 @@ def cmd_launch(args) -> int:
 
     attach = None
     attach_cmd = None
+    refused_to_attach = False
     if code is None:
         if teardown_hook.returncode != 0:
             # Refuse to attach rather than risk it: without the teardown hook, a crash
@@ -446,6 +470,7 @@ def cmd_launch(args) -> int:
             # exists to close, just moved later and made permanent for this frame. The
             # harness keeps running (it was already started, detached); the operator can
             # still attach manually and accept that risk themselves.
+            refused_to_attach = True
             util.err("charter frame: refusing to attach — the session-teardown hook "
                      "failed to install, so a crash later would block `attach` forever "
                      "with nothing to end the session. The harness is still running, "
@@ -493,6 +518,12 @@ def cmd_launch(args) -> int:
     state.reap(live_after)
     if code is not None:
         return code
+    if refused_to_attach:
+        # Nonzero, deliberately distinct from the `still live` detach path below: the
+        # harness never ran interactively and charter has no way to learn its real exit
+        # code, so a script or `&&` chain must see this as a failure rather than the
+        # quiet success an operator's own deliberate detach is allowed to be.
+        return 1
     if fid in live_after:
         # Detach, not completion — the session tmux still lists is this frame's own.
         # Silence here is exactly what the spec calls out: "an agent surviving a closed

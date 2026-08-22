@@ -113,6 +113,15 @@ class PaneDiedHooks(unittest.TestCase):
         self.assertIn("pane-died", cmd)
         self.assertNotIn("pane-died[1]", cmd)
 
+    def test_the_write_hook_is_scoped_to_the_pane_not_the_whole_session(self):
+        """`-p` is what makes this a PANE hook rather than a session-wide one — verified
+        against tmux 3.7c what dropping it costs: without `-p`, `pane-died` fires for
+        EVERY pane in the session, so a decorative PANEL exiting (77, say) writes 77
+        into the harness's own exit-status file, and the operator sees a panel's exit
+        status reported as their agent's."""
+        cmd = commands_frame._pane_died_write_hook_argv(socket="charter", harness_pane="%9")
+        self.assertIn("-p", cmd)
+
     def test_the_write_hook_action_is_constant(self):
         """No operator- or plane-derived string is ever embedded in this text — the
         exact bug that let a plane root with a literal `'` in it hang silently
@@ -194,6 +203,13 @@ class QueryPaneDeadStatus(unittest.TestCase):
         return mock.patch(
             "charter.commands_frame.subprocess.run",
             return_value=subprocess.CompletedProcess([], rc, stdout=stdout, stderr=""))
+
+    def test_the_unknown_death_sentinel_is_not_zero(self):
+        """Every other test in this class refers to `_UNKNOWN_DEATH_CODE` symbolically,
+        which pins nothing about its actual VALUE — and `0` is precisely the fabricated
+        silent success this whole module exists to rule out. A pane confirmed dead with
+        no readable status must never be reported as if it exited cleanly."""
+        self.assertNotEqual(commands_frame._UNKNOWN_DEATH_CODE, 0)
 
     def test_a_dead_pane_returns_its_status(self):
         with self._dm("1:42"):
@@ -433,11 +449,30 @@ class Launch(PersonaIso, unittest.TestCase):
         time the hook could possibly fire."""
         fake = _FakeTmux(exit_code=0)
         _launch(fake)
-        names = [c[3] if len(c) > 3 else "" for c in fake.calls]
         env_idx = next(i for i, c in enumerate(fake.calls) if "set-environment" in c)
         hook_idx = next(i for i, c in enumerate(fake.calls)
                        if "set-hook" in c and "pane-died[1]" not in c)
         self.assertLess(env_idx, hook_idx)
+
+    def test_the_write_hook_is_installed_before_the_teardown_hook(self):
+        """Load-bearing, not incidental — see `_pane_died_teardown_hook_argv`'s own
+        docstring. Verified against tmux 3.7c: an UNINDEXED `set-hook pane-died ...`
+        call does not merely overwrite index 0 of an existing hook array, it REPLACES
+        THE WHOLE ARRAY — so installing the write hook (unindexed) AFTER the teardown
+        hook (`pane-died[1]`) silently deletes the teardown hook the moment it lands,
+        and the hang both hooks together exist to close comes back. Reproduced end to
+        end by swapping the two `cmd_launch` calls: `RESULT: TIMEOUT`, session left
+        attached. This test pins the ORDER `cmd_launch` issues the two commands in;
+        `tests/test_frame_tmux_integration.py` pins the real-tmux array-replacement
+        behaviour the order exists to work around."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        write_idx = next(i for i, c in enumerate(fake.calls)
+                         if "set-hook" in c and "pane-died[1]" not in c)
+        teardown_idx = next(i for i, c in enumerate(fake.calls) if "pane-died[1]" in c)
+        self.assertLess(write_idx, teardown_idx,
+                        "the write hook must be installed BEFORE the teardown hook, or "
+                        "installing teardown wipes it out — see the docstring above")
 
     def test_the_recorded_exit_code_wins_over_a_zero_from_attach(self):
         """The whole module's reason to exist: an attached `tmux attach` (like
@@ -562,12 +597,17 @@ class Launch(PersonaIso, unittest.TestCase):
         would leave `attach` blocked forever with nothing to end the session — the same
         hang the eager check exists to close, just moved later and made permanent for
         this frame. Refusing to attach is the safe choice; the harness keeps running,
-        detached."""
+        detached.
+
+        The return code must be NONZERO, not the `0` a deliberate operator detach
+        returns below: the harness never ran interactively and charter has no way to
+        learn its real exit code, so a script or `&&` chain must see this launch as
+        having failed, not quietly succeeded."""
         fake = _FakeTmux(teardown_hook_rc=1, still_live=True)
         buf = []
         with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
             rc = _launch(fake)
-        self.assertEqual(rc, 0)
+        self.assertNotEqual(rc, 0)
         self.assertTrue(any("refusing to attach" in m for m in buf),
                         f"no refusal message: {buf}")
         self.assertFalse(any("attach" in c for c in fake.calls),
