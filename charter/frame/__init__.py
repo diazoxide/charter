@@ -8,5 +8,6 @@ parses or draws the harness's pane. ADR 0018.
 from __future__ import annotations
 
 from . import layout
+from . import tmuxctl
 
-__all__ = ["layout"]
+__all__ = ["layout", "tmuxctl"]
