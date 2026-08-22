@@ -239,6 +239,14 @@ class OnePasswordProvider(VaultProvider):
         and drop this field, and silently losing a credential somebody believes they
         stored is worse than failing.
         """
+        # Three `op item get` calls happen below — here, in `_item_present`, and in
+        # `_existing_ids` — all fetching the SAME document, which the first one already
+        # holds in full. That redundancy is why #354 was reachable at all: three chances
+        # to be rate-limited on the path where being rate-limited is most expensive, and
+        # ids that come from a different fetch than the values they are paired with.
+        # Collapsing them into one read is #355; it is deliberately not done here, because
+        # its correctness lives in the `op item edit`/`item create` round trip that no
+        # machine in this project can exercise against a real vault.
         fields = self._fields(reveal=True)
         fields[key] = value
         self._write(fields, creating=fields is not None and not self._item_present())
@@ -293,8 +301,25 @@ class OnePasswordProvider(VaultProvider):
         return title in self._list_items()
 
     def _item_present(self) -> bool:
+        """Whether the item exists — ``False`` only when that is PROVEN (#354).
+
+        This chooses between `op item create` and `op item edit`, and it used to be
+        `return proc.returncode == 0`. `op item get` exits non-zero both for "there is no
+        such item" and for every way a read can fail, so a rate limit read as *absent* and
+        charter created an item whose title was already taken. 1Password permits duplicate
+        titles, so nothing refused it: the vault ends up holding two items called
+        `charter-<vault>`, `op item get <title>` can no longer say which one is meant, and
+        the vault stays unreadable until a human deletes one. Worse than the renumbering
+        in :meth:`_existing_ids`, and from the same swallow.
+
+        Absence is proven the way #322 taught: ask this vault's own identity to list the
+        vault, untagged because an adopted item carries no charter tag. Not in the listing
+        means not there. A listing that fails is the answer, and propagates.
+        """
         proc = self._run(self._argv("item", "get", self.op_item,
                                     "--vault", self.op_vault, "--format", "json"))
+        if proc.returncode != 0 and self.op_item in self._list_items(tagged=False):
+            raise self._fail(f"reading vault '{self.name}'", proc)
         return proc.returncode == 0
 
     def _fields(self, reveal: bool = False) -> dict:
@@ -367,15 +392,32 @@ class OnePasswordProvider(VaultProvider):
         Adoption must be non-destructive: a field charter did not create carries an id
         1Password generated, and rewriting it to the key name on the next write would
         mutate an identifier the user never chose on an item charter does not own.
+
+        Both failures below used to `return {}` (#354). That is the swallow #322 was about,
+        arriving as a silent MUTATION rather than a false diagnosis: `{}` here does not
+        report anything, it tells :meth:`_write` there are no ids to keep, and every field
+        of the adopted item is renumbered on the next write while `set` returns success.
+        A rate limit is enough — no race with another writer required.
+
+        Unlike :meth:`_fields` and :meth:`_item_present`, there is nothing to prove here
+        and so no listing to make. This runs only from `_write(creating=False)`, which
+        means presence was just established, so no non-zero exit is a legitimate "no item"
+        — every one of them is a failed read. If the item did vanish in between, raising
+        names the read that failed instead of letting the `item edit` fail more obscurely.
+
+        The parse is refused for the same reason and not a weaker one: `_fields` already
+        raises on a document it cannot read, and the same bytes must not get two different
+        answers. That the failure is charter's inability to READ the answer rather than
+        1Password's inability to give one still makes it a failure, never an absence.
         """
         proc = self._run(self._argv("item", "get", self.op_item, "--vault", self.op_vault,
                                     "--format", "json"))
         if proc.returncode != 0:
-            return {}
+            raise self._fail(f"reading vault '{self.name}'", proc)
         try:
             doc = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            return {}
+        except json.JSONDecodeError as e:
+            raise VaultError(f"could not parse 1Password item '{self.op_item}': {e}")
         out = {}
         for f in doc.get("fields") or []:
             name = _field_name(f)
