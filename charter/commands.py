@@ -921,6 +921,26 @@ def _as_rule(pattern: str) -> str:
     return f"Bash({p})"
 
 
+def _say_if_uneven(wrote: bool, refused: bool) -> None:
+    """Say so when one command left the rule in force under some harnesses and not others.
+
+    The refusal to touch a malformed file is per-harness, not per-command: the caller goes
+    on to the next harness, so a `✗` beside a `✓` means one invocation left the plane
+    holding the rule under opencode and not under Claude Code. An operator who sees the `✗`
+    reads it as "nothing was written" (#369), and a re-run after the fix then makes the
+    other harness's copy a duplicate write rather than a first one.
+
+    Making the command all-or-nothing is a two-phase apply across three file formats with
+    no rollback primitive — a design change, and not this one. Naming what actually
+    happened costs nothing and is true today. Shared by both verbs so `ask` and `allow`
+    cannot come to describe the same half-write differently.
+    """
+    if wrote and refused:
+        util.warn("  The rule landed UNEVENLY — it is in force under the harnesses ticked "
+                  "above and NOT under the one refused, from this one command. Fix that "
+                  "file and re-run; the harnesses that already have it will say so.")
+
+
 def _refuse_unexpressible(pattern: str) -> str | None:
     """Why *pattern* cannot be written as a rule at all, or ``None``.
 
@@ -982,7 +1002,13 @@ def add_permission_rule(root: Path, rule: str, bucket: str,
     command now asks each registered harness to write its own file in its own syntax,
     and this is Claude Code's half. Refuses a malformed file rather than repairing it,
     and a `permissions` or bucket of the wrong type is somebody's deliberate structure —
-    charter reports it and stops.
+    charter reports it and writes nothing HERE.
+
+    "Writes nothing here" is the whole of the promise, and the docstring used to overstate
+    it as "reports it and stops" (#369). The refusal is per-harness: the caller goes on to
+    the next one, so a malformed Claude Code file leaves the rule in force under opencode
+    and absent under Claude Code from a single command. That is worth knowing at this level
+    because it is what the callers have to say out loud.
 
     Parameterised over the bucket when `guard allow` arrived: `ask` and `allow` are the
     same job with opposite verbs, and two copies of this function would eventually
@@ -1110,6 +1136,7 @@ def cmd_guard_allow(args) -> int:
                       "just you. Use `--local` for a rule that is yours alone.")
         util.info("  charter's own guards are unaffected: an allow rule relaxes the HOST's "
                   "prompt, never the secret, credential or plane-root denials.")
+    _say_if_uneven(wrote, rc == 1)
     return rc
 
 
@@ -1167,6 +1194,7 @@ def cmd_guard_ask(args) -> int:
             util.info("  These files are committed, so the rule applies to everyone on this "
                       "repo — no sync step, and nothing that can drift (ADR 0014).")
         _warn_if_shadowing(registry.get(registry.CLAUDE_CODE).ask_rule(pattern))
+    _say_if_uneven(wrote, rc == 1)
     return rc
 
 

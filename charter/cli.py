@@ -255,10 +255,23 @@ def build_parser() -> argparse.ArgumentParser:
     vsub = ver.add_subparsers(dest="version_cmd")
     ver.set_defaults(func=commands.cmd_version)     # bare `charter version` = show
 
+    # The harness names are DERIVED, never written down. `charter guard` writes every
+    # registered harness — there is no `detect()` gate on purpose, because `detect()`
+    # answers "am I running inside this harness right now" rather than "does this team use
+    # it", and gating on it would make a rule's reach depend on which harness happened to
+    # type the command (ADR 0014: no sync step, nothing that can drift). The help said one
+    # file while the command wrote three, so the claim moved to match (#369) — and reading
+    # the registry rather than listing it here keeps this from being one more place to
+    # remember the day a harness is added, which `harness/registry.py` warns about.
+    from .harness import registry as _harness_registry
+
     gd = sub.add_parser("guard",
-                        help="Force-prompt rules for this plane. Written as Claude Code "
-                             "`permissions.ask` rules in .claude/settings.json — charter "
-                             "keeps no list of its own (ADR 0014).")
+                        help="Force-prompt and stop-prompting rules for this plane. "
+                             "Written in each harness's own syntax, into the file each "
+                             "one reads — every harness charter knows ("
+                             + ", ".join(_harness_registry.KINDS)
+                             + "), not only the one you are running. charter keeps no "
+                               "list of its own (ADR 0014).")
     gsub = gd.add_subparsers(dest="guard_cmd")
     gd.set_defaults(func=commands.cmd_guard_list)
     ga = gsub.add_parser("ask", help="Always prompt before this command runs.")
