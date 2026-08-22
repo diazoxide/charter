@@ -118,7 +118,10 @@ it, and a context full of things that don't apply.
 A **persona** is a small named scope with its own charter, its own committed memory, its own
 vault, and a `delegate-when` line saying what should be handed to it. `charter persona
 sync-agents` turns each one into a real Claude Code sub-agent, so dispatching a role is
-ordinary delegation rather than a prompt trick.
+ordinary delegation rather than a prompt trick. A persona whose `mcp.json` hands a vault
+value to a server names the command it would run and waits for `--approve-mcp` — the
+approval covers the command and its arguments, not the server's name, so a teammate
+re-pointing it lapses the approval rather than inheriting it.
 
 They compose the way people do: `extends:` inherits a parent's charter, `uses:` says this
 role routes work to that one, and `agent-tools` narrows what the generated sub-agent may
@@ -277,7 +280,10 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
 - **Three harnesses, one set of rules.** charter runs inside `claude-code`, `opencode` and
   `codex` — the names `$CHARTER_HARNESS` holds — and enforces the same invariants in each:
   the plane-root guard, the one-credential rule, the secret-leak check, the persona's
-  declared tools. What differs is not what charter enforces but what each harness *lets*
+  declared tools, and the containment rule — **a name charter reads out of a committed file
+  cannot choose what it runs, what it reads, or where it writes**. Personas, manifests,
+  memory and the inventory are meant to be committed and shared, which is exactly what makes
+  them untrusted input: they arrive from someone else's machine. What differs is not what charter enforces but what each harness *lets*
   charter offer, and `charter harness list` prints that gap rather than leaving you to find
   it. Neither `opencode` nor `codex` has a status bar charter can render into, which is what
   `charter statusline --watch` is for; `codex` needs one extra command
