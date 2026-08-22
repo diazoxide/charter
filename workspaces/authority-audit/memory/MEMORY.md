@@ -15,3 +15,7 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Vacuous-pass traps found this round (authority audit): (1) a ONE-LINE ta](20260822-083046-vacuous-pass-traps-found-this-round-authority-au.md)
 - [#343 ruling (won't-fix on revocation): after #342 a broken persona refer](20260822-083046-343-ruling-won-t-fix-on-revocation-after-342-a-b.md)
 - [0.48.0 SHIPPED (2026-08-22): the authority audit and all its fixes — 23 ](20260822-125704-0-48-0-shipped-2026-08-22-the-authority-audit-an.md)
+- [Closed todo: AFTER #328: #331 needs a non-mutating health() (doctor chmo](20260822-125729-closed-todo-after-328-331-needs-a-non-mutating-h.md)
+- [Closed todo: Wave 2 after wave 1 merges: #336 symlinks+liveness · #333/#](20260822-125729-closed-todo-wave-2-after-wave-1-merges-336-symli.md)
+- [Closed todo: Wave 3a: #349/#329/#343 (authority-audit) + #333/#338/#339 ](20260822-125729-closed-todo-wave-3a-349-329-343-authority-audit-.md)
+- [Closed todo: Wave 3b after 3a: #321 news diagnostic + #322 secret list l](20260822-125729-closed-todo-wave-3b-after-3a-321-news-diagnostic.md)
