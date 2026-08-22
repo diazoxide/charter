@@ -144,6 +144,57 @@ def bypass(argv: list[str]) -> int:
     return 127  # unreachable; execvp either replaces this process or raises
 
 
+def frame_ready() -> tuple[int, str, str]:
+    """Can a frame run on this machine right now? ``(exit code, util.* level, one line)``
+    — read-only, and the only thing this asks is `tmuxctl.version()`.
+
+    Mirrors `cmd_launch`'s own gate exactly, not a stricter one: a few lines into
+    `cmd_launch`, tmux below `tmuxctl.FLOOR` gets a warning and the launch CONTINUES —
+    only its hotkey menu is disabled (`tmuxctl.below_floor_message`) — and only `tmux`
+    being entirely absent (`version() is None`) makes `cmd_launch` refuse outright.
+    Refusing here on anything short of that would report a frame this same launcher
+    goes on to draw regardless — a probe that lies about `cmd_launch`'s own behaviour is
+    worse than one that runs nothing at all.
+
+    Two callers share this, both read-only for the same reason `charter/news.py`
+    requires of a `check:` (reads, never acts; and this module's own subprocess calls
+    already carry timeouts, so neither can hang): `--probe` on every `charter
+    <harness>`/`charter frame` launcher (`cmd_launch` below), for an operator to run by
+    hand, and the top-level `charter frame-probe` (`cmd_probe`) that a news `check:`
+    names — see `cmd_probe`'s own docstring for why the check cannot simply be `frame
+    --probe` itself.
+    """
+    v = tmuxctl.version()
+    if v is None:
+        return 1, "err", tmuxctl.absent_message()
+    if v < tmuxctl.FLOOR:
+        return 0, "warn", tmuxctl.below_floor_message(v)
+    return 0, "ok", f"charter frame: tmux {v[0]}.{v[1]} — a frame can run on this machine"
+
+
+def _report_probe(code: int, level: str, line: str) -> int:
+    getattr(util, level)(line)
+    return code
+
+
+def cmd_probe(args=None) -> int:
+    """`charter frame-probe` — read-only, one line, starts nothing. The command a news
+    `check:` names.
+
+    A TOP-LEVEL command, not `frame --probe` reached through the escape hatch (which
+    also exists — see `cmd_launch`'s own `args.probe` branch): `news._PROBEABLE`
+    refuses any command whose parser carries a pass-through positional (#317), and
+    every parser `cli._wire` builds — `frame` included — carries `rest`
+    (`nargs=argparse.REMAINDER`, the harness's own verbatim argv, the entire point of
+    `charter frame -- <cmd>`). That makes `("frame",)` exactly the shape #317 fixed,
+    `--probe` or not, so it can never be added to `news._PROBEABLE` no matter what flag
+    reaches it. This command takes no arguments at all — nothing here could ever carry
+    an argv from a caller — so it is not that shape, and can be (see
+    `tests/test_news_probeable.py`).
+    """
+    return _report_probe(*frame_ready())
+
+
 def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> str:
     """The private tmux config for one frame's own settings. Never `~/.tmux.conf`.
 
@@ -457,6 +508,14 @@ def _query_pane_dead_status(socket: str, harness_pane: str) -> int | None:
 
 def cmd_launch(args) -> int:
     """One launcher, shared by every registered harness and by `charter frame --`."""
+    if getattr(args, "probe", False):
+        # First, and read-only: nothing below this line — resolving a harness, touching
+        # the workspace, reaping a sibling frame's state, ever calling `subprocess.run` —
+        # may run before a `--probe` caller gets its one-line answer and nothing else.
+        # `getattr` rather than `args.probe`: every other caller of `cmd_launch` in this
+        # codebase (tests included) constructs its own `args` without a `probe` field,
+        # and none of them means "probe".
+        return _report_probe(*frame_ready())
     h = next((x for x in harness.all() if x.cli_name == args.harness), None)
     rest = list(args.rest or [])
     # `nargs=argparse.REMAINDER` keeps a literal leading `--` when the operator typed

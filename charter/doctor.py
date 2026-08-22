@@ -699,6 +699,40 @@ def check_harness() -> Result:
     return Result(name, OK, detail=f"{current} — {len(gaps)} capability ceiling{plural}\n{listed}")
 
 
+def check_frame() -> Result:
+    """Can `charter <harness>` compose a frame here? (ADR 0018)
+
+    Its own check, sitting beside `check_harness` rather than inside its deficit list:
+    tmux is a prerequisite of the FRAME, not a ceiling of any harness, and filing it
+    under `check_harness` would tell the reader their harness is limited when it is not
+    — `tests/test_doctor_absent_is_not_health.py` already draws exactly that line for a
+    check that renders green over something it never actually looked at, and the
+    opposite error (naming a harness limit that is not real) is the one `check_harness`'s
+    own docstring guards against.
+
+    WARN, never FAIL: `cmd_doctor` exits non-zero only on FAIL, and a machine with no
+    tmux — or one too old to meet `tmuxctl.FLOOR` — can still do every bit of charter's
+    core work; discover, clone, and run any harness with `--no-frame`. Only `charter
+    <harness>` without that flag is affected, and both remedies are named here rather
+    than left to be discovered in `docs/frame.md`.
+    """
+    from .frame import tmuxctl
+
+    name = "frame"
+    v = tmuxctl.version()
+    if v is None:
+        return Result(name, WARN, detail="tmux not found",
+                      hint="charter <harness> needs tmux to compose a frame — brew "
+                           "install tmux (or your package manager). Without it, "
+                           "charter <harness> --no-frame still runs the harness bare.")
+    if v < tmuxctl.FLOOR:
+        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}",
+                      hint=f"below the frame's floor (tmux {tmuxctl.FLOOR[0]}."
+                           f"{tmuxctl.FLOOR[1]}+) — a frame still starts, with its "
+                           f"hotkey menu disabled.")
+    return Result(name, OK, detail=f"tmux {v[0]}.{v[1]}")
+
+
 def _read_text(p) -> str:
     """A settings file's text, or ``""`` when it cannot be read. A file charter is not
     allowed to open is not evidence of anything, and a preflight row must render whatever
@@ -1980,7 +2014,7 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_harness(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
+                check_plane_root(), check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),

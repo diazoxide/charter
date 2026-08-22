@@ -234,6 +234,84 @@ class MissingTmux(unittest.TestCase):
         run.assert_not_called()
 
 
+class Probe(unittest.TestCase):
+    """`--probe` (on `cmd_launch`) and `charter frame-probe` (`cmd_probe`) share one
+    read-only gate, `commands_frame.frame_ready` — mirroring `cmd_launch`'s OWN behaviour
+    below `tmuxctl.FLOOR` (warn, still runs), not a stricter refusal, is the whole point:
+    a probe that refused there would report a frame this same launcher goes on to draw.
+    """
+
+    def test_present_and_at_the_floor_exits_zero(self):
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("builtins.print") as p:
+            rc = commands_frame.cmd_probe()
+        self.assertEqual(rc, 0)
+        run.assert_not_called()
+        printed = " ".join(str(c) for c in p.call_args_list)
+        self.assertIn("3.7", printed)
+
+    def test_absent_tmux_exits_nonzero_and_names_it(self):
+        with mock.patch("charter.frame.tmuxctl.version", return_value=None), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("builtins.print") as p:
+            rc = commands_frame.cmd_probe()
+        self.assertNotEqual(rc, 0)
+        run.assert_not_called()
+        printed = " ".join(str(c) for c in p.call_args_list)
+        self.assertIn("tmux", printed)
+
+    def test_below_the_floor_still_exits_zero(self):
+        """The mutation this pins: a naive `--probe` written as "refuse below the floor"
+        would flip this to non-zero — wrong, because `cmd_launch` itself still runs a
+        frame there (only the hotkey menu is disabled). A probe stricter than the thing
+        it is asked about lies about that thing."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 0)), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("builtins.print"):
+            rc = commands_frame.cmd_probe()
+        self.assertEqual(rc, 0)
+        run.assert_not_called()
+
+    def test_cmd_launch_short_circuits_on_probe_before_touching_anything(self):
+        """`args.probe` is checked before `harness.all()`, `workspace.resolve()`, or any
+        `subprocess.run` — the read-only promise `charter/news.py` requires of a `check:`,
+        proven here by making every one of those raise if reached at all."""
+        args = SimpleNamespace(harness="claude", rest=["-p", "hi"], no_frame=False,
+                               probe=True)
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch("charter.harness.all", side_effect=AssertionError("harness "
+                        "resolved")), \
+             mock.patch("charter.workspace.resolve",
+                        side_effect=AssertionError("workspace touched")), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("builtins.print"):
+            rc = commands_frame.cmd_launch(args)
+        self.assertEqual(rc, 0)
+        run.assert_not_called()
+
+    def test_a_missing_probe_attribute_means_launch_not_probe(self):
+        """`getattr(args, "probe", False)`, not `args.probe`: every OTHER `cmd_launch`
+        call in this file builds its own `args` with no `probe` field at all, and none of
+        them means "probe" — a bare `AttributeError` here would crash every one of them.
+
+        Distinguished from the probe path by what it REACHES, not by its return code —
+        with tmux present, `--probe` returns before `workspace.resolve()`
+        (`test_cmd_launch_short_circuits_on_probe_before_touching_anything` above); an
+        `args` with no `probe` field at all must reach it, exactly like an ordinary
+        launch always has.
+        """
+        args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
+        self.assertFalse(hasattr(args, "probe"))
+        sentinel = AssertionError("workspace resolved — the launch path was reached")
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("charter.workspace.resolve", side_effect=sentinel):
+            with self.assertRaises(AssertionError) as ctx:
+                commands_frame.cmd_launch(args)
+        self.assertIs(ctx.exception, sentinel)
+
+
 class QueryPaneDeadStatus(unittest.TestCase):
     """`_query_pane_dead_status` is the SAME function `cmd_launch` calls both eagerly
     (immediately after installing the hooks, to close the install race) and again as a
@@ -1193,6 +1271,27 @@ class CollisionGuard(unittest.TestCase):
                 cli.build_parser()
         self.assertIn("frame-action-harness", str(ctx.exception))
 
+    def test_a_harness_named_frame_probe_is_refused_too(self):
+        """`frame-probe` (this task) is reserved the same way, though for a different
+        reason than `frame-menu`/`frame-action`: it exists because `news._PROBEABLE`
+        cannot list `("frame",)` at all — every parser `_wire` builds carries a
+        pass-through `rest` — not because `_split_frame_argv` eats anything past
+        `frame`. A harness silently shadowing it would break the one command a news
+        `check:` can safely name for the frame feature at all."""
+        from charter import cli
+        from charter.harness.base import Harness
+
+        class _FrameProbeHarness(Harness):
+            name = "frame-probe-harness"
+            cli_name = "frame-probe"
+            binary = "frame-probe-harness"
+
+        with mock.patch.dict("charter.harness.registry.KINDS",
+                             {"frame-probe-harness": _FrameProbeHarness}, clear=True):
+            with self.assertRaises(ValueError) as ctx:
+                cli.build_parser()
+        self.assertIn("frame-probe-harness", str(ctx.exception))
+
 
 class FrameArgvSplit(unittest.TestCase):
     """Critical 2: `charter claude -p hi` — the documented, spec-named invocation — was
@@ -1226,6 +1325,17 @@ class FrameArgvSplit(unittest.TestCase):
     def test_a_bare_no_frame_is_still_recognized(self):
         ns = self._parse(["claude", "--no-frame"])
         self.assertTrue(ns.no_frame)
+        self.assertEqual(ns.rest, [])
+
+    def test_a_bare_probe_is_still_recognized(self):
+        """The exact trap this task's brief named: without `--probe` in `_OWN_FLAGS`,
+        `_split_frame_argv` grafts it onto `args.rest` instead of leaving it for
+        `argparse`, and `cmd_launch` (finding no harness named `""` for bare `frame`)
+        hands `["--probe"]` to `bypass`, which `os.execvp("--probe", ...)` turns into a
+        real `FileNotFoundError` — confirmed by hand by removing the entry and running
+        `charter frame --probe`."""
+        ns = self._parse(["frame", "--probe"])
+        self.assertTrue(ns.probe)
         self.assertEqual(ns.rest, [])
 
     def test_no_frame_followed_by_harness_flags(self):
@@ -1281,7 +1391,7 @@ class FrameArgvSplit(unittest.TestCase):
         matches, so `_split_frame_argv` leaves them alone — the same reason `panel` is
         already a top-level sibling of `frame` rather than nested under it."""
         from charter.cli import _split_frame_argv
-        for argv in (["frame-action", "a1"], ["frame-menu"]):
+        for argv in (["frame-action", "a1"], ["frame-menu"], ["frame-probe"]):
             with self.subTest(argv=argv):
                 rest, frame_rest = _split_frame_argv(list(argv))
                 self.assertEqual(rest, argv)
@@ -1323,6 +1433,29 @@ class MainDeliversFrameRest(unittest.TestCase):
             rc = cli.main(["frame-menu", "/dev/ttys7"])
         cm.assert_called_once()
         self.assertEqual(cm.call_args[0][0].client, "/dev/ttys7")
+        self.assertEqual(rc, 0)
+
+    def test_charter_frame_probe_reaches_cmd_probe_via_main(self):
+        """The delivery half of `frame-probe`'s own registration: a test that only
+        proves `_split_frame_argv` leaves it alone (`FrameArgvSplit` above) cannot catch
+        `_add_frame_parsers` never having registered a parser for it."""
+        from charter import cli
+        with mock.patch("charter.commands_frame.cmd_probe", return_value=0) as cp:
+            rc = cli.main(["frame-probe"])
+        cp.assert_called_once()
+        self.assertEqual(rc, 0)
+
+    def test_charter_frame_dash_dash_probe_reaches_cmd_launch_via_main(self):
+        """The delivery half of the `_OWN_FLAGS` fix: a test that only exercises
+        `_split_frame_argv` in isolation (`test_a_bare_probe_is_still_recognized` above)
+        cannot catch `main` failing to graft `args.probe` through, or `cmd_launch`
+        itself never checking it."""
+        from charter import cli
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("builtins.print"):
+            rc = cli.main(["frame", "--probe"])
+        run.assert_not_called()
         self.assertEqual(rc, 0)
 
 

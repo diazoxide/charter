@@ -616,28 +616,42 @@ def _add_frame_parsers(sub) -> None:
                             help="Passed to the harness verbatim.")
         parser.add_argument("--no-frame", action="store_true",
                             help="Run the harness bare, with no charter frame.")
+        # Read-only, and shares `--no-frame`'s own `_OWN_FLAGS` treatment below so
+        # `charter claude --probe` reaches `cmd_launch` as a flag rather than being
+        # grafted onto the harness's own verbatim argv. `cmd_launch` checks this FIRST,
+        # before resolving a harness or touching the workspace — see its own docstring.
+        # A `charter frame-probe` sibling also exists (registered further down) for the
+        # one caller this flag cannot serve: a news `check:`, which `news._PROBEABLE`
+        # refuses for any command whose parser carries a pass-through positional — every
+        # parser `_wire` builds has one (`rest`, above) — so `frame --probe` itself can
+        # never be listed there. See `commands_frame.cmd_probe`'s own docstring.
+        parser.add_argument("--probe", action="store_true",
+                            help="Read-only: can a frame run here? Prints one line, "
+                                 "starts nothing, never launches the harness.")
         parser.set_defaults(harness=name, func=commands_frame.cmd_launch)
 
     for h in harness.all():
         if not h.cli_name:
             continue
-        # `"frame"`, `"panel"`, `"frame-menu"` and `"frame-action"` are all reserved even
-        # though none of their OWN `add_parser` calls below has run yet: the loop
-        # finishes and registers every harness BEFORE any of them are added, so a
-        # harness with `cli_name` equal to one of these would pass a check against
-        # `sub.choices` alone (nothing there is named any of them yet) and only collide
-        # once THAT `add_parser` call runs a few lines down — where, on argparse versions
-        # that raise for a conflicting name, the error names the reserved command instead
-        # of the harness that actually caused it, and on versions that do not raise (this
-        # repo's own 3.11 floor — see `_split_frame_argv`'s docstring for the same
-        # version gap elsewhere), the later `add_parser` call silently shadows the
-        # harness instead — `frame`'s own escape hatch disappearing, every panel pane
+        # `"frame"`, `"panel"`, `"frame-menu"`, `"frame-action"` and `"frame-probe"` are
+        # all reserved even though none of their OWN `add_parser` calls below has run
+        # yet: the loop finishes and registers every harness BEFORE any of them are
+        # added, so a harness with `cli_name` equal to one of these would pass a check
+        # against `sub.choices` alone (nothing there is named any of them yet) and only
+        # collide once THAT `add_parser` call runs a few lines down — where, on argparse
+        # versions that raise for a conflicting name, the error names the reserved
+        # command instead of the harness that actually caused it, and on versions that do
+        # not raise (this repo's own 3.11 floor — see `_split_frame_argv`'s docstring for
+        # the same version gap elsewhere), the later `add_parser` call silently shadows
+        # the harness instead — `frame`'s own escape hatch disappearing, every panel pane
         # failing to start because `charter panel` now means something else
-        # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`), or the
+        # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`), the
         # hotkey menu silently opening a harness launch instead of a menu because
-        # `charter frame-menu`/`charter frame-action` now mean something else too.
+        # `charter frame-menu`/`charter frame-action` now mean something else too, or a
+        # news `check:` naming `frame-probe` silently launching a harness instead of
+        # reading tmux's own version (see `commands_frame.cmd_probe`'s own docstring).
         if h.cli_name in sub.choices or h.cli_name in ("frame", "panel", "frame-menu",
-                                                       "frame-action"):
+                                                       "frame-action", "frame-probe"):
             raise ValueError(
                 f"harness {h.name!r} wants `charter {h.cli_name}`, which is already a "
                 f"charter command — rename the harness's cli_name or the command before "
@@ -681,6 +695,21 @@ def _add_frame_parsers(sub) -> None:
     act = sub.add_parser("frame-action")
     act.add_argument("action_id")
     act.set_defaults(func=commands_frame.cmd_action)
+
+    # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-menu`/
+    # `frame-action` above: those two exist because `_split_frame_argv` eats everything
+    # after `argv[0] == "frame"`. This one exists because `news._PROBEABLE` (charter's
+    # `check:` allowlist, #317) refuses any command whose parser carries a pass-through
+    # positional, and every parser `_wire` builds carries one (`rest`, the harness's own
+    # verbatim argv) — so `("frame",)` can never be added there, `--probe` on it or not.
+    # `frame-probe` takes no arguments at all, so it is not that shape and CAN be listed
+    # (see `news._PROBEABLE` and `commands_frame.cmd_probe`'s own docstring). Unlike
+    # `panel`/`frame-menu`/`frame-action`, an operator can also type this one directly —
+    # it is the same read-only check `--probe` runs, just reachable without a launcher.
+    pb = sub.add_parser("frame-probe",
+                        help="Read-only: can a frame run here? (same check as "
+                             "`--probe` on any launcher above.)")
+    pb.set_defaults(func=commands_frame.cmd_probe)
 
 
 def _add_harness_parser(sub) -> None:
@@ -1142,7 +1171,14 @@ def _frame_command_names() -> set[str]:
 #: reachable — just as `-p`/`--continue` are — by putting it anywhere OTHER than this
 #: fixed leading run (`charter claude --continue --help`, or explicitly `charter claude
 #: -- --help`).
-_OWN_FLAGS = ("--no-frame", "-h", "--help")
+#:
+#: `--probe` joined for the identical reason `--no-frame` is here at all: without it,
+#: `charter frame --probe` has `argparse` never see `--probe` as `frame`'s own flag —
+#: `_split_frame_argv` grafts it onto `args.rest` instead, and `cmd_launch` (finding no
+#: harness named `""`, bare `frame`) hands `["--probe"]` to `bypass`, which
+#: `os.execvp("--probe", ...)` turns into a `FileNotFoundError` — confirmed by running
+#: `charter frame --probe` with this entry left out before adding it.
+_OWN_FLAGS = ("--no-frame", "--probe", "-h", "--help")
 
 
 def _split_frame_argv(argv: list[str]) -> tuple[list[str], list[str] | None]:
