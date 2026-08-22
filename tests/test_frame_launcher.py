@@ -3,27 +3,31 @@
 The exit code is asserted because it was measured wrong once: an attached
 `tmux new-session` returns 0 whatever its command exited with (pinned against 3.7c), so
 the launcher waits and reads a recorded status instead of exec'ing and hoping. A second,
-narrower race survives even that fix — the hook that records the status is not installed
-until a moment after the harness starts running, so a harness that dies inside that
-window is never caught by it, and (verified by hand against a real tmux 3.7c) nothing is
-left to end the session either, so `attach` would block forever rather than merely return
-early. `Launch` below covers the EAGER `display-message` check `cmd_launch` runs right
-after installing the hook — before ever calling `attach` — that closes this.
+narrower race survives even that fix — the hooks that record the status and end the
+session are not installed until a moment after the harness starts running, so a harness
+that dies inside that window is never caught by them, and (verified by hand against a
+real tmux 3.7c) nothing is left to end the session either, so `attach` would block
+forever rather than merely return early. `Launch` below covers the EAGER
+`display-message` check `cmd_launch` runs right after installing both hooks — before
+ever calling `attach` — that closes this, and its harder cousin: a harness killed by a
+signal reports `#{pane_dead_status}` EMPTY, not negative, and treating empty as "cannot
+tell" reopens the same hang from a different angle (confirmed by hand:
+`charter frame -- bash -c 'kill -9 $$'` hung under an earlier version of this fix).
 
 **Every fake tmux command here returns a `subprocess.CompletedProcess`, never a real
 tmux process** — the point of `charter/frame/tmuxctl.py` splitting the binary out of
 everything else is that this module gets to keep that promise while still exercising the
 FULL launch sequence: session creation, reading the captured pane id back off stdout,
-loading the session-scoped config, installing the exit-code hook, drawing the panels,
-and attaching. The shell-quoting and multi-session-server properties `_pane_died_hook_argv`
-and `source-file` rely on were verified by hand against a real tmux 3.7c (see the
-fix-round section of the task report) — that verification cannot be a unit test without
-violating "never start a real tmux server in this suite".
+loading the session-scoped config, carrying the exit-status path out of band, installing
+the write and teardown hooks, drawing the panels, focusing the harness pane, and
+attaching. The shell-quoting, hook-independence, and multi-session-server properties this
+relies on were verified by hand against a real tmux 3.7c (see the fix-round sections of
+the task report) — that verification cannot be a unit test without violating "never
+start a real tmux server in this suite".
 """
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 import unittest
 from pathlib import Path
@@ -51,14 +55,13 @@ class Bypass(unittest.TestCase):
 
 
 class Conf(unittest.TestCase):
-    """`conf_text` no longer carries the `pane-died` hook (see `PaneDiedHook` below) —
-    only the settings that are safe to bake into a text file `source-file` loads: no
-    untrusted path ever reaches this function."""
+    """Neither `pane-died` hook lives in `conf_text` — see `PaneDiedHooks` below — only
+    the settings that are safe to bake into a text file `source-file` loads."""
 
     def test_status_mouse_and_history_limit_are_session_scoped(self):
-        """Finding 4: `source-file` applies this text to the ONE shared server every
-        frame runs on. `-g` (global) here would rewrite every OTHER live frame's mouse
-        and scrollback the moment this frame's config loads — session-scoped (`-t
+        """`source-file` applies this text to the ONE shared server every frame runs
+        on. `-g` (global) here would rewrite every OTHER live frame's mouse and
+        scrollback the moment this frame's config loads — session-scoped (`-t
         <session>`, no `-g`) is what keeps frame N's settings from becoming frame
         (N-1)'s."""
         text = commands_frame.conf_text(hotkey="F2", mouse=True, history_limit=999,
@@ -95,52 +98,68 @@ class Conf(unittest.TestCase):
         self.assertIn("history-limit 50000", text)
 
 
-class PaneDiedHook(unittest.TestCase):
-    """`_pane_died_hook_argv` — issued as its OWN tmux command (clean argv), never text
-    baked into `conf_text`'s output. See the module docstring in `commands_frame.py` for
-    why: nesting a shell-quoted path inside a SECOND, text-file level of tmux quoting
-    (what `source-file`'s config syntax requires) breaks `shlex.quote`'s own escaping for
-    a path containing a literal single quote — verified by hand against tmux 3.7c."""
+class PaneDiedHooks(unittest.TestCase):
+    """The exit-status hook is now TWO separate tmux commands, not one — see
+    `commands_frame.py`'s module docstring ("Teardown is its own hook") for why a
+    write hook (`pane-died[0]`, carries the real status) and a teardown hook
+    (`pane-died[1]`, a constant `kill-session`) are installed independently: a bug in
+    the write hook's own construction must never be able to take teardown down with it.
+    The status path itself is delivered out of band (`_exit_path_env_argv`,
+    `set-environment`), never embedded in either hook's action text."""
 
-    def test_the_hook_targets_the_harness_pane(self):
-        cmd = commands_frame._pane_died_hook_argv(socket="charter", harness_pane="%9",
-                                                   status_path="/tmp/f/exit")
+    def test_the_write_hook_targets_the_harness_pane(self):
+        cmd = commands_frame._pane_died_write_hook_argv(socket="charter", harness_pane="%9")
         self.assertEqual(cmd[cmd.index("-t") + 1], "%9")
         self.assertIn("pane-died", cmd)
+        self.assertNotIn("pane-died[1]", cmd)
 
-    def test_it_is_a_clean_argv_list_naming_the_socket(self):
-        cmd = commands_frame._pane_died_hook_argv(socket="charter", harness_pane="%0",
-                                                   status_path="/x")
-        self.assertIsInstance(cmd, list)
-        for part in cmd:
-            self.assertIsInstance(part, str)
-        self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+    def test_the_write_hook_action_is_constant(self):
+        """No operator- or plane-derived string is ever embedded in this text — the
+        exact bug that let a plane root with a literal `'` in it hang silently
+        (`set-hook` reported success while the stored action was corrupted). Two calls
+        with different `harness_pane`s produce IDENTICAL action text; only the `-t`
+        target differs."""
+        a = commands_frame._pane_died_write_hook_argv(socket="charter", harness_pane="%1")
+        b = commands_frame._pane_died_write_hook_argv(socket="charter", harness_pane="%2")
+        self.assertEqual(a[-1], b[-1])
 
-    def test_the_status_path_is_shell_quoted_against_a_space(self):
-        """Finding 5: `status_path` reaches `run-shell`, which hands it to `/bin/sh -c`.
-        A plane root (or `$CHARTER_HOME`) containing a space — ordinary on macOS — must
-        not silently truncate the write. `shlex.quote`'s exact output is asserted, not
-        merely "no error", because a test that only checks `set-hook` didn't crash would
-        pass even if the path were embedded completely unquoted."""
-        path = "/tmp/My Plane/exit"
-        cmd = commands_frame._pane_died_hook_argv(socket="charter", harness_pane="%0",
-                                                   status_path=path)
+    def test_the_write_hook_falls_back_to_the_unknown_death_sentinel_when_status_is_empty(self):
+        """Measured against tmux 3.7c: a harness killed by a signal
+        (SIGKILL/SIGTERM/SIGSEGV) reports `#{pane_dead_status}` EMPTY, not a negative
+        number. An unqualified `echo #{pane_dead_status} > ...` would write an empty,
+        unparseable line — `state.exit_code` cannot parse it and reads back `None`,
+        exactly like nothing was ever recorded. Confirmed by hand: `charter frame --
+        bash -c 'sleep 1.5; kill -9 $$'` (well past the install race, so the hooks ARE
+        installed) returned 0 — silent success for a crashed harness — before this
+        fix. `${v:-N}` in the shell fragment closes it at the point of writing."""
+        cmd = commands_frame._pane_died_write_hook_argv(socket="charter", harness_pane="%0")
         action = cmd[-1]
-        self.assertIn(shlex.quote(path), action)
-        # The raw, unquoted path must not appear on its own — only inside the quoted form.
-        self.assertNotIn(f"> {path}\"", action)
+        self.assertIn(f"${{v:-{commands_frame._UNKNOWN_DEATH_CODE}}}", action)
 
-    def test_a_dollar_paren_injection_attempt_is_neutralized(self):
-        """The sharper form of the same finding: a path shaped like a command
-        substitution must reach the shell as an inert literal, not run."""
-        path = "/tmp/inj $(touch pwned)/exit"
-        cmd = commands_frame._pane_died_hook_argv(socket="charter", harness_pane="%0",
-                                                   status_path=path)
-        action = cmd[-1]
-        self.assertIn(shlex.quote(path), action)
-        # Unquoted, "$(touch pwned)" would sit outside any quotes in the action string;
-        # quoted, it is wrapped in the shell-single-quoted form `shlex.quote` produces.
-        self.assertNotIn("> /tmp/inj $(touch pwned)/exit\"", action)
+    def test_the_teardown_hook_is_a_constant_kill_session_at_index_1(self):
+        cmd = commands_frame._pane_died_teardown_hook_argv(socket="charter", harness_pane="%9")
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%9")
+        self.assertIn("pane-died[1]", cmd)
+        self.assertEqual(cmd[-1], "kill-session")
+
+    def test_both_hooks_are_clean_argv_lists_naming_the_socket(self):
+        for cmd in (commands_frame._pane_died_write_hook_argv(socket="charter", harness_pane="%0"),
+                   commands_frame._pane_died_teardown_hook_argv(socket="charter", harness_pane="%0")):
+            self.assertIsInstance(cmd, list)
+            for part in cmd:
+                self.assertIsInstance(part, str)
+            self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+
+    def test_the_status_path_is_carried_out_of_band(self):
+        """`set-environment` takes the path as ONE argv value — no shell, no tmux
+        text-command parsing of it at all — verified by hand to round-trip a space, a
+        literal `'`, and a `$(...)` injection attempt correctly precisely because
+        nothing here ever re-parses it as text."""
+        path = "/tmp/My Plane's exit $(touch pwned)/exit"
+        cmd = commands_frame._exit_path_env_argv(socket="charter", session="demo-1",
+                                                 status_path=path)
+        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo-1",
+                              "CHARTER_FRAME_EXIT", path])
 
 
 class MissingTmux(unittest.TestCase):
@@ -167,7 +186,7 @@ class MissingTmux(unittest.TestCase):
 
 class QueryPaneDeadStatus(unittest.TestCase):
     """`_query_pane_dead_status` is the SAME function `cmd_launch` calls both eagerly
-    (immediately after installing the hook, to close the install race) and again as a
+    (immediately after installing the hooks, to close the install race) and again as a
     fallback after `attach` returns — pinned directly here, not only indirectly through
     `Launch`'s race-recovery test, since either call site reuses this one function."""
 
@@ -179,6 +198,16 @@ class QueryPaneDeadStatus(unittest.TestCase):
     def test_a_dead_pane_returns_its_status(self):
         with self._dm("1:42"):
             self.assertEqual(commands_frame._query_pane_dead_status("charter", "%0"), 42)
+
+    def test_a_subprocess_error_returns_none_rather_than_raising(self):
+        """Correction 2's counterpart for a query rather than an action: `_live_sessions`
+        already wraps its `subprocess.run` call this way, and this function must too — a
+        `TimeoutExpired`/`OSError` escaping here would crash `cmd_launch` AFTER the
+        harness is already running, which is a worse failure than the one this whole
+        function exists to prevent (a fabricated answer)."""
+        with mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=OSError("no such tmux")):
+            self.assertIsNone(commands_frame._query_pane_dead_status("charter", "%0"))
 
     def test_a_live_pane_returns_none(self):
         with self._dm("0:"):
@@ -195,15 +224,39 @@ class QueryPaneDeadStatus(unittest.TestCase):
         with self._dm("1:99", rc=1):
             self.assertIsNone(commands_frame._query_pane_dead_status("charter", "%0"))
 
-    def test_unparseable_status_text_returns_none_rather_than_raising(self):
+    def test_unparseable_status_text_degrades_to_the_sentinel_rather_than_raising(self):
         """`#{pane_dead_status}` is tmux's own format variable, not operator input, but
-        this function must not assume its shape: a malformed or unexpected value must
-        degrade to "cannot tell", never raise `ValueError` out of `int(status)`."""
+        this function must not assume its shape: a malformed value must never raise
+        `ValueError` out of `int(status)`. It degrades to `_UNKNOWN_DEATH_CODE`, not
+        `None` — by the time `status` is even inspected, `dead == "1"` already confirmed
+        the pane IS dead (see `test_a_failed_query_returns_none_not_zero` above for the
+        one case that still answers `None`: the query itself failing, before `dead` is
+        even known). `None` would tell `cmd_launch` to go ahead and attach a pane
+        already known to be gone."""
         with self._dm("1:not-a-number"):
-            self.assertIsNone(commands_frame._query_pane_dead_status("charter", "%0"))
+            self.assertEqual(commands_frame._query_pane_dead_status("charter", "%0"),
+                             commands_frame._UNKNOWN_DEATH_CODE)
 
-    def test_a_negative_status_is_parsed(self):
-        """tmux reports a negative `pane_dead_status` for a process killed by a signal."""
+    def test_an_empty_status_is_dead_with_unknown_status_not_cannot_tell(self):
+        """Fix round 2, item 1/2: measured against tmux 3.7c, a harness killed by a
+        signal (SIGKILL/SIGTERM/SIGSEGV) reports `pane_dead=1` with an EMPTY
+        `pane_dead_status` — replaces an earlier version of this test class that wrongly
+        assumed a signal death produced a NEGATIVE number (see the test below, reworded
+        rather than deleted, for the parser's own handling of that shape). Treating
+        empty as `None` ("cannot tell") told `cmd_launch` "alive, go ahead and attach" —
+        confirmed by hand that this hung `charter frame -- bash -c 'kill -9 $$'`
+        forever, against a session `remain-on-exit` was correctly keeping alive with
+        nothing left to end it."""
+        with self._dm("1:"):
+            self.assertEqual(commands_frame._query_pane_dead_status("charter", "%0"),
+                             commands_frame._UNKNOWN_DEATH_CODE)
+
+    def test_a_negative_status_would_still_be_parsed_if_one_were_ever_reported(self):
+        """NOT a claim that tmux reports negative statuses for a signal death — verified
+        it does not (see the empty-status test above, which is what actually happens
+        and is what this test used to wrongly assert). Kept, reworded, to pin the
+        parser's own `-` handling defensively in case some other tmux version or
+        platform ever does report one."""
         with self._dm("1:-15"):
             self.assertEqual(commands_frame._query_pane_dead_status("charter", "%0"), -15)
 
@@ -222,35 +275,48 @@ class _FakeTmux:
 
     - `exit_code`: the ORDINARY path. Written via `state.record_exit` at the moment the
       fake `attach` command runs — mimicking real timing, where `attach` blocks until the
-      session ends and by the time it returns, the hook (fired on the real server while
-      attach was blocked) has already recorded the code.
+      session ends and by the time it returns, the write hook (fired on the real server
+      while attach was blocked) has already recorded the code.
     - `race_death_status`: the RACE `cmd_launch`'s eager `display-message` check exists
-      to close. Nothing is written via `state.record_exit` up front (the hook never got
+      to close. Nothing is written via `state.record_exit` up front (the hooks never got
       the chance to fire), but a fake `display-message` query answers `1:<status>` —
       what tmux would actually report for a pane that died before any hook existed but
       is still there to ask, thanks to `remain-on-exit`. `cmd_launch` asks this BEFORE
-      ever calling `attach` (verified by hand against a real tmux 3.7c that a `attach`
-      against exactly this state blocks forever otherwise, `remain-on-exit` legitimately
-      keeping the session alive with nothing left to end it), so a correct launcher
-      never reaches the fake `attach` handler at all in this scenario.
+      ever calling `attach` (verified by hand against a real tmux 3.7c that `attach`
+      against exactly this state blocks forever otherwise), so a correct launcher never
+      reaches the fake `attach` handler at all in this scenario.
     - `still_live` (with both of the above left `None`): the session is still running
       when `attach` returns (an operator detach, not a finish) — `list-sessions` reports
       the frame's own session id as still live.
+
+    `pre_existing_sessions` answers the FIRST `list-sessions` call (before this frame's
+    own session exists, i.e. `self.fid` is still `None`) — a separate knob from
+    `still_live`, which only answers the SECOND call (after this frame's session was
+    created), because they model two different questions: "was anything else already
+    running before this launch" versus "is THIS frame still running after `attach`".
     """
 
     def __init__(self, *, pane_id="%7", exit_code=None, race_death_status=None,
-                still_live=False, session_rc=0, source_rc=0, hook_rc=0, panel_rc=0,
-                attach_rc=0, dm_rc=0):
+                still_live=False, pre_existing_sessions=frozenset(),
+                session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
+                teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
+                kill_rc=0, arm_rc=0):
         self.pane_id = pane_id
         self.exit_code = exit_code
         self.race_death_status = race_death_status
         self.still_live = still_live
+        self.pre_existing_sessions = pre_existing_sessions
         self.session_rc = session_rc
         self.source_rc = source_rc
-        self.hook_rc = hook_rc
+        self.env_set_rc = env_set_rc
+        self.write_hook_rc = write_hook_rc
+        self.teardown_hook_rc = teardown_hook_rc
         self.panel_rc = panel_rc
+        self.select_rc = select_rc
         self.attach_rc = attach_rc
         self.dm_rc = dm_rc
+        self.kill_rc = kill_rc
+        self.arm_rc = arm_rc
         self.calls: list[list[str]] = []
         self.fid = None
         self.sourced_conf_text = None
@@ -270,9 +336,24 @@ class _FakeTmux:
             self.sourced_conf_text = Path(conf_path).read_text()
             return subprocess.CompletedProcess(cmd, self.source_rc, stdout="",
                                                stderr="" if self.source_rc == 0 else "bad config line")
+        if "remain-on-exit" in cmd:
+            # The direct "arm ahead of an already-running server" command — distinct
+            # from `source-file` (which carries `remain-on-exit` as text in a config
+            # file, never as a bare tmux argv command).
+            return subprocess.CompletedProcess(cmd, self.arm_rc, stdout="",
+                                               stderr="" if self.arm_rc == 0 else "cannot set")
+        if "set-environment" in cmd:
+            return subprocess.CompletedProcess(cmd, self.env_set_rc, stdout="",
+                                               stderr="" if self.env_set_rc == 0 else "bad session")
         if "set-hook" in cmd:
-            return subprocess.CompletedProcess(cmd, self.hook_rc, stdout="",
-                                               stderr="" if self.hook_rc == 0 else "bad hook target")
+            if "pane-died[1]" in cmd:
+                return subprocess.CompletedProcess(cmd, self.teardown_hook_rc, stdout="",
+                                                   stderr="" if self.teardown_hook_rc == 0 else "bad teardown target")
+            return subprocess.CompletedProcess(cmd, self.write_hook_rc, stdout="",
+                                               stderr="" if self.write_hook_rc == 0 else "bad hook target")
+        if "select-pane" in cmd:
+            return subprocess.CompletedProcess(cmd, self.select_rc, stdout="",
+                                               stderr="" if self.select_rc == 0 else "no such pane")
         if "split-window" in cmd:
             return subprocess.CompletedProcess(cmd, self.panel_rc, stdout="",
                                                stderr="" if self.panel_rc == 0 else "no space for a new pane")
@@ -281,13 +362,17 @@ class _FakeTmux:
             return subprocess.CompletedProcess(cmd, self.dm_rc, stdout=out, stderr="")
         if "kill-session" in cmd:
             self.kill_session_called = True
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
+                                               stderr="" if self.kill_rc == 0 else "no such session")
         if "attach" in cmd:
             if self.exit_code is not None and self.fid:
                 state.record_exit(self.fid, self.exit_code)
             return subprocess.CompletedProcess(cmd, self.attach_rc, stdout="", stderr="")
         if "list-sessions" in cmd:
-            live = {self.fid} if (self.still_live and self.fid) else set()
+            if self.fid is None:
+                live = set(self.pre_existing_sessions)
+            else:
+                live = {self.fid} if self.still_live else set()
             return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
         raise AssertionError(f"unexpected tmux command in test: {cmd}")
 
@@ -304,7 +389,7 @@ def _launch(fake: _FakeTmux, *, cols=200, rows=50, version=(3, 7), harness="clau
 
 
 class Launch(PersonaIso, unittest.TestCase):
-    def test_the_pane_died_hook_targets_the_pane_tmux_actually_reported(self):
+    def test_the_write_hook_targets_the_pane_tmux_actually_reported(self):
         """The regression correction 3 names directly: the hook's target must be the id
         READ OFF tmux's stdout, never the literal `"%0"` that happens to be right only
         for the very first pane ever created on a fresh server. `_FakeTmux` reports
@@ -313,8 +398,9 @@ class Launch(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(pane_id="%7", exit_code=0)
         rc = _launch(fake)
         self.assertEqual(rc, 0)
-        hook_cmd = next(c for c in fake.calls if "set-hook" in c)
-        self.assertEqual(hook_cmd[hook_cmd.index("-t") + 1], "%7")
+        write_hook_cmd = next(c for c in fake.calls
+                              if "set-hook" in c and "pane-died[1]" not in c)
+        self.assertEqual(write_hook_cmd[write_hook_cmd.index("-t") + 1], "%7")
 
     def test_the_config_is_loaded_with_source_file_not_only_dash_f(self):
         """Measured against tmux 3.7c (module docstring of commands_frame.py): `-f` on
@@ -328,17 +414,30 @@ class Launch(PersonaIso, unittest.TestCase):
                         "the real config was never loaded via `source-file`")
         self.assertIn("mouse", fake.sourced_conf_text)
 
-    def test_the_pane_died_hook_is_installed_as_its_own_command(self):
-        """Companion to the `source-file` test: the hook must not be missing from BOTH
-        places (baked into neither the sourced config nor issued separately)."""
+    def test_both_hooks_are_installed_as_their_own_commands(self):
+        """Companion to the `source-file` test: neither hook is missing from BOTH
+        places (baked into the sourced config nor issued separately)."""
         fake = _FakeTmux(exit_code=0)
         _launch(fake)
-        self.assertTrue(any("set-hook" in c and "pane-died" in " ".join(c)
-                           for c in fake.calls),
-                        "the pane-died hook was never installed")
-        # And NOT duplicated into the text file `source-file` loads (see `Conf`/
-        # `PaneDiedHook`'s own docstrings for why it moved out entirely).
+        write = [c for c in fake.calls if "set-hook" in c and "pane-died[1]" not in c]
+        teardown = [c for c in fake.calls if "pane-died[1]" in c]
+        self.assertEqual(len(write), 1, "the write hook was not installed exactly once")
+        self.assertEqual(len(teardown), 1, "the teardown hook was not installed exactly once")
+        # And NOT duplicated into the text file `source-file` loads.
         self.assertNotIn("pane-died", fake.sourced_conf_text or "")
+
+    def test_the_exit_status_path_is_carried_before_the_write_hook_is_installed(self):
+        """Ordering matters: the write hook's action reads `$CHARTER_FRAME_EXIT` back
+        from the session's own environment, so `set-environment` must land before the
+        hook that depends on it — otherwise the shell sees an unset variable the first
+        time the hook could possibly fire."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        names = [c[3] if len(c) > 3 else "" for c in fake.calls]
+        env_idx = next(i for i, c in enumerate(fake.calls) if "set-environment" in c)
+        hook_idx = next(i for i, c in enumerate(fake.calls)
+                       if "set-hook" in c and "pane-died[1]" not in c)
+        self.assertLess(env_idx, hook_idx)
 
     def test_the_recorded_exit_code_wins_over_a_zero_from_attach(self):
         """The whole module's reason to exist: an attached `tmux attach` (like
@@ -349,17 +448,18 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 17)
 
     def test_a_death_that_races_the_hooks_own_install_is_recovered(self):
-        """Critical 1: `new-session` starts the harness immediately; the hook that would
-        record its exit code is not installed until a `set-hook` call some time later. A
-        harness that dies inside that window is never caught by the hook — nothing was
-        listening yet, and hooks do not fire retroactively.
+        """Critical 1: `new-session` starts the harness immediately; the hooks that
+        would record its exit code and end the session are not installed until a
+        `set-hook` call some time later. A harness that dies inside that window is
+        never caught by them — nothing was listening yet, and hooks do not fire
+        retroactively.
 
-        The check for this is EAGER — run immediately after `set-hook` returns, before
-        `attach` is ever called — not merely a fallback after `attach` returns. Verified
-        by hand against a real tmux 3.7c: with nothing left to run the hook's own
+        The check for this is EAGER — run immediately after both hooks are installed,
+        before `attach` is ever called — not merely a fallback after `attach` returns.
+        Verified by hand against a real tmux 3.7c: with nothing left to run
         `kill-session`, `remain-on-exit` legitimately keeps the session alive forever,
         so an `attach` reaching this state BLOCKS FOREVER rather than returning 0 early.
-        A correct launcher must therefore finish the hook's own job itself (record the
+        A correct launcher must therefore finish the hooks' own job itself (record the
         code, run `kill-session`) and skip `attach` entirely — this test fails if
         `attach` is ever reached in this scenario, not only if the wrong code comes
         back."""
@@ -382,12 +482,23 @@ class Launch(PersonaIso, unittest.TestCase):
                          "attach must never be reached against a session already known "
                          "to be over — reaching it here would hang against real tmux")
 
+    def test_a_failed_teardown_after_an_early_death_is_reported(self):
+        """`kill-session`, run directly after the eager check recovers an early death,
+        was the module's own last unchecked tmux return code — correction 2 applies to
+        it too."""
+        fake = _FakeTmux(race_death_status=9, kill_rc=1)
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 9)
+        self.assertTrue(any("ending the frame" in m for m in buf), buf)
+
     def test_remain_on_exit_is_armed_before_the_pane_id_is_even_known(self):
         """The other half of Critical 1: the placeholder loaded via `new-session`'s own
         `-f` — written and on disk BEFORE that command even runs — must already carry
         `remain-on-exit on`, because a harness that dies in the opening milliseconds
         (a missing binary is the sharpest case) needs its pane to survive before this
-        launcher has done anything else at all, config or hook alike."""
+        launcher has done anything else at all, config or hooks alike."""
         conf_snapshots = []
 
         def _peek(cmd, **kwargs):
@@ -408,12 +519,34 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(len(conf_snapshots), 1)
         self.assertIn("remain-on-exit on", conf_snapshots[0])
 
+    def test_remain_on_exit_is_armed_directly_when_a_server_is_already_running(self):
+        """The placeholder's `-f` is silently ignored once a server is already up
+        (measured; see the module docstring), regardless of who started it — an
+        operator's own `tmux -L charter new-session` included. Confirmed by hand:
+        without arming it directly in that case, a race-window death against such a
+        server returns the WRONG code (1, not its own) deterministically, rather than
+        hanging — still wrong, just a quieter failure than the hang."""
+        fake = _FakeTmux(exit_code=0, pre_existing_sessions=frozenset({"someone-elses"}))
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("remain-on-exit" in c for c in fake.calls),
+                        "remain-on-exit was not armed directly ahead of a running server")
+
+    def test_remain_on_exit_is_not_armed_a_second_way_on_a_fresh_server(self):
+        """Companion: when nothing else is running, the placeholder `-f` is sufficient
+        (it IS what starts the server), so the direct arm command should not run —
+        pinning that the condition is actually checked, not that running it twice would
+        itself be wrong."""
+        fake = _FakeTmux(exit_code=0)  # pre_existing_sessions defaults to empty
+        _launch(fake)
+        self.assertFalse(any("remain-on-exit" in c for c in fake.calls))
+
     def test_a_still_live_session_after_attach_is_a_detach_not_a_silent_zero(self):
-        """Finding 6, and the spec's own words: "Detach is allowed and prints how to
-        reattach... returning silently to a shell with it still running is not." A
-        session `list-sessions` still reports after `attach` returns is this frame's
-        own — the harness is still running, so this must not read as success by
-        accident and must not stay silent about it."""
+        """The spec's own words: "Detach is allowed and prints how to reattach...
+        returning silently to a shell with it still running is not." A session
+        `list-sessions` still reports after `attach` returns is this frame's own — the
+        harness is still running, so this must not read as success by accident and must
+        not stay silent about it."""
         fake = _FakeTmux(still_live=True)
         buf = []
         with mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
@@ -424,11 +557,47 @@ class Launch(PersonaIso, unittest.TestCase):
         # The frame's own directory must not be reaped while the session is still live.
         self.assertTrue(state.frame_dir(fake.fid).exists())
 
-    def test_a_failed_hook_install_is_reported_but_not_fatal(self):
+    def test_refuses_to_attach_when_the_teardown_hook_fails_to_install(self):
+        """Without the teardown hook, a crash ANY time later in the harness's life
+        would leave `attach` blocked forever with nothing to end the session — the same
+        hang the eager check exists to close, just moved later and made permanent for
+        this frame. Refusing to attach is the safe choice; the harness keeps running,
+        detached."""
+        fake = _FakeTmux(teardown_hook_rc=1, still_live=True)
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("refusing to attach" in m for m in buf),
+                        f"no refusal message: {buf}")
+        self.assertFalse(any("attach" in c for c in fake.calls),
+                         "attach must never be reached once teardown cannot be trusted")
+        self.assertTrue(state.frame_dir(fake.fid).exists())
+
+    def test_the_harness_pane_is_selected_after_the_splits(self):
+        """`split-window` makes the newly created pane the ACTIVE one by default, so
+        after every slot has been drawn, the LAST panel drawn — not the harness — has
+        focus, and an interactive harness never receives a keystroke without this
+        (measured by hand: `%2 active=1, %0 active=0` after two splits)."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        select_cmd = next(c for c in fake.calls if "select-pane" in c)
+        self.assertEqual(select_cmd[select_cmd.index("-t") + 1], fake.pane_id)
+
+    def test_a_failed_pane_selection_is_reported_but_not_fatal(self):
+        fake = _FakeTmux(exit_code=0, select_rc=1)
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("focusing the harness pane" in m for m in buf), buf)
+        self.assertTrue(any("attach" in c for c in fake.calls))
+
+    def test_a_failed_write_hook_install_is_reported_but_not_fatal(self):
         """A harness pane already exists and is already running by the time the hook is
         installed — losing exit-code tracking for this one frame is a real degradation,
         but killing an already-live pane over it would be worse."""
-        fake = _FakeTmux(hook_rc=1, exit_code=5)
+        fake = _FakeTmux(write_hook_rc=1, exit_code=5)
         buf = []
         with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
             rc = _launch(fake)
@@ -528,16 +697,17 @@ class Launch(PersonaIso, unittest.TestCase):
              mock.patch("os.get_terminal_size", return_value=_os_terminal_size(200, 50)):
             rc = commands_frame.cmd_launch(args)
         self.assertNotEqual(rc, 0)
-        # `run` is reached once, for the pre-create `reap()` pass (see the reap-ordering
-        # test below) — but never for anything that needs a working state directory.
+        # `run` is reached at most for the pre-create `reap()`/arm pass (see the
+        # reap-ordering test below) — but never for anything that needs a working state
+        # directory.
         self.assertFalse(any("new-session" in c.args[0] for c in run.call_args_list))
 
     def test_reap_runs_before_this_frames_own_directory_is_created(self):
-        """Finding 12: `state.reap` compares live tmux sessions against directories
-        already on disk. Creating THIS frame's own directory first — before its tmux
-        session exists — would make it look exactly like an abandoned one, and the very
-        next `reap()` call would delete a directory this launch had not even started
-        using yet."""
+        """`state.reap` compares live tmux sessions against directories already on
+        disk. Creating THIS frame's own directory first — before its tmux session
+        exists — would make it look exactly like an abandoned one, and the very next
+        `reap()` call would delete a directory this launch had not even started using
+        yet."""
         order = []
         real_reap = state.reap
         real_frame_dir = state.frame_dir
@@ -565,8 +735,8 @@ class BypassRouting(unittest.TestCase):
     """`Bypass.test_a_pipe_gets_no_frame` pins `bypass()`'s OWN argv shape but never
     calls `cmd_launch` at all — it cannot catch a `cmd_launch` that stopped routing to
     `bypass()` in the first place (confirmed: deleting the routing check, or replacing
-    it with `if False:`, left the full 15-test suite green before this class existed).
-    These test the DECISION, not what `bypass()` does once reached."""
+    it with `if False:`, left the full suite green before this class existed). These
+    test the DECISION, not what `bypass()` does once reached."""
 
     def test_the_no_frame_flag_routes_to_bypass(self):
         args = SimpleNamespace(harness="claude", rest=[], no_frame=True)
@@ -633,7 +803,7 @@ class CollisionGuard(unittest.TestCase):
         self.assertIn("charter status", str(ctx.exception))
 
     def test_a_harness_named_frame_is_refused_too(self):
-        """Finding 11: the loop that registers every harness runs BEFORE `sub.add_parser
+        """The loop that registers every harness runs BEFORE `sub.add_parser
         ("frame", ...)` does, so a harness with `cli_name == "frame"` would pass a check
         against `sub.choices` alone (nothing is named `frame` there yet) and only
         collide once the escape hatch's own `add_parser` call runs a few lines later —
@@ -731,6 +901,22 @@ class FrameArgvSplit(unittest.TestCase):
                 rest, frame_rest = _split_frame_argv(list(argv))
                 self.assertEqual(rest, argv)
                 self.assertIsNone(frame_rest)
+
+
+class MainDeliversFrameRest(unittest.TestCase):
+    """The DELIVERY half of Critical 2. `FrameArgvSplit` above tests `_split_frame_argv`
+    in isolation, re-implementing in its own `_parse` helper the graft `cli.main` itself
+    performs (`args.rest = frame_rest`) — a test that only exercises the helper cannot
+    catch that graft line being deleted from `main`. Confirmed: deleting `args.rest =
+    frame_rest` from `main()` left the full suite green, while `charter claude -p hi`
+    silently ran with `rest=[]`, dropping `-p hi` entirely."""
+
+    def test_charter_claude_dash_p_hi_reaches_bypass_via_main(self):
+        from charter import cli
+        with mock.patch("charter.commands_frame.bypass", return_value=0) as byp:
+            rc = cli.main(["claude", "--no-frame", "-p", "hi"])
+        byp.assert_called_once_with(["claude", "-p", "hi"])
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":

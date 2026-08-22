@@ -2,50 +2,73 @@
 
 The launcher does NOT exec tmux, and that is measured rather than stylistic: an attached
 `tmux new-session` returns 0 whatever its command exited with (tmux 3.7c). So the status
-is carried out of band — normally by a pane-scoped `pane-died` hook, with a direct query
-as a fallback for the race described below — and this process waits for tmux, reads the
+is carried out of band — normally by a pair of `pane-died` hooks, with a direct query as
+a fallback for the race described below — and this process waits for tmux, reads the
 recorded (or queried) code, and exits with it. `exec` survives only on the bypass path,
 where there is no frame in the way.
 
 **Every frame shares one tmux server (`SOCKET`), told apart by session name (the frame
 id), not one server per frame.** That single choice is what makes the rest of this module
 non-obvious, and it is why the session-scoped/hook-installing config reaches tmux through
-`source-file`/a direct `set-hook` command rather than through the `-f` flag
-`layout.session_argv` also carries. Measured against tmux 3.7c: `-f` is read only at the
-moment a client's connection actually STARTS the server — a later `new-session -f`
+`source-file`/direct `set-hook`/`set-environment` commands rather than through the `-f`
+flag `layout.session_argv` also carries. Measured against tmux 3.7c: `-f` is read only at
+the moment a client's connection actually STARTS the server — a later `new-session -f`
 against a server that is already running (the ordinary case, once a first frame is up) is
 silently ignored. A frame launched second, third, or fifty-first would then never get its
-own config applied at all if it relied on `-f` alone. `source-file` and a direct
-`set-hook` invocation both re-apply against whatever server already answers on the
-socket, so they work identically for the first frame and the fifty-first (verified by
-hand against tmux 3.7c: a hook installed this way for a SECOND session on an
-already-running server fires correctly, and its `kill-session` tears down only that
-session, leaving a sibling frame's session untouched).
+own config applied at all if it relied on `-f` alone. `source-file` and direct commands
+both re-apply against whatever server already answers on the socket, so they work
+identically for the first frame and the fifty-first (verified by hand against tmux 3.7c: a
+hook installed this way for a SECOND session on an already-running server fires correctly,
+and its `kill-session` tears down only that session, leaving a sibling frame untouched).
 
 **A second, narrower race survives even that fix.** `new-session` starts the harness
-running immediately; the hook that would record its exit code is not installed until a
-separate `set-hook` call some milliseconds later (measured 8.2-10.5ms). A harness that
-dies inside that window is never caught by the hook — hooks do not fire retroactively for
-an event that already happened, so it never existed yet to catch anything — and this is
-worse than `state.exit_code` merely reading back `None`: with nothing left to run the
-hook's own `kill-session`, an `attach` against that session BLOCKS FOREVER (verified by
-hand against a real tmux 3.7c — `remain-on-exit`, armed for exactly this reason, is
-legitimately keeping the dead pane's session alive; the module never called anything to
-end it). `remain-on-exit on` in the placeholder `-f` config is still necessary — it is
-what keeps the pane around long enough to be askable at all — but is not sufficient on
-its own. What actually closes the race is asking tmux directly, `display-message -p -t
-<harness_pane> '#{pane_dead}:#{pane_dead_status}'`, IMMEDIATELY after the `set-hook` call
-returns and BEFORE ever calling `attach`: if the pane is already dead at that point, this
-launcher finishes the hook's job itself (records the code, runs `kill-session`) and skips
-`attach` entirely, rather than block on a session that will never end on its own. The
-same query runs again as a fallback after `attach` DOES return, for whatever gap the
-eager check could not have seen yet.
+running immediately; the hooks that would record its exit code and end the session are
+not installed until separate `set-hook` calls a few milliseconds later (measured
+8.2-10.5ms). A harness that dies inside that window is never caught by them — hooks do
+not fire retroactively for an event that already happened — and this is worse than
+`state.exit_code` merely reading back `None`: with nothing left to run `kill-session`, an
+`attach` against that session BLOCKS FOREVER (verified by hand against a real tmux 3.7c,
+via a Python `pty` driving the real launcher end to end — `remain-on-exit`, armed for
+exactly this reason, is legitimately keeping the dead pane's session alive; nothing else
+was ever going to end it). `remain-on-exit on` in the placeholder `-f` config is still
+necessary — it is what keeps the pane around long enough to be askable at all — but is
+not sufficient on its own. What actually closes the race is asking tmux directly,
+`display-message -p -t <harness_pane> '#{pane_dead}:#{pane_dead_status}'`, IMMEDIATELY
+after the hooks are installed and BEFORE ever calling `attach`: if the pane is already
+dead at that point, this launcher finishes the hooks' own job itself (records the code,
+runs `kill-session`) and skips `attach` entirely, rather than block on a session that
+will never end on its own. The same query runs again as a fallback after `attach` DOES
+return, for whatever gap the eager check could not have seen yet.
+
+**The exit-code hook's action text is a CONSTANT string, on purpose — status_path is
+never embedded in it.** An earlier version of this module interpolated the path directly
+into the hook's `run-shell "echo ... > <path>"` action. That action is TEXT tmux
+re-parses as a fresh command line when the hook fires — one tmux-quote layer nested
+inside the `source-file`/`set-hook` install call that wrote it — and `shlex.quote()`
+cannot escape a path containing a literal `'` correctly across that nesting: verified by
+hand against tmux 3.7c that the install call still reported success (`set-hook` returned
+0) while the stored action was silently corrupted (`; kill-session` disappeared into a
+mangled argument), so a plane root with an apostrophe in it hung the exact same way the
+install race does, with SUCCESS printed on the way in. Fixed by delivering the path out
+of band instead — `set-environment -t <session> CHARTER_FRAME_EXIT <path>`, a single
+argv value, no shell involved — and writing a hook action that never varies by frame at
+all (`_pane_died_write_hook_argv`): nothing in it depends on plane state, so there is
+nothing left for any path, however hostile, to corrupt (verified against tmux 3.7c with
+a path containing a space, a literal `'`, and a `$(...)` injection attempt: the exact
+byte string reaches the file and nothing embedded in it runs).
+
+**Teardown is its own hook, `pane-died[1]`, entirely separate from the write hook
+(`pane-died[0]`).** `kill-session` alone, a constant string with no interpolated data at
+all. Verified by hand: even with the write hook's own action deliberately mangled, the
+teardown hook — sharing no text with it — still fired and ended the session correctly.
+Belt and braces over the constant-action fix above: it means a *future* bug in the write
+hook's own construction can degrade to "the wrong exit code was recorded" and never
+regress all the way back to "the session never ends."
 """
 
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 import sys
 
@@ -67,14 +90,31 @@ _FALLBACK_SIZE = (80, 24)
 
 #: The placeholder loaded via `session_argv`'s `-f`, in effect ONLY if this call happens
 #: to start a brand-new tmux server on `SOCKET` (see the module docstring: `-f` is
-#: ignored otherwise). `remain-on-exit` alone, deliberately global (`-g`, not scoped to
-#: this one session): every frame wants the same value, so there is nothing to leak by
-#: sharing it, and this is what has to be in effect from the instant the harness's
-#: process starts — before this launcher has even read the pane id back off tmux's
-#: stdout, let alone had a chance to `source-file` the rest of the config — or a harness
-#: that dies in that opening window tears its own pane down before anything downstream
-#: (the hook, this launcher's fallback query) has a pane left to learn anything from.
+#: ignored otherwise — which is also why `cmd_launch` arms this same setting a second,
+#: direct way when a server is already running; see the "by construction" comment
+#: there). `remain-on-exit` alone, deliberately global (`-g`, not scoped to this one
+#: session): every frame wants the same value, so there is nothing to leak by sharing
+#: it, and this is what has to be in effect from the instant the harness's process
+#: starts — before this launcher has even read the pane id back off tmux's stdout, let
+#: alone had a chance to install anything else — or a harness that dies in that opening
+#: window tears its own pane down before anything downstream (the hooks, this
+#: launcher's fallback query) has a pane left to learn anything from.
 _PLACEHOLDER_CONF = "set -g remain-on-exit on\n"
+
+#: The session-scoped environment variable the write hook's shell reads the exit-status
+#: path back from — see the module docstring's "constant string" section for why the
+#: path is delivered this way instead of being embedded in the hook's own action text.
+_EXIT_PATH_ENV = "CHARTER_FRAME_EXIT"
+
+#: What `_query_pane_dead_status` returns for a pane confirmed dead (`#{pane_dead}` is
+#: `1`) whose `#{pane_dead_status}` tmux itself could not report — measured against tmux
+#: 3.7c: EMPTY, not negative, for a harness killed by SIGKILL/SIGTERM/SIGSEGV. `None`
+#: means "cannot tell" everywhere in this module (see `_query_pane_dead_status`'s own
+#: docstring) and must never be confused with "dead, but the real number isn't known" —
+#: the pane genuinely IS gone either way, so returning `None` here would send
+#: `cmd_launch` on to `attach` a session with nothing left to end it, recreating the
+#: exact hang the eager check exists to close, just from a signal instead of a race.
+_UNKNOWN_DEATH_CODE = 1
 
 
 def bypass(argv: list[str]) -> int:
@@ -106,8 +146,14 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     identical binding anyway, so nothing is lost by sharing it the same way
     `remain-on-exit` is (see `_PLACEHOLDER_CONF`).
 
-    The `pane-died` hook does NOT live here — see `_pane_died_hook_argv` for why it is
-    issued as its own tmux command instead of text baked into this string.
+    Neither `pane-died` hook lives here — see `_pane_died_write_hook_argv` and
+    `_pane_died_teardown_hook_argv` for why they are issued as their own tmux commands
+    instead of text baked into this string.
+
+    *session* is the frame id, which `state.frame_id` already sanitises (see
+    `charter/frame/state.py`) before this function ever sees it — interpolated into
+    plain `set -t <session> ...` config text, never into a shell command string, so it
+    carries none of the risk `_EXIT_PATH_ENV`'s docstring describes for `status_path`.
 
     `hotkey` is accepted and never bound to anything here on purpose: binding the key AND
     populating the menu it opens both belong to the task that makes the menu reachable,
@@ -125,36 +171,53 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     ])
 
 
-def _pane_died_hook_argv(*, socket: str, harness_pane: str, status_path: str) -> list[str]:
-    """The `set-hook` command that records the harness's real exit code.
+def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[str]:
+    """`set-environment`: carries *status_path* to the write hook's shell out of band.
 
-    Scoped to *harness_pane* — the id `cmd_launch` read off tmux's own stdout after
-    creating the session, never a guess. Unscoped, `pane-died` fires for ANY pane, and a
-    crashed side panel would be reported to the operator as the agent's own exit code.
-
-    Issued as its OWN tmux command — never embedded as text inside `conf_text`'s output
-    the way an earlier version of this module did — because the hook's action is itself
-    a shell command string that needs its own quoting, and nesting THAT inside a second,
-    text-file level of tmux quoting (`source-file`'s config syntax) breaks even
-    `shlex.quote`'s own escaping for a path containing a literal single quote: verified
-    against tmux 3.7c that the two nested quote layers corrupt each other's boundaries
-    (the outer layer's quote character terminates early on a quote character that only
-    means something to the inner one). Passed as one clean argv element instead —
-    matching every other command `frame/layout.py` builds, and the reason its own module
-    docstring gives for never joining argv (`gh -F`, #328) — `shlex.quote` then needs no
-    help and was verified, by hand against the same tmux 3.7c, to round-trip a path
-    containing a space, a literal single quote, and a `$(...)` injection attempt
-    correctly: the exact byte string reaches the file, and nothing embedded in it runs.
-
-    *status_path* reaches here from `STATE_DIR` (the plane root, or `$CHARTER_HOME`) —
-    never operator argv — but it is still handed to `/bin/sh -c` inside `run-shell`, the
-    one place this module hands tmux a STRING rather than an argv list, so it is quoted
-    like any other value that reaches a shell: a plane root with a space in it must not
-    silently write to the wrong file, and one shaped like `$(...)` must not run.
+    One argv value, no shell parsing at all on this side — the whole point (see the
+    module docstring). `run-shell`'s own spawned shell later reads it back from its
+    inherited environment via `$CHARTER_FRAME_EXIT`, verified by hand to work for a
+    SESSION-scoped `set-environment` (no `-g`) reaching a hook fired for a pane in that
+    session.
     """
-    action = (f'run-shell "echo #{{pane_dead_status}} > {shlex.quote(status_path)}" '
-             f'; kill-session')
+    return ["tmux", "-L", socket, "set-environment", "-t", session, _EXIT_PATH_ENV,
+           status_path]
+
+
+def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
+    """`pane-died[0]`: writes the harness's real exit status, out of band.
+
+    A CONSTANT action — no operator- or plane-derived string is ever embedded in this
+    text (see the module docstring's "constant string" section for the bug that fixes).
+    `\\"` before a literal `"` or `$` is load-bearing, not decorative: verified by hand
+    that an UNESCAPED `$` inside this tmux double-quoted argument is consumed by tmux's
+    OWN parsing before the shell ever sees it (a first draft came out with the variable
+    reference silently missing, and a SECOND unescaped `$` — inside `${v:-1}` — made
+    `set-hook` itself fail outright with "invalid environment variable"); the escaped
+    form is what reaches `/bin/sh -c` as literal text for the SHELL to interpret.
+
+    `v=#{pane_dead_status}; echo "${v:-N}" > ...` rather than a bare `echo
+    #{pane_dead_status} > ...`: `#{pane_dead_status}` is EMPTY, not present as some
+    fallback digit, for a harness killed by a signal (SIGKILL/SIGTERM/SIGSEGV; measured
+    against tmux 3.7c) — an unqualified `echo` would then write an empty line, which
+    `state.exit_code`'s `int(...)` cannot parse, silently reading back as `None` exactly
+    like "nothing was ever recorded." The shell's own `${v:-N}` (not `${v-N}`, which only
+    substitutes for UNSET, not empty) closes that at the point of writing, so the file
+    this hook produces is always a parseable integer — `_UNKNOWN_DEATH_CODE` on a signal
+    death, the real status otherwise. Verified against tmux 3.7c for both.
+    """
+    action = ('run-shell "v=#{pane_dead_status}; echo '
+             f'\\"\\${{v:-{_UNKNOWN_DEATH_CODE}}}\\" > '
+             f'\\"\\${_EXIT_PATH_ENV}\\""')
     return ["tmux", "-L", socket, "set-hook", "-p", "-t", harness_pane, "pane-died", action]
+
+
+def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
+    """`pane-died[1]`: ends the session. Nothing else — see the module docstring's
+    "Teardown is its own hook" section for why this is never combined with the write
+    hook above."""
+    return ["tmux", "-L", socket, "set-hook", "-p", "-t", harness_pane, "pane-died[1]",
+           "kill-session"]
 
 
 def _live_sessions(socket: str) -> set[str]:
@@ -189,22 +252,31 @@ def _report_tmux_failure(action: str, cmd: list[str], proc: subprocess.Completed
 def _query_pane_dead_status(socket: str, harness_pane: str) -> int | None:
     """Ask tmux directly whether *harness_pane* died, and with what status.
 
-    Called twice by `cmd_launch`, for two different gaps a hook alone cannot cover: once
-    EAGERLY, right after `set-hook` returns, to close the install race the module
-    docstring measures (a harness that died before the hook existed is never caught by
-    it, because a hook only fires for a death AFTER it exists); and again as a fallback
-    after `attach` returns, for whatever the eager check could not have seen yet.
-    `remain-on-exit` (armed from the very first moment via `_PLACEHOLDER_CONF`) is what
-    keeps the pane around long enough to still be askable either time — without it, this
-    query would simply find no such pane, exactly like the hook found no such event.
+    Called twice by `cmd_launch`, for two different gaps the hooks alone cannot cover:
+    once EAGERLY, right after both hooks are installed, to close the install race the
+    module docstring measures (a harness that died before the hooks existed is never
+    caught by them, because a hook only fires for a death AFTER it exists); and again as
+    a fallback after `attach` returns, for whatever the eager check could not have seen
+    yet. `remain-on-exit` (armed from the very first moment via `_PLACEHOLDER_CONF`, or
+    directly when a server is already running — see `cmd_launch`) is what keeps the pane
+    around long enough to still be askable either time — without it, this query would
+    simply find no such pane, exactly like the hooks found no such event.
 
-    ``None`` for "cannot tell" (the pane is alive, or the query itself failed) — never a
-    fabricated 0, which is the exact silent-success failure this whole module exists to
-    rule out.
+    ``None`` means "cannot tell" (the pane is alive, or the query itself failed) — never
+    a fabricated 0. An EMPTY `#{pane_dead_status}` is a THIRD case, distinct from both:
+    the pane is confirmed dead (`#{pane_dead}` is `1`) but tmux itself has no status to
+    report — measured against tmux 3.7c for a harness killed by a signal
+    (SIGKILL/SIGTERM/SIGSEGV), not merely a hypothetical. Returning `None` for THAT case
+    would tell `cmd_launch` "alive, go ahead and attach" for a pane that is provably
+    dead — the exact hang the eager check exists to close, reopened by a signal instead
+    of a timing race. See `_UNKNOWN_DEATH_CODE`.
     """
-    dm = subprocess.run(["tmux", "-L", socket, "display-message", "-p", "-t", harness_pane,
-                         "#{pane_dead}:#{pane_dead_status}"],
-                        capture_output=True, text=True, timeout=5)
+    try:
+        dm = subprocess.run(["tmux", "-L", socket, "display-message", "-p", "-t", harness_pane,
+                             "#{pane_dead}:#{pane_dead_status}"],
+                            capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
     if dm.returncode != 0:
         return None
     dead, _, status = dm.stdout.strip().partition(":")
@@ -213,7 +285,7 @@ def _query_pane_dead_status(socket: str, harness_pane: str) -> int | None:
     status = status.strip()
     if status.lstrip("-").isdigit():
         return int(status)
-    return None
+    return _UNKNOWN_DEATH_CODE
 
 
 def cmd_launch(args) -> int:
@@ -255,7 +327,25 @@ def cmd_launch(args) -> int:
     # also narrows (though does not close) the same race for a sibling frame's `exit`
     # file: less time between "session gone" and "directory removed" for a sibling's own
     # launcher to lose the read.
-    state.reap(_live_sessions(SOCKET))
+    live_before = _live_sessions(SOCKET)
+    if live_before:
+        # Arm `remain-on-exit` by construction here, not by coincidence. The placeholder
+        # `-f` config above only takes effect if THIS `new-session` call is what starts
+        # the tmux server — but a server on `SOCKET` may already be running for a reason
+        # that has nothing to do with charter (an operator's own `tmux -L charter
+        # new-session`, say), in which case `-f` is silently ignored and remain-on-exit
+        # stays at tmux's own default (off) until SOME charter frame happens to
+        # `source-file` it. Verified by hand: without this, a harness that dies in the
+        # race window against such a server returns the wrong code (1, not its own)
+        # deterministically — not a hang, since the session simply vanishes with it, but
+        # still wrong, and worth closing the same way the placeholder closes the
+        # first-frame-ever case.
+        arm_cmd = ["tmux", "-L", SOCKET, "set", "-g", "remain-on-exit", "on"]
+        arm = subprocess.run(arm_cmd, capture_output=True, text=True, timeout=15)
+        if arm.returncode != 0:
+            _report_tmux_failure("arming remain-on-exit ahead of an already-running server",
+                                 arm_cmd, arm)
+    state.reap(live_before)
 
     fdir = state.frame_dir(fid, create=True)
     if fdir is None:
@@ -306,56 +396,98 @@ def cmd_launch(args) -> int:
         util.warn("charter frame: continuing without it — mouse/history-limit/hotkey "
                   "settings may not be in effect for this frame")
 
-    hook_cmd = _pane_died_hook_argv(socket=SOCKET, harness_pane=harness_pane,
-                                    status_path=str(status_path))
-    hook = subprocess.run(hook_cmd, env=env, capture_output=True, text=True, timeout=15)
-    if hook.returncode != 0:
-        _report_tmux_failure("installing the exit-code hook", hook_cmd, hook)
+    env_cmd = _exit_path_env_argv(socket=SOCKET, session=fid, status_path=str(status_path))
+    env_set = subprocess.run(env_cmd, env=env, capture_output=True, text=True, timeout=15)
+    if env_set.returncode != 0:
+        _report_tmux_failure("carrying the exit-status path", env_cmd, env_set)
         util.warn("charter frame: continuing without it — the exit code may not be "
                   "recorded for this frame")
 
-    # Closes the install race, rather than merely working around its symptom. A harness
-    # that died in the window between `new-session` starting it and the `set-hook` call
-    # above actually registering leaves the hook registered for an event that ALREADY
-    # happened — hooks do not fire retroactively, so it never fires at all, and nothing
-    # is left to run the hook's own `kill-session`. Verified by hand against a real tmux
-    # 3.7c: `attach` below then blocks FOREVER on a session `remain-on-exit` is legitimately
-    # keeping alive, not merely returns 0 early — a worse failure than the one the module
+    write_hook_cmd = _pane_died_write_hook_argv(socket=SOCKET, harness_pane=harness_pane)
+    write_hook = subprocess.run(write_hook_cmd, env=env, capture_output=True, text=True, timeout=15)
+    if write_hook.returncode != 0:
+        _report_tmux_failure("installing the exit-status hook", write_hook_cmd, write_hook)
+        util.warn("charter frame: continuing without it — the exit code may not be "
+                  "recorded for this frame")
+
+    teardown_hook_cmd = _pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=harness_pane)
+    teardown_hook = subprocess.run(teardown_hook_cmd, env=env, capture_output=True, text=True,
+                                   timeout=15)
+    if teardown_hook.returncode != 0:
+        _report_tmux_failure("installing the session-teardown hook", teardown_hook_cmd,
+                             teardown_hook)
+
+    # Closes the install race directly, rather than merely working around its symptom. A
+    # harness that died in the window between `new-session` starting it and the hooks
+    # above actually registering leaves them registered for an event that ALREADY
+    # happened — hooks do not fire retroactively, so neither fires at all, and nothing is
+    # left to run `kill-session`. Verified by hand against a real tmux 3.7c: `attach`
+    # below then blocks FOREVER on a session `remain-on-exit` is legitimately keeping
+    # alive, not merely returns 0 early — a worse failure than the one the module
     # docstring describes, because there is no return to read a code from at all. Asking
-    # directly, immediately, closes it: if the pane is already dead, the job the hook
+    # directly, immediately, closes it: if the pane is already dead, the job the hooks
     # would have done (record the code, end the session) is finished right here, and
     # `attach` is never even called against a session already known to be over.
     code = _query_pane_dead_status(SOCKET, harness_pane)
     if code is not None:
         state.record_exit(fid, code)
-        subprocess.run(["tmux", "-L", SOCKET, "kill-session", "-t", fid], env=env,
-                       capture_output=True, text=True, timeout=15)
+        kill_cmd = ["tmux", "-L", SOCKET, "kill-session", "-t", fid]
+        kill = subprocess.run(kill_cmd, env=env, capture_output=True, text=True, timeout=15)
+        if kill.returncode != 0:
+            _report_tmux_failure("ending the frame after an early death", kill_cmd, kill)
 
     attach = None
     attach_cmd = None
     if code is None:
-        for cmd in layout.panel_argvs(slots=slots, session=fid, socket=SOCKET,
-                                      charter_argv=[sys.executable, "-m", "charter"],
-                                      harness_pane=harness_pane):
-            p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-            if p.returncode != 0:
-                # Reported, not fatal: one decorative panel failing to draw must not
-                # take down a harness pane that is already up and running (correction 2
-                # asks for every return code to be CHECKED, not every failure refused).
-                _report_tmux_failure("drawing a panel", cmd, p)
+        if teardown_hook.returncode != 0:
+            # Refuse to attach rather than risk it: without the teardown hook, a crash
+            # ANY time later in the harness's life would leave `attach` blocked forever
+            # with nothing to end the session — the same hang the eager check above
+            # exists to close, just moved later and made permanent for this frame. The
+            # harness keeps running (it was already started, detached); the operator can
+            # still attach manually and accept that risk themselves.
+            util.err("charter frame: refusing to attach — the session-teardown hook "
+                     "failed to install, so a crash later would block `attach` forever "
+                     "with nothing to end the session. The harness is still running, "
+                     f"detached; reattach manually if you must: "
+                     f"tmux -L {SOCKET} attach -t {fid}")
+        else:
+            for cmd in layout.panel_argvs(slots=slots, session=fid, socket=SOCKET,
+                                          charter_argv=[sys.executable, "-m", "charter"],
+                                          harness_pane=harness_pane):
+                p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
+                if p.returncode != 0:
+                    # Reported, not fatal: one decorative panel failing to draw must not
+                    # take down a harness pane that is already up and running (correction
+                    # 2 asks for every return code to be CHECKED, not every failure
+                    # refused).
+                    _report_tmux_failure("drawing a panel", cmd, p)
 
-        # No capture_output: this is the operator's own terminal for as long as the
-        # harness runs, not an admin command whose output charter should own.
-        attach_cmd = ["tmux", "-L", SOCKET, "attach", "-t", fid]
-        attach = subprocess.run(attach_cmd, env=env)
+            # `split-window` makes the newly created pane the ACTIVE one by default, so
+            # after every slot has been drawn, the LAST panel drawn — not the harness —
+            # has focus, and an interactive harness never receives a keystroke (measured:
+            # `%2 active=1, %0 active=0` after two splits). Pre-existing in
+            # `layout.panel_argvs`'s own split ordering, not something this diff
+            # introduced, but leaving the frame in a state the operator can actually type
+            # into is this launcher's job.
+            select_cmd = ["tmux", "-L", SOCKET, "select-pane", "-t", harness_pane]
+            select = subprocess.run(select_cmd, env=env, capture_output=True, text=True,
+                                    timeout=15)
+            if select.returncode != 0:
+                _report_tmux_failure("focusing the harness pane", select_cmd, select)
 
-        code = state.exit_code(fid)
-        if code is None:
-            # A second ask, for whatever gap the eager check above could not have seen
-            # yet (the harness was still alive at that point and died later — the
-            # ordinary case, caught here by the hook, or a rarer one where the hook
-            # itself never actually reached the server despite reporting success).
-            code = _query_pane_dead_status(SOCKET, harness_pane)
+            # No capture_output: this is the operator's own terminal for as long as the
+            # harness runs, not an admin command whose output charter should own.
+            attach_cmd = ["tmux", "-L", SOCKET, "attach", "-t", fid]
+            attach = subprocess.run(attach_cmd, env=env)
+
+            code = state.exit_code(fid)
+            if code is None:
+                # A second ask, for whatever gap the eager check above could not have
+                # seen yet (the harness was still alive at that point and died later —
+                # the ordinary case, caught here by the hooks, or a rarer one where they
+                # never actually reached the server despite reporting success).
+                code = _query_pane_dead_status(SOCKET, harness_pane)
 
     live_after = _live_sessions(SOCKET)
     state.reap(live_after)
