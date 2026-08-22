@@ -269,6 +269,17 @@ _RESIZE_FLAG = {"top": "-y", "bottom": "-y", "left": "-x", "right": "-x"}
 #: that whatever the string actually was cannot corrupt the action tmux re-parses.
 _PANE_ID_RE = re.compile(r"%\d+")
 
+#: tmux's own answer, verbatim, for a `set-hook` call naming an event this binary does
+#: not recognise at all — confirmed by hand against a real tmux 3.7c with a fabricated
+#: hook name (`invalid option: <name>`, generic `set-hook` argument-parsing text, not
+#: specific to any one hook's name). Checked against a FAILED install's own stderr
+#: rather than trusted only up front: `RESIZE_HOOK_FLOOR` is a fast path to skip the
+#: attempt for a version already KNOWN too old, not the only thing standing between an
+#: operator and a loud, recurring error if that constant ever turns out to be wrong —
+#: this is what makes the mechanism safe BY CONSTRUCTION rather than by the constant
+#: being right (see `_report_tmux_failure`'s call site below for how the two combine).
+_INVALID_HOOK_NAME = "invalid option"
+
 
 def _resize_hook_argv(*, socket: str, harness_pane: str, panes: dict[str, str]) -> list[str]:
     """`window-resized`: re-asserts every fixed-size panel's dimension after a resize.
@@ -615,9 +626,22 @@ def cmd_launch(args) -> int:
                 resize = subprocess.run(resize_cmd, env=env, capture_output=True, text=True,
                                         timeout=15)
                 if resize.returncode != 0:
-                    _report_tmux_failure("installing the resize hook", resize_cmd, resize)
-                    util.warn("charter frame: continuing without it — panels may "
-                             "drift out of shape if this terminal is resized")
+                    if _INVALID_HOOK_NAME in (resize.stderr or ""):
+                        # RESIZE_HOOK_FLOOR believed this tmux would recognise the
+                        # hook name and it does not — the constant is wrong, not the
+                        # launch. Trust what THIS tmux just said over the constant and
+                        # degrade the same quiet way the version-gate above already
+                        # does, rather than report it as a broken integration (a
+                        # capability ceiling, not a failure — see the module's own
+                        # "belt and braces" framing and `harness.base.Deficit`'s same
+                        # philosophy for a harness-level capability gap).
+                        util.warn("charter frame: this tmux does not support the "
+                                 "resize-recovery hook — panels may drift out of "
+                                 "shape if this terminal is resized")
+                    else:
+                        _report_tmux_failure("installing the resize hook", resize_cmd, resize)
+                        util.warn("charter frame: continuing without it — panels may "
+                                 "drift out of shape if this terminal is resized")
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —

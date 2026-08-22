@@ -318,7 +318,8 @@ class _FakeTmux:
                 panel_pane_ids=None,
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
-                kill_rc=0, arm_rc=0, resize_hook_rc=0):
+                kill_rc=0, arm_rc=0, resize_hook_rc=0,
+                resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
         self.exit_code = exit_code
         self.race_death_status = race_death_status
@@ -340,6 +341,10 @@ class _FakeTmux:
         self.kill_rc = kill_rc
         self.arm_rc = arm_rc
         self.resize_hook_rc = resize_hook_rc
+        # Distinct from every other stderr string in this fake — a test needs to
+        # control it independently to exercise the "invalid option" degrade (fix
+        # round 3, item 2) separately from an ordinary resize-hook failure.
+        self.resize_hook_stderr = resize_hook_stderr
         self.calls: list[list[str]] = []
         self.fid = None
         self.sourced_conf_text = None
@@ -374,7 +379,7 @@ class _FakeTmux:
                                                    stderr="" if self.teardown_hook_rc == 0 else "bad teardown target")
             if "window-resized" in cmd:
                 return subprocess.CompletedProcess(cmd, self.resize_hook_rc, stdout="",
-                                                   stderr="" if self.resize_hook_rc == 0 else "bad resize hook target")
+                                                   stderr="" if self.resize_hook_rc == 0 else self.resize_hook_stderr)
             return subprocess.CompletedProcess(cmd, self.write_hook_rc, stdout="",
                                                stderr="" if self.write_hook_rc == 0 else "bad hook target")
         if "select-pane" in cmd:
@@ -754,6 +759,7 @@ class Launch(PersonaIso, unittest.TestCase):
             rc = _launch(fake)
         self.assertEqual(rc, 0)
         self.assertTrue(any("resize hook" in m for m in buf), buf)
+        self.assertTrue(any("attach" in c for c in fake.calls))
 
     def test_a_failed_resize_hook_install_names_its_consequence(self):
         """Fix round 2, item 4: `_report_tmux_failure` prints the command and tmux's
@@ -769,6 +775,46 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(any("continuing without it" in m and "drift" in m for m in buf),
                         buf)
+
+    def test_an_invalid_option_resize_hook_failure_warns_rather_than_errors(self):
+        """Fix round 3, item 2: `RESIZE_HOOK_FLOOR` is a fast path to skip a version
+        already KNOWN too old, not the only thing standing between an operator and a
+        LOUD, RECURRING error if that constant is ever wrong — safe by construction,
+        not by the constant being right. A failed install whose stderr is tmux's own
+        `invalid option: <name>` (confirmed by hand: generic `set-hook`
+        argument-parsing text, not specific to this one hook) must degrade the SAME
+        quiet way a known-too-old version already does: `util.warn`, never
+        `util.err`/`_report_tmux_failure`'s command-and-stderr dump."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"},
+                         resize_hook_rc=1,
+                         resize_hook_stderr="invalid option: window-resized")
+        warned, errored = [], []
+        with mock.patch("charter.util.warn", side_effect=lambda m: warned.append(m)), \
+             mock.patch("charter.util.err", side_effect=lambda m: errored.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(errored, [], f"an unsupported hook name must never reach "
+                                      f"util.err: {errored}")
+        self.assertTrue(any("resize" in m and "drift" in m for m in warned), warned)
+
+    def test_a_non_invalid_option_resize_hook_failure_still_errors(self):
+        """Companion to the test above — the two paths must not collapse into each
+        other. A resize-hook failure for some OTHER reason (a real bug, a permissions
+        problem, anything that isn't tmux saying the hook name itself is unrecognised)
+        must still get the loud, specific `_report_tmux_failure` treatment; degrading
+        every failure to a quiet warning would hide an actual regression behind the
+        same wording a known compatibility gap uses."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"},
+                         resize_hook_rc=1,
+                         resize_hook_stderr="no space for a new pane")
+        warned, errored = [], []
+        with mock.patch("charter.util.warn", side_effect=lambda m: warned.append(m)), \
+             mock.patch("charter.util.err", side_effect=lambda m: errored.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("resize hook" in m for m in errored), errored)
+        self.assertTrue(any("continuing without it" in m and "drift" in m
+                            for m in warned), warned)
 
     def test_the_resize_hook_is_skipped_quietly_below_its_own_version_floor(self):
         """Fix round 2, item 5: `window-resized` was added in tmux 3.3
@@ -786,7 +832,6 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertFalse(any("window-resized" in c for c in fake.calls),
                          "the hook must not even be attempted below its own floor")
         self.assertTrue(any("3.2" in m and "resize" in m for m in buf), buf)
-        self.assertTrue(any("attach" in c for c in fake.calls))
 
     def test_below_the_tmux_floor_degrades_instead_of_refusing(self):
         """Correction 5: a version below `tmuxctl.FLOOR` prints `below_floor_message`
