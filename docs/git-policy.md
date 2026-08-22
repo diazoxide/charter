@@ -40,6 +40,12 @@ the fix, which is usually nothing at all — `charter git-policy --apply` has al
 configured the repo correctly. Check the credential with `glab auth status` or `gh auth
 status`, never `ssh -T`.
 
+**And when it is not the rule working** — a repo that genuinely needs something this guard
+refuses — see [hooks.md](hooks.md) → *When a guard is wrong*. Short version: nothing in
+`charter.toml` or the environment lifts a denial, deliberately, and you run the command in
+your own terminal. If the guard is wrong about you *every time*, that is charter holding a
+policy your organisation does not, and it belongs in an issue rather than a local switch.
+
 The same guard covers the vault: it refuses `--reveal` on a non-interactive stdout and
 refuses file-reading tools pointed at a vault file, so a secret cannot reach the transcript
 by way of `cat`. See [secrets.md](secrets.md).

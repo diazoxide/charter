@@ -59,11 +59,40 @@ def _emit(obj: dict) -> None:
     print(json.dumps(obj))
 
 
+#: What to do when a guard is WRONG about your case (#370).
+#:
+#: Every denial named a remedy for the workflow the operator was supposed to be doing, and
+#: none named this. Nothing else did either — no config key, no environment variable, no
+#: per-guard switch — so the only route past a denial charter got wrong was to delete the
+#: hook or disable the plugin, taking every guard, both injections and all the tallies with
+#: it. Every guard is eventually wrong about something, and when the only move is nuclear,
+#: the guard that was wrong once is off for ever along with the ones that were not.
+#:
+#: **The answer is that there is no switch, and that is the design.** charter's guards exist
+#: because committed data must not reach a credential or make something run. A key in
+#: `charter.toml` would be a key a teammate's pull request could flip; an environment
+#: variable sits on a command line the agent itself writes. An override charter can READ is
+#: an override the AGENT controls, which is exactly the party being bound. What remains is
+#: the operator's own shell, which was never inside the boundary: these are `PreToolUse`
+#: hooks on the harness's tools, so running the command yourself works around nothing.
+#:
+#: Appended in :func:`_deny` rather than at the five call sites, for two reasons that are
+#: both about the next guard rather than these five: a sixth carries it without anyone
+#: remembering to, and the trace tally keys — derived from the reason BEFORE it gets here —
+#: cannot drift. Appended, never prepended, for the same reason.
+_OVERRIDE_NOTE = (
+    " — Wrong about this case? There is deliberately no config key, environment variable or "
+    "switch that lifts a charter denial: one charter could read is one a committed file could "
+    "flip. Run it yourself, in your own terminal — these guards bound what an AGENT does with "
+    "your authority, never what you do. See `docs/hooks.md` → When a guard is wrong."
+)
+
+
 def _deny(event: str, reason: str) -> None:
     _emit({"hookSpecificOutput": {
         "hookEventName": event,
         "permissionDecision": "deny",
-        "permissionDecisionReason": f"charter guard: {reason}",
+        "permissionDecisionReason": f"charter guard: {reason}{_OVERRIDE_NOTE}",
     }})
 
 

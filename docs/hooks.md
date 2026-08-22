@@ -52,6 +52,43 @@ rule while one who reads a bare refusal files an issue.
 A sixth path is not a guard but an allowance: a binary the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then.
 
+## When a guard is wrong
+
+Every guard is eventually wrong about something, and the response a design invites at that
+moment is the response it gets. So this is written down rather than left to be discovered.
+
+**There is no config key, environment variable or `charter guard` verb that lifts a
+denial, and there will not be one.** That is the answer, not an omission:
+
+- charter's guards exist because **committed data must not be able to reach a credential or
+  make something run**. A switch charter read from `charter.toml` would be a switch a
+  committed file could flip — a teammate's pull request turning off the guard that keeps a
+  vault out of the transcript. An environment variable is no better: the agent writes the
+  command line the variable would sit on.
+- So an override charter can read is an override the *agent* controls, which is precisely
+  the party the guards bound.
+
+**The override is that you run the command yourself.** The guards are `PreToolUse` hooks on
+the harness's tools — they govern what an agent does with your authority inside a session.
+Your own shell is on the other side of that boundary and always was. Open a terminal and run
+it. Nothing is being worked around: the rule never applied to you.
+
+Two guards name a narrower move first, and it is usually the one you want:
+
+- **Release floor** — re-run the step **attended**. This is a mode, and it is yours to set.
+- **One credential** — `charter git-policy --apply` configures every clone for the token
+  transport, which is what most denials of it are actually asking for.
+
+**If a guard is wrong about you *every time*, that is not an override problem.** It means
+charter is holding a policy your organisation does not — an org that mandates signed
+commits, say. Switching the guard off locally hides that; the fix belongs in the rule.
+[Open an issue](https://github.com/diazoxide/charter/issues).
+
+**The thing that is not an override**, named here so nobody finds it by accident and
+believes they found the switch: removing charter's hooks from `.claude/settings.json`, or
+disabling the plugin. That takes out every guard, both injections and every tally together,
+because one of them was wrong once. It is an uninstall.
+
 ## What charter stopped asking
 
 charter used to nudge before a git write inside a workspace clone, suggesting a repo-rooted
