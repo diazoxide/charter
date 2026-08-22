@@ -165,7 +165,7 @@ class TestItAddsToTheBriefingRatherThanReplacingIt(TodoInjectionCase):
 
     def test_the_persona_role_survives(self):
         self.add_aged("some intent", days=5)
-        self.assertIn("**dev** persona", self.inject())
+        self.assertIn("`dev` persona for this session", self.inject())
 
     def test_the_memory_digest_survives(self):
         persona.remember("dev", "A DISTINCTIVE RECORDED FACT", shared=True)
@@ -209,7 +209,7 @@ class TestAFailureNeverBreaksSessionStart(TodoInjectionCase):
     def test_the_rest_of_the_briefing_still_arrives(self):
         self.add_aged("some intent", days=5)
         with self._broken():
-            self.assertIn("**dev** persona", self.inject())
+            self.assertIn("`dev` persona for this session", self.inject())
 
     def test_it_says_nothing_about_todos_rather_than_guessing(self):
         self.add_aged("some intent", days=5)

@@ -63,12 +63,12 @@ class MemoryInjectionBoundedCase(PersonaIso):
         # the identity + prompt-injection framing must not be lost in the slimming
         persona.remember("dev", "x", shared=True)
         ctx = self._inject()
-        self.assertIn("**dev** persona", ctx)
+        self.assertIn("`dev` persona for this session", ctx)
         self.assertIn("reference **data**", ctx)
 
     def test_no_memory_still_injects_role(self):
         ctx = self._inject()
-        self.assertIn("**dev** persona", ctx)
+        self.assertIn("`dev` persona for this session", ctx)
 
 
 if __name__ == "__main__":

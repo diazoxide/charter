@@ -9,8 +9,8 @@ responsibilities were a parenthetical instruction to a human.
 The rule is asymmetric on purpose, and the asymmetry is mechanical rather than
 stylistic: **dispatch** bakes the whole charter into an agent's system prompt
 with no human in the loop, while **adoption** injects only the identity line
-(`You are acting as the **x** persona — <role>`) and a pointer to
-`charter persona show`. So a draft may be adopted — that is how you work on it
+(``You are the `x` persona for this session``, with the committed `role:` quoted
+under a data label) and a pointer to `charter persona show`. So a draft may be adopted — that is how you work on it
 — and may never be dispatched.
 """
 
