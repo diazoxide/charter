@@ -8,3 +8,5 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Task 6 fix-round (charter <harness> launcher): three tmux-3.7c facts wor](20260822-110759-task-6-fix-round-charter-harness-launcher-three-.md)
 - [tmux run-shell env inheritance (verified against 3.7c): a run-shell fire](20260822-183710-tmux-run-shell-env-inheritance-verified-against-.md)
 - [cli._split_frame_argv intercepts EVERY argv[0] in _frame_command_names()](20260822-183719-cli-split-frame-argv-intercepts-every-argv-0-in-.md)
+- [tmux display-menu item NAMES are FORMATS (its own docs: 'The name and co](20260822-195054-tmux-display-menu-item-names-are-formats-its-own.md)
+- [Testing tmux display-menu format-expansion safety (the #(...) execution ](20260822-195054-testing-tmux-display-menu-format-expansion-safet.md)

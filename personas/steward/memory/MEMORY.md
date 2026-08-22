@@ -47,3 +47,4 @@ Written by the persona as it learns; committed and shared.
 - [NEVER run git commands in a clone a dispatched agent is working in — not](never-run-git-commands-in-a-clone-a-dispatched-a.md)
 - [DOCS HAVE A LEVEL NOBODY OWNS BY DEFAULT. Across ten PRs closing 23 issu](docs-have-a-level-nobody-owns-by-default-across-.md)
 - [charter guard's _as_rule: the parenthesis requirement in the old carve-o](charter-guard-s-as-rule-the-parenthesis-requirem.md)
+- [CORRECTION to my own earlier memory: the asset-freshness gate does NOT b](correction-to-my-own-earlier-memory-the-asset-fr.md)

@@ -32,3 +32,7 @@ Written by the persona as it learns; committed and shared.
 - [0.48.0 (2026-08-22) cut as a MINOR carrying the whole authority audit: 1](0-48-0-2026-08-22-cut-as-a-minor-carrying-the-wh.md)
 - [The asset-freshness gate (tests/test_asset_freshness.py) can VETO a vers](the-asset-freshness-gate-tests-test-asset-freshn.md)
 - [Smoke-testing a release: a refusal proves nothing without a benign twin.](smoke-testing-a-release-a-refusal-proves-nothing.md)
+- [0.49.0 prepared (2026-08-22, PR #378) as a MINOR carrying the authority-](0-49-0-prepared-2026-08-22-pr-378-as-a-minor-car.md)
+- [STALE-MEMORY TRAP, caught cutting 0.49.0: my own note said 'NEXT MINOR I](stale-memory-trap-caught-cutting-0-49-0-my-own-n.md)
+- [Smoke-testing a release, the isolation pattern that works: pin a throwaw](smoke-testing-a-release-the-isolation-pattern-th.md)
+- [OPEN DEFECT found smoke-testing 0.49.0, NOT fixed there (pre-existing, o](open-defect-found-smoke-testing-0-49-0-not-fixed.md)
