@@ -58,5 +58,12 @@ class Messages(unittest.TestCase):
         self.assertIn("3.2", msg)
 
 
+class RunArgv(unittest.TestCase):
+    def test_run_rejects_a_string_with_typeerror(self):
+        """The argv guard survives `python -O`, so it raises TypeError, not AssertionError."""
+        with self.assertRaises(TypeError):
+            tmuxctl.run("tmux new-session")
+
+
 if __name__ == "__main__":
     unittest.main()

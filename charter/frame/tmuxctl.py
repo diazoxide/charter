@@ -63,5 +63,6 @@ def below_floor_message(v: tuple[int, int]) -> str:
 
 def run(cmd: list[str]) -> int:
     """Run one tmux command. *cmd* is a LIST; this module never joins argv."""
-    assert isinstance(cmd, list), "tmux argv must be a list — see frame/layout.py"
+    if not isinstance(cmd, list):
+        raise TypeError(f"tmux argv must be a list, got {type(cmd).__name__}: {cmd!r} — see frame/layout.py")
     return subprocess.run(cmd).returncode
