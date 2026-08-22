@@ -1170,23 +1170,69 @@ def cmd_guard_ask(args) -> int:
     return rc
 
 
+#: The buckets `charter guard` writes, in the host's own evaluation order.
+#:
+#: `deny` is deliberately absent. Charter never writes it, and it answers neither question
+#: an operator opens this command with — "what has charter put in my permissions" and "what
+#: is currently not prompting me".
+_LISTED_BUCKETS = ("ask", "allow")
+
+
+def _rules_in(doc, bucket: str) -> list[str]:
+    """The string rules in ``permissions.<bucket>``, tolerating every other shape.
+
+    A `permissions` block or a bucket of the wrong type is somebody's deliberate structure,
+    which `add_permission_rule` refuses to write into. A *reader* has less standing still:
+    it reports what it can read and never raises over what it cannot.
+    """
+    perms = doc.get("permissions") if isinstance(doc, dict) else None
+    entries = perms.get(bucket) if isinstance(perms, dict) else None
+    return [r for r in entries if isinstance(r, str)] if isinstance(entries, list) else []
+
+
 def cmd_guard_list(args) -> int:
-    """Show the plane's force-prompt rules — read from the host's file, not a charter one."""
+    """Show the plane's guard rules — read from the host's files, not a charter one.
+
+    Both buckets, from both files. This read `permissions.ask` alone, and bare `charter
+    guard` defaults to it, so the command an operator reaches for to answer "what has
+    charter put in my permissions" showed the conservative half and hid the widening one
+    (#368). An ask rule narrows what happens without a human; an allow rule widens it, which
+    is why `cmd_guard_allow` shouts `COMMITTED` when it writes one — and why that half being
+    the invisible one was the wrong way round.
+
+    **Grouped by file, because the file a rule lives in IS its blast radius.** A flat list
+    with a label would ask the reader to trust the label; a heading makes it structural. The
+    machine-local file was invisible here for the same reason the allow bucket was — the
+    reader only ever opened one — so `--local` rules had no reader at all.
+
+    Read through the same two loaders `add_permission_rule` writes through, so the reader
+    and the writer cannot come to different conclusions about what a file contains. A
+    malformed file is named and does not suppress the other: reporting nothing because one
+    of two files is unparseable would hide rules that are in force, which is the silent
+    direction this command was already failing in.
+    """
     root = Path(config.ROOT)
-    settings, path = _load_settings(root)
-    if settings is None:
-        util.err(f"{path} is not valid JSON.")
-        return 1
-    perms = settings.get("permissions")
-    ask = (perms or {}).get("ask") if isinstance(perms, dict) else None
-    if not ask:
-        util.info("No force-prompt rules in this plane. "
+    committed, committed_path = _load_settings(root)
+    local, local_path = _load_json_settings(Path(root) / LOCAL_SETTINGS)
+    files = ((committed, committed_path, "committed — everyone on this repo"),
+             (local, local_path, "machine-local — yours alone, on this machine"))
+    rc, shown = 0, False
+    for doc, path, blast_radius in files:
+        if doc is None:
+            util.err(f"{path} is not valid JSON — skipped, so this listing is incomplete.")
+            rc = 1
+            continue
+        rules = [(b, r) for b in _LISTED_BUCKETS for r in _rules_in(doc, b)]
+        if not rules:
+            continue
+        print(f"  {path}  ({blast_radius})")
+        for bucket, rule in rules:
+            print(f"    {bucket:<6} {rule}")
+        shown = True
+    if not shown and rc == 0:
+        util.info("No guard rules in this plane. "
                   "Add one: charter guard ask 'terraform apply *'")
-        return 0
-    print(f"  {path}")
-    for rule in ask:
-        print(f"    {rule}")
-    return 0
+    return rc
 
 
 def _warn_if_shadowing(rule: str) -> None:
