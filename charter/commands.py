@@ -873,15 +873,67 @@ def _json_style(text: str) -> tuple[str | None, tuple[str, str]]:
 #: naming another tool must survive untouched — wrapping `Read(./secrets/**)` would produce
 #: `Bash(Read(./secrets/**))`, which matches nothing and fails in the silent direction.
 _RULE_TOOLS = ("Bash", "Read", "Edit", "Write", "Grep", "Glob", "WebFetch", "NotebookEdit",
-               "Task", "mcp__")
+               "Task")
+
+#: A rule already in the host's ``Tool(pattern)`` form.
+_TOOL_RULE_RE = re.compile(r"^(?:%s)\(.*\)$" % "|".join(_RULE_TOOLS), re.DOTALL)
+
+#: An MCP rule: a whole server (``mcp__slack``) or one of its tools (``mcp__slack__send``).
+#: Claude Code's MCP permission syntax is exactly this — a bare name, never parenthesised
+#: and never wildcarded — which is why it needs a shape of its own here.
+_MCP_RULE_RE = re.compile(r"^mcp__[A-Za-z0-9_-]+$")
+
+
+class UnexpressibleRule(ValueError):
+    """A pattern that names a rule syntax and then asks for something it cannot say.
+
+    Raised rather than guessed because both guesses fail silently: wrapping produces
+    `Bash(mcp__slack__send *)`, which matches a bash command by that literal name, and
+    writing it bare produces an MCP rule the host will not match either. A rule charter
+    cannot express is the one case where refusing beats writing something.
+    """
 
 
 def _as_rule(pattern: str) -> str:
-    """A permission rule for *pattern*, wrapping a bare command in ``Bash(...)``."""
+    """A permission rule for *pattern*, wrapping a bare command in ``Bash(...)``.
+
+    Tests the **shape** of the rule, never the prefix of the string. The prefix test this
+    replaces required a parenthesis (`"(" in p`), which excluded the one family that cannot
+    carry one: `charter guard ask 'mcp__slack__send'` wrote `Bash(mcp__slack__send)` and
+    printed a tick (#365).
+
+    Dropping the parenthesis requirement would have mirrored the bug rather than fixed it.
+    `str.startswith` matches raw prefixes, so `Globalprotect --connect` starts with `Glob`
+    and `Taskwarrior add x` starts with `Task`; both are ordinary binaries, and writing
+    either bare would produce a rule matching nothing in the other direction. The three
+    shapes below are what a rule can actually be — `Tool(pattern)`, a bare tool name, a bare
+    MCP name — and everything else is a command.
+    """
     p = (pattern or "").strip()
-    if p.startswith(_RULE_TOOLS) and ("(" in p or p in ("Bash",)):
+    if _TOOL_RULE_RE.match(p) or p in _RULE_TOOLS or _MCP_RULE_RE.match(p):
         return p
+    if p.startswith("mcp__"):
+        raise UnexpressibleRule(
+            f"charter cannot write {p!r} as a permission rule. An MCP rule names a server "
+            f"(`mcp__slack`) or one of its tools (`mcp__slack__send`) exactly — no "
+            f"wildcard and no arguments. Wrapping it as `Bash(...)` would write a rule "
+            f"that matches nothing, so charter writes nothing.")
     return f"Bash({p})"
+
+
+def _refuse_unexpressible(pattern: str) -> str | None:
+    """Why *pattern* cannot be written as a rule at all, or ``None``.
+
+    Asked once, BEFORE the harness loop, so a pattern charter cannot express never lands
+    under one harness and not another — the split #369 records for the malformed-file case.
+    `_as_rule` stays the single authority on what is expressible; this only decides when to
+    ask it, so the command and the translator cannot come to different answers.
+    """
+    try:
+        _as_rule(pattern)
+    except UnexpressibleRule as e:
+        return str(e)
+    return None
 
 
 def _settings_path(root: Path) -> Path:
@@ -1022,6 +1074,10 @@ def cmd_guard_allow(args) -> int:
     if not pattern:
         util.err("Nothing to add. Example: charter guard allow 'git status *'")
         return 2
+    unexpressible = _refuse_unexpressible(pattern)
+    if unexpressible:
+        util.err(unexpressible)
+        return 2
     from .harness import registry
 
     root = Path(config.ROOT)
@@ -1076,6 +1132,10 @@ def cmd_guard_ask(args) -> int:
     local = bool(getattr(args, "local", False))
     if not pattern:
         util.err("Nothing to add. Example: charter guard ask 'terraform apply *'")
+        return 2
+    unexpressible = _refuse_unexpressible(pattern)
+    if unexpressible:
+        util.err(unexpressible)
         return 2
     from .harness import registry
 
