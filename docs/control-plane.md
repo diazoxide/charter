@@ -53,6 +53,12 @@ worktrees = "../plane.worktrees" # Where worktrees live. A relative path resolve
                                   # Default: per-workspace, under
                                   # workspaces/<ws>/.worktrees/ — see "Where worktrees
                                   # live" below.
+                                  # This file is committed and `git worktree add` creates
+                                  # directories here, so the value must land inside the
+                                  # plane or in a single sibling of it (the shape above).
+                                  # Anywhere further afield is ignored and `charter doctor`
+                                  # says so; $CHARTER_WORKTREES — your machine, your
+                                  # choice — is not restricted.
 
 # One [[forge]] block per code-hosting forge this control plane tracks. A single-forge
 # control plane (the common case) declares exactly one; see "Mixed-forge" below for more
@@ -64,6 +70,11 @@ group = "my-org"                 # the GitLab group (or GitHub org/user) this fo
 host = "gitlab.com"              # optional: a self-hosted forge's host (GitLab Enterprise,
                                   # GitHub Enterprise Server). Default: the forge's own public
                                   # host (gitlab.com / github.com). See docs/forges.md.
+                                  # A bare hostname, optionally :port — no scheme, no path,
+                                  # no "@". It widens the SSH guard's deny set and becomes
+                                  # the `url.https://<host>/.insteadOf` that
+                                  # `charter git-policy --apply` writes, so a block whose
+                                  # host is not a hostname is skipped and reported.
 exclude = ["this-control-plane"] # repo names never written into the inventory — typically
                                   # the control plane's own repo, so `discover` doesn't list
                                   # itself as a clone target.

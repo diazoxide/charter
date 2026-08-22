@@ -845,9 +845,22 @@ def _close_todo(name: str, slug: str, *, journal: bool) -> int:
     Journalling happens BEFORE the delete: the entry is the only surviving evidence, so it
     is written while the todo is still there to name. Both halves resolve through the
     workspace's own todo directory, which is what keeps one workspace from closing another's
-    work — there is no path from here to a slug that lives elsewhere.
+    work.
+
+    **That last sentence used to claim more than the code did** (#339). `memstore.resolve`
+    applies no containment, and every workspace's `todos/` lives under the same data root,
+    so `../../<other>/todos/<slug>` resolved to a NEIGHBOUR's file and `unlink` took it —
+    `contain.file_refusal` had nothing to object to, because the target really is plane
+    data. The reachable input is argv rather than a committed file, so this was never a
+    finding; the comment was load-bearing anyway, and one `segment_ok` is cheaper than
+    softening it. A slug names one entry in this workspace's own directory or it names
+    nothing.
     """
-    from . import memstore, todos
+    from . import contain, memstore, todos
+    if not contain.segment_ok(slug):
+        util.err(contain.refusal(slug))
+        util.info(f"  List the real ones: charter ws todo --workspace {name}")
+        return 1
     d = todos.todos_dir(name)
     p = memstore.resolve(d, slug)
     if p is None:
