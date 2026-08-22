@@ -1641,7 +1641,9 @@ file on someone's machine. Quoting it for tmux would be an arms race against a p
 `;` separation, `#{}` expansion and two quote styles.
 
 So the command tmux runs is always `charter frame action a<N>`, and charter looks the real
-argv up in its own state. Labels are still shown — a label is drawn, never executed — but
+argv up in its own state. Labels are still shown — and a label is NOT merely drawn:
+tmux runs item names through its format engine, so `#(cmd)` in a label executes `cmd`
+(measured; see the execution notes below). Labels are escaped, not trusted — but
 they are sanitised of the one thing that could confuse a menu: newlines.
 """
 
@@ -1905,3 +1907,50 @@ git commit -m "Document the frame, record ADR 0018, and report tmux in doctor (#
 2. **Panel respawn with backoff** (`remain-on-exit` already keeps a dead panel visible with its error, which is the half that matters; three-attempt respawn is the other half).
 
 Both are named here rather than silently dropped, because a plan that omits them reads as if the spec were fully covered.
+
+---
+
+## What execution changed (2026-08-22)
+
+This plan was written before any of it ran. Eleven tasks, twenty reviews and several
+hundred mutations later, a number of its claims turned out to be wrong. They are corrected
+here rather than quietly left, because a plan read later is evidence about the design, and
+a wrong one is worse than none.
+
+**Defects in this plan, found by building it:**
+
+| where | what the plan said | what is true |
+| --- | --- | --- |
+| Task 3 | every `split-window` targets `{session}:0.0` | tmux renumbers panes on each split, so the second split divides the *first panel* and fails with `size or position no space for a new pane` — the frame came up with one panel instead of four, silently. Fixed by capturing the harness pane id (`-P -F '#{pane_id}'`) and targeting it. |
+| Task 3 | `visible_slots` as written | contradicted its own test: at 200x12 it returned `['bottom','left','right']` where the test asserted `['bottom']`. |
+| Task 2 | `[frame]` keys read from TOML | `FRAME_DEFAULTS` was keyed with underscores while the documented TOML spelling is hyphenated, so `history-limit`, `min-cols` and `min-rows` were silently ignored — and the plan's own tests only covered the three hyphen-free keys. |
+| Task 5 | `frame_dir()` creates on every call | a read path that writes: reading a version created the frame's directory, and a panel could resurrect a directory `reap()` had just deleted. |
+| Task 6 | the launcher `exec`s tmux and re-raises the harness's status | an attached `tmux new-session` returns 0 whatever its command exited with. The launcher must fork, wait, and read a recorded status. |
+| Task 6 | `charter claude [args…]` | `argparse.REMAINDER` does not capture leading option-like tokens, so `charter claude -p hi` errored. |
+| Task 10 | `charter frame action <id>` | unreachable — `_split_frame_argv` swallows everything after `frame` so the harness gets its argv verbatim. `frame-action` is a top-level sibling. |
+| Task 10 | "a label is drawn, never executed" | false, and the most serious finding in the plan. See below. |
+| Task 11 | `check: frame --probe` | `news._PROBEABLE` refuses any command whose parser carries a pass-through positional, which `frame` always does. A separate `charter frame-probe` carries the news probe. |
+| Task 1/6 | the collision guard raises on any duplicate `cli_name` | raising from `build_parser()` breaks *every* charter command. It now raises only for a collision with a core command; a duplicate between harnesses skips. |
+
+**The one that mattered most.** `display-menu` item names pass through tmux's format
+engine, so a label containing `#(cmd)` **executes** `cmd` the moment the menu renders. It
+was reproduced end to end in a real frame — two labels, two canary files — and the payload
+needs no space, because `#(id>/tmp/x)` is a legal git branch name. That is the same
+delivery vehicle `docs/news/unreleased-forge-argv-encoding.md` describes, where "checking
+out a branch from someone else's pull request was enough". Labels are now escaped (`#` →
+`##`), and the module comment and test that had certified the opposite were inverted.
+
+**Behaviours pinned against tmux 3.7c**, each by rejection rather than by documentation:
+
+- separate argv is not shell-interpreted; a joined string is;
+- an attached `new-session` returns 0 regardless of its command's status;
+- `-f <conf>` is honoured only when the call actually *starts* the server, so a second
+  frame on a shared socket silently never got its own hooks;
+- a bare `set-hook pane-died` replaces the **whole array**, deleting `[1]` — so swapping
+  two adjacent lines reintroduces an infinite hang with a green suite;
+- tmux reports an **empty** `pane_dead_status` for signal deaths, not a negative one;
+- `-t` scopes format state; `-c` selects the client, so the menu rendered on the wrong
+  operator's screen until the presser was carried through the bind via `#{client_name}`;
+- `window-resized` needs tmux 3.3, and without it panels drift to 15 of 50 rows on resize.
+
+**What is still open** is recorded in the branch's final review, not here.
