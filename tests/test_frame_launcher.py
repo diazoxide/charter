@@ -29,6 +29,7 @@ start a real tmux server in this suite".
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -39,6 +40,34 @@ from unittest import mock
 from tests._isolation import PersonaIso
 from charter import commands_frame, config
 from charter.frame import menu, state
+
+
+def _harness_binary_installed(resolver=None):
+    """Make "is the harness's binary installed?" deterministic for the framed path.
+
+    `cmd_launch` refuses to reach tmux for a REGISTERED harness whose binary is not on
+    `$PATH` (it hands off to `bypass`, which names it and exits 127). Every framed-path
+    test below therefore has to answer that question itself: left to the real
+    `shutil.which`, the entire `Launch` class would take the bypass branch on any machine
+    without `claude` installed — and `bypass` calls `os.execvp`, so a suite run there
+    would try to REPLACE THE TEST PROCESS rather than merely fail. Machine-dependent and
+    destructive, which is a worse combination than either alone.
+
+    `side_effect` over `return_value`: `shutil.which` is patched on the module object, so
+    this is global for the duration — `tmuxctl._probe`'s own `which("tmux")` goes through
+    it too — and answering every name with a plausible path keeps that honest rather than
+    special-casing one string.
+
+    *resolver* exists because the blanket "everything is installed" answer silently made a
+    test vacuous the first time this helper was written: `_launch` applies this patch
+    INSIDE its own `with`, so it overrides anything a caller set up outside, and
+    `test_the_frame_escape_hatch_is_not_narrowed_by_that_check` — whose entire point is a
+    binary that is NOT on `$PATH` — was answered "installed" along with everything else.
+    Caught by the mutation that widens the guard to `argv[0]`, which stayed green. A
+    caller that cares what `which` says must therefore say so.
+    """
+    return mock.patch("charter.commands_frame.shutil.which",
+                      side_effect=resolver or (lambda name, *a, **k: f"/usr/bin/{name}"))
 
 
 def _os_terminal_size(cols, rows):
@@ -83,6 +112,71 @@ class MissingHarnessBinary(unittest.TestCase):
             rc = commands_frame.bypass(["claude"])
         self.assertEqual(rc, 126)
         self.assertTrue(any("claude" in m for m in buf), buf)
+
+    def test_the_framed_path_refuses_before_tmux_and_says_why(self):
+        """The defect the `bypass` fix alone did not reach, and the one that mattered
+        most: `charter claude` in a TERMINAL — the normal path, the first thing a new
+        operator types — printed nothing at all.
+
+        `new-session` starts, the exec fails instantly, the eager
+        `_query_pane_dead_status` catches the dead pane and runs `kill-session`, and from
+        that moment `code is not None`, so the whole `if code is None:` block — panels,
+        `select-pane`, and `attach` — is skipped. No pane, no attach, nothing drawn.
+        Measured under a pty against a real tmux 3.7c with `claude` genuinely off
+        `$PATH`: **zero bytes** of output, exit 127, no alternate-screen switch. The
+        irony this test also pins: `--no-frame` and piped output, the two paths that
+        skip the frame, printed the right thing all along.
+
+        `run.assert_not_called()` is the half that says "before tmux": returning 127 by
+        going all the way through `new-session` and reading a dead pane's status would
+        satisfy the exit code while leaving the operator exactly as uninformed."""
+        args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
+        buf = []
+        with mock.patch("charter.commands_frame.shutil.which", return_value=None), \
+             mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch("os.execvp", side_effect=FileNotFoundError(2, "No such file")), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = commands_frame.cmd_launch(args)
+        self.assertEqual(rc, 127)
+        self.assertTrue(any("claude" in m for m in buf),
+                        f"the operator must be told what is missing: {buf}")
+        run.assert_not_called()
+
+    def test_the_frame_escape_hatch_is_not_narrowed_by_that_check(self):
+        """`charter frame -- <cmd>` must behave exactly as it did. `argv[0]` there is the
+        operator's own verbatim word and is allowed to be a shell builtin, a relative
+        path, or anything else tmux's own resolution accepts — so the check is scoped to
+        `if h`, a REGISTERED harness whose binary charter itself chose
+        (`harness.base.binary`), and never to `argv[0]`.
+
+        This is what fails if anyone "simplifies" the guard to `not
+        shutil.which(argv[0])`: a command charter has never met, provably not on `$PATH`,
+        must still reach `new-session`."""
+        fake = _FakeTmux(exit_code=0)
+        self.assertIsNone(shutil.which("charter-definitely-not-a-real-binary-xyz"))
+        # NOTHING resolves on `$PATH` for the duration — the strongest form of the
+        # question, and it has to be said explicitly: `_launch`'s default answers
+        # "installed" for every name, which made the first version of this test vacuous
+        # (see `_harness_binary_installed`).
+        with mock.patch("os.execvp", side_effect=AssertionError("bypassed the frame")):
+            rc = _launch(fake, harness="",
+                         rest=["--", "charter-definitely-not-a-real-binary-xyz"],
+                         which=lambda name, *a, **k: None)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("new-session" in c for c in fake.calls),
+                        "the `frame --` escape hatch must still reach tmux for a command "
+                        "that is not on $PATH")
+
+    def test_an_installed_harness_is_not_short_circuited(self):
+        """The other direction, and what stops the guard from being "always bypass": with
+        the binary present the launch proceeds into tmux exactly as before."""
+        fake = _FakeTmux(exit_code=0)
+        with mock.patch("os.execvp", side_effect=AssertionError("bypassed the frame")):
+            rc = _launch(fake, harness="claude")
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("new-session" in c for c in fake.calls))
 
     def test_no_crash_report_is_filed_for_a_missing_binary(self):
         """The half that actually mattered: not merely "does not traceback", but "does
@@ -296,6 +390,7 @@ class MissingTmux(unittest.TestCase):
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
         with mock.patch("charter.frame.tmuxctl.version", return_value=None), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             _harness_binary_installed(), \
              mock.patch("charter.commands_frame.subprocess.run") as run, \
              mock.patch("builtins.print") as p:
             rc = commands_frame.cmd_launch(args)
@@ -419,6 +514,7 @@ class Probe(unittest.TestCase):
         sentinel = AssertionError("workspace resolved — the launch path was reached")
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             _harness_binary_installed(), \
              mock.patch("charter.workspace.resolve", side_effect=sentinel):
             with self.assertRaises(AssertionError) as ctx:
                 commands_frame.cmd_launch(args)
@@ -651,10 +747,11 @@ class _FakeTmux:
 
 
 def _launch(fake: _FakeTmux, *, cols=200, rows=50, version=(3, 7), harness="claude",
-           rest=()):
+           rest=(), which=None):
     args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False)
     with mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
          mock.patch("sys.stdout.isatty", return_value=True), \
+         _harness_binary_installed(which), \
          mock.patch("charter.frame.tmuxctl.version", return_value=version), \
          mock.patch("charter.workspace.resolve", return_value="demo"), \
          mock.patch("os.get_terminal_size", return_value=_os_terminal_size(cols, rows)):
@@ -916,6 +1013,7 @@ class Launch(PersonaIso, unittest.TestCase):
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=_peek), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             _harness_binary_installed(), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("charter.workspace.resolve", return_value="demo"), \
              mock.patch("os.get_terminal_size", return_value=_os_terminal_size(200, 50)):
@@ -1225,6 +1323,7 @@ class Launch(PersonaIso, unittest.TestCase):
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             _harness_binary_installed(), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("charter.workspace.resolve", return_value="demo"), \
              mock.patch("os.get_terminal_size", side_effect=OSError("no tty size")):
@@ -1298,6 +1397,7 @@ class Launch(PersonaIso, unittest.TestCase):
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
         with mock.patch("charter.commands_frame.subprocess.run") as run, \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             _harness_binary_installed(), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("charter.workspace.resolve", return_value="demo"), \
              mock.patch("charter.frame.state.frame_dir", return_value=None), \

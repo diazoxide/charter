@@ -8,6 +8,7 @@ enable a feature v1 does not ship is a bad trade.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from charter import instance
 
@@ -161,6 +162,35 @@ class HotkeyIsNotAFreeString(unittest.TestCase):
             with self.subTest(hotkey=good):
                 self.assertEqual(instance.frame_of({"frame": {"hotkey": good}})["hotkey"],
                                  good)
+
+    def test_a_refused_hotkey_degrades_silently_and_no_surface_names_it(self):
+        """A CHARACTERIZATION test: this pins a known gap, not a desired behaviour.
+
+        `_HOTKEY_RE`'s own comment used to claim a refused key "costs the operator their
+        preferred hotkey and a line in `charter frame-probe`". It never did — measured
+        with the newline payload in charter.toml, `frame-probe` prints a clean green tick
+        and `doctor`'s frame row is green, while the hotkey silently becomes `F2`. That
+        false claim is the same class this branch removed from `frame/menu.py` and
+        `frame/tmuxctl.py`, so the truth is asserted here rather than only written down.
+
+        It is deliberately left this way for now: NO refused `[frame]` value is reported
+        anywhere — a dropped `slots` entry and a rejected `history-limit` are exactly as
+        quiet — so the fix is one surface for the whole section, filed as a follow-up. If
+        you are implementing that follow-up, this test SHOULD fail; update it, do not
+        route around it."""
+        from charter import commands_frame, config, doctor
+        hostile = "F2\nrun-shell 'touch /tmp/PWNED'"
+        resolved = instance.frame_of({"frame": {"hotkey": hostile}})
+        self.assertEqual(resolved["hotkey"], "F2")
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch.dict(config.FRAME, resolved):
+            code, level, line = commands_frame.frame_ready()
+            row = doctor.check_frame()
+        self.assertEqual((code, level), (0, "ok"),
+                         "the probe does not currently know a hotkey was refused")
+        self.assertNotIn("hotkey", line)
+        self.assertEqual(row.status, doctor.OK)
+        self.assertNotIn("hotkey", row.hint or "")
 
     def test_a_non_string_hotkey_still_degrades_the_way_it_always_did(self):
         """The type check the regex sits behind must survive it: `_HOTKEY_RE.fullmatch`

@@ -372,9 +372,28 @@ FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.ite
 #: ``a``, ``7``) or a single punctuation key. Whitespace, newlines, quotes, ``;``, ``#``,
 #: ``$``, ``\\`` and braces are all absent from that alphabet, so nothing matching this
 #: can end the ``bind`` line, start a second command, open a quote, or introduce a tmux
-#: format. A key this refuses that tmux would have accepted costs the operator their
-#: preferred hotkey and a line in `charter frame-probe`; a key this accepted that tmux
+#: format.
+#:
+#: The asymmetry is what justifies erring narrow: a key this refuses that tmux would have
+#: accepted costs the operator their preferred hotkey; a key this accepted that tmux
 #: parses as a command costs them the machine.
+#:
+#: **A refusal is currently SILENT — nothing anywhere names it.** :func:`frame_of`
+#: discards the value and the shipped ``F2`` takes its place, and neither
+#: ``charter frame-probe`` nor ``charter doctor``'s frame row says a word: measured with
+#: the newline payload above sitting in charter.toml, both render a clean green tick.
+#: An earlier version of this comment claimed the probe reported it, which it never did —
+#: the same class of false claim this branch removed from `frame/menu.py` and
+#: `frame/tmuxctl.py`, so it is written down here rather than quietly deleted.
+#:
+#: Left silent deliberately, not overlooked. The gap is real but it is not this
+#: constant's: NO refused ``[frame]`` value is reported anywhere — a dropped ``slots``
+#: entry and a rejected ``history-limit`` are exactly as quiet — so the fix is one
+#: surface for the whole section, not a special case for the one key that happens to have
+#: a security story. It also would NOT catch the neighbouring hazard it looks like it
+#: should: a key such as ``Fn2`` MATCHES this pattern, so :func:`frame_of` accepts it and
+#: has nothing to report, and it is tmux that refuses it later, at ``source-file`` time.
+#: Those are two mechanisms needing two answers. Both are filed as follow-ups.
 _HOTKEY_RE = re.compile(r"^(?:[CMS]-){0,3}(?:[A-Za-z0-9]{1,20}|[!%&()*+,./:<=>?@\[\]^_|~-])$")
 
 

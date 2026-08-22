@@ -89,6 +89,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -628,6 +629,31 @@ def cmd_launch(args) -> int:
         return 2
 
     if args.no_frame or not sys.stdout.isatty():
+        return bypass(argv)
+
+    # A REGISTERED harness whose binary is not installed never reaches tmux — and the
+    # irony is worth recording, because it is what hid this for a whole review round:
+    # `--no-frame` and piped output, the two paths that bypass the frame, already
+    # printed charter's own message and exited 127 correctly. Only the terminal path —
+    # the NORMAL one, the first thing a new operator types — was silent, and silent in
+    # the most complete way available: `new-session` starts, the exec fails instantly,
+    # the eager `_query_pane_dead_status` below catches the dead pane and runs
+    # `kill-session`, and because `code is not None` from that moment on, the entire
+    # `if code is None:` block — panels, `select-pane`, and `attach` — is skipped. There
+    # is no pane left and no attach, so nothing is ever drawn. Measured against a real
+    # tmux 3.7c under a pty, with `claude` genuinely off `$PATH`: **zero bytes** of
+    # output, exit 127, no alternate-screen switch. `charter claude` before installing
+    # `claude` returned instantly with no explanation of any kind.
+    #
+    # Scoped to `if h` deliberately, and this is the whole reason the check sits here
+    # rather than over `argv[0]`. A registered harness's binary comes from charter's own
+    # registry (`harness.base.binary`), so `shutil.which` is asking about a name charter
+    # chose. `charter frame -- <cmd>` is the opposite: `argv[0]` is the operator's own
+    # verbatim word, and it is allowed to be a shell builtin, a relative path, or
+    # anything else tmux's own resolution accepts — a `which` check over THAT would
+    # narrow what the escape hatch accepts, which is a design change and not this fix.
+    # So the escape hatch keeps its current behaviour exactly, unchanged.
+    if h and not shutil.which(h.binary):
         return bypass(argv)
 
     # ONE call (correction 5): asking `tmux -V` twice on a path that branches on the
