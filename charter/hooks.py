@@ -2131,11 +2131,21 @@ def pretooluse_dispatch() -> int:
         if ((d.get("meta") or {}).get("dispatch-isolation") or "").strip() != "worktree":
             return 0  # not a code-writer: overlapping is fine
         peers = ", ".join(f"`{o}`" for o in others)
-        _ask("PreToolUse",
-             f"`{agent}` writes code and {peers} "
-             f"{'is' if len(others) == 1 else 'are'} already running. They share one "
-             f"working tree, so parallel edits interleave silently. Dispatch this one "
-             f"with `isolation: worktree`, or let the other finish first.", data)
+        if _ask("PreToolUse",
+                f"`{agent}` writes code and {peers} "
+                f"{'is' if len(others) == 1 else 'are'} already running. They share one "
+                f"working tree, so parallel edits interleave silently. Dispatch this one "
+                f"with `isolation: worktree`, or let the other finish first.", data):
+            # The ask half of the tally. Passing `data` above already leaves the marker
+            # `posttooluse_bash` turns into an `ask-approved`, so without this row those
+            # approvals counted against a denominator nothing ever incremented — the exact
+            # shape #290 was filed to remove, left behind at the third of three sites.
+            #
+            # Its own event name, not `ask`: every historical `ask` row means the
+            # clone-commit guard, and folding this in would corrupt the series a judgement
+            # about that guard has to rest on. Counts and names only, like the rest of the
+            # tally — the agent, and how many peers, never the prompt.
+            _trace("dispatch-ask", data.get("session_id"), agent=agent, peers=len(others))
         del token
     except Exception:
         return 0  # a nudge must never break a turn
