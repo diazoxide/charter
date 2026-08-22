@@ -1322,8 +1322,17 @@ def check_memory_indexes() -> Result:
     # repaired. A remediation hint that silently no-ops is worse than no hint at all.
     unindexed_kinds: set[str] = set()
     large_kinds: set[str] = set()
+    refused = []
     for label, mem_dir in bases:
         if not mem_dir.exists():
+            continue
+        # Asked FIRST, and reported on its own terms. A refused index answers "nothing is
+        # listed", which is what an empty base answers too — so without this the drift
+        # numbers below describe a store charter is declining to touch as though it were
+        # merely untidy, and point `optimize` at a repair that cannot run (#349).
+        why = memstore.index_refusal(mem_dir)
+        if why:
+            refused.append(f"{label}: {why}")
             continue
         d = memstore.index_drift(mem_dir)
         if d["dangling"] or d["unindexed"]:
@@ -1341,6 +1350,15 @@ def check_memory_indexes() -> Result:
         if n >= _INDEX_LINES_WARN:
             large.append(f"{label} ({n} entries)")
             large_kinds.add("workspace" if label.startswith("ws:") else "persona")
+    if refused:
+        # Ahead of drift and growth because it outranks them: those are hygiene, this is a
+        # committed file redirecting charter's own writes, and the remedy is to fix that
+        # file rather than to run any curation command.
+        return Result("memory indexes", WARN,
+                      detail=f"{len(refused)} index(es) charter will not touch",
+                      hint="; ".join(refused[:2]) + (", …" if len(refused) > 2 else "")
+                           + "  → this is a defect in a committed file: replace the link "
+                             "with a real MEMORY.md")
     if not worst and not large:
         return Result("memory indexes", OK, detail=f"{len(bases)} base(s) consistent")
     hint = ", ".join(worst[:4]) + (", …" if len(worst) > 4 else "")
@@ -1415,6 +1433,64 @@ def check_front_door() -> Result:
                              f"advice is inert (no acting persona means no `routing:` level)",
                       hint="charter persona default <name>")
     return Result(name, OK, detail="none declared")
+
+
+def check_persona_grant() -> Result:
+    """The ACTIVE persona is broken, and is still auto-approving tools (#343).
+
+    `toolgate.decide` asks the active persona what its tools are and never asks whether
+    the persona is well-formed. `charter persona lint` calls it broken; the gate honours
+    it anyway. Two checks read one file, answer different questions about it, and only one
+    of them sits on the path that removes a prompt.
+
+    **Why this reports rather than revokes.** #343's own suggested direction (1) — have
+    the gate ignore a persona with non-empty ``structural_errors`` — was measured before
+    being declined, in `tests/test_broken_persona_still_grants.py`. After #342 it closes
+    nothing: `load()` returns None for a reference that is not a name, so a broken
+    reference contributes no tools at all, and what survives is the persona's own
+    ``tools:`` plus what a reader of those same files would compute. Revoking that would
+    take away a grant the operator wrote by hand and give back no containment.
+
+    It would also take it away **silently**, which is the part that decided it. The gate's
+    production output path emits nothing when `decide` declines — a lost grant looks
+    exactly like a persona that never declared the tool, and the operator gets an
+    unexplained prompt with nothing to connect it to the typo that caused it. Reporting is
+    the half that can be done without that cost, and the half that was actually missing.
+
+    Deliberately separate from :func:`check_personas`, which reports the roster's health
+    and would say "4 with error(s)" whether or not any of them were the acting identity.
+    The pairing is this check's whole content: *this* persona, *these* binaries, right
+    now. Silent when the active persona is well-formed — the `tools:` grant is the
+    designed behaviour (#329) and a check that fired on it would be noise on every plane.
+
+    The mirror of :func:`check_ask_rules`, which names the case where a persona's tools
+    quietly *stop* being pre-approved. This one names where they quietly keep going.
+    """
+    name = "persona grant"
+    from . import persona
+    try:
+        active = persona.resolve_active()
+        if not active:
+            return Result(name, OK, detail="no active persona")
+        issues = persona.structural_errors(active)
+        if not issues:
+            return Result(name, OK, detail=f"'{active}' is well-formed")
+        tools = sorted(persona.effective_tools(active))
+        if not tools:
+            # Broken but granting nothing — `check_personas` already reports the break,
+            # and saying it twice in different words is how a preflight stops being read.
+            return Result(name, OK, detail=f"'{active}' is broken but grants no tools")
+    except Exception as e:
+        # Only ever advisory. A check that crashes the preflight over a persona file is
+        # worse than the divergence it reports.
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+    why = "; ".join(m for _level, m in issues[:2])
+    return Result(name, WARN,
+                  detail=f"'{active}' is broken and still auto-approves "
+                         f"{', '.join(tools)}",
+                  hint=f"{why}  → charter persona lint {active}  (the gate reads this "
+                       f"persona's tools whether or not it loads cleanly, so a prompt you "
+                       f"expected to see may not appear)")
 
 
 def check_personas() -> Result:
@@ -1876,7 +1952,8 @@ def _checks():
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
-                check_memory_indexes(), check_personas(), check_front_door(),
+                check_memory_indexes(), check_personas(), check_persona_grant(),
+                check_front_door(),
                 check_news_adoption(),
                 check_ask_rules(),
                 check_shadowed_knowledge(),

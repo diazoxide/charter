@@ -38,7 +38,7 @@ import socket
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config
+from . import config, contain
 
 #: Directory under ``personas/`` holding the tally. Leading underscore so it can never
 #: collide with a persona name — the same convention ``_dispatch`` and ``_shared`` use.
@@ -73,6 +73,8 @@ def record(skill: str, persona_name: str | None = None,
         return None
     when = when or _now()
     p = path_for(when)
+    if contain.write_refusal(p):
+        return None  # a committed link at this fixed name — see contain.write_refusal
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps({"ts": when.isoformat(timespec="seconds"),
