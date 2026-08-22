@@ -1864,6 +1864,8 @@ def context_block(cwd=None) -> str:
 
 
 def sessionstart() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     # Read the piece's existing state BEFORE recording this session as alive — the write
     # below would otherwise replace the holder's mark with ours and hide the collision.
@@ -2010,6 +2012,8 @@ def memory_share_note() -> str:
 
 
 def posttooluse() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     _touch_piece(data)
     # The approval half of the `routing: require` edit nudge (`pretooluse_edit`), which asks
@@ -2710,6 +2714,8 @@ def _commitment_nudge(prompt: str, sid: str | None, unattended: bool = False) ->
 
 
 def userpromptsubmit() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     _touch_piece(data)
     sid = data.get("session_id")

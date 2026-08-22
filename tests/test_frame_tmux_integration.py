@@ -31,11 +31,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from charter import commands_frame, todos
-from charter.frame import state
+from charter import commands_frame, hooks, todos
+from charter.frame import notify, state
 
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, run_hook
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -302,6 +303,56 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         self.assertTrue(changed, f"the panel never repainted after a real state.bump; "
                                  f"still showing:\n{first!r}")
         self.assertEqual(_tmux("display-message", "-p", "-t", "panel-live",
+                               "#{pane_dead}").stdout.strip(), "0",
+                         "the pane died sometime after its first paint")
+
+    def test_a_real_hook_call_repaints_a_live_panel_without_a_direct_state_bump(self):
+        """Closes the gap the test above leaves open: that test calls `state.bump`
+        directly, which proves the PANEL half of the liveness story (Task 6/7) but says
+        nothing about the HOOK half (Task 8) — `notify.plane_changed`, wired into
+        `charter/hooks.py`'s `sessionstart`/`userpromptsubmit`/`posttooluse` handlers,
+        is the thing that is actually supposed to call `state.bump` in a running
+        session. This drives a REAL hook handler (`hooks.posttooluse`, via
+        `tests._isolation.run_hook` — the same stdin-JSON shape Claude Code itself
+        feeds it) with `$CHARTER_SESSION_ID` set to the live panel's own frame id, and
+        watches the SAME pane used above repaint from that call alone — no
+        `state.bump` call anywhere in this test. `notify._last` is reset first so a
+        debounce window left over from another test in this process can't mask a
+        broken hook wiring the way `test_frame_liveness.py`'s own docstring warns
+        about."""
+        fid = state.frame_id("panel-hook-integ", os.getpid())
+        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
+        r = _tmux("new-session", "-d", "-s", "panel-hook-live", "-x", "40", "-y", "5",
+                  "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        time.sleep(1)
+        first = _tmux("capture-pane", "-p", "-t", "panel-hook-live").stdout
+        self.assertIn("todo", first, f"the pane never drew its content:\n{first!r}")
+        self.assertEqual(_tmux("display-message", "-p", "-t", "panel-hook-live",
+                               "#{pane_dead}").stdout.strip(), "0",
+                         "the pane died at startup")
+
+        todos.add("demo", "a todo a real hook call should surface")
+        notify._last["at"] = 0.0
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid}):
+            out = run_hook(hooks.posttooluse, {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/nonexistent"},
+                "session_id": "hook-integ-session",
+            })
+        self.assertIsNone(out, "posttooluse should emit nothing for a plain Read")
+
+        deadline = time.monotonic() + 3
+        changed = False
+        while time.monotonic() < deadline:
+            if _tmux("capture-pane", "-p", "-t", "panel-hook-live").stdout != first:
+                changed = True
+                break
+            time.sleep(0.2)
+        self.assertTrue(changed, f"the panel never repainted after a real "
+                                 f"hooks.posttooluse() call; still showing:\n{first!r}")
+        self.assertEqual(_tmux("display-message", "-p", "-t", "panel-hook-live",
                                "#{pane_dead}").stdout.strip(), "0",
                          "the pane died sometime after its first paint")
 
