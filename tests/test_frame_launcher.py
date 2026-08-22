@@ -864,6 +864,29 @@ class CollisionGuard(unittest.TestCase):
                 cli.build_parser()
         self.assertIn("frame-harness", str(ctx.exception))
 
+    def test_a_harness_named_panel_is_refused_too(self):
+        """`charter/frame/panel.py` (Task 7) is internal, spawned only by
+        `layout.panel_argvs` — never typed by an operator — but it is registered the
+        same way `frame` is: AFTER the harness loop, in `_add_frame_parsers`. A harness
+        claiming `cli_name == "panel"` would otherwise pass `sub.choices` (nothing is
+        named `panel` yet when the loop checks) and only collide once `charter/cli.py`'s
+        own `sub.add_parser("panel")` call runs — where a version-3.11 argparse would
+        silently let the harness shadow it, and every panel pane would then fail at
+        startup against a parser that no longer expects `--session`."""
+        from charter import cli
+        from charter.harness.base import Harness
+
+        class _PanelHarness(Harness):
+            name = "panel-harness"
+            cli_name = "panel"
+            binary = "panel-harness"
+
+        with mock.patch.dict("charter.harness.registry.KINDS",
+                             {"panel-harness": _PanelHarness}, clear=True):
+            with self.assertRaises(ValueError) as ctx:
+                cli.build_parser()
+        self.assertIn("panel-harness", str(ctx.exception))
+
 
 class FrameArgvSplit(unittest.TestCase):
     """Critical 2: `charter claude -p hi` — the documented, spec-named invocation — was

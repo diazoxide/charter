@@ -26,6 +26,7 @@ from . import (
 )
 from .browser import PINNED as _PLAYWRIGHT_PIN
 from .forge.registry import KINDS as _FORGE_KINDS
+from .frame import panel as frame_panel
 from .secrets.registry import PROVIDERS
 
 
@@ -620,16 +621,19 @@ def _add_frame_parsers(sub) -> None:
     for h in harness.all():
         if not h.cli_name:
             continue
-        # `"frame"` itself is reserved even though its OWN `add_parser` call below has
-        # not run yet: the loop finishes and registers every harness BEFORE `frame` is
-        # added, so a harness with `cli_name == "frame"` would pass a check against
-        # `sub.choices` alone (nothing there is named `frame` yet) and only collide once
-        # `sub.add_parser("frame", ...)` runs a few lines down — where, on argparse
-        # versions that raise for a conflicting name, the error names `frame` instead of
-        # the harness that actually caused it, and on versions that do not raise (this
-        # repo's own 3.11 floor — see `_split_frame_argv`'s docstring for the same
-        # version gap elsewhere), the escape hatch silently shadows the harness instead.
-        if h.cli_name in sub.choices or h.cli_name == "frame":
+        # `"frame"` and `"panel"` are reserved even though neither's OWN `add_parser`
+        # call below has run yet: the loop finishes and registers every harness BEFORE
+        # either is added, so a harness with `cli_name == "frame"` or `"panel"` would
+        # pass a check against `sub.choices` alone (nothing there is named either yet)
+        # and only collide once THAT `add_parser` call runs a few lines down — where, on
+        # argparse versions that raise for a conflicting name, the error names `frame`/
+        # `panel` instead of the harness that actually caused it, and on versions that
+        # do not raise (this repo's own 3.11 floor — see `_split_frame_argv`'s docstring
+        # for the same version gap elsewhere), the later `add_parser` call silently
+        # shadows the harness instead — `frame`'s own escape hatch disappearing, or every
+        # panel pane failing to start because `charter panel` now means something else
+        # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`).
+        if h.cli_name in sub.choices or h.cli_name in ("frame", "panel"):
             raise ValueError(
                 f"harness {h.name!r} wants `charter {h.cli_name}`, which is already a "
                 f"charter command — rename the harness's cli_name or the command before "
@@ -641,6 +645,15 @@ def _add_frame_parsers(sub) -> None:
     fr = sub.add_parser("frame",
                         help="Run any command inside charter's frame — `charter frame -- <cmd>`.")
     _wire(fr, "")
+
+    # Internal: one pane of a running frame, spawned by `layout.panel_argvs` — never
+    # typed by an operator. The argv shape here (`panel <slot> --session <fid>`) must
+    # match what that function emits EXACTLY: it is the only thing standing between a
+    # tmux pane and a process that fails at startup, leaving a hole in the frame.
+    pn = sub.add_parser("panel")
+    pn.add_argument("slot")
+    pn.add_argument("--session", dest="session", required=True)
+    pn.set_defaults(func=lambda args: frame_panel.run(args.slot, args.session))
 
 
 def _add_harness_parser(sub) -> None:
