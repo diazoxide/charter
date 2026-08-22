@@ -36,7 +36,7 @@ Code* table.
 | --- | --- | --- | --- |
 | `_leak_reason` | no | no | no |
 | `_plane_root_branch_reason` | no | no | no |
-| `_clone_commit_reason` | no | no | no |
+| `_clone_commit_reason` (removed, #371) | no | no | no |
 | `toolgate.decide` | no | **yes** | no |
 | `_single_credential_reason` | yes | yes | yes |
 

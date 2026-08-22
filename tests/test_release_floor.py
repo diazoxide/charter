@@ -8,10 +8,13 @@ was there:
     git tag v9.9.9  (default)            -> ask     # a hook `ask` floors at a prompt in
     git tag v9.9.9  (bypassPermissions)  -> allow   # EVERY mode, so this used to stop
 
-`_clone_commit_reason` matches `_GIT_WRITE_RE`, which includes `tag` and `push`. It was never
-designed to guard releases; it just did, and pushing a tag fires `release.yml` → an
-irreversible PyPI publish (Trusted Publishing, no token, nothing to retract). `gh pr merge`
-and `gh release create` were never covered at all, being no kind of `git`.
+The cover was the clone-commit nudge, whose git-write pattern happened to include `tag` and
+`push`. It was never designed to guard releases; it just did, and pushing a tag fires
+`release.yml` → an irreversible PyPI publish (Trusted Publishing, no token, nothing to
+retract). `gh pr merge` and `gh release create` were never covered at all, being no kind of
+`git`. That nudge has since been deleted outright (#371) — which is exactly why this guard
+had to stop depending on it, and why the cases below assert the floor directly rather than
+through anything the nudge happens to catch.
 
 Two properties carry the whole design and are asserted with equal weight:
 
@@ -64,7 +67,7 @@ class TestUnattendedCannotCutARelease(FloorCase):
             self.assertEqual("deny", self.decide(cmd, UNATTENDED), cmd)
 
     def test_forge_release_and_merge_are_denied(self):
-        """Never covered before — no kind of `git`, so `_GIT_WRITE_RE` never saw them."""
+        """Never covered before — no kind of `git`, so the old nudge never saw them."""
         for cmd in ("gh release create v9.9.9",
                     "gh pr merge 1 --squash",
                     "glab release create v9.9.9",
@@ -90,8 +93,11 @@ class TestAttendedIsCompletelyUnchanged(FloorCase):
     def test_a_person_tagging_at_the_plane_is_not_stopped(self):
         self.assertIsNone(self.decide("git tag v9.9.9", "default"))
 
-    def test_a_person_tagging_in_a_clone_still_only_gets_the_old_nudge(self):
-        self.assertEqual("ask", self.decide("git tag v9.9.9", "default", in_clone=True))
+    def test_a_person_tagging_in_a_clone_is_not_stopped_either(self):
+        """Was `ask` while the clone-commit nudge existed; that nudge is gone (#371), so
+        this is now silent for the same reason the plane-root case is. The floor is what
+        matters here and it is asserted directly above — attended tagging never denies."""
+        self.assertIsNone(self.decide("git tag v9.9.9", "default", in_clone=True))
 
     def test_auto_mode_is_attended(self):
         """`auto` usually has a human watching — same boundary `_ask` already draws."""

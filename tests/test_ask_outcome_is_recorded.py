@@ -8,43 +8,78 @@ argument for keeping or deleting it could only be made from irritation. Same fai
 The signal is deterministic and already in the protocol: a hook `ask` blocks the tool, so a
 `PostToolUse` for that same `tool_use_id` means it ran, which means it was approved. An ask
 that is declined simply never gets one — its marker is still there, which is what makes
-"asked 231 times, approved 231 times" countable.
+"asked N times, approved M times" countable.
+
+**Why this file no longer drives the clone-commit nudge.** That nudge is gone (#371): it was
+counted, and the count is what deleted it — 471 asks, all one rule, 97 of 98 approved. It
+was also the only ask charter raised on the **Bash** tool, and `_ask_mark_take` was wired to
+`posttooluse_bash` alone. Removing the producer therefore left the take half with no reachable
+caller at all: the two surviving nudges raise on `Task|Agent` (`pretooluse_dispatch`) and on
+`Write|Edit|MultiEdit` (`pretooluse_edit`), and *those* PostToolUse handlers never took the
+marker. Every one of their approvals was already uncountable, and deleting the clone nudge
+would have made "asked N, approved M" permanently `M = 0` — the exact defect #290 was filed
+to remove, arriving by the back door.
+
+So the take half now lives in one helper (`_ask_approved`) called from all three PostToolUse
+handlers, and the cases below assert it on each tool family. The fixtures are real nudges on
+real committed frontmatter, and each one asserts the ask actually fired before asserting
+anything about the count — a fixture that stops reaching `_ask` must fail loudly rather than
+report zero approvals of zero asks.
 """
 
 import unittest
 
 from tests._isolation import run_hook
 from tests.test_hooks import InAControlPlane
-from charter import hooks, trace
-
-ASKED = {"tool_input": {"command": "cd workspaces/default/x && git commit -m y"},
-         "cwd": "", "session_id": "s", "tool_use_id": "tu_1"}
+from charter import config, hooks, trace
 
 
 class AskOutcomeCase(InAControlPlane):
-    def ask(self, **over):
-        payload = {**ASKED, **over}
-        payload["cwd"] = str(self.tmp / "workspaces" / "default" / "x")
-        (self.tmp / "workspaces" / "default" / "x").mkdir(parents=True, exist_ok=True)
-        r = run_hook(hooks.pretooluse, payload)
+    """The overlapping-dispatch nudge: `Task` in, `Task` out, same `tool_use_id`."""
+
+    SID = "s"
+    TUID = "tu_1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.make_persona("coder", **{"dispatch-isolation": "worktree"})
+
+    def ask(self, tuid: str | None = None) -> dict:
+        """Raise one real nudge; returns the payload whose approval can now be recorded."""
+        first = {"tool_name": "Task", "tool_input": {"subagent_type": "coder"},
+                 "session_id": self.SID, "tool_use_id": "tu_0"}
+        run_hook(hooks.pretooluse_dispatch, first)
+        payload = {**first, "tool_use_id": tuid or self.TUID}
+        r = run_hook(hooks.pretooluse_dispatch, payload)
+        self.assertIsNotNone(r, "fixture never reached `_ask` — the count proves nothing")
         self.assertEqual("ask", r["hookSpecificOutput"]["permissionDecision"], r)
         return payload
 
-    def events(self, sid="s"):
-        return [e["event"] for e in trace.read(sid)]
+    def approve(self, payload: dict) -> None:
+        run_hook(hooks.posttooluse_dispatch, {**payload, "tool_response": ""})
+
+    def events(self, sid=None):
+        return [e["event"] for e in trace.read(sid or self.SID)]
+
+    def markers(self):
+        return list(config.SESSIONS_DIR.glob("*.ask-pending"))
 
 
 class TestAnApprovedAskIsRecorded(AskOutcomeCase):
     def test_the_tool_running_marks_it_approved(self):
-        p = self.ask()
-        run_hook(hooks.posttooluse_bash,
-                 {"tool_name": "Bash", "session_id": p["session_id"],
-                  "tool_use_id": p["tool_use_id"]})
+        self.approve(self.ask())
         self.assertIn("ask-approved", self.events())
 
     def test_the_ask_itself_is_still_traced(self):
+        """Both halves, or the ratio has no denominator."""
         self.ask()
-        self.assertIn("ask", self.events())
+        self.assertIn("dispatch-ask", self.events())
+
+    def test_the_marker_is_consumed(self):
+        p = self.ask()
+        self.assertEqual(1, len(self.markers()), "precondition: an ask was pending")
+        self.approve(p)
+        self.assertEqual([], self.markers())
 
 
 class TestAnUnansweredAskIsNotRecordedAsApproved(AskOutcomeCase):
@@ -54,54 +89,55 @@ class TestAnUnansweredAskIsNotRecordedAsApproved(AskOutcomeCase):
         self.assertNotIn("ask-approved", self.events())
 
     def test_a_different_tool_call_does_not_resolve_it(self):
-        """The correlation is per `tool_use_id` — another Bash call in the same session
-        must not be mistaken for the answer to this one."""
-        self.ask()
-        run_hook(hooks.posttooluse_bash,
-                 {"tool_name": "Bash", "session_id": "s", "tool_use_id": "tu_OTHER"})
+        p = self.ask()
+        self.approve({**p, "tool_use_id": "tu_other"})
         self.assertNotIn("ask-approved", self.events())
 
 
 class TestItIsCheapAndSafeOnTheHotPath(AskOutcomeCase):
-    def test_an_ordinary_bash_call_traces_nothing(self):
-        """The overwhelmingly common case: no ask was pending, so the handler is a stat()
-        and a return. It must not write a trace line per Bash call."""
-        run_hook(hooks.posttooluse_bash,
-                 {"tool_name": "Bash", "session_id": "quiet", "tool_use_id": "tu_x"})
-        self.assertEqual([], self.events("quiet"))
-
-    def test_a_missing_tool_use_id_is_survivable(self):
-        self.assertIsNone(run_hook(hooks.posttooluse_bash,
-                                   {"tool_name": "Bash", "session_id": "s"}))
-
-    def test_garbage_input_never_raises(self):
-        self.assertIsNone(run_hook(hooks.posttooluse_bash, {}))
+    def test_a_post_tool_use_with_no_pending_ask_records_nothing(self):
+        """The overwhelmingly common case: no marker, so the handler is a stat() and a
+        return. It must never invent a row."""
+        self.approve({"tool_name": "Task", "tool_input": {"subagent_type": "coder"},
+                      "session_id": self.SID, "tool_use_id": "tu_never_asked"})
+        self.assertNotIn("ask-approved", self.events())
 
     def test_it_resolves_only_once(self):
-        """A replayed PostToolUse must not inflate the approval count."""
+        """The unlink IS the idempotency — a replayed PostToolUse cannot inflate the count."""
         p = self.ask()
-        for _ in range(3):
-            run_hook(hooks.posttooluse_bash,
-                     {"tool_name": "Bash", "session_id": p["session_id"],
-                      "tool_use_id": p["tool_use_id"]})
+        self.approve(p)
+        self.approve(p)
         self.assertEqual(1, self.events().count("ask-approved"))
 
 
-class TestItIsWired(unittest.TestCase):
-    """A handler the manifest does not dispatch is a handler that does not run — the lesson
-    `test_vault_read_guard` already had to learn once."""
+class TestEveryToolFamilyThatCanAskCanAlsoRecordTheApproval(InAControlPlane):
+    """The gap #371 exposed: `_ask_mark_take` lived only in `posttooluse_bash`, so an ask
+    raised on `Task|Agent` or on `Write|Edit|MultiEdit` could be approved and never counted.
 
-    def test_the_manifest_registers_a_bash_posttooluse(self):
-        import json
-        from pathlib import Path
-        root = Path(__file__).resolve().parent.parent
-        hooks_json = json.loads((root / "hooks" / "hooks.json").read_text())["hooks"]
-        cmds = [h["command"] for e in hooks_json["PostToolUse"] for h in e["hooks"]]
-        named = {c.split("charter hook ")[1].split()[0] for c in cmds if "charter hook " in c}
-        self.assertIn("posttooluse-bash", named)
+    Asserted directly on the marker rather than through a nudge fixture, because the claim
+    is about the HANDLER — that each PostToolUse family consumes a pending ask — and a
+    per-family nudge fixture would make three different preconditions carry one assertion.
+    """
 
-    def test_the_engine_knows_the_handler(self):
-        self.assertIn("posttooluse-bash", hooks._HANDLERS)
+    HANDLERS = (("posttooluse_bash", {"tool_name": "Bash"}),
+                ("posttooluse", {"tool_name": "Edit", "tool_input": {"file_path": "/x/y.py"}}),
+                ("posttooluse_dispatch", {"tool_name": "Task",
+                                          "tool_input": {"subagent_type": "coder"},
+                                          "tool_response": ""}))
+
+    def test_each_one_consumes_a_pending_ask_and_records_it(self):
+        for name, payload in self.HANDLERS:
+            with self.subTest(handler=name):
+                sid, tuid = f"s-{name}", "tu_1"
+                hooks._ask_mark_set(sid, tuid)
+                self.assertTrue(hooks._ask_mark(sid, tuid).exists(),
+                                "precondition: an ask is pending")
+                run_hook(getattr(hooks, name), {**payload, "session_id": sid,
+                                                "tool_use_id": tuid})
+                self.assertFalse(hooks._ask_mark(sid, tuid).exists(),
+                                 f"{name} left the marker behind")
+                self.assertIn("ask-approved", [e["event"] for e in trace.read(sid)],
+                              f"{name} consumed the marker without recording the approval")
 
 
 if __name__ == "__main__":

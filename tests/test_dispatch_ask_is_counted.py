@@ -5,10 +5,12 @@ clears it when the tool actually runs, and that clearing is recorded as `ask-app
 deliberately does not trace the ask itself — "callers trace their own event name, so they
 must not also record an 'ask' that never reached anybody".
 
-Three sites call it. `pretooluse` traces `ask`, `pretooluse_edit` traces `routing-ask`, and
-`pretooluse_dispatch` traced nothing while still passing `data` — so its approvals were
+Three sites called it. `pretooluse` traced `ask`, `pretooluse_edit` traces `routing-ask`,
+and `pretooluse_dispatch` traced nothing while still passing `data` — so its approvals were
 recorded against a denominator that never counted the ask. That is the exact shape #290 was
-filed to remove, applied to two sites of three.
+filed to remove, applied to two sites of three. Two sites remain: `pretooluse`'s
+clone-commit nudge was deleted in #371, and `_functions_that_ask` below is what will notice
+if a third is ever added without an ask-shaped row to count it.
 
 **This cannot be observed on a plane that does not use worktree isolation**, which is every
 plane the audit had: the nudge fires only when a peer declaring `dispatch-isolation:
@@ -18,8 +20,10 @@ nudge actually fired — the emitted decision — so a fixture that stops reachi
 fails loudly instead of passing vacuously.
 
 The event is `dispatch-ask`, not `ask`. `routing-ask` set that precedent, and folding this
-into `ask` would corrupt a series whose every historical row means the clone-commit guard —
-the evidence a judgement about that guard has to rest on.
+into `ask` would have corrupted a series whose every historical row means the clone-commit
+guard — the evidence the judgement about that guard rested on, and did: 471 rows, all one
+rule, 97 of 98 approved, and the guard was deleted (#371). Keeping the series clean is what
+made that answerable, so the separation stays.
 """
 
 from __future__ import annotations
@@ -88,8 +92,9 @@ class TestTheAskIsCounted(DispatchAskCase):
         self.assertEqual(len(markers), 1, "the approval half was already being recorded")
         self.assertEqual(len(self.events("dispatch-ask")), 1, "so the ask half must be too")
 
-    def test_it_does_not_pollute_the_clone_commit_ask_series(self):
-        """`ask` rows all mean the clone-commit guard. This one says what it is."""
+    def test_it_does_not_pollute_the_bare_ask_series(self):
+        """Historical `ask` rows all mean the clone-commit guard, which no longer exists.
+        This one says what it is, so a store holding both stays readable."""
         self.dispatch()
         self.assert_nudged(self.dispatch())
         self.assertEqual(self.events("ask"), [])
@@ -162,7 +167,7 @@ class TestEveryAskSiteRecordsAnAsk(unittest.TestCase):
     def test_the_known_sites_are_all_found(self):
         """Precondition: the scan sees the real call sites, so a pass means something."""
         self.assertEqual(set(self._functions_that_ask()),
-                         {"pretooluse", "pretooluse_dispatch", "pretooluse_edit"})
+                         {"pretooluse_dispatch", "pretooluse_edit"})
 
     def test_every_function_that_asks_also_traces_an_ask(self):
         for name, fn in sorted(self._functions_that_ask().items()):

@@ -30,7 +30,7 @@ class TestLeakGuard(PersonaIso):  # A
 class InAControlPlane(PersonaIso):
     """A tmp plane that actually IS one.
 
-    `pretooluse` gates the single-credential and clone-commit guards on
+    `pretooluse` gates the single-credential and plane-root guards on
     `config.HAS_CONTROL_PLANE`: the plugin installs per user or per project but the handler
     ran everywhere, so `git clone git@…`, `git commit -S` and `ssh -T git@github.com` were
     denied in every unrelated repo on the machine, explaining a control plane that did not
@@ -48,31 +48,75 @@ class InAControlPlane(PersonaIso):
         config.HAS_CONTROL_PLANE = True
 
 
-class TestCloneGuard(InAControlPlane):  # B — a nudge ('ask'), not a hard block
-    def test_cd_into_clone_commit_asks(self):
-        r = run_hook(hooks.pretooluse, {"tool_input": {"command": "cd workspaces/default/x && git commit -m y"},
-                                        "cwd": str(self.tmp)})
-        self.assertEqual(_decision(r), "ask")
+class TestCommittingInACloneIsNotNudged(InAControlPlane):
+    """Guard B is gone (#371). Committing in a clone is charter's OWN prescribed workflow.
 
-    def test_git_dash_C_clone_asks(self):
-        r = run_hook(hooks.pretooluse, {"tool_input": {"command": "git -C workspaces/default/x push"},
-                                        "cwd": str(self.tmp)})
-        self.assertEqual(_decision(r), "ask")
+    `charter clone` puts every repo under `workspaces/`, and `skills/working-in-a-clone`
+    says *"Commit to the repo you are in"* — so the nudge's trigger condition was the
+    intended state, not a deviation from it. Measured: 471 asks in one plane over two weeks,
+    every one of them this rule, 97 of 98 approved on the first day approvals were countable.
 
-    def test_legacy_repos_path_still_asks(self):  # back-compat mid-migration
-        r = run_hook(hooks.pretooluse, {"tool_input": {"command": "cd repos/default/x && git commit -m y"},
-                                        "cwd": str(self.tmp)})
-        self.assertEqual(_decision(r), "ask")
+    These cases are the ones that USED to ask. They are kept, inverted, because "the nudge
+    is gone" has to be asserted at the shapes that produced it — a bare `assertIsNone` on
+    some unrelated command would pass whether or not the code came out.
+    """
 
-    def test_commit_with_cwd_inside_repos_asks(self):
+    def test_cd_into_a_clone_then_commit_is_silent(self):
+        self.assertIsNone(run_hook(hooks.pretooluse, {
+            "tool_input": {"command": "cd workspaces/default/x && git commit -m y"},
+            "cwd": str(self.tmp)}))
+
+    def test_git_dash_C_into_a_clone_is_silent(self):
+        self.assertIsNone(run_hook(hooks.pretooluse, {
+            "tool_input": {"command": "git -C workspaces/default/x push"}, "cwd": str(self.tmp)}))
+
+    def test_the_legacy_repos_path_is_silent(self):
+        self.assertIsNone(run_hook(hooks.pretooluse, {
+            "tool_input": {"command": "cd repos/default/x && git commit -m y"},
+            "cwd": str(self.tmp)}))
+
+    def test_a_commit_with_cwd_inside_a_clone_is_silent(self):
         cwd = config.WORKSPACES_DIR / "ws" / "repo"
         cwd.mkdir(parents=True)
-        r = run_hook(hooks.pretooluse, {"tool_input": {"command": "git commit -m x"}, "cwd": str(cwd)})
-        self.assertEqual(_decision(r), "ask")
-
-    def test_umbrella_root_commit_silent(self):
         self.assertIsNone(run_hook(hooks.pretooluse,
-                                   {"tool_input": {"command": "git commit -q -F m.txt"}, "cwd": str(self.tmp)}))
+                                   {"tool_input": {"command": "git commit -m x"}, "cwd": str(cwd)}))
+
+    def test_a_command_that_merely_mentions_a_clone_path_is_silent(self):
+        """The false-positive half. `_REPOS_REF_RE` scanned the raw command string, so a
+        `grep`, an `echo`, a commit message or a `gh` comment body all reproduced as `ask`
+        — the technique this file abandoned twice elsewhere (`_leak_reason`,
+        `_single_credential_hit`) for causing exactly this."""
+        for cmd in ("grep -rn 'git commit' workspaces/demo/repo",
+                    "gh issue comment 5 --body 'we should git rebase workspaces/demo/repo'",
+                    "echo 'next: git push from workspaces/demo/repo'"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(run_hook(hooks.pretooluse,
+                                           {"tool_input": {"command": cmd}, "cwd": "/tmp"}))
+
+    def test_no_ask_row_is_traced_for_a_clone_commit(self):
+        """The trace event went with it: `ask` had exactly one producer."""
+        from charter import trace
+        cwd = config.WORKSPACES_DIR / "ws" / "repo"
+        cwd.mkdir(parents=True)
+        run_hook(hooks.pretooluse, {"tool_input": {"command": "git commit -m x"},
+                                    "cwd": str(cwd), "session_id": "s-371"})
+        self.assertEqual([e for e in trace.read("s-371") if e.get("event") == "ask"], [])
+
+    def test_no_pending_ask_marker_is_left_behind(self):
+        cwd = config.WORKSPACES_DIR / "ws" / "repo"
+        cwd.mkdir(parents=True)
+        run_hook(hooks.pretooluse, {"tool_input": {"command": "git commit -m x"}, "cwd": str(cwd),
+                                    "session_id": "s-371", "tool_use_id": "tu-371"})
+        self.assertEqual(list(config.SESSIONS_DIR.glob("*.ask-pending")), [])
+
+    def test_the_release_floor_still_stops_an_unattended_tag(self):
+        """The one thing the nudge covered by ACCIDENT (#299) is covered on purpose by A4,
+        which runs BEFORE it did — so removing B cannot reopen it."""
+        cwd = config.WORKSPACES_DIR / "ws" / "repo"
+        cwd.mkdir(parents=True)
+        r = run_hook(hooks.pretooluse, {"tool_input": {"command": "git tag v9.9.9"},
+                                        "cwd": str(cwd), "permission_mode": "bypassPermissions"})
+        self.assertEqual(_decision(r), "deny")
 
     def test_secret_leak_still_hard_denied(self):  # A stays a hard block
         r = run_hook(hooks.pretooluse, {"tool_input": {"command": "cat .charter/vaults/dev.json"}})
@@ -380,8 +424,10 @@ class TestGuardsAreScopedToAPlane(PersonaIso):
     def test_signing_is_not_denied_without_a_plane(self):
         self.assertIsNone(self._decide("git commit -S -m 'signed'"))
 
-    def test_the_clone_commit_nudge_is_silent_without_a_plane(self):
-        self.assertIsNone(self._decide("cd workspaces/default/x && git commit -m y"))
+    # The clone-commit nudge used to be asserted silent here too. Removed rather than kept
+    # when #371 deleted the guard: it is now silent in EVERY plane, so the case could no
+    # longer distinguish "scoped to a plane" from "gone", and a test that passes for a
+    # reason other than the one it names is worse than no test.
 
     def test_the_same_command_is_denied_once_a_plane_exists(self):
         """The other half of the claim: this is scoping, not removal."""

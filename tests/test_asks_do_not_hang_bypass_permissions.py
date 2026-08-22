@@ -13,6 +13,16 @@ Two deliberate boundaries, both asserted here:
   the prompt.
 * **The floor is untouched.** `bypassPermissions` is the operator saying *stop asking me*,
   not *stop knowing things*. Every `deny` still denies.
+
+The nudge these cases drive used to be the clone-commit one, on `pretooluse`. #371 deleted
+it, so the fixture moved to the overlapping-dispatch nudge on `pretooluse_dispatch` — a real
+nudge on real committed frontmatter (`dispatch-isolation: worktree`), which is the shape
+that matters here: the payload has to reach `_ask` for the downgrade to happen at all.
+
+That fixture only fires when a code-writing peer is already in flight, so it can stop firing
+silently. Every mode assertion below is therefore paired with `assert_reached`, which fails
+if the handler emitted nothing — otherwise "no ask under bypassPermissions" would pass for a
+plane where nothing could ever have asked.
 """
 
 import unittest
@@ -21,15 +31,36 @@ from tests._isolation import run_hook
 from tests.test_hooks import InAControlPlane
 from charter import hooks, trace
 
-CLONE_COMMIT = "cd workspaces/default/x && git commit -m y"
 SSH_CLONE = "git clone git@github.com:acme/x.git"
 
 
 class ModeCase(InAControlPlane):
+    """Two decision paths: the NUDGE (dispatch) and the FLOOR (Bash guards)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.make_persona("coder", **{"dispatch-isolation": "worktree"})
+
+    def _dispatch(self, mode, sid, tuid):
+        payload = {"tool_name": "Task", "tool_input": {"subagent_type": "coder"},
+                   "session_id": sid, "tool_use_id": tuid}
+        if mode is not None:
+            payload["permission_mode"] = mode
+        return run_hook(hooks.pretooluse_dispatch, payload)
+
+    def nudge(self, mode: str | None, sid="s"):
+        """One overlapping dispatch — the first puts `coder` in flight, the second nudges."""
+        self._dispatch(mode, sid, "tu_0")
+        r = self._dispatch(mode, sid, "tu_1")
+        self.assert_reached(r)
+        return r["hookSpecificOutput"]["permissionDecision"]
+
+    def assert_reached(self, r):
+        self.assertIsNotNone(r, "fixture never reached `_ask` — this assertion proves nothing")
+
     def decide(self, cmd: str, mode: str | None, sid="s"):
-        (self.tmp / "workspaces" / "default" / "x").mkdir(parents=True, exist_ok=True)
-        payload = {"tool_input": {"command": cmd},
-                   "cwd": str(self.tmp / "workspaces" / "default" / "x"),
+        """The FLOOR path: a Bash command through the guards."""
+        payload = {"tool_input": {"command": cmd}, "cwd": str(self.tmp),
                    "session_id": sid, "tool_use_id": "tu_1"}
         if mode is not None:
             payload["permission_mode"] = mode
@@ -39,31 +70,31 @@ class ModeCase(InAControlPlane):
 
 class TestBypassPermissionsTurnsAnAskIntoAnAllow(ModeCase):
     def test_the_nudge_no_longer_blocks(self):
-        self.assertEqual("allow", self.decide(CLONE_COMMIT, "bypassPermissions"))
+        self.assertEqual("allow", self.nudge("bypassPermissions"))
 
     def test_it_is_still_counted(self):
         """Suppressed is not the same as invisible — the tally must still show it fired."""
-        self.decide(CLONE_COMMIT, "bypassPermissions")
+        self.nudge("bypassPermissions")
         self.assertIn("ask-unattended", [e["event"] for e in trace.read("s")])
 
 
 class TestEveryOtherModeStillAsks(ModeCase):
     def test_auto_still_asks(self):
         """`auto` usually HAS a human watching. Fail toward the prompt."""
-        self.assertEqual("ask", self.decide(CLONE_COMMIT, "auto"))
+        self.assertEqual("ask", self.nudge("auto"))
 
     def test_default_still_asks(self):
-        self.assertEqual("ask", self.decide(CLONE_COMMIT, "default"))
+        self.assertEqual("ask", self.nudge("default"))
 
     def test_plan_still_asks(self):
-        self.assertEqual("ask", self.decide(CLONE_COMMIT, "plan"))
+        self.assertEqual("ask", self.nudge("plan"))
 
     def test_an_absent_mode_still_asks(self):
         """Hosts that send no `permission_mode` must not be read as unattended."""
-        self.assertEqual("ask", self.decide(CLONE_COMMIT, None))
+        self.assertEqual("ask", self.nudge(None))
 
     def test_an_unknown_mode_still_asks(self):
-        self.assertEqual("ask", self.decide(CLONE_COMMIT, "some-future-mode"))
+        self.assertEqual("ask", self.nudge("some-future-mode"))
 
 
 class TestTheFloorIsNotAPermission(ModeCase):
@@ -160,9 +191,9 @@ class TestASuppressedAskIsCountedExactlyOnce(ModeCase):
         return [e["event"] for e in trace.read(sid)]
 
     def test_unattended_records_only_the_suppression(self):
-        self.decide(CLONE_COMMIT, "bypassPermissions", sid="u")
+        self.nudge("bypassPermissions", sid="u")
         self.assertEqual(["ask-unattended"], self.events("u"))
 
     def test_attended_records_only_the_ask(self):
-        self.decide(CLONE_COMMIT, "default", sid="d")
-        self.assertEqual(["ask"], self.events("d"))
+        self.nudge("default", sid="d")
+        self.assertEqual(["dispatch-ask"], self.events("d"))

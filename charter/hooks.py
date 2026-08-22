@@ -153,6 +153,36 @@ def _ask_mark_take(sid, tuid) -> bool:
         return False
 
 
+def _ask_approved(data: dict) -> None:
+    """Record that an `ask` was APPROVED — the other half of every nudge charter emits.
+
+    A hook `ask` blocks the tool, so a ``PostToolUse`` carrying the same ``tool_use_id`` is
+    proof it ran, which is proof somebody said yes. A declined ask never produces one and
+    its marker simply stays behind; that asymmetry is what makes "asked N, approved M"
+    countable at all (#290).
+
+    **One function, called from every PostToolUse family, because an ask can be raised on
+    every tool family.** This lived inside `posttooluse_bash` and nowhere else, which was
+    correct only for as long as the one nudge on the **Bash** tool existed. #371 deleted it,
+    and the two nudges that remain raise on ``Task|Agent`` and on ``Write|Edit|MultiEdit``
+    — so every approval either of them ever received was already uncountable, and the
+    deletion would have pinned the numerator at zero for good. Two code paths answering
+    "was this nudge approved?" is how that stayed invisible; there is now one.
+
+    **Kept to a stat() on the common path.** Every caller is registered against every call
+    of its tool, so the overwhelming majority of invocations must find no marker and return
+    having written nothing — no trace line, no read of the trace, no import beyond what is
+    already loaded.
+    """
+    try:
+        sid, tuid = data.get("session_id"), data.get("tool_use_id")
+        if not _ask_mark_take(sid, tuid):
+            return
+        _trace("ask-approved", sid)
+    except Exception:
+        return  # bookkeeping must never break a turn
+
+
 # --------------------------------------------------------------------------- #
 # secret detection (shared): report the KIND, never the value                  #
 # --------------------------------------------------------------------------- #
@@ -938,32 +968,32 @@ def _release_floor_reason(cmd: str, data: dict) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
-# B: clone-boundary guard — deny git-write inside a clone from the control plane #
+# B: the clone-commit nudge — REMOVED in #371                                   #
 # --------------------------------------------------------------------------- #
-_GIT_WRITE_RE = re.compile(r"\bgit\b[^|;&]*?\b(?:commit|push|add|am|cherry-pick|tag|rebase|merge)\b")
-# Matches a clone path under the workspaces root (or the legacy `repos/` name, for a
-# teammate mid-migration): `cd workspaces/<ws>/<repo>`, `git -C …/workspaces/…`, etc.
-_CLONE = r"(?:repos|workspaces)"
-_REPOS_REF_RE = re.compile(
-    rf"(?:\bcd\s+\S*{_CLONE}/|-C\s+\S*{_CLONE}/|(?:^|[\s'\"]){_CLONE}/[^/\s]+/[^/\s]+)")
-
-
-def _clone_commit_reason(cmd: str, cwd: str) -> str | None:
-    if not _GIT_WRITE_RE.search(cmd):
-        return None
-    in_repos = bool(_REPOS_REF_RE.search(cmd))
-    if not in_repos and cwd:
-        try:
-            Path(cwd).resolve().relative_to(config.WORKSPACES_DIR.resolve())
-            in_repos = True
-        except Exception:
-            in_repos = False
-    if in_repos:
-        return ("you're committing inside a clone from the control-plane session. A repo-rooted "
-                "session (`cd workspaces/<ws>/<name> && claude`) applies the repo's own "
-                "hooks/skills/conventions — usually better for real repo work. Proceed if it's "
-                "intentional (the clone is its own git repo; the control plane's is untouched).")
-    return None
+# It asked before a git write inside a workspace clone, recommending a repo-rooted session.
+# Deleted rather than narrowed, for a reason worth keeping written down because the same
+# argument will be made for the next nudge somebody wants to add:
+#
+#   * **Its trigger was the prescribed workflow.** `charter clone` puts every repo under
+#     `workspaces/`, and `skills/working-in-a-clone` says "Commit to the repo you are in".
+#     A guard whose firing condition is the intended state is not miscalibrated, it is
+#     inverted — no amount of narrowing fixes that.
+#   * **Measured, not assumed.** 471 asks in one plane over two weeks, every `ask` row in
+#     the store this one rule, 97 of 98 approved on the first day approvals were countable.
+#     Against it, the persona tool-gate — the mechanism whose whole job is to REMOVE
+#     prompts — fired 16 times in the same window.
+#   * **It could not be justified even in principle.** Keeping it meant committing to show
+#     it earns its interruptions, and the evidence for that is a DECLINE. A declined ask
+#     produces no `PostToolUse`, so it is indistinguishable from an interrupted turn or an
+#     ended session (see `posttooluse_bash`). A guard that can only ever be defended with
+#     evidence the protocol cannot yield is a guard that will be re-argued forever.
+#   * **It was safe to remove.** It is not a safety rule and never claimed to be — the
+#     clone is its own repository and the plane's git is untouched either way. The one
+#     thing it covered by ACCIDENT, an unattended release (#299), has been covered on
+#     purpose by A4 since 0.46.1, and A4 runs BEFORE this ever did.
+#
+# The advice itself is not lost; it lives in prose in `skills/working-in-a-clone`, which is
+# one source of truth rather than two, and interrupts nobody.
 
 
 def _trace(event, session, **f):
@@ -1208,24 +1238,17 @@ def pretooluse() -> int:
         _deny("PreToolUse", branch)
         _trace("deny", sid, reason="plane-root-branch", cmd=head)
         return 0
-    # A4: an unattended run may not publish (#299). Checked BEFORE the clone nudge, which
-    # is where the hole was: that nudge matches `tag`/`push`, and 0.46.0 turned its
-    # unattended `ask` into an `allow` — so a release walked straight through it.
+    # A4: an unattended run may not publish (#299). It used to matter that this ran before
+    # the clone nudge — that nudge matched `tag`/`push` and stopped releases by accident
+    # until 0.46.0 turned its unattended `ask` into an `allow`. The nudge is gone (#371);
+    # this guard stands on its own, which is what "on purpose" was always supposed to mean.
     pub = _release_floor_reason(cmd, data) if _cfg.HAS_CONTROL_PLANE else None
     if pub:
         _deny("PreToolUse", pub)
         _trace("deny", sid, reason="release-floor", cmd=head)
         return 0
-    # B: committing inside a clone → ASK, not deny. A repo-rooted session is usually better
-    # (the repo's own hooks/conventions apply), but it's a preference, not a safety rule —
-    # the clone is its own git repo, so the control plane's is untouched either way.
-    # Same gate: "you are committing inside a clone rather than at the plane" is advice
-    # about a plane, so it has nothing to say where there is none.
-    clone = _clone_commit_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
-    if clone:
-        if _ask("PreToolUse", clone, data):
-            _trace("ask", sid, reason=clone[:70], cmd=head)
-        return 0
+    # B WAS HERE: the clone-commit nudge, removed in #371 — see the note where it lived.
+    # Nothing on this handler asks any more; every remaining verdict is a deny or an allow.
     # fall through to the allow-only persona tool-gate (unchanged behaviour)
     try:
         from . import toolgate
@@ -1960,6 +1983,10 @@ def memory_share_note() -> str:
 def posttooluse() -> int:
     data = _read_stdin()
     _touch_piece(data)
+    # The approval half of the `routing: require` edit nudge (`pretooluse_edit`), which asks
+    # on THIS tool family. Before the file-path checks below, because an approval is a fact
+    # about the tool call and not about what it wrote.
+    _ask_approved(data)
     if (data.get("tool_name") or "") not in ("Write", "Edit", "MultiEdit"):
         return 0
     ti = data.get("tool_input") or {}
@@ -2153,28 +2180,26 @@ def pretooluse_dispatch() -> int:
 
 
 def posttooluse_bash() -> int:
-    """Record that an `ask` was APPROVED — the other half of every nudge charter emits.
+    """The approval half of any nudge raised on the **Bash** tool — see `_ask_approved`.
 
-    A hook `ask` blocks the tool, so a `PostToolUse` for the same ``tool_use_id`` is proof
-    it ran, which is proof a human said yes. A declined ask never produces one, and its
-    marker simply stays behind; that asymmetry is what makes "asked N times, approved M"
-    countable at all (#290).
+    **charter currently raises none.** The clone-commit nudge was the only one and #371
+    deleted it, so on today's code this handler finds no marker and returns, every time.
+    That is deliberate rather than an oversight worth cleaning up:
 
-    **Kept to a stat() on the common path.** This is registered against every Bash call, so
-    the overwhelming majority of invocations must find no marker and return having written
-    nothing — no trace line, no read of the trace, no import beyond what is already loaded.
-    The cost that remains is the process spawn itself; narrowing the matcher with the host's
-    `if:` condition (e.g. ``Bash(git *)``) is the obvious next reduction, deferred only
-    because it would raise charter's minimum supported host version.
+    * A handler the shipped `hooks/hooks.json` dispatches cannot be removed from the CLI
+      without breaking every install whose plugin is a version behind — `charter hook
+      posttooluse-bash` would simply error, on every Bash call. Version skew in either
+      direction is the failure shape this project keeps paying for (`docs/hooks.md`), and
+      it is not worth re-entering to delete a `stat()`.
+    * `pretooluse` is where a Bash-tool guard would go, and the next one that wants to be a
+      nudge rather than a deny needs its approval counted from the day it ships — which is
+      the lesson #371 cost 471 prompts to learn.
+
+    The residual cost is the process spawn, already noted before this became a no-op:
+    narrowing the matcher with the host's `if:` condition (e.g. ``Bash(git *)``) is the
+    obvious reduction, deferred only because it would raise charter's minimum host version.
     """
-    data = _read_stdin()
-    try:
-        sid, tuid = data.get("session_id"), data.get("tool_use_id")
-        if not _ask_mark_take(sid, tuid):
-            return 0
-        _trace("ask-approved", sid)
-    except Exception:
-        return 0  # bookkeeping must never break a turn
+    _ask_approved(_read_stdin())
     return 0
 
 
@@ -2289,6 +2314,10 @@ def posttooluse_message() -> int:
 
 def posttooluse_dispatch() -> int:
     data = _read_stdin()
+    # The approval half of the overlapping-dispatch nudge (`pretooluse_dispatch`). Before
+    # the `subagent_type` check: an ask that was approved was approved whatever the tally
+    # below can make of the payload.
+    _ask_approved(data)
     if (data.get("tool_name") or "") not in ("Task", "Agent"):
         return 0
     agent = ((data.get("tool_input") or {}).get("subagent_type") or "").strip()

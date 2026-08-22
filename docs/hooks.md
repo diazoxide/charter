@@ -17,7 +17,7 @@ one thing a hook is allowed to shout about.
 | --- | --- | --- |
 | `SessionStart` | — | reconcile workspace state, GC persona scratch, inject context, run `doctor`, refresh forge state |
 | `UserPromptSubmit` | — | the commitment gate (below) |
-| `PreToolUse` | `Bash` | the four guards (below) |
+| `PreToolUse` | `Bash` | four of the five guards (below) |
 | `PreToolUse` | `Read\|Grep` | keeps a vault file from being read into context |
 | `PreToolUse` | `Task\|Agent` | notes a dispatch about to happen |
 | `PostToolUse` | `Write\|Edit\|MultiEdit` | the record-memory nudge |
@@ -27,12 +27,17 @@ one thing a hook is allowed to shout about.
 
 ## The guards
 
+Every one of them **denies**. None of them asks — charter holds no nudge on the Bash tool,
+and that is a deliberate position, not an accident (see *What charter stopped asking*).
+
 A denial from these is **the rule working, not a bug** — the single most common thing
 mistaken for a defect. Each prints why, because a developer who reads the reason learns the
 rule while one who reads a bare refusal files an issue.
 
 - **Secret leak.** A command whose argv would put a vault's contents into the transcript.
   Needs argv *and* the plane's vault paths, so it cannot be expressed as a static rule.
+- **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
+  matcher at all.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone.
 - **One credential.** SSH to a forge, `GIT_SSH_COMMAND`, `-S`/`--gpg-sign`, and the
@@ -40,11 +45,31 @@ rule while one who reads a bare refusal files an issue.
   `--config-env`, `GIT_CONFIG_KEY_n`, and a `git config` write of it). This one *is*
   expressible as a pattern and stays in the hook anyway, so it can explain itself — see
   [git-policy.md](git-policy.md) and ADR 0014.
-- **Commit inside a clone.** Asks rather than denies: committing there is usually intended,
-  and only the working directory reveals which case it is.
+- **Release floor.** A run the harness reports as `bypassPermissions` may not create a tag,
+  push tags, or `gh release create` / `gh pr merge`. `bypassPermissions` means *stop asking
+  me*, not *stop knowing things*, and a published version number can never be reused.
 
-A fifth path is not a guard but an allowance: a binary the **active persona** declares in
+A sixth path is not a guard but an allowance: a binary the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then.
+
+## What charter stopped asking
+
+charter used to nudge before a git write inside a workspace clone, suggesting a repo-rooted
+session. It is gone, and the measurement is why: in one plane it asked **471 times in two
+weeks and was approved 97 times out of 98** — while the persona tool-gate, the mechanism
+whose whole job is to *remove* prompts, fired 16 times over the same window. Its trigger was
+also charter's own prescribed workflow: `charter clone` puts every repo under `workspaces/`,
+and the `working-in-a-clone` skill says *commit to the repo you are in*. The advice the
+nudge carried still exists there, in prose, interrupting nobody.
+
+The rule that came out of it, and the one a new nudge has to pass:
+
+> **A prompt is worth its interruption only if it changes what happens.** If the evidence
+> that it does cannot be collected, the prompt cannot be justified — and a declined `ask`
+> produces no `PostToolUse`, so charter can never tell a decline from an interrupted turn.
+
+An approved ask *is* countable, and every nudge charter still has records both halves. See
+*What gets counted*.
 
 Policy that *can* be written as a command pattern belongs in Claude Code's own
 `permissions`, not here — `charter guard ask <pattern>` writes it there. Charter keeps only
