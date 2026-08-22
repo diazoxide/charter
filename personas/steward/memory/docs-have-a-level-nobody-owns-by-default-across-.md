@@ -1,0 +1,5 @@
+# DOCS HAVE A LEVEL NOBODY OWNS BY DEFAULT. Across ten PRs closing 23 issu
+
+_2026-08-22 17:05 · persistent_
+
+DOCS HAVE A LEVEL NOBODY OWNS BY DEFAULT. Across ten PRs closing 23 issues in the 0.48.0 audit, every brief said 'update the docs describing this behaviour' and every agent did — docs/mcp.md, docs/secrets.md, docs/control-plane.md all moved correctly within their own surface. NONE looked up: README.md was untouched, so charter's front page still told readers to run 'persona sync-agents' with no mention of the new --approve-mcp gate, and still listed four cross-harness invariants without the containment rule the whole release added. Nine individually-correct agents summed to a stale front page — the same shape as commands_workspace.py:521,526, a line three issues each assumed another covered. LESSON: when a release changes a CLASS of behaviour rather than one command, name the top-level doc (README, the docs index) in ONE brief explicitly, or own it yourself at the end. An agent scoped to a surface will never edit the file that describes the whole. Fixed in PR #359 AFTER 0.48.0 shipped, so PyPI's description stays stale until the next release.
