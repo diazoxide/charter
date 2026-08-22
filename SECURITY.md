@@ -4,10 +4,14 @@
 
 Please **do not open a public issue** for a security problem.
 
-Report it privately through GitHub's
-[private vulnerability reporting](https://github.com/diazoxide/charter/security/advisories/new),
-or by email to the maintainer address listed in `pyproject.toml`. Include the charter
-version (`charter version`), your OS, and the smallest reproduction you have.
+Report it privately **by email to the maintainer address in
+[`pyproject.toml`](pyproject.toml)** (the `authors` line). Include the charter version
+(`charter version`), your OS, and the smallest reproduction you have.
+
+GitHub's private vulnerability reporting is not enabled on this repository, so its
+advisory form is not a route here — email is. This page names only the channel that
+works, because a report filed into a channel nobody is listening on is indistinguishable,
+from the maintainer's side, from no report at all.
 
 You should get an acknowledgement within a few days. charter is maintained by one person,
 so please allow reasonable time for a fix before disclosing publicly.
