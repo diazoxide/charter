@@ -620,7 +620,16 @@ def _add_frame_parsers(sub) -> None:
     for h in harness.all():
         if not h.cli_name:
             continue
-        if h.cli_name in sub.choices:
+        # `"frame"` itself is reserved even though its OWN `add_parser` call below has
+        # not run yet: the loop finishes and registers every harness BEFORE `frame` is
+        # added, so a harness with `cli_name == "frame"` would pass a check against
+        # `sub.choices` alone (nothing there is named `frame` yet) and only collide once
+        # `sub.add_parser("frame", ...)` runs a few lines down — where, on argparse
+        # versions that raise for a conflicting name, the error names `frame` instead of
+        # the harness that actually caused it, and on versions that do not raise (this
+        # repo's own 3.11 floor — see `_split_frame_argv`'s docstring for the same
+        # version gap elsewhere), the escape hatch silently shadows the harness instead.
+        if h.cli_name in sub.choices or h.cli_name == "frame":
             raise ValueError(
                 f"harness {h.name!r} wants `charter {h.cli_name}`, which is already a "
                 f"charter command — rename the harness's cli_name or the command before "
@@ -1071,6 +1080,61 @@ def _split_exec_command(argv: list[str]) -> tuple[list[str], list[str] | None]:
     return argv, None
 
 
+def _frame_command_names() -> set[str]:
+    """Every subcommand `_add_frame_parsers` registers: each harness's `cli_name`, plus
+    the `frame` escape hatch. Read at call time (`harness.all()`, never cached) for the
+    same reason `_add_frame_parsers` itself iterates live rather than listing — a harness
+    added to `KINDS` is covered the moment it is registered."""
+    return {h.cli_name for h in harness.all() if h.cli_name} | {"frame"}
+
+
+#: The ONLY tokens `_split_frame_argv` ever keeps for `argparse` itself, and only in the
+#: fixed leading run described there. `-h`/`--help` are included deliberately: leaving
+#: them out was tried first and broke `charter claude --help` outright — REMAINDER
+#: absorbs `--help` just like any other harness token once it is past `argparse`'s own
+#: matching, so `cmd_launch` received `rest=["--help"]`, found no harness named `""`
+#: (bare `frame`) or treated it as a literal argv element otherwise, and the bypass path
+#: (non-tty in that reproduction) called `os.execvp("--help", ...)` — a real crash
+#: (`FileNotFoundError`, uncaught), not merely a UX regression. Keeping `-h`/`--help`
+#: recognized here restores the working behaviour: `charter claude --help` shows
+#: charter's OWN thin help for that subcommand (`usage: charter claude [-h]
+#: [--no-frame] ...`) exactly as before this fix, and a harness's own `--help` is still
+#: reachable — just as `-p`/`--continue` are — by putting it anywhere OTHER than this
+#: fixed leading run (`charter claude --continue --help`, or explicitly `charter claude
+#: -- --help`).
+_OWN_FLAGS = ("--no-frame", "-h", "--help")
+
+
+def _split_frame_argv(argv: list[str]) -> tuple[list[str], list[str] | None]:
+    """Peel a harness's own arguments off before `argparse` ever sees them.
+
+    `nargs=argparse.REMAINDER` cannot hold a positional whose very FIRST token looks
+    like an option `argparse` does not itself recognize: `charter claude -p hi` has
+    `argparse` try to match `-p` against `claude`'s own options (`-h`, `--no-frame`),
+    fail, and refuse the whole command with "unrecognized arguments: -p" — before
+    REMAINDER ever gets a chance to absorb anything. Confirmed identical on 3.9, 3.12 and
+    3.14, so unlike `_split_exec_command` above this is not something a Python-version
+    split could route around: it is `argparse`'s documented behaviour on every version
+    this repo supports, not drift on the 3.11 floor.
+
+    Splitting here — the same shape `_split_exec_command` uses for `secret exec` —
+    sidesteps the mechanism entirely: only `charter <name>` and a leading run of
+    `_OWN_FLAGS` immediately after it are ever handed to `argparse`; everything past
+    that point is captured here and grafted onto `args.rest` untouched by `argparse`'s
+    own option matching, dashes and all. `_OWN_FLAGS` is recognized only in that one
+    fixed leading position — anywhere else, a token that happens to spell `--no-frame`
+    or `--help` is just more of the harness's own verbatim argv, which is the one
+    unambiguous rule available once the harness's own flags (`-p`, `--continue`,
+    anything) are indistinguishable from ours by shape alone.
+    """
+    if not argv or argv[0] not in _frame_command_names():
+        return argv, None
+    i = 1
+    while i < len(argv) and argv[i] in _OWN_FLAGS:
+        i += 1
+    return argv[:i], argv[i:]
+
+
 def _subcommand_names(parser: argparse.ArgumentParser) -> set[str]:
     """Every top-level subcommand the parser accepts.
 
@@ -1134,6 +1198,7 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv = _hoist_persona_memory(argv)
     argv, exec_command = _split_exec_command(argv)
+    argv, frame_rest = _split_frame_argv(argv)
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
@@ -1144,6 +1209,8 @@ def main(argv=None) -> int:
         raise
     if exec_command is not None:
         args.command = exec_command
+    if frame_rest is not None:
+        args.rest = frame_rest
     try:
         return args.func(args) or 0
     except KeyboardInterrupt:
