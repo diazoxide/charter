@@ -10,6 +10,7 @@ from . import (
     commands_update,
     __version__,
     commands,
+    commands_frame,
     commands_harness,
     commands_persona,
     commands_report,
@@ -17,6 +18,7 @@ from . import (
     commands_workspace,
     commands_worktree,
     contain,
+    harness,
     hooks,
     statusline,
     toolgate,
@@ -332,6 +334,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_secret_parser(sub)
     _add_persona_parser(sub)
     _add_report_parser(sub)
+    # Last: the collision guard below refuses a harness `cli_name` that shadows an
+    # already-registered command, so it needs the FULL set of `charter`'s own commands
+    # already in `sub.choices` — not just the ones defined above this line — to check
+    # against. Placed after every other `_add_*_parser` call for that reason.
+    _add_frame_parsers(sub)
 
     return p
 
@@ -584,6 +591,47 @@ def _add_workspace_parser(sub) -> None:
     aus.set_defaults(func=commands_workspace.cmd_workspace_autosave)
     pbg = wsub.add_parser("_pushbg")    # internal: background push half of autosave
     pbg.set_defaults(func=commands_workspace.cmd_workspace_pushbg)
+
+
+def _add_frame_parsers(sub) -> None:
+    """One launcher per registered harness, plus the escape hatch (`charter frame --`).
+
+    Generated from `harness.all()` rather than listed, which is the reason `registry.py`
+    exists: a harness added to `KINDS` gets a launcher the day it is registered, with no
+    second place to remember to update. That same automatism is exactly what makes a
+    name collision dangerous — a harness registered with `cli_name = "status"` would
+    otherwise silently take `charter status` away from the operator, with nothing
+    printing so much as a warning, because nothing forced the two registries (core
+    commands here, harnesses in `harness.KINDS`) to stay disjoint. `sub.choices` is
+    `argparse`'s own record of every subcommand name already claimed, so the check below
+    asks the same authority the CLI itself will dispatch through, rather than keeping a
+    second list of "known" command names that could itself drift. Raised, not printed:
+    this runs at import/parser-construction time, before any command line is parsed, so
+    there is no operator turn to spend a warning on — the fix is a code change, not
+    something to work around at runtime.
+    """
+    def _wire(parser, name):
+        parser.add_argument("rest", nargs=argparse.REMAINDER,
+                            help="Passed to the harness verbatim.")
+        parser.add_argument("--no-frame", action="store_true",
+                            help="Run the harness bare, with no charter frame.")
+        parser.set_defaults(harness=name, func=commands_frame.cmd_launch)
+
+    for h in harness.all():
+        if not h.cli_name:
+            continue
+        if h.cli_name in sub.choices:
+            raise ValueError(
+                f"harness {h.name!r} wants `charter {h.cli_name}`, which is already a "
+                f"charter command — rename the harness's cli_name or the command before "
+                f"this can ship")
+        p = sub.add_parser(h.cli_name,
+                           help=f"Run {h.cli_name} inside charter's frame.")
+        _wire(p, h.cli_name)
+
+    fr = sub.add_parser("frame",
+                        help="Run any command inside charter's frame — `charter frame -- <cmd>`.")
+    _wire(fr, "")
 
 
 def _add_harness_parser(sub) -> None:
