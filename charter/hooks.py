@@ -2232,6 +2232,8 @@ def posttooluse_bash() -> int:
     narrowing the matcher with the host's `if:` condition (e.g. ``Bash(git *)``) is the
     obvious reduction, deferred only because it would raise charter's minimum host version.
     """
+    from .frame import notify
+    notify.plane_changed()
     _ask_approved(_read_stdin())
     return 0
 
@@ -2248,6 +2250,8 @@ def posttooluse_skill() -> int:
     workspace or client name would travel. `skilluse.record` swallows its own failures: a
     tally must never break a turn.
     """
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     _touch_piece(data)
     try:
@@ -2327,6 +2331,8 @@ def posttooluse_message() -> int:
     created — `main`, another session, a teammate's agent. Attributing those would be
     inventing a delegation that did not happen.
     """
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     if (data.get("tool_name") or "") != "SendMessage":
         return 0
@@ -2346,6 +2352,8 @@ def posttooluse_message() -> int:
 
 
 def posttooluse_dispatch() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     # The approval half of the overlapping-dispatch nudge (`pretooluse_dispatch`). Before
     # the `subagent_type` check: an ask that was approved was approved whatever the tally

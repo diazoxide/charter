@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -67,6 +68,31 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     """Run one of `commands_frame`'s own argv-building functions' output — never a
     hand-retyped command — so this module tests the exact bytes the launcher sends."""
     return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+
+def _kill_pid(pid_str: str) -> None:
+    """SIGKILL one process directly, tolerating it already being gone.
+
+    `tmux kill-server` is a fire-and-forget signal TO THE SERVER, not a wait for it to
+    actually finish tearing down and reaping every pane's process — confirmed by hand
+    (`PanelIntegration`'s three tests, run back to back on ONE shared socket, left THREE
+    separate orphaned `tmux` server processes behind, each with PPID 1 and each still
+    holding its own live `python3 -m charter panel ...` child, even though every test's
+    own `addCleanup(_tmux, "kill-server")` had already run and reported success — the
+    review that found this counted 52 such orphans after a full suite run). Once a
+    server has detached and reparented to init like that, no later `kill-server` call
+    from a DIFFERENT test can reach it — the socket path it was using may already have
+    rolled over to a fresh server for the next test's `new-session`. Killing the pane's
+    OWN pid (captured via `#{pane_pid}` right after the pane is created) sidesteps the
+    whole question of whether the server ever tears itself down cleanly."""
+    try:
+        pid = int(pid_str)
+    except (TypeError, ValueError):
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass  # already dead — exactly what this cleanup is trying to ensure
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
@@ -269,6 +295,21 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         self.env.pop("CHARTER_HOME", None)  # let it derive under CHARTER_ROOT, like this
                                             # process's own PersonaIso-isolated config
 
+    def _spawn_panel(self, session: str, fid: str) -> None:
+        """One `charter panel bottom --session <fid>` pane, in a fresh session named
+        *session* on this class's socket. Registers `_kill_pid` as a cleanup — see its
+        own docstring for why `kill-server` alone leaves this process orphaned — using
+        the pane's OWN pid (`#{pane_pid}`), captured immediately, rather than the
+        session or pane id: those name tmux objects, not the OS process underneath
+        them, and killing the process is the actual guarantee this method exists to
+        give every caller."""
+        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
+        r = _tmux("new-session", "-d", "-s", session, "-x", "40", "-y", "5",
+                  "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pid = _tmux("display-message", "-p", "-t", session, "#{pane_pid}").stdout.strip()
+        self.addCleanup(_kill_pid, pid)
+
     def test_a_bottom_panel_draws_and_repaints_on_a_real_state_bump(self):
         """Minimal shape: a real pane running `charter panel bottom --session <fid>`
         must (1) show real content rather than dying at startup — `capture-pane`
@@ -277,10 +318,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         changes, not just once at launch — a fresh todo plus a real `state.bump` must
         change what `capture-pane` reports within a few polls of `panel.TICK`."""
         fid = state.frame_id("panel-integ", os.getpid())
-        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
-        r = _tmux("new-session", "-d", "-s", "panel-live", "-x", "40", "-y", "5",
-                  "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self._spawn_panel("panel-live", fid)
 
         time.sleep(1)
         first = _tmux("capture-pane", "-p", "-t", "panel-live").stdout
@@ -321,10 +359,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         broken hook wiring the way `test_frame_liveness.py`'s own docstring warns
         about."""
         fid = state.frame_id("panel-hook-integ", os.getpid())
-        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
-        r = _tmux("new-session", "-d", "-s", "panel-hook-live", "-x", "40", "-y", "5",
-                  "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self._spawn_panel("panel-hook-live", fid)
 
         time.sleep(1)
         first = _tmux("capture-pane", "-p", "-t", "panel-hook-live").stdout
@@ -367,10 +402,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         signal than checking the pane alone would give.
         """
         fid = state.frame_id("panel-integ-corrupt", os.getpid())
-        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
-        r = _tmux("new-session", "-d", "-s", "panel-corrupt", "-x", "40", "-y", "5",
-                  "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self._spawn_panel("panel-corrupt", fid)
 
         time.sleep(1)
         alive = _tmux("display-message", "-p", "-t", "panel-corrupt", "#{pane_dead}")

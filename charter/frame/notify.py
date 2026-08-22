@@ -2,8 +2,22 @@
 
 Called from `charter/hooks.py`, where the posture is absolute (see that module's own
 docstring, and `contain.py`'s): a hook may cost a session its briefing, never its turn.
-`posttooluse` fires on every single tool call, so this has two jobs, not one — never
-raise, and never cost the hot path anything worth measuring.
+
+**Every `posttooluse*` handler calls this, not just the bare-named `posttooluse`.**
+`hooks/hooks.json` scopes `posttooluse` itself to `Write|Edit|MultiEdit` — Bash, Skill,
+Task/Agent and SendMessage each route to their own handler (`posttooluse-bash`,
+`-skill`, `-dispatch`, `-message`). Relying on `posttooluse` alone would leave the frame
+blind to Bash specifically, which is where most plane-state changes that matter to a
+panel actually happen — commits, branch moves, worktree edits — none of them a
+Write/Edit/MultiEdit call. Every handler bumping, rather than picking the ones that seem
+to matter today, is the one rule simple enough that a future sixth `posttooluse-*`
+handler has an unambiguous answer for whether it should call this too (yes). Each call
+site sits behind the same 250ms debounce below, so calling from five handlers instead of
+one costs nothing extra on the common path — it only changes which single call in a
+quiet stretch is the one that survives the debounce and actually writes.
+
+Being called from five hot paths instead of one changes nothing about what this module
+owes them: never raise, and never cost any of them anything worth measuring.
 
 A FIFO was considered and rejected: opening one for write blocks until a reader exists,
 which would put a hang directly in the hook path the first time no panel was listening.
@@ -26,7 +40,8 @@ from . import state
 
 #: At most one bump per this many seconds. A panel ticks at 0.2s (`panel.TICK`), so a
 #: tighter debounce buys nothing a reader could ever see — it would only add cost to a
-#: hot path (`posttooluse`, once per tool call) for no visible benefit.
+#: hot path (every `posttooluse*` handler, so once per Bash/Write/Edit/MultiEdit/Skill/
+#: Task/Agent/SendMessage call) for no visible benefit.
 DEBOUNCE = 0.25
 
 #: Mutable through a dict, not a bare module global, so a test can reset it

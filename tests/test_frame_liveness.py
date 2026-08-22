@@ -1,8 +1,8 @@
 """The frame updates because the agent did something.
 
-`posttooluse` runs on every tool call, and `hooks.py` already treats that path as hot, so
-the bump is debounced and swallows every error: a hook may cost a session its briefing,
-never its turn.
+Every `posttooluse*` handler runs on some tool call, and `hooks.py` already treats that
+family as hot, so the bump is debounced and swallows every error: a hook may cost a
+session its briefing, never its turn.
 """
 
 from __future__ import annotations
@@ -11,9 +11,10 @@ import os
 import unittest
 from unittest import mock
 
+from charter import hooks
 from charter.frame import notify, state
 
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, run_hook
 
 
 class Notify(PersonaIso, unittest.TestCase):
@@ -54,6 +55,34 @@ class Notify(PersonaIso, unittest.TestCase):
              mock.patch.object(state, "bump", side_effect=OSError("read-only")):
             notify._last["at"] = 0.0
             notify.plane_changed()   # must not raise
+
+
+class EveryPostToolUseHandlerBumps(PersonaIso, unittest.TestCase):
+    """`hooks/hooks.json` scopes the bare-named `posttooluse` handler to
+    `Write|Edit|MultiEdit` alone — Bash, Skill, Task/Agent and SendMessage each route to
+    their OWN `posttooluse-*` handler (`posttooluse-bash`, `-skill`, `-dispatch`,
+    `-message`). Wiring `plane_changed()` into `posttooluse` only would leave the frame
+    blind to Bash specifically, which is where most of the plane-state changes a panel
+    cares about actually happen — commits, branch moves, worktree edits, none of them a
+    Write/Edit/MultiEdit call.
+
+    Enumerates `hooks._HANDLERS` rather than hardcoding today's five names, so a future
+    SIXTH `posttooluse-*` handler that forgets the call fails HERE, the same way it
+    would have caught the gap this class exists to close."""
+
+    def test_every_posttooluse_handler_calls_plane_changed(self):
+        names = [n for n in hooks._HANDLERS if n.startswith("posttooluse")]
+        # A floor, not a fixed count — the whole point is that a sixth name added later
+        # is picked up automatically, not that exactly five exist today.
+        self.assertGreaterEqual(len(names), 5,
+                                "hooks.json's own five posttooluse* matchers "
+                                "(posttooluse, -bash, -skill, -dispatch, -message) "
+                                "should all be registered in _HANDLERS")
+        for name in names:
+            with self.subTest(handler=name), \
+                 mock.patch.object(notify, "plane_changed") as bumped:
+                run_hook(hooks._HANDLERS[name], {})
+                bumped.assert_called_once()
 
 
 if __name__ == "__main__":
