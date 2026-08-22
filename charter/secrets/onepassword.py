@@ -60,6 +60,14 @@ _DIAGNOSES: tuple[tuple[str, str], ...] = (
      "1Password refused this as unauthorised. For a service-account token that usually "
      "means it has no WRITE access to this vault — the same token reads perfectly well, "
      "which is what makes the failure look like a charter bug."),
+    # Reported in #322: an agent invoking the path charter invokes saw "Too many requests.
+    # Your client has been rate-limited." across ~17 attempts with backoff. `op` still
+    # exits 1 — the same code as "no such item" — which is precisely why the exit status
+    # cannot classify this, and why it read as four empty vaults. The advice is the part
+    # the operator did not get: wait, and do not conclude anything about the contents.
+    ("rate-limited",
+     "1Password rate-limited this client. Its contents are UNKNOWN — this is not an empty "
+     "vault. Wait and retry rather than re-provisioning secrets that are probably there."),
     # Reported in #78 against op 2.34.0: `op` says this when it never parsed the JSON
     # template, which DOES declare a category. The flag it asks for is a red herring,
     # and supplying it is actively destructive, so the hint has to say so.
@@ -250,13 +258,29 @@ class OnePasswordProvider(VaultProvider):
         self._write(fields, creating=False)
 
     def keys(self) -> list[str]:
-        """The item's field names. Empty when the item does not exist yet."""
+        """The item's field names. Empty when the item PROVABLY does not exist yet.
+
+        Raises rather than returning ``[]`` when charter could not read the vault, because
+        the caller renders the two differently and cannot tell them apart from a list
+        (#322): `cmd_secret_list` prints "has no secrets" and exits 0 for the first, and
+        must report and exit non-zero for the second.
+        """
         return sorted(self._fields())
 
     # --- helpers ----------------------------------------------------------- #
-    def _list_items(self) -> list[str]:
-        proc = self._run(self._argv("item", "list", "--vault", self.op_vault,
-                                    "--tags", self._vault_tag(), "--format", "json"))
+    def _list_items(self, tagged: bool = True) -> list[str]:
+        """Item titles in the op-vault. Tagged as charter's by default.
+
+        ``tagged=False`` is for the one question the tag cannot answer: is this vault's
+        item *there*? An item charter adopted rather than created carries no charter tag —
+        that is the whole point of `op-item` — so a tagged listing would report it absent
+        and :meth:`_fields` would call an unreadable vault empty for exactly the vaults
+        most likely to be somebody's hand-curated item.
+        """
+        argv = ["item", "list", "--vault", self.op_vault]
+        if tagged:
+            argv += ["--tags", self._vault_tag()]
+        proc = self._run(self._argv(*argv, "--format", "json"))
         if proc.returncode != 0:
             raise self._fail(f"listing vault '{self.name}'", proc)
         try:
@@ -274,7 +298,8 @@ class OnePasswordProvider(VaultProvider):
         return proc.returncode == 0
 
     def _fields(self, reveal: bool = False) -> dict:
-        """This vault's secrets as ``{field: value}``. ``{}`` if there is no item yet.
+        """This vault's secrets as ``{field: value}``. ``{}`` if there is no item yet, and
+        a :class:`VaultError` if charter could not tell — never ``{}`` for a failed read.
 
         ``reveal`` is **off by default and belongs only to the write path.** With it, `op`
         returns real values — which is what makes the read-modify-write safe, since writing
@@ -290,6 +315,30 @@ class OnePasswordProvider(VaultProvider):
             argv.append("--reveal")
         proc = self._run(self._argv(*argv))
         if proc.returncode != 0:
+            # A vault charter could not READ is not a vault with no secrets (#322).
+            #
+            # `op item get` exits non-zero for "there is no item yet" and for every way the
+            # read can fail — rate limit, expired session, a token that cannot see this
+            # vault, the wrong `op-vault` name — and this used to return `{}` for all of
+            # them. So a failure arrived everywhere as a benign state: `secret list` said
+            # "has no secrets" about a populated vault, `health()` called it fine, and the
+            # read-modify-write in `set` piped back an item holding only the key being
+            # written, silently dropping every sibling secret. An operator lost an hour to
+            # re-provisioning credentials that were already there, and could not verify the
+            # result because the same mask was still in place.
+            #
+            # The two diagnoses demand opposite responses — go and populate it, versus
+            # check the identity and treat the contents as unknown — so absence is now
+            # PROVEN rather than assumed, and proven by this vault's own identity: if
+            # `op item list` can read the vault and the item is not in it, there is no
+            # item. If that read fails too, the failure IS the answer and it propagates.
+            #
+            # Untagged, because an adopted `op-item` carries no charter tag. And no
+            # matching of `op`'s English on this path, unlike `_diagnose`, which only
+            # sharpens a message: here a missed signature would turn a failure back into
+            # an empty vault, which is the bug.
+            if self.op_item in self._list_items(tagged=False):
+                raise self._fail(f"reading vault '{self.name}'", proc)
             return {}
         try:
             doc = json.loads(proc.stdout or "{}")
