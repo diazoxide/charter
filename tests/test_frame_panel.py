@@ -47,8 +47,14 @@ class Redraw(PersonaIso, unittest.TestCase):
 
 class Draw(PersonaIso, unittest.TestCase):
     def test_one_pass_writes_the_slot_and_returns(self):
-        rc = panel.run("bottom", "f-1", once=True)
+        """`rc == 0` alone survives `_paint` becoming a no-op — the "writes the slot"
+        half of this test's own name needs the actual painted content checked, not just
+        that `run` returned cleanly."""
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = panel.run("bottom", "f-1", once=True)
         self.assertEqual(rc, 0)
+        self.assertIn("todo", buf.getvalue())
 
     def test_an_unknown_slot_is_refused_rather_than_drawn_blank(self):
         rc = panel.run("sideways", "f-1", once=True)
@@ -73,11 +79,12 @@ class Height(unittest.TestCase):
 class PaintClampsToRealHeight(PersonaIso, unittest.TestCase):
     """`render()`'s contract is a single string with no notion of height — a future
     `left`/`right` slot could return more lines than a real pane holds, and painting all
-    of them would scroll the frame's own top row out of view, the same shape of
-    corruption a stale-width repaint causes. Every real slot today (`top`/`bottom`) only
-    ever emits one line, so this stands a fake multi-line slot in for a future renderer
-    the same way `test_frame_slots.py`'s own `boom` fixture stands in for a failing one —
-    restored via `finally`, not `addCleanup`, to match that file's own convention.
+    of them would scroll that PANEL'S OWN rows (each tmux pane keeps its own scroll
+    region — a sibling pane is untouched), the same shape of corruption a stale-width
+    repaint causes. Every real slot today (`top`/`bottom`) only ever emits one line, so
+    this stands a fake multi-line slot in for a future renderer the same way
+    `test_frame_slots.py`'s own `boom` fixture stands in for a failing one — restored via
+    `finally`, not `addCleanup`, to match that file's own convention.
     """
 
     def test_a_taller_than_the_pane_render_is_clamped_to_the_panes_rows(self):
@@ -151,6 +158,23 @@ class Tick(PersonaIso, unittest.TestCase):
         paint.assert_called_once_with("bottom", "f-1")
         self.assertEqual(result, state.version("f-1"))
         self.assertNotEqual(result, seen)
+
+    def test_a_bump_landing_during_the_paint_is_not_marked_seen(self):
+        """Pins the read-before-paint ordering `_tick`'s own docstring argues for,
+        deterministically rather than by argument alone: `_paint` is mocked to itself
+        call `state.bump` — standing in for a hook firing WHILE this tick's paint is in
+        flight — so the version has already moved again by the time `_paint` returns.
+        `_tick` must not report the version it read at the START of this tick as "seen"
+        in a way that satisfies `should_redraw` for the version that landed during it;
+        red on the one mutation (of thirteen) that swapped the read and the paint."""
+        fid = "f-race"
+        state.bump(fid)
+        seen = state.version(fid)
+        state.bump(fid)
+        with mock.patch("charter.frame.panel._paint",
+                        side_effect=lambda slot, f: state.bump(f)):
+            result = panel._tick({"flag": False}, seen, "bottom", fid)
+        self.assertTrue(panel.should_redraw(result, fid))
 
 
 class Sigwinch(unittest.TestCase):

@@ -106,6 +106,20 @@ class PanelArgvs(unittest.TestCase):
             for part in cmd:
                 self.assertIsInstance(part, str)
 
+    def test_it_asks_tmux_to_print_each_panels_pane_id(self):
+        """Mirrors `SessionArgv.test_it_asks_tmux_to_print_the_pane_id`: a caller needs
+        each panel's own pane id to re-assert its fixed size after tmux's own layout
+        engine redistributes every pane proportionally on a resize (measured against
+        tmux 3.7c — see this function's own docstring). `-P`/`-F` must land BEFORE the
+        `--` separator (tmux's own option, never part of the `charter panel …` argv
+        after it) — the same placement `session_argv` already uses."""
+        for cmd in layout.panel_argvs(slots=["top", "bottom"], **PANELS):
+            self.assertIn("-P", cmd)
+            i = cmd.index("-P")
+            self.assertEqual(cmd[i + 1:i + 3], ["-F", "#{pane_id}"])
+            self.assertLess(i, cmd.index("--"),
+                            "-P/-F must be split-window's own options, before --")
+
     def test_each_visible_slot_gets_one_panel_command(self):
         cmds = layout.panel_argvs(slots=["top", "bottom"], **PANELS)
         panels = [c for c in cmds if "panel" in c]

@@ -28,6 +28,7 @@ start a real tmux server in this suite".
 
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -35,7 +36,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests._isolation import PersonaIso
-from charter import commands_frame
+from charter import commands_frame, config
 from charter.frame import state
 
 
@@ -314,14 +315,19 @@ class _FakeTmux:
 
     def __init__(self, *, pane_id="%7", exit_code=None, race_death_status=None,
                 still_live=False, pre_existing_sessions=frozenset(),
+                panel_pane_ids=None,
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
-                kill_rc=0, arm_rc=0):
+                kill_rc=0, arm_rc=0, resize_hook_rc=0):
         self.pane_id = pane_id
         self.exit_code = exit_code
         self.race_death_status = race_death_status
         self.still_live = still_live
         self.pre_existing_sessions = pre_existing_sessions
+        # slot -> pane id `split-window` reports for it. Empty by default (see
+        # `split-window`'s own handler below for why that matters for every other test
+        # in this class).
+        self.panel_pane_ids = panel_pane_ids or {}
         self.session_rc = session_rc
         self.source_rc = source_rc
         self.env_set_rc = env_set_rc
@@ -333,6 +339,7 @@ class _FakeTmux:
         self.dm_rc = dm_rc
         self.kill_rc = kill_rc
         self.arm_rc = arm_rc
+        self.resize_hook_rc = resize_hook_rc
         self.calls: list[list[str]] = []
         self.fid = None
         self.sourced_conf_text = None
@@ -365,13 +372,27 @@ class _FakeTmux:
             if "pane-died[1]" in cmd:
                 return subprocess.CompletedProcess(cmd, self.teardown_hook_rc, stdout="",
                                                    stderr="" if self.teardown_hook_rc == 0 else "bad teardown target")
+            if "window-resized" in cmd:
+                return subprocess.CompletedProcess(cmd, self.resize_hook_rc, stdout="",
+                                                   stderr="" if self.resize_hook_rc == 0 else "bad resize hook target")
             return subprocess.CompletedProcess(cmd, self.write_hook_rc, stdout="",
                                                stderr="" if self.write_hook_rc == 0 else "bad hook target")
         if "select-pane" in cmd:
             return subprocess.CompletedProcess(cmd, self.select_rc, stdout="",
                                                stderr="" if self.select_rc == 0 else "no such pane")
         if "split-window" in cmd:
-            return subprocess.CompletedProcess(cmd, self.panel_rc, stdout="",
+            # Real tmux, with `-P -F '#{pane_id}'` now always on this argv (see
+            # `layout.panel_argvs`), prints the new pane's id. Most tests leave
+            # `panel_pane_ids` empty (its default) and get the SAME "reports nothing"
+            # behaviour this fake always had — deliberately, so this addition doesn't
+            # ripple through every other test in this class, which are not ABOUT the
+            # resize hook. Keyed by slot (`cmd[cmd.index("panel") + 1]`, the literal
+            # argv element `panel_argvs` always emits right after `--`), not by call
+            # order, so a test can name exactly which slot(s) it wants a real id for.
+            slot = cmd[cmd.index("panel") + 1] if "panel" in cmd else None
+            pane_id = self.panel_pane_ids.get(slot, "") if self.panel_rc == 0 else ""
+            return subprocess.CompletedProcess(cmd, self.panel_rc,
+                                               stdout=f"{pane_id}\n" if pane_id else "",
                                                stderr="" if self.panel_rc == 0 else "no space for a new pane")
         if "display-message" in cmd:
             out = f"1:{self.race_death_status}" if self.race_death_status is not None else "0:"
@@ -675,6 +696,48 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertTrue(any("attach" in c for c in fake.calls),
                         "a decorative panel failing must not cancel the attach")
 
+    def test_a_resize_hook_is_installed_reasserting_every_drawn_panels_size(self):
+        """Cross-task fix round, item 3: tmux's own layout engine redistributes EVERY
+        pane proportionally on any resize, `-l size` notwithstanding — verified by hand
+        against real tmux 3.7c (`commands_frame._resize_hook_argv`'s own docstring): a
+        120x30 frame grown to 200x50 stretched two one-row panels to 8 and 7 rows.
+        `cmd_launch` must install a `window-resized` hook re-asserting each DRAWN
+        panel's fixed dimension, targeting the REAL pane id tmux reported for it — a
+        slot name alone is not a valid `resize-pane` target."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        resize_cmd = next(c for c in fake.calls if "window-resized" in c)
+        self.assertEqual(resize_cmd[resize_cmd.index("-t") + 1], fake.pane_id,
+                         "the hook must be scoped to the harness pane's own window")
+        action = resize_cmd[-1]
+        self.assertIn("%11", action)
+        self.assertIn("%12", action)
+        self.assertIn("-y 1", action)
+
+    def test_no_resize_hook_is_installed_when_no_panel_pane_id_was_learned(self):
+        """Companion: every OTHER test in this class leaves `split-window` reporting no
+        pane id (the fake's own default). With nothing valid to target, installing a
+        resize hook anyway would either fail outright or silently target nothing — this
+        pins that `cmd_launch` does not even attempt it in that case."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        self.assertFalse(any("window-resized" in c for c in fake.calls))
+
+    def test_a_failed_resize_hook_install_is_reported_but_not_fatal(self):
+        """Same "report, don't kill an already-running pane" treatment every other
+        cosmetic tmux command in this launcher gets (correction 2) — every pane already
+        measures its own tty on every repaint regardless (the module docstring's "belt
+        and braces" framing), so a launch's correctness never depended on this hook."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"},
+                         resize_hook_rc=1)
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("resize hook" in m for m in buf), buf)
+        self.assertTrue(any("attach" in c for c in fake.calls))
+
     def test_below_the_tmux_floor_degrades_instead_of_refusing(self):
         """Correction 5: a version below `tmuxctl.FLOOR` prints `below_floor_message`
         and the frame still launches — only the (not-yet-wired) hotkey menu is
@@ -723,6 +786,40 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIsNotNone(fake.new_session_env)
         self.assertEqual(fake.new_session_env.get("CHARTER_SESSION_ID"), fake.fid)
+
+    def test_columns_and_lines_are_stripped_from_the_environment_handed_to_tmux(self):
+        """Belt and braces alongside every pane measuring its own tty (`frame/slots.py`,
+        `frame/panel.py`): `env` here is inherited WHOLE by every process tmux starts on
+        this launch, and `$COLUMNS`/`$LINES` describe the LAUNCHING terminal, not any
+        pane this frame creates — verified against a real panel pane by hand (`ps -E`
+        showed both inherited whole before this fix)."""
+        fake = _FakeTmux(exit_code=0)
+        with mock.patch.dict(os.environ, {"COLUMNS": "500", "LINES": "70"}):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertIsNotNone(fake.new_session_env)
+        self.assertNotIn("COLUMNS", fake.new_session_env)
+        self.assertNotIn("LINES", fake.new_session_env)
+
+    def test_a_configured_slot_with_no_renderer_is_skipped_not_spawned_dead(self):
+        """`[frame] slots` accepts `left`/`right` (`instance.FRAME_SLOTS`, sized by
+        `layout.SLOT_SIZE`) even though `frame.slots.SLOTS` — the renderer registry —
+        has no renderer for either yet. Spawning a real pane for one anyway would leave
+        the operator a permanently dead, wrapped-error pane under `remain-on-exit on`
+        (`panel.run` correctly refuses it, exit 2, but nothing then explains why at the
+        point the frame actually comes up). This pins that no such pane is even
+        attempted, one warning names it, and the implemented slots still draw."""
+        fake = _FakeTmux(exit_code=0)
+        buf = []
+        with mock.patch.dict(config.FRAME, {"slots": ["top", "bottom", "left"]}), \
+             mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertFalse(any("panel" in c and "left" in c for c in fake.calls),
+                         "no pane may be spawned for a slot with no renderer")
+        self.assertTrue(any("left" in m for m in buf), buf)
+        self.assertTrue(any("panel" in c and "bottom" in c for c in fake.calls),
+                        "an IMPLEMENTED slot must still be drawn")
 
     def test_a_frame_dir_the_state_module_refuses_does_not_crash(self):
         """`frame_dir` returns `None` rather than a `Path` for an id it cannot shape

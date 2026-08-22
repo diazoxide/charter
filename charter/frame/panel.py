@@ -26,10 +26,12 @@ downstream of it knows how many ROWS the pane it is about to overwrite actually 
 `top`/`bottom` panel is one row today (`layout.SLOT_SIZE`), but `left`/`right` are
 full-height panes the layout module already supports — assuming "one line" here would
 silently clip a future multi-line renderer to its first row, or (the opposite failure)
-let it emit more lines than the pane holds and scroll the frame's own top row out of
-view, corruption of the same shape a stale-width repaint causes. `_rows` measures the
-pane the same way `slots._width` measures it, and `_paint` clamps the LINE COUNT to that
-measurement the way `tui.truncate` already clamps each line's WIDTH.
+let it emit more lines than the pane holds and scroll THAT PANEL'S OWN rows — measured
+against real tmux: each pane keeps its own scroll region, so an over-height paint pushes
+only its own top line out of view and leaves every sibling pane untouched, not the whole
+frame. `_rows` measures the pane the same way `slots._width` measures it, and `_paint`
+clamps the LINE COUNT to that measurement the way `tui.truncate` already clamps each
+line's WIDTH.
 
 **SIGWINCH matters because a resize does not bump the frame's version.** Only charter's
 own hooks call `state.bump`; the operator resizing their terminal does not. Without a
@@ -116,25 +118,33 @@ def _tick(resized: dict, seen: str, slot: str, fid: str) -> str:
     `while True`/`time.sleep`, which a test cannot call directly without either hanging
     or racing real wall-clock time.
 
-    A resize repaints even when the frame's own version has not moved: `should_redraw`
+    Reads `state.version` exactly once (`should_redraw`'s own version read is not
+    reused here — it takes *seen* and *fid*, not a precomputed current value, so calling
+    it as well would mean two `stat`s to decide one repaint). `should_redraw` stays the
+    public, standalone answer to "has the frame changed", exercised directly by its own
+    tests; this inlines the same comparison against the ALREADY-read *now* instead of
+    calling it a second time.
+
+    A resize repaints even when the frame's own version has not moved: comparing versions
     alone would leave a pane showing content laid out for a size that no longer exists
     until the next unrelated version bump happened to come along — see the module
     docstring's SIGWINCH section.
 
-    The version is read BEFORE `_paint` runs, not after — deliberately the direction
-    that errs safe. `_paint` calls `slots.render`, which reads several independent
-    pieces of live state (workspace, todos, alerts) one at a time, not atomically; a
-    second bump landing while that read is in flight could leave the painted content
-    reflecting only the OLDER state. Recording the version from after the paint would
-    then mark that newer version "seen" even though nothing on screen actually reflects
-    it, and the next tick's `should_redraw` would see no difference and stay silent —
-    a missed repaint with nothing left to trigger a correction. Reading first means
-    `seen` can only lag behind (or exactly match) what was actually painted, so any
-    bump during or after the paint is still visible to the next comparison.
+    *now* is read BEFORE `_paint` runs, not after — deliberately the direction that errs
+    safe. `_paint` calls `slots.render`, which reads several independent pieces of live
+    state (workspace, todos, alerts) one at a time, not atomically; a second bump landing
+    while that read is in flight could leave the painted content reflecting only the
+    OLDER state. Recording the version from after the paint would then mark that newer
+    version "seen" even though nothing on screen actually reflects it, and the next
+    tick's comparison would see no difference and stay silent — a missed repaint with
+    nothing left to trigger a correction. Reading first means `seen` can only lag behind
+    (or exactly match) what was actually painted, so any bump during or after the paint
+    is still visible to the next comparison — pinned directly by
+    `Tick.test_a_bump_landing_during_the_paint_is_not_marked_seen`.
     """
-    if resized["flag"] or should_redraw(seen, fid):
+    now = state.version(fid)
+    if resized["flag"] or now != seen:
         resized["flag"] = False
-        now = state.version(fid)
         _paint(slot, fid)
         return now
     return seen

@@ -26,12 +26,16 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from charter import commands_frame
+from charter import commands_frame, todos
+from charter.frame import state
+
+from tests._isolation import PersonaIso
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -39,10 +43,23 @@ _HAS_TMUX = shutil.which("tmux") is not None
 #: interrupted run must never collide with (or be mistaken for) this one's.
 SOCKET = f"charter-integration-test-{os.getpid()}"
 
+#: `tests/_isolation.py`'s `PersonaIso` isolates the paths a Python IMPORT of `charter`
+#: reads inside THIS process; `PanelIntegration` below needs a SUBPROCESS to see the
+#: same throwaway plane, which only `$CHARTER_ROOT`/`$CHARTER_WORKSPACE` can hand it
+#: across a process boundary. `charter panel` never dies over a missing repo, `.git`,
+#: or any other plane furniture (this module's own `setUp` creates nothing beyond one
+#: empty `charter.toml` marker), so nothing here needs `PersonaIso`'s SIBLING classes
+#: (`ReportIso`, worktree scaffolding) — just its config-path redirection.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
-def _tmux(*args: str) -> subprocess.CompletedProcess:
+
+def _tmux(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    """*env* is `None` by every existing call site (inherit this process's own
+    environment, unchanged) — `PanelIntegration` is the one caller that needs a
+    DIFFERENT environment for a `new-session` call, so tmux hands its spawned pane a
+    throwaway plane's `$CHARTER_ROOT` rather than this test process's real one."""
     return subprocess.run(["tmux", "-L", SOCKET, *args], capture_output=True, text=True,
-                          timeout=10)
+                          timeout=10, env=env)
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -184,6 +201,109 @@ class TmuxIntegration(unittest.TestCase):
         self.assertEqual(content, str(commands_frame._UNKNOWN_DEATH_CODE),
                          f"expected the sentinel, got {content!r} (an empty string here "
                          f"is exactly the bug: state.exit_code cannot parse it)")
+
+    # -- 4. Resize redistribution ----------------------------------------------------- #
+
+    def test_a_fixed_size_panels_dimension_survives_a_real_window_resize(self):
+        """Cross-task fix round, item 3: tmux's own layout engine redistributes EVERY
+        pane proportionally on ANY resize, `-l size` notwithstanding — hand-verified
+        against this exact tmux binary during development: a 120x30 frame grown to
+        200x50 stretched a one-row panel to 8 rows, and only snapped back to 1 row on
+        the way down because that particular shrink happened to be an exact round trip
+        of the same grow. This drives `commands_frame._resize_hook_argv` — the real
+        function, not a hand-retyped `resize-pane` — through three resizes (grow,
+        shrink smaller than the original, grow past the first grow) to rule out "only
+        works for a round trip" as the actual fix."""
+        r = _tmux("new-session", "-d", "-s", "rsz", "-x", "120", "-y", "30",
+                  "-P", "-F", "#{pane_id}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        top = _tmux("split-window", "-t", harness_pane, "-v", "-b", "-l", "1",
+                   "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+        self.assertEqual(top.returncode, 0, top.stderr)
+        top_pane = top.stdout.strip()
+
+        hook_cmd = commands_frame._resize_hook_argv(socket=SOCKET, harness_pane=harness_pane,
+                                                    panes={"top": top_pane})
+        self.assertEqual(_run(hook_cmd).returncode, 0, "installing the resize hook failed")
+
+        for cols, rows in ((200, 50), (90, 25), (300, 100)):
+            r = _tmux("resize-window", "-t", "rsz", "-x", str(cols), "-y", str(rows))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            time.sleep(0.3)
+            height = _tmux("display-message", "-p", "-t", top_pane,
+                           "#{pane_height}").stdout.strip()
+            self.assertEqual(height, "1",
+                             f"the panel drifted to {height} rows after resizing to "
+                             f"{cols}x{rows} — the hook did not hold")
+
+
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class PanelIntegration(PersonaIso, unittest.TestCase):
+    """`charter panel` end to end, closing the exact gap that let a launcher spawning
+    real panel panes (Task 6) and a `charter panel` command (Task 7) ship across two
+    whole tasks with a fully green suite even if the two had never actually agreed on
+    an argv shape — every OTHER test in this file, and in `test_frame_launcher.py`,
+    either builds argv without running it or runs tmux commands without a real
+    `charter panel` process on the other end. This is the one place both are true at
+    once: a real tmux pane running the REAL subprocess.
+
+    A THROWAWAY plane, not the real one this repo's own suite runs from — `todos.add`
+    below writes state, and PersonaIso's isolation (this class's own base) only covers
+    what a Python IMPORT of `charter` reads in THIS process; the SUBPROCESS needs the
+    same throwaway plane handed across the process boundary via `$CHARTER_ROOT`
+    (`root.py`'s own override, which requires a real `charter.toml` marker to exist at
+    that path or it silently falls back to the subprocess's own cwd instead) and
+    `$CHARTER_WORKSPACE` (`workspace.resolve`'s own override, checked before any
+    cwd-tree detection) — never the developer's real ``~/.charter`` or workspace data.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.addCleanup(_tmux, "kill-server")
+        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
+                        .unlink(missing_ok=True))
+        (self.tmp / "charter.toml").write_text("")
+        self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
+        self.env.pop("CHARTER_HOME", None)  # let it derive under CHARTER_ROOT, like this
+                                            # process's own PersonaIso-isolated config
+
+    def test_a_bottom_panel_draws_and_repaints_on_a_real_state_bump(self):
+        """Minimal shape: a real pane running `charter panel bottom --session <fid>`
+        must (1) show real content rather than dying at startup — `capture-pane`
+        containing "todo" kills that, since a dead pane under `remain-on-exit` shows
+        nothing of the sort — and (2) actually repaint when the version file it polls
+        changes, not just once at launch — a fresh todo plus a real `state.bump` must
+        change what `capture-pane` reports within a few polls of `panel.TICK`."""
+        fid = state.frame_id("panel-integ", os.getpid())
+        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
+        r = _tmux("new-session", "-d", "-s", "panel-live", "-x", "40", "-y", "5",
+                  "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        time.sleep(1)
+        first = _tmux("capture-pane", "-p", "-t", "panel-live").stdout
+        self.assertIn("todo", first, f"the pane never drew its content:\n{first!r}")
+        self.assertEqual(_tmux("display-message", "-p", "-t", "panel-live",
+                               "#{pane_dead}").stdout.strip(), "0",
+                         "the pane died at startup — exactly the launcher-days-of-a-"
+                         "green-suite gap this test exists to close")
+
+        todos.add("demo", "a fresh todo the live panel should pick up")
+        state.bump(fid)
+
+        deadline = time.monotonic() + 3
+        changed = False
+        while time.monotonic() < deadline:
+            if _tmux("capture-pane", "-p", "-t", "panel-live").stdout != first:
+                changed = True
+                break
+            time.sleep(0.2)
+        self.assertTrue(changed, f"the panel never repainted after a real state.bump; "
+                                 f"still showing:\n{first!r}")
+        self.assertEqual(_tmux("display-message", "-p", "-t", "panel-live",
+                               "#{pane_dead}").stdout.strip(), "0",
+                         "the pane died sometime after its first paint")
 
 
 if __name__ == "__main__":

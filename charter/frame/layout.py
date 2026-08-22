@@ -88,6 +88,18 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
     split below targets that same id — never a `session:0.0`-style index, and never a
     target derived from an earlier split in this same list. Both are the mistake the
     module docstring measures: indices move under every split tmux runs, pane ids don't.
+
+    Also asks tmux to PRINT the new pane's id (`-P -F '#{pane_id}'`, the same flags
+    `session_argv` uses for the harness pane, placed the same way — before `--`, so they
+    are `split-window`'s own options and never touch the `charter panel …` argv after
+    it). A caller that keeps the id for each fixed-size slot can re-assert its size on a
+    `window-resized` hook (see `commands_frame._resize_hook_argv`): tmux's own layout
+    engine redistributes EVERY pane proportionally on a resize, `-l size` notwithstanding
+    — measured against tmux 3.7c, growing a 120x30 frame to 200x50 stretched two
+    one-row panels to 8 and 7 rows, snapping back only because the resize happened to be
+    an exact round trip. Without the id, nothing later could target the RIGHT pane to
+    correct that (an index would renumber under the very next split, same failure the
+    module docstring already measures for the harness pane).
     """
     cmds: list[list[str]] = []
     for slot in slots:
@@ -95,6 +107,7 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
         direction = "-v" if slot in ("top", "bottom") else "-h"
         before = ["-b"] if slot in ("top", "left") else []
         cmds.append(_tmux(socket, "split-window", "-t", harness_pane,
-                          direction, *before, "-l", str(size), "--",
+                          direction, *before, "-l", str(size),
+                          "-P", "-F", "#{pane_id}", "--",
                           *charter_argv, "panel", slot, "--session", session))
     return cmds
