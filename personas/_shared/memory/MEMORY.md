@@ -14,3 +14,6 @@ Written by the persona as it learns; committed and shared.
 - [tmux argv, pinned against 3.7c by rejection: passing a command to new-se](tmux-argv-pinned-against-3-7c-by-rejection-passi.md)
 - [A failed read must never render as a benign state: onepassword._fields r](a-failed-read-must-never-render-as-a-benign-stat.md)
 - [A workspace clone is not privately yours: a coordinator or sibling agent](a-workspace-clone-is-not-privately-yours-a-coord.md)
+- [Live-testing a charter checkout: run 'python3 -m charter ...' (CONTRIBUT](live-testing-a-charter-checkout-run-python3-m-ch.md)
+- [A workspace clone of charter is itself a control plane, so a concurrent](a-workspace-clone-of-charter-is-itself-a-control.md)
+- [A HARNESS REFUSAL IS NOT A ROUTING PROBLEM. On 2026-08-22 a dispatched a](a-harness-refusal-is-not-a-routing-problem-on-20.md)
