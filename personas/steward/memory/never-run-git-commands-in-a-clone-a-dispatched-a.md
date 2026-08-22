@@ -1,0 +1,5 @@
+# NEVER run git commands in a clone a dispatched agent is working in — not
+
+_2026-08-22 11:30 · persistent_
+
+NEVER run git commands in a clone a dispatched agent is working in — not even read-only-looking ones. On 2026-08-22 I ran 'git checkout main' in an agent's clone to list docs/news/ while it was mid-verification. Its next full suite ran against main and printed 'Ran 3214 / OK' — a clean, plausible pass that had tested NONE of its work, distinguishable from a real pass only by the count being exactly the baseline. It cost that agent a long unreproducible investigation (it suspected charter workspace _reconcile, got one apparent hit, failed three clean trials, and correctly declined to file). This is the SAME error as not telling parallel sweeps about each other, except the sibling was me. Two rules: (1) to inspect a repo an agent holds, use 'git -C <path> show <ref>:<file>' or read from a different clone — never checkout, never pull; (2) any long verification run must ASSERT THE BRANCH IDENTICAL BEFORE AND AFTER, because a suite that silently loses the tests it was meant to run reports OK.

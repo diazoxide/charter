@@ -11,3 +11,6 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Wave 1 done: #324/#326 (PR 344) and #330/#331/#332 (PR 346) merged; 3043](20260822-001231-wave-1-done-324-326-pr-344-and-330-331-332-pr-34.md)
 - [#336 boundary correction: .charter/ sits UNDER the plane ROOT, so 'refus](20260822-005353-336-boundary-correction-charter-sits-under-the-p.md)
 - [Open finding, NOT closed by PR #348: a committed symlink redirects chart](20260822-005356-open-finding-not-closed-by-pr-348-a-committed-sy.md)
+- [Write-side containment (#349/#350): contain.write_refusal is file_refusa](20260822-083033-write-side-containment-349-350-contain-write-ref.md)
+- [Vacuous-pass traps found this round (authority audit): (1) a ONE-LINE ta](20260822-083046-vacuous-pass-traps-found-this-round-authority-au.md)
+- [#343 ruling (won't-fix on revocation): after #342 a broken persona refer](20260822-083046-343-ruling-won-t-fix-on-revocation-after-342-a-b.md)

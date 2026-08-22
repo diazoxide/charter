@@ -12,3 +12,4 @@ Written by the persona as it learns; committed and shared.
 - [charter/contain.py (added 0.47.x) is the ONE containment helper for name](charter-contain-py-added-0-47-x-is-the-one-conta.md)
 - [A pure-Python terminal component cannot host a harness at usable speed,](a-pure-python-terminal-component-cannot-host-a-h.md)
 - [tmux argv, pinned against 3.7c by rejection: passing a command to new-se](tmux-argv-pinned-against-3-7c-by-rejection-passi.md)
+- [A failed read must never render as a benign state: onepassword._fields r](a-failed-read-must-never-render-as-a-benign-stat.md)

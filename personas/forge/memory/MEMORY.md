@@ -9,3 +9,5 @@ Written by the persona as it learns; committed and shared.
 - [Forge CLI calls are bounded by two constants in charter/forge/base.py: S](forge-cli-calls-are-bounded-by-two-constants-in-.md)
 - [util.run passes stdin=DEVNULL for every caller (conditional on input=Non](util-run-passes-stdin-devnull-for-every-caller-c.md)
 - [glstate's spawn lock carries TWO facts: its content is the pid of an in-](glstate-s-spawn-lock-carries-two-facts-its-conte.md)
+- [diazoxide/charter has GitHub private vulnerability reporting DISABLED (g](diazoxide-charter-has-github-private-vulnerabili.md)
+- [registry.resolve_host fails closed on host-confusion URLs (user@github.c](registry-resolve-host-fails-closed-on-host-confu.md)

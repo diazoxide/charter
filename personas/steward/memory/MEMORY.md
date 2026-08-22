@@ -41,3 +41,8 @@ Written by the persona as it learns; committed and shared.
 - [ISSUE GRANULARITY IS A DECISION TO PUT TO THE OPERATOR, not one to deleg](issue-granularity-is-a-decision-to-put-to-the-op.md)
 - [An allowlist only closes a data-reaches-execution hole when the field na](an-allowlist-only-closes-a-data-reaches-executio.md)
 - [#331(a) ruling, with evidence: do NOT contain a vault 'file' path. comma](331-a-ruling-with-evidence-do-not-contain-a-vaul.md)
+- [OnePasswordProvider.set() issues THREE separate 'op item get' calls (_fi](onepasswordprovider-set-issues-three-separate-op.md)
+- [A charter news entry parses via charter.news._read and lands in release](a-charter-news-entry-parses-via-charter-news-rea.md)
+- [Assert the git branch BEFORE and AFTER any long verification run in a wo](assert-the-git-branch-before-and-after-any-long-.md)
+- [Observed once (2026-08-22, authority-audit/charter): a workspace clone's](observed-once-2026-08-22-authority-audit-charter.md)
+- [NEVER run git commands in a clone a dispatched agent is working in — not](never-run-git-commands-in-a-clone-a-dispatched-a.md)

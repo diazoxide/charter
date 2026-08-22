@@ -28,3 +28,4 @@ Written by the persona as it learns; committed and shared.
 - [docs/assets/captured.json is NOT a fifth version point — it records when](docs-assets-captured-json-is-not-a-fifth-version.md)
 - [Proving a news-probe fix needs an OLD-CODE counterfactual, and 'git work](proving-a-news-probe-fix-needs-an-old-code-count.md)
 - [0.47.2 (2026-08-21) cut as a PATCH carrying #318 (cross-process probe gu](0-47-2-2026-08-21-cut-as-a-patch-carrying-318-cr.md)
+- [The [charter] version lock applies only UPGRADES unattended (#333, PR #3](the-charter-version-lock-applies-only-upgrades-u.md)
