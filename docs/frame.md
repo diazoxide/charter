@@ -20,16 +20,27 @@ names rather than nested under `frame` too.
 
 ## What it needs
 
-tmux 3.2 or newer composes the rectangles and does every part of terminal emulation;
-charter fills the edges and never draws or parses the harness's own pane (ADR 0018). Below
-3.2, `charter <harness>` still starts — the frame's hotkey menu is what needs 3.2, not the
-frame itself — with one warning naming the gap. The resize-recovery hook needs a further
-3.3; below that a resize still works, panels can just drift out of their fixed size until
-the next one, again with a single warning rather than a failure.
+tmux composes the rectangles and does every part of terminal emulation; charter fills the
+edges and never draws or parses the harness's own pane (ADR 0018). Only tmux being
+*missing* stops a launch. tmux 3.2 is the version charter has checked its own
+requirements against — the hotkey's `display-menu`, and the pane-scoped hooks that carry
+the harness's exit code back out. Below 3.2 `charter <harness>` still starts and nothing
+is switched off: the hotkey stays bound but may open nothing, and if the exit-code hooks
+fail to install charter says so and declines to attach rather than risk a session nothing
+can end. The resize-recovery hook needs a further 3.3; below that a resize still works,
+panels can just drift out of their fixed size until the next one.
 
 `charter <harness> --probe` (or the standalone `charter frame-probe`) answers "can a frame
-run here" without starting anything: one line, exit 0 if it can, non-zero if tmux is
-missing entirely. `charter doctor` carries the same fact as its own `frame` row.
+run here, and what will it not be able to do" without starting anything: exit 0 if a frame
+can run, non-zero if tmux is missing entirely, plus a line for each standing limit — a
+tmux below 3.2, and any `[frame] slots` entry charter sizes but has no renderer for.
+`charter doctor` carries the same facts as its own `frame` row.
+
+Those two limits are deliberately **not** printed when a frame launches. A warning
+written to your terminal microseconds before tmux switches to the alternate screen is not
+readable — measured at 86 bytes ahead of the switch — and it comes back into view only
+once the frame exits. Both are standing properties of this machine and this plane rather
+than news about one launch, so they live on the two surfaces you can ask on demand.
 
 ## What changes inside the frame
 
@@ -52,9 +63,15 @@ changed.
 shell's environment whole, so trusting `$COLUMNS` there would lay a panel out at the outer
 terminal's width and wrap inside its own much narrower one.
 
-Charter never touches `~/.tmux.conf`. Outside tmux it starts its own private server;
-inside tmux it opens a new window in your own server instead, so there is no nesting and no
-second prefix key to learn.
+Charter never touches `~/.tmux.conf` — the frame's settings go into a private server of
+charter's own (`tmux -L charter`), one server shared by every frame on the machine, with
+each frame a session on it.
+
+**Run from inside an existing tmux session, the frame nests.** charter starts its own
+server regardless, so you end up with two tmux layers and two prefix keys — charter's
+frame does not currently read `$TMUX` or open a window in your own server instead. That
+non-nesting path is not built. If you already live in tmux, `charter <harness> --no-frame`
+is the honest answer for now.
 
 ## Exit codes
 
@@ -72,8 +89,8 @@ drop — any shortage costs them, since neither can spare its own divider. A fur
 in rows drops `top` too. Below half of either floor, every panel drops and the harness
 simply gets the whole terminal, the same choice `charter`'s own status line makes when it
 runs out of width. `left`/`right` are accepted in configuration and sized, but nothing
-renders in them yet — asking for one prints a single warning and leaves the harness pane
-holding that space instead of a dead, unwritten-to pane.
+renders in them yet — asking for one leaves the harness pane holding that space instead of
+a dead, unwritten-to pane, and `charter frame-probe`/`charter doctor` name it.
 
 ## Configuring it
 
@@ -86,6 +103,13 @@ history-limit = 50000
 min-cols = 100
 min-rows = 20
 ```
+
+`hotkey` is checked against the shape of a tmux key name — optional `C-`/`M-`/`S-`
+modifiers and then a key (`F2`, `Up`, `PPage`, `a`, `/`). Anything else falls back to
+`F2`, the same way every other key in `[frame]` falls back to its default when charter
+cannot make sense of it. That check is not cosmetic: this value is interpolated into tmux
+configuration that `source-file` *executes*, and `charter.toml` is a committed, shared
+file that arrives from someone else's machine.
 
 `slots`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`, `min-cols`
 and `min-rows` are the three that are not: charter.toml spells them with a hyphen: the

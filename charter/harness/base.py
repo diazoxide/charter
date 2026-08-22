@@ -53,7 +53,15 @@ class Harness:
     #: and what a hand types. Empty means charter cannot launch this harness.
     cli_name: str = ""
 
-    #: The binary to exec. Separate from :attr:`cli_name` because they differ.
+    #: The binary to exec. All three shipped harnesses set this to the SAME string as
+    #: :attr:`cli_name` — the split is not there because they differ today, and saying
+    #: so was a lie a reader could check in thirty seconds. It is kept because the two
+    #: answer to different owners: `cli_name` is charter's own command surface, checked
+    #: for collisions against every core `charter` command at parser-construction time
+    #: (see `cli._wire`), while `binary` is whatever the harness's vendor happens to
+    #: install. Either can move without the other — a harness renaming its binary, or
+    #: charter having to rename a subcommand that collided — and collapsing them into
+    #: one attribute would make each of those a change to the other's meaning.
     binary: str = ""
 
     def launch_argv(self, extra: list[str]) -> list[str]:
