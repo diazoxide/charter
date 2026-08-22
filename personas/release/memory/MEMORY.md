@@ -29,3 +29,6 @@ Written by the persona as it learns; committed and shared.
 - [Proving a news-probe fix needs an OLD-CODE counterfactual, and 'git work](proving-a-news-probe-fix-needs-an-old-code-count.md)
 - [0.47.2 (2026-08-21) cut as a PATCH carrying #318 (cross-process probe gu](0-47-2-2026-08-21-cut-as-a-patch-carrying-318-cr.md)
 - [The [charter] version lock applies only UPGRADES unattended (#333, PR #3](the-charter-version-lock-applies-only-upgrades-u.md)
+- [0.48.0 (2026-08-22) cut as a MINOR carrying the whole authority audit: 1](0-48-0-2026-08-22-cut-as-a-minor-carrying-the-wh.md)
+- [The asset-freshness gate (tests/test_asset_freshness.py) can VETO a vers](the-asset-freshness-gate-tests-test-asset-freshn.md)
+- [Smoke-testing a release: a refusal proves nothing without a benign twin.](smoke-testing-a-release-a-refusal-proves-nothing.md)

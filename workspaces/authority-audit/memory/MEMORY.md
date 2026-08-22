@@ -14,3 +14,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Write-side containment (#349/#350): contain.write_refusal is file_refusa](20260822-083033-write-side-containment-349-350-contain-write-ref.md)
 - [Vacuous-pass traps found this round (authority audit): (1) a ONE-LINE ta](20260822-083046-vacuous-pass-traps-found-this-round-authority-au.md)
 - [#343 ruling (won't-fix on revocation): after #342 a broken persona refer](20260822-083046-343-ruling-won-t-fix-on-revocation-after-342-a-b.md)
+- [0.48.0 SHIPPED (2026-08-22): the authority audit and all its fixes — 23 ](20260822-125704-0-48-0-shipped-2026-08-22-the-authority-audit-an.md)
