@@ -1293,6 +1293,140 @@ class CollisionGuard(unittest.TestCase):
         self.assertIn("frame-probe-harness", str(ctx.exception))
 
 
+class TwoHarnessesCanShareAWord(unittest.TestCase):
+    """The genuine flaw a rebase onto charter 0.49.0 surfaced: `registry.all()`
+    instantiates by dict VALUE (`[cls() for cls in KINDS.values()]`), so two KEYS mapped
+    to the same class produce two harness objects sharing a `cli_name` —
+    `tests/test_guard_claims_its_reach.py::test_the_names_are_derived_not_written_down`
+    reaches exactly this shape (`KINDS["zzz-fictional"] = KINDS[CLAUDE_CODE]`) from a
+    module that owns no code here at all. `_add_frame_parsers` used to raise
+    `ValueError` for it — indistinguishable, until this fix, from a harness shadowing a
+    CORE command — which took down `build_parser()`, and with it every `charter`
+    command, over a registry mistake in a different module entirely. A harness-vs-
+    harness collision costs the LATER harness one launcher; it must not cost the whole
+    CLI, which is the whole reason `_add_frame_parsers` now tells the two apart.
+    """
+
+    def test_a_harness_colliding_with_a_core_command_still_raises(self):
+        """Enumerated against the REAL parser's own core commands, not one hardcoded
+        name (`CollisionGuard` above already pins `status` alone) — the rule has to hold
+        for core commands in general, not just the one example that happened to be
+        picked first."""
+        from charter import cli, harness
+        from charter.harness.base import Harness
+
+        core = cli._subcommand_names(cli.build_parser())
+        reserved = ({h.cli_name for h in harness.all() if h.cli_name} |
+                   {"frame", "panel", "frame-menu", "frame-action", "frame-probe"})
+        # Only genuinely CORE commands — colliding with the frame family itself is
+        # `CollisionGuard`'s own job, one dedicated test per reserved name.
+        sample = sorted(core - reserved)
+        self.assertTrue(sample, "no core (non-harness) command found to collide with")
+        for core_name in sample[:4]:
+            with self.subTest(core_command=core_name):
+                # Named `core_name`, not `name`: a class body assigning its OWN `name`
+                # attribute shadows an enclosing `name` when Python resolves names
+                # inside the class suite, which turns `name = f"...{name}"` into a
+                # `NameError` from inside the class body itself (confirmed by hand).
+                class _Colliding(Harness):
+                    name = f"colliding-with-{core_name}"
+                    cli_name = core_name
+                    binary = "colliding"
+
+                with mock.patch.dict("charter.harness.registry.KINDS",
+                                     {f"colliding-with-{core_name}": _Colliding},
+                                     clear=True):
+                    with self.assertRaises(ValueError) as ctx:
+                        cli.build_parser()
+                self.assertIn(f"colliding-with-{core_name}", str(ctx.exception))
+
+    def test_two_harnesses_sharing_a_cli_name_do_not_raise_and_the_first_wins(self):
+        """`build_parser()` must succeed, exactly one subcommand must exist for the
+        shared word, and running it must resolve to a REAL harness — the one registered
+        FIRST, `KINDS`'s own dict-insertion order (`registry.all`'s own docstring: "in
+        registration order"), asserted directly here rather than assumed.
+
+        This is the OUTCOME an operator would see, not a direct pin of
+        `_add_frame_parsers`'s own loop order: `_wire` stores only the plain STRING
+        `h.cli_name` on the parser (`set_defaults(harness=name, ...)`), so `cmd_launch`
+        re-resolves it against a FRESH `harness.all()` at run time regardless of which of
+        the two colliding classes happened to call `add_parser` first — confirmed by hand
+        by reversing `_add_frame_parsers`'s own iteration order and watching this test
+        stay green while `test_the_second_claimant_is_reported_not_silent` below (which
+        checks the warning's own wording) goes red. That test is what actually pins the
+        loop's choice of "first"; this one pins that the choice is never silently wrong
+        from an operator's seat.
+        """
+        from charter import cli, harness
+        from charter.harness import registry
+        from charter.harness.base import Harness
+
+        class _First(Harness):
+            name = "first-claimant"
+            cli_name = "shared-word"
+            binary = "first"
+
+        class _Second(Harness):
+            name = "second-claimant"
+            cli_name = "shared-word"   # same word, a DIFFERENT class
+            binary = "second"
+
+        kinds = {"first-claimant": _First, "second-claimant": _Second}
+        with mock.patch.dict("charter.harness.registry.KINDS", kinds, clear=True):
+            # What "first" means, pinned rather than assumed: dict-insertion order.
+            self.assertEqual([h.name for h in registry.all()],
+                             ["first-claimant", "second-claimant"])
+            parser = cli.build_parser()  # must NOT raise
+            names = cli._subcommand_names(parser)
+            self.assertIn("shared-word", names)
+            args = parser.parse_args(["shared-word", "--", "hi"])
+            self.assertEqual(args.harness, "shared-word")
+            # `cmd_launch` resolves `args.harness` back to a `Harness` this same way
+            # (`next((x for x in harness.all() if x.cli_name == args.harness), None)`)
+            # — the harness that actually RUNS for this word is the one that got the
+            # launcher, not merely the one this test expects by name.
+            resolved = next((h for h in harness.all() if h.cli_name == args.harness), None)
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.name, "first-claimant")
+
+    def test_the_second_claimant_is_reported_not_silent(self):
+        """"Make the skip observable": a second harness wanting a claimed word must say
+        so, not merely fail to get a launcher with nothing printed anywhere.
+
+        Roles are checked precisely, not just "both names appear somewhere": it is
+        `second-claimant` that must be named as the one left without a launcher, and
+        `first-claimant` as who already holds it — the same distinction
+        `test_two_harnesses_sharing_a_cli_name_do_not_raise_and_the_first_wins` pins from
+        the parser's own side. A version of this loop that iterated `harness.all()`
+        reversed would still call `util.warn` exactly once, mentioning both names, and
+        still pass a test that only checked for their presence — confirmed by hand: only
+        the STARTSWITH/`already claimed by` checks below actually go red under that
+        mutation.
+        """
+        from charter import cli
+        from charter.harness.base import Harness
+
+        class _First(Harness):
+            name = "first-claimant"
+            cli_name = "shared-word"
+            binary = "first"
+
+        class _Second(Harness):
+            name = "second-claimant"
+            cli_name = "shared-word"
+            binary = "second"
+
+        kinds = {"first-claimant": _First, "second-claimant": _Second}
+        with mock.patch.dict("charter.harness.registry.KINDS", kinds, clear=True), \
+             mock.patch("charter.util.warn") as warn:
+            cli.build_parser()
+        warn.assert_called_once()
+        said = warn.call_args[0][0]
+        self.assertTrue(said.startswith("harness 'second-claimant'"), said)
+        self.assertIn("already claimed by 'first-claimant'", said)
+        self.assertIn("shared-word", said)
+
+
 class FrameArgvSplit(unittest.TestCase):
     """Critical 2: `charter claude -p hi` — the documented, spec-named invocation — was
     refused outright by `argparse` before this fix (`nargs=argparse.REMAINDER` cannot

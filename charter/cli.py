@@ -603,13 +603,37 @@ def _add_frame_parsers(sub) -> None:
     name collision dangerous — a harness registered with `cli_name = "status"` would
     otherwise silently take `charter status` away from the operator, with nothing
     printing so much as a warning, because nothing forced the two registries (core
-    commands here, harnesses in `harness.KINDS`) to stay disjoint. `sub.choices` is
-    `argparse`'s own record of every subcommand name already claimed, so the check below
-    asks the same authority the CLI itself will dispatch through, rather than keeping a
-    second list of "known" command names that could itself drift. Raised, not printed:
-    this runs at import/parser-construction time, before any command line is parsed, so
-    there is no operator turn to spend a warning on — the fix is a code change, not
-    something to work around at runtime.
+    commands here, harnesses in `harness.KINDS`) to stay disjoint.
+
+    **Two collisions, two different hazards, two different responses.** A `cli_name` that
+    shadows a CORE command (anything registered before this function runs — see
+    `build_parser`'s own comment about calling this last — plus the names this function
+    reserves for itself: `frame`, `panel`, `frame-menu`, `frame-action`, `frame-probe`)
+    raises, loudly, at parser-construction time: `build_parser()` is called by every
+    single `charter` invocation, so a registry mistake here breaks `charter --help`,
+    `charter doctor`, everything — the failure has to happen in CI, not in an operator's
+    terminal. A `cli_name` shared between two HARNESSES is a narrower problem: it costs
+    one harness a launcher, not the whole CLI, and `harness.registry.all()` instantiating
+    by dict VALUE rather than by key (`tests/test_guard_claims_its_reach.py`'s own
+    `KINDS["zzz-fictional"] = KINDS[CLAUDE_CODE]` reproduces this directly) makes it
+    reachable by a registry mistake that has nothing to do with `_add_frame_parsers` at
+    all. Raising there would take down every command over a defect in a DIFFERENT
+    module's registry — so the first registration wins the word and every later one is
+    skipped, reported (not silently), and `build_parser()` keeps going.
+
+    "First" is `harness.all()`'s own order, which is `KINDS`'s dict-insertion order —
+    stable, and `registry.all`'s own docstring already calls it "registration order" — not
+    an alphabetical or otherwise inferred one. Worth stating here rather than leaving a
+    reader to work it out from `KINDS` being a dict at all.
+
+    `sub.choices` is `argparse`'s own record of every subcommand name already claimed, so
+    the CORE-collision check asks the same authority the CLI itself will dispatch
+    through, rather than keeping a second list of "known" command names that could itself
+    drift — but it is read as a SNAPSHOT taken before the harness loop starts, not live
+    inside it: the loop's own `sub.add_parser(h.cli_name, ...)` calls grow `sub.choices`
+    as they run, and reading it live would conflate "this collides with a core command"
+    with "this collides with an earlier harness in this very loop" — exactly the two
+    cases this docstring just said get different responses.
     """
     def _wire(parser, name):
         parser.add_argument("rest", nargs=argparse.REMAINDER,
@@ -630,32 +654,60 @@ def _add_frame_parsers(sub) -> None:
                                  "starts nothing, never launches the harness.")
         parser.set_defaults(harness=name, func=commands_frame.cmd_launch)
 
+    # Snapshot, not a live read of `sub.choices` inside the loop — see this function's
+    # own docstring for why the two must be kept apart. `_add_frame_parsers` runs LAST
+    # (`build_parser`'s own comment), so `sub.choices` here already holds every CORE
+    # command: init, doctor, workspace, worktree, vault, secret, persona, report,
+    # harness, hook, trace, all of it. `"frame"`, `"panel"`, `"frame-menu"`,
+    # `"frame-action"` and `"frame-probe"` join it even though none of their OWN
+    # `add_parser` calls below has run yet: the loop finishes and registers every
+    # harness BEFORE any of them are added, so a harness with `cli_name` equal to one of
+    # these would pass a check against `sub.choices` alone (nothing there is named any of
+    # them yet) and only collide once THAT `add_parser` call runs a few lines down —
+    # where, on argparse versions that raise for a conflicting name, the error names the
+    # reserved command instead of the harness that actually caused it, and on versions
+    # that do not raise (this repo's own 3.11 floor — see `_split_frame_argv`'s docstring
+    # for the same version gap elsewhere), the later `add_parser` call silently shadows
+    # the harness instead — `frame`'s own escape hatch disappearing, every panel pane
+    # failing to start because `charter panel` now means something else
+    # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`), the hotkey
+    # menu silently opening a harness launch instead of a menu because `charter
+    # frame-menu`/`charter frame-action` now mean something else too, or a news `check:`
+    # naming `frame-probe` silently launching a harness instead of reading tmux's own
+    # version (see `commands_frame.cmd_probe`'s own docstring).
+    _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
+                                         "frame-probe"}
+
+    # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
+    # already claimed each word, so a SECOND harness wanting it is told who got there
+    # first rather than merely "already taken". Scoped to this one loop, never `sub
+    # .choices`: after the first `sub.add_parser(h.cli_name, ...)` call below, that name
+    # IS in `sub.choices` too, and reading it there would make a harness-vs-harness
+    # collision indistinguishable from a harness-vs-core one — the exact conflation this
+    # function's own docstring says the two checks below exist to avoid.
+    _claimed_by: dict[str, str] = {}
     for h in harness.all():
         if not h.cli_name:
             continue
-        # `"frame"`, `"panel"`, `"frame-menu"`, `"frame-action"` and `"frame-probe"` are
-        # all reserved even though none of their OWN `add_parser` calls below has run
-        # yet: the loop finishes and registers every harness BEFORE any of them are
-        # added, so a harness with `cli_name` equal to one of these would pass a check
-        # against `sub.choices` alone (nothing there is named any of them yet) and only
-        # collide once THAT `add_parser` call runs a few lines down — where, on argparse
-        # versions that raise for a conflicting name, the error names the reserved
-        # command instead of the harness that actually caused it, and on versions that do
-        # not raise (this repo's own 3.11 floor — see `_split_frame_argv`'s docstring for
-        # the same version gap elsewhere), the later `add_parser` call silently shadows
-        # the harness instead — `frame`'s own escape hatch disappearing, every panel pane
-        # failing to start because `charter panel` now means something else
-        # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`), the
-        # hotkey menu silently opening a harness launch instead of a menu because
-        # `charter frame-menu`/`charter frame-action` now mean something else too, or a
-        # news `check:` naming `frame-probe` silently launching a harness instead of
-        # reading tmux's own version (see `commands_frame.cmd_probe`'s own docstring).
-        if h.cli_name in sub.choices or h.cli_name in ("frame", "panel", "frame-menu",
-                                                       "frame-action", "frame-probe"):
+        if h.cli_name in _core_commands:
             raise ValueError(
                 f"harness {h.name!r} wants `charter {h.cli_name}`, which is already a "
                 f"charter command — rename the harness's cli_name or the command before "
                 f"this can ship")
+        if h.cli_name in _claimed_by:
+            # Two REGISTERED harnesses, not a harness against a core command — a
+            # narrower hazard (one harness loses a launcher, not the whole CLI; see the
+            # docstring), so this is reported rather than raised. "First" is
+            # `harness.all()`'s own order — `KINDS`'s dict-insertion order, per
+            # `registry.all`'s own docstring ("registration order") — so the harness
+            # registered EARLIER in `registry.KINDS` keeps `charter <cli_name>` and this
+            # one simply gets no launcher of its own.
+            util.warn(f"harness {h.name!r} also wants `charter {h.cli_name}`, already "
+                      f"claimed by {_claimed_by[h.cli_name]!r} — {h.name!r} has no "
+                      f"`charter <harness>` launcher of its own until the collision is "
+                      f"fixed in the registry.")
+            continue
+        _claimed_by[h.cli_name] = h.name
         p = sub.add_parser(h.cli_name,
                            help=f"Run {h.cli_name} inside charter's frame.")
         _wire(p, h.cli_name)
