@@ -1534,8 +1534,7 @@ def _other_workspaces_digest(session_id: str | None) -> str:
 def _autosync_version_lock() -> str | None:
     """Conform this machine to `[charter] version` — once per session, loudly.
 
-    Opt-in: no lock, nothing happens. Exact match, so it downgrades too — pinning a
-    team back to a known-good release is the case you most want automatic.
+    Opt-in: no lock, nothing happens.
 
     Never blocks. A failed install (offline, bad pin, no uv) returns a message and
     the session proceeds on whatever is installed; charter must not make its own
@@ -1544,12 +1543,49 @@ def _autosync_version_lock() -> str | None:
     Session start, never mid-turn and never the status line: this replaces the
     binary that enforces the credential guard, and a session boundary is the only
     safe moment to do that.
+
+    **Upgrades happen here; downgrades do not** (#333). The lock is exact, and that is
+    still right — pinning a fleet back to a known-good release is a real case, and
+    `charter version sync --cli` still does it. What this site no longer does is act on
+    that direction *by itself*. Read the docstring above again: this replaces the binary
+    that enforces the credential guard, and the two directions are not symmetric in what
+    that can cost. An upgrade can only ADD guards; a downgrade can only remove them. A
+    committed ``version = "0.47.1"`` reinstalls, on every teammate's next session, the
+    build in which #317 was open — the mechanism that conforms a fleet, un-conforming it.
+
+    **Report rather than ask, because SessionStart cannot ask.** There is no `ask` verdict
+    on this hook; the only thing it emits is context, and the only reader of that context
+    is a model, which is not the human whose consent replacing the guard binary needs. So
+    the choice is act or say, and for the direction that can only subtract, it says.
+
+    **Not a version floor**, which was the other candidate. A floor is a number that ages
+    into refusing legitimate pin-backs, and the version an attacker picks is simply one
+    above it. Direction is the property that actually distinguishes the two cases, and it
+    needs no number.
+
+    The pin is checked for BEING a version first — see :func:`instance.version_ok`. A
+    wildcard is not orderable, so the direction check cannot speak for it, and a pin that
+    reads as exact while resolving to whatever is published is the failure a lock exists
+    to prevent.
     """
     try:
         from . import __version__, commands, config, instance as _instance
         locked = _instance.locked_version(_instance.load(config.ROOT))
         if not locked or locked == __version__:
             return None
+        if not _instance.version_ok(locked):
+            return (f"⬢ charter: this control plane's `[charter] version` is not a "
+                    f"version, so nothing was installed. "
+                    f"{_instance.NOT_A_VERSION.format(version=locked)}. Working on "
+                    f"{__version__}; fix the pin in the plane's `charter.toml`.")
+        here, there = _parse_version(__version__), _parse_version(locked)
+        if here is not None and there is not None and there < here:
+            return (f"⬢ charter: this control plane pins {locked}, which is OLDER than "
+                    f"the {__version__} you are running. charter did not install it: a "
+                    f"downgrade replaces the binary that enforces the credential guard "
+                    f"with one that knows less, and session start has nobody to ask. "
+                    f"Working on {__version__}. If the pin-back is deliberate, conform "
+                    f"this machine yourself: `charter version sync --cli`.")
         ok, detail = commands.sync_to(locked)
         if not ok:
             return (f"⬢ charter: this control plane pins {locked}, you are running "

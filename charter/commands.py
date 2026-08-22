@@ -7,8 +7,8 @@ import json
 import re
 from pathlib import Path
 
-from . import (config, contain, docsrc, doctor, inventory, render, util, workspace,
-               worktree)
+from . import (config, contain, docsrc, doctor, instance, inventory, render, util,
+               workspace, worktree)
 # One committer for the control plane, in charter/planegit.py. Re-exported rather
 # than moved-and-updated so every existing caller and test keeps working — the point
 # of the extraction is that there is ONE implementation, not that callers churn.
@@ -2137,16 +2137,33 @@ def _dist() -> str:
 
 def _sync_cmd(version: str) -> list[str]:
     """The install that actually works. NOT `uv tool upgrade` — it reports
-    "Nothing to upgrade" for a git-installed charter and leaves you pinned."""
+    "Nothing to upgrade" for a git-installed charter and leaves you pinned.
+
+    **The last gate before a requirement specifier** (#333), the same place
+    `browser._checked_version` sits before an npm package spec and for the same reason:
+    the argv-list discipline stops the value splitting into extra ARGUMENTS, and stops
+    nothing about what it means inside the one argument it is. ``charter-cp==0.*``
+    resolves to the latest 0.x, so an exact-looking pin would not pin.
+
+    Raises rather than returning a refusal because every caller is a command or
+    :func:`sync_to`, both of which have somewhere to put the message — and because a
+    version that got this far unchecked is a bug in the caller, not a user input.
+    """
+    if not instance.version_ok(version):
+        raise ValueError(instance.NOT_A_VERSION.format(version=version))
     return ["uv", "tool", "install", f"{_dist()}=={version}", "--force", "--refresh"]
 
 
 def sync_to(version: str) -> tuple[bool, str]:
     """Install exactly *version*. Returns (ok, detail). Never raises."""
     import shutil
+    try:
+        cmd = _sync_cmd(version)
+    except ValueError as e:
+        return False, str(e)
     if not shutil.which("uv"):
         return False, "uv is not on PATH — install it, or run the pip equivalent by hand"
-    proc = util.run(_sync_cmd(version), check=False)
+    proc = util.run(cmd, check=False)
     if proc.returncode != 0:
         why = (proc.stderr or proc.stdout or "").strip().splitlines()
         return False, (why[-1][:200] if why else f"exit {proc.returncode}")
@@ -2229,6 +2246,13 @@ def cmd_version_sync(args) -> int:
         return 0
 
     installed = _installed_version()
+    if not instance.version_ok(locked):
+        # Before the "already on it" check, deliberately: a malformed pin is a defect in a
+        # committed file whichever version happens to be installed, and reporting "in sync"
+        # against a pin nothing could ever install is the silent-wrongness this guards.
+        util.err(instance.NOT_A_VERSION.format(version=locked))
+        util.info(f"  fix `[charter] version` in {config.ROOT / 'charter.toml'}")
+        return 1
     if locked == installed:
         util.ok(f"already on the locked version ({locked}).")
         return 0

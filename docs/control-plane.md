@@ -329,16 +329,34 @@ version = "0.7.1"
 | `charter version sync` | Installs the locked version on this machine |
 | `charter version bump [--to X] [--push]` | Moves the pin, after verifying the target installs |
 
-**It is exact, not a floor — so it downgrades.** That is the point: pinning a team back to a
-known-good release is precisely the case you want to be automatic.
+**It is exact, not a floor — so it downgrades.** Pinning a team back to a known-good
+release is precisely the case the pin exists for. `charter version sync --cli` performs it.
 
-**Auto-conformance runs once per session.** The `SessionStart` hook installs the locked
-version when it differs from what is running, and says so:
+**The pin must be an exact `X.Y.Z`.** It becomes the right-hand side of a pip requirement,
+`charter-cp==<pin>`, where a wildcard (`0.*`), a range (`>=0.47`) or a dist-name would also
+be accepted — and would resolve to whatever is published, which is the one thing a lock
+exists to prevent. Anything else is refused by name rather than installed.
+
+**Auto-conformance runs once per session, and only upwards.** The `SessionStart` hook
+installs the locked version when it is *newer* than what is running, and says so:
 
 ```
 ⬢ charter: auto-updated 0.7.1 → 0.8.0 to match this control plane's lock.
   The next `charter …` call uses it.
 ```
+
+A pin **older** than what is running is reported and not installed:
+
+```
+⬢ charter: this control plane pins 0.7.1, which is OLDER than the 0.8.0 you are
+  running. charter did not install it: a downgrade replaces the binary that enforces
+  the credential guard with one that knows less, and session start has nobody to ask.
+```
+
+`charter.toml` is committed, so the pin is data a teammate can change — and an unattended
+downgrade past a fix would re-open it on every teammate's next session. An upgrade can only
+add guards; a downgrade can only remove them, so only one of the two directions happens by
+itself. The pin-back stays one deliberate command, run by the person who read the message.
 
 That wording is literal — a running process cannot replace itself mid-call, so *this*
 invocation finishes on the old build and every later `charter …` in the session uses the
