@@ -46,3 +46,4 @@ Written by the persona as it learns; committed and shared.
 - [Assert the git branch BEFORE and AFTER any long verification run in a wo](assert-the-git-branch-before-and-after-any-long-.md)
 - [NEVER run git commands in a clone a dispatched agent is working in — not](never-run-git-commands-in-a-clone-a-dispatched-a.md)
 - [DOCS HAVE A LEVEL NOBODY OWNS BY DEFAULT. Across ten PRs closing 23 issu](docs-have-a-level-nobody-owns-by-default-across-.md)
+- [charter guard's _as_rule: the parenthesis requirement in the old carve-o](charter-guard-s-as-rule-the-parenthesis-requirem.md)

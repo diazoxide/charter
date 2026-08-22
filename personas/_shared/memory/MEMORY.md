@@ -18,3 +18,4 @@ Written by the persona as it learns; committed and shared.
 - [A workspace clone of charter is itself a control plane, so a concurrent](a-workspace-clone-of-charter-is-itself-a-control.md)
 - [A HARNESS REFUSAL IS NOT A ROUTING PROBLEM. On 2026-08-22 a dispatched a](a-harness-refusal-is-not-a-routing-problem-on-20.md)
 - [A harness refusal is not a routing problem](a-harness-refusal-is-not-a-routing-problem.md)
+- [charter repo tests: no venv committed — run 'uv run --with pytest pytest](charter-repo-tests-no-venv-committed-run-uv-run-.md)
