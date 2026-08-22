@@ -109,5 +109,68 @@ class FrameDefaults(unittest.TestCase):
         self.assertEqual(f["history_limit"], 50000)
 
 
+class HotkeyIsNotAFreeString(unittest.TestCase):
+    """`hotkey` is the one `[frame]` value that reaches a PARSER, and it was the one
+    with no check beyond `isinstance(value, str)`.
+
+    `commands_frame.conf_text` interpolates it into tmux config text that `source-file`
+    parses and runs. Verified against a real tmux 3.7c, through the exact text
+    `conf_text` produces: `hotkey = "F2\\nrun-shell 'touch /tmp/PWNED'"` makes
+    `source-file` return **0**, silently, and the canary file appears **at launch, with
+    no keypress at all** — the newline ends the `bind` line and starts a second command.
+    `charter.toml` is committed and shared; it arrives from someone else's machine,
+    which is exactly the input class the containment rule exists for.
+
+    Checked at the config boundary rather than inside the frame, which is the point:
+    `slots` is set-filtered here, `mouse` is a bool here, the three numbers are
+    int-checked here — this was the fifth input arriving through a fifth door.
+    """
+
+    def test_a_newline_bearing_hotkey_degrades_to_the_default(self):
+        """The exploit itself, as an assertion. Fails if `_HOTKEY_RE` is deleted or
+        loosened to accept `\\n` — nothing else in `frame_of` would stop it."""
+        f = instance.frame_of({"frame": {"hotkey": "F2\nrun-shell 'touch /tmp/PWNED'"}})
+        self.assertEqual(f["hotkey"], "F2")
+
+    def test_every_shape_that_could_break_out_of_the_bind_line_is_refused(self):
+        """One case per escape route out of `bind -n {hotkey} run-shell '…'`: end the
+        line, end the command, open a quote, start a comment or a tmux format, reach the
+        shell, or split the argument. Each must fall back to `F2` — an `assertEqual`
+        per shape rather than one loop assertion, so a regression names which shape."""
+        for hostile in ["F2\nkill-server",
+                        "F2; kill-server",
+                        "F2 run-shell 'touch /tmp/x'",
+                        "F2'",
+                        'F2"',
+                        "F2#{client_name}",
+                        "F2$(touch /tmp/x)",
+                        "F2\\",
+                        "F2\tkill-server",
+                        "{}"]:
+            with self.subTest(hotkey=hostile):
+                f = instance.frame_of({"frame": {"hotkey": hostile}})
+                self.assertEqual(f["hotkey"], "F2",
+                                 f"{hostile!r} was accepted into a tmux config line")
+
+    def test_the_key_names_an_operator_actually_types_are_still_accepted(self):
+        """The other half, and the one that stops the fix being "reject everything":
+        a guard that only ever returned the default would pass every test above and
+        silently take `[frame] hotkey` away from everyone."""
+        for good in ["F2", "F12", "M-m", "C-b", "S-Left", "C-M-x", "Escape", "BSpace",
+                     "PPage", "Up", "a", "7", "/", "C-/"]:
+            with self.subTest(hotkey=good):
+                self.assertEqual(instance.frame_of({"frame": {"hotkey": good}})["hotkey"],
+                                 good)
+
+    def test_a_non_string_hotkey_still_degrades_the_way_it_always_did(self):
+        """The type check the regex sits behind must survive it: `_HOTKEY_RE.fullmatch`
+        raises `TypeError` on a non-`str`, and `frame_of` is imported by every command
+        including `charter --version`."""
+        for bad in [42, True, None, ["F2"], {"key": "F2"}]:
+            with self.subTest(hotkey=bad):
+                self.assertEqual(instance.frame_of({"frame": {"hotkey": bad}})["hotkey"],
+                                 "F2")
+
+
 if __name__ == "__main__":
     unittest.main()

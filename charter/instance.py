@@ -347,6 +347,36 @@ FRAME_FIELDS = {
 #: ``config.FRAME`` docstring) that only want the shipped defaults, not the TOML mapping.
 FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.items()}
 
+#: The shape of a tmux key name, and the ONE thing standing between ``[frame] hotkey``
+#: and arbitrary code execution at launch.
+#:
+#: ``commands_frame.conf_text`` interpolates this value into tmux CONFIG TEXT that
+#: ``source-file`` parses and runs (``bind -n {hotkey} run-shell …``). Verified against
+#: tmux 3.7c: ``hotkey = "F2\\nrun-shell 'touch /tmp/PWNED'"`` makes ``source-file``
+#: return **0**, silently, and the file appears **at launch, with no keypress** — the
+#: newline simply ends the ``bind`` line and starts a second command. `charter.toml` is
+#: committed and shared, which is precisely what makes it untrusted input (see the
+#: containment rule in README.md): it arrives from someone else's machine.
+#:
+#: Checked HERE, at the config boundary, rather than as a fifth ad-hoc guard inside the
+#: frame. Every other ``[frame]`` value is already constrained where it enters —
+#: ``slots`` is set-filtered, ``mouse`` is a bool, the three numbers are int-checked —
+#: and ``hotkey`` was the one free string in the section, and the one that reaches a
+#: parser. The branch already carries four separate sanitisers added after four separate
+#: incidents (``frame.state._UNSAFE``, ``frame.menu._ACTION_ID_RE``,
+#: ``commands_frame._PANE_ID_RE``, ``contain.child``); this defect existed because a
+#: fifth input arrived through a fifth door.
+#:
+#: Deliberately narrower than tmux's own key grammar: optional ``C-``/``M-``/``S-``
+#: modifiers, then either a key NAME (``F2``, ``Up``, ``PPage``, ``BSpace``, ``Escape``,
+#: ``a``, ``7``) or a single punctuation key. Whitespace, newlines, quotes, ``;``, ``#``,
+#: ``$``, ``\\`` and braces are all absent from that alphabet, so nothing matching this
+#: can end the ``bind`` line, start a second command, open a quote, or introduce a tmux
+#: format. A key this refuses that tmux would have accepted costs the operator their
+#: preferred hotkey and a line in `charter frame-probe`; a key this accepted that tmux
+#: parses as a command costs them the machine.
+_HOTKEY_RE = re.compile(r"^(?:[CMS]-){0,3}(?:[A-Za-z0-9]{1,20}|[!%&()*+,./:<=>?@\[\]^_|~-])$")
+
 
 def frame_of(cfg: dict) -> dict:
     """The ``[frame]`` section merged over :data:`FRAME_DEFAULTS`.
@@ -354,6 +384,13 @@ def frame_of(cfg: dict) -> dict:
     Every value is type-checked against its default and discarded if it disagrees. This
     module is imported by every command, including ``charter --version``, so a
     hand-edited charter.toml must degrade to the defaults rather than raise.
+
+    Two keys need more than a type check, and both get it here rather than downstream:
+    ``slots`` is filtered against :data:`FRAME_SLOTS`, and ``hotkey`` against
+    :data:`_HOTKEY_RE` — see that constant for the injection a bare ``isinstance(value,
+    str)`` let through. Both degrade to the shipped default, which is the contract every
+    other key in this function already keeps: a charter.toml charter cannot make sense
+    of never stops charter from running.
     """
     out = dict(FRAME_DEFAULTS)
     section = cfg.get("frame")
@@ -368,6 +405,10 @@ def frame_of(cfg: dict) -> dict:
                 kept = [s for s in value if s in FRAME_SLOTS]
                 if kept:
                     out[key] = kept
+            continue
+        if key == "hotkey":
+            if isinstance(value, str) and _HOTKEY_RE.fullmatch(value):
+                out[key] = value
             continue
         # `bool` is a subclass of `int` in Python, so `isinstance(True, int)` is True even
         # though `True` was never meant to stand in for an int default — without this
