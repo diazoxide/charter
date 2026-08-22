@@ -37,10 +37,81 @@ from . import config, contain, mcpseen
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
+#: The characters :data:`_NAME_RE` admits anywhere after the first. Kept beside it so the
+#: rule and the sentence that reports the rule cannot drift apart.
+_NAME_CHARS = re.compile(r"[a-z0-9._-]")
+
+#: Why a reference is not a persona name when its **alphabet** is what it violated, rather
+#: than its shape. Said here, next to :func:`valid_name`, because that is the rule broken.
+#:
+#: `contain.NOT_A_SEGMENT` describes a *different* violation and enumerates separators,
+#: dots and absolute paths — none of which is true of ``"parent"`` (quoted). Rendering it
+#: for either half of :func:`reference_ok` sent the operator looking for a slash that is
+#: not there, which is #328's own defect, a distinction collapsed, reappearing three lines
+#: below the docstring that names it (#361).
+NOT_A_NAME = ("'{name}' is not a persona name{detail}. Charter mints these itself — "
+              "`persona create` enforces exactly this — so a reference can only name one: "
+              "a lowercase letter or digit first, then lowercase letters, digits, '.', "
+              "'_' or '-'")
+
+#: The one refused reference that is neither a path nor a bad character: nothing at all.
+#: ``extends:`` with an empty value parses to ``""``, and "'' is not a name — it is a path"
+#: would be wrong twice over.
+EMPTY_REFERENCE = "is empty — remove the key, or name a persona"
+
 
 def valid_name(name: str) -> bool:
     # A leading '_' is reserved (the shared namespace) and rejected by the regex.
     return bool(name) and _NAME_RE.match(name) is not None
+
+
+def _alphabet_detail(ref: str) -> str:
+    """The clause naming *which* part of the alphabet *ref* broke.
+
+    Three cases, because they are three different fixes. A disallowed character is deleted
+    or replaced; a bad *first* character means the name is otherwise fine and only starts
+    wrong; and quotes mean the frontmatter was written as YAML by someone who reasonably
+    expected YAML.
+    """
+    bad = sorted({c for c in ref if not _NAME_CHARS.fullmatch(c)})
+    if bad and set(bad) <= {'"', "'"}:
+        # The live case from #361, and worth its own sentence because the generic one
+        # ("'\"' cannot appear in one") is true and still leaves the reader guessing.
+        # charter's frontmatter parser does not strip quotes, so the value really does
+        # carry them — the fix is in the file, and it is two characters.
+        return (" — the quotes are part of the value. charter's frontmatter parser does "
+                "not strip them, so `extends: \"parent\"` asks for a persona whose name "
+                "includes the quote marks; remove them")
+    if bad:
+        return f" — {', '.join(repr(c) for c in bad)} cannot appear in one"
+    # Every character is in the alphabet, so the FIRST one is what is wrong. Listing '_'
+    # as a disallowed character here would be its own small lie: it is allowed, just not
+    # in front.
+    if ref[0] == "_":
+        return " — a leading '_' is reserved for the shared namespace"
+    return f" — it starts with {ref[0]!r}"
+
+
+def reference_refusal(ref: str) -> str | None:
+    """Why *ref*, read out of a committed file, cannot name a persona — or ``None``.
+
+    **The one place that answers this**, verdict *and* sentence together, which is the
+    property :func:`reference_ok` already claimed for itself and did not have: it decided
+    the verdict here while the caller picked the message somewhere else, and the message
+    it picked described the other failure (#361).
+
+    The two halves are asked in this order deliberately. Where a reference is both a path
+    and outside the alphabet, "it is a path" is the more serious and the more useful thing
+    to say — the alphabet is a naming rule, containment is what stops a committed file
+    naming a target outside the directory charter meant to look in.
+    """
+    if not ref:
+        return EMPTY_REFERENCE
+    if contain.child(config.PERSONAS_DIR, ref) is None:
+        return contain.refusal(ref)
+    if not valid_name(ref):
+        return NOT_A_NAME.format(name=ref, detail=_alphabet_detail(ref))
+    return None
 
 
 def reference_ok(ref: str) -> bool:
@@ -64,8 +135,12 @@ def reference_ok(ref: str) -> bool:
 
     The containment join is belt and braces on top, per :mod:`charter.contain`: it is the
     half that still holds if `_NAME_RE` is ever widened.
+
+    Delegates to :func:`reference_refusal` rather than re-testing the two halves, so the
+    verdict and the sentence an operator reads cannot describe different failures — which
+    they did, and which is what #361 is (see that function).
     """
-    return valid_name(ref) and contain.child(config.PERSONAS_DIR, ref) is not None
+    return reference_refusal(ref) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -910,18 +985,27 @@ def is_draft(name: str) -> bool:
 def _reference_problem(field: str, ref: str, known: set[str]) -> tuple[str, str] | None:
     """Why *ref* cannot be used as a persona reference, or None when it can.
 
-    Two failures, said two ways, because they send the reader to two different places. A
-    name that is simply absent is a typo or a rename — "dangling" is right, and hunting
-    for the persona is the fix. A reference that is a *path* is not a name at all: no
-    amount of looking for that persona will help, and the fix is in the file. #328's whole
-    shape is a distinction like this one being collapsed, so it gets its own sentence.
+    Three failures, said three ways, because they send the reader to three different
+    places. A name that is simply absent is a typo or a rename — "dangling" is right, and
+    hunting for the persona is the fix. A reference that is a *path* is not a name at all:
+    no amount of looking for that persona will help, and the fix is in the file. And a
+    reference that is neither — ``"parent"``, quoted — is refused by the *alphabet*, where
+    the fix is two characters. #328's whole shape is a distinction like these being
+    collapsed, so each gets its own sentence.
+
+    It said two, and that is #361: this line rendered `contain.refusal` for either half of
+    :func:`reference_ok`, so a quoted reference — no separator, no dot, not absolute — was
+    answered with a sentence enumerating separators, dots and absolute paths. The
+    distinction this docstring exists to draw was collapsed on the line below it.
+    :func:`reference_refusal` now decides the verdict and the sentence together.
 
     Shares :func:`reference_ok` with :func:`load`, which is what makes lint and the
     resolver structurally unable to disagree again — the property whose absence let the
     gate honour a grant `lint` was calling dangling in the same run.
     """
-    if not reference_ok(ref):
-        return ("error", f"{field}: {contain.refusal(ref)}")
+    refused = reference_refusal(ref)
+    if refused:
+        return ("error", f"{field}: {refused}")
     if ref not in known:
         return ("error", f"{field}: '{ref}' — no such persona (dangling)")
     return None
