@@ -417,17 +417,38 @@ def reconcile(session_id: str | None = None, terminal_id: str | None = None) -> 
 
 
 def _prune() -> None:
+    """Drop every per-session pointer past the cutoff — the DIRECTORY, not a list of names.
+
+    This enumerated five suffixes (`*.workspace`, `*.lock`, `*.configver`, `*.memnudge`,
+    `*.usage`) and read as an exhaustive list of the marker family while being nothing of
+    the kind. Three families were missing by the time anyone looked: `*.ask-pending`,
+    `*.route-pending` (`hooks`) and `*.persona` (`persona`, in both directories). The
+    allowlist drifted three times, and a reader adding a fourth marker type had nothing
+    telling them this list needed editing.
+
+    The list is gone rather than three names longer, because a fourth drift is otherwise
+    just a matter of time — a family added tomorrow is now covered the day it is written.
+    Both directories are charter's own state and hold nothing but per-session and
+    per-terminal pointers, so there is no member for which keeping it past the cutoff is
+    the right answer. Files only: a directory in here is not a pointer, and unlinking is
+    not the tool for one.
+
+    Pruning `*.ask-pending` was checked against its readers rather than assumed safe — a
+    declined ask deliberately leaves its marker behind, and that asymmetry is what makes
+    "asked N, approved M" countable (#290). Nothing globs these suffixes: every reader
+    (`_ask_mark_take`, `_route_mark_take`, `_route_mark_clear`) addresses one file by exact
+    ids, and the tally itself lives in the trace store, which this does not touch.
+    """
     cutoff = time.time() - _SESSION_MAX_AGE
     for d in (config.SESSIONS_DIR, config.TERMINALS_DIR):
         if not d.exists():
             continue
-        for pattern in ("*.workspace", "*.lock", "*.configver", "*.memnudge", "*.usage"):
-            for f in d.glob(pattern):
-                try:
-                    if f.stat().st_mtime < cutoff:
-                        f.unlink()
-                except OSError:
-                    pass
+        for f in d.iterdir():
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
 
 
 def list_workspaces() -> list[str]:
