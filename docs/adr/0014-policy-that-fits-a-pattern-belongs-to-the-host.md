@@ -39,9 +39,15 @@ standing or who you are?
 | --- | --- | --- |
 | `_leak_reason` | argv, and the plane's vault paths | no |
 | `_plane_root_branch_reason` | the working directory | no |
-| `_clone_commit_reason` | the working directory | no |
+| `_clone_commit_reason` ⁺ | the working directory | no |
 | `toolgate.decide` | the active persona's declared tools | no |
 | `_single_credential_reason` | the command alone | **yes** |
+
+⁺ Removed in #371 — not because the line drawn here moved, but because that particular
+guard failed a different test: it asked 471 times in one plane, was approved 97 times out of
+98, and its trigger condition was the workflow `skills/working-in-a-clone` prescribes. "Not
+expressible as a host rule" answers *where a guard lives*. It never answered *whether the
+guard should exist*, and this table was read as if it did.
 
 Only the last is static, and it deliberately stays in the hook anyway. A native `deny` rule
 prints no reason, and the reason is most of what that guard is for: a developer who reads

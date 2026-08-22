@@ -240,7 +240,10 @@ class TheGuardsThatWereAlreadyThere(PersonaIso):
         import re as _re
         src = inspect.getsource(hooks)
         calls = _re.findall(r"_ask\(\s*\"[^\"]+\",(?:[^()]|\([^()]*\))*?\)", src)
-        self.assertGreaterEqual(len(calls), 3, "precondition: no _ask calls were found")
+        # Two since #371 removed the clone-commit nudge: `pretooluse_dispatch` and
+        # `pretooluse_edit`. The number is a PRECONDITION, not the claim — without it a
+        # regex that stopped matching would make the loop below pass over nothing.
+        self.assertGreaterEqual(len(calls), 2, "precondition: no _ask calls were found")
         for call in calls:
             self.assertRegex(call, r",\s*data\s*[,)]",
                              f"an _ask site does not pass the payload:\n{call}")

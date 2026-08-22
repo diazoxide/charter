@@ -1134,8 +1134,14 @@ def cmd_guard_allow(args) -> int:
             # who clones the repo, on machines and under identities they did not choose.
             util.warn("  COMMITTED — this stops the prompt for everyone on this repo, not "
                       "just you. Use `--local` for a rule that is yours alone.")
+        # The claim is accurate and stays. What was missing is the next sentence: a reader
+        # who has just been told this command cannot reach charter's denials is exactly the
+        # reader about to go looking for something that can, and until #370 there was
+        # nothing to find and nowhere saying so.
         util.info("  charter's own guards are unaffected: an allow rule relaxes the HOST's "
-                  "prompt, never the secret, credential or plane-root denials.")
+                  "prompt, never the secret, credential, plane-root or release denials.")
+        util.info("  Nothing lifts those — by design. `charter docs show hooks` → *When a "
+                  "guard is wrong* for what to do when one of them is wrong about you.")
     _say_if_uneven(wrote, rc == 1)
     return rc
 
