@@ -23,6 +23,15 @@ charter's hooks, where an exception costs a session its turn; ``version()`` is p
 several times a second by a panel, where a write-on-read would fight ``reap()`` over
 whether a dead frame's directory should exist. A missing frame answers with a sentinel
 ("0", ``None``, ``[]``) rather than an exception or a side effect.
+
+An id can be shaped correctly and still be unusable: ``contain.child`` bounds shape, not
+length, so a multi-thousand-character ``$CHARTER_SESSION_ID`` passes it and then hits
+``mkdir``'s own limit (``ENAMETOOLONG``) — reachable in practice, since
+``session.py``'s id-safety regex strips characters but never bounds length. The read
+paths (``version``, ``exit_code``) were already safe here, because a failing read was
+already inside a ``try/except OSError``; ``frame_dir``'s ``mkdir`` and the writes in
+``bump``/``record_exit`` needed the same guard to make the claim true rather than
+aspirational.
 """
 
 from __future__ import annotations
@@ -71,12 +80,28 @@ def frame_dir(fid: str, *, create: bool = False) -> Path | None:
     polling the version of a frame that ``reap()`` already removed must see it stay gone,
     not have its own read resurrect it; the two write paths (``bump``, ``record_exit``)
     pass ``create=True`` because minting state IS their job.
+
+    **The length guard lives here, not in `frame_id`.** `contain.child` bounds *shape*
+    (no traversal, no separators) but not *length* — an id thousands of characters long
+    still passes it — and `$CHARTER_SESSION_ID` reaches `bump()` without ever going
+    through `frame_id`'s minting, so a cap there would guard some callers and not others.
+    `mkdir` is the one place every caller's id necessarily passes through, so it is the
+    one place a length cap protects all of them: an oversized-but-otherwise-valid id
+    degrades to "no directory" (``ENAMETOOLONG``, caught below) exactly like a hostile
+    one does above, rather than raising out of a hook that cannot afford it.
     """
     d = contain.child(_root(), fid)
     if d is None:
         return None
     if create:
-        d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Shaped correctly (no traversal, no separators) but unusable anyway —
+            # ENAMETOOLONG is the case this exists for, but any mkdir failure here
+            # (permissions, a full filesystem) gets the same treatment: the caller
+            # asked for a directory it cannot have, not for an exception.
+            return None
     return d
 
 
@@ -93,8 +118,14 @@ def bump(fid: str) -> None:
     if d is None:
         return
     tmp = d / "version.tmp"
-    tmp.write_text(f"{time.time_ns()}\n")
-    os.replace(tmp, d / "version")
+    try:
+        tmp.write_text(f"{time.time_ns()}\n")
+        os.replace(tmp, d / "version")
+    except OSError:
+        # The directory existing doesn't guarantee the write does too (a filesystem
+        # that fills up between the two calls above, say) — same must-not-raise
+        # promise as the mkdir guard in frame_dir, covering the step after it.
+        return
 
 
 def version(fid: str) -> str:
@@ -121,8 +152,11 @@ def record_exit(fid: str, code: int) -> None:
     if d is None:
         return
     tmp = d / "exit.tmp"
-    tmp.write_text(f"{int(code)}\n")
-    os.replace(tmp, d / "exit")
+    try:
+        tmp.write_text(f"{int(code)}\n")
+        os.replace(tmp, d / "exit")
+    except OSError:
+        return
 
 
 def exit_code(fid: str) -> int | None:

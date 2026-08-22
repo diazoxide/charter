@@ -8,6 +8,7 @@ the other's activity.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter.frame import state
@@ -37,8 +38,11 @@ class Version(PersonaIso, unittest.TestCase):
         self.assertNotEqual(before, state.version("f-1"))
 
     def test_a_reader_never_sees_a_half_written_version(self):
-        """Written with os.replace, so a panel reading mid-bump gets the old value whole
-        rather than a torn one."""
+        """Fifty sequential bump+read cycles in one thread, so this cannot actually
+        observe a torn read racing a writer — that guarantee rests on `os.replace`'s own
+        atomicity, not on anything asserted here. What this pins down is narrower: the
+        write path fails loudly (an exception, catchable by the caller) rather than
+        silently leaving a reader with an empty or missing value."""
         for _ in range(50):
             state.bump("f-1")
             self.assertTrue(state.version("f-1").strip())
@@ -79,6 +83,43 @@ class FrameDirContainment(PersonaIso, unittest.TestCase):
         turn — a malformed $CHARTER_SESSION_ID must be a no-op, not a crash."""
         state.bump("../../escaped")  # must not raise
         self.assertFalse(state._root().exists())
+
+
+class OverlongFid(PersonaIso, unittest.TestCase):
+    """`contain.child` bounds shape, not length — a 5000-character fid passes it and
+    then hits `mkdir`'s own ENAMETOOLONG, which is reachable from a real
+    `$CHARTER_SESSION_ID` (`session.py`'s id-safety regex strips characters, never
+    bounds length). `bump`/`record_exit` run from hooks, where that has to degrade to a
+    no-op rather than propagate."""
+
+    def test_bump_on_an_overlong_fid_does_not_raise_or_create(self):
+        fid = "x" * 5000
+        state.bump(fid)  # must not raise
+        self.assertFalse(state._root().exists())
+        self.assertEqual(state.version(fid), "0")
+
+    def test_record_exit_on_an_overlong_fid_does_not_raise_or_create(self):
+        fid = "x" * 5000
+        state.record_exit(fid, 7)  # must not raise
+        self.assertFalse(state._root().exists())
+        self.assertIsNone(state.exit_code(fid))
+
+
+class WriteFailureIsNotFatal(PersonaIso, unittest.TestCase):
+    """The over-long-fid case above fails at `mkdir`, before any write is attempted.
+    This covers the other half: the directory exists, but the write into it fails
+    anyway (a filesystem that fills up between `mkdir` and `os.replace`, say) — still a
+    hook's-eye no-op, not a raise."""
+
+    def test_bump_survives_a_failing_replace(self):
+        with mock.patch("charter.frame.state.os.replace", side_effect=OSError("disk full")):
+            state.bump("f-1")  # must not raise
+        self.assertEqual(state.version("f-1"), "0")
+
+    def test_record_exit_survives_a_failing_replace(self):
+        with mock.patch("charter.frame.state.os.replace", side_effect=OSError("disk full")):
+            state.record_exit("f-1", 9)  # must not raise
+        self.assertIsNone(state.exit_code("f-1"))
 
 
 class ExitCode(PersonaIso, unittest.TestCase):
