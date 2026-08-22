@@ -1156,6 +1156,42 @@ class CollisionGuard(unittest.TestCase):
                 cli.build_parser()
         self.assertIn("panel-harness", str(ctx.exception))
 
+    def test_a_harness_named_frame_menu_is_refused_too(self):
+        """Same class of collision as `frame`/`panel` above, for the two commands this
+        task added: a harness claiming `cli_name == "frame-menu"` would pass the loop's
+        own `sub.choices` check (nothing is named that yet) and only collide once
+        `_add_frame_parsers`'s own `sub.add_parser("frame-menu")` call runs — silently
+        shadowing the hotkey menu's own handler on a 3.11 floor, with nothing telling
+        the operator why the hotkey stopped doing anything."""
+        from charter import cli
+        from charter.harness.base import Harness
+
+        class _FrameMenuHarness(Harness):
+            name = "frame-menu-harness"
+            cli_name = "frame-menu"
+            binary = "frame-menu-harness"
+
+        with mock.patch.dict("charter.harness.registry.KINDS",
+                             {"frame-menu-harness": _FrameMenuHarness}, clear=True):
+            with self.assertRaises(ValueError) as ctx:
+                cli.build_parser()
+        self.assertIn("frame-menu-harness", str(ctx.exception))
+
+    def test_a_harness_named_frame_action_is_refused_too(self):
+        from charter import cli
+        from charter.harness.base import Harness
+
+        class _FrameActionHarness(Harness):
+            name = "frame-action-harness"
+            cli_name = "frame-action"
+            binary = "frame-action-harness"
+
+        with mock.patch.dict("charter.harness.registry.KINDS",
+                             {"frame-action-harness": _FrameActionHarness}, clear=True):
+            with self.assertRaises(ValueError) as ctx:
+                cli.build_parser()
+        self.assertIn("frame-action-harness", str(ctx.exception))
+
 
 class FrameArgvSplit(unittest.TestCase):
     """Critical 2: `charter claude -p hi` — the documented, spec-named invocation — was
@@ -1285,32 +1321,84 @@ class MainDeliversFrameRest(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+def _fake_list_clients(*names: str):
+    """A `subprocess.run` `side_effect` distinguishing `list-clients` (answers *names*,
+    one per line, tmux's own `-F` output shape) from any other command (answers an empty,
+    successful `CompletedProcess`) — `cmd_menu` issues two DIFFERENT tmux commands now
+    (`_menu_clients`'s query, then `display-menu` itself), so a single flat mock return
+    value can no longer stand in for both."""
+    def _run(cmd, **kwargs):
+        if "list-clients" in cmd:
+            return SimpleNamespace(returncode=0, stdout="\n".join(names))
+        return SimpleNamespace(returncode=0)
+    return _run
+
+
 class MenuCommands(PersonaIso, unittest.TestCase):
     """`cmd_menu`/`cmd_action` — the handlers `charter frame-menu`/`charter frame-action`
     dispatch to. Both resolve the frame purely from `$CHARTER_SESSION_ID`; neither ever
     takes a frame id as an argument (see `menu.py`'s own docstring for why the id stays
     out of the bind's own text)."""
 
-    def test_cmd_menu_opens_the_current_frames_own_menu(self):
+    def test_cmd_menu_opens_the_current_frames_own_menu_on_its_own_client(self):
+        """`-c` — not merely `-t` — is what the fix for IMPORTANT-1 added: `-t fid`
+        alone does not choose WHICH terminal sees the menu (verified by hand: it
+        rendered frame B's menu on frame A's screen). `cmd_menu` must ask `list-clients`
+        first and pass whatever it learns straight through to `-c`."""
         menu.record(fid="f-menu", entries=[("Detach", ["true"])])
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            run.return_value = SimpleNamespace(returncode=0)
+             mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=_fake_list_clients("/dev/ttys7")) as run:
             rc = commands_frame.cmd_menu(SimpleNamespace())
         self.assertEqual(rc, 0)
-        run.assert_called_once()
-        cmd = run.call_args[0][0]
-        self.assertEqual(cmd[:6], ["tmux", "-L", "charter", "display-menu", "-t", "f-menu"])
+        calls = [c.args[0] for c in run.call_args_list]
+        list_clients_cmd = next(c for c in calls if "list-clients" in c)
+        self.assertEqual(list_clients_cmd,
+                         ["tmux", "-L", "charter", "list-clients", "-t", "f-menu",
+                          "-F", "#{client_name}"])
+        menu_cmd = next(c for c in calls if "display-menu" in c)
+        self.assertEqual(menu_cmd[:9],
+                         ["tmux", "-L", "charter", "display-menu", "-t", "f-menu",
+                          "-c", "/dev/ttys7", "-T"])
 
-    def test_cmd_menu_with_no_session_id_opens_an_empty_menu_rather_than_crashing(self):
-        """No `$CHARTER_SESSION_ID` at all (the frame died between the bind firing and
-        this process starting, say) must not raise — `menu.menu_argv("", socket)` is
-        still a valid, if useless, `display-menu` invocation with no items."""
-        with mock.patch.dict(os.environ, {}, clear=True), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            run.return_value = SimpleNamespace(returncode=0)
+    def test_cmd_menu_with_zero_clients_is_a_quiet_no_op(self):
+        """Nothing attached to this session right now (a keypress landing mid-detach,
+        say) — `display-menu` would just fail with tmux's own "no current client", and
+        there is no screen left to report that failure on anyway. `cmd_menu` must not
+        even attempt it."""
+        menu.record(fid="f-menu", entries=[("Detach", ["true"])])
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
+             mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=_fake_list_clients()) as run:
             rc = commands_frame.cmd_menu(SimpleNamespace())
         self.assertEqual(rc, 0)
+        self.assertFalse(any("display-menu" in c.args[0] for c in run.call_args_list),
+                         "display-menu must never be attempted with no client to draw on")
+
+    def test_cmd_menu_with_several_clients_picks_the_first_reported(self):
+        """The same session open in two terminals at once — `display-menu -c` only ever
+        accepts one, and there is no way to show a menu on two screens simultaneously;
+        picking the first `list-clients` reports is at least a client actually watching
+        THIS session, which a bare `-t fid` never guaranteed (see the test above)."""
+        menu.record(fid="f-menu", entries=[("Detach", ["true"])])
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
+             mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=_fake_list_clients("/dev/ttys1", "/dev/ttys2")) as run:
+            rc = commands_frame.cmd_menu(SimpleNamespace())
+        self.assertEqual(rc, 0)
+        menu_cmd = next(c.args[0] for c in run.call_args_list if "display-menu" in c.args[0])
+        self.assertEqual(menu_cmd[menu_cmd.index("-c") + 1], "/dev/ttys1")
+
+    def test_cmd_menu_with_no_session_id_finds_no_clients_and_does_nothing(self):
+        """No `$CHARTER_SESSION_ID` at all (the frame died between the bind firing and
+        this process starting, say) must not raise — `list-clients -t ""` reports no
+        clients, and `cmd_menu` treats that the same as any other zero-clients case."""
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=_fake_list_clients()) as run:
+            rc = commands_frame.cmd_menu(SimpleNamespace())
+        self.assertEqual(rc, 0)
+        self.assertFalse(any("display-menu" in c.args[0] for c in run.call_args_list))
 
     def test_cmd_action_runs_the_resolved_argv_as_a_list_never_a_shell(self):
         menu.record(fid="f-act", entries=[("Detach", ["tmux", "-L", "charter",

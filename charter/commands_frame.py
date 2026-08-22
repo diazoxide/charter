@@ -390,6 +390,25 @@ def _live_sessions(socket: str) -> set[str]:
     return {line.strip() for line in out.stdout.splitlines() if line.strip()}
 
 
+def _menu_clients(socket: str, session: str) -> list[str]:
+    """Every client `tmux -L socket list-clients -t session` reports for *session*, now.
+
+    `cmd_menu`'s own query for `-c`'s answer (see `menu.menu_argv`'s docstring for why
+    `-t` alone cannot choose the client) — same shape as `_live_sessions` above, and for
+    the same reason: `list-clients` exits non-zero with nothing on stdout for the
+    ordinary "nothing attached right now" case, which `splitlines()` already turns into
+    an empty list with no special-casing needed. The `except` guards tmux vanishing
+    between calls, not that ordinary case.
+    """
+    try:
+        out = subprocess.run(["tmux", "-L", socket, "list-clients", "-t", session,
+                              "-F", "#{client_name}"],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+
+
 def _report_tmux_failure(action: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:
     """Name the command that failed and tmux's own stderr. Never silent.
 
@@ -785,9 +804,25 @@ def cmd_menu(args) -> int:
     (see `conf_text`'s docstring for why that split is load-bearing, not incidental):
     the SAME bind text is shared by every frame on `SOCKET`, so the frame it opens a menu
     FOR has to be resolved here, at the moment the key actually fires, never earlier.
+
+    Resolves the CLIENT to draw the menu on before ever calling `display-menu` — `-t`
+    alone does not choose it (verified by hand against tmux 3.7c with two frames attached
+    in two terminals: `-t fid` rendered the WRONG frame's menu on the wrong screen; see
+    `menu.menu_argv`'s own docstring). `_menu_clients` asks `list-clients` directly,
+    scoped to this session, rather than ever falling back to tmux's own "most recently
+    active" default. Zero clients (nothing attached right now — a keypress landing mid
+    detach, say) is a quiet no-op: `display-menu` would just fail with tmux's own "no
+    current client", and there is no screen left to report that failure on anyway.
+    Several clients (the same session open in two terminals at once) picks the FIRST one
+    reported — any client actually watching THIS session is correct by construction,
+    `display-menu -c` only ever accepts one, and there is no way to show a menu on two
+    screens at the same time.
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
-    return subprocess.run(menu.menu_argv(fid, SOCKET)).returncode
+    clients = _menu_clients(SOCKET, fid)
+    if not clients:
+        return 0
+    return subprocess.run(menu.menu_argv(fid, SOCKET, client=clients[0])).returncode
 
 
 def cmd_action(args) -> int:

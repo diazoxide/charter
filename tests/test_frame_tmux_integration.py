@@ -24,6 +24,7 @@ one does.
 from __future__ import annotations
 
 import os
+import pty
 import shutil
 import signal
 import subprocess
@@ -538,8 +539,10 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
 
         # The exact template `menu_argv` embeds for this item, `charter` swapped for
         # `sys.executable -m charter` (see the class docstring) — everything else,
-        # including the absence of any label text, matches byte for byte.
-        real_command = menu.menu_argv(fid, SOCKET)[-1]
+        # including the absence of any label text, matches byte for byte. `client`
+        # (this test's own no-op stand-in) only affects `-c`, never the per-item
+        # action text this line inspects.
+        real_command = menu.menu_argv(fid, SOCKET, client="")[-1]
         self.assertNotIn("pwned", real_command,
                          "sanity: the hostile label must not have leaked into the "
                          "action text this integration test is about to run for real")
@@ -558,6 +561,212 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
         self.assertFalse(os.path.exists(pwned),
                          "the hostile LABEL text must never execute, even though it "
                          "sat right next to the real id in the same menu table")
+
+
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class MenuFormatIntegration(unittest.TestCase):
+    """The CRITICAL finding from the first review round, proved against a REAL,
+    RENDERED `display-menu` — not only the argv shape `tests/test_frame_menu.py`'s
+    `LabelSafety` checks. `display-menu`'s own docs: "The name and command are formats"
+    — a menu item's NAME is a tmux FORMAT, not inert text, and an unescaped `#(shell
+    command)` label runs the command the INSTANT tmux DRAWS the menu, no selection
+    needed (confirmed by hand: the hostile row was invisible in the rendered menu —
+    nothing about the menu LOOKED wrong, only the canary gave it away).
+
+    A REAL, ATTACHED client is unavoidable here — `display-menu` refuses outright ("no
+    current client") without one — which is why every OTHER test in this file avoids
+    attaching one at all. `_attach_pty` is the one place in the suite that does.
+    """
+
+    def setUp(self) -> None:
+        self.addCleanup(_tmux, "kill-server")
+        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
+                        .unlink(missing_ok=True))
+
+    def _new_session(self, fid: str) -> None:
+        """A fresh `cat`-backed session named *fid*, with its pane's OWN pid registered
+        for cleanup — `kill-server` alone (already in `setUp`) is documented elsewhere in
+        this file (`_kill_pid`'s own docstring) as unreliable at reaping a still-running
+        pane's process in time; `PanelIntegration`/`MenuIntegration` above both work
+        around it the same way, and this class needs the identical fix (confirmed by
+        hand: without this, three "cat" processes were still alive under `pgrep -f
+        'tmux -L charter-integration-test'` after this class's own tests finished and
+        `kill-server` had already run)."""
+        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pid = _tmux("display-message", "-p", "-t", fid, "#{pane_pid}").stdout.strip()
+        self.addCleanup(_kill_pid, pid)
+
+    def _attach_pty(self, session: str) -> tuple[str, int]:
+        """Forks a real `tmux attach -t session` under a pty — the one way to hand
+        `display-menu` a client it will actually accept for `-c`/`-t` targeting.
+        Registers the fork's own cleanup (SIGKILL, then reap — `_kill_pid` alone only
+        signals; a pty-forked child is THIS process's own, so it is also this process's
+        own zombie to reap, unlike a tmux-spawned pane's process, which reparents away)
+        before returning the attached client's name (`#{client_name}`, read back from
+        tmux itself once the attachment has had time to register) and the pty's own
+        master fd — writing a KEY to the fd (not `tmux send-keys`, confirmed by hand:
+        `send-keys` feeds a PANE's own input queue, which an active menu overlay never
+        reads from) is the only way found to actually select a menu item from here.
+        """
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execvp("tmux", ["tmux", "-L", SOCKET, "attach", "-t", session])
+
+        def _reap():
+            _kill_pid(str(pid))
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self.addCleanup(_reap)
+
+        deadline = time.monotonic() + 3
+        name = ""
+        while time.monotonic() < deadline:
+            out = _tmux("list-clients", "-t", session, "-F", "#{client_name}")
+            name = out.stdout.strip()
+            if name:
+                break
+            time.sleep(0.1)
+        self.assertTrue(name, "the pty-attached client never registered with tmux")
+        return name, fd
+
+    def _drive_menu(self, fd: int, cmd: list[str]) -> None:
+        """Bind *cmd* (a real `display-menu` invocation) to a throwaway key and press
+        it through the attached pty — never issue *cmd* directly.
+
+        Confirmed by hand, twice, with the identical *cmd*: issued DIRECTLY (via
+        `subprocess.run` with a timeout, and separately via `Popen` with none) the menu
+        drew its visible text but an unescaped `#(touch CANARY)` label created no
+        canary either way — only firing the SAME command from a key binding did. This
+        is also the more honest test regardless of that quirk: a real operator's hotkey
+        never issues `display-menu` directly either, it always goes through a bind (see
+        `commands_frame.cmd_menu`).
+
+        `F2`'s own two escape sequences (`\\x1bOQ` application mode, `\\x1b[OQ` normal
+        mode) are written with a pause between them because this pty's terminal mode is
+        not otherwise known — sending both covers whichever one the attached client is
+        actually in, harmlessly duplicating the keypress if it is in neither exclusively
+        (redundant, not incorrect: two menus would just draw and one waits behind the
+        other, and only ONE F2 is ever ACTUALLY interpreted per mode in practice).
+        """
+        bind_cmd = ["tmux", "-L", SOCKET, "bind", "-n", "F2"] + cmd[3:]
+        r = subprocess.run(bind_cmd, capture_output=True, text=True, timeout=5)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        os.write(fd, b"\x1bOQ")
+        time.sleep(0.3)
+        os.write(fd, b"\x1b[OQ")
+        time.sleep(0.8)
+
+    def _short_canary(self, name: str) -> str:
+        """A canary path SHORT enough to survive `record`'s own `_MAX_LABEL` (60 chars)
+        truncation intact when embedded directly IN A LABEL.
+
+        `tempfile.mkdtemp()`'s own paths run 55-70+ characters before a filename is
+        even added on this platform (`/var/folders/<hash>/T/<prefix>-<random>/`) —
+        confirmed by hand that this silently truncates an embedded `#(touch ...)` job
+        mid-path, cutting off its closing `)` and neutralising the injection BY
+        ACCIDENT rather than by the escape this class exists to prove: the very first
+        version of these three tests passed even with `_safe_label`'s own `#` -> `##`
+        line deleted, for exactly this reason — a real bug in the test, not a real fix.
+        `/tmp` directly, not the plane's own scratch dir, and not cleaned up via
+        `shutil.rmtree` on a whole directory (there is no directory here to remove).
+        """
+        path = f"/tmp/chfi-{os.getpid()}-{name}"
+
+        def _cleanup():
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self.addCleanup(_cleanup)
+        return path
+
+    def test_a_shell_job_label_never_executes_when_the_menu_renders(self):
+        fid = f"menu-fmt-integ-{os.getpid()}"
+        self._new_session(fid)
+        client, fd = self._attach_pty(fid)
+
+        canary = self._short_canary("a")
+        hostile_label = f"#(touch {canary})"
+
+        menu.record(fid=fid, entries=[(hostile_label, ["true"])])
+        self._drive_menu(fd, menu.menu_argv(fid, SOCKET, client=client))
+
+        self.assertFalse(os.path.exists(canary),
+                         "an unescaped #(...) label executed the instant the menu was "
+                         "drawn — the exact hole this fix round closes")
+
+    def test_a_format_variable_label_also_never_executes(self):
+        """`#{session_name}` substitutes a value rather than running a shell job, but it
+        is the SAME `#`-triggered mechanism `_safe_label`'s escaping closes for both —
+        this pins that a label combining both shapes still creates no canary against a
+        real, rendered menu, not only in `menu_argv`'s own argv-shape unit test."""
+        fid = f"menu-fmt-integ2-{os.getpid()}"
+        self._new_session(fid)
+        client, fd = self._attach_pty(fid)
+
+        canary = self._short_canary("b")
+        hostile_label = f"#{{session_name}} #(touch {canary})"
+
+        menu.record(fid=fid, entries=[(hostile_label, ["true"])])
+        self._drive_menu(fd, menu.menu_argv(fid, SOCKET, client=client))
+
+        self.assertFalse(os.path.exists(canary),
+                         "#{session_name} and #(...) both reach the SAME escape — a "
+                         "label combining them must still create no canary")
+
+    def test_an_escaped_label_still_lets_the_real_action_run_when_selected(self):
+        """The other half of the property: `_safe_label` must not merely refuse to
+        execute — the row still has to be USABLE. After `_drive_menu` opens it (F2),
+        writes the bound key ('1') directly to the attached pty's own master fd — not
+        `tmux send-keys` (confirmed by hand: `send-keys -t <pane>` feeds the PANE's own
+        input queue, which an active menu overlay never reads from; a canary bound to
+        key '1' was never created that way) — and confirms the REAL argv (spawned via
+        the real id) is what runs, never anything derived from the label."""
+        fid = f"menu-fmt-integ3-{os.getpid()}"
+        self._new_session(fid)
+        client, fd = self._attach_pty(fid)
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=SOCKET, session=fid)).returncode, 0)
+
+        tmp = tempfile.mkdtemp(prefix="charter-integ-fmt3-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        real_canary = os.path.join(tmp, "REAL_CANARY")  # in the ARGV, not the label —
+                                                         # no length bound applies to it
+        format_canary = self._short_canary("c")  # in the LABEL — must stay short
+        hostile_label = f"#(touch {format_canary})"
+
+        menu.record(fid=fid, entries=[
+            (hostile_label, [sys.executable, "-c", f"open({real_canary!r}, 'w').close()"]),
+        ])
+        cmd = menu.menu_argv(fid, SOCKET, client=client)
+        # `charter` (bare, per `menu_argv`'s own text) may not be this checkout on
+        # `$PATH` — same substitution `MenuIntegration` above makes, for the same
+        # reason. The item's own action is the LAST argv element, a single string
+        # (`"run-shell 'charter frame-action a0'"`), not a separate "run-shell" token.
+        cmd[-1] = cmd[-1].replace("charter frame-action",
+                                 f"{sys.executable} -m charter frame-action")
+        self._drive_menu(fd, cmd)
+
+        self.assertFalse(os.path.exists(format_canary),
+                         "the hostile label must not have executed merely by being "
+                         "rendered")
+
+        os.write(fd, b"1")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not os.path.exists(real_canary):
+            time.sleep(0.2)
+        self.assertTrue(os.path.exists(real_canary),
+                        "selecting the (escaped, still-usable) item must still run "
+                        "its real, opaque-id-resolved action")
+        self.assertFalse(os.path.exists(format_canary),
+                         "selecting the item must not retroactively execute the label")
 
 
 if __name__ == "__main__":

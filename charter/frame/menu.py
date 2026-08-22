@@ -8,9 +8,19 @@ tmux would be an arms race against a parser with `;` separation, `#{}` expansion
 quote styles.
 
 So the command tmux runs is always `charter frame-action a<N>`, and charter looks the real
-argv up in its own state — never re-derives it, never re-quotes it. Labels are still
-shown — a label is drawn, never executed — but they are sanitised of the one thing that
-could confuse the menu's own layout: newlines.
+argv up in its own state — never re-derives it, never re-quotes it.
+
+**A label is a tmux FORMAT, not inert text — it is drawn, but "drawn" still means
+tmux expands it first.** `display-menu`'s own docs: "The name and command are formats,
+see the FORMATS and STYLES sections." `#(shell command)` runs the command and substitutes
+its output; `#{variable}` substitutes a value — both fire the moment tmux RENDERS the
+menu, no selection needed. Verified by hand against tmux 3.7c, in a real frame: a label of
+`#(touch CANARY)` created `CANARY` the instant the menu was drawn, and the hostile row
+itself was invisible in the rendered menu — nothing about the menu LOOKED wrong. An
+earlier version of this module's docstring said "a label is drawn, never executed"; that
+was false, and a wrong invariant asserted by a passing test is worse than no test at all
+— see `_safe_label` for the fix (`#` -> `##`, tmux's own escape for a literal `#`) and
+`tests/test_frame_menu.py` for the canary that proves it closed.
 
 **`charter frame-action`, not `charter frame action`.** `charter/cli.py`'s
 `_split_frame_argv` treats every `charter frame ...` invocation as the launcher's own
@@ -26,6 +36,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from . import state
 
@@ -34,6 +45,15 @@ from . import state
 #: merely look ugly — the same "safe by construction" standard this module's other
 #: sanitisation (stripping newlines) already applies.
 _MAX_LABEL = 60
+
+#: What `record` ever mints — `a0`, `a1`, … — and the ONLY shape `build` will hand back to
+#: a caller that turns it into a command (`menu_argv`). Checked again here, at the point
+#: an id is about to reach an argv, rather than trusted because `record` is the only
+#: writer TODAY: the guard belongs at the join, not at whichever writer happens to exist
+#: first — a hand-edited or otherwise corrupted `actions.json` key of `a0'; run-shell
+#: "..."` would otherwise reach `menu_argv`'s f-string untouched and become exactly the
+#: injection this whole module exists to refuse.
+_ACTION_ID_RE = re.compile(r"^a[0-9]+$")
 
 
 def _table(fid: str, *, create: bool = False):
@@ -58,16 +78,27 @@ def record(*, fid: str, entries: list[tuple[str, list[str]]]) -> None:
     atomic-write shape: `build`/`resolve` are read from a `run-shell` fired by an
     operator's own keypress, which has no way to retry a table caught mid-write.
 
-    A label is drawn by tmux, never executed — see the module docstring — but it is still
-    operator-visible text read from a committed file, so newlines are stripped (a menu row
+    A label is still operator-visible text read from a committed file (see the module
+    docstring for why "drawn" does not mean "inert"), so newlines are stripped (a menu row
     cannot hold one without corrupting the menu's own layout) and the length is bounded
-    (`_MAX_LABEL`) for the same reason.
+    (`_MAX_LABEL`) for the same reason. The tmux-format escaping (`#` -> `##`) and the
+    leading-`-`/trailing-`#` guards live in `menu_argv` instead, at the point a label
+    actually reaches tmux's argv — this function's own job is making the STORED text
+    sane, not making it safe for a parser it has not met yet.
+
+    An empty result (the label was empty, or entirely newlines) falls back to a
+    placeholder rather than an empty string: `display-menu` treats an empty NAME as a
+    separator line, which desynchronises every `label key command` triple after it and
+    fails the whole menu outright with "not enough arguments" — the hotkey would then
+    silently do nothing, for a reason with no message anywhere to explain it.
     """
     path = _table(fid, create=True)
     if path is None:
         return
-    data = {f"a{i}": {"label": label.replace("\n", " ")[:_MAX_LABEL], "argv": list(argv)}
-            for i, (label, argv) in enumerate(entries)}
+    data = {}
+    for i, (label, argv) in enumerate(entries):
+        clean = label.replace("\n", " ")[:_MAX_LABEL] or "(untitled)"
+        data[f"a{i}"] = {"label": clean, "argv": list(argv)}
     tmp = path.with_name(path.name + ".tmp")
     try:
         tmp.write_text(json.dumps(data))
@@ -86,6 +117,10 @@ def build(fid: str) -> list[tuple[str, str]]:
     the same order `record`'s own dict comprehension wrote them in — no `sorted()` here on
     purpose: sorting the id STRINGS lexicographically would put ``"a10"`` before ``"a2"``,
     silently reordering the menu the moment a frame ever grows past nine entries.
+
+    Any key not shaped `a<N>` is dropped rather than passed through — see
+    `_ACTION_ID_RE`'s own docstring for why this is checked here, at the join, and not
+    only trusted from `record`.
     """
     path = _table(fid)
     if path is None:
@@ -96,7 +131,8 @@ def build(fid: str) -> list[tuple[str, str]]:
         return []
     if not isinstance(data, dict):
         return []
-    return [(v.get("label", ""), k) for k, v in data.items() if isinstance(v, dict)]
+    return [(v.get("label", ""), k) for k, v in data.items()
+            if isinstance(v, dict) and _ACTION_ID_RE.fullmatch(k)]
 
 
 def resolve(fid: str, action_id: str) -> list[str] | None:
@@ -104,7 +140,10 @@ def resolve(fid: str, action_id: str) -> list[str] | None:
 
     Reads the same table `build` does and nothing more — no name, hostile or not, is ever
     on the path from a menu selection to this return value; `cmd_action` runs whatever
-    comes back through `subprocess.run` as a list, never a shell.
+    comes back through `subprocess.run` as a list, never a shell. `action_id` is not
+    re-checked against `_ACTION_ID_RE` here: a `dict.get` lookup is safe against a key of
+    any shape (there is no parser downstream of it to confuse), unlike `menu_argv`, which
+    interpolates the id into text tmux re-parses and is where that check actually matters.
     """
     path = _table(fid)
     if path is None:
@@ -122,26 +161,64 @@ def resolve(fid: str, action_id: str) -> list[str] | None:
     return argv if isinstance(argv, list) and all(isinstance(a, str) for a in argv) else None
 
 
-def menu_argv(fid: str, socket: str) -> list[str]:
+def _safe_label(label: str) -> str:
+    """*label*, made inert against tmux's own format/style parsing. Three transforms:
+
+    1. **`#` -> `##`.** The fix for the format-expansion hole the module docstring
+       describes: `#(...)`/`#{...}` in an unescaped label execute/substitute the moment
+       tmux draws the menu. `##` is tmux's own escape for a literal `#` — doubling every
+       occurrence closes it the same way `_pane_died_write_hook_argv` closes `$`/`"` in a
+       hook action: escape every occurrence, not a scan for "looks like a format".
+
+    2. **A leading `-` disables the item.** `display-menu`'s own docs: a name starting
+       with `-` is "shown dim and may not be chosen" — the whole row, not merely its
+       first character, becomes something else. That is exactly correction 4's "truncated
+       into something misleading" failure, reached through a menu instead of a status
+       line. A leading space keeps the text intact and un-disables the row.
+
+    3. **A label ending in `#` gets a trailing space.** Cosmetic only — nothing here
+       executes either way — but worth closing: verified by hand that a label doubled
+       from a single trailing `#` (`"trailing#"` -> `"trailing##"`) collides with a
+       style-reset sequence tmux appends after every item's own name, rendering as
+       literal `trailing#[default]` garbage in the menu. A label with no trailing hash
+       never showed it. A trailing space breaks the adjacency.
+    """
+    label = label.replace("#", "##")
+    if label.startswith("-"):
+        label = " " + label
+    if label.endswith("#"):
+        label = label + " "
+    return label
+
+
+def menu_argv(fid: str, socket: str, client: str) -> list[str]:
     """The `display-menu` invocation for this frame. Ids only — never a name.
 
-    `-t fid` targets THIS frame's own session explicitly, always. Without it,
-    `display-menu` defaults to "the client that fired this command" — exactly right the
-    instant a bind's own action runs `display-menu` directly, but nothing about that
-    default survives being invoked a second time removed, which is what actually happens
-    here: the hotkey bind runs `charter frame-menu` (see `commands_frame.cmd_menu`), and
-    THAT process is what calls this function and runs its result as a brand-new `tmux`
-    client invocation — a different process from whichever client's keypress triggered
-    it. `fid` is the one thing this function is always trusted to carry (it is the
-    session's own name, minted by `state.frame_id`'s restricted alphabet — see its
-    docstring), so passing it explicitly is free and removes an ambiguity that would
-    otherwise only show up with two frames attached in two terminals at once.
+    `-c client` is what selects WHICH ATTACHED TERMINAL the menu is drawn on —
+    `display-menu`'s own docs: "Display a menu on target-client. target-pane gives the
+    target for any commands run from the menu." `-t` (kept below) never did that; it only
+    scopes FORMAT EVALUATION for the item's own command text. Verified by hand against
+    tmux 3.7c with two frames attached in two separate terminals: `-t fid` alone rendered
+    frame B's menu on frame A's screen when B's own hotkey was pressed — B's operator saw
+    nothing, and selecting the item there would have run B's action from A's terminal.
+    *client* is resolved by `commands_frame.cmd_menu` (via `list-clients -t fid`) before
+    this function is ever called — `menu.py` makes no subprocess calls of its own (every
+    other function here is pure file/state access), so the one query `-c` needs lives in
+    `commands_frame.py` and the answer is simply handed in.
 
-    Every item's own action is the fixed template ``run-shell 'charter frame-action
-    a<N>'`` — the opaque id is the only thing that varies, and it is never derived from
-    the label sitting right next to it in this same argv.
+    `-t fid` stays for a DIFFERENT reason: it is what scopes the ITEM's own `run-shell`
+    command to this session's `$CHARTER_SESSION_ID` (verified by hand: an item fired from
+    `display-menu -t <session>` inherits that session's own `set-environment` values even
+    though its own `run-shell` text carries no `-t` — see `_session_id_env_argv`'s own
+    docstring in `commands_frame.py` for why that value has to be there at all).
+
+    Every label passes through `_safe_label` — see its own docstring and the module
+    docstring for why a label is not inert text. Every item's own ACTION is the fixed
+    template ``run-shell 'charter frame-action a<N>'`` — the opaque id is the only thing
+    that varies, and `build` already refuses anything not shaped `a<N>` before it ever
+    reaches here.
     """
-    cmd = ["tmux", "-L", socket, "display-menu", "-t", fid, "-T", "charter"]
+    cmd = ["tmux", "-L", socket, "display-menu", "-t", fid, "-c", client, "-T", "charter"]
     for i, (label, action_id) in enumerate(build(fid)):
-        cmd += [label, str(i + 1), f"run-shell 'charter frame-action {action_id}'"]
+        cmd += [_safe_label(label), str(i + 1), f"run-shell 'charter frame-action {action_id}'"]
     return cmd

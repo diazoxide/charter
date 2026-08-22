@@ -621,19 +621,23 @@ def _add_frame_parsers(sub) -> None:
     for h in harness.all():
         if not h.cli_name:
             continue
-        # `"frame"` and `"panel"` are reserved even though neither's OWN `add_parser`
-        # call below has run yet: the loop finishes and registers every harness BEFORE
-        # either is added, so a harness with `cli_name == "frame"` or `"panel"` would
-        # pass a check against `sub.choices` alone (nothing there is named either yet)
-        # and only collide once THAT `add_parser` call runs a few lines down — where, on
-        # argparse versions that raise for a conflicting name, the error names `frame`/
-        # `panel` instead of the harness that actually caused it, and on versions that
-        # do not raise (this repo's own 3.11 floor — see `_split_frame_argv`'s docstring
-        # for the same version gap elsewhere), the later `add_parser` call silently
-        # shadows the harness instead — `frame`'s own escape hatch disappearing, or every
-        # panel pane failing to start because `charter panel` now means something else
-        # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`).
-        if h.cli_name in sub.choices or h.cli_name in ("frame", "panel"):
+        # `"frame"`, `"panel"`, `"frame-menu"` and `"frame-action"` are all reserved even
+        # though none of their OWN `add_parser` calls below has run yet: the loop
+        # finishes and registers every harness BEFORE any of them are added, so a
+        # harness with `cli_name` equal to one of these would pass a check against
+        # `sub.choices` alone (nothing there is named any of them yet) and only collide
+        # once THAT `add_parser` call runs a few lines down — where, on argparse versions
+        # that raise for a conflicting name, the error names the reserved command instead
+        # of the harness that actually caused it, and on versions that do not raise (this
+        # repo's own 3.11 floor — see `_split_frame_argv`'s docstring for the same
+        # version gap elsewhere), the later `add_parser` call silently shadows the
+        # harness instead — `frame`'s own escape hatch disappearing, every panel pane
+        # failing to start because `charter panel` now means something else
+        # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`), or the
+        # hotkey menu silently opening a harness launch instead of a menu because
+        # `charter frame-menu`/`charter frame-action` now mean something else too.
+        if h.cli_name in sub.choices or h.cli_name in ("frame", "panel", "frame-menu",
+                                                       "frame-action"):
             raise ValueError(
                 f"harness {h.name!r} wants `charter {h.cli_name}`, which is already a "
                 f"charter command — rename the harness's cli_name or the command before "
