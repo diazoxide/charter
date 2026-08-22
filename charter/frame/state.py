@@ -108,11 +108,15 @@ def frame_dir(fid: str, *, create: bool = False) -> Path | None:
 def bump(fid: str) -> None:
     """Record that the frame changed. A caller on a must-not-crash path (a hook).
 
-    Written to a temp file and moved into place with ``os.replace``, which is atomic on
-    the same filesystem, so a panel reading mid-bump gets the previous value whole rather
-    than a half-written one. Silently does nothing for an *fid* :func:`frame_dir` refuses
-    — this runs from charter's hooks, where raising costs a session its turn, so a hostile
-    or malformed id is a no-op here rather than an exception.
+    Written to a temp file and moved into place with ``os.replace``. A failed write is
+    swallowed (see below), not raised — which is exactly why the atomic replace matters
+    more here than it would if a failure were still visible: ``os.replace`` only ever
+    touches the target file by fully replacing it, never partially, so a write that
+    cannot complete leaves the previous version exactly as a reader last saw it rather
+    than corrupting it silently. Does nothing for an *fid* :func:`frame_dir` refuses, and
+    nothing for a write that fails after the directory exists (a full filesystem, say) —
+    this runs from charter's hooks, where raising costs a session its turn, so every
+    failure here is a no-op rather than an exception.
     """
     d = frame_dir(fid, create=True)
     if d is None:

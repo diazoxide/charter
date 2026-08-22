@@ -37,16 +37,6 @@ class Version(PersonaIso, unittest.TestCase):
         state.bump("f-1")
         self.assertNotEqual(before, state.version("f-1"))
 
-    def test_a_reader_never_sees_a_half_written_version(self):
-        """Fifty sequential bump+read cycles in one thread, so this cannot actually
-        observe a torn read racing a writer — that guarantee rests on `os.replace`'s own
-        atomicity, not on anything asserted here. What this pins down is narrower: the
-        write path fails loudly (an exception, catchable by the caller) rather than
-        silently leaving a reader with an empty or missing value."""
-        for _ in range(50):
-            state.bump("f-1")
-            self.assertTrue(state.version("f-1").strip())
-
     def test_reading_an_unknown_frames_version_creates_nothing_on_disk(self):
         """A probe reads; it does not act (charter/news.py). `version()` on a frame that
         was never bumped must not create the directory it is only trying to look at —
@@ -120,6 +110,19 @@ class WriteFailureIsNotFatal(PersonaIso, unittest.TestCase):
         with mock.patch("charter.frame.state.os.replace", side_effect=OSError("disk full")):
             state.record_exit("f-1", 9)  # must not raise
         self.assertIsNone(state.exit_code("f-1"))
+
+    def test_a_failed_bump_leaves_the_previous_version_intact(self):
+        """This is the property the tmp-file + os.replace shape in `bump()` exists for,
+        and Finding 1 made it load-bearing: a failed write no longer raises, so the only
+        thing standing between it and a reader seeing a corrupted value is that
+        os.replace never touches the target file unless it fully succeeds. A bump that
+        fails must leave the version a reader already saw exactly as it was — not "0",
+        not empty, not some partial write of the new value."""
+        state.bump("f-1")
+        before = state.version("f-1")
+        with mock.patch("charter.frame.state.os.replace", side_effect=OSError("disk full")):
+            state.bump("f-1")  # the write fails silently (Finding 1)
+        self.assertEqual(state.version("f-1"), before)
 
 
 class ExitCode(PersonaIso, unittest.TestCase):
