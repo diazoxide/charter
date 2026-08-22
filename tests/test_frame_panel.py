@@ -29,22 +29,6 @@ from charter.frame import panel, slots, state
 from tests._isolation import PersonaIso
 
 
-class Redraw(PersonaIso, unittest.TestCase):
-    def test_an_unchanged_version_does_not_redraw(self):
-        seen = state.version("f-1")
-        self.assertFalse(panel.should_redraw(seen, "f-1"))
-
-    def test_a_bump_asks_for_a_redraw(self):
-        seen = state.version("f-1")
-        state.bump("f-1")
-        self.assertTrue(panel.should_redraw(seen, "f-1"))
-
-    def test_a_missing_frame_redraws_rather_than_crashing(self):
-        """A panel outliving its state directory must show something, not die and leave
-        a hole in the frame."""
-        self.assertTrue(panel.should_redraw("nothing-like-a-version", "never-existed"))
-
-
 class Draw(PersonaIso, unittest.TestCase):
     def test_one_pass_writes_the_slot_and_returns(self):
         """`rc == 0` alone survives `_paint` becoming a no-op — the "writes the slot"
@@ -129,8 +113,8 @@ class Tick(PersonaIso, unittest.TestCase):
     decision can be exercised without also exercising `run`'s `while True`/
     `time.sleep`. A resize must win even when the frame's own version has not moved —
     only charter's own hooks call `state.bump`; an operator resizing their terminal does
-    not, so `should_redraw` alone would leave a pane painted for a size that no longer
-    exists until unrelated agent activity happened to bump the version next.
+    not, so a version comparison alone would leave a pane painted for a size that no
+    longer exists until unrelated agent activity happened to bump the version next.
     """
 
     def test_a_resize_paints_even_when_the_version_is_unchanged(self):
@@ -165,8 +149,11 @@ class Tick(PersonaIso, unittest.TestCase):
         call `state.bump` — standing in for a hook firing WHILE this tick's paint is in
         flight — so the version has already moved again by the time `_paint` returns.
         `_tick` must not report the version it read at the START of this tick as "seen"
-        in a way that satisfies `should_redraw` for the version that landed during it;
-        red on the one mutation (of thirteen) that swapped the read and the paint."""
+        in a way that satisfies "has the frame changed" for the version that landed
+        during it; red on the one mutation (of thirteen) that swapped the read and the
+        paint. Asserts against `state.version` directly — `panel.should_redraw`, the
+        predicate this used to ask, was deleted as dead (no production caller ever
+        reached it), and the question it answered is one `!=` either way."""
         fid = "f-race"
         state.bump(fid)
         seen = state.version(fid)
@@ -174,7 +161,7 @@ class Tick(PersonaIso, unittest.TestCase):
         with mock.patch("charter.frame.panel._paint",
                         side_effect=lambda slot, f: state.bump(f)):
             result = panel._tick({"flag": False}, seen, "bottom", fid)
-        self.assertTrue(panel.should_redraw(result, fid))
+        self.assertNotEqual(result, state.version(fid))
 
 
 class Sigwinch(unittest.TestCase):

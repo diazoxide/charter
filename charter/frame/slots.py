@@ -63,20 +63,40 @@ def _bottom(fid: str) -> str:
     survives rather than leaving it to whichever one happens to fit before
     `tui.truncate`'s ellipsis — the same truncation-order reasoning `statusline.py`
     names inline wherever a row has to choose what to drop.
+
+    The hotkey is READ, not spelled out: `[frame] hotkey` is configurable, and this row
+    hardcoded `F2 menu` — so a plane on `hotkey = "F1"` had its own panel telling every
+    operator the wrong key, on every repaint, forever. `config.FRAME` is the resolved
+    value `commands_frame.conf_text` binds, so there is one source for what the panel
+    says and what the frame actually does.
     """
-    from .. import statusline, workspace
+    from .. import config, statusline, workspace
     ws = workspace.resolve()
     todos = statusline._todo_count(ws)
     alerts = statusline._alerts(ws)
     parts = [f"{todos} todo" + ("s" if todos != 1 else "")]
     parts.extend(alerts[:1])
-    parts.append("F2 menu")
+    parts.append(f"{config.FRAME['hotkey']} menu")
     return tui.truncate(" · ".join(p for p in parts if p), _width())
 
 
 #: Every slot charter can draw. `panel.run` refuses a name that is not in here rather
 #: than painting an empty pane, because an empty pane reads as a broken frame.
 SLOTS = {"top": _top, "bottom": _bottom}
+
+
+def unimplemented(configured) -> list[str]:
+    """Which of *configured* charter sizes and accepts but has no renderer for.
+
+    `left`/`right` today: `instance.FRAME_SLOTS` accepts both and `layout.SLOT_SIZE`
+    sizes both, while :data:`SLOTS` implements neither. Three callers need exactly this
+    list and must agree — `commands_frame.cmd_launch` (to skip splitting a pane that
+    would be permanently dead under `remain-on-exit on`), `commands_frame.frame_ready`
+    (`--probe`) and `doctor.check_frame` (both to SAY so, which is the only place it is
+    said at all now) — so the question is answered here, next to the registry that
+    answers it, rather than three times over.
+    """
+    return sorted({s for s in configured if s not in SLOTS})
 
 
 def render(slot: str, fid: str) -> str:

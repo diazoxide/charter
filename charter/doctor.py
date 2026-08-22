@@ -715,8 +715,17 @@ def check_frame() -> Result:
     core work; discover, clone, and run any harness with `--no-frame`. Only `charter
     <harness>` without that flag is affected, and both remedies are named here rather
     than left to be discovered in `docs/frame.md`.
+
+    This row and `charter frame-probe` are also the ONLY places the frame's standing
+    capability ceilings are reported at all. They used to be `util.warn` calls inside
+    `cmd_launch`, printed microseconds before tmux switched the operator's terminal to
+    the alternate screen, where nobody could read them — see
+    `commands_frame.frame_ready`'s own docstring for the measurement and the argument.
+    Both facts are answerable without starting anything: `tmuxctl.version()` and
+    `config.FRAME["slots"]`.
     """
-    from .frame import tmuxctl
+    from . import config
+    from .frame import slots as frame_slots, tmuxctl
 
     name = "frame"
     v = tmuxctl.version()
@@ -725,12 +734,33 @@ def check_frame() -> Result:
                       hint="charter <harness> needs tmux to compose a frame — brew "
                            "install tmux (or your package manager). Without it, "
                            "charter <harness> --no-frame still runs the harness bare.")
+    missing = frame_slots.unimplemented(config.FRAME["slots"])
     if v < tmuxctl.FLOOR:
+        # Not "the hotkey menu is disabled" — nothing disables it. `cmd_launch` warns
+        # and continues, and `conf_text` emits the bind unchanged; what is actually at
+        # risk below the floor is that the bind opens nothing and that the pane-scoped
+        # exit-code hooks may not install. `below_floor_message` is the one place that
+        # sentence lives, so this row and `--probe` cannot drift apart.
+        hint = tmuxctl.below_floor_message(v)
+        if missing:
+            hint += " " + commands_frame_no_renderer(missing)
+        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}", hint=hint)
+    if missing:
         return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}",
-                      hint=f"below the frame's floor (tmux {tmuxctl.FLOOR[0]}."
-                           f"{tmuxctl.FLOOR[1]}+) — a frame still starts, with its "
-                           f"hotkey menu disabled.")
+                      hint=commands_frame_no_renderer(missing))
     return Result(name, OK, detail=f"tmux {v[0]}.{v[1]}")
+
+
+def commands_frame_no_renderer(missing: list[str]) -> str:
+    """`commands_frame.no_renderer_message`, imported lazily.
+
+    A module-level `from .commands_frame import no_renderer_message` would make every
+    `charter doctor` import the whole launcher (and, through it, `harness`, `workspace`
+    and `frame.menu`) to print one row; the import lives inside a function for the same
+    reason `check_frame`'s own `tmuxctl` import does.
+    """
+    from .commands_frame import no_renderer_message
+    return no_renderer_message(missing)
 
 
 def _read_text(p) -> str:

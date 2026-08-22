@@ -72,6 +72,17 @@ it REPLACES THE WHOLE ARRAY, silently deleting `[1]` if it was already there. In
 the write hook second would wipe out the teardown hook the moment it lands — reproduced
 end to end by swapping the two `cmd_launch` calls: the session hung exactly the way it
 did before either hook existed. See `_pane_died_teardown_hook_argv`'s own docstring.
+
+**Every tmux command here goes through `frame/tmuxctl.py`, and the timeout is the
+reason.** `cmd_launch` used to issue eleven `subprocess.run(…, timeout=15)` calls of its
+own with nothing catching `subprocess.TimeoutExpired`. Ten of them run AFTER
+`new-session` has already started the harness detached, so a wedged tmux server did not
+merely fail one command: it raised a traceback out of the launcher, `cli.main` filed a
+charter crash report for it, and the operator was left with a live agent session, no
+reattach line, and a bug report pointing at the wrong repository. `tmuxctl.run` folds a
+timeout into a return code (`tmuxctl.TIMED_OUT`) so all eleven degrade down the paths
+they already had for a tmux that merely says no, and `tmuxctl.report_failure` is called
+for each by default rather than remembered at each call site.
 """
 
 from __future__ import annotations
@@ -121,6 +132,12 @@ _PLACEHOLDER_CONF = "set -g remain-on-exit on\n"
 #: path is delivered this way instead of being embedded in the hook's own action text.
 _EXIT_PATH_ENV = "CHARTER_FRAME_EXIT"
 
+#: The second value carried the same out-of-band way, for the same reason: the
+#: interpreter the hotkey bind and every menu action run charter with. Owned by
+#: `tmuxctl` so `frame/menu.py` — which cannot import this module without a cycle —
+#: spells the same name; see `_charter_py_env_argv` and `conf_text`.
+_CHARTER_PY_ENV = tmuxctl.CHARTER_PY_ENV
+
 #: What `_query_pane_dead_status` returns for a pane confirmed dead (`#{pane_dead}` is
 #: `1`) whose `#{pane_dead_status}` tmux itself could not report — measured against tmux
 #: 3.7c: EMPTY, not negative, for a harness killed by SIGKILL/SIGTERM/SIGSEGV. `None`
@@ -139,37 +156,92 @@ def bypass(argv: list[str]) -> int:
     `tmux new-session` returns 0 regardless of what ran inside it (see the module
     docstring) — but there is no tmux in the way on this path, so the exit code an exec'd
     process carries out is already the real one.
+
+    **A missing harness binary is a condition, not a charter bug.** `os.execvp` raises
+    `FileNotFoundError` for a `claude` that is not installed — the most likely FIRST-RUN
+    state of this whole feature — and an uncaught one reached `cli.main`'s `except
+    Exception`, which files a crash report against charter and re-raises a traceback.
+    `cli.main` already carves out exactly this class twice (`contain.Refused`,
+    `util.ProcTimeout`), both noting that filing such a condition as a bug "sends whoever
+    reads it looking in the wrong repository"; a harness charter was asked to start and
+    could not find belongs in the same set. Caught HERE rather than as a third clause up
+    there, because this is the only place in charter that execs an operator-named binary
+    and the message can name what is missing.
+
+    127 and 126 are the shell's own numbers for the two cases, so `charter claude &&
+    …` behaves the way `claude && …` would have.
     """
-    os.execvp(argv[0], argv)
+    try:
+        os.execvp(argv[0], argv)
+    except FileNotFoundError:
+        util.err(f"charter: {argv[0]} is not installed, or not on $PATH.\n"
+                 f"  charter cannot start a harness it cannot find — install {argv[0]}, "
+                 f"or run a different one: charter harness list")
+        return 127
+    except PermissionError:
+        util.err(f"charter: {argv[0]} is not executable — check its permissions")
+        return 126
     return 127  # unreachable; execvp either replaces this process or raises
 
 
+def no_renderer_message(missing: list[str]) -> str:
+    """The one sentence for `[frame] slots` naming a slot charter cannot draw yet.
+
+    Shared by `frame_ready` and `doctor.check_frame` rather than written twice, for the
+    same reason both of them exist: this is a standing property of the configuration and
+    the build, and two copies of a standing fact drift into two different facts.
+    """
+    return (f"no renderer yet for {', '.join(missing)} — charter sizes and accepts "
+            f"{'it' if len(missing) == 1 else 'them'} in `[frame] slots` but draws "
+            f"nothing there, so the harness pane keeps that space")
+
+
 def frame_ready() -> tuple[int, str, str]:
-    """Can a frame run on this machine right now? ``(exit code, util.* level, one line)``
-    — read-only, and the only thing this asks is `tmuxctl.version()`.
+    """Can a frame run on this machine right now, and what will it not be able to do?
+    ``(exit code, util.* level, text)`` — read-only: `tmuxctl.version()` and
+    `config.FRAME`, nothing started, nothing written.
 
     Mirrors `cmd_launch`'s own gate exactly, not a stricter one: a few lines into
-    `cmd_launch`, tmux below `tmuxctl.FLOOR` gets a warning and the launch CONTINUES —
-    only its hotkey menu is disabled (`tmuxctl.below_floor_message`) — and only `tmux`
-    being entirely absent (`version() is None`) makes `cmd_launch` refuse outright.
-    Refusing here on anything short of that would report a frame this same launcher
-    goes on to draw regardless — a probe that lies about `cmd_launch`'s own behaviour is
-    worse than one that runs nothing at all.
+    `cmd_launch`, tmux below `tmuxctl.FLOOR` warns and the launch CONTINUES, and only
+    `tmux` being entirely absent (`version() is None`) makes `cmd_launch` refuse
+    outright. Refusing here on anything short of that would report a frame this same
+    launcher goes on to draw regardless — a probe that lies about `cmd_launch`'s own
+    behaviour is worse than one that runs nothing at all.
+
+    **The two STANDING conditions are reported here and nowhere else.** Both used to be
+    `util.warn` calls inside `cmd_launch` itself, and both were measured to be
+    unreadable there: `util.warn` for an unimplemented slot lands 86 bytes before tmux's
+    own `\\x1b[?1049h`, so the operator's terminal switches to the alternate screen
+    milliseconds later and the line is restored to view only when the frame EXITS. A
+    warning printed where it cannot be read is worse than silence, because it creates a
+    record that the operator was told. Neither is per-launch news anyway — a tmux below
+    the floor, and a configured slot with no renderer, are true on every launch on this
+    machine and this plane until something changes. They are capability ceilings, so
+    they belong to the two surfaces built to report ceilings on demand: this one, and
+    `doctor.check_frame`. (A per-launch notice mechanism, for conditions specific to one
+    launch, is deliberately NOT built here.)
 
     Two callers share this, both read-only for the same reason `charter/news.py`
-    requires of a `check:` (reads, never acts; and this module's own subprocess calls
-    already carry timeouts, so neither can hang): `--probe` on every `charter
-    <harness>`/`charter frame` launcher (`cmd_launch` below), for an operator to run by
-    hand, and the top-level `charter frame-probe` (`cmd_probe`) that a news `check:`
-    names — see `cmd_probe`'s own docstring for why the check cannot simply be `frame
-    --probe` itself.
+    requires of a `check:` (reads, never acts; and this module's own tmux calls all go
+    through `tmuxctl.run`, which is time-boxed, so neither can hang): `--probe` on every
+    `charter <harness>`/`charter frame` launcher (`cmd_launch` below), for an operator
+    to run by hand, and the top-level `charter frame-probe` (`cmd_probe`) that a news
+    `check:` names — see `cmd_probe`'s own docstring for why the check cannot simply be
+    `frame --probe` itself.
     """
     v = tmuxctl.version()
     if v is None:
         return 1, "err", tmuxctl.absent_message()
+    head = f"charter frame: tmux {v[0]}.{v[1]} — a frame can run on this machine"
+    ceilings = []
     if v < tmuxctl.FLOOR:
-        return 0, "warn", tmuxctl.below_floor_message(v)
-    return 0, "ok", f"charter frame: tmux {v[0]}.{v[1]} — a frame can run on this machine"
+        ceilings.append(tmuxctl.below_floor_message(v))
+    missing = frame_slots.unimplemented(config.FRAME["slots"])
+    if missing:
+        ceilings.append(no_renderer_message(missing))
+    if not ceilings:
+        return 0, "ok", head
+    return 0, "warn", "\n".join([head, *(f"  ↳ {c}" for c in ceilings)])
 
 
 def _report_probe(code: int, level: str, line: str) -> int:
@@ -221,8 +293,8 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     plain `set -t <session> ...` config text, never into a shell command string, so it
     carries none of the risk `_EXIT_PATH_ENV`'s docstring describes for `status_path`.
 
-    `hotkey` opens this frame's own menu: `bind -n {hotkey} run-shell 'charter
-    frame-menu "#{client_name}"'`. A key BINDING has no per-session form the way
+    `hotkey` opens this frame's own menu: `bind -n {hotkey} run-shell '"$CHARTER_PY" -m
+    charter frame-menu "#{client_name}"'`. A key BINDING has no per-session form the way
     `status`/`mouse`/`history-limit` above do — key tables are server-wide in tmux, so
     every frame on `SOCKET` ends up sharing this exact bind text, "last launched wins"
     exactly like `escape-time`/`remain-on-exit`/the `WheelUpPane` bind two lines down
@@ -262,6 +334,23 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     OMITTING `-t` entirely does. `-t =` resolves for FORMAT evaluation (`if-shell -F`,
     which never spawns a process); it is not the same mechanism a spawned shell's
     environment goes through, and the two do not behave alike.
+
+    **`"$CHARTER_PY" -m charter`, never a bare `charter`.** The panels already launch
+    charter as `[sys.executable, "-m", "charter"]` (see `cmd_launch`'s `panel_argvs`
+    call) precisely because the `charter` an operator's `$PATH` resolves may be a
+    different install, or no install at all — a `uv tool` shim not on the tmux server's
+    own PATH, a checkout run as `python -m charter`. This line had kept the bare name,
+    and the failure lands in the worst possible place: `run-shell` reports a non-zero
+    command by printing `'charter frame-menu "/dev/ttys020"' returned 127` INTO THE
+    HARNESS PANE and dropping it into copy-mode — charter drawing in the one rectangle
+    ADR 0018 says it never draws. The interpreter is carried out of band via
+    `set-environment` (`_charter_py_env_argv`) rather than interpolated here, for the
+    same reason `status_path` is (see `_EXIT_PATH_ENV`): an absolute path re-embedded
+    inside this nested tmux-quote layer is one apostrophe away from the silent
+    corruption the module docstring measures. Verified against tmux 3.7c that a
+    session-scoped `CHARTER_PY` reaches the shell this bind spawns and expands there,
+    and that this exact bind text survives `source-file` intact (`list-keys` reads it
+    back byte for byte).
     """
     return "\n".join([
         f"set -t {session} status off",
@@ -269,11 +358,31 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
         f"set -t {session} history-limit {int(history_limit)}",
         "set -g escape-time 0",
         "set -g remain-on-exit on",
-        f"bind -n {hotkey} run-shell 'charter frame-menu \"#{{client_name}}\"'",
+        f"bind -n {hotkey} run-shell "
+        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-menu \"#{{client_name}}\"'",
         "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
         "",
     ])
+
+
+def _charter_py_env_argv(*, socket: str, session: str) -> list[str]:
+    """`set-environment`: the interpreter the hotkey and every menu action run charter
+    with.
+
+    `sys.executable`, delivered the same out-of-band way `_exit_path_env_argv` delivers
+    `status_path` and for the same two reasons — a single argv value nothing re-parses,
+    and a bind/action TEMPLATE that stays free of per-machine text. See `conf_text`'s
+    own docstring for what a bare `charter` cost, and `frame/menu.py`'s `menu_argv` for
+    the second consumer.
+
+    Session-scoped, not `-g`: two planes on one laptop can be two different charter
+    installs (`docs/control-plane.md`'s version pin exists for exactly that), and a `-g`
+    write would hand frame N's interpreter to frame N-1 — the same "last launched wins"
+    trap `conf_text`'s docstring already names for `mouse`/`history-limit`.
+    """
+    return ["tmux", "-L", socket, "set-environment", "-t", session, _CHARTER_PY_ENV,
+           sys.executable]
 
 
 def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[str]:
@@ -397,7 +506,7 @@ _PANE_ID_RE = re.compile(r"%\d+")
 #: attempt for a version already KNOWN too old, not the only thing standing between an
 #: operator and a loud, recurring error if that constant ever turns out to be wrong —
 #: this is what makes the mechanism safe BY CONSTRUCTION rather than by the constant
-#: being right (see `_report_tmux_failure`'s call site below for how the two combine).
+#: being right (see `tmuxctl.report_failure`'s call site below for how the two combine).
 _INVALID_HOOK_NAME = "invalid option"
 
 
@@ -443,28 +552,16 @@ def _live_sessions(socket: str) -> set[str]:
 
     Empty rather than raised when nothing has ever run on *socket* — `list-sessions`
     exits non-zero with nothing on stdout in that case, which the plain `splitlines()`
-    below already turns into an empty set with no special-casing needed. The `except`
-    guards the rarer case: tmux vanishing between `tmuxctl.available()`'s own check and
-    this call, not the ordinary "no server yet" one.
+    below already turns into an empty set with no special-casing needed. That ordinary
+    "no server yet" answer is also why this is the one caller besides
+    `_query_pane_dead_status` that asks `tmuxctl.run` NOT to report: a failure here is
+    normally not a fault at all, and reporting it would print an error on every launch
+    that happens to be the first one on this machine.
     """
-    try:
-        out = subprocess.run(["tmux", "-L", socket, "list-sessions", "-F", "#{session_name}"],
-                             capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return set()
+    out = tmuxctl.run("listing the frames already running",
+                      ["tmux", "-L", socket, "list-sessions", "-F", "#{session_name}"],
+                      timeout=5, report=False)
     return {line.strip() for line in out.stdout.splitlines() if line.strip()}
-
-
-def _report_tmux_failure(action: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:
-    """Name the command that failed and tmux's own stderr. Never silent.
-
-    This is what correction 2 exists to force: `subprocess.run(cmd, env=env)` with the
-    result thrown away is exactly how the pane-index bug `frame/layout.py`'s own module
-    docstring describes would have shipped — a frame missing a panel, and nothing
-    anywhere saying why.
-    """
-    stderr = (proc.stderr or "").strip() or "(tmux printed nothing to stderr)"
-    util.err(f"charter frame: {action} failed — `{' '.join(cmd)}`: {stderr}")
 
 
 def _query_pane_dead_status(socket: str, harness_pane: str) -> int | None:
@@ -489,13 +586,15 @@ def _query_pane_dead_status(socket: str, harness_pane: str) -> int | None:
     dead — the exact hang the eager check exists to close, reopened by a signal instead
     of a timing race. See `_UNKNOWN_DEATH_CODE`.
     """
-    try:
-        dm = subprocess.run(["tmux", "-L", socket, "display-message", "-p", "-t", harness_pane,
-                             "#{pane_dead}:#{pane_dead_status}"],
-                            capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return None
+    dm = tmuxctl.run("asking whether the harness pane died",
+                     ["tmux", "-L", socket, "display-message", "-p", "-t", harness_pane,
+                      "#{pane_dead}:#{pane_dead_status}"],
+                     timeout=5, report=False)
     if dm.returncode != 0:
+        # Includes the timeout and could-not-run cases `tmuxctl.run` folds into a
+        # return code (see its own docstring): all three mean the same thing here —
+        # "cannot tell" — and `report=False` keeps a query that answers `None` from
+        # printing an error for a question `cmd_launch` is about to handle either way.
         return None
     dead, _, status = dm.stdout.strip().partition(":")
     if dead != "1":
@@ -531,17 +630,19 @@ def cmd_launch(args) -> int:
     if args.no_frame or not sys.stdout.isatty():
         return bypass(argv)
 
-    # ONE call (correction 5): `available()`, `version()` and `meets_floor()` each shell
-    # out to `tmux -V` independently, so calling all three in sequence would spawn three
-    # subprocesses to ask the same unchanging question on every single launch.
+    # ONE call (correction 5): asking `tmux -V` twice on a path that branches on the
+    # answer once is two subprocesses for one unchanging fact.
     v = tmuxctl.version()
     if v is None:
         util.err(tmuxctl.absent_message())
         return 1
-    if v < tmuxctl.FLOOR:
-        # Below the floor: degrade (the hotkey menu, not yet wired to anything by this
-        # task, would be unusable anyway), never refuse — the frame itself still works.
-        util.warn(tmuxctl.below_floor_message(v))
+    # Below `tmuxctl.FLOOR` the frame still launches — degrade, never refuse. Nothing is
+    # printed here, deliberately: this is a STANDING condition, true on every launch on
+    # this machine, and `util.warn` was measured landing 86 bytes before tmux's own
+    # `\x1b[?1049h` — the operator's terminal switches to the alternate screen
+    # milliseconds later and the line only comes back into view once the frame exits.
+    # It is reported by `frame_ready` (`--probe`, `charter frame-probe`) and by
+    # `doctor.check_frame` instead; see `frame_ready`'s own docstring.
 
     ws = workspace.resolve()
     fid = state.frame_id(ws, os.getpid())
@@ -566,11 +667,8 @@ def cmd_launch(args) -> int:
         # deterministically — not a hang, since the session simply vanishes with it, but
         # still wrong, and worth closing the same way the placeholder closes the
         # first-frame-ever case.
-        arm_cmd = ["tmux", "-L", SOCKET, "set", "-g", "remain-on-exit", "on"]
-        arm = subprocess.run(arm_cmd, capture_output=True, text=True, timeout=15)
-        if arm.returncode != 0:
-            _report_tmux_failure("arming remain-on-exit ahead of an already-running server",
-                                 arm_cmd, arm)
+        tmuxctl.run("arming remain-on-exit ahead of an already-running server",
+                    ["tmux", "-L", SOCKET, "set", "-g", "remain-on-exit", "on"])
     state.reap(live_before)
 
     fdir = state.frame_dir(fid, create=True)
@@ -601,14 +699,17 @@ def cmd_launch(args) -> int:
     # alive, the operator is left with a permanently dead, wrapped-error 22-column
     # pane and no explanation at the point the frame actually came up. Skipping an
     # unimplemented slot here instead means the harness pane simply keeps that space —
-    # the same degrade `visible_slots` itself already makes under a tight terminal —
-    # and one message, printed once, says why up front rather than leaving the operator
-    # to puzzle out a dead pane's own stderr.
-    unimplemented = sorted({s for s in slots if s not in frame_slots.SLOTS})
+    # the same degrade `visible_slots` itself already makes under a tight terminal.
+    #
+    # Silently, and that is the deliberate half: which slots have a renderer is a
+    # property of THIS BUILD, not of this launch, so a warning here repeats an
+    # unchanging fact on every single start — and repeats it into a terminal that is
+    # about to switch to tmux's alternate screen, where nobody reads it (measured; see
+    # `frame_ready`'s own docstring). `--probe`, `charter frame-probe` and `charter
+    # doctor` all name it on demand instead, from the same `frame_slots.unimplemented`
+    # this line filters on.
+    unimplemented = frame_slots.unimplemented(slots)
     if unimplemented:
-        util.warn(f"charter frame: no renderer yet for {', '.join(unimplemented)} — "
-                  f"not drawing {'it' if len(unimplemented) == 1 else 'them'}; "
-                  f"the harness pane keeps that space instead")
         slots = [s for s in slots if s not in unimplemented]
 
     env = dict(os.environ, CHARTER_SESSION_ID=fid)
@@ -632,9 +733,8 @@ def cmd_launch(args) -> int:
 
     session_cmd = layout.session_argv(session=fid, conf=str(conf_path), socket=SOCKET,
                                       cols=cols, rows=rows, harness_argv=argv)
-    proc = subprocess.run(session_cmd, env=env, capture_output=True, text=True, timeout=15)
+    proc = tmuxctl.run("starting the frame", session_cmd, env=env)
     if proc.returncode != 0:
-        _report_tmux_failure("starting the frame", session_cmd, proc)
         return 1
     harness_pane = proc.stdout.strip()
     if not harness_pane:
@@ -644,17 +744,17 @@ def cmd_launch(args) -> int:
 
     conf_path.write_text(conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
                                    history_limit=frame["history_limit"], session=fid))
-    src_cmd = ["tmux", "-L", SOCKET, "source-file", str(conf_path)]
-    src = subprocess.run(src_cmd, env=env, capture_output=True, text=True, timeout=15)
+    src = tmuxctl.run("loading the frame's config",
+                      ["tmux", "-L", SOCKET, "source-file", str(conf_path)], env=env)
     if src.returncode != 0:
-        _report_tmux_failure("loading the frame's config", src_cmd, src)
         util.warn("charter frame: continuing without it — mouse/history-limit/hotkey "
                   "settings may not be in effect for this frame")
 
-    env_cmd = _exit_path_env_argv(socket=SOCKET, session=fid, status_path=str(status_path))
-    env_set = subprocess.run(env_cmd, env=env, capture_output=True, text=True, timeout=15)
+    env_set = tmuxctl.run(
+        "carrying the exit-status path",
+        _exit_path_env_argv(socket=SOCKET, session=fid, status_path=str(status_path)),
+        env=env)
     if env_set.returncode != 0:
-        _report_tmux_failure("carrying the exit-status path", env_cmd, env_set)
         util.warn("charter frame: continuing without it — the exit code may not be "
                   "recorded for this frame")
 
@@ -664,12 +764,21 @@ def cmd_launch(args) -> int:
     # process's environment, and without this call a frame beyond the first sharing
     # `SOCKET` would silently resolve the FIRST frame's id instead of its own (see
     # `_session_id_env_argv`'s own docstring for what was verified by hand).
-    sid_cmd = _session_id_env_argv(socket=SOCKET, session=fid)
-    sid_set = subprocess.run(sid_cmd, env=env, capture_output=True, text=True, timeout=15)
+    sid_set = tmuxctl.run("carrying the frame id to its own hotkey menu",
+                          _session_id_env_argv(socket=SOCKET, session=fid), env=env)
     if sid_set.returncode != 0:
-        _report_tmux_failure("carrying the frame id to its own hotkey menu", sid_cmd, sid_set)
         util.warn("charter frame: continuing without it — the hotkey menu may not find "
                   "this frame's own actions")
+
+    # The second value the same mechanism carries: which interpreter runs charter when
+    # the hotkey (or a menu item) fires. Without it both fall back to a bare `charter`
+    # on the tmux server's own `$PATH`, and `run-shell` reports the resulting 127 by
+    # printing it INTO THE HARNESS PANE — see `conf_text`'s own docstring.
+    py_set = tmuxctl.run("carrying charter's own interpreter to the hotkey menu",
+                         _charter_py_env_argv(socket=SOCKET, session=fid), env=env)
+    if py_set.returncode != 0:
+        util.warn("charter frame: continuing without it — the hotkey menu may not open "
+                  "on this frame")
 
     # The menu itself: what the hotkey actually opens. A single "Detach" entry — the
     # spec's own words, "Detach is allowed and prints how to reattach" — proves the
@@ -682,19 +791,16 @@ def cmd_launch(args) -> int:
         ("Detach", ["tmux", "-L", SOCKET, "detach-client", "-s", fid]),
     ])
 
-    write_hook_cmd = _pane_died_write_hook_argv(socket=SOCKET, harness_pane=harness_pane)
-    write_hook = subprocess.run(write_hook_cmd, env=env, capture_output=True, text=True, timeout=15)
+    write_hook = tmuxctl.run(
+        "installing the exit-status hook",
+        _pane_died_write_hook_argv(socket=SOCKET, harness_pane=harness_pane), env=env)
     if write_hook.returncode != 0:
-        _report_tmux_failure("installing the exit-status hook", write_hook_cmd, write_hook)
         util.warn("charter frame: continuing without it — the exit code may not be "
                   "recorded for this frame")
 
-    teardown_hook_cmd = _pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=harness_pane)
-    teardown_hook = subprocess.run(teardown_hook_cmd, env=env, capture_output=True, text=True,
-                                   timeout=15)
-    if teardown_hook.returncode != 0:
-        _report_tmux_failure("installing the session-teardown hook", teardown_hook_cmd,
-                             teardown_hook)
+    teardown_hook = tmuxctl.run(
+        "installing the session-teardown hook",
+        _pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=harness_pane), env=env)
 
     # Closes the install race directly, rather than merely working around its symptom. A
     # harness that died in the window between `new-session` starting it and the hooks
@@ -710,10 +816,8 @@ def cmd_launch(args) -> int:
     code = _query_pane_dead_status(SOCKET, harness_pane)
     if code is not None:
         state.record_exit(fid, code)
-        kill_cmd = ["tmux", "-L", SOCKET, "kill-session", "-t", fid]
-        kill = subprocess.run(kill_cmd, env=env, capture_output=True, text=True, timeout=15)
-        if kill.returncode != 0:
-            _report_tmux_failure("ending the frame after an early death", kill_cmd, kill)
+        tmuxctl.run("ending the frame after an early death",
+                    ["tmux", "-L", SOCKET, "kill-session", "-t", fid], env=env)
 
     attach = None
     attach_cmd = None
@@ -742,13 +846,12 @@ def cmd_launch(args) -> int:
             # slot, in the same order (see its own docstring).
             panes: dict[str, str] = {}
             for slot, cmd in zip(slots, panel_cmds):
-                p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
+                # Reported by `tmuxctl.run` but not fatal: one decorative panel failing
+                # to draw must not take down a harness pane that is already up and
+                # running (correction 2 asks for every return code to be CHECKED, not
+                # every failure refused).
+                p = tmuxctl.run("drawing a panel", cmd, env=env)
                 if p.returncode != 0:
-                    # Reported, not fatal: one decorative panel failing to draw must not
-                    # take down a harness pane that is already up and running (correction
-                    # 2 asks for every return code to be CHECKED, not every failure
-                    # refused).
-                    _report_tmux_failure("drawing a panel", cmd, p)
                     continue
                 pane_id = p.stdout.strip()
                 if pane_id and _PANE_ID_RE.fullmatch(pane_id):
@@ -775,8 +878,13 @@ def cmd_launch(args) -> int:
                 # geometry upkeep, not something a launch's correctness depends on.
                 resize_cmd = _resize_hook_argv(socket=SOCKET, harness_pane=harness_pane,
                                                panes=panes)
-                resize = subprocess.run(resize_cmd, env=env, capture_output=True, text=True,
-                                        timeout=15)
+                # `report=False`: this is the one call site that reads a failure's own
+                # stderr before deciding whether it IS one — an unrecognised hook name
+                # here is a capability ceiling to note quietly, not an integration to
+                # report loudly, and `tmuxctl.run`'s default would have printed the loud
+                # version first regardless of which branch runs below.
+                resize = tmuxctl.run("installing the resize hook", resize_cmd, env=env,
+                                     report=False)
                 if resize.returncode != 0:
                     if _INVALID_HOOK_NAME in (resize.stderr or ""):
                         # RESIZE_HOOK_FLOOR believed this tmux would recognise the
@@ -791,7 +899,8 @@ def cmd_launch(args) -> int:
                                  "resize-recovery hook — panels may drift out of "
                                  "shape if this terminal is resized")
                     else:
-                        _report_tmux_failure("installing the resize hook", resize_cmd, resize)
+                        tmuxctl.report_failure("installing the resize hook", resize_cmd,
+                                               resize)
                         util.warn("charter frame: continuing without it — panels may "
                                  "drift out of shape if this terminal is resized")
 
@@ -802,16 +911,14 @@ def cmd_launch(args) -> int:
             # `layout.panel_argvs`'s own split ordering, not something this diff
             # introduced, but leaving the frame in a state the operator can actually type
             # into is this launcher's job.
-            select_cmd = ["tmux", "-L", SOCKET, "select-pane", "-t", harness_pane]
-            select = subprocess.run(select_cmd, env=env, capture_output=True, text=True,
-                                    timeout=15)
-            if select.returncode != 0:
-                _report_tmux_failure("focusing the harness pane", select_cmd, select)
+            tmuxctl.run("focusing the harness pane",
+                        ["tmux", "-L", SOCKET, "select-pane", "-t", harness_pane], env=env)
 
-            # No capture_output: this is the operator's own terminal for as long as the
-            # harness runs, not an admin command whose output charter should own.
+            # `tmuxctl.interact`, not `tmuxctl.run`: no capture and no timeout — this
+            # IS the operator's own terminal for as long as the harness runs, not an
+            # admin command whose output (or lifetime) charter should own.
             attach_cmd = ["tmux", "-L", SOCKET, "attach", "-t", fid]
-            attach = subprocess.run(attach_cmd, env=env)
+            attach = tmuxctl.interact(attach_cmd, env=env)
 
             code = state.exit_code(fid)
             if code is None:
@@ -843,7 +950,7 @@ def cmd_launch(args) -> int:
         # Nothing was recorded, tmux is not still tracking this session, AND `attach`
         # itself reported trouble — surfaced rather than folded into a bare 0, which is
         # precisely the failure this whole module exists to stop happening silently.
-        _report_tmux_failure("attaching to the frame", attach_cmd, attach)
+        tmuxctl.report_failure("attaching to the frame", attach_cmd, attach)
         return attach.returncode
     return 0
 
@@ -882,7 +989,8 @@ def cmd_menu(args) -> int:
     was invoked some other way) is a quiet no-op: there is no screen to draw on, and no
     screen left to report that on either. So is an EMPTY menu (`not menu.build(fid)`):
     `display-menu` requires at least one `name key command` triple and fails outright
-    ("too few arguments") without one — reachable with a genuine `$CHARTER_SESSION_ID`
+    (rc 1, `not enough arguments` — tmux's own text, confirmed against 3.7c with a real
+    attached client) without one — reachable with a genuine `$CHARTER_SESSION_ID`
     whose frame has recorded nothing yet, and, before this guard, WOULD have been
     reachable with none at all (`menu.build("")` is always empty — `state.frame_dir`
     refuses an empty id — so a keypress arriving with no session id would otherwise
@@ -892,7 +1000,11 @@ def cmd_menu(args) -> int:
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     if not args.client or not menu.build(fid):
         return 0
-    return subprocess.run(menu.menu_argv(fid, SOCKET, client=args.client)).returncode
+    # `tmuxctl.interact`: `display-menu` draws on an attached client and does not return
+    # until the operator chooses or dismisses it, so it belongs with `attach` on the
+    # no-capture, no-timeout side of `tmuxctl` — time-boxing it would close a menu for
+    # the crime of being read slowly.
+    return tmuxctl.interact(menu.menu_argv(fid, SOCKET, client=args.client)).returncode
 
 
 def cmd_action(args) -> int:

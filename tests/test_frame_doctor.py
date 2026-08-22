@@ -34,14 +34,45 @@ class FrameRow(unittest.TestCase):
         self.assertNotEqual(r.status, doctor.OK)
 
     def test_a_below_floor_tmux_still_warns_not_fails(self):
-        """`cmd_launch` itself does not refuse below `tmuxctl.FLOOR` — it warns and the
-        frame still starts, with its hotkey menu disabled (`tmuxctl.below_floor_message`).
-        A doctor row that FAILED here would tell the reader `charter <harness>` cannot run
-        when it, in fact, still can."""
+        """`cmd_launch` itself does not refuse below `tmuxctl.FLOOR` — the frame still
+        starts, and nothing is switched off (`tmuxctl.below_floor_message`). A doctor row
+        that FAILED here would tell the reader `charter <harness>` cannot run when it, in
+        fact, still can."""
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 0)):
             r = doctor.check_frame()
         self.assertEqual(r.status, doctor.WARN)
         self.assertNotEqual(r.status, doctor.FAIL)
+
+    def test_the_below_floor_hint_does_not_claim_the_hotkey_is_disabled(self):
+        """This hint used to say "a frame still starts, with its hotkey menu disabled".
+        Nothing disables it: `cmd_launch` warns and continues, and `conf_text` emits the
+        bind unchanged. The hint now comes from `tmuxctl.below_floor_message` — one
+        sentence shared with `--probe`, so the two cannot drift apart."""
+        from charter.frame import tmuxctl
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 0)):
+            r = doctor.check_frame()
+        self.assertNotIn("hotkey menu disabled", r.hint)
+        self.assertEqual(r.hint, tmuxctl.below_floor_message((3, 0)))
+
+    def test_a_slot_with_no_renderer_is_a_ceiling_this_row_names(self):
+        """The second standing condition that moved off the launch path (see
+        `commands_frame.frame_ready`): `[frame] slots` accepts `left`/`right`, charter
+        sizes them, and nothing draws in them. It used to be a `util.warn` printed
+        microseconds before tmux switched the terminal to the alternate screen."""
+        from charter import config
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "right"]}):
+            r = doctor.check_frame()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertIn("right", r.hint)
+
+    def test_an_ordinary_machine_still_renders_a_clean_row(self):
+        """What stops the two tests above from passing against a row that always warns."""
+        from charter import config
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
+            r = doctor.check_frame()
+        self.assertEqual(r.status, doctor.OK)
 
     def test_tmux_is_not_reported_as_a_harness_deficit(self):
         from charter import harness

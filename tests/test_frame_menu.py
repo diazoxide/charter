@@ -21,6 +21,7 @@ cannot prove tmux's own format parser was actually defeated.
 from __future__ import annotations
 
 import json
+import sys
 import unittest
 
 from charter.frame import menu, state
@@ -38,7 +39,8 @@ class OpaqueIds(PersonaIso, unittest.TestCase):
     def test_the_action_slot_never_carries_the_label(self):
         """The property that actually matters, and the one the brief's own draft test
         ('assertNotIn("run-shell", flat)') cannot check: `menu_argv`'s FIXED action
-        template is `run-shell 'charter frame-action a<N>'`, which legitimately contains
+        template is `run-shell '"$CHARTER_PY" -m charter frame-action a<N>'`, which
+        legitimately contains
         the substring "run-shell" for every entry, hostile label or not — asserting that
         substring is absent from the whole joined argv fails against ANY correct
         implementation the moment a label happens to echo it back, which this one does on
@@ -57,10 +59,27 @@ class OpaqueIds(PersonaIso, unittest.TestCase):
         # matters, proven against a real, rendered menu.
         self.assertEqual(label, HOSTILE)
         self.assertEqual(key, "1")
-        self.assertEqual(command, "run-shell 'charter frame-action a0'")
+        self.assertEqual(command,
+                         'run-shell \'"$CHARTER_PY" -m charter frame-action a0\'')
         self.assertNotIn(HOSTILE, command)
         self.assertNotIn("/tmp/pwned", command)
         self.assertNotIn(";", command)
+
+    def test_the_action_runs_charter_through_a_named_interpreter_not_off_the_path(self):
+        """Same defect as the hotkey bind's own (`test_frame_launcher.Conf`), one layer
+        down: every MENU ITEM ran a bare `charter` too. With charter not on the tmux
+        server's `$PATH`, selecting "Detach" makes `run-shell` print
+        `'charter frame-action a0' returned 127` INTO THE HARNESS PANE and drop it into
+        copy-mode — charter drawing in the one rectangle ADR 0018 says it never draws.
+
+        The interpreter is a VARIABLE the session carries, never `sys.executable` baked
+        in here: an absolute path re-embedded inside this nested tmux-quote layer is the
+        construction `commands_frame`'s module docstring bans for `status_path`."""
+        menu.record(fid="f-1", entries=[("Detach", ["true"])])
+        command = menu.menu_argv("f-1", "charter", client="/dev/ttys0")[-1]
+        self.assertNotIn("run-shell 'charter", command)
+        self.assertIn('"$CHARTER_PY" -m charter frame-action', command)
+        self.assertNotIn(sys.executable, command)
 
     def test_the_menu_targets_this_frames_own_client_and_session(self):
         """`-c client` is what selects WHICH ATTACHED TERMINAL sees the menu —
@@ -100,7 +119,7 @@ class OpaqueIds(PersonaIso, unittest.TestCase):
     def test_a_key_not_shaped_a_n_is_refused_at_the_point_of_use(self):
         """Only `record` mints ids today, so this is defence in depth rather than a live
         hole — but `menu_argv` interpolates whatever `build` hands it directly into text
-        tmux re-parses (`f"run-shell 'charter frame-action {action_id}'"`), so a
+        tmux re-parses (`run-shell '"$CHARTER_PY" -m charter frame-action <id>'`), so a
         corrupted or hand-edited table with a key like `a0'; run-shell "touch x` must
         never reach that f-string. Written directly to the table `record` itself would
         write to, bypassing `record`'s own minting, to prove the guard is at `build`,

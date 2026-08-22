@@ -57,7 +57,20 @@ class Notify(PersonaIso, unittest.TestCase):
             notify.plane_changed()   # must not raise
 
 
-class EveryPostToolUseHandlerBumps(PersonaIso, unittest.TestCase):
+#: Every hook family the spec names as a liveness trigger, and what each one buys.
+#:
+#: `posttooluse*` alone is what this class used to enumerate, and the gap was real:
+#: removing `notify.plane_changed()` from `hooks.sessionstart` or
+#: `hooks.userpromptsubmit` left the whole suite green. The cost of the
+#: `userpromptsubmit` one in particular is the "agent is thinking, no tool calls yet"
+#: window — exactly when an operator looks at the panel and finds it stale, because the
+#: next repaint waits for a tool call that has not happened yet. `sessionstart` is the
+#: first paint of a frame's life: without it a panel opens showing whatever the
+#: previous session left behind until something else moves.
+_TRIGGERS = ("sessionstart", "userpromptsubmit", "posttooluse")
+
+
+class EveryLivenessTriggerBumps(PersonaIso, unittest.TestCase):
     """`hooks/hooks.json` scopes the bare-named `posttooluse` handler to
     `Write|Edit|MultiEdit` alone — Bash, Skill, Task/Agent and SendMessage each route to
     their OWN `posttooluse-*` handler (`posttooluse-bash`, `-skill`, `-dispatch`,
@@ -66,18 +79,25 @@ class EveryPostToolUseHandlerBumps(PersonaIso, unittest.TestCase):
     cares about actually happen — commits, branch moves, worktree edits, none of them a
     Write/Edit/MultiEdit call.
 
-    Enumerates `hooks._HANDLERS` rather than hardcoding today's five names, so a future
-    SIXTH `posttooluse-*` handler that forgets the call fails HERE, the same way it
-    would have caught the gap this class exists to close."""
+    Enumerates `hooks._HANDLERS` against :data:`_TRIGGERS` rather than hardcoding
+    today's names, so a future handler in any of the three families that forgets the
+    call fails HERE, the same way it would have caught the gap this class exists to
+    close."""
 
-    def test_every_posttooluse_handler_calls_plane_changed(self):
-        names = [n for n in hooks._HANDLERS if n.startswith("posttooluse")]
-        # A floor, not a fixed count — the whole point is that a sixth name added later
-        # is picked up automatically, not that exactly five exist today.
-        self.assertGreaterEqual(len(names), 5,
-                                "hooks.json's own five posttooluse* matchers "
-                                "(posttooluse, -bash, -skill, -dispatch, -message) "
-                                "should all be registered in _HANDLERS")
+    def test_every_liveness_trigger_calls_plane_changed(self):
+        names = [n for n in hooks._HANDLERS if n.startswith(_TRIGGERS)]
+        # A floor, not a fixed count — the whole point is that a name added later is
+        # picked up automatically, not that exactly seven exist today.
+        self.assertGreaterEqual(len(names), 7,
+                                "the three trigger families the spec names: "
+                                "sessionstart, userpromptsubmit, and hooks.json's own "
+                                "five posttooluse* matchers (posttooluse, -bash, "
+                                "-skill, -dispatch, -message)")
+        for family in _TRIGGERS:
+            self.assertTrue(any(n.startswith(family) for n in names),
+                            f"no handler at all for the {family!r} trigger family — "
+                            "an enumeration that silently covers two of three is how "
+                            "the gap this class closes got in")
         for name in names:
             with self.subTest(handler=name), \
                  mock.patch.object(notify, "plane_changed") as bumped:

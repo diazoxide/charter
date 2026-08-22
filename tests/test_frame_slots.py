@@ -19,7 +19,7 @@ import sys
 import unittest
 from unittest import mock
 
-from charter import tui
+from charter import config, tui
 from charter.frame import slots
 
 from tests._isolation import PersonaIso
@@ -50,12 +50,52 @@ class Render(PersonaIso, unittest.TestCase):
         finally:
             del slots.SLOTS["boom"]
 
+    def test_the_bottom_row_names_the_configured_hotkey_not_a_hardcoded_one(self):
+        """`[frame] hotkey` is configurable and this row spelled `F2 menu` literally, so
+        a plane on `hotkey = "F1"` had its own panel telling every operator the wrong
+        key, on every repaint, forever.
+
+        `F1` is chosen precisely because it is NOT the default: asserting against `F2`
+        would pass against the hardcoded string this test exists to remove. The absence
+        assertion is the one that fails on the mutation."""
+        with mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
+            out = slots.render("bottom", "f-1")
+        self.assertIn("F1 menu", out)
+        self.assertNotIn("F2", out)
+
+    def test_a_modifier_hotkey_reaches_the_panel_intact(self):
+        """A second, differently-shaped value — `F1` alone could be satisfied by a
+        one-character substitution. `M-m` shares no characters with `F2`."""
+        with mock.patch.dict(config.FRAME, {"hotkey": "M-m"}):
+            self.assertIn("M-m menu", slots.render("bottom", "f-1"))
+
     def test_an_unknown_slot_is_named_rather_than_drawn_blank(self):
         """`panel.run` (Task 7) refuses an unknown slot before ever spawning a pane for
         it — but `render` is the one place that can explain *why*, so it must not answer
         an unknown name with silence either."""
         out = slots.render("sideways", "f-1")
         self.assertIn("sideways", out)
+
+
+class Unimplemented(unittest.TestCase):
+    """Which configured slots charter sizes but cannot draw — asked in one place because
+    three callers need the same answer and must not drift: `cmd_launch` (to skip
+    splitting a pane that would be permanently dead under `remain-on-exit on`),
+    `frame_ready` (`--probe`) and `doctor.check_frame`."""
+
+    def test_the_two_sized_but_unrendered_slots_are_named(self):
+        self.assertEqual(slots.unimplemented(["top", "left", "bottom", "right"]),
+                         ["left", "right"])
+
+    def test_an_all_implemented_configuration_names_nothing(self):
+        self.assertEqual(slots.unimplemented(["top", "bottom"]), [])
+
+    def test_the_answer_comes_from_the_registry_not_a_hardcoded_pair(self):
+        """`left`/`right` are today's answer, not the rule. A renderer landing for one
+        of them must take it off this list without anybody remembering to edit a
+        literal — so the registry is patched and the answer must follow."""
+        with mock.patch.dict(slots.SLOTS, {"left": lambda fid: "drawn"}):
+            self.assertEqual(slots.unimplemented(["top", "left", "right"]), ["right"])
 
 
 class Width(unittest.TestCase):

@@ -35,7 +35,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import commands_frame, hooks, todos
+from charter import commands_frame, hooks, instance, todos
 from charter.frame import menu, notify, state
 
 from tests._isolation import PersonaIso, run_hook
@@ -125,6 +125,52 @@ class TmuxIntegration(unittest.TestCase):
         # wants it regardless (see `commands_frame._PLACEHOLDER_CONF`'s own docstring).
         _tmux("set", "-g", "remain-on-exit", "on")
         return name, r.stdout.strip()
+
+    # -- 0. The hotkey is not a free string ----------------------------------------- #
+
+    def test_a_hostile_hotkey_from_charter_toml_runs_nothing_at_launch(self):
+        """CRITICAL, against a real tmux 3.7c: `[frame] hotkey` reaches
+        `source-file`'s PARSER, and until `instance._HOTKEY_RE` it was type-checked as a
+        `str` and nothing else.
+
+        Three parts, and the middle one is what makes this test able to fail. First the
+        exploit is run for real, unfiltered, and the canary MUST appear — that is the
+        positive control, and without it a fix that broke `conf_text` entirely would
+        look like a pass. Then the same charter.toml goes through `instance.frame_of`,
+        the way `config.FRAME` builds it, and the resolved hotkey must produce no canary
+        at all. Note what the exploit does not need: no keypress, no attached client,
+        nothing but `source-file` returning 0, which it does, silently."""
+        payload = f"/tmp/charter-c1-{os.getpid()}"
+        armed, disarmed = f"{payload}-armed", f"{payload}-disarmed"
+        for path in (armed, disarmed):
+            self.addCleanup(lambda p=path: Path(p).unlink(missing_ok=True))
+        conf_dir = Path(tempfile.mkdtemp(prefix="charter-integ-hotkey-"))
+        self.addCleanup(shutil.rmtree, conf_dir, True)
+        self._new_pane()
+
+        def _source(hotkey: str, name: str) -> int:
+            conf = conf_dir / f"{name}.conf"
+            conf.write_text(commands_frame.conf_text(
+                hotkey=hotkey, mouse=False, history_limit=1, session="p1"))
+            return _tmux("source-file", str(conf)).returncode
+
+        # 1. The exploit itself, unfiltered — proof this test can fail.
+        self.assertEqual(_source(f"F2\nrun-shell 'touch {armed}'", "armed"), 0,
+                         "`source-file` returns 0 for this; that silence is the defect")
+        time.sleep(0.5)
+        self.assertTrue(os.path.exists(armed),
+                        "the positive control never fired — this test cannot fail as "
+                        "written, so its other half proves nothing")
+
+        # 2. The same value, arriving the way charter.toml actually delivers it.
+        resolved = instance.frame_of(
+            {"frame": {"hotkey": f"F2\nrun-shell 'touch {disarmed}'"}})["hotkey"]
+        self.assertEqual(resolved, "F2", "the hostile value must degrade to the default")
+        self.assertEqual(_source(resolved, "disarmed"), 0)
+        time.sleep(0.5)
+        self.assertFalse(os.path.exists(disarmed),
+                         "a charter.toml hotkey ran a command at launch, with no "
+                         "keypress — see instance._HOTKEY_RE")
 
     # -- 1. Append and the order trap ---------------------------------------------- #
 
@@ -493,11 +539,17 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
     inside a live `display-menu -t fid` would (see `menu_argv`'s own docstring for why
     `-t fid` is what supplies that scoping normally).
 
-    Uses `sys.executable -m charter` rather than the bare `charter` text `menu_argv`
-    itself embeds: this developer machine's own `$PATH` may resolve `charter` to an
-    entirely different install than this checkout (confirmed on the machine this test
-    was written on), and `PanelIntegration` above avoids the identical trap the same
-    way, for `charter panel`."""
+    Substitutes `sys.executable` for the `"$CHARTER_PY"` `menu_argv` embeds, rather
+    than tying it to the session — this class fires the action through `run-shell -t
+    fid` directly instead of through a rendered menu, so it is writing the command
+    itself and can simply name the interpreter. (`MenuFormatIntegration` below, which
+    does drive a real rendered menu, sets `CHARTER_PY` on the session instead and
+    leaves `menu_argv`'s own text untouched; `MenuClientIntegration` goes further and
+    proves it with no `charter` on `$PATH` at all.) Either way, never a bare `charter`:
+    this developer machine's own `$PATH` may resolve one to an entirely different
+    install than this checkout (confirmed on the machine this test was written on), and
+    `PanelIntegration` above avoids the identical trap the same way for `charter
+    panel`."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -537,11 +589,11 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
         action_id = menu.build(fid)[0][1]
         self.assertRegex(action_id, r"^a[0-9]+$")
 
-        # The exact template `menu_argv` embeds for this item, `charter` swapped for
-        # `sys.executable -m charter` (see the class docstring) — everything else,
-        # including the absence of any label text, matches byte for byte. `client`
-        # (this test's own no-op stand-in) only affects `-c`, never the per-item
-        # action text this line inspects.
+        # The exact template `menu_argv` embeds for this item, `"$CHARTER_PY"` swapped
+        # for `sys.executable` (see the class docstring) — everything else, including
+        # the absence of any label text, matches byte for byte. `client` (this test's
+        # own no-op stand-in) only affects `-c`, never the per-item action text this
+        # line inspects.
         real_command = menu.menu_argv(fid, SOCKET, client="")[-1]
         self.assertNotIn("pwned", real_command,
                          "sanity: the hostile label must not have leaked into the "
@@ -744,13 +796,16 @@ class MenuFormatIntegration(unittest.TestCase):
         menu.record(fid=fid, entries=[
             (hostile_label, [sys.executable, "-c", f"open({real_canary!r}, 'w').close()"]),
         ])
+        # The item's own action reads `"$CHARTER_PY" -m charter frame-action a0` — no
+        # string substitution needed here any more (an earlier version rewrote a bare
+        # `charter`, which may not be this checkout on `$PATH`). Setting the session's
+        # own `CHARTER_PY` is what production does, so this drives the real mechanism
+        # rather than a rewrite of it: `display-menu -t <session>` scopes the item's
+        # `run-shell` to this session's environment.
+        self.assertEqual(_tmux("set-environment", "-t", fid, "CHARTER_PY",
+                              sys.executable).returncode, 0)
         cmd = menu.menu_argv(fid, SOCKET, client=client)
-        # `charter` (bare, per `menu_argv`'s own text) may not be this checkout on
-        # `$PATH` — same substitution `MenuIntegration` above makes, for the same
-        # reason. The item's own action is the LAST argv element, a single string
-        # (`"run-shell 'charter frame-action a0'"`), not a separate "run-shell" token.
-        cmd[-1] = cmd[-1].replace("charter frame-action",
-                                 f"{sys.executable} -m charter frame-action")
+        self.assertIn("$CHARTER_PY", cmd[-1])
         self._drive_menu(fd, cmd)
 
         self.assertFalse(os.path.exists(format_canary),
@@ -812,40 +867,70 @@ class MenuClientIntegration(unittest.TestCase):
         self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
                         .unlink(missing_ok=True))
 
-    def _charter_shim_env(self) -> dict:
-        """A `$PATH` entry standing in for `charter` — see the class docstring for
-        why a string substitution (as `MenuIntegration`/`MenuFormatIntegration`
-        above use) cannot reach the command `cmd_menu` builds internally. `#!` uses
-        `sys.executable` directly (not `/usr/bin/env python3`) so the shim runs
-        under the SAME interpreter this test process does, and `sys.path` is set
-        explicitly inside the shim rather than relied on from the environment: a
-        script executed by its own shebang gets ITS OWN directory as `sys.path[0]`,
-        not this checkout's, so `import charter` would otherwise fail
-        (`ModuleNotFoundError`) — confirmed by hand while building this.
+    def _charter_py_env(self) -> dict:
+        """The environment this class's tmux server starts with: an INTERPRETER shim
+        for `$CHARTER_PY`, and a `$PATH` with no `charter` on it at all.
+
+        Both halves matter, and the second is why this replaced an earlier `$PATH` shim
+        that stood in for a bare `charter` executable. That shim papered over the very
+        requirement this class is now the end-to-end proof of: the production bind ran
+        a bare `charter` off `$PATH`, and the suite supplied one, so nothing ever
+        observed what happens on a machine where `$PATH` has no charter — `run-shell`
+        prints `'charter frame-menu "…"' returned 127` INTO THE HARNESS PANE and drops
+        it into copy-mode, charter drawing in the one rectangle ADR 0018 says it never
+        draws. Scrubbing `$PATH` to a single empty directory means a bare `charter`
+        cannot possibly resolve here, so this class fails if the fix is ever reverted
+        rather than passing on the old shim's charity.
+
+        The shim itself still exists for the reason the old one did, unchanged:
+        `commands_frame.SOCKET` is a hardcoded module constant ("charter", the real
+        production socket) and a subprocess spawned by tmux cannot be told a different
+        one through any argv this module controls. It accepts exactly the `-m charter
+        …` argv the real interpreter would, monkeypatches `SOCKET`, and dispatches to
+        the real `cli.main`. `#!` uses `sys.executable` directly and sets `sys.path`
+        explicitly, because a script executed by its own shebang gets ITS OWN directory
+        as `sys.path[0]`, not this checkout's.
         """
         repo_root = str(Path(__file__).resolve().parent.parent)
         shim_dir = Path(tempfile.mkdtemp(prefix="charter-integ-shim-"))
         self.addCleanup(shutil.rmtree, shim_dir, True)
-        shim = shim_dir / "charter"
+        shim = shim_dir / "charter-py"
         shim.write_text(
             f"#!{sys.executable}\n"
             "import sys\n"
             f"sys.path.insert(0, {repo_root!r})\n"
+            "argv = sys.argv[1:]\n"
+            "assert argv[:2] == ['-m', 'charter'], argv\n"
             "import charter.commands_frame\n"
             f"charter.commands_frame.SOCKET = {SOCKET!r}\n"
             "from charter.cli import main\n"
-            "sys.exit(main(sys.argv[1:]))\n"
+            "sys.exit(main(argv[2:]))\n"
         )
         shim.chmod(0o755)
-        return dict(os.environ, PATH=f"{shim_dir}:{os.environ.get('PATH', '')}")
+        # A `$PATH` holding exactly one thing: tmux. Not an EMPTY directory — this
+        # environment is also what the `_tmux("new-session", …)` call that starts the
+        # server runs under, and it has to be able to find the binary it is starting.
+        # Symlinked into a throwaway directory rather than reusing tmux's own (which on
+        # this machine is a package manager's `bin`, and may well hold a real `charter`
+        # — the exact thing this must not silently supply).
+        bare = Path(tempfile.mkdtemp(prefix="charter-integ-nopath-"))
+        self.addCleanup(shutil.rmtree, bare, True)
+        (bare / "tmux").symlink_to(shutil.which("tmux"))
+        self.assertIsNone(shutil.which("charter", path=str(bare)),
+                          "this class proves a bare `charter` is never needed — its "
+                          "own $PATH must not contain one")
+        self.shim = shim
+        return dict(os.environ, PATH=str(bare))
 
     def _new_session(self, fid: str) -> None:
         """The one `new-session` call that starts this class's fresh server —
-        carries the `charter` shim's `$PATH` (see `_charter_shim_env`). `run-shell`
-        (no explicit `-t`, matching both the bind's own action and every per-item
-        action) falls back to the SERVER's own starting process environment (see
-        `_session_id_env_argv`'s own docstring), so this is the only call in this
-        class that needs the special environment at all.
+        carries the scrubbed `$PATH` (see `_charter_py_env`). `/bin/cat`, absolute,
+        because that `$PATH` has nothing on it. `run-shell` (no explicit `-t`, matching
+        both the bind's own action and every per-item action) falls back to the SERVER's
+        own starting process environment (see `_session_id_env_argv`'s own docstring),
+        so this is the only call in this class that needs the special environment at
+        all — `$CHARTER_PY` itself is tied to the SESSION, the way `cmd_launch` ties
+        it.
 
         Kills both the pane's own process AND the server's own process directly
         (`#{pid}`, tmux's own server-PID format) rather than relying on `setUp`'s
@@ -856,8 +941,8 @@ class MenuClientIntegration(unittest.TestCase):
         docstring already names for a session's PANE process, evidently reachable
         for the SERVER process too under this class's own load. `kill-server`
         stays in `setUp` as a harmless, already-a-no-op-by-then fallback."""
-        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "cat",
-                 env=self._charter_shim_env())
+        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "/bin/cat",
+                 env=self._charter_py_env())
         self.assertEqual(r.returncode, 0, r.stderr)
         server_pid = _tmux("display-message", "-p", "-t", fid, "#{pid}").stdout.strip()
         self.addCleanup(_kill_pid, server_pid)
@@ -900,10 +985,10 @@ class MenuClientIntegration(unittest.TestCase):
         return name, fd
 
     def _install_real_bind(self, fid: str) -> None:
-        """`conf_text`'s own bind line, `source-file`'d for real — no substitution
-        needed here (see the class docstring): the `charter` shim on `$PATH`
-        already makes the bare `charter` this embeds resolve correctly, against
-        THIS class's own socket."""
+        """`conf_text`'s own bind line, `source-file`'d for real — byte for byte, no
+        substitution of any kind. The bind reads `"$CHARTER_PY" -m charter frame-menu
+        "#{client_name}"`, and `$CHARTER_PY` is tied to this session by the
+        `set-environment` call in the test below, exactly as `cmd_launch` does it."""
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session=fid)
         conf = Path(tempfile.mkdtemp(prefix="charter-integ-clientconf-")) / "tmux.conf"
@@ -931,6 +1016,11 @@ class MenuClientIntegration(unittest.TestCase):
         self.assertNotEqual(clientA, clientB)
         self.assertEqual(_run(commands_frame._session_id_env_argv(
             socket=SOCKET, session=fid)).returncode, 0)
+        # `$CHARTER_PY`, carried the same out-of-band way `cmd_launch` carries it —
+        # the shim standing in for `sys.executable` so `commands_frame.SOCKET` lands on
+        # THIS class's own socket rather than the real one (see `_charter_py_env`).
+        self.assertEqual(_tmux("set-environment", "-t", fid, "CHARTER_PY",
+                              str(self.shim)).returncode, 0)
         self._install_real_bind(fid)
 
         # -- A presses: only A's own keystream may select what A's own press opened --

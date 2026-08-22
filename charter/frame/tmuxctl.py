@@ -1,7 +1,19 @@
 """The only module in charter that runs tmux.
 
-Kept alone so everything else — layout, panels, slots — is testable on a machine with no
-tmux installed, and so there is exactly one place where the argv rule can be broken.
+Kept alone so everything else — layout, panels, slots, the menu table — is testable on a
+machine with no tmux installed, and so there is exactly one place where the argv rule can
+be broken. That sentence was aspirational for a while: `commands_frame.py` called
+`subprocess.run(["tmux", …])` at thirteen separate call sites of its own, each repeating
+`capture_output=True, text=True, timeout=15` and each catching nothing, so a wedged tmux
+raised `subprocess.TimeoutExpired` straight out of the launcher. :func:`run` and
+:func:`interact` below are what the sentence needed to become true: every tmux command
+charter issues goes through one of them.
+
+One honest exception remains, and it is not a tmux call by construction:
+`commands_frame.cmd_action` runs whatever argv a menu entry resolved to. That argv is a
+LIST out of charter's own state — a tmux command today (`detach-client`), but nothing in
+`menu.record`'s contract says it has to be one — so it is run as a plain child process
+rather than pushed through a tmux-shaped helper that would have to lie about what it is.
 """
 
 from __future__ import annotations
@@ -10,8 +22,30 @@ import re
 import shutil
 import subprocess
 
-#: `display-menu` arrived in 3.0 and `display-popup` in 3.2, and the frame's interaction
-#: model uses both. Floor at the higher one and degrade below it rather than refuse.
+from .. import util
+
+#: The tmux the frame is known to work on, and the version charter warns below.
+#:
+#: **Not `display-popup`.** An earlier version of this constant justified 3.2 by naming
+#: `display-popup` (3.2) as part of "the frame's interaction model" — that command
+#: appears nowhere in shipped code, in any form; only in two comments. The number is
+#: right for a different reason, so the reason is written down rather than the number
+#: lowered to match a justification that was never real:
+#:
+#: * `display-menu` — what the hotkey actually opens — arrived in 3.0.
+#: * The exit-code mechanism rests on PANE-scoped hooks (`set-hook -p`, see
+#:   `commands_frame._pane_died_write_hook_argv`), which followed pane options into tmux
+#:   some time after 3.0. If those do not install, `cmd_launch` does not merely lose the
+#:   exit code: a failed TEARDOWN hook makes it refuse to attach at all, which is a far
+#:   worse outcome than the warning this floor produces.
+#:
+#: No tmux older than 3.7c exists on the machine this was written on, so where exactly
+#: `set-hook -p` first appeared could not be confirmed by running it — and an unverified
+#: reading of tmux's CHANGES is not a good enough reason to lower a floor whose only cost
+#: when it is too high is one accurate warning, and whose cost when it is too low is a
+#: frame that starts and then refuses to attach. Kept at 3.2, conservatively, with the
+#: real reason recorded. Below it charter WARNS and launches anyway — nothing refuses,
+#: and nothing disables the hotkey either; see :func:`below_floor_message`.
 FLOOR = (3, 2)
 
 #: The first tmux release with a `window-resized` hook AT ALL — the VERSION is read
@@ -31,7 +65,35 @@ FLOOR = (3, 2)
 #: two constants.
 RESIZE_HOOK_FLOOR = (3, 3)
 
+#: The session-scoped tmux environment variable carrying the interpreter that runs
+#: charter from inside a frame — `"$CHARTER_PY" -m charter …`, never a bare `charter`
+#: off `$PATH`. Defined HERE, not in either of the two modules that build text around it
+#: (`commands_frame.conf_text`'s hotkey bind and `menu.menu_argv`'s per-item action), so
+#: the name the writer sets and the name both readers spell cannot drift apart —
+#: `commands_frame` imports `menu`, so there is no direction in which those two could
+#: have shared it between themselves. See `commands_frame._charter_py_env_argv` for why
+#: the value travels out of band at all.
+CHARTER_PY_ENV = "CHARTER_PY"
+
+#: How long any one tmux ADMIN command may take before charter stops waiting for it.
+#: Every command the launcher issues is a local, in-process request to a server on a
+#: unix socket; none of them is supposed to take measurable time at all, so a command
+#: still unanswered after this is a wedged server, not a slow one. See :func:`run`.
+TIMEOUT = 15
+
 _VERSION = re.compile(r"^tmux (\d+)\.(\d+)")
+
+#: What :func:`run` reports as the return code of a command that never answered.
+#: `timeout(1)`'s own convention, and deliberately not `1`: every caller in
+#: `commands_frame` already branches on "nonzero", so a timeout degrades exactly the
+#: way a refusal does, but the number still tells a reader which of the two happened.
+TIMED_OUT = 124
+
+#: What :func:`run` reports when tmux could not be started at all (`OSError` — the
+#: binary vanished between `version()` and this call, a fork failure). 127 is the
+#: shell's own "command not found", the same code `commands_frame.bypass` returns for a
+#: missing harness binary.
+COULD_NOT_RUN = 127
 
 
 def _probe() -> str | None:
@@ -58,15 +120,6 @@ def version() -> tuple[int, int] | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def available() -> bool:
-    return version() is not None
-
-
-def meets_floor() -> bool:
-    v = version()
-    return bool(v and v >= FLOOR)
-
-
 def absent_message() -> str:
     return ("charter's frame needs tmux, which is not on this machine.\n"
             "  install:  brew install tmux   (or your package manager)\n"
@@ -74,12 +127,84 @@ def absent_message() -> str:
 
 
 def below_floor_message(v: tuple[int, int]) -> str:
-    return (f"tmux {v[0]}.{v[1]} composes the frame, but its menu needs "
-            f"tmux {FLOOR[0]}.{FLOOR[1]} — the frame starts with the hotkey disabled.")
+    """What an operator below :data:`FLOOR` is actually in for.
+
+    An earlier wording said "the frame starts with the hotkey disabled". Nothing
+    disables the hotkey — `commands_frame.cmd_launch` warns and continues, and
+    `conf_text` still emits the bind unchanged — so that sentence described a mechanism
+    that does not exist, in the one message an operator reads to find out what they are
+    losing. What actually happens is written instead.
+    """
+    return (f"tmux {v[0]}.{v[1]} composes the frame, and charter still launches it — "
+            f"nothing here is disabled. Below tmux {FLOOR[0]}.{FLOOR[1]} charter has "
+            f"not verified two things it relies on: the hotkey stays bound but may open "
+            f"nothing (`display-menu`), and the pane-scoped hooks that carry the "
+            f"harness's real exit code may fail to install, in which case charter says "
+            f"so and declines to attach rather than risk a session nothing can end.")
 
 
-def run(cmd: list[str]) -> int:
-    """Run one tmux command. *cmd* is a LIST; this module never joins argv."""
-    if not isinstance(cmd, list):
-        raise TypeError(f"tmux argv must be a list, got {type(cmd).__name__}: {cmd!r} — see frame/layout.py")
-    return subprocess.run(cmd).returncode
+def report_failure(action: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:
+    """Name the command that failed and tmux's own stderr. Never silent.
+
+    Correction 2's rule, in one place: `subprocess.run(cmd, env=env)` with the result
+    thrown away is exactly how the pane-index bug `frame/layout.py`'s own module
+    docstring describes would have shipped — a frame missing a panel, and nothing
+    anywhere saying why. :func:`run` calls this for every non-zero return by default, so
+    a caller has to opt OUT of reporting (and say why) rather than remember to opt in.
+    """
+    stderr = (proc.stderr or "").strip() or "(tmux printed nothing to stderr)"
+    util.err(f"charter frame: {action} failed — `{' '.join(cmd)}`: {stderr}")
+
+
+def run(action: str, argv: list[str], *, env: dict | None = None,
+        timeout: float = TIMEOUT, report: bool = True) -> subprocess.CompletedProcess:
+    """Run one tmux ADMIN command, captured and time-boxed. Never raises.
+
+    *action* is the human-readable phrase :func:`report_failure` prints ("installing the
+    exit-status hook") — required, not optional, because the failure message is the whole
+    reason this wrapper exists and a call site that has not decided what to call itself
+    has not decided what it is doing either.
+
+    **A timeout comes back as a return code, not an exception.** Ten of the launcher's
+    eleven admin commands run AFTER `new-session` has already started the harness
+    detached; a `subprocess.TimeoutExpired` propagating out of one of them gave the
+    operator a traceback, a filed charter crash report, an orphaned agent session and no
+    reattach line. Every caller already branches on a non-zero return, so a wedged server
+    now degrades down the same path a refusal does — see :data:`TIMED_OUT`.
+
+    *report* is opt-out for the two callers that read the failure themselves: a query
+    whose whole answer is "cannot tell" (`_query_pane_dead_status`), and one whose
+    non-zero return is the ORDINARY case rather than a fault (`_live_sessions` against a
+    socket no server has ever run on).
+    """
+    if not isinstance(argv, list):
+        raise TypeError(f"tmux argv must be a list, got {type(argv).__name__}: {argv!r} "
+                        "— see frame/layout.py")
+    try:
+        proc = subprocess.run(argv, env=env, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc = subprocess.CompletedProcess(
+            argv, TIMED_OUT, stdout="",
+            stderr=f"tmux did not answer within {timeout:g}s")
+    except OSError as e:
+        proc = subprocess.CompletedProcess(argv, COULD_NOT_RUN, stdout="", stderr=str(e))
+    if proc.returncode != 0 and report:
+        report_failure(action, argv, proc)
+    return proc
+
+
+def interact(argv: list[str], *, env: dict | None = None) -> subprocess.CompletedProcess:
+    """Run one tmux command that OWNS the operator's terminal — no capture, no timeout.
+
+    `attach` and `display-menu` are not admin commands: the first IS the session for as
+    long as the harness runs, and the second draws on an attached client and waits for a
+    keypress. Capturing either would swallow the operator's own screen, and time-boxing
+    either would kill a frame for the crime of being used. Split from :func:`run` rather
+    than expressed as flags on it, so "this one has no timeout" is a visible property of
+    the call site instead of a keyword argument easily copied to a command that needs one.
+    """
+    if not isinstance(argv, list):
+        raise TypeError(f"tmux argv must be a list, got {type(argv).__name__}: {argv!r} "
+                        "— see frame/layout.py")
+    return subprocess.run(argv, env=env)

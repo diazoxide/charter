@@ -65,34 +65,6 @@ TICK = 0.2
 _DEFAULT_ROWS = 24
 
 
-def should_redraw(seen: str, fid: str) -> bool:
-    """Has the frame changed since *seen*?
-
-    The plain, PUBLIC form of the question this module's whole run loop answers — part
-    of `panel.py`'s own interface (the plan's Task 7 contract names it alongside `run`)
-    and the direct oracle several tests assert against, including the one pinning
-    `_tick`'s read-before-paint ordering (`Tick.test_a_bump_landing_during_the_paint_is_
-    not_marked_seen`). `_tick` itself does NOT call this: it needs the actual current
-    version anyway, to remember as the next `seen`, and calling this first would mean
-    two `state.version` reads to answer one question — see `_tick`'s own docstring for
-    why it inlines the equivalent comparison against a value it already has. This
-    function exists for every OTHER caller: tests that want a yes/no without needing
-    the value, and any future one with the same need.
-
-    Trusts `state.version` never to raise, the same way `_paint` trusts `slots.render`
-    — no `try/except` here duplicating a guarantee the callee already makes. That
-    guarantee used to be incomplete (a non-UTF-8 version file escaped `state.version`'s
-    own `except OSError` and crashed whichever caller reached it) and this function's
-    own `try/except Exception: return True` was, for a while, the only thing standing
-    between that bug and a live panel — which is exactly the kind of promise this
-    module must not make unless the production path actually goes through it. Fixed at
-    the source instead (`state.version`'s own docstring), so every caller — this
-    function, `_tick`, anything future — is safe without needing its own copy of the
-    guard.
-    """
-    return state.version(fid) != seen
-
-
 def _rows() -> int:
     """This pane's own height, measured the way `slots._width` measures its own width:
     `os.get_terminal_size(sys.stdout.fileno())` asks the file descriptor this process is
@@ -134,12 +106,13 @@ def _tick(resized: dict, seen: str, slot: str, fid: str) -> str:
     `while True`/`time.sleep`, which a test cannot call directly without either hanging
     or racing real wall-clock time.
 
-    Reads `state.version` exactly once (`should_redraw`'s own version read is not
-    reused here — it takes *seen* and *fid*, not a precomputed current value, so calling
-    it as well would mean two `stat`s to decide one repaint). `should_redraw` stays the
-    public, standalone answer to "has the frame changed", exercised directly by its own
-    tests; this inlines the same comparison against the ALREADY-read *now* instead of
-    calling it a second time.
+    Reads `state.version` exactly once, and the comparison is inline. A separate
+    `should_redraw(seen, fid)` predicate lived beside this for a while — the plan's own
+    Task 7 contract named it — but it took *seen* and *fid* rather than a precomputed
+    current value, so this function could never use it without paying a second `stat` to
+    decide one repaint, and nothing in production ever called it. It has been deleted
+    rather than documented: a public helper with no caller is a claim about an interface
+    nobody has.
 
     A resize repaints even when the frame's own version has not moved: comparing versions
     alone would leave a pane showing content laid out for a size that no longer exists

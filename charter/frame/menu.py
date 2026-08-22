@@ -1,6 +1,7 @@
 """The frame's menu, built so no name ever reaches tmux's parser.
 
-`display-menu` and `display-popup -E` take commands **tmux** parses and executes. Every
+`display-menu` takes commands **tmux** itself parses and executes (so does `display-popup
+-E`, which charter does not use). Every
 interesting label in charter — a workspace, a repo, a branch, a persona — is read out of a
 committed file or `.git/HEAD`, which is exactly the input class that made `gh -F` open a
 file on someone's machine (`docs/news/unreleased-forge-argv-encoding.md`). Quoting it for
@@ -18,18 +19,27 @@ successfully. Verified through the real production path (`bind` -> `run-shell` -
 `charter frame-menu` -> `display-menu`), not a lab stand-in, including with a real git
 branch literally named `#(id>/tmp/...)` — a shape `git checkout -b` accepts without
 complaint and `.git/HEAD` holds unchanged: the job ran and the branch name itself never
-appeared anywhere in the rendered menu. A label that is ENTIRELY a silent `#(...)` job
-(nothing visible before or after it, and the command itself writes no stdout — `touch`,
-say) expands to an EMPTY string, and `display-menu` treats an empty name as a separator
-line, which desyncs this module's own `label key command` triples and REFUSES THE WHOLE
-MENU outright ("too few arguments") — but the job still ran; that refusal is decided
-only after evaluation, not instead of it, so it is not a defence, only a different-
-looking failure mode. An earlier version of this module's docstring said "a label is
-drawn, never executed"; that was false, and a wrong invariant asserted by a passing test
-is worse than no test at all — see `_safe_label` for the fix (`#` -> `##`, tmux's own
-escape for a literal `#`, applied before tmux ever sees the label, which closes it
-regardless of how many times it is later collapsed for display — pre-doubled payloads
-(`##(...)`, `####(...)`) were tried by hand against the fix and found no hole) and
+appeared anywhere in the rendered menu.
+
+**There is no accidental defence anywhere in that path.** An earlier version of this
+docstring claimed a label that is ENTIRELY a silent `#(...)` job (nothing visible before
+or after it, and the command writing no stdout — `touch`, say) expands to an empty
+string and so REFUSES THE WHOLE MENU. Re-measured against tmux 3.7c through a real bind,
+with a real attached client: `display-menu` returned **0**, the menu **opened**, the
+sibling item stayed **selectable**, and the canary **fired**. The mechanism is that tmux
+counts a command's arguments BEFORE expanding formats, so a name that expands to nothing
+still occupies its own slot and nothing desynchronises. The refusal is real for a
+LITERALLY empty name (`""` — rc 1, tmux's own text is `not enough arguments`, see
+`record`), and that is a different case from a name that merely expands to empty. Both
+claims mattered: this one was cited as a reason the hole was partly self-limiting, and
+it never was.
+
+An earlier version of this docstring also said "a label is drawn, never executed"; that
+was false too, and a wrong invariant asserted by a passing test is worse than no test at
+all — see `_safe_label` for the fix (`#` -> `##`, tmux's own escape for a literal `#`,
+applied before tmux ever sees the label, which closes it regardless of how many times it
+is later collapsed for display — pre-doubled payloads (`##(...)`, `####(...)`) were
+tried by hand against the fix and found no hole) and
 `tests/test_frame_menu.py`/`tests/test_frame_tmux_integration.py` for the canaries that
 prove it closed.
 
@@ -49,7 +59,7 @@ import json
 import os
 import re
 
-from . import state
+from . import state, tmuxctl
 
 #: The bound on one label's length, and the reason for it: a `display-menu` row is one
 #: line, and a label long enough to wrap would corrupt the menu's own layout rather than
@@ -98,10 +108,16 @@ def record(*, fid: str, entries: list[tuple[str, list[str]]]) -> None:
     sane, not making it safe for a parser it has not met yet.
 
     An empty result (the label was empty, or entirely newlines) falls back to a
-    placeholder rather than an empty string: `display-menu` treats an empty NAME as a
-    separator line, which desynchronises every `label key command` triple after it and
-    fails the whole menu outright with "not enough arguments" — the hotkey would then
+    placeholder rather than an empty string: `display-menu` treats a LITERALLY empty NAME
+    as a separator line, which desynchronises every `label key command` triple after it
+    and fails the whole menu outright — rc 1, tmux's own text `not enough arguments`,
+    re-confirmed against tmux 3.7c with a real attached client. The hotkey would then
     silently do nothing, for a reason with no message anywhere to explain it.
+
+    Distinct from a name that merely EXPANDS to empty (`#(touch x)`, `#{no_such_thing}`),
+    which does NOT refuse: tmux counts a command's arguments before expanding formats, so
+    such a name still occupies its slot and the menu opens normally. See the module
+    docstring — that difference used to be recorded the wrong way round.
     """
     path = _table(fid, create=True)
     if path is None:
@@ -232,24 +248,42 @@ def menu_argv(fid: str, socket: str, client: str) -> list[str]:
     tmux 3.7c with two frames attached in two separate terminals: `-t fid` alone rendered
     frame B's menu on frame A's screen when B's own hotkey was pressed — B's operator saw
     nothing, and selecting the item there would have run B's action from A's terminal.
-    *client* is resolved by `commands_frame.cmd_menu` (via `list-clients -t fid`) before
-    this function is ever called — `menu.py` makes no subprocess calls of its own (every
-    other function here is pure file/state access), so the one query `-c` needs lives in
-    `commands_frame.py` and the answer is simply handed in.
+
+    *client* arrives as `#{client_name}`, expanded by tmux inside the hotkey BIND's own
+    `run-shell` text and handed to `charter frame-menu` as a plain argv value, which
+    `commands_frame.cmd_menu` passes straight here (see `conf_text`'s own docstring).
+    Nothing queries it: an earlier version of this module said the client was resolved
+    "via `list-clients -t fid`", and that command was removed from charter entirely when
+    the guess it fed turned out to pick the wrong client with two attached. `menu.py`
+    still makes no subprocess calls of its own — every function here is pure file/state
+    access — but that is now true because there is no query left anywhere, not because
+    one was moved next door.
 
     `-t fid` stays for a DIFFERENT reason: it is what scopes the ITEM's own `run-shell`
-    command to this session's `$CHARTER_SESSION_ID` (verified by hand: an item fired from
-    `display-menu -t <session>` inherits that session's own `set-environment` values even
-    though its own `run-shell` text carries no `-t` — see `_session_id_env_argv`'s own
-    docstring in `commands_frame.py` for why that value has to be there at all).
+    command to this session's `$CHARTER_SESSION_ID` and `$CHARTER_PY` (verified by hand:
+    an item fired from `display-menu -t <session>` inherits that session's own
+    `set-environment` values even though its own `run-shell` text carries no `-t` — see
+    `_session_id_env_argv`'s own docstring in `commands_frame.py` for why those values
+    have to be there at all).
 
     Every label passes through `_safe_label` — see its own docstring and the module
     docstring for why a label is not inert text. Every item's own ACTION is the fixed
-    template ``run-shell 'charter frame-action a<N>'`` — the opaque id is the only thing
-    that varies, and `build` already refuses anything not shaped `a<N>` before it ever
-    reaches here.
+    template ``run-shell '"$CHARTER_PY" -m charter frame-action a<N>'`` — the opaque id
+    is the only thing that varies, and `build` already refuses anything not shaped `a<N>`
+    before it ever reaches here.
+
+    `"$CHARTER_PY" -m charter`, never a bare `charter`: the `charter` on the tmux
+    server's own `$PATH` may be a different install or none at all, and `run-shell`
+    reports a 127 by printing it INTO THE HARNESS PANE and dropping that pane into
+    copy-mode — charter drawing in the one rectangle ADR 0018 says it never draws. The
+    interpreter is carried session-scoped by `commands_frame._charter_py_env_argv`, which
+    keeps this template free of any per-machine path; embedding `sys.executable` here
+    instead would put an absolute path back inside a nested tmux-quote layer, the exact
+    construction the `commands_frame` module docstring bans for `status_path`.
     """
     cmd = ["tmux", "-L", socket, "display-menu", "-t", fid, "-c", client, "-T", "charter"]
     for i, (label, action_id) in enumerate(build(fid)):
-        cmd += [_safe_label(label), str(i + 1), f"run-shell 'charter frame-action {action_id}'"]
+        cmd += [_safe_label(label), str(i + 1),
+                f'run-shell \'"${tmuxctl.CHARTER_PY_ENV}" -m charter '
+                f'frame-action {action_id}\'']
     return cmd

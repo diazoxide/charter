@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +54,49 @@ class Bypass(unittest.TestCase):
              mock.patch("os.execvp") as ex:
             commands_frame.bypass(["claude", "-p", "hi"])
         ex.assert_called_once_with("claude", ["claude", "-p", "hi"])
+
+
+class MissingHarnessBinary(unittest.TestCase):
+    """`charter claude` before `claude` is installed — the most likely FIRST-RUN state
+    of this whole feature.
+
+    `bypass` called `os.execvp` raw, so `FileNotFoundError` reached `cli.main`'s
+    `except Exception`, which files a charter crash report and re-raises a traceback.
+    `cli.main` already carves out this exact class twice (`contain.Refused`,
+    `util.ProcTimeout`), both noting that filing such a condition as a bug "sends
+    whoever reads it looking in the wrong repository"."""
+
+    def test_a_missing_binary_exits_127_and_names_what_is_missing(self):
+        buf = []
+        with mock.patch("os.execvp", side_effect=FileNotFoundError(2, "No such file")), \
+             mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = commands_frame.bypass(["claude", "-p", "hi"])
+        self.assertEqual(rc, 127, "127 is the shell's own 'command not found', so "
+                                  "`charter claude && ...` behaves like `claude && ...`")
+        self.assertTrue(any("claude" in m for m in buf),
+                        f"the message must name the binary charter could not find: {buf}")
+
+    def test_a_non_executable_binary_exits_126_rather_than_crashing(self):
+        buf = []
+        with mock.patch("os.execvp", side_effect=PermissionError(13, "Permission denied")), \
+             mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = commands_frame.bypass(["claude"])
+        self.assertEqual(rc, 126)
+        self.assertTrue(any("claude" in m for m in buf), buf)
+
+    def test_no_crash_report_is_filed_for_a_missing_binary(self):
+        """The half that actually mattered: not merely "does not traceback", but "does
+        not file a bug against charter". Driven through `cli.main`, because that is
+        where `_record_crash` lives — a test calling `bypass` directly could never
+        observe it."""
+        from charter import cli
+        with mock.patch("os.execvp", side_effect=FileNotFoundError(2, "No such file")), \
+             mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("charter.cli._record_crash") as crash, \
+             mock.patch("charter.util.err"):
+            rc = cli.main(["claude", "--no-frame"])
+        self.assertEqual(rc, 127)
+        crash.assert_not_called()
 
 
 class Conf(unittest.TestCase):
@@ -107,9 +151,36 @@ class Conf(unittest.TestCase):
         (a different literal token) is what `cli.py` actually registers."""
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
-        self.assertIn('bind -n F2 run-shell \'charter frame-menu "#{client_name}"\'',
-                      text)
+        self.assertIn('bind -n F2 run-shell \'"$CHARTER_PY" -m charter '
+                      'frame-menu "#{client_name}"\'', text)
         self.assertNotIn("frame menu", text)
+
+    def test_the_hotkey_never_invokes_a_bare_charter_off_the_path(self):
+        """The panels already launch `[sys.executable, "-m", "charter"]`; this bind kept
+        a bare `charter`. With charter not on the tmux server's own `$PATH` — a `uv
+        tool` shim, a checkout run as `python -m charter` — pressing the hotkey makes
+        `run-shell` print `'charter frame-menu "/dev/ttys020"' returned 127` INTO THE
+        HARNESS PANE and drop it into copy-mode: charter drawing in the one rectangle
+        ADR 0018 says it never draws.
+
+        Asserts the absence of the old shape, not merely the presence of the new one —
+        a fix that added `$CHARTER_PY` while leaving a second bare invocation behind
+        would satisfy an `assertIn` alone. `run-shell 'charter` is the exact byte
+        sequence that puts `charter` in the shell's own command position."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session="x")
+        self.assertNotIn("run-shell 'charter", text)
+        self.assertIn('"$CHARTER_PY" -m charter frame-menu', text)
+
+    def test_the_interpreter_is_carried_out_of_band_not_baked_into_the_bind(self):
+        """The same reasoning `_exit_path_env_argv`'s own docstring records for
+        `status_path`: an absolute path re-embedded inside this nested tmux-quote layer
+        is one apostrophe away from silent corruption (verified against 3.7c that
+        `set-hook` still returns 0 while the stored action is mangled). So the bind
+        text must carry the VARIABLE, never the value."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session="x")
+        self.assertNotIn(sys.executable, text)
 
     def test_the_hotkey_bind_is_global_not_session_scoped(self):
         """Key tables have no per-session form in tmux (unlike `status`/`mouse`/
@@ -216,11 +287,12 @@ class MissingTmux(unittest.TestCase):
     def test_an_absent_tmux_names_the_remedy_and_does_not_start_a_frame(self):
         """Adapted from the task brief's own draft, which mocked `tmuxctl.available()`.
         Correction 5 requires `cmd_launch` to call `tmuxctl.version()` exactly ONCE and
-        branch on it — `available()` is never called at all in the corrected launcher —
-        so a test that only patches `available()` would exercise the REAL `tmux -V` here
-        (whatever happens to be installed on the machine running the suite) instead of
-        the absent-tmux path it claims to test. Patching `version()` to return `None` (=
-        "absent", per `tmuxctl.version`'s own docstring) is what actually simulates it."""
+        branch on it, so a test that patched `available()` would exercise the REAL `tmux
+        -V` here (whatever happens to be installed on the machine running the suite)
+        instead of the absent-tmux path it claims to test. Patching `version()` to return
+        `None` (= "absent", per `tmuxctl.version`'s own docstring) is what actually
+        simulates it. `available()` has since been deleted outright — it never had a
+        production caller, which is exactly why the brief's draft could name it."""
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
         with mock.patch("charter.frame.tmuxctl.version", return_value=None), \
              mock.patch("sys.stdout.isatty", return_value=True), \
@@ -272,6 +344,47 @@ class Probe(unittest.TestCase):
             rc = commands_frame.cmd_probe()
         self.assertEqual(rc, 0)
         run.assert_not_called()
+
+    def test_below_the_floor_says_what_is_at_risk(self):
+        """Where the below-floor message went when it stopped printing at launch (see
+        `Launch.test_below_the_tmux_floor_degrades_instead_of_refusing`). This is the
+        surface an operator can actually read: nothing has switched their terminal to
+        tmux's alternate screen by the time it prints."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 0)), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("builtins.print") as p:
+            rc = commands_frame.cmd_probe()
+        self.assertEqual(rc, 0)
+        run.assert_not_called()
+        printed = " ".join(str(c) for c in p.call_args_list)
+        self.assertIn("3.0", printed)
+        self.assertIn("3.2", printed)
+
+    def test_a_slot_with_no_renderer_is_named_by_probe(self):
+        """The second standing ceiling that moved off the launch path: `[frame] slots`
+        accepts `left`/`right` and `layout.SLOT_SIZE` sizes them, but `frame.slots.SLOTS`
+        implements neither, so the harness pane silently keeps that space. Read from
+        `config.FRAME` with nothing started — the probe's own read-only promise."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "left", "right"]}), \
+             mock.patch("charter.commands_frame.subprocess.run") as run, \
+             mock.patch("builtins.print") as p:
+            rc = commands_frame.cmd_probe()
+        self.assertEqual(rc, 0, "an unimplemented slot is a ceiling, not a failure")
+        run.assert_not_called()
+        printed = " ".join(str(c) for c in p.call_args_list)
+        self.assertIn("left", printed)
+        self.assertIn("right", printed)
+
+    def test_an_ordinary_machine_gets_no_ceilings_at_all(self):
+        """The other direction, and what stops the two tests above from passing against
+        a probe that always warns: with a new-enough tmux and only implemented slots
+        configured, `frame_ready` reports `ok` and names no ceiling."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
+            code, level, line = commands_frame.frame_ready()
+        self.assertEqual((code, level), (0, "ok"))
+        self.assertNotIn("\n", line)
 
     def test_cmd_launch_short_circuits_on_probe_before_touching_anything(self):
         """`args.probe` is checked before `harness.all()`, `workspace.resolve()`, or any
@@ -590,13 +703,31 @@ class Launch(PersonaIso, unittest.TestCase):
         """Ordering matters: the write hook's action reads `$CHARTER_FRAME_EXIT` back
         from the session's own environment, so `set-environment` must land before the
         hook that depends on it — otherwise the shell sees an unset variable the first
-        time the hook could possibly fire."""
+        time the hook could possibly fire.
+
+        Filtered on `CHARTER_FRAME_EXIT`, and that filter is the test. `cmd_launch`
+        issues THREE `set-environment` calls now (the exit path, the frame id, the
+        interpreter), and an unfiltered `next(... if "set-environment" in c)` was
+        satisfied by whichever landed first — so deleting the `_exit_path_env_argv`
+        block outright left this assertion, and the whole suite, green. No test
+        anywhere asserted the launcher issued the exit-path call at all. Copies the
+        shape `test_the_frame_id_is_carried_to_its_own_menu_before_the_write_hook`
+        below already had right: filter, assert exactly one, assert the VALUE."""
         fake = _FakeTmux(exit_code=0)
         _launch(fake)
-        env_idx = next(i for i, c in enumerate(fake.calls) if "set-environment" in c)
+        exit_calls = [c for c in fake.calls
+                      if "set-environment" in c and "CHARTER_FRAME_EXIT" in c]
+        self.assertEqual(len(exit_calls), 1,
+                         "the exit-status path must be carried out of band exactly "
+                         f"once: {fake.calls}")
+        cmd = exit_calls[0]
+        self.assertEqual(cmd[cmd.index("-t") + 1], fake.fid)
+        self.assertEqual(cmd[-1], str(state.frame_dir(fake.fid) / "exit"),
+                         "the path carried must be THIS frame's own `exit` file — the "
+                         "one `state.exit_code` reads back")
         hook_idx = next(i for i, c in enumerate(fake.calls)
                        if "set-hook" in c and "pane-died[1]" not in c)
-        self.assertLess(env_idx, hook_idx)
+        self.assertLess(fake.calls.index(cmd), hook_idx)
 
     def test_the_frame_id_is_carried_to_its_own_menu_before_the_write_hook(self):
         """Companion to the test above: `charter frame-menu`/`charter frame-action`
@@ -615,6 +746,62 @@ class Launch(PersonaIso, unittest.TestCase):
         hook_idx = next(i for i, c in enumerate(fake.calls)
                        if "set-hook" in c and "pane-died[1]" not in c)
         self.assertLess(sid_idx, hook_idx)
+
+    def test_charters_own_interpreter_is_carried_to_the_hotkey_menu(self):
+        """The delivery half of the bare-`charter` fix (`Conf` above pins the bind text
+        that READS it). Without this call the bind expands `$CHARTER_PY` to nothing and
+        `run-shell` runs ` -m charter frame-menu ...`, whose failure tmux prints into
+        the harness pane. Filtered and counted the way the `CHARTER_SESSION_ID` test
+        below is — an unfiltered "some set-environment happened" assertion is exactly
+        what let the exit-path call be deleted with the suite green."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        py_calls = [c for c in fake.calls
+                    if "set-environment" in c and "CHARTER_PY" in c]
+        self.assertEqual(len(py_calls), 1,
+                         f"the interpreter must be carried exactly once: {fake.calls}")
+        cmd = py_calls[0]
+        self.assertEqual(cmd[cmd.index("-t") + 1], fake.fid,
+                         "session-scoped: two planes on one laptop can be two different "
+                         "charter installs, so a `-g` write would hand frame N's "
+                         "interpreter to frame N-1")
+        self.assertEqual(cmd[-1], sys.executable)
+
+    def test_the_harness_name_reaches_the_harness_environment(self):
+        """`harness.current()` reads `$CHARTER_HARNESS` FIRST, before any native
+        detection — so this export decides what every hook running inside the frame
+        thinks it is running in. Nothing asserted it: removing the two lines that set
+        it survived the entire suite.
+
+        The ambient value is deliberately overwritten with a sentinel first, and that is
+        the whole test. `cmd_launch` builds its environment as `dict(os.environ, ...)`,
+        and this suite is frequently RUN inside a charter frame, where the real
+        `$CHARTER_HARNESS` is already `claude-code` — so a straight assertion on the
+        expected value passes whether or not the launcher exports anything at all
+        (confirmed: the mutation that deletes the export left the first version of this
+        test green). Starting from a wrong value means only an actual export can make
+        this pass.
+
+        `claude` (`cli_name`, what a hand types) and `claude-code` (`name`, the harness's
+        own identity) are also different strings on purpose, so a launcher exporting the
+        wrong one of the two fails rather than passes."""
+        fake = _FakeTmux(exit_code=0)
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "stale-sentinel"}):
+            _launch(fake, harness="claude")
+        self.assertIsNotNone(fake.new_session_env)
+        self.assertEqual(fake.new_session_env.get("CHARTER_HARNESS"), "claude-code")
+
+    def test_a_bare_frame_command_leaves_the_harness_name_alone(self):
+        """`charter frame -- <cmd>` runs something charter has never met, so there is no
+        harness identity for the launcher to claim — it must not invent one. Same
+        sentinel trick, read the other way: whatever the launching environment already
+        said is what the harness inherits, and nothing charter made up."""
+        fake = _FakeTmux(exit_code=0)
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "stale-sentinel"}):
+            _launch(fake, harness="", rest=["--", "echo", "hi"])
+        self.assertIsNotNone(fake.new_session_env)
+        self.assertEqual(fake.new_session_env.get("CHARTER_HARNESS"), "stale-sentinel",
+                         "a bare `charter frame --` must not claim a harness identity")
 
     def test_the_menu_is_populated_with_a_detach_action(self):
         """`cmd_launch` must not merely bind the hotkey — the menu it opens has to have
@@ -800,11 +987,30 @@ class Launch(PersonaIso, unittest.TestCase):
         """`split-window` makes the newly created pane the ACTIVE one by default, so
         after every slot has been drawn, the LAST panel drawn — not the harness — has
         focus, and an interactive harness never receives a keystroke without this
-        (measured by hand: `%2 active=1, %0 active=0` after two splits)."""
+        (measured by hand: `%2 active=1, %0 active=0` after two splits).
+
+        The ORDER is the property, and it was the half nothing pinned: this test's own
+        name and docstring were about ordering while it asserted only the target, so
+        moving the `select-pane` call ABOVE the panel loop — which reintroduces exactly
+        the "the harness never receives a keystroke" defect, since every later split
+        steals the focus back — left the suite green. Compares indices, the way
+        `test_the_write_hook_is_installed_before_the_teardown_hook` already does."""
         fake = _FakeTmux(exit_code=0)
         _launch(fake)
-        select_cmd = next(c for c in fake.calls if "select-pane" in c)
+        select_idx = next(i for i, c in enumerate(fake.calls) if "select-pane" in c)
+        select_cmd = fake.calls[select_idx]
         self.assertEqual(select_cmd[select_cmd.index("-t") + 1], fake.pane_id)
+
+        split_idxs = [i for i, c in enumerate(fake.calls) if "split-window" in c]
+        self.assertTrue(split_idxs, "no panel was drawn — this test would be vacuous")
+        self.assertGreater(select_idx, max(split_idxs),
+                           "the harness pane must be selected AFTER every split, or "
+                           "the last panel drawn keeps the focus and the harness never "
+                           "receives a keystroke")
+        attach_idx = next(i for i, c in enumerate(fake.calls) if "attach" in c)
+        self.assertLess(select_idx, attach_idx,
+                        "selecting after `attach` returns is selecting after the "
+                        "operator has already stopped using the frame")
 
     def test_a_failed_pane_selection_is_reported_but_not_fatal(self):
         fake = _FakeTmux(exit_code=0, select_rc=1)
@@ -918,7 +1124,7 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertTrue(any("attach" in c for c in fake.calls))
 
     def test_a_failed_resize_hook_install_names_its_consequence(self):
-        """Fix round 2, item 4: `_report_tmux_failure` prints the command and tmux's
+        """Fix round 2, item 4: `tmuxctl.report_failure` prints the command and tmux's
         own stderr, but not what the failure COSTS the operator — every other degrade
         in this launcher (`source-file`, `set-environment`) pairs its failure report
         with a `util.warn` naming the consequence; the resize hook's own failure was
@@ -940,7 +1146,7 @@ class Launch(PersonaIso, unittest.TestCase):
         `invalid option: <name>` (confirmed by hand: generic `set-hook`
         argument-parsing text, not specific to this one hook) must degrade the SAME
         quiet way a known-too-old version already does: `util.warn`, never
-        `util.err`/`_report_tmux_failure`'s command-and-stderr dump."""
+        `util.err`/`tmuxctl.report_failure`'s command-and-stderr dump."""
         fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"},
                          resize_hook_rc=1,
                          resize_hook_stderr="invalid option: window-resized")
@@ -957,7 +1163,7 @@ class Launch(PersonaIso, unittest.TestCase):
         """Companion to the test above — the two paths must not collapse into each
         other. A resize-hook failure for some OTHER reason (a real bug, a permissions
         problem, anything that isn't tmux saying the hook name itself is unrecognised)
-        must still get the loud, specific `_report_tmux_failure` treatment; degrading
+        must still get the loud, specific `tmuxctl.report_failure` treatment; degrading
         every failure to a quiet warning would hide an actual regression behind the
         same wording a known compatibility gap uses."""
         fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"},
@@ -990,18 +1196,27 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertTrue(any("3.2" in m and "resize" in m for m in buf), buf)
 
     def test_below_the_tmux_floor_degrades_instead_of_refusing(self):
-        """Correction 5: a version below `tmuxctl.FLOOR` prints `below_floor_message`
-        and the frame still launches — only the (not-yet-wired) hotkey menu is
-        affected, not the frame itself."""
+        """Correction 5: a version below `tmuxctl.FLOOR` still launches — the frame
+        itself works there.
+
+        And it launches SILENTLY. The below-floor message used to be a `util.warn` on
+        this path; measured, `util.warn` lands 86 bytes before tmux's own
+        `\x1b[?1049h`, so the operator's terminal switches to the alternate screen
+        milliseconds later and the line is restored to view only when the frame EXITS.
+        It is a standing capability ceiling — true on every launch on this machine —
+        so it moved to the two surfaces built to answer on demand: `frame_ready`
+        (`--probe`, `charter frame-probe`) and `doctor.check_frame`. See
+        `Probe.test_below_the_floor_says_what_is_at_risk` for where it is asserted now."""
         fake = _FakeTmux(exit_code=0)
         buf = []
         with mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
             rc = _launch(fake, version=(3, 0))
         self.assertEqual(rc, 0)
-        self.assertTrue(any("3.0" in m and "3.2" in m for m in buf),
-                        f"the below-floor message was never printed: {buf}")
         self.assertTrue(any("new-session" in c for c in fake.calls),
                         "below-floor must degrade, not refuse to launch")
+        self.assertEqual(buf, [], "a standing ceiling must not be warned about into a "
+                                 "terminal that is about to switch to tmux's alternate "
+                                 "screen — see the docstring")
 
     def test_a_terminal_size_os_cannot_report_falls_back_rather_than_crashing(self):
         """`os.get_terminal_size()` raises `OSError` even on a tty that passes
@@ -1068,9 +1283,13 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertFalse(any("panel" in c and "left" in c for c in fake.calls),
                          "no pane may be spawned for a slot with no renderer")
-        self.assertTrue(any("left" in m for m in buf), buf)
         self.assertTrue(any("panel" in c and "bottom" in c for c in fake.calls),
                         "an IMPLEMENTED slot must still be drawn")
+        # Silently: which slots have a renderer is a property of this BUILD, not of
+        # this launch, and the warning it used to print landed 86 bytes before tmux
+        # switched the terminal to the alternate screen. `--probe` and `charter doctor`
+        # name it instead — see `Probe.test_a_slot_with_no_renderer_is_named_by_probe`.
+        self.assertEqual(buf, [], f"nothing standing may be warned at launch: {buf}")
 
     def test_a_frame_dir_the_state_module_refuses_does_not_crash(self):
         """`frame_dir` returns `None` rather than a `Path` for an id it cannot shape
