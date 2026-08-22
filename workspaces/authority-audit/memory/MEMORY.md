@@ -19,3 +19,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Closed todo: Wave 2 after wave 1 merges: #336 symlinks+liveness · #333/#](20260822-125729-closed-todo-wave-2-after-wave-1-merges-336-symli.md)
 - [Closed todo: Wave 3a: #349/#329/#343 (authority-audit) + #333/#338/#339 ](20260822-125729-closed-todo-wave-3a-349-329-343-authority-audit-.md)
 - [Closed todo: Wave 3b after 3a: #321 news diagnostic + #322 secret list l](20260822-125729-closed-todo-wave-3b-after-3a-321-news-diagnostic.md)
+- [Closed todo: Regenerate the three SVG captures BEFORE 0.49.0 — captured.](20260822-172629-closed-todo-regenerate-the-three-svg-captures-be.md)

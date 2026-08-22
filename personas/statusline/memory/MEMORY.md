@@ -14,3 +14,5 @@ Written by the persona as it learns; committed and shared.
 - [A statusline surface that DELETES the record it draws from turns the mos](a-statusline-surface-that-deletes-the-record-it-.md)
 - [Regenerating docs/assets captures: a statusline feature that renders onl](regenerating-docs-assets-captures-a-statusline-f.md)
 - [Regenerating charter's captured README assets (docs/assets/): the pipeli](regenerating-charter-s-captured-readme-assets-do.md)
+- [Regenerating docs/assets captures on a machine with git commit signing:](regenerating-docs-assets-captures-on-a-machine-w.md)
+- [docs/assets captures, proving a re-run when output is byte-identical: on](docs-assets-captures-proving-a-re-run-when-outpu.md)
