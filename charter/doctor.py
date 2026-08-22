@@ -1322,8 +1322,17 @@ def check_memory_indexes() -> Result:
     # repaired. A remediation hint that silently no-ops is worse than no hint at all.
     unindexed_kinds: set[str] = set()
     large_kinds: set[str] = set()
+    refused = []
     for label, mem_dir in bases:
         if not mem_dir.exists():
+            continue
+        # Asked FIRST, and reported on its own terms. A refused index answers "nothing is
+        # listed", which is what an empty base answers too — so without this the drift
+        # numbers below describe a store charter is declining to touch as though it were
+        # merely untidy, and point `optimize` at a repair that cannot run (#349).
+        why = memstore.index_refusal(mem_dir)
+        if why:
+            refused.append(f"{label}: {why}")
             continue
         d = memstore.index_drift(mem_dir)
         if d["dangling"] or d["unindexed"]:
@@ -1341,6 +1350,15 @@ def check_memory_indexes() -> Result:
         if n >= _INDEX_LINES_WARN:
             large.append(f"{label} ({n} entries)")
             large_kinds.add("workspace" if label.startswith("ws:") else "persona")
+    if refused:
+        # Ahead of drift and growth because it outranks them: those are hygiene, this is a
+        # committed file redirecting charter's own writes, and the remedy is to fix that
+        # file rather than to run any curation command.
+        return Result("memory indexes", WARN,
+                      detail=f"{len(refused)} index(es) charter will not touch",
+                      hint="; ".join(refused[:2]) + (", …" if len(refused) > 2 else "")
+                           + "  → this is a defect in a committed file: replace the link "
+                             "with a real MEMORY.md")
     if not worst and not large:
         return Result("memory indexes", OK, detail=f"{len(bases)} base(s) consistent")
     hint = ", ".join(worst[:4]) + (", …" if len(worst) > 4 else "")

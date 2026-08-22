@@ -36,10 +36,22 @@ def _now() -> datetime.datetime:
     return datetime.datetime.now()
 
 
+#: **The one gate on the write side**, the mirror of :func:`files` on the read side and
+#: for the same stated reason: containment asserted once rather than at four callers,
+#: three of which stay correct. Every write this module performs goes through it, and it
+#: checks both the file and the directory holding it — ``MEMORY.md`` is a fixed name, so
+#: an attacker needs no guess and wins no race, and a linked ``memory/`` hides the file
+#: check entirely (#349).
+writable = contain.writable
+
+
 def ensure_index(mem_dir: Path, header: str) -> Path:
     """Create the dir + MEMORY.md (with *header*) if missing; return the index path."""
+    # Gated BEFORE the mkdir: `mkdir(exist_ok=True)` accepts a committed symlink to a
+    # directory outside the plane, and would then create that directory's missing parents
+    # for the attacker on the way past.
+    idx = writable(index_path(mem_dir))
     mem_dir.mkdir(parents=True, exist_ok=True)
-    idx = index_path(mem_dir)
     if not idx.exists():
         idx.write_text(header if header.endswith("\n") else header + "\n")
     return idx
@@ -55,6 +67,12 @@ def write(mem_dir: Path, text: str, title: str | None = None, *, timestamped: bo
     if not text:
         raise ValueError("empty memory")
     title = (title or text.splitlines()[0]).strip()[:72]
+    # Before the mkdir, and before a byte is written: both targets are checked up front so
+    # a refusal leaves the store exactly as it was, rather than a memory file on disk that
+    # nothing indexes.
+    refusal = contain.dir_refusal(mem_dir, "write")
+    if refusal:
+        raise contain.Refused(refusal)
     mem_dir.mkdir(parents=True, exist_ok=True)
     now = stamp or _now()
     prefix = now.strftime("%Y%m%d-%H%M%S-") if timestamped else ""
@@ -64,6 +82,11 @@ def write(mem_dir: Path, text: str, title: str | None = None, *, timestamped: bo
     while p.exists():  # same title (and same second) → keep both
         p = mem_dir / f"{prefix}{base}-{i}.md"
         i += 1
+    # `exists()` is false for a DANGLING link, so the loop above stops on exactly the
+    # entry that would create a file wherever it points. `writable` resolves it.
+    writable(p)
+    if index:
+        writable(index_path(mem_dir))
     p.write_text(f"# {title}\n\n_{now.strftime('%Y-%m-%d %H:%M')} · {kind}_\n\n{text}\n")
     if index:
         index_append(index_path(mem_dir), p.name, title)
@@ -71,6 +94,7 @@ def write(mem_dir: Path, text: str, title: str | None = None, *, timestamped: bo
 
 
 def index_append(idx: Path, filename: str, title: str) -> None:
+    idx = writable(idx)
     if not idx.exists():
         idx.parent.mkdir(parents=True, exist_ok=True)
         idx.write_text("# Memory Index\n\n")
@@ -141,9 +165,54 @@ def index_drift(mem_dir: Path) -> dict[str, list[str]]:
     for every memory base, and runs from the SessionStart hook.
     """
     actual = {p.name for p in files(mem_dir)}
-    idx = index_path(mem_dir)
-    listed = set(_INDEX_LINK_RE.findall(idx.read_text())) if idx.exists() else set()
+    listed = _listed(mem_dir)
     return {"dangling": sorted(listed - actual), "unindexed": sorted(actual - listed)}
+
+
+def index_refusal(mem_dir: Path) -> str | None:
+    """Why charter will not touch this base's ``MEMORY.md``, or ``None``.
+
+    Public because a refusal here is the one that hides. A refused *memory* still leaves
+    the other memories to list, so the store visibly shrinks; a refused *index* answers
+    with an empty set, which a base that simply has no memories yet answers with too. On
+    a store whose files were also refused, `doctor` reported "consistent" over an index
+    pointing at a credential file.
+
+    So the reason is exported rather than swallowed, and `doctor` prints it. ADR 0009:
+    name what was actually checked. "1 unindexed" is true and sends the operator to
+    `charter persona optimize`, which cannot repair an index charter declines to write.
+
+    **The write-side rule, deliberately, even though `_listed` reads.** An index that is
+    simply *absent* is not a defect — `charter init` scaffolds a front door whose
+    `memory/` holds a `.gitkeep` and no `MEMORY.md` — so the read-side gate's "not there
+    is a refusal" reported every fresh plane as broken. `write_refusal` still catches the
+    case `exists()` cannot see: a **dangling** link that escapes, which is absent and
+    hostile at the same time. `_listed` is unaffected either way, because a missing file
+    and a refused one both leave it with nothing listed.
+    """
+    return (contain.dir_refusal(mem_dir, "write")
+            or contain.write_refusal(index_path(mem_dir)))
+
+
+def _listed(mem_dir: Path) -> set[str]:
+    """The filenames MEMORY.md links to — ``set()`` when charter may not read it.
+
+    **The one read `files()` never covered**, because ``MEMORY.md`` is the single name it
+    filters out (`p.name != "MEMORY.md"`). So the file with the most predictable name in
+    the store was the only one with no gate on either side (#336, #349). `doctor` reads
+    this for every memory base on every SessionStart, where a FIFO costs the briefing and
+    a link reads whatever it points at.
+
+    An unreadable index answers ``set()`` rather than raising, matching `files()`: the
+    drift report then shows every file as unindexed, which is true — nothing charter is
+    willing to read indexes them — and is what surfaces the defect to the operator.
+    """
+    if index_refusal(mem_dir):
+        return set()
+    try:
+        return set(_INDEX_LINK_RE.findall(index_path(mem_dir).read_text()))
+    except OSError:
+        return set()
 
 
 def index_size(mem_dir: Path) -> int:
@@ -299,10 +368,24 @@ def forget(mem_dir: Path, ident: str) -> Path | None:
 
 
 def _drop_index_line(mem_dir: Path, filename: str) -> None:
+    """Remove *filename*'s line from the index — the store's only **truncating** write.
+
+    Where `index_append` adds two lines to whatever a link points at, this replaces the
+    target with what survived a filter, so pointed at a credential store it destroys it
+    outright rather than corrupting it. `file_refusal` is the right gate here rather than
+    `write_refusal`: the file must already exist for there to be a line to drop, so ENOENT
+    is genuinely "nothing to do" on both sides of the question.
+
+    Refuses by doing nothing, deliberately — unlike `write`, this runs *after* `forget`
+    and `archive` have already moved the memory file, so raising would report a failure
+    for work that succeeded. The index left holding a stale line is a file charter has
+    declined to read, which `index_drift` reports as drift on the next `doctor`.
+    """
     idx = index_path(mem_dir)
-    if idx.exists():
-        keep = [ln for ln in idx.read_text().splitlines() if f"({filename})" not in ln]
-        idx.write_text("\n".join(keep) + ("\n" if keep else ""))
+    if not idx.exists() or contain.dir_refusal(mem_dir, "write") or contain.file_refusal(idx):
+        return
+    keep = [ln for ln in idx.read_text().splitlines() if f"({filename})" not in ln]
+    idx.write_text("\n".join(keep) + ("\n" if keep else ""))
 
 
 def body(text: str) -> str:
@@ -323,6 +406,13 @@ def archive(mem_dir: Path, ident: str) -> Path | None:
     if not p or not p.exists():
         return None
     dest_dir = mem_dir / "archive"
+    # The fifth fixed name in the store, and the one #349 did not list. `rename` follows a
+    # link on the destination directory exactly as `open` follows one on a file, so a
+    # committed `archive` → elsewhere turns a retire into a move out of the plane. Answers
+    # None like every other "nothing was archived", rather than raising into `curate`'s
+    # batch.
+    if contain.dir_refusal(dest_dir, "write"):
+        return None
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / p.name
     i = 2

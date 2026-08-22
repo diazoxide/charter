@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-from . import memstore
+from . import contain, memstore
 
 # Durable-RULE language worth promoting to the charter. Weighted toward IMPERATIVE,
 # time-invariant phrasing ("standing rule", "always/never") and deliberately EXCLUDING
@@ -95,10 +95,18 @@ def apply_safe(mem_dir: Path) -> list[str]:
     missing = report(mem_dir)["index"]["missing"]  # recompute after archiving
     if missing:
         idx = memstore.index_path(mem_dir)
-        for p, title, _text in memstore.entries(mem_dir):
-            if p.name in missing:
-                memstore.index_append(idx, p.name, title)
-        actions.append(f"repaired index: linked {len(missing)} unindexed memory(ies)")
+        # `apply_safe` returns a LOG the operator reads, and by here it may already have
+        # archived files. A refusal is therefore reported into that log rather than raised
+        # out of a half-finished batch — and reported rather than swallowed, because a
+        # linked index turns this one command into N appends into whatever it points at,
+        # which is the largest single write charter performs unprompted (#349).
+        try:
+            for p, title, _text in memstore.entries(mem_dir):
+                if p.name in missing:
+                    memstore.index_append(idx, p.name, title)
+            actions.append(f"repaired index: linked {len(missing)} unindexed memory(ies)")
+        except contain.Refused as e:
+            actions.append(f"index NOT repaired — {e}")
     return actions
 
 

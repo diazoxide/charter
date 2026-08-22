@@ -211,7 +211,10 @@ def declared_default() -> str | None:
 
 
 def set_declared_default(name: str) -> None:
-    d = default_file()
+    # A fixed name directly under `workspaces/`, which the default ignore rule
+    # (`/workspaces/*/*`) does not match — so it is an ordinarily committable path, and a
+    # link there redirects this write (#349).
+    d = contain.writable(default_file())
     d.parent.mkdir(parents=True, exist_ok=True)
     d.write_text(name.strip() + "\n")
 
@@ -659,7 +662,7 @@ def read_manifest(name: str) -> dict:
 
 def write_manifest(name: str, data: dict) -> None:
     ensure(name)
-    manifest_path(name).write_text(json.dumps(data, indent=2) + "\n")
+    contain.writable(manifest_path(name)).write_text(json.dumps(data, indent=2) + "\n")
 
 
 def merge_repo_rows(manifest_rows, disk_rows) -> tuple[list[dict], list[str]]:
@@ -872,7 +875,10 @@ def _replace_md_section(text: str, header: str, body: str) -> str:
 
 def scaffold_charter(name: str, vision: str | None = None) -> None:
     """Create workspace.md from the template if missing; if a vision is given, set it."""
-    cf = charter_file(name)
+    # `read_charter` below already refuses a `workspace.md` that resolves out of the
+    # plane; this is the same file, written. A guard on one side of one name is how the
+    # write half of #336 stayed open after the read half closed (#349).
+    cf = contain.writable(charter_file(name))
     if not cf.exists():
         cf.parent.mkdir(parents=True, exist_ok=True)
         cf.write_text(_CHARTER_TEMPLATE.format(
@@ -884,7 +890,7 @@ def scaffold_charter(name: str, vision: str | None = None) -> None:
 def set_vision(name: str, text: str) -> None:
     """Set/replace the charter's ## Vision section (creating the charter if needed)."""
     scaffold_charter(name)
-    cf = charter_file(name)
+    cf = contain.writable(charter_file(name))
     cf.write_text(_replace_md_section(cf.read_text(), "Vision", text))
 
 

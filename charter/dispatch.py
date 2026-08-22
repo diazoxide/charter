@@ -36,7 +36,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import config
+from . import config, contain
 
 DIR_NAME = "_dispatch"
 #: Agents that aren't personas — tallied so the persona-vs-generic ratio stays visible.
@@ -70,6 +70,8 @@ def record(agent: str, when: datetime | None = None) -> Path | None:
         return None
     when = when or _now()
     p = path_for(when)
+    if contain.write_refusal(p):
+        return None  # a committed link at this fixed name — see contain.write_refusal
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps({"ts": when.isoformat(timespec="seconds"), "agent": agent},
@@ -97,6 +99,8 @@ def record_advice(when: datetime | None = None) -> Path | None:
     """Append one 'routing advice was shown' event. Best-effort, like :func:`record`."""
     when = when or _now()
     p = path_for(when)
+    if contain.write_refusal(p):
+        return None  # a committed link at this fixed name — see contain.write_refusal
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps({"event": ADVICE, "ts": when.isoformat(timespec="seconds")},
@@ -140,6 +144,8 @@ def record_resume(agent: str, when: datetime | None = None) -> Path | None:
         return None
     when = when or _now()
     p = path_for(when)
+    if contain.write_refusal(p):
+        return None  # a committed link at this fixed name — see contain.write_refusal
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps({"agent": agent, "event": RESUME,

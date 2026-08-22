@@ -1165,9 +1165,13 @@ def vault_of(name: str) -> str | None:
 def scaffold_memory(name: str, shared: bool = False) -> None:
     """Create the committed memory/ and refs/ dirs with keep-files so git tracks
     them and the persona always has an index to read."""
+    # Two fixed names under a directory a commit controls, written HERE rather than
+    # through `memstore.ensure_index` — so gating the store alone would have left the
+    # scaffolder holding the same hole one function over (#349). Both checked before the
+    # `mkdir`, which happily accepts a committed link to a directory outside the plane.
     mem = memory_dir(name, shared)
+    idx = contain.writable(index_of(mem))
     mem.mkdir(parents=True, exist_ok=True)
-    idx = index_of(mem)
     if not idx.exists():
         who = "shared (all personas)" if shared else name
         idx.write_text(
@@ -1176,8 +1180,8 @@ def scaffold_memory(name: str, shared: bool = False) -> None:
             "Written by the persona as it learns; committed and shared.\n"
         )
     refs = refs_dir(name, shared)
+    readme = contain.writable(refs / "README.md")
     refs.mkdir(parents=True, exist_ok=True)
-    readme = refs / "README.md"
     if not readme.exists():
         who = "shared (all personas)" if shared else name
         readme.write_text(

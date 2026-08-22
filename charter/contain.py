@@ -53,8 +53,10 @@ and break a plane that legitimately links a persona directory. Resolving keeps t
 working, and #342's reason for staying lexical was never that symlinks are acceptable —
 only that doing half of this while claiming all of it would be worse than filing it.
 
-**Nothing here raises.** These checks sit under `doctor`, the status line and SessionStart,
-where the rule is that a hook may cost a session its briefing and never its turn. A refused
+**No refusal function here raises.** These checks sit under `doctor`, the status line and
+SessionStart, where the rule is that a hook may cost a session its briefing and never its
+turn. The single exception is :func:`writable`, which exists to raise and says so: a write
+that refuses has no fallback the way a skipped read does. A refused
 name is reported as data — see :data:`NOT_A_SEGMENT` and the vocabulary in
 :mod:`charter.news`, which says five kinds of "no answer" five different ways for the same
 reason: folding a defect in a file behind a generic message hides the defect, and somebody
@@ -136,13 +138,37 @@ def refusal(name: str) -> str:
 # the resolving layer — a PATH charter is about to read (#336)                 #
 # --------------------------------------------------------------------------- #
 
+class Refused(Exception):
+    """A path charter declined to write to, carrying the sentence that says why.
+
+    Deliberately **not** a `ValueError`. The write sites sit under `except ValueError`
+    handlers that already mean "the text you passed was empty", and three more swallow it
+    bare — inheriting from it would let a containment refusal be caught by a clause
+    written about something else and disappear, which is the one outcome worse than the
+    corruption this exists to stop.
+
+    Caught once, in `cli.main`, beside `util.ProcTimeout` and for the same stated reason:
+    *a child that outlived its budget is a condition, not a bug*. So is a committed file
+    that redirects a write. Reaching the `except Exception` below it would file a crash
+    report against charter for a defect in the plane's own data, and send the reader
+    looking for the bug in the wrong repository.
+
+    The refusal functions themselves still never raise — this is thrown by *callers* that
+    have nothing useful to do with a refusal except stop.
+    """
+
+
 #: Said once, like :data:`NOT_A_SEGMENT`, and for the same reason: the reader has a defect
 #: in a committed file. It names both ends because "refused" without the target is
 #: unactionable — the whole point is that the path charter opened is not the path it read.
+#:
+#: ``{verb}`` is read/write rather than two near-identical constants: which operation was
+#: redirected is the one word that differs, and it is the word that tells the reader
+#: whether they are looking at a leak or at corruption.
 NOT_PLANE_DATA = ("'{name}' resolves to '{target}', outside the directories a control "
                   "plane keeps its data in ({roots}). A committed symlink there redirects "
-                  "the read, so charter follows a link that lands inside them and refuses "
-                  "one that leaves")
+                  "the {verb}, so charter follows a link that lands inside them and "
+                  "refuses one that leaves")
 
 #: A path charter cannot examine at all (vanished mid-listing, a broken link, no
 #: permission). Refused rather than raised — every caller here is on a path that must not
@@ -152,9 +178,13 @@ UNREADABLE = "'{name}' cannot be examined ({error})"
 #: Not a file at all: a FIFO, a device, a socket, a directory. Named for what it is,
 #: because "could not be read" would send the reader looking for a permissions problem
 #: when what they have is a path that blocks for ever or yields for ever.
-NOT_A_FILE = ("'{name}' is not a regular file (it is {kind}). Charter reads plane data by "
-              "listing a directory and opening what it finds, so an entry that blocks or "
-              "never ends would take the read with it")
+#:
+#: A FIFO blocks a *writer* just as completely as a reader — ``open(fifo, "a")`` waits for
+#: a reader to appear and never stops waiting — so this is one sentence for both sides,
+#: and the write side has no `hooks.json` timeout above it to end the wait.
+NOT_A_FILE = ("'{name}' is not a regular file (it is {kind}). Charter opens plane data at "
+              "names a committed file can occupy, so an entry that blocks or never ends "
+              "would take the {verb} with it")
 
 #: The bound on one plane file charter reads whole. **1 MiB, and it is meant never to fire
 #: on anything a human wrote**: the largest persona charter in charter's own plane is
@@ -226,25 +256,31 @@ def within_data(path) -> bool:
     return False
 
 
-def _not_plane_data(path) -> str:
+def _not_plane_data(path, verb: str = "read") -> str:
     roots = ", ".join(sorted(Path(r).name for r in data_roots()))
     try:
         target = os.path.realpath(path)
     except (OSError, ValueError):
         target = path            # unresolvable — say what was asked for, never raise here
-    return NOT_PLANE_DATA.format(name=path, target=target, roots=roots)
+    return NOT_PLANE_DATA.format(name=path, target=target, roots=roots, verb=verb)
 
 
-def dir_refusal(directory) -> str | None:
-    """Why charter must not list *directory*, or ``None``.
+def dir_refusal(directory, verb: str = "read") -> str | None:
+    """Why charter must not list — or write inside — *directory*, or ``None``.
 
     Separate from :func:`file_refusal` because a listing pays this **once** while paying
     the per-file check N times, and because it is what catches the variant the file check
     structurally cannot see: when the *directory* is the link, every file inside it is an
     ordinary regular file that no per-file check has anything to object to.
+
+    That variant is worse on the write side, where charter creates the directory it is
+    about to write into: ``mkdir(parents=True, exist_ok=True)`` accepts a symlink to an
+    existing directory without complaint, so a committed link at ``memory/`` silently
+    relocates every file written under it. Hence *verb* — the same question, asked before
+    the ``mkdir`` rather than before the listing.
     """
     if not within_data(directory):
-        return _not_plane_data(directory)
+        return _not_plane_data(directory, verb)
     return None
 
 
@@ -268,14 +304,84 @@ def file_refusal(path) -> str | None:
     Not a TOCTOU guard, and not sold as one: the attacker here holds a commit, not a
     process racing the read.
     """
+    return _path_refusal(path, missing_ok=False, verb="read")
+
+
+def write_refusal(path) -> str | None:
+    """Why charter must not **write** to *path*, or ``None``.
+
+    #348 gated every read of plane data and left the write side untouched, so a committed
+    link at a name charter writes redirected the write instead of the read (#349). The
+    same three questions apply — is this link contained, is it a file at all, is it a
+    sane size — and each of them matters *more* here: an append to a credential store
+    corrupts it where a read merely leaked it, ``write_text`` through a **dangling** link
+    creates the target wherever it points, and ``open(fifo, "a")`` blocks for ever with a
+    human sitting at the command rather than a hook timeout overhead.
+
+    **One rule differs, and it is the whole reason this is a second function.** On a read,
+    a path that is not there is a refusal. On a write it is the ordinary case — the file
+    is about to be created — so ENOENT answers ``None``. Getting that backwards refuses
+    every first write on a fresh plane, and getting it *too* right (treating "not there"
+    as "nothing to check" before the link is resolved) misses the dangling-link case
+    entirely, because ``exists()`` is false for exactly the link that is most dangerous.
+    Both halves are held by tests that fail in opposite directions.
+
+    **The parent is checked here, not by the caller.** On the read side that split is
+    right — a listing pays :func:`dir_refusal` once and the per-file check N times. A
+    write has no such loop, and the directory variant is the one a per-file check
+    structurally cannot see: when ``memory/`` is the link, ``MEMORY.md`` inside it is an
+    ordinary regular file with nothing to object to, and every ``mkdir(exist_ok=True)`` in
+    charter accepts a symlink to a directory without complaint. Folding it in costs one
+    resolve on a path nobody writes in a loop, and makes it impossible for the fifteenth
+    caller to remember the file and forget the directory.
+
+    What this is not: a check on whether the *value* being written belongs there. It
+    answers where the bytes will land, nothing more.
+    """
+    return (dir_refusal(Path(path).parent, "write")
+            or _path_refusal(path, missing_ok=True, verb="write"))
+
+
+def writable(path) -> Path:
+    """*path*, when charter may write there — else raise :class:`Refused`.
+
+    The one place in this module that raises, and the exception is deliberate rather than
+    an oversight in the "nothing here raises" promise above: that promise is about the
+    *refusal* functions, which run under `doctor`, the status line and SessionStart and
+    must return data. This is for callers on a command path, where a refusal has no
+    sensible fallback — a read that refuses can skip the file, but a write that refuses
+    and carries on leaves `charter persona remember` printing ✓ over a fact it never
+    recorded, which is the same class of lie as the corruption being prevented.
+
+    Callers that must *not* raise — the hook-driven tallies, which already promise a hook
+    may never break a turn — ask :func:`write_refusal` directly and decline to write.
+    """
+    refusal = write_refusal(path)
+    if refusal:
+        raise Refused(refusal)
+    return Path(path)
+
+
+def _path_refusal(path, *, missing_ok: bool, verb: str) -> str | None:
+    """The body :func:`file_refusal` and :func:`write_refusal` share.
+
+    One implementation with the difference named, rather than two functions kept in step
+    by hand — the divergence between two checks that read the same file and answered
+    differently is what #328 and #342 were both about, and it is not a mistake worth
+    making again inside the module that exists to stop it.
+    """
+    if not str(path):
+        # ENOENT means "about to be created" only for a path that COULD be created, and
+        # the empty path never can. Without this the write side answered "nothing to
+        # object to" for it and handed the caller an unhandled `OSError` one line later —
+        # a refusal turned back into a crash, which is the bug #348 shipped and fixed.
+        return UNREADABLE.format(name=path, error="empty path")
     try:
         st = os.lstat(path)
-        if stat.S_ISLNK(st.st_mode):
-            if not within_data(path):
-                return _not_plane_data(path)
-            # Follows the link. Still a `stat`, so a FIFO on the other end answers here
-            # rather than blocking; a broken link raises and is refused as unreadable.
-            st = os.stat(path)
+    except FileNotFoundError:
+        if missing_ok:
+            return None       # about to be created — there is nothing there to object to
+        return UNREADABLE.format(name=path, error="No such file or directory")
     except OSError as e:
         return UNREADABLE.format(name=path, error=e.strerror or e)
     except ValueError as e:
@@ -283,9 +389,27 @@ def file_refusal(path) -> str | None:
         # input shaped to get past a check (`segment_ok` refuses it for the same reason).
         # "Nothing here raises" is this module's promise; catching only OSError broke it.
         return UNREADABLE.format(name=path, error=e)
+    if stat.S_ISLNK(st.st_mode):
+        # Asked BEFORE `os.stat`, and that order is load-bearing on the write side: a
+        # dangling link has no target to stat, so a containment check placed after the
+        # stat would never run on the one link that can create a file out of nothing.
+        if not within_data(path):
+            return _not_plane_data(path, verb)
+        try:
+            # Follows the link. Still a `stat`, so a FIFO on the other end answers here
+            # rather than blocking.
+            st = os.stat(path)
+        except FileNotFoundError:
+            if missing_ok:
+                return None   # a contained link naming a file charter is about to create
+            return UNREADABLE.format(name=path, error="No such file or directory")
+        except OSError as e:
+            return UNREADABLE.format(name=path, error=e.strerror or e)
+        except ValueError as e:
+            return UNREADABLE.format(name=path, error=e)
     if not stat.S_ISREG(st.st_mode):
         kind = next((k for test, k in _KINDS if test(st.st_mode)), "not a file")
-        return NOT_A_FILE.format(name=path, kind=kind)
+        return NOT_A_FILE.format(name=path, kind=kind, verb=verb)
     if st.st_size > MAX_BYTES:
         return TOO_LARGE.format(name=path, size=st.st_size, cap=MAX_BYTES)
     return None

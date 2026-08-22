@@ -44,7 +44,7 @@ import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import persona, session, workspace
+from . import contain, persona, session, workspace
 
 #: Directory under a workspace holding its piece records. Deliberately absent from
 #: ``workspace._live_block`` — see the module docstring.
@@ -113,6 +113,8 @@ def record(ws: str, event: str, repo: str, piece: str, reason: str | None = None
     if reason:
         line["reason"] = reason
     p = log_path(ws)
+    if contain.write_refusal(p):
+        return None  # a committed link at this fixed name — see contain.write_refusal
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         blob = (json.dumps(line, sort_keys=True) + "\n").encode()
@@ -267,6 +269,8 @@ def seen(ws: str, repo: str, piece: str | None, session: str | None = None,
     if persona:
         blob["persona"] = persona
         blob["by"] = by
+    if contain.write_refusal(p):
+        return None  # a committed link at this fixed name — see contain.write_refusal
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(blob, sort_keys=True) + "\n")

@@ -16,6 +16,7 @@ from . import (
     commands_secrets,
     commands_workspace,
     commands_worktree,
+    contain,
     hooks,
     statusline,
     toolgate,
@@ -1109,6 +1110,13 @@ def main(argv=None) -> int:
             except Exception:  # noqa: BLE001 - a best-effort tidy-up, never the story
                 pass
         return 141  # 128 + SIGPIPE, matching the 128 + SIGINT returned below
+    except contain.Refused as e:
+        # A committed file that redirects a write is a defect in the PLANE's data, not in
+        # charter — the same distinction `ProcTimeout` draws below, one noun over. Falling
+        # through to the crash reporter would file a report against charter for it and
+        # send whoever reads it looking in the wrong repository (#349).
+        util.err(str(e))
+        return 1
     except util.ProcTimeout as e:
         # A child that outlived its budget is a condition, not a bug. Only
         # KeyboardInterrupt was caught here, so a timeout reached the user as a traceback
