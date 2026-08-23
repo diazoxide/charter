@@ -32,6 +32,7 @@ uncountable — the precise defect #290 was filed to remove, arriving by a new d
 from __future__ import annotations
 
 import ast
+import itertools
 import os
 import unittest
 from collections import Counter
@@ -40,6 +41,7 @@ from unittest import mock
 from charter import config, hooks, trace
 from tests import test_dispatch_ask_is_counted as _sites
 from tests._isolation import PersonaIso, run_hook
+from tests.test_plugin import _hooks_json as _manifest
 
 SESSION = "s-375"
 WORK = "refactor the release tagging flow, maybe something cleaner"
@@ -101,6 +103,19 @@ class TwoNudgesInOnePlane(PersonaIso):
         c = Counter(e["event"] for e in trace.read(SESSION))
         return {k: v for k, v in c.items() if "ask" in k}
 
+    def approvals(self) -> list[str]:
+        """Every approval row, found by SHAPE and read out of the WHOLE trace.
+
+        Deliberately not `asks()`: that filters on ``"ask" in k``, which is right for the
+        ratio line and wrong for "did charter invent an approval". An approval whose kind
+        went wrong need not contain "ask" at all — `None-approved` is what `_ask_approved`
+        writes if its ``if kind is None: return`` is dropped — so the filter that makes the
+        ratio readable is also a filter that hides the failure. Named kinds are asserted
+        against `asks()`; the existence of a row nobody can attribute is asserted here.
+        """
+        return sorted(e["event"] for e in trace.read(SESSION)
+                      if e["event"].endswith("-approved"))
+
 
 class TestAnApprovalNamesTheNudgeThatEarnedIt(TwoNudgesInOnePlane):
     def test_the_dispatch_nudge_s_approval_is_named_for_it(self):
@@ -122,13 +137,21 @@ class TestAnApprovalNamesTheNudgeThatEarnedIt(TwoNudgesInOnePlane):
         self.assertEqual({"routing-ask": 1, "routing-ask-approved": 1, "dispatch-ask": 1},
                          self.asks())
 
-    def test_no_undifferentiated_approval_row_is_written(self):
+    def test_every_approval_row_written_names_a_nudge(self):
         """Stated separately from the counts above, because the failure it guards is a
         SECOND row rather than a missing one: an approval recorded under both names would
-        satisfy every assertion here except this one, and would double every tally."""
+        satisfy every assertion here except this one, and would double every tally.
+
+        Asserted as the whole list of `-approved` rows rather than as
+        ``asks().get("ask-approved", 0) == 0``. That literal names one string of the many
+        that cannot be attributed to a guard, and it is a string no code path can produce
+        any more — so it holds only against a mutation that reintroduces that exact spelling
+        and lets every other unattributable row through, `None-approved` included.
+        """
         self.approve_dispatch(self.dispatch_nudge())
-        self.assertEqual(0, self.asks().get("ask-approved", 0),
-                         "a bare `ask-approved` cannot be attributed to any guard (#375)")
+        self.assertEqual(["dispatch-ask-approved"], self.approvals(),
+                         "an approval row was written that no guard can be credited with "
+                         "or debited for (#375)")
 
 
 class TestTheMarkerIsWhatCarriesTheKind(TwoNudgesInOnePlane):
@@ -208,6 +231,58 @@ class TestANewNudgeCannotBecomeUncountable(unittest.TestCase):
         and reads as a nudge that exists."""
         used = {k for fn in self._sites_that_ask().values() for k in self._kinds_passed(fn)}
         self.assertEqual(set(hooks._ASK_KINDS), used)
+
+
+class TestOneToolUseIdCarriesAtMostOnePendingAsk(unittest.TestCase):
+    """`_ask_mark_take` answers with ONE kind, so two markers on one `tool_use_id` would
+    resolve to whichever kind stands first in `_ASK_KINDS` and leave the other to age out
+    — counted as an ask and never as an approval, which is precisely the shape #371 read a
+    guard's deletion off.
+
+    That cannot happen today, and the reason is not in `hooks.py`: the two nudges are raised
+    from PreToolUse handlers whose SHIPPED matchers name disjoint tool families, so no
+    single tool call reaches both. This asserts that, rather than the docstring asserting it
+    — the assumption lives in `hooks/hooks.json`, which nothing else here reads, and a third
+    nudge added on `Write|Edit|MultiEdit` would satisfy every other test in this file while
+    silently making one of the two counts wrong.
+
+    Reads the manifest through `test_plugin`'s reader rather than a second one, so both
+    files see the same shipped file.
+    """
+
+    @staticmethod
+    def _matcher_of(handler: str) -> str:
+        """The tool matcher `hooks.json` ships for ``charter hook <handler>``."""
+        found = [entry.get("matcher") for entries in _manifest().values()
+                 for entry in entries for hook in entry["hooks"]
+                 if f"charter hook {handler} " in hook["command"] + " "]
+        assert len(found) == 1, f"{handler}: expected one manifest entry, got {found}"
+        return found[0] or ""
+
+    @classmethod
+    def _families(cls) -> dict[str, set[str]]:
+        """Tool name -> the nudge-raising handlers registered for it."""
+        names = {n for n in TestANewNudgeCannotBecomeUncountable._sites_that_ask()}
+        # `_HANDLERS` maps the manifest's hyphenated name onto the function.
+        by_fn = {fn.__name__: name for name, fn in hooks._HANDLERS.items()}
+        return {n: set(cls._matcher_of(by_fn[n]).split("|")) for n in sorted(names)}
+
+    def test_the_scan_found_the_real_handlers_in_the_shipped_manifest(self):
+        """Precondition: a matcher lookup that silently found nothing would make the
+        disjointness below vacuously true."""
+        fams = self._families()
+        self.assertEqual({"pretooluse_dispatch", "pretooluse_edit"}, set(fams))
+        for name, tools in fams.items():
+            self.assertTrue(tools and all(tools), f"{name} has no shipped matcher: {tools}")
+
+    def test_no_two_nudges_can_be_raised_on_the_same_tool(self):
+        fams = self._families()
+        for a, b in itertools.combinations(sorted(fams), 2):
+            with self.subTest(pair=(a, b)):
+                self.assertEqual(set(), fams[a] & fams[b],
+                                 f"{a} and {b} can both raise on the same tool call, so one "
+                                 f"tool_use_id can carry two pending asks — `_ask_mark_take` "
+                                 f"answers with one kind and the other is never counted")
 
 
 if __name__ == "__main__":

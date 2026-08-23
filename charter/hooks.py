@@ -206,6 +206,15 @@ def _ask_mark_take(sid, tuid) -> str | None:
     call of every tool a nudge can be raised on, and a directory scan there grows with the
     number of markers in the sessions dir, while a fixed pair of `stat()`s on a path that
     is almost always absent does not.
+
+    **It answers with ONE kind, and that is only correct while one `tool_use_id` can carry
+    at most one pending ask.** Two markers on the same id would resolve to whichever kind
+    stands first in :data:`_ASK_KINDS` and leave the other to age out under `_prune` —
+    counted as an ask, never as an approval, which is the reading that deleted a guard in
+    #371. Nothing here enforces that; the matchers in ``hooks/hooks.json`` do, by giving
+    the two nudges disjoint tool families (``Task|Agent`` and ``Write|Edit|MultiEdit``), and
+    `test_ask_approval_names_its_nudge.py` holds them to it — so a third nudge sharing a
+    family with an existing one fails a test rather than silently losing a count.
     """
     for kind in _ASK_KINDS:
         f = _ask_mark(sid, tuid, kind)
