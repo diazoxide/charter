@@ -495,11 +495,11 @@ class OpenCodeHarness(Harness):
         What charter cannot check is that opencode's `mcp` block names the server the same
         way. That is the contract Claude Code's rule already has — the name is the
         operator's, not charter's guess — and `guard` prints what it wrote so they can read
-        it back. Which is what makes that read-back load-bearing rather than cosmetic: it
-        currently renders as the repr of this tuple (`('slack_send', '*')`) and not as
-        anything `opencode.json` holds, so it is the one line an operator cannot check the
-        translation against. Filed as #395 rather than fixed here — the return type is
-        the harness rule interface, and three harnesses answer it.
+        it back. Which is what makes that read-back load-bearing rather than cosmetic, and
+        why the pair returned here is no longer what gets printed: it rendered as this
+        tuple's repr (`('slack_send', '*')`), which appears in no `opencode.json` there
+        has ever been. :meth:`rule_text` spells it the way the file does (#395); this
+        stays the pair `_apply_rule` writes from.
 
         The whole-server glob is as tight as opencode's own names allow and no tighter:
         `_` is both the separator `toolName` joins with and a legal character either side
@@ -539,6 +539,35 @@ class OpenCodeHarness(Harness):
                 if p.startswith(prefix) and p.endswith(")"):
                     return oc_id, p[len(prefix):-1]
         return "bash", p
+
+    def rule_text(self, pattern: str) -> str:
+        """The rule as `opencode.json` holds it: ``permission.slack_send."*"``.
+
+        A path into the file, so the operator can open it and land on the same key. The
+        base default would have printed :meth:`ask_rule`'s pair, and a 2-tuple's repr
+        (`('slack_send', '*')`) is not a spelling anything on disk uses — which mattered
+        the day #374 started translating `mcp__slack__send` into a name the operator
+        never typed and charter cannot verify against their `mcp` block (#395).
+
+        **The shape follows the write, because `_apply_rule` chooses between two.** A
+        :data:`FLAT_ONLY_PERMISSIONS` key takes a bare action and holds no glob at all —
+        the file says ``"doom_loop": "ask"`` — so printing ``permission.doom_loop."*"``
+        would send the reader looking for a key that is not there, over the one rule
+        shape where charter's own writer already had to know better. The object form is
+        kept when the glob is not `*`, which is the case `_apply_rule` REFUSES: nothing
+        is written, `guard` prints nothing, and the description stays true to what was
+        asked rather than quietly implying the glob was dropped.
+
+        The glob is JSON-quoted rather than pasted bare. It carries the operator's own
+        words — ``permission.bash."git push *"`` — and a spaced pattern run together with
+        a dotted path is unreadable at exactly the moment the line is being read
+        carefully. `json.dumps` is what wrote the file, so the quoting the reader sees
+        here is the quoting the file uses.
+        """
+        tool, glob = self.ask_rule(pattern)
+        if tool in FLAT_ONLY_PERMISSIONS and glob == "*":
+            return f"permission.{tool}"
+        return f"permission.{tool}.{json.dumps(glob)}"
 
     def rule_outranks(self, pattern: str) -> str:
         """opencode's own permission names this rule will decide for too, or ``""``.
