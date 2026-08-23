@@ -423,6 +423,39 @@ def _launcher_is_alive(pid: int) -> bool:
     return True
 
 
+def is_live(fid: str) -> bool:
+    """Is *fid* a frame of THIS plane that is still running? Asks two questions, cheaply.
+
+    :func:`reap` asks the same pair to decide what to delete; this asks them to decide
+    what to *draw* (ADR 0019 — `statusline.main` blanks its output inside a frame, and a
+    frame that has ended must not keep it blank forever). Both callers need an answer on
+    a hot path — `reap` runs at every launch, this one runs every time Claude Code
+    repaints its footer — so neither may shell out to tmux for it. The frame id ends in
+    the launcher's own pid (:func:`frame_id`), so ``os.kill(pid, 0)`` answers it with a
+    syscall and no subprocess at all.
+
+    **The directory is asked about first, and it is not redundant.** The value reaching
+    here comes from ``$CHARTER_SESSION_ID``, which a harness that is not a frame also
+    sets — Claude Code's own session id is a UUID, and a UUID whose last group happens to
+    be all digits parses as a pid perfectly well. A frame that exists has a directory
+    (``cmd_launch`` creates and bumps it before any pane is split); an id that never named
+    one is not this plane's frame whatever its digits say. It also keeps the SUITE honest:
+    a test that isolates ``config.STATE_DIR`` (every test that touches plane state does)
+    finds no frame directory there, so suppression cannot switch itself on because of
+    whatever frame the developer's own terminal happens to be sitting in.
+
+    Both halves must be true, and each is the sole guard against one real failure: without
+    the pid, a stale directory left by a frame that crashed would blank the status line on
+    that plane forever; without the directory, an id that is not a frame id at all could
+    blank it by coincidence.
+    """
+    d = frame_dir(fid)
+    if d is None or not d.is_dir():
+        return False
+    pid = _launcher_pid(fid)
+    return pid is not None and _launcher_is_alive(pid)
+
+
 def reap(live: set[str], *, server: str) -> list[str]:
     """Remove state for frames of *server* that are gone. Returns what was removed.
 

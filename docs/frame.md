@@ -192,15 +192,50 @@ Below `[frame]`'s `min-cols`/`min-rows`, the side panels (`left`/`right`) are th
 drop — any shortage costs them, since neither can spare its own divider. A further shortage
 in rows drops `top` too. Below half of either floor, every panel drops and the harness
 simply gets the whole terminal, the same choice `charter`'s own status line makes when it
-runs out of width. `left`/`right` are accepted in configuration and sized, but nothing
-renders in them yet — asking for one leaves the harness pane holding that space instead of
-a dead, unwritten-to pane, and `charter frame-probe`/`charter doctor` name it.
+runs out of width. So a narrow terminal degrades to the two strips on its own; nothing has
+to be configured for it.
+
+## The status line goes quiet inside a frame
+
+**Inside a frame, `charter statusline` prints nothing.** The panels are built out of the
+status line's own renderers, so leaving both on drew the plane's state on the edges and
+then again in Claude Code's footer three lines below them. The frame owns the surface
+(ADR 0019); outside a frame the status line is unchanged in every respect.
+
+Two things it does anyway, and they are deliberate:
+
+- **It keeps running, and keeps recording.** Claude Code passes this session's token usage
+  to the `statusLine` command and nowhere else — no hook ever sees those numbers — so the
+  command still reads its payload and still writes the cache-hit and prefix-rebuild
+  history. Unwiring `statusLine` from `.claude/settings.json` because it "prints nothing
+  now" would delete that record rather than remove a duplicate.
+- **A human asking still gets an answer.** Run `charter statusline` yourself in any
+  terminal, or `charter statusline --watch`, and it renders in full. Only the piped
+  invocation — which is how Claude Code calls it — goes blank, and only while a frame with
+  this session's id is actually running.
+
+The honest cost: `ctx NN%` and `cache NN%` lived on the status line, and no panel draws
+them yet, so a framed Claude Code session does not show them. codex and opencode never
+showed them at all — nothing feeds either one a per-turn usage payload to draw from.
+
+## One frame, one charter session
+
+`charter <harness>` exports the frame's id as `$CHARTER_SESSION_ID`, the same variable
+every charter command reads to answer "which session am I". That is on purpose: inside a
+frame, the frame **is** the charter session. The agent's shell, each panel and any
+`charter` command typed inside the frame all agree on one identity, which is why
+`charter workspace use <name>` typed at the agent moves the panels too — the pointer is
+written under the frame's id and the panels read it back under the same one.
+
+Claude Code's own session id has not gone anywhere; it arrives in the status line's stdin
+payload and keys what comes with it (the usage history, the session trace). Two ids, two
+jobs. See ADR 0019.
 
 ## Configuring it
 
 ```toml
 [frame]
-slots = ["top", "bottom"]
+slots = ["top", "bottom", "left", "right"]
 mouse = false
 hotkey = "F2"
 history-limit = 50000
@@ -214,6 +249,14 @@ modifiers and then a key (`F2`, `Up`, `PPage`, `a`, `/`). Anything else falls ba
 cannot make sense of it. That check is not cosmetic: this value is interpolated into tmux
 configuration that `source-file` *executes*, and `charter.toml` is a committed, shared
 file that arrives from someone else's machine.
+
+All four edges are on by default. `top` and `bottom` are one-line strips; `left` (repo
+rows) and `right` (persona chips) are 22-column sidebars, and both drop themselves on a
+terminal too small for them (see above). The **order** is the order the panes are split
+in, and therefore the geometry: with `bottom` before the sidebars its row spans the whole
+frame and the sidebars sit between the two strips, while listing it last leaves it only
+the width the sidebars did not take. The bottom row is where an alert and the command that
+fixes it appear, so the shipped order gives it the full width.
 
 `slots`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`, `min-cols`
 and `min-rows` are the three that are not: charter.toml spells them with a hyphen: the

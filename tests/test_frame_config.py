@@ -3,6 +3,11 @@
 Defaults are the shipped behaviour, so they are asserted rather than assumed: `mouse` is
 off because `set -g mouse on` takes over drag-select, and breaking the operator's copy to
 enable a feature v1 does not ship is a bad trade.
+
+`slots` is all four edges since #386, and the reason is the same kind of trade read the
+other way: inside a frame `charter statusline` draws nothing (ADR 0019), so an edge the
+frame does not fill is information nobody sees at all. The order is asserted too, because
+it is the split order and therefore the geometry — see `instance.FRAME_FIELDS`.
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ from charter import instance
 class FrameDefaults(unittest.TestCase):
     def test_an_absent_section_yields_the_shipped_defaults(self):
         f = instance.frame_of({})
-        self.assertEqual(f["slots"], ["top", "bottom"])
+        self.assertEqual(f["slots"], ["top", "bottom", "left", "right"])
         self.assertIs(f["mouse"], False)
         self.assertEqual(f["hotkey"], "F2")
         self.assertEqual(f["history_limit"], 50000)
@@ -27,25 +32,29 @@ class FrameDefaults(unittest.TestCase):
         f = instance.frame_of({"frame": {"mouse": True, "hotkey": "F5"}})
         self.assertIs(f["mouse"], True)
         self.assertEqual(f["hotkey"], "F5")
-        self.assertEqual(f["slots"], ["top", "bottom"])
+        self.assertEqual(f["slots"], ["top", "bottom", "left", "right"])
 
     def test_an_unknown_slot_is_dropped_rather_than_carried(self):
         """A typo must not reach a tmux argv. Dropping is louder than it looks: the slot
         simply does not appear, and `doctor` has the config to report.
 
-        By itself this does not distinguish "filtered" from "ignored": `["top",
-        "sideways", "bottom"]` filters to `["top", "bottom"]`, which is byte-identical to
-        the default, so a stub that always returns the default would also pass this one.
-        `test_a_valid_slots_override_actually_takes_effect` below is what rules that out.
+        Until #386 this could not tell "filtered" from "ignored" on its own: the default
+        was `["top", "bottom"]`, so `["top", "sideways", "bottom"]` filtered to something
+        byte-identical to it and a stub that always returned the default passed too. The
+        shipped default is all four edges now, so the two answers differ and this test
+        distinguishes them by itself; `test_a_valid_slots_override_actually_takes_effect`
+        below stays, because that is a property worth pinning on purpose rather than by
+        the luck of what the default happens to be this release.
         """
         f = instance.frame_of({"frame": {"slots": ["top", "sideways", "bottom"]}})
         self.assertEqual(f["slots"], ["top", "bottom"])
 
     def test_a_valid_slots_override_actually_takes_effect(self):
         """Companion to the test above: a *different* valid override must actually be
-        honoured, not just filtered. `["left", "right"]` shares no elements with the
-        default `["top", "bottom"]`, so a stub that always returns the default — which
-        would still pass the "unknown slot is dropped" test above — fails this one."""
+        honoured, not just filtered. Every slot name is in the shipped default now, so
+        "shares no element with it" is no longer available to anything — what rules a
+        default-returning stub out here is the list itself: two entries, in an order the
+        default does not have them in."""
         f = instance.frame_of({"frame": {"slots": ["left", "right"]}})
         self.assertEqual(f["slots"], ["left", "right"])
 
@@ -60,7 +69,7 @@ class FrameDefaults(unittest.TestCase):
         final `isinstance(value, type(default))` type check is deleted: without it, the
         string `"lots"` would be assigned straight into `history_limit`."""
         f = instance.frame_of({"frame": {"slots": "top", "history-limit": "lots"}})
-        self.assertEqual(f["slots"], ["top", "bottom"])
+        self.assertEqual(f["slots"], ["top", "bottom", "left", "right"])
         self.assertEqual(f["history_limit"], 50000)
 
     def test_a_bool_does_not_satisfy_a_non_bool_default(self):

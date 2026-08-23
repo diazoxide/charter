@@ -1855,12 +1855,54 @@ class Launch(PersonaIso, unittest.TestCase):
 
     def test_charter_session_id_reaches_the_harness_environment(self):
         """Task 8's `notify.plane_changed` reads `$CHARTER_SESSION_ID` back out of the
-        running harness's own environment — this is the one place it is ever set."""
+        running harness's own environment — this is the one place it is ever set.
+
+        This asserts the environment handed to the tmux CLIENT, and on its own that
+        proved nothing about the harness: #411 is a frame whose harness read a DIFFERENT
+        frame's id while this test stayed green. The client's environment reaches the
+        pane only when this call is what starts the server. See the two tests below."""
         fake = _FakeTmux(exit_code=0)
         rc = _launch(fake)
         self.assertEqual(rc, 0)
         self.assertIsNotNone(fake.new_session_env)
         self.assertEqual(fake.new_session_env.get("CHARTER_SESSION_ID"), fake.fid)
+
+    def test_the_frame_id_rides_on_the_new_session_command_not_only_its_client(self):
+        """#411, and the half the test above cannot see. Every frame on charter's private
+        server shares ONE tmux server, so only the first launch's `new-session` starts it
+        — for every later frame tmux builds the new pane's environment from the SERVER's
+        global one, which belongs to whichever launcher started it. Measured against tmux
+        3.7c: a second frame's harness reported the FIRST frame's `$CHARTER_SESSION_ID`,
+        so `charter ws use` wrote the first frame's workspace pointer and every hook
+        bumped the first frame's version — the second frame's panels were never told
+        anything had changed.
+
+        `-e` is what fixes it, and it must land before `--`: after it, it is not a tmux
+        option at all, it is two more arguments handed to the harness."""
+        fake = _FakeTmux(exit_code=0)
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        session_cmd = next(c for c in fake.calls if "new-session" in c)
+        pair = f"CHARTER_SESSION_ID={fake.fid}"
+        self.assertIn(pair, session_cmd,
+                      "the harness pane's own environment must carry this frame's id")
+        self.assertEqual(session_cmd[session_cmd.index(pair) - 1], "-e")
+        self.assertLess(session_cmd.index(pair), session_cmd.index("--"),
+                        "-e is new-session's own option — after `--` it is the "
+                        "harness's argv")
+
+    def test_below_the_env_floor_the_launch_carries_nothing_rather_than_failing(self):
+        """`new-session -e` arrived in tmux 3.2 (`tmuxctl.SESSION_ENV_FLOOR`, read from
+        tmux's own CHANGES). Below that it is not a flag that degrades, it is one that
+        makes the command a parse error — and `below_floor_message` explicitly still lets
+        a pre-3.2 operator launch. So the environment is withheld there and the frame
+        still starts, which is exactly what every frame did before #411."""
+        fake = _FakeTmux(exit_code=0)
+        rc = _launch(fake, version=(3, 1))
+        self.assertEqual(rc, 0)
+        session_cmd = next(c for c in fake.calls if "new-session" in c)
+        self.assertNotIn("-e", session_cmd,
+                         "a tmux that cannot parse -e must be handed none")
 
     def test_columns_and_lines_are_stripped_from_the_environment_handed_to_tmux(self):
         """Belt and braces alongside every pane measuring its own tty (`frame/slots.py`,
@@ -3253,11 +3295,18 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
                          "a 60x8 tmux window has no room for a panel")
 
     def test_the_panels_are_split_off_the_harness_pane(self):
+        """The slot list is pinned here rather than left to the shipped default: this
+        test's subject is that every split targets the harness pane's id, and reading the
+        count off `config.FRAME` made it fail the day the default changed (#386 turned all
+        four edges on) for a reason that has nothing to do with what it checks."""
         fake = _FakeOperatorTmux(exit_code=0,
-                                 panel_pane_ids={"top": "%8", "bottom": "%9"})
-        _launch_inside(fake)
+                                 panel_pane_ids={"top": "%8", "bottom": "%9",
+                                                 "left": "%10", "right": "%11"})
+        with mock.patch.dict(config.FRAME,
+                             {"slots": ["top", "bottom", "left", "right"]}):
+            _launch_inside(fake)
         splits = [c for c in fake.calls if "split-window" in c]
-        self.assertEqual(len(splits), 2, f"one per configured slot: {splits}")
+        self.assertEqual(len(splits), 4, f"one per configured slot: {splits}")
         for cmd in splits:
             self.assertEqual(cmd[cmd.index("-t") + 1], "%7",
                              "every split targets the harness pane's id — tmux "

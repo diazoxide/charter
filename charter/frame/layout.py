@@ -134,13 +134,18 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
 
     *env* rides on `-e`, one `NAME=VALUE` argv element each, sorted so the command is
     the same on every launch. This is the only way charter's own variables
-    (`CHARTER_SESSION_ID`, `CHARTER_HARNESS`) can reach the harness here: the
-    private-server path gets them because `new-session` starts the server and the server
-    inherits the launcher's environment, and there is no equivalent on a server that is
-    already running and is not charter's. The alternative tmux offers — `set-environment
-    -t <session>` — would reach the harness AND hand every new shell the operator opens
-    in that session a frame id that is not theirs, which is the identity collision
+    (`CHARTER_SESSION_ID`, `CHARTER_HARNESS`) can reach the harness here. The
+    alternative tmux offers — `set-environment -t <session>` — would reach the harness
+    AND hand every new shell the operator opens in that session a frame id that is not
+    theirs, which is the identity collision
     `docs/superpowers/specs/2026-08-21-harness-wrapper-design.md` removed `WINDOWID` for.
+
+    **This used to add "the private-server path gets them because `new-session` starts
+    the server and the server inherits the launcher's environment", and that was #411.**
+    It is true only of the launch that actually starts the server; every later frame on
+    charter's shared private server finds it running and inherits the FIRST launcher's
+    environment instead. `session_argv` now carries the same `-e` for the same reason —
+    see its docstring for what was measured.
 
     Measured against tmux 3.7c: `respawn-pane -e` REPLACES the pane's environment rather
     than adding to whatever `new-window -e` set, so everything the harness needs is on
@@ -158,7 +163,8 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
 
 
 def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
-                 harness_argv: list[str]) -> list[str]:
+                 harness_argv: list[str],
+                 env: dict[str, str] | None = None) -> list[str]:
     """The `new-session` command that starts the frame's tmux server, harness inside it.
 
     Detached (`-d`): this is launched from a script with no tty to hand tmux, not typed
@@ -168,9 +174,36 @@ def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
     That id is the whole fix the module docstring describes: the caller must capture it
     off stdout and pass it to `panel_argvs`, because a `session:0.0`-style index stops
     naming the harness after the very first split.
+
+    *env* rides on `-e`, exactly as it does for :func:`respawn_argv` and
+    :func:`panel_argvs`, and **#411 is what it is here for.** It used to be absent
+    because passing the launcher's environment to the tmux CLIENT was believed to be
+    enough — "`new-session` starts the server and the server inherits the launcher's
+    environment", as `respawn_argv`'s own docstring put it. That is true of the launch
+    that STARTS the server and of no other: every frame on charter's private server
+    shares one server (see `commands_frame`'s module docstring), so a second frame's
+    `new-session` finds it already running, and tmux builds the new pane's environment
+    from the SERVER's global environment — captured from whichever launcher happened to
+    start it, possibly days ago.
+
+    Measured against tmux 3.7c, two frames on one private socket, reading the harness
+    shell's own `$CHARTER_SESSION_ID`: the second frame's harness reported
+    ``default-58069`` while its own session was ``default-58696``, and
+    ``show-environment -g CHARTER_SESSION_ID`` held the first frame's id. Everything
+    keyed on that variable then went to the wrong frame — `charter ws use` wrote the
+    first frame's workspace pointer, and every hook bumped the first frame's version, so
+    the second frame's panels were never told anything had changed. The panels
+    themselves were already right: `commands_frame._session_id_env_argv` ties the id to
+    the SESSION, which `split-window` honours (measured on the same server), so this
+    closes the one pane that call cannot reach — the one `new-session` itself creates.
+
+    ``None`` means "carry nothing", which is what a tmux below
+    `tmuxctl.SESSION_ENV_FLOOR` gets: `-e` is not a flag `new-session` degrades on, it is
+    one it refuses, and refusing takes the whole launch with it.
     """
     return _tmux(socket, "-f", conf, "new-session", "-d", "-s", session,
                 "-x", str(cols), "-y", str(rows), "-P", "-F", "#{pane_id}",
+                *_env_argv(env),
                 "--", *harness_argv)
 
 

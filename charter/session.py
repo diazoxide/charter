@@ -28,12 +28,26 @@ _SAFE = re.compile(r"[^A-Za-z0-9._-]")
 def current(explicit: str | None = None) -> str | None:
     """This session's id, or ``None`` when there is not one.
 
-    ``explicit`` first — the status line receives the id in its stdin payload rather than
-    its environment, which Claude Code scrubs. Then ``$CHARTER_SESSION_ID``, which any
-    harness sets when it knows its own session (opencode's plugin reads it off
-    ``shell.env``'s ``input.sessionID``, per invocation — one server hosts many sessions,
-    so nothing may be cached). Then ``$CLAUDE_CODE_SESSION_ID``, kept so no session
-    already running regresses the day the neutral name ships.
+    ``explicit`` first — the status line receives the id in its stdin payload, and Claude
+    Code never puts its own session id in the environment at all. (It passes the
+    environment on: measured 2026-08-24 against Claude Code 2.1.241, a `statusLine`
+    command saw every variable exported to the harness. It simply has nothing of its own
+    to put there. An earlier version of this line said the environment was *scrubbed*,
+    which is a different and false claim — see :mod:`charter.statusline`'s own docstring
+    for the measurement.) Then ``$CHARTER_SESSION_ID``, which any harness sets when it
+    knows its own session (opencode's plugin reads it off ``shell.env``'s
+    ``input.sessionID``, per invocation — one server hosts many sessions, so nothing may
+    be cached). Then ``$CLAUDE_CODE_SESSION_ID``, kept so no session already running
+    regresses the day the neutral name ships.
+
+    **Inside a frame that variable holds the FRAME's id, and that is deliberate** — see
+    ADR 0019 and ``docs/frame.md``. `charter <harness>` exports the frame id here, so
+    every process the frame contains (the agent's own shell, each panel, any `charter`
+    command typed inside it) agrees about which charter session it belongs to, which is
+    why `charter ws use` in the agent's shell moves the panels. Claude Code's own session
+    id keys what arrives by payload — the usage history, the trace — and the frame id keys
+    what a process can only read off its environment; they are two identities with two
+    jobs, not one identity with a bug.
 
     Sanitised, because the value becomes a filename.
     """

@@ -1517,8 +1517,16 @@ def cmd_launch(args) -> int:
     status_path = fdir / "exit"
     conf_path.write_text(_PLACEHOLDER_CONF)
 
+    # `env=` and not merely `tmuxctl.run(env=env)` below: the second only sets what the
+    # tmux CLIENT runs with, and a client's environment reaches the new pane ONLY when
+    # this call is what starts the server. Every frame after the first on `SOCKET` finds
+    # it already running, and its harness would inherit the FIRST frame's
+    # `$CHARTER_SESSION_ID` — #411, measured against tmux 3.7c; see `layout.session_argv`.
+    # Withheld below `SESSION_ENV_FLOOR`, where `-e` is a parse error rather than a
+    # missing feature and would take the whole launch down with it.
     session_cmd = layout.session_argv(session=fid, conf=str(conf_path), socket=SOCKET,
-                                      cols=cols, rows=rows, harness_argv=argv)
+                                      cols=cols, rows=rows, harness_argv=argv,
+                                      env=env if v >= tmuxctl.SESSION_ENV_FLOOR else None)
     proc = tmuxctl.run("starting the frame", session_cmd, env=env)
     if proc.returncode != 0:
         return 1

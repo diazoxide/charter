@@ -30,15 +30,22 @@ declares the layout; all width math lives in :mod:`charter.tui`, whose nodes
 guarantee that no emitted line ever exceeds the terminal width — overflow is
 truncated with ``…``, never wrapped (a wrap shears every column below it).
 
-Note: Claude Code does **not** pass the session's environment to the status
-line, so an ``$CHARTER_WORKSPACE``-pinned session shows the active-file/default here
-even though its commands honor the env var. Cosmetic only.
+**On this command's environment.** This used to say Claude Code does "not pass the
+session's environment to the status line", and that an ``$CHARTER_WORKSPACE``-pinned
+session therefore showed the default here. **Measured false** (2026-08-24, Claude Code
+2.1.241, darwin): a `statusLine` command started with both variables exported saw
+``SID=[probe-frame-99999] WS=[probews]`` — Claude Code spawns this command with its own
+process environment, exactly as it spawns every other subprocess. The same probe measured
+the other half this module now depends on: **stdout is a pipe, never a tty**. Both facts
+are load-bearing for :func:`main`'s frame check, so they are written down as measurements
+rather than left as beliefs — the previous sentence here was a belief, and it was wrong.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -273,6 +280,34 @@ def _cache_hint(streak: int) -> str | None:
             f"churns the prefix; prefer {_R}{_BOLD}/rewind{_R}{_DIM} over /compact{_R}")
 
 
+def record_usage(payload: dict) -> list[int]:
+    """Write this turn's cache numbers into the session's trend; return the trend.
+
+    Public, and the reason is ADR 0019. Inside a frame :func:`main` draws nothing, but it
+    still has to *run*: Claude Code's per-turn payload is the only place these numbers
+    exist — ``hooks.py`` has zero references to usage, and no other charter surface is
+    handed them — so a "suppression" that stopped invoking this command would delete the
+    record rather than merely hide a duplicate of it. Splitting the write out of
+    :func:`_context_gauge` is what lets the blank path keep the record without drawing a
+    character, and keeps the extraction of ``read``/``write``/``hit`` in ONE place so the
+    drawing path and the recording path cannot come to disagree about what a turn was.
+
+    Reads nothing that is not in *payload*, so a caller that does not intend to draw pays
+    one file read and one file write and nothing else — no git, no forge, no persona scan.
+    ``[]`` when the payload carries no live numbers, which is every turn early in a
+    session and right after ``/compact``: there is nothing to record then, and recording a
+    zero would be inventing a turn.
+    """
+    cw = (payload or {}).get("context_window") or {}
+    cu = cw.get("current_usage") or {}
+    read = cu.get("cache_read_input_tokens") or 0
+    write = cu.get("cache_creation_input_tokens") or 0
+    if not (read or write):
+        return []
+    hit = round(100 * read / (read + write))
+    return _record_turn((payload or {}).get("session_id") or "", hit, read, write)
+
+
 def _context_gauge(payload: dict) -> list[str]:
     """Live **context + prompt-cache health** from the status-line payload.
 
@@ -310,7 +345,7 @@ def _context_gauge(payload: dict) -> list[str]:
         out.append(f"{_DIM}cache{_R} {col}{hit}%{_R}")
         try:
             sid = payload.get("session_id") or ""
-            trend = _record_turn(sid, hit, read, write)
+            trend = record_usage(payload)
             # Rebuilds are the dominant cost and are invisible in the ratio — surface them
             # cumulatively so the price of a mid-task switch stays on screen.
             n, cost = _rebuilds(_history(sid))
@@ -2036,6 +2071,50 @@ def watch(interval: float = WATCH_INTERVAL) -> int:
         out.flush()
 
 
+def a_frame_owns_this_surface() -> bool:
+    """Is this invocation drawing INTO a live frame, which already draws all of it?
+
+    ADR 0019. Inside a frame the panels carry what the status line carries, so charter
+    would otherwise print the same repos, personas and alerts twice on one screen — once
+    on the edges tmux gave it, once again in Claude Code's own footer just above them.
+
+    **Here at the command edge, deliberately, and never inside :func:`render`.** The check
+    reads ambient state — an environment variable, a directory, a pid — so a `render` that
+    consulted it would answer differently depending on which terminal the developer
+    happened to type `python3 -m unittest` in: the eight-plus `test_statusline_*` modules
+    call `render` directly, and this project's own suite now runs inside a frame. A
+    property that changes with the room the developer is standing in is not a property a
+    test can pin. Everything below this line is `main`'s alone; `render` is unchanged and
+    every test of it still means what it meant.
+
+    Two conditions, and both were measured rather than assumed (2026-08-24, Claude Code
+    2.1.241, darwin — see the module docstring):
+
+    * **stdout is not a tty.** Claude Code invokes this command with its stdout piped, so
+      a tty means a human ran `charter statusline` by hand and wants to see the thing they
+      asked for — a frame on the same screen is no reason to hand them a blank line.
+    * **``$CHARTER_SESSION_ID`` names a live frame of this plane.** The frame launcher
+      exports the frame id under that name (`commands_frame._frame_env`) and Claude Code
+      passes its own environment to this command intact, so the variable is here to be
+      read. :func:`charter.frame.state.is_live` is what decides "live", by the pid the id
+      ends in — no tmux call on a path that runs every time the footer repaints, and no
+      stale directory left by a crashed frame blanking this plane's status line forever.
+
+    Never raises. Everything it touches is ambient, and every failure means "no frame"
+    (which renders) rather than a status line that vanished for a reason nobody can see.
+    """
+    try:
+        if sys.stdout.isatty():
+            return False
+        fid = os.environ.get("CHARTER_SESSION_ID", "")
+        if not fid:
+            return False
+        from .frame import state as frame_state
+        return frame_state.is_live(fid)
+    except Exception:
+        return False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="charter statusline", add_help=True)
     ap.add_argument("--watch", action="store_true",
@@ -2053,6 +2132,23 @@ def main(argv=None) -> int:
         payload = json.load(sys.stdin)
     except Exception:
         payload = {}
+    if a_frame_owns_this_surface():
+        # **Draw nothing; record anyway — and do not "clean this up".** It looks like a
+        # command that has been switched off and could therefore be unwired from
+        # `.claude/settings.json` altogether. It is the opposite: it is a command kept
+        # running for its side effect. Claude Code's payload is the only source of this
+        # session's token usage — `hooks.py` never sees those fields — so unwiring the
+        # command destroys the record, silently, and nothing would notice until somebody
+        # went looking for a history that had stopped being written months earlier.
+        # ADR 0019 says this in prose; this comment says it where the deletion would
+        # happen. `print()` and not `return 0` alone: Claude Code reads a line from this
+        # command, and an empty one is how it is told there is nothing to show.
+        try:
+            record_usage(payload)
+        except Exception:
+            pass          # the record is best-effort; a footer is not worth a crash
+        print()
+        return 0
     # Defense in depth (FINDING M9): `render()` itself is guarded end-to-end, but this
     # is the outermost boundary of the whole subprocess — it must never crash even if a
     # future bug (or a monkeypatch, or an import-time surprise) reaches past render's

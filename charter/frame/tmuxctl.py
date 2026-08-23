@@ -67,6 +67,23 @@ FLOOR = (3, 2)
 #: two constants.
 RESIZE_HOOK_FLOOR = (3, 3)
 
+#: The first tmux release in which `new-session` accepts `-e` at all — the VERSION is
+#: read from tmux's own published CHANGES file (github.com/tmux/tmux, "CHANGES FROM 3.1c
+#: TO 3.2"): "Add -e flag for new-session to set environment variables, like the same
+#: flag for new-window." Confirmed present in this machine's 3.7c man page
+#: (``new-session … [-e environment]``, "-e takes the form 'VARIABLE=value'").
+#:
+#: Numerically equal to `FLOOR` and deliberately a SECOND constant, for the same reason
+#: `RESIZE_HOOK_FLOOR` is: it is a different fact about tmux and it will not necessarily
+#: move with the other. `FLOOR` is where charter WARNS; this is where a `new-session`
+#: carrying `-e` stops being a command tmux can parse — below it the flag is not degraded
+#: but rejected outright ("unknown option"), which would take the whole launch down on a
+#: tmux that `below_floor_message` explicitly still allows to launch. `cmd_launch`
+#: therefore omits the environment below this line and accepts what that costs there:
+#: the harness of a SECOND frame on charter's shared private server inherits the FIRST
+#: frame's environment, exactly as every frame did before #411.
+SESSION_ENV_FLOOR = (3, 2)
+
 #: The session-scoped tmux environment variable carrying the interpreter that runs
 #: charter from inside a frame — `"$CHARTER_PY" -m charter …`, never a bare `charter`
 #: off `$PATH`. Defined HERE, not in either of the two modules that build text around it
