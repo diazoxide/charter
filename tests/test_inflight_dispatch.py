@@ -204,17 +204,19 @@ class DispatchNudge(unittest.TestCase):
     def setUp(self) -> None:
         self._td = TemporaryDirectory()
         root = Path(self._td.name)
-        self._state, self._root = config.STATE_DIR, config.ROOT
-        self._personas = config.PERSONAS_DIR
-        config.STATE_DIR = root / ".charter"
-        config.ROOT = root
-        config.PERSONAS_DIR = root / "personas"
+        # `config.use`, not three named attributes. The nudge these cases drive calls
+        # `_trace("dispatch-ask", data.get("session_id"))`, and `_run`'s payload carries no
+        # session id — so the row fell through to the ambient `$CHARTER_SESSION_ID` and
+        # landed in the OPERATOR's live trace bucket, which is what `charter trace
+        # --summary` counts (#372). `PERSONA_STATE_DIR` was the attribute this list missed;
+        # `config.DERIVED` exists so a fixture cannot miss one.
+        #
+        # `charter.toml` first, because `use` re-derives HAS_CONTROL_PLANE and the
+        # hand-rolled patch left the real plane's `True` standing.
+        (root / "charter.toml").write_text("schema = 1\n")
+        self._orig = config.use(root)
         self.addCleanup(self._td.cleanup)
-
-        def _restore():
-            config.STATE_DIR, config.ROOT = self._state, self._root
-            config.PERSONAS_DIR = self._personas
-        self.addCleanup(_restore)
+        self.addCleanup(lambda: config.restore(self._orig))
 
         self._persona("coder", "dispatch-isolation: worktree\n")
         self._persona("explorer", "")

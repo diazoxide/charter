@@ -2,9 +2,9 @@
 switched mid-session (unless forced), and SessionStart nudges the agent to confirm one.
 
 The lock is keyed by the Claude session id and stored at ``.charter/sessions/<sid>.lock``.
-These paths are import-time-derived from ``STATE_DIR``, so the test repoints
-``STATE_DIR``/``SESSIONS_DIR``/``TERMINALS_DIR``/``WORKSPACES_DIR`` at a tmp dir and pins
-``$CLAUDE_CODE_SESSION_ID`` so ``set_active`` sees a stable session.
+These paths are derived from ``STATE_DIR``, so the fixture repoints the whole plane at a tmp
+dir through ``config.use`` and pins ``$CLAUDE_CODE_SESSION_ID`` so ``set_active`` sees a
+stable session.
 """
 
 from __future__ import annotations
@@ -28,13 +28,19 @@ class WorkspaceLockBase(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="edm-wslock-"))
-        self._orig = {k: getattr(config, k)
-                      for k in ("ROOT", "STATE_DIR", "SESSIONS_DIR", "TERMINALS_DIR", "WORKSPACES_DIR")}
-        config.ROOT = self.tmp
-        config.STATE_DIR = self.tmp / ".charter"
-        config.SESSIONS_DIR = config.STATE_DIR / "sessions"
-        config.TERMINALS_DIR = config.STATE_DIR / "terminals"
-        config.WORKSPACES_DIR = self.tmp / "workspaces"
+        # `config.use`, not a hand-picked list. This fixture named five attributes and
+        # `set_active` writes through a sixth — `PERSONA_STATE_DIR`, where the trace lives —
+        # so every case below appended `workspace-use`/`workspace-refused` rows to the
+        # DEVELOPER's own plane, twenty a run, in the session bucket `charter trace
+        # --summary` counts (#372). `config.DERIVED` is the single definition of what
+        # follows from a root precisely so a fixture cannot miss one; #227 moved
+        # `test_plugin` onto the same seam after the same failure.
+        #
+        # `charter.toml` first: `use` re-derives HAS_CONTROL_PLANE, and these cases drive
+        # handlers that are gated on it. The hand-rolled patch left the real plane's value
+        # standing, so dropping the marker would silently change what is under test.
+        (self.tmp / "charter.toml").write_text("schema = 1\n")
+        self._orig = config.use(self.tmp)
         config.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
 
         self._orig_env = {k: os.environ.get(k) for k in ("CLAUDE_CODE_SESSION_ID", "CHARTER_WORKSPACE")}
@@ -43,8 +49,7 @@ class WorkspaceLockBase(unittest.TestCase):
         self.addCleanup(self._restore)
 
     def _restore(self) -> None:
-        for k, v in self._orig.items():
-            setattr(config, k, v)
+        config.restore(self._orig)
         for k, v in self._orig_env.items():
             if v is None:
                 os.environ.pop(k, None)
