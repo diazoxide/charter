@@ -21,14 +21,34 @@ as a silent *mutation*, and `set()` still returns successfully:
 None of this needs an attacker or a race with another writer. A rate limit is enough, and
 rate limiting is what #322 was actually reported from.
 
-**The window is the whole point, and it is what makes these tests non-vacuous.** `set()`
-issues *three* separate `op item get` calls — `_fields`, then `_item_present`, then
-`_existing_ids` — all fetching the same document (#355). So the failure under test is not
-"op is broken", which #352 already covers and which would make `_fields` raise before any
-of this is reached. It is the second or third call failing after the first SUCCEEDED. Every
-test below therefore asserts that the first `op item get` returned 0 before the one that
-failed; a fixture where op fails from the start would prove nothing here, and neither would
-an item that genuinely had no fields to renumber.
+**The window these tests were written against is gone (#355), and this file was rewritten
+when it closed.** It used to say:
+
+    The window is the whole point, and it is what makes these tests non-vacuous. `set()`
+    issues *three* separate `op item get` calls — `_fields`, then `_item_present`, then
+    `_existing_ids` — all fetching the same document (#355).
+
+and every case below failed a *later* `op item get` after the first had succeeded, with
+`assertFirstReadSucceeded` guarding that the window had really been entered. It also
+carried the note that "if this ever drops to one (#355), the `fail_get_from` indices below
+stop meaning what their comments say and must be revisited". #355 dropped it to one, so
+they are revisited here rather than deleted.
+
+What the collapse changes, and what it does not:
+
+* **(a)** `_existing_ids` returning `{}` on a non-zero exit is now *unreachable*, not
+  merely handled — there is no second fetch to fail. The property is preserved by
+  construction rather than by a check, and `ThereIsOnlyOneReadToSwallow` pins the
+  construction so it cannot quietly come back.
+* **(b)** the parse swallow is still a live risk, because there is still a parse. Pinned
+  below at the single read.
+* **(c)** the presence swallow is still a live risk, because presence is still an answer
+  that a failed read must not be allowed to give. Pinned below at the single read.
+
+So (b) and (c) keep their tests, moved to `item get` index **0** — which is now the only
+index there is. (a) keeps a structural test instead of a behavioural one, which is the
+honest replacement: there is no longer a failure to observe, and asserting that a call
+charter never makes did not misbehave would be a test that cannot fail.
 """
 
 from __future__ import annotations
@@ -63,10 +83,15 @@ class FakeOp:
     """`op`, with failure injectable **per `item get` call index**.
 
     Distinct from the fakes in `test_onepassword_single_item` (fails whatever a substring
-    matches) and `test_op_unreadable_vault_is_not_empty` (fails a whole subcommand). Neither
-    can express the distinction this file exists for: `item get` is the subcommand of all
-    three reads, so failing "item get" wholesale makes `_fields` raise and the window is
-    never entered. What matters here is *which* of the three failed.
+    matches) and `test_op_unreadable_vault_is_not_empty` (fails a whole subcommand).
+
+    The per-index knob was what this file existed for: `item get` was the subcommand of
+    all three reads, so failing "item get" wholesale made `_fields` raise and the window
+    under test was never entered — what mattered was *which* of the three failed. #355
+    collapsed them, so every index used below is now 0. The knob is kept rather than
+    simplified away: if a second `op item get` ever reappears on the write path, this is
+    the fake that can say which one broke, and `ThereIsOnlyOneReadToSwallow` is the test
+    that will notice it did.
     """
 
     def __init__(self, *, raw_fields=None, titles=(ITEM,), fail_get_from=None,
@@ -182,21 +207,32 @@ class OpCase(unittest.TestCase):
         p.runner = op
         return op, p
 
-    def assertFirstReadSucceeded(self, op):
-        """The precondition every assertion in this file rests on.
+    def assertTheOnlyReadFailed(self, op):
+        """The precondition every failure case in this file rests on, after #355.
 
-        Without it a test could pass because `op` failed from the very first call — which
-        is #352's case, already fixed, and would make these assertions vacuous.
+        Its predecessor `assertFirstReadSucceeded` demanded a second `op item get` and
+        that the first had succeeded — the window. With one read there is no such window,
+        and what has to be established instead is that the read charter *does* make really
+        ran and really failed, rather than the write path having bailed out earlier (a
+        missing `op-vault`, an unset identity) and the assertion passing for a reason that
+        has nothing to do with a swallowed read.
         """
         gets = op.gets()
-        self.assertGreaterEqual(len(gets), 2,
-                                "precondition: the write path must reach a SECOND "
-                                "`op item get`; only one was made")
+        self.assertEqual(len(gets), 1,
+                         "precondition: the write path makes exactly one `op item get` "
+                         "(#355); a second one means the swallow window is back and this "
+                         "file's premise needs revisiting")
+        self.assertFalse(gets[0]["ok"],
+                         "precondition: that read must have FAILED — otherwise nothing "
+                         "was swallowed and the assertion holds vacuously")
+
+    def assertTheOnlyReadSucceeded(self, op):
+        """The parse cases: `op` exited 0 and charter could not read what it said."""
+        gets = op.gets()
+        self.assertEqual(len(gets), 1, "precondition: exactly one `op item get` (#355)")
         self.assertTrue(gets[0]["ok"],
-                        "precondition: the FIRST `op item get` must succeed, otherwise "
-                        "_fields raises and the window under test is never entered")
-        self.assertFalse(gets[-1]["ok"],
-                         "precondition: a LATER `op item get` must fail")
+                        "precondition: the read EXITS 0 here — the failure under test is "
+                        "the parse, not the process")
 
 
 class TheFixtureReallyHasAnIdToLose(OpCase):
@@ -217,26 +253,56 @@ class TheFixtureReallyHasAnIdToLose(OpCase):
         p.set("GITHUB_TOKEN", "ghp_new")
         self.assertEqual(op.written_ids()["GITHUB_TOKEN"], "GITHUB_TOKEN")
 
-    def test_the_write_path_really_makes_three_item_get_calls(self):
-        """The window exists. If this ever drops to one (#355), the `fail_get_from`
-        indices below stop meaning what their comments say and must be revisited."""
+
+class ThereIsOnlyOneReadToSwallow(OpCase):
+    """(a), structurally. `_existing_ids`' swallow is unreachable rather than handled.
+
+    This class replaces `test_the_write_path_really_makes_three_item_get_calls`, whose
+    docstring read: *The window exists. If this ever drops to one (#355), the
+    `fail_get_from` indices below stop meaning what their comments say and must be
+    revisited.* It dropped to one. The assertion is inverted rather than dropped, because
+    the count is what the rest of this file's premise now rests on: a second `op item get`
+    would reopen the window that swallowed a failed id read, and nothing else here would
+    notice.
+    """
+
+    def test_set_makes_exactly_one_item_get(self):
         op, p = self.make()
         p.set("GITHUB_TOKEN", "ghp_new")
-        self.assertEqual(len(op.gets()), 3, op.subs())
+        self.assertEqual(len(op.gets()), 1, op.subs())
+
+    def test_delete_makes_exactly_one_item_get(self):
+        op, p = self.make()
+        p.delete("PROD_KUBECONFIG")
+        self.assertEqual(len(op.gets()), 1, op.subs())
+
+    def test_the_ids_written_come_from_that_one_read(self):
+        """What `_existing_ids` was for, now answered by the document already in hand.
+        The control above proves the id survives; this proves no `op` call fetched it."""
+        op, p = self.make()
+        p.set("GITHUB_TOKEN", "ghp_new")
+        self.assertEqual(op.written_ids()["PROD_KUBECONFIG"], ADOPTED_ID)
+        self.assertEqual(op.subs().count("item get"), 1, op.subs())
 
 
 class AFailedIdReadIsReportedRatherThanRenumbering(OpCase):
-    """`_existing_ids` — the defect #354 was filed for."""
+    """`_existing_ids` — the defect #354 was filed for.
+
+    Its fetch is gone; the read that now supplies both the ids and the values is `item
+    get` **0**. So the failure that used to be swallowed into "no ids to keep" is the
+    failure of that read, and it must still stop the write rather than renumber. The
+    indices moved from 2 (and 1 for `delete`) to 0, which is where they were always going
+    to end up once the three reads became one.
+    """
 
     def test_set_raises_rather_than_returning_successfully(self):
-        # Calls 0 (_fields) and 1 (_item_present) succeed; call 2 (_existing_ids) fails.
-        op, p = self.make(fail_get_from=2)
+        op, p = self.make(fail_get_from=0)
         with self.assertRaises(base.VaultError):
             p.set("GITHUB_TOKEN", "ghp_new")
-        self.assertFirstReadSucceeded(op)
+        self.assertTheOnlyReadFailed(op)
 
     def test_no_write_reaches_op_with_renumbered_ids(self):
-        op, p = self.make(fail_get_from=2)
+        op, p = self.make(fail_get_from=0)
         with self.assertRaises(base.VaultError):
             p.set("GITHUB_TOKEN", "ghp_new")
         self.assertIsNone(op.template,
@@ -244,37 +310,64 @@ class AFailedIdReadIsReportedRatherThanRenumbering(OpCase):
         self.assertNotIn("item edit", op.subs())
 
     def test_the_failure_names_the_rate_limit_rather_than_guessing_at_tokens(self):
-        op, p = self.make(fail_get_from=2)
+        op, p = self.make(fail_get_from=0)
         with self.assertRaises(base.VaultError) as raised:
             p.set("GITHUB_TOKEN", "ghp_new")
         self.assertIn("rate-limited", str(raised.exception))
 
     def test_delete_raises_too(self):
-        # delete() has no presence check, so _existing_ids is `item get` call 1 there.
-        op, p = self.make(fail_get_from=1)
-        with self.assertRaises(base.VaultError):
+        op, p = self.make(fail_get_from=0)
+        with self.assertRaises(base.VaultError) as raised:
             p.delete("PROD_KUBECONFIG")
-        self.assertFirstReadSucceeded(op)
+        # `SecretNotFound` IS a `VaultError`, and `delete` raises it for a key that is not
+        # among the fields. A swallowed read hands `delete` an empty field set, so the
+        # bare `assertRaises(VaultError)` this used to be would have been satisfied by
+        # exactly the swallow it exists to forbid — "no such secret" reported about a
+        # vault charter could not read. The read failure has to be what surfaces.
+        self.assertNotIsInstance(raised.exception, base.SecretNotFound,
+                                 "the failed read was reported as a missing secret")
+        self.assertTheOnlyReadFailed(op)
         self.assertIsNone(op.template)
 
 
 class AnUnparseableItemIsNotReadAsNoIds(OpCase):
     """`op` exited 0 and charter could not parse what it said.
 
-    `_fields` raises `VaultError` for exactly this condition eight lines up. `_existing_ids`
+    `_fields` raised `VaultError` for exactly this condition eight lines up. `_existing_ids`
     swallowed it, so the same bytes got two different answers. That charter cannot READ the
     answer is not evidence about the item's contents either.
+
+    Still a live risk after #355 — the second *parse* went with the second fetch, but there
+    is still a parse, and it must still refuse rather than report "no ids".
     """
 
     def test_set_raises_rather_than_renumbering(self):
-        op, p = self.make(bad_json_from=2)
+        op, p = self.make(bad_json_from=0)
         with self.assertRaises(base.VaultError):
             p.set("GITHUB_TOKEN", "ghp_new")
-        gets = op.gets()
-        self.assertTrue(gets[0]["ok"] and gets[-1]["ok"],
-                        "precondition: every `op item get` here EXITS 0 — the failure "
-                        "under test is the parse, not the process")
+        self.assertTheOnlyReadSucceeded(op)
         self.assertIsNone(op.template)
+
+    def test_delete_raises_rather_than_renumbering(self):
+        op, p = self.make(bad_json_from=0)
+        with self.assertRaises(base.VaultError) as raised:
+            p.delete("PROD_KUBECONFIG")
+        # See `test_delete_raises_too`: a swallowed parse leaves `delete` with no fields,
+        # and the `SecretNotFound` that follows would satisfy a bare `assertRaises`.
+        self.assertNotIsInstance(raised.exception, base.SecretNotFound,
+                                 "the unreadable document was reported as a missing "
+                                 "secret rather than as a document charter cannot read")
+        self.assertIn("could not parse", str(raised.exception))
+        self.assertTheOnlyReadSucceeded(op)
+        self.assertIsNone(op.template)
+
+    def test_keys_raises_too_so_the_same_bytes_get_one_answer(self):
+        """The read path and the write path now share a parse. The point of #354 was that
+        two parses of the same document must not disagree; one parse is how that stops
+        being something to remember."""
+        op, p = self.make(bad_json_from=0)
+        with self.assertRaises(base.VaultError):
+            p.keys()
 
 
 class AFailedPresenceCheckIsNotAnAbsentItem(OpCase):
@@ -282,23 +375,37 @@ class AFailedPresenceCheckIsNotAnAbsentItem(OpCase):
 
     A failed read reading as *absent* flips `_write` to `item create` against a title that
     already exists, leaving two same-titled items in the vault.
+
+    Still a live risk after #355. The presence question did not go away with its fetch:
+    the single read still has to answer it, and a failed read must still not be allowed
+    to answer *absent*. The item is in the listing here, so absence is DISPROVEN and the
+    read failure is the only honest answer.
     """
 
     def test_set_raises_rather_than_creating_a_duplicate_item(self):
-        # Call 0 (_fields) succeeds; call 1 (_item_present) fails.
-        op, p = self.make(fail_get_from=1)
+        op, p = self.make(fail_get_from=0)
         with self.assertRaises(base.VaultError):
             p.set("GITHUB_TOKEN", "ghp_new")
-        self.assertFirstReadSucceeded(op)
+        self.assertTheOnlyReadFailed(op)
 
     def test_no_second_item_is_created(self):
-        op, p = self.make(fail_get_from=1)
+        op, p = self.make(fail_get_from=0)
         with self.assertRaises(base.VaultError):
             p.set("GITHUB_TOKEN", "ghp_new")
         self.assertNotIn("item create", op.subs(),
                          "charter created a second item titled the same as the one that "
                          "is already there — the vault is now ambiguous to `op item get`")
         self.assertEqual(op.titles, [ITEM])
+
+    def test_the_precondition_the_item_is_visible_to_this_identity(self):
+        """Absence is DISPROVEN here, which is what makes the raise required rather than
+        merely one of two defensible answers. With the item missing from the listing this
+        would be the legitimate creation path two classes down."""
+        op, p = self.make(fail_get_from=0)
+        with self.assertRaises(base.VaultError):
+            p.set("GITHUB_TOKEN", "ghp_new")
+        self.assertIn("item list", op.subs(), "absence was assumed, not disproven")
+        self.assertIn(ITEM, op.titles)
 
 
 class AProvenAbsentItemIsStillCreated(OpCase):
@@ -331,15 +438,26 @@ class AVaultThatCannotBeListedIsNotAnAbsentItem(OpCase):
     This is #352's rule applied to the presence check: under a real rate limit the listing
     that would prove absence is limited too, which is exactly what makes absence unprovable
     and the failure the only honest answer.
+
+    A rate limit not being per-subcommand is also why collapsing the three reads was worth
+    doing on its own terms: they were three chances to be limited, on the one path where
+    being limited costs the most.
     """
 
     def test_set_raises_when_neither_the_read_nor_the_listing_answers(self):
-        op, p = self.make(fail_get_from=1, fail_subs={"item list"})
+        op, p = self.make(fail_get_from=0, fail_subs={"item list"})
         with self.assertRaises(base.VaultError):
             p.set("GITHUB_TOKEN", "ghp_new")
-        self.assertTrue(op.gets()[0]["ok"],
-                        "precondition: the first read succeeded, so this is not #352")
+        self.assertTheOnlyReadFailed(op)
+        self.assertIn("item list", op.subs(),
+                      "precondition: absence was assumed rather than the proof attempted")
         self.assertIsNone(op.template)
+
+    def test_no_item_is_created_on_an_unprovable_absence(self):
+        op, p = self.make(fail_get_from=0, fail_subs={"item list"})
+        with self.assertRaises(base.VaultError):
+            p.set("GITHUB_TOKEN", "ghp_new")
+        self.assertNotIn("item create", op.subs())
 
 
 if __name__ == "__main__":
