@@ -81,43 +81,124 @@ def _needs_attention(r: dict) -> bool:
                or r.get("ci") in ("failed", "running") or r.get("change"))
 
 
-def _repo_line(r: dict, color: str) -> str:
-    """One repo, one line: name (bold+underline if it is where you are standing,
-    coloured by the same per-position palette `_repo_rows` cycles), branch with
-    its dirty/ahead/behind markers, then CI and an open change if there is room.
+def _row(lead: str, name_markup: str, r: dict, width: int, badge_n: int = 0) -> str:
+    """One row — *lead* glyphs, a name, then branch+markers, CI, an open
+    change, and (last, lowest priority) a `⑂N` piece-count badge — each field
+    sized against its OWN budget rather than the assembled line trimmed once
+    from the right at the end.
+
+    **Fix round 1, finding 1.** The first version of this function built the
+    whole line (`f"{name} {branch}{marks} {ci} {change}"`) and let a single
+    `tui.truncate` at the call site cut whatever didn't fit off the end. On
+    this project's own branches — `worktree-recall-since`,
+    `browser-session-scope`, `global-shim-refresh`: 21-28 characters is the
+    NORM here, not an edge case — `name + " " + branch` alone already fills a
+    22-column pane, so the cut always landed on the markers, the CI glyph and
+    the change sigil. A dirty, CI-failing, unpushed repo rendered as
+    `"charter worktree-reca…"` — a FALSE CLEAN reading, worse than not having
+    the panel at all for a panel that exists to surface exactly that.
+
+    `statusline._branch_cell_for` already keeps the right rule for the wide
+    table (`_BRANCH_W - width(marks)`, so the branch shrinks and the markers
+    never do) — this generalises it to a whole LINE's budget rather than one
+    fixed-width cell, and extends the same "shrink the least important field
+    first" idea to CI and an open change: they are appended whole or not at
+    all (never character-truncated — half a glyph reads as broken, an absent
+    one reads honestly as "no room to say"), in priority order behind the
+    markers, and the branch — read last on this line, and the one field
+    genuinely fine to abbreviate — is what actually gives up its columns.
 
     `_markers` and `_CI_MARK` are `statusline.py`'s own — called, not
-    reimplemented, so a fix to what a marker or a CI glyph means lands here the
-    moment it lands in the wide table. Only the CI *glyph* is kept, not
-    `_ci_part`'s trailing label (`"✓ passed"`): a narrow pane spends its columns
-    on the branch and the markers first, and the label would just be the first
-    thing `tui.truncate` throws away.
+    reimplemented, so a fix to what a marker or a CI glyph means lands here
+    the moment it lands in the wide table.
     """
     from .. import statusline as sl
-    emph = f"{sl._BOLD}{sl._UNDER}" if r.get("current") else ""
-    name = f"{emph}{color}{r['name']}{sl._R}"
+
     _plain, marks, _dirty = sl._markers(r)
-    branch = f"{sl._DIM}{r.get('branch') or '?'}{sl._R}{marks}"
-    line = f"{name} {branch}"
+    marks_w = tui.width(marks)
+
     ci = r.get("ci")
+    ci_text = ""
     if ci:
         c, glyph, _label = sl._CI_MARK.get(ci, (sl._DIM, "?", ci))
-        line += f" {c}{glyph}{sl._R}"
+        ci_text = f" {c}{glyph}{sl._R}"
+    ci_w = tui.width(ci_text)
+
     change = r.get("change")
+    change_text = ""
     if change:
         sigil = r.get("sigil") or "!"
-        line += f" {sl._GREEN}{sigil}{change}{sl._R}"
-    return line
+        change_text = f" {sl._GREEN}{sigil}{change}{sl._R}"
+    change_w = tui.width(change_text)
+
+    badge_text = f" {sl._DIM}⑂{badge_n}{sl._R}" if badge_n else ""
+    badge_w = tui.width(badge_text)
+
+    branch = r.get("branch") or "?"
+    lead_w = tui.width(lead)
+
+    budget = max(0, width - lead_w)
+    name_w = min(tui.width(name_markup), max(1, budget // 2))
+    name_shown = tui.truncate(name_markup, name_w)
+    budget -= tui.width(name_shown)
+
+    sep = " " if budget > 0 else ""
+    budget -= tui.width(sep)
+
+    # What's left for the branch, once the markers glued to it are reserved.
+    remaining = budget - marks_w
+    # CI, an open change, and the piece badge are included only while there is
+    # still at least 1 column left over for the branch itself after they are —
+    # dropped whole, priority order, rather than let any of them crowd the
+    # branch out entirely.
+    show_ci = bool(ci_text) and (remaining - ci_w) >= 1
+    tail_w = ci_w if show_ci else 0
+    show_change = bool(change_text) and (remaining - tail_w - change_w) >= 1
+    if show_change:
+        tail_w += change_w
+    show_badge = bool(badge_text) and (remaining - tail_w - badge_w) >= 1
+    if show_badge:
+        tail_w += badge_w
+
+    branch_w = max(1, remaining - tail_w)
+    branch_shown = tui.truncate(f"{sl._DIM}{branch}{sl._R}", branch_w)
+
+    line = f"{lead}{name_shown}{sep}{branch_shown}{marks}"
+    if show_ci:
+        line += ci_text
+    if show_change:
+        line += change_text
+    if show_badge:
+        line += badge_text
+    # Safety net, not the fix: correct budgeting above should already leave
+    # this a no-op (`tui.truncate`'s own fast path returns unchanged input
+    # unmodified) — kept only so a rounding slip degrades to a trimmed line
+    # rather than an over-width one, the same belt-and-braces `panel.py`
+    # already keeps around its own measurements.
+    return tui.truncate(line, width)
 
 
-def _piece_line(p: dict) -> str:
-    """One piece (worktree), indented under its repo — same cells as
-    :func:`_repo_line` minus the palette colour and the bold/underline emphasis,
-    which belong to a REPO's row, not one of its pieces."""
+def _repo_line(r: dict, color: str, width: int, badge_n: int = 0) -> str:
+    """One repo, one line: name (bold+underline if it is where you are
+    standing, coloured by the same per-position palette `_repo_rows` cycles),
+    then :func:`_row`'s shared branch/markers/CI/change/badge composition.
+
+    *badge_n* is the repo's `⑂N` — the pieces NOT already shown as their own
+    rows below it (see :func:`_left`'s own docstring: `0` when every piece
+    already has a row, or when the repo has none)."""
     from .. import statusline as sl
-    _plain, marks, _dirty = sl._markers(p)
-    branch = f"{sl._DIM}{p.get('branch') or '?'}{sl._R}{marks}"
-    return f"{sl._DIM}{sl._TREE_WT}{sl._R}{p['name']} {branch}"
+    emph = f"{sl._BOLD}{sl._UNDER}" if r.get("current") else ""
+    name_markup = f"{emph}{color}{r['name']}{sl._R}"
+    return _row("", name_markup, r, width, badge_n=badge_n)
+
+
+def _piece_line(p: dict, width: int) -> str:
+    """One piece (worktree), indented under its repo — same composition as
+    :func:`_repo_line` minus the palette colour and the bold/underline
+    emphasis, which belong to a REPO's row, not one of its pieces."""
+    from .. import statusline as sl
+    lead = f"{sl._DIM}{sl._TREE_WT}{sl._R}"
+    return _row(lead, p["name"], p, width)
 
 
 def _left(fid: str) -> str:
@@ -132,15 +213,16 @@ def _left(fid: str) -> str:
     refreshed — never a repo directory listing, a `git status`, or a
     `glstate.read_for` of its own; every field a row needs (`name`, `branch`,
     `dirty`, `tracked_dirty`, `ahead`, `behind`, `ci`, `change`, `sigil`,
-    `current`) is already sitting in that one gather. `_pick_rows` is called
-    rather than reinvented for the same reason: it already carries the lesson
-    `statusline.py` paid for in production (an unranked slice of 18 clones
-    showed thirteen clean repos on `main` and hid the one dirty repo you were
-    actually standing in) — `_pick_rows` wants directory-shaped keys (`.name`,
-    hashable), so each cache row is wrapped in a bare `_RowKey` rather than a
-    `Path`: nothing here touches a filesystem, and a `Path` would imply one
-    exists to touch (and, unlike a `Path`, two `_RowKey`s never compare equal
-    just because their names happen to match — see its own docstring).
+    `current`, `worktree_count`) is already sitting in that one gather.
+    `_pick_rows` is called rather than reinvented for the same reason: it
+    already carries the lesson `statusline.py` paid for in production (an
+    unranked slice of 18 clones showed thirteen clean repos on `main` and hid
+    the one dirty repo you were actually standing in) — `_pick_rows` wants
+    directory-shaped keys (`.name`, hashable), so each cache row is wrapped in
+    a bare `_RowKey` rather than a `Path`: nothing here touches a filesystem,
+    and a `Path` would imply one exists to touch (and, unlike a `Path`, two
+    `_RowKey`s never compare equal just because their names happen to match —
+    see its own docstring).
 
     `left` is a full-height pane with rows to fill, unlike `top`/`bottom`'s fixed
     single row — but nothing in this module measures how many it actually has
@@ -154,12 +236,14 @@ def _left(fid: str) -> str:
     ONLY when the workspace resolves to exactly one repo — it mirrors
     `statusline._detail_worktrees`'s own single-repo rule verbatim (see that
     function's docstring: spending rows on piece detail is only a good trade
-    when there is exactly one repo to spend them on). A MULTI-repo workspace's
-    per-repo worktree COUNT — the `⑂N` badge and one-line piece-name summary
-    `_repo_rows` draws via a fresh, always-live `worktree.dirs_for(active,
-    d.name)` call of its own — was never part of Task 1's cache at all, and
-    nothing here re-derives it with a live call of its own to patch that over:
-    see this task's report.
+    when there is exactly one repo to spend them on). Every OTHER repo's
+    pieces — the ones never turned into rows of their own — still get a `⑂N`
+    badge on their repo's own line, from `worktree_count` (fix round 1,
+    finding 2, #385: this used to be missing from the cache entirely for a
+    multi-repo workspace; `gather.py`'s own module docstring records the
+    fix). `_repo_line` is handed `0` whenever every one of a repo's pieces
+    already has its own row — the badge means "there is more you cannot see
+    here," not "this repo has pieces."
     """
     from .. import statusline as sl
     from . import gather
@@ -176,23 +260,39 @@ def _left(fid: str) -> str:
     by_key = dict(zip(keys, repos))
     cur_repo = data.get("current_repo")
 
+    # How many of a repo's pieces already have their own row below it
+    # (`data["worktrees"]`, single-repo-only — see the docstring above), so
+    # the badge can say "there is more" rather than double-count what is
+    # already on screen.
+    shown_pieces: dict = {}
+    for p in (data.get("worktrees") or []):
+        shown_pieces[p.get("repo")] = shown_pieces.get(p.get("repo"), 0) + 1
+
+    def _badge_for(r: dict) -> int:
+        total = r.get("worktree_count") or 0
+        return total if shown_pieces.get(r["name"], 0) < total else 0
+
     budget = sl._MAX_REPO_LINES
     capped = len(keys) > budget
     show = sl._pick_rows(keys, (budget - 1) if capped else budget,
                          cur_repo, by_key, by_key) if capped else keys
 
-    lines = [tui.truncate(_repo_line(by_key[k], color_by_name[by_key[k]["name"]]), w)
+    lines = [_repo_line(by_key[k], color_by_name[by_key[k]["name"]], w,
+                        badge_n=_badge_for(by_key[k]))
              for k in show]
 
     if capped:
         shown = set(show)
         hidden = [k for k in keys if k not in shown]
         quiet = not any(_needs_attention(by_key[k]) for k in hidden)
-        note = ", clean" if quiet else ""
+        # Same wording as `_repo_rows`' own overflow line (`statusline.py`) —
+        # this used to say bare ", clean", a needless divergence between the
+        # two surfaces for the exact same claim.
+        note = ", all clean" if quiet else ""
         lines.append(tui.truncate(f"{sl._DIM}…(+{len(hidden)} more{note}){sl._R}", w))
 
     for p in (data.get("worktrees") or []):
-        lines.append(tui.truncate(_piece_line(p), w))
+        lines.append(_piece_line(p, w))
 
     return "\n".join(lines)
 

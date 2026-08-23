@@ -25,6 +25,17 @@ logic lands here automatically; nothing about a repo's dirty/ahead/behind state 
 re-derived. ``charter/statusline.py``'s render path is not modified — this module
 only calls it.
 
+**Every repo entry also carries its own ``worktree_count``** (fix round 1,
+finding 2, #385) — ``worktree.dirs_for(active, d.name)``, the SAME filesystem-only
+(no subprocess) call ``statusline._repo_rows`` already makes PER REPO on every
+render for its ``⑂N`` badge, gathered here once instead. Task 3 shipped without
+this and reported the gap rather than adding a live call to its own renderer: a
+multi-repo workspace's cache carried repo rows with no piece information at all,
+because ``_detail_worktrees`` (below) only ever builds full piece ROWS for the
+single-repo case, and nothing folded the plain per-repo COUNT in for every other
+shape. Now every ``repos[i]["worktree_count"]`` is real regardless of repo count;
+only the full per-piece detail rows (``worktrees``, below) stay single-repo-only.
+
 **Never raises.** Every field gathered below is wrapped individually, so one bad
 repo (a ``.git`` gone missing between ``_repo_trees`` and ``_branch``, say)
 degrades that repo's row rather than the whole scan, and the whole function falls
@@ -85,12 +96,17 @@ def _empty(workspace: str | None) -> dict:
     }
 
 
-def _entry(d: Path, branch: str, states: dict, gl: dict, cur_repo: str | None) -> dict:
+def _entry(d: Path, branch: str, states: dict, gl: dict, cur_repo: str | None,
+          worktree_count: int = 0) -> dict:
     """One tree's row — repo or worktree alike, the same facts
     ``statusline._tree_cells`` draws from, minus everything that is layout
     (colour, truncation, tree glyphs, presence text). A narrow-pane renderer
     reads this directly; it never re-derives dirty/ahead/behind/ci/change from
     ``states``/``gl`` itself, which is the whole point of gathering once.
+
+    *worktree_count* defaults to 0 (right for a worktree/piece entry — a piece
+    does not itself have pieces); :func:`scan` passes the real count only for
+    a REPO entry. See ``worktree_count``'s own note on :func:`scan`.
     """
     st = states.get(d) or {}
     info = gl.get(d) or {}
@@ -105,6 +121,7 @@ def _entry(d: Path, branch: str, states: dict, gl: dict, cur_repo: str | None) -
         "change": info.get("change"),
         "sigil": info.get("sigil") or "",
         "current": d.name == cur_repo,
+        "worktree_count": int(worktree_count),
     }
 
 
@@ -188,8 +205,31 @@ def scan(workspace: str | None = None, cwd: str | None = None) -> dict:
     # tree that counts as current in every workspace alike.
     cur_repo = cur[1] if (cur and (cur[0] is None or cur[0] == active)) else None
 
+    # Fix round 1, finding 2 (#385): `_repo_rows` gets its `⑂N` badge from a
+    # fresh, always-live `worktree.dirs_for(active, d.name)` call PER REPO, on
+    # every render, independent of `detail_wts` above (which only ever holds
+    # rows for the single-repo case — `_detail_worktrees`' own rule). That
+    # per-repo count was never folded into this scan, so a multi-repo
+    # workspace's cache carried no piece information at all — the exact gap
+    # Task 3 found and reported rather than working around with a live call of
+    # its own. `worktree.dirs_for` is filesystem-only (no subprocess, no
+    # network — see its own docstring), so gathering it here costs the same
+    # `iterdir`+`stat` sweep `_repo_rows` already pays, once, rather than once
+    # per panel that wants it.
+    wt_counts: dict = {}
     try:
-        repos = [_entry(d, branches.get(d, "?"), states, gl, cur_repo) for d in dirs]
+        from .. import worktree as wt_mod
+        for d in dirs:
+            try:
+                wt_counts[d] = len(wt_mod.dirs_for(active, d.name))
+            except Exception:
+                wt_counts[d] = 0
+    except Exception:
+        pass
+
+    try:
+        repos = [_entry(d, branches.get(d, "?"), states, gl, cur_repo,
+                        worktree_count=wt_counts.get(d, 0)) for d in dirs]
         repo_for_wt = dirs[0].name if dirs else None
         worktrees = []
         for w in detail_wts:

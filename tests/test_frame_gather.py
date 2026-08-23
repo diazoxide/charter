@@ -93,6 +93,62 @@ class ScanReusesStatuslineHelpers(ClonedRepoIso, unittest.TestCase):
         self.assertIsNone(data["current_repo"])
 
 
+class WorktreeCountPerRepo(ClonedRepoIso, unittest.TestCase):
+    """Fix round 1, finding 2 (#385): `_repo_rows` gets its `⑂N` badge from a
+    live `worktree.dirs_for(active, d.name)` call PER REPO, independent of
+    `_detail_worktrees` (single-repo-only). That per-repo count was never
+    folded into `scan()`, so `repos[i]["worktree_count"]` did not exist at all
+    — a multi-repo workspace's cache carried no piece information whatsoever.
+    These pin the field is now REAL, not merely present, in exactly the shape
+    (2+ repos) the gap was reported against."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo2 = config.WORKSPACES_DIR / config.DEFAULT_WORKSPACE / "second"
+        _init_repo(self.repo2)
+
+    def _add_piece(self, repo: Path, piece: str) -> Path:
+        """A worktree DIRECTORY at the path charter's own registry uses —
+        `worktree.dirs_for` is filesystem-only (`base.iterdir()`, no
+        subprocess — see its own docstring), and with two repos
+        `_detail_worktrees` never selects either for full detail rows (its own
+        single-repo rule), so nothing in `scan()` ever reads THIS directory as
+        a tree of its own; a bare directory is the honest fixture for a count
+        that only cares that it exists."""
+        from charter import worktree
+        p = worktree.path_for(config.DEFAULT_WORKSPACE, repo.name, piece)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def test_a_repo_with_no_pieces_counts_zero(self):
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        by_name = {r["name"]: r for r in data["repos"]}
+        self.assertEqual(by_name["demo"]["worktree_count"], 0)
+        self.assertEqual(by_name["second"]["worktree_count"], 0)
+
+    def test_a_multi_repo_workspaces_piece_count_is_real_per_repo(self):
+        """The exact gap: with TWO repos, `detail_wts`/`data["worktrees"]` is
+        always `[]` (`_detail_worktrees`'s single-repo rule) — before this fix
+        round, that meant `demo`'s two real pieces were invisible to `left`
+        entirely, not merely uncounted."""
+        self._add_piece(self.repo, "piece-a")
+        self._add_piece(self.repo, "piece-b")
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        by_name = {r["name"]: r for r in data["repos"]}
+        self.assertEqual(by_name["demo"]["worktree_count"], 2)
+        self.assertEqual(by_name["second"]["worktree_count"], 0)
+        # The gap this pins: `detail_wts` truly is empty here, so the count is
+        # the ONLY place this fact survives into the cache at all.
+        self.assertEqual(data["worktrees"], [])
+
+    def test_a_broken_worktree_lookup_does_not_raise_and_zeroes_the_count(self):
+        with mock.patch("charter.worktree.dirs_for", side_effect=RuntimeError("boom")):
+            data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        by_name = {r["name"]: r for r in data["repos"]}
+        self.assertEqual(by_name["demo"]["worktree_count"], 0)
+        self.assertEqual(by_name["second"]["worktree_count"], 0)
+
+
 class DivergedRepoIso(ClonedRepoIso):
     """`ClonedRepoIso`'s repo, but with real ahead/behind AND an upstream to
     diverge from — the `tests/test_worktree.py` `_add_upstream` pattern (a bare

@@ -26,14 +26,15 @@ from tests._isolation import PersonaIso
 
 
 def _row(name, *, branch="main", dirty=False, tracked_dirty=False, ahead=0, behind=0,
-        ci=None, change=None, sigil="", current=False, repo=None) -> dict:
+        ci=None, change=None, sigil="", current=False, repo=None,
+        worktree_count=0) -> dict:
     """A `gather`-cache-shaped row — the exact fields `gather._entry` writes, built
     directly rather than through a real `git`/`gather.scan`: these tests pin `left`'s
     own COMPOSITION (what it does with a row already in the cache), which
     `tests/test_frame_gather.py` already covers the gather side of independently."""
     d = {"name": name, "branch": branch, "dirty": dirty, "tracked_dirty": tracked_dirty,
         "ahead": ahead, "behind": behind, "ci": ci, "change": change, "sigil": sigil,
-        "current": current}
+        "current": current, "worktree_count": worktree_count}
     if repo is not None:
         d["repo"] = repo
     return d
@@ -223,6 +224,27 @@ class LeftRenderer(PersonaIso, unittest.TestCase):
              worktrees=[_row("piece-one", repo="demo")])
         self.assertIn("piece-one", tui.strip_ansi(slots.render("left", "f-1")))
 
+    def test_a_multi_repo_workspaces_piece_count_shows_as_a_badge(self):
+        """Fix round 1, finding 2: `worktree_count` did not exist in the cache at
+        all for a multi-repo workspace before this round — `data["worktrees"]`
+        is `[]` here (as it always is with two repos; `gather._detail_worktrees`'
+        own single-repo rule), so the badge is the ONLY way either repo's pieces
+        are visible at all."""
+        _seed("f-1", repos=[_row("demo", worktree_count=3),
+                            _row("second", worktree_count=0)],
+             worktrees=[])
+        out = tui.strip_ansi(slots.render("left", "f-1"))
+        self.assertIn("⑂3", out)
+
+    def test_a_repo_whose_pieces_are_all_shown_as_rows_carries_no_badge(self):
+        """The single-repo case: every piece already has its own row
+        (`data["worktrees"]`), so the badge — "there is more you cannot see" —
+        would be actively misleading if it appeared anyway."""
+        _seed("f-1", repos=[_row("demo", worktree_count=1)],
+             worktrees=[_row("piece-one", repo="demo")])
+        out = tui.strip_ansi(slots.render("left", "f-1"))
+        self.assertNotIn("⑂", out)
+
     def test_picks_the_dirty_repo_over_clean_ones_when_over_budget(self):
         """`_pick_rows` is CALLED here, not reinvented — the same ranking
         `statusline.py`'s own regression (an unranked slice of 18 clones showed
@@ -235,6 +257,16 @@ class LeftRenderer(PersonaIso, unittest.TestCase):
         self.assertIn("zzz-dirty-one-past-the-cap",
                       tui.strip_ansi(slots.render("left", "f-1")))
 
+    def test_the_overflow_note_matches_the_wide_tables_own_wording(self):
+        """Fix round 1, finding 3: this line used to say `", clean"` where
+        `_repo_rows`' own overflow line (`statusline.py`) says `", all clean"` —
+        the same claim, worded two different ways on the two surfaces."""
+        clean = [_row(f"clean-{i}") for i in range(statusline._MAX_REPO_LINES + 1)]
+        _seed("f-1", repos=clean)
+        out = tui.strip_ansi(slots.render("left", "f-1"))
+        self.assertIn(", all clean)", out)
+        self.assertNotIn("more, clean)", out)
+
     def test_never_exceeds_the_pane_width(self):
         _seed("f-1", repos=[_row("a-repo-with-quite-a-long-descriptive-name",
                                 change=999999, ci="failed", ahead=12, behind=34)])
@@ -244,6 +276,59 @@ class LeftRenderer(PersonaIso, unittest.TestCase):
         for line in out.splitlines():
             with self.subTest(line=line):
                 self.assertLessEqual(tui.width(line), 22)
+
+    def test_never_exceeds_the_pane_width_even_when_narrower_than_the_markers(self):
+        """`_row`'s own per-field budgeting can still ask for more than a truly
+        tiny pane has (each field's floor is `max(1, ...)`, and those floors can
+        sum past `width` once the pane is narrower than the markers themselves)
+        — `_row`'s trailing `tui.truncate(line, width)` is the backstop for
+        exactly that. Confirmed load-bearing by mutation: dropping it lets a
+        5-repo-state line overflow a 3-column pane to 8 display cells."""
+        _seed("f-1", repos=[_row("abcdef", dirty=True, ahead=3, behind=2,
+                                ci="failed", change=5, sigil="!")])
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((3, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("left", "f-1")
+        for line in out.splitlines():
+            with self.subTest(line=line):
+                self.assertLessEqual(tui.width(line), 3)
+
+    def test_a_realistic_long_branch_does_not_crowd_out_the_dirty_marker_or_ci_glyph(self):
+        """Fix round 1, finding 1: a single `tui.truncate` over the whole assembled
+        line cut from the right, and this project's own branches
+        (`worktree-recall-since`, `browser-session-scope`, `global-shim-refresh`:
+        21-28 characters, the norm here) are long enough that `name + " " +
+        branch` alone fills a 22-column pane before the dirty marker, the CI
+        glyph or an open change is ever reached — a FALSE CLEAN reading on a
+        dirty, CI-failing, unpushed repo. `test_a_dirty_repo_shows_the_dirty_marker`
+        and `test_a_failing_ci_status_shows_its_glyph` above use `branch="main"`
+        (no truncation pressure) and would not have caught this; this fixture
+        matches the reviewer's own repro exactly."""
+        _seed("f-1", repos=[_row("charter", branch="worktree-recall-since",
+                                dirty=True, ahead=1, ci="failed")])
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = tui.strip_ansi(slots.render("left", "f-1"))
+        self.assertIn("*", out, "the dirty marker must survive truncation")
+        self.assertIn("✗", out, "the CI glyph must survive truncation")
+
+    def test_a_long_branch_with_a_change_still_surfaces_marker_ci_and_change(self):
+        """The three-field version of the test above, at the ACTUAL production
+        pane width (`layout.SLOT_SIZE["left"] == 22`) — pins that reserving room
+        for CI does not itself starve a trailing open change (`_row`'s priority
+        order includes it last), the case a narrower, artificial width would
+        have to invent rather than measure."""
+        _seed("f-1", repos=[_row("charter", branch="worktree-recall-since",
+                                dirty=True, ahead=1, ci="failed",
+                                change=12, sigil="!")])
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            line = slots.render("left", "f-1").splitlines()[0]
+        out = tui.strip_ansi(line)
+        self.assertLessEqual(tui.width(line), 22)
+        self.assertIn("*", out, "the dirty marker must survive")
+        self.assertIn("✗", out, "the CI glyph must survive")
+        self.assertIn("!12", out, "the open change must survive")
 
     def test_a_cjk_heavy_repo_name_still_fits_a_narrow_pane(self):
         cjk = "測" * 30  # 30 characters, 60 display cells
