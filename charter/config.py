@@ -252,6 +252,10 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: How far a written memory travels — see charter.instance.SHARE_MODES.
     d["MEMORY_SHARE"] = _instance.share_of(cfg)
 
+    #: How `charter <harness>` composes its frame. Defaults live in
+    #: `instance.FRAME_DEFAULTS`; an absent or malformed section yields them whole.
+    d["FRAME"] = _instance.frame_of(cfg)
+
     #: Root for worktrees, or ``None`` for the per-workspace ``.worktrees/`` default.
     d["WORKTREES_ROOT"] = worktrees_root_for(root, cfg)
 

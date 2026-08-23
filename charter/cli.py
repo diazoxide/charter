@@ -10,6 +10,7 @@ from . import (
     commands_update,
     __version__,
     commands,
+    commands_frame,
     commands_harness,
     commands_persona,
     commands_report,
@@ -17,6 +18,7 @@ from . import (
     commands_workspace,
     commands_worktree,
     contain,
+    harness,
     hooks,
     statusline,
     toolgate,
@@ -24,6 +26,7 @@ from . import (
 )
 from .browser import PINNED as _PLAYWRIGHT_PIN
 from .forge.registry import KINDS as _FORGE_KINDS
+from .frame import panel as frame_panel
 from .secrets.registry import PROVIDERS
 
 
@@ -332,6 +335,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_secret_parser(sub)
     _add_persona_parser(sub)
     _add_report_parser(sub)
+    # Last: the collision guard below refuses a harness `cli_name` that shadows an
+    # already-registered command, so it needs the FULL set of `charter`'s own commands
+    # already in `sub.choices` — not just the ones defined above this line — to check
+    # against. Placed after every other `_add_*_parser` call for that reason.
+    _add_frame_parsers(sub)
 
     return p
 
@@ -584,6 +592,176 @@ def _add_workspace_parser(sub) -> None:
     aus.set_defaults(func=commands_workspace.cmd_workspace_autosave)
     pbg = wsub.add_parser("_pushbg")    # internal: background push half of autosave
     pbg.set_defaults(func=commands_workspace.cmd_workspace_pushbg)
+
+
+def _add_frame_parsers(sub) -> None:
+    """One launcher per registered harness, plus the escape hatch (`charter frame --`).
+
+    Generated from `harness.all()` rather than listed, which is the reason `registry.py`
+    exists: a harness added to `KINDS` gets a launcher the day it is registered, with no
+    second place to remember to update. That same automatism is exactly what makes a
+    name collision dangerous — a harness registered with `cli_name = "status"` would
+    otherwise silently take `charter status` away from the operator, with nothing
+    printing so much as a warning, because nothing forced the two registries (core
+    commands here, harnesses in `harness.KINDS`) to stay disjoint.
+
+    **Two collisions, two different hazards, two different responses.** A `cli_name` that
+    shadows a CORE command (anything registered before this function runs — see
+    `build_parser`'s own comment about calling this last — plus the names this function
+    reserves for itself: `frame`, `panel`, `frame-menu`, `frame-action`, `frame-probe`)
+    raises, loudly, at parser-construction time: `build_parser()` is called by every
+    single `charter` invocation, so a registry mistake here breaks `charter --help`,
+    `charter doctor`, everything — the failure has to happen in CI, not in an operator's
+    terminal. A `cli_name` shared between two HARNESSES is a narrower problem: it costs
+    one harness a launcher, not the whole CLI, and `harness.registry.all()` instantiating
+    by dict VALUE rather than by key (`tests/test_guard_claims_its_reach.py`'s own
+    `KINDS["zzz-fictional"] = KINDS[CLAUDE_CODE]` reproduces this directly) makes it
+    reachable by a registry mistake that has nothing to do with `_add_frame_parsers` at
+    all. Raising there would take down every command over a defect in a DIFFERENT
+    module's registry — so the first registration wins the word and every later one is
+    skipped, reported (not silently), and `build_parser()` keeps going.
+
+    "First" is `harness.all()`'s own order, which is `KINDS`'s dict-insertion order —
+    stable, and `registry.all`'s own docstring already calls it "registration order" — not
+    an alphabetical or otherwise inferred one. Worth stating here rather than leaving a
+    reader to work it out from `KINDS` being a dict at all.
+
+    `sub.choices` is `argparse`'s own record of every subcommand name already claimed, so
+    the CORE-collision check asks the same authority the CLI itself will dispatch
+    through, rather than keeping a second list of "known" command names that could itself
+    drift — but it is read as a SNAPSHOT taken before the harness loop starts, not live
+    inside it: the loop's own `sub.add_parser(h.cli_name, ...)` calls grow `sub.choices`
+    as they run, and reading it live would conflate "this collides with a core command"
+    with "this collides with an earlier harness in this very loop" — exactly the two
+    cases this docstring just said get different responses.
+    """
+    def _wire(parser, name):
+        parser.add_argument("rest", nargs=argparse.REMAINDER,
+                            help="Passed to the harness verbatim.")
+        parser.add_argument("--no-frame", action="store_true",
+                            help="Run the harness bare, with no charter frame.")
+        # Read-only, and shares `--no-frame`'s own `_OWN_FLAGS` treatment below so
+        # `charter claude --probe` reaches `cmd_launch` as a flag rather than being
+        # grafted onto the harness's own verbatim argv. `cmd_launch` checks this FIRST,
+        # before resolving a harness or touching the workspace — see its own docstring.
+        # A `charter frame-probe` sibling also exists (registered further down) for the
+        # one caller this flag cannot serve: a news `check:`, which `news._PROBEABLE`
+        # refuses for any command whose parser carries a pass-through positional — every
+        # parser `_wire` builds has one (`rest`, above) — so `frame --probe` itself can
+        # never be listed there. See `commands_frame.cmd_probe`'s own docstring.
+        parser.add_argument("--probe", action="store_true",
+                            help="Read-only: can a frame run here? Prints one line, "
+                                 "starts nothing, never launches the harness.")
+        parser.set_defaults(harness=name, func=commands_frame.cmd_launch)
+
+    # Snapshot, not a live read of `sub.choices` inside the loop — see this function's
+    # own docstring for why the two must be kept apart. `_add_frame_parsers` runs LAST
+    # (`build_parser`'s own comment), so `sub.choices` here already holds every CORE
+    # command: init, doctor, workspace, worktree, vault, secret, persona, report,
+    # harness, hook, trace, all of it. `"frame"`, `"panel"`, `"frame-menu"`,
+    # `"frame-action"` and `"frame-probe"` join it even though none of their OWN
+    # `add_parser` calls below has run yet: the loop finishes and registers every
+    # harness BEFORE any of them are added, so a harness with `cli_name` equal to one of
+    # these would pass a check against `sub.choices` alone (nothing there is named any of
+    # them yet) and only collide once THAT `add_parser` call runs a few lines down —
+    # where, on argparse versions that raise for a conflicting name, the error names the
+    # reserved command instead of the harness that actually caused it, and on versions
+    # that do not raise (this repo's own 3.11 floor — see `_split_frame_argv`'s docstring
+    # for the same version gap elsewhere), the later `add_parser` call silently shadows
+    # the harness instead — `frame`'s own escape hatch disappearing, every panel pane
+    # failing to start because `charter panel` now means something else
+    # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`), the hotkey
+    # menu silently opening a harness launch instead of a menu because `charter
+    # frame-menu`/`charter frame-action` now mean something else too, or a news `check:`
+    # naming `frame-probe` silently launching a harness instead of reading tmux's own
+    # version (see `commands_frame.cmd_probe`'s own docstring).
+    _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
+                                         "frame-probe"}
+
+    # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
+    # already claimed each word, so a SECOND harness wanting it is told who got there
+    # first rather than merely "already taken". Scoped to this one loop, never `sub
+    # .choices`: after the first `sub.add_parser(h.cli_name, ...)` call below, that name
+    # IS in `sub.choices` too, and reading it there would make a harness-vs-harness
+    # collision indistinguishable from a harness-vs-core one — the exact conflation this
+    # function's own docstring says the two checks below exist to avoid.
+    _claimed_by: dict[str, str] = {}
+    for h in harness.all():
+        if not h.cli_name:
+            continue
+        if h.cli_name in _core_commands:
+            raise ValueError(
+                f"harness {h.name!r} wants `charter {h.cli_name}`, which is already a "
+                f"charter command — rename the harness's cli_name or the command before "
+                f"this can ship")
+        if h.cli_name in _claimed_by:
+            # Two REGISTERED harnesses, not a harness against a core command — a
+            # narrower hazard (one harness loses a launcher, not the whole CLI; see the
+            # docstring), so this is reported rather than raised. "First" is
+            # `harness.all()`'s own order — `KINDS`'s dict-insertion order, per
+            # `registry.all`'s own docstring ("registration order") — so the harness
+            # registered EARLIER in `registry.KINDS` keeps `charter <cli_name>` and this
+            # one simply gets no launcher of its own.
+            util.warn(f"harness {h.name!r} also wants `charter {h.cli_name}`, already "
+                      f"claimed by {_claimed_by[h.cli_name]!r} — {h.name!r} has no "
+                      f"`charter <harness>` launcher of its own until the collision is "
+                      f"fixed in the registry.")
+            continue
+        _claimed_by[h.cli_name] = h.name
+        p = sub.add_parser(h.cli_name,
+                           help=f"Run {h.cli_name} inside charter's frame.")
+        _wire(p, h.cli_name)
+
+    fr = sub.add_parser("frame",
+                        help="Run any command inside charter's frame — `charter frame -- <cmd>`.")
+    _wire(fr, "")
+
+    # Internal: one pane of a running frame, spawned by `layout.panel_argvs` — never
+    # typed by an operator. The argv shape here (`panel <slot> --session <fid>`) must
+    # match what that function emits EXACTLY: it is the only thing standing between a
+    # tmux pane and a process that fails at startup, leaving a hole in the frame.
+    pn = sub.add_parser("panel")
+    pn.add_argument("slot")
+    pn.add_argument("--session", dest="session", required=True)
+    pn.set_defaults(func=lambda args: frame_panel.run(args.slot, args.session))
+
+    # Internal, same reason `panel` above is a TOP-LEVEL sibling of `frame` rather than
+    # nested under it: `_split_frame_argv` (below) treats `argv[0] == "frame"` as the
+    # launcher's own escape hatch and grafts EVERYTHING past it onto the harness's own
+    # verbatim argv before `argparse` ever gets a chance to route a subcommand — a
+    # `frsub = fr.add_subparsers(...)` nested under `fr` would never be reached, because
+    # `_split_frame_argv` runs first and unconditionally. `frame-menu` and
+    # `frame-action` are different literal tokens, so `_split_frame_argv` leaves them
+    # alone and ordinary top-level dispatch applies. Both are fired by tmux via
+    # `run-shell` (the hotkey bind in `conf_text`, and one menu item's own action built
+    # by `charter.frame.menu.menu_argv`) — never typed by an operator.
+    #
+    # `frame-menu`'s own `client` argument is `#{client_name}`, expanded by tmux INSIDE
+    # the bind's `run-shell` text before this process starts — never queried after the
+    # fact (see `cmd_menu`'s own docstring for why: `list-clients` cannot tell WHO
+    # pressed the key, only who is attached, and picking among several guessed wrong).
+    mn = sub.add_parser("frame-menu")
+    mn.add_argument("client")
+    mn.set_defaults(func=commands_frame.cmd_menu)
+
+    act = sub.add_parser("frame-action")
+    act.add_argument("action_id")
+    act.set_defaults(func=commands_frame.cmd_action)
+
+    # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-menu`/
+    # `frame-action` above: those two exist because `_split_frame_argv` eats everything
+    # after `argv[0] == "frame"`. This one exists because `news._PROBEABLE` (charter's
+    # `check:` allowlist, #317) refuses any command whose parser carries a pass-through
+    # positional, and every parser `_wire` builds carries one (`rest`, the harness's own
+    # verbatim argv) — so `("frame",)` can never be added there, `--probe` on it or not.
+    # `frame-probe` takes no arguments at all, so it is not that shape and CAN be listed
+    # (see `news._PROBEABLE` and `commands_frame.cmd_probe`'s own docstring). Unlike
+    # `panel`/`frame-menu`/`frame-action`, an operator can also type this one directly —
+    # it is the same read-only check `--probe` runs, just reachable without a launcher.
+    pb = sub.add_parser("frame-probe",
+                        help="Read-only: can a frame run here? (same check as "
+                             "`--probe` on any launcher above.)")
+    pb.set_defaults(func=commands_frame.cmd_probe)
 
 
 def _add_harness_parser(sub) -> None:
@@ -1023,6 +1201,68 @@ def _split_exec_command(argv: list[str]) -> tuple[list[str], list[str] | None]:
     return argv, None
 
 
+def _frame_command_names() -> set[str]:
+    """Every subcommand `_add_frame_parsers` registers: each harness's `cli_name`, plus
+    the `frame` escape hatch. Read at call time (`harness.all()`, never cached) for the
+    same reason `_add_frame_parsers` itself iterates live rather than listing — a harness
+    added to `KINDS` is covered the moment it is registered."""
+    return {h.cli_name for h in harness.all() if h.cli_name} | {"frame"}
+
+
+#: The ONLY tokens `_split_frame_argv` ever keeps for `argparse` itself, and only in the
+#: fixed leading run described there. `-h`/`--help` are included deliberately: leaving
+#: them out was tried first and broke `charter claude --help` outright — REMAINDER
+#: absorbs `--help` just like any other harness token once it is past `argparse`'s own
+#: matching, so `cmd_launch` received `rest=["--help"]`, found no harness named `""`
+#: (bare `frame`) or treated it as a literal argv element otherwise, and the bypass path
+#: (non-tty in that reproduction) called `os.execvp("--help", ...)` — a real crash
+#: (`FileNotFoundError`, uncaught), not merely a UX regression. Keeping `-h`/`--help`
+#: recognized here restores the working behaviour: `charter claude --help` shows
+#: charter's OWN thin help for that subcommand (`usage: charter claude [-h]
+#: [--no-frame] ...`) exactly as before this fix, and a harness's own `--help` is still
+#: reachable — just as `-p`/`--continue` are — by putting it anywhere OTHER than this
+#: fixed leading run (`charter claude --continue --help`, or explicitly `charter claude
+#: -- --help`).
+#:
+#: `--probe` joined for the identical reason `--no-frame` is here at all: without it,
+#: `charter frame --probe` has `argparse` never see `--probe` as `frame`'s own flag —
+#: `_split_frame_argv` grafts it onto `args.rest` instead, and `cmd_launch` (finding no
+#: harness named `""`, bare `frame`) hands `["--probe"]` to `bypass`, which
+#: `os.execvp("--probe", ...)` turns into a `FileNotFoundError` — confirmed by running
+#: `charter frame --probe` with this entry left out before adding it.
+_OWN_FLAGS = ("--no-frame", "--probe", "-h", "--help")
+
+
+def _split_frame_argv(argv: list[str]) -> tuple[list[str], list[str] | None]:
+    """Peel a harness's own arguments off before `argparse` ever sees them.
+
+    `nargs=argparse.REMAINDER` cannot hold a positional whose very FIRST token looks
+    like an option `argparse` does not itself recognize: `charter claude -p hi` has
+    `argparse` try to match `-p` against `claude`'s own options (`-h`, `--no-frame`),
+    fail, and refuse the whole command with "unrecognized arguments: -p" — before
+    REMAINDER ever gets a chance to absorb anything. Confirmed identical on 3.9, 3.12 and
+    3.14, so unlike `_split_exec_command` above this is not something a Python-version
+    split could route around: it is `argparse`'s documented behaviour on every version
+    this repo supports, not drift on the 3.11 floor.
+
+    Splitting here — the same shape `_split_exec_command` uses for `secret exec` —
+    sidesteps the mechanism entirely: only `charter <name>` and a leading run of
+    `_OWN_FLAGS` immediately after it are ever handed to `argparse`; everything past
+    that point is captured here and grafted onto `args.rest` untouched by `argparse`'s
+    own option matching, dashes and all. `_OWN_FLAGS` is recognized only in that one
+    fixed leading position — anywhere else, a token that happens to spell `--no-frame`
+    or `--help` is just more of the harness's own verbatim argv, which is the one
+    unambiguous rule available once the harness's own flags (`-p`, `--continue`,
+    anything) are indistinguishable from ours by shape alone.
+    """
+    if not argv or argv[0] not in _frame_command_names():
+        return argv, None
+    i = 1
+    while i < len(argv) and argv[i] in _OWN_FLAGS:
+        i += 1
+    return argv[:i], argv[i:]
+
+
 def _subcommand_names(parser: argparse.ArgumentParser) -> set[str]:
     """Every top-level subcommand the parser accepts.
 
@@ -1086,6 +1326,7 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv = _hoist_persona_memory(argv)
     argv, exec_command = _split_exec_command(argv)
+    argv, frame_rest = _split_frame_argv(argv)
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
@@ -1096,6 +1337,8 @@ def main(argv=None) -> int:
         raise
     if exec_command is not None:
         args.command = exec_command
+    if frame_rest is not None:
+        args.rest = frame_rest
     try:
         return args.func(args) or 0
     except KeyboardInterrupt:

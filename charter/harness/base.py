@@ -4,9 +4,15 @@ A *harness* is the agent runtime charter runs inside — Claude Code, opencode, 
 whatever comes next — as distinct from a *host*, which in this codebase is a forge
 (``github.com``, a self-hosted GitLab). ADR 0015.
 
-The interface is deliberately three members wide. Charter does not model a harness; it
-models the three things it needs from one: what it calls itself, what it cannot carry,
-and what has to be written on disk for charter to work inside it.
+Charter does not model a harness; it models what it needs from one, and the interface
+grows only when that need does. Three members answered while charter only lived inside a
+harness: what it calls itself, what it cannot carry, and what has to be written on disk
+for charter to work inside it. `charter <harness>` adds a fourth, because charter now
+runs the harness rather than only living inside it, so it also needs to know how to
+start one — what an operator types, and what argv to exec (ADR 0018, issue #345). That
+fact lives here, on the harness, for the same reason the first three do: anywhere else
+it is a hardcoded literal per harness, the exact failure `registry.py` iterating
+``KINDS`` exists to end. A fifth member needs the same kind of argument, not just a use.
 """
 
 from __future__ import annotations
@@ -40,6 +46,33 @@ class Harness:
     #: What charter cannot offer here. Empty is a claim, not a default — it says this
     #: harness carries everything, and `doctor` prints that as a clean row.
     deficits: tuple[Deficit, ...] = ()
+
+    #: The word an operator types after ``charter`` to run this harness in a frame.
+    #: Distinct from :attr:`name`, which is the harness's own identity in
+    #: ``$CHARTER_HARNESS``: ``claude-code`` names the harness, ``claude`` is the binary
+    #: and what a hand types. Empty means charter cannot launch this harness.
+    cli_name: str = ""
+
+    #: The binary to exec. All three shipped harnesses set this to the SAME string as
+    #: :attr:`cli_name` — the split is not there because they differ today, and saying
+    #: so was a lie a reader could check in thirty seconds. It is kept because the two
+    #: answer to different owners: `cli_name` is charter's own command surface, checked
+    #: for collisions against every core `charter` command at parser-construction time
+    #: (see `cli._wire`), while `binary` is whatever the harness's vendor happens to
+    #: install. Either can move without the other — a harness renaming its binary, or
+    #: charter having to rename a subcommand that collided — and collapsing them into
+    #: one attribute would make each of those a change to the other's meaning.
+    binary: str = ""
+
+    def launch_argv(self, extra: list[str]) -> list[str]:
+        """Argv for starting this harness, with the operator's arguments appended.
+
+        A **list**, never a joined string, and that is a security property rather than a
+        style preference: tmux does not shell-interpret separate arguments and does
+        interpret a joined one (pinned against 3.7c). Returning a string here would put
+        command injection back into every launch.
+        """
+        return [self.binary, *extra]
 
     def detect(self) -> bool:
         """Is this harness live, judged by its own native evidence?

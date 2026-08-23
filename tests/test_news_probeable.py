@@ -135,6 +135,17 @@ class OnlyAListedCommandIsProbeable(unittest.TestCase):
         self.assertTrue(news.probeable("persona lint"))
         self.assertTrue(news.probeable("persona lint --only delegate-when"))
 
+    def test_frame_probe_is_allowed_but_frame_dash_dash_probe_is_not(self):
+        """`charter frame-probe` (this task) is a TOP-LEVEL command specifically because
+        `frame` itself can never be added here: every parser `cli._wire` builds — `frame`
+        included — carries a pass-through `rest` (#317's shape), `--probe` on it or not.
+        Both halves are pinned together so a future edit that lists `("frame",)` instead
+        fails HERE, not only in `TheListIsPinnedToTheParser` below (which would report
+        THAT failure as "frame takes a pass-through argv", true but not why this specific
+        command exists)."""
+        self.assertTrue(news.probeable("frame-probe"))
+        self.assertFalse(news.probeable("frame --probe"))
+
     def test_a_command_that_probes_news_is_still_allowed_here(self):
         """`news --pending` re-enters, and #311's guard is what answers that — a separate
         question, answered later and with its own reason. Folding the two together would

@@ -699,6 +699,70 @@ def check_harness() -> Result:
     return Result(name, OK, detail=f"{current} — {len(gaps)} capability ceiling{plural}\n{listed}")
 
 
+def check_frame() -> Result:
+    """Can `charter <harness>` compose a frame here? (ADR 0018)
+
+    Its own check, sitting beside `check_harness` rather than inside its deficit list:
+    tmux is a prerequisite of the FRAME, not a ceiling of any harness, and filing it
+    under `check_harness` would tell the reader their harness is limited when it is not
+    — `tests/test_doctor_absent_is_not_health.py` already draws exactly that line for a
+    check that renders green over something it never actually looked at, and the
+    opposite error (naming a harness limit that is not real) is the one `check_harness`'s
+    own docstring guards against.
+
+    WARN, never FAIL: `cmd_doctor` exits non-zero only on FAIL, and a machine with no
+    tmux — or one too old to meet `tmuxctl.FLOOR` — can still do every bit of charter's
+    core work; discover, clone, and run any harness with `--no-frame`. Only `charter
+    <harness>` without that flag is affected, and both remedies are named here rather
+    than left to be discovered in `docs/frame.md`.
+
+    This row and `charter frame-probe` are also the ONLY places the frame's standing
+    capability ceilings are reported at all. They used to be `util.warn` calls inside
+    `cmd_launch`, printed microseconds before tmux switched the operator's terminal to
+    the alternate screen, where nobody could read them — see
+    `commands_frame.frame_ready`'s own docstring for the measurement and the argument.
+    Both facts are answerable without starting anything: `tmuxctl.version()` and
+    `config.FRAME["slots"]`.
+    """
+    from . import config
+    from .frame import slots as frame_slots, tmuxctl
+
+    name = "frame"
+    v = tmuxctl.version()
+    if v is None:
+        return Result(name, WARN, detail="tmux not found",
+                      hint="charter <harness> needs tmux to compose a frame — brew "
+                           "install tmux (or your package manager). Without it, "
+                           "charter <harness> --no-frame still runs the harness bare.")
+    missing = frame_slots.unimplemented(config.FRAME["slots"])
+    if v < tmuxctl.FLOOR:
+        # Not "the hotkey menu is disabled" — nothing disables it. `cmd_launch` warns
+        # and continues, and `conf_text` emits the bind unchanged; what is actually at
+        # risk below the floor is that the bind opens nothing and that the pane-scoped
+        # exit-code hooks may not install. `below_floor_message` is the one place that
+        # sentence lives, so this row and `--probe` cannot drift apart.
+        hint = tmuxctl.below_floor_message(v)
+        if missing:
+            hint += " " + commands_frame_no_renderer(missing)
+        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}", hint=hint)
+    if missing:
+        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}",
+                      hint=commands_frame_no_renderer(missing))
+    return Result(name, OK, detail=f"tmux {v[0]}.{v[1]}")
+
+
+def commands_frame_no_renderer(missing: list[str]) -> str:
+    """`commands_frame.no_renderer_message`, imported lazily.
+
+    A module-level `from .commands_frame import no_renderer_message` would make every
+    `charter doctor` import the whole launcher (and, through it, `harness`, `workspace`
+    and `frame.menu`) to print one row; the import lives inside a function for the same
+    reason `check_frame`'s own `tmuxctl` import does.
+    """
+    from .commands_frame import no_renderer_message
+    return no_renderer_message(missing)
+
+
 def _read_text(p) -> str:
     """A settings file's text, or ``""`` when it cannot be read. A file charter is not
     allowed to open is not evidence of anything, and a preflight row must render whatever
@@ -1980,7 +2044,7 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_harness(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
+                check_plane_root(), check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),

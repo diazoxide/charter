@@ -290,6 +290,14 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
   (`charter harness install codex`) because nothing in a plugin can tell a shell which
   harness it is.
   → [docs/harnesses.md](docs/harnesses.md)
+- **A status line only one of your three harnesses has.** `charter claude` (or `codex`,
+  or `opencode`) runs the harness inside a frame charter composes: the agent in the middle,
+  charter's own panels on the edges — the active workspace, open todos, what wants
+  attention — repainting when charter's hooks say the plane changed. tmux composes and
+  owns the rectangles; charter fills the edges and never draws in the agent's own pane.
+  `charter frame -- <cmd>` does it for a command charter has never met, and `--no-frame`
+  (or piping the output anywhere) skips the frame entirely and carries the real exit code.
+  → [docs/frame.md](docs/frame.md)
 - **An unattended run that stops to ask a question.** Every git operation authenticates
   with that repo's own forge CLI token over HTTPS — never an SSH key, never signing —
   because a passphrase prompt hangs an agent until it times out.
@@ -345,6 +353,9 @@ copy wins, is compared to nothing, and drifts unwatched in both directions.
   against, `secret exec`, and feeding a tool that wants a dotenv file.
 - [docs/harnesses.md](docs/harnesses.md) — Claude Code, opencode and Codex: how each is
   wired, what each cannot carry, and the one command Codex needs.
+- [docs/frame.md](docs/frame.md) — `charter claude` and the frame: what tmux it needs,
+  what changes inside it (scrollback, mouse, the hotkey menu), how exit codes get out,
+  what happens when the terminal is too small, and every `[frame]` setting.
 - [docs/git-policy.md](docs/git-policy.md) — the one-credential rule, and why a denial from
   the plugin's guard is the rule working rather than a bug.
 - [docs/hooks.md](docs/hooks.md) — everything the plugin does without being asked: what

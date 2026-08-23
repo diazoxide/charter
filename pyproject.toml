@@ -50,6 +50,7 @@ packages = ["charter"]
 "docs/browser.md" = "charter/_docs/browser.md"
 "docs/control-plane.md" = "charter/_docs/control-plane.md"
 "docs/forges.md" = "charter/_docs/forges.md"
+"docs/frame.md" = "charter/_docs/frame.md"
 "docs/git-policy.md" = "charter/_docs/git-policy.md"
 "docs/harnesses.md" = "charter/_docs/harnesses.md"
 "docs/hooks.md" = "charter/_docs/hooks.md"

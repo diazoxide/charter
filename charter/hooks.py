@@ -1864,6 +1864,8 @@ def context_block(cwd=None) -> str:
 
 
 def sessionstart() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     # Read the piece's existing state BEFORE recording this session as alive — the write
     # below would otherwise replace the holder's mark with ours and hide the collision.
@@ -2010,6 +2012,8 @@ def memory_share_note() -> str:
 
 
 def posttooluse() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     _touch_piece(data)
     # The approval half of the `routing: require` edit nudge (`pretooluse_edit`), which asks
@@ -2228,6 +2232,8 @@ def posttooluse_bash() -> int:
     narrowing the matcher with the host's `if:` condition (e.g. ``Bash(git *)``) is the
     obvious reduction, deferred only because it would raise charter's minimum host version.
     """
+    from .frame import notify
+    notify.plane_changed()
     _ask_approved(_read_stdin())
     return 0
 
@@ -2244,6 +2250,8 @@ def posttooluse_skill() -> int:
     workspace or client name would travel. `skilluse.record` swallows its own failures: a
     tally must never break a turn.
     """
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     _touch_piece(data)
     try:
@@ -2323,6 +2331,8 @@ def posttooluse_message() -> int:
     created — `main`, another session, a teammate's agent. Attributing those would be
     inventing a delegation that did not happen.
     """
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     if (data.get("tool_name") or "") != "SendMessage":
         return 0
@@ -2342,6 +2352,8 @@ def posttooluse_message() -> int:
 
 
 def posttooluse_dispatch() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     # The approval half of the overlapping-dispatch nudge (`pretooluse_dispatch`). Before
     # the `subagent_type` check: an ask that was approved was approved whatever the tally
@@ -2710,6 +2722,8 @@ def _commitment_nudge(prompt: str, sid: str | None, unattended: bool = False) ->
 
 
 def userpromptsubmit() -> int:
+    from .frame import notify
+    notify.plane_changed()
     data = _read_stdin()
     _touch_piece(data)
     sid = data.get("session_id")

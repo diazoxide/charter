@@ -321,6 +321,9 @@ class OpenCodeHarness(Harness):
                 "effectful tools (write/edit/bash) instead of arriving beside them."),
     )
 
+    cli_name = "opencode"
+    binary = "opencode"
+
     def stale_wiring(self) -> str:
         """The version that wrote the installed plugin, when it is not this one.
 

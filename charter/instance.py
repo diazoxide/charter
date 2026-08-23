@@ -314,3 +314,132 @@ def drift(root: Path) -> list[str]:
         else:
             out.append(f"missing directory: {d}/")
     return out
+
+
+#: The edges a frame may occupy. A slot outside this set is a typo, and a typo must not
+#: reach a tmux argv — so an unknown one is dropped rather than passed through.
+FRAME_SLOTS = ("top", "bottom", "left", "right")
+
+#: Every ``[frame]`` setting, keyed by the name :func:`frame_of` returns it under
+#: (underscore — reads better at the call site, e.g. ``frame["history_limit"]``) and
+#: paired with ``(default, toml_key)``: the shipped default, and the name charter.toml
+#: actually spells it with. Three of the six differ — ``history-limit``, ``min-cols``,
+#: ``min-rows`` use a hyphen, per docs/frame.md — so the TOML spelling travels right next
+#: to the default it belongs to instead of living in a second dict a reader has to keep
+#: in sync by hand. Two dicts keyed apart, as an earlier draft of this had it, meant a key
+#: added to one and not the other was a ``KeyError`` raised from inside :func:`frame_of` —
+#: in a module every charter command imports. One structure makes that failure mode
+#: impossible by construction rather than merely unlikely. Only the ``toml_key`` spelling
+#: is ever honoured — the underscore form is not accepted as a second, undocumented alias.
+FRAME_FIELDS = {
+    "slots": (["top", "bottom"], "slots"),
+    #: Off by default: tmux's `set -g mouse on` takes over drag-select, so turning this on
+    #: trades the operator's terminal text-selection for clickable panels. That trade
+    #: belongs to a later release that actually ships clickable panels, not this one.
+    "mouse": (False, "mouse"),
+    "hotkey": ("F2", "hotkey"),
+    "history_limit": (50000, "history-limit"),
+    "min_cols": (100, "min-cols"),
+    "min_rows": (20, "min-rows"),
+}
+
+#: The plain ``{key: default}`` view of :data:`FRAME_FIELDS`, for callers (and the
+#: ``config.FRAME`` docstring) that only want the shipped defaults, not the TOML mapping.
+FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.items()}
+
+#: The shape of a tmux key name, and the ONE thing standing between ``[frame] hotkey``
+#: and arbitrary code execution at launch.
+#:
+#: ``commands_frame.conf_text`` interpolates this value into tmux CONFIG TEXT that
+#: ``source-file`` parses and runs (``bind -n {hotkey} run-shell …``). Verified against
+#: tmux 3.7c: ``hotkey = "F2\\nrun-shell 'touch /tmp/PWNED'"`` makes ``source-file``
+#: return **0**, silently, and the file appears **at launch, with no keypress** — the
+#: newline simply ends the ``bind`` line and starts a second command. `charter.toml` is
+#: committed and shared, which is precisely what makes it untrusted input (see the
+#: containment rule in README.md): it arrives from someone else's machine.
+#:
+#: Checked HERE, at the config boundary, rather than as a fifth ad-hoc guard inside the
+#: frame. Every other ``[frame]`` value is already constrained where it enters —
+#: ``slots`` is set-filtered, ``mouse`` is a bool, the three numbers are int-checked —
+#: and ``hotkey`` was the one free string in the section, and the one that reaches a
+#: parser. The branch already carries four separate sanitisers added after four separate
+#: incidents (``frame.state._UNSAFE``, ``frame.menu._ACTION_ID_RE``,
+#: ``commands_frame._PANE_ID_RE``, ``contain.child``); this defect existed because a
+#: fifth input arrived through a fifth door.
+#:
+#: Deliberately narrower than tmux's own key grammar: optional ``C-``/``M-``/``S-``
+#: modifiers, then either a key NAME (``F2``, ``Up``, ``PPage``, ``BSpace``, ``Escape``,
+#: ``a``, ``7``) or a single punctuation key. Whitespace, newlines, quotes, ``;``, ``#``,
+#: ``$``, ``\\`` and braces are all absent from that alphabet, so nothing matching this
+#: can end the ``bind`` line, start a second command, open a quote, or introduce a tmux
+#: format.
+#:
+#: The asymmetry is what justifies erring narrow: a key this refuses that tmux would have
+#: accepted costs the operator their preferred hotkey; a key this accepted that tmux
+#: parses as a command costs them the machine.
+#:
+#: **A refusal is currently SILENT — nothing anywhere names it.** :func:`frame_of`
+#: discards the value and the shipped ``F2`` takes its place, and neither
+#: ``charter frame-probe`` nor ``charter doctor``'s frame row says a word: measured with
+#: the newline payload above sitting in charter.toml, both render a clean green tick.
+#: An earlier version of this comment claimed the probe reported it, which it never did —
+#: the same class of false claim this branch removed from `frame/menu.py` and
+#: `frame/tmuxctl.py`, so it is written down here rather than quietly deleted.
+#:
+#: Left silent deliberately, not overlooked. The gap is real but it is not this
+#: constant's: NO refused ``[frame]`` value is reported anywhere — a dropped ``slots``
+#: entry and a rejected ``history-limit`` are exactly as quiet — so the fix is one
+#: surface for the whole section, not a special case for the one key that happens to have
+#: a security story. It also would NOT catch the neighbouring hazard it looks like it
+#: should: a key such as ``Fn2`` MATCHES this pattern, so :func:`frame_of` accepts it and
+#: has nothing to report, and it is tmux that refuses it later, at ``source-file`` time.
+#: Those are two mechanisms needing two answers. Both are filed as follow-ups.
+_HOTKEY_RE = re.compile(r"^(?:[CMS]-){0,3}(?:[A-Za-z0-9]{1,20}|[!%&()*+,./:<=>?@\[\]^_|~-])$")
+
+
+def frame_of(cfg: dict) -> dict:
+    """The ``[frame]`` section merged over :data:`FRAME_DEFAULTS`.
+
+    Every value is type-checked against its default and discarded if it disagrees. This
+    module is imported by every command, including ``charter --version``, so a
+    hand-edited charter.toml must degrade to the defaults rather than raise.
+
+    Two keys need more than a type check, and both get it here rather than downstream:
+    ``slots`` is filtered against :data:`FRAME_SLOTS`, and ``hotkey`` against
+    :data:`_HOTKEY_RE` — see that constant for the injection a bare ``isinstance(value,
+    str)`` let through. Both degrade to the shipped default, which is the contract every
+    other key in this function already keeps: a charter.toml charter cannot make sense
+    of never stops charter from running.
+    """
+    out = dict(FRAME_DEFAULTS)
+    section = cfg.get("frame")
+    if not isinstance(section, dict):
+        return out
+    for key, (default, toml_key) in FRAME_FIELDS.items():
+        if toml_key not in section:
+            continue
+        value = section[toml_key]
+        if key == "slots":
+            if isinstance(value, list):
+                kept = [s for s in value if s in FRAME_SLOTS]
+                if kept:
+                    out[key] = kept
+            continue
+        if key == "hotkey":
+            if isinstance(value, str) and _HOTKEY_RE.fullmatch(value):
+                out[key] = value
+            continue
+        # `bool` is a subclass of `int` in Python, so `isinstance(True, int)` is True even
+        # though `True` was never meant to stand in for an int default — without this
+        # guard, `history-limit = true` would silently pass `isinstance(True, int)` and be
+        # accepted as a (nonsensical) history limit. The reverse can't happen through
+        # plain `isinstance` alone (an `int` like `1` is never an instance of `bool`, so
+        # `mouse = 1` is already rejected without this line) but the check is written to
+        # cover both directions, since "a value must be an instance of the default's own
+        # type" is the contract this function documents, not "…unless int and bool are
+        # involved, in which case it depends which one is the default."
+        if isinstance(value, bool) != isinstance(default, bool):
+            continue
+        if isinstance(value, type(default)):
+            out[key] = value
+    return out

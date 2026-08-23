@@ -301,6 +301,11 @@ _PROBEABLE = frozenset({
     ("doctor",),           # reads the plane and reports on it
     ("news",),             # reads entries; the ones that probe are #311's guard to answer
     ("persona", "lint"),   # reads the persona files — every shipped probe today
+    ("frame-probe",),      # reads tmux's own version (charter.commands_frame.cmd_probe);
+                            # a TOP-LEVEL command rather than `frame --probe` precisely so
+                            # it carries no pass-through positional — `frame` itself always
+                            # does (`rest`, its harness's verbatim argv) and so can never be
+                            # listed here, `--probe` or not.
 })
 
 
