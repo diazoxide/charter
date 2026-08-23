@@ -441,6 +441,7 @@ def _bottom(fid: str) -> str:
     panel says and what the frame actually does.
     """
     from .. import config, session as _session, statusline as sl, workspace
+    from . import state, tmuxctl
     ws = workspace.resolve()
     todos = sl._todo_count(ws)
     alerts = sl._alerts(ws)
@@ -454,7 +455,14 @@ def _bottom(fid: str) -> str:
     todo_text = f"{todos} todo" + ("s" if todos != 1 else "")
     alert_text = alerts[0] if alerts else ""
     news_text = f"{sl._DIM} · {sl._R}".join(news) if news else ""
-    hotkey_text = f"{config.FRAME['hotkey']} menu"
+    # Nothing to advertise inside a tmux charter did not start: it binds no key there
+    # at all (`commands_frame._launch_in_operator_tmux` says why — a key table is
+    # server-wide in tmux, and the menu's one entry is one the operator's own prefix
+    # already does). A row still printing `F2 menu` there would be telling every
+    # operator about a key that does nothing, on every repaint — the same defect the
+    # hardcoded `F2` was, reached through the other server instead of the wrong config.
+    hotkey_text = ("" if tmuxctl.is_operator_socket(state.frame_server(fid))
+                   else f"{config.FRAME['hotkey']} menu")
 
     # Decide who survives, highest priority first (see this function's own docstring
     # above for why); `_fit_fields` does the actual budgeting so it can be tested in

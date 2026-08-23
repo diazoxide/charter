@@ -48,13 +48,15 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, hooks, instance, todos
-from charter.frame import gather, layout, menu, notify, state
+from charter.frame import gather, layout, menu, notify, state, tmuxctl
 
 from tests._isolation import PersonaIso, run_hook
 
@@ -335,7 +337,17 @@ class _NeedsAttachedClient:
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
-class TmuxIntegration(unittest.TestCase):
+class _TmuxServerFixture:
+    """One real tmux server per test, and the helpers every class here needs.
+
+    A MIXIN rather than a base TestCase, and that is not style. `unittest` collects a
+    subclass's inherited tests as its own, so `class WindowInsideAnOperatorsTmux
+    (TmuxIntegration)` would silently re-run every test in `TmuxIntegration` a second
+    time — each one starting its own real tmux server — which is how a "14 tests"
+    surprise showed up the first time this module grew a second class. Mixing the
+    fixture in leaves each class owning exactly its own tests.
+    """
+
     def setUp(self) -> None:
         self.addCleanup(self._teardown_socket)
         self._pane_counter = 0
@@ -410,6 +422,8 @@ class TmuxIntegration(unittest.TestCase):
                 "nothing here can carry a harness's exit status out of a dead pane — "
                 "the capability these tests measure is not present to measure")
 
+
+class TmuxIntegration(_TmuxServerFixture, unittest.TestCase):
     # -- 0. The hotkey is not a free string ----------------------------------------- #
 
     def _source_hotkey(self, conf_dir: Path, hotkey: str, name: str
@@ -2016,6 +2030,243 @@ class EarlyDeathIntegration(unittest.TestCase):
         msg = commands_frame.early_death_message([self.MISSING, "--flag"], code, words)
         self.assertIn(self.MISSING, msg)
         self.assertIn(str(code), msg)
+
+
+#: The socket FILE tmux computes for `-L SOCKET` — the same path `_teardown_socket`
+#: already has to know. Needed as a path (not a name) by `WindowInsideAnOperatorsTmux`,
+#: because the whole point of that class is exercising the `-S <socket path>` half of
+#: `tmuxctl.server_argv`, which is how charter reaches a server it did not start.
+SOCKET_PATH = str(Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
+
+
+class WindowInsideAnOperatorsTmux(_TmuxServerFixture, unittest.TestCase):
+    """The frame built as a WINDOW in a tmux charter did not start (#381).
+
+    Stands a real server up and treats it as the operator's: charter reaches it by
+    socket PATH, opens one window in one of its sessions, and must leave everything else
+    exactly as it found it. The properties here are the ones a mock cannot check —
+    whether tmux keeps a dead pane at all when `remain-on-exit` is set PANE-scoped,
+    what it answers for a pane that no longer exists, whether `respawn-pane -e` reaches
+    the process, and whether `kill-window` takes the operator's session with it.
+
+    No attached client anywhere in this class, deliberately: every command is issued
+    against a detached session, so nothing here needs the terminal capability
+    `_NeedsAttachedClient` probes for and none of it is skipped on a headless CI step.
+    """
+
+    def _operator_server(self, harness_dies_by="exit 0"):
+        """A session standing in for one the operator already had open.
+
+        Returns its name, its `$N` session id, its own pane id, and the gate the frame's
+        harness will die by. The session's own pane runs a program that never exits on
+        its own, so anything that quietly takes the operator's session down shows up as
+        a missing session rather than as a race.
+        """
+        name, pane, gate = self._new_pane("exit 0")
+        sid = _tmux("display-message", "-p", "-t", pane, "#{session_id}").stdout.strip()
+        self.assertTrue(sid.startswith("$"), sid)
+        return name, sid, pane, gate
+
+    def _open_frame_window(self, sid, fid="charter-demo-1"):
+        """`layout.window_argv`'s own bytes, run for real. Returns (window id, pane id)."""
+        r = _run(layout.window_argv(socket=SOCKET_PATH, session=sid, window=fid,
+                                    cwd=self._gate_dir))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        window_id, _, pane_id = r.stdout.strip().partition(" ")
+        self.assertTrue(window_id.startswith("@"), r.stdout)
+        self.assertTrue(pane_id.startswith("%"), r.stdout)
+        return window_id, pane_id
+
+    def _wait_until(self, predicate, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _require_pane_options(self, pane_id):
+        """Skip unless THIS tmux accepts a pane-scoped `remain-on-exit`.
+
+        `set-option -p` is what keeps a dead harness pane askable on a server charter is
+        a guest on, and it is the only scope that does not reach past charter's own
+        window (see `commands_frame._remain_on_exit_argv`). A tmux without pane options
+        cannot do the thing these tests measure, so they skip naming that rather than
+        failing with tmux's own argument-parsing text."""
+        r = _run(commands_frame._remain_on_exit_argv(socket=SOCKET_PATH,
+                                                     harness_pane=pane_id))
+        if r.returncode != 0:
+            self.skipTest("this tmux does not accept a pane-scoped `remain-on-exit` "
+                          f"({r.stderr.strip()}), so it cannot hold a dead harness pane "
+                          "for its exit status to be read out of")
+
+    def test_the_harnesss_real_exit_code_survives_in_someone_elses_server(self):
+        """End to end for the one property the whole module exists for, on the path
+        where there is no `attach` to read a code out of: charter opens the window,
+        arms the pane, respawns the harness into it, and reads the status back through
+        `_pane_state` — the same function the launcher's wait loop calls."""
+        _, sid, _, _ = self._operator_server()
+        window_id, pane_id = self._open_frame_window(sid)
+        self._require_pane_options(pane_id)
+        gate = os.path.join(self._gate_dir, "harness-gate")
+        r = _run(layout.respawn_argv(socket=SOCKET_PATH, harness_pane=pane_id, env={},
+                                     cwd=self._gate_dir,
+                                     harness_argv=_gate_argv(gate, "exit 33")))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id),
+                         (commands_frame._ALIVE, None))
+        self._release(gate)
+        self.assertTrue(self._wait_until(
+            lambda: commands_frame._pane_state(SOCKET_PATH, pane_id)[0]
+            == commands_frame._DEAD), "the pane never came back dead")
+        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id),
+                         (commands_frame._DEAD, 33))
+        del window_id
+
+    def test_the_placeholder_does_not_exit_on_its_own(self):
+        """`layout.PLACEHOLDER`'s only required property, and the one an argv assertion
+        cannot make: if it could exit, the window would be gone before `remain-on-exit`
+        was ever set on its pane and the ordering the whole path rests on would buy
+        nothing."""
+        _, sid, _, _ = self._operator_server()
+        _, pane_id = self._open_frame_window(sid)
+        time.sleep(0.4)
+        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id)[0],
+                         commands_frame._ALIVE,
+                         "the placeholder exited on its own")
+
+    def test_a_pane_that_is_gone_answers_empty_rather_than_failing(self):
+        """The measured fact `_pane_state` — and therefore the launcher's wait loop —
+        rests on: `display-message -p -t <a pane that no longer exists>` does NOT fail.
+        It returns 0 and prints an empty line. A loop that only stopped on
+        `#{pane_dead}` being `1` would poll a window nobody can bring back, forever."""
+        _, sid, _, _ = self._operator_server()
+        window_id, pane_id = self._open_frame_window(sid)
+        raw = _run(tmuxctl.server_argv(SOCKET_PATH, "display-message", "-p", "-t",
+                                       pane_id, commands_frame._DEAD_FORMAT))
+        self.assertEqual(raw.returncode, 0)
+        self.assertEqual(raw.stdout.strip(), "0:")
+        _run(tmuxctl.server_argv(SOCKET_PATH, "kill-window", "-t", window_id))
+        gone = _run(tmuxctl.server_argv(SOCKET_PATH, "display-message", "-p", "-t",
+                                        pane_id, commands_frame._DEAD_FORMAT))
+        self.assertEqual(gone.returncode, 0,
+                         "tmux is expected to answer, not to refuse")
+        self.assertEqual(gone.stdout.strip(), ":",
+                         "both variables expand to nothing, and the format's own "
+                         "literal `:` is all that is left — NOT an empty line, which "
+                         "is what a guard written from memory assumed")
+        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id),
+                         (commands_frame._GONE, None))
+
+    def test_closing_the_frames_window_leaves_the_operators_session_alone(self):
+        """`kill-window`, never `kill-session` — the difference between charter tidying
+        up after itself and charter ending every window the operator had open."""
+        name, sid, op_pane, _ = self._operator_server()
+        window_id, _ = self._open_frame_window(sid)
+        before = _tmux("list-windows", "-a", "-F", "#{window_name}").stdout.split()
+        self.assertIn("charter-demo-1", before)
+        _run(tmuxctl.server_argv(SOCKET_PATH, "kill-window", "-t", window_id))
+        after = _tmux("list-windows", "-a", "-F", "#{window_name}").stdout.split()
+        self.assertNotIn("charter-demo-1", after)
+        self.assertIn(name, _tmux("list-sessions", "-F", "#{session_name}").stdout.split(),
+                      "the operator's own session went with charter's window")
+        self.assertEqual(_tmux("display-message", "-p", "-t", op_pane,
+                               "#{pane_dead}").stdout.strip(), "0",
+                         "the operator's own pane died with it")
+
+    def test_charters_environment_reaches_the_harness_and_the_launchers_pane_does_not(self):
+        """`respawn-pane -e` is the only channel charter has here, and the launching
+        pane's own `$TMUX_PANE` must not travel down it: tmux sets that variable itself
+        for the pane it creates, and overwriting it would tell the harness — and
+        `session.terminal()`, which reads it — that it is somewhere it is not."""
+        _, sid, op_pane, _ = self._operator_server()
+        _, pane_id = self._open_frame_window(sid)
+        self._require_pane_options(pane_id)
+        out = os.path.join(self._gate_dir, "harness-env")
+        env = commands_frame._frame_env("charter-demo-1", None)
+        env["CHARTER_HARNESS"] = "claude-code"
+        r = _run(layout.respawn_argv(
+            socket=SOCKET_PATH, harness_pane=pane_id, env=env, cwd=self._gate_dir,
+            harness_argv=["/bin/sh", "-c",
+                          f'printf "%s\\n%s\\n%s\\n" "$CHARTER_SESSION_ID" '
+                          f'"$CHARTER_HARNESS" "$TMUX_PANE" > "{out}"']))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(_await_file(out), "the harness never ran")
+        self.assertTrue(self._wait_until(lambda: Path(out).read_text().count("\n") >= 3))
+        sid_seen, harness_seen, pane_seen = Path(out).read_text().splitlines()[:3]
+        self.assertEqual(sid_seen, "charter-demo-1")
+        self.assertEqual(harness_seen, "claude-code")
+        self.assertEqual(pane_seen, pane_id,
+                         "the harness must see its OWN pane, not the launcher's")
+        self.assertNotEqual(pane_seen, op_pane)
+
+    def test_the_harness_starts_where_charter_was_typed(self):
+        """A pane in a server charter did not start otherwise inherits the SESSION's
+        working directory — wherever the operator was when they first ran `tmux`."""
+        _, sid, _, _ = self._operator_server()
+        _, pane_id = self._open_frame_window(sid)
+        self._require_pane_options(pane_id)
+        out = os.path.join(self._gate_dir, "harness-cwd")
+        r = _run(layout.respawn_argv(
+            socket=SOCKET_PATH, harness_pane=pane_id, env={}, cwd=self._gate_dir,
+            harness_argv=["/bin/sh", "-c", f'pwd > "{out}"']))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(_await_file(out), "the harness never ran")
+        self.assertEqual(Path(Path(out).read_text().strip()).resolve(),
+                         Path(self._gate_dir).resolve())
+
+    def test_nothing_of_the_operators_is_written_by_a_whole_launch(self):
+        """The boundary, checked against tmux's own reported state rather than against
+        charter's argv: every server option, every option of the operator's own session,
+        and the entire key table are read before and after a REAL `cmd_launch` runs
+        inside this server, and must come back byte for byte.
+
+        `cmd_launch` itself, not the argv builders — this is the one test that can catch
+        a command the launcher issues that nobody thought to look for.
+        """
+        name, sid, op_pane, _ = self._operator_server()
+        gate = os.path.join(self._gate_dir, "e2e-gate")
+
+        def _snapshot():
+            return tuple(_tmux(*args).stdout for args in (
+                ("show-options", "-g"),
+                ("show-options", "-t", name),
+                ("show-options", "-g", "-w"),
+                ("list-keys",)))
+
+        before = _snapshot()
+        server_pid = _tmux("display-message", "-p", "#{pid}").stdout.strip()
+        args = SimpleNamespace(harness="frame", rest=["--", *_gate_argv(gate, "exit 21")],
+                               no_frame=False)
+        rc: list[int] = []
+
+        def _run_launch():
+            env = dict(os.environ, TMUX=f"{SOCKET_PATH},{server_pid},{sid[1:]}",
+                       TMUX_PANE=op_pane)
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch("sys.stdout.isatty", return_value=True), \
+                 mock.patch("charter.workspace.resolve", return_value="demo"), \
+                 mock.patch.dict(config.FRAME, {"slots": []}):
+                rc.append(commands_frame.cmd_launch(args))
+
+        worker = threading.Thread(target=_run_launch, daemon=True)
+        worker.start()
+        self.assertTrue(self._wait_until(
+            lambda: "demo-" in _tmux("list-windows", "-a", "-F",
+                                     "#{window_name}").stdout, timeout=15),
+            "the frame's own window never appeared in the operator's server")
+        during = _snapshot()
+        self._release(gate)
+        worker.join(timeout=25)
+        self.assertFalse(worker.is_alive(), "cmd_launch never returned")
+        self.assertEqual(rc, [21], "the harness's own exit code did not come back")
+        self.assertEqual(before, during,
+                         "charter wrote something on a server it is only a guest on")
+        self.assertEqual(before, _snapshot())
+        self.assertIn(name, _tmux("list-sessions", "-F", "#{session_name}").stdout.split())
+        self.assertNotIn("demo-", _tmux("list-windows", "-a", "-F",
+                                        "#{window_name}").stdout,
+                         "the frame's window was left behind")
 
 
 if __name__ == "__main__":

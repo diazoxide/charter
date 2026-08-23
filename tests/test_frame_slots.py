@@ -20,7 +20,7 @@ import unittest
 from unittest import mock
 
 from charter import config, statusline, tui
-from charter.frame import gather, slots
+from charter.frame import gather, slots, state
 
 from tests._isolation import PersonaIso
 
@@ -91,6 +91,28 @@ class Render(PersonaIso, unittest.TestCase):
         one-character substitution. `M-m` shares no characters with `F2`."""
         with mock.patch.dict(config.FRAME, {"hotkey": "M-m"}):
             self.assertIn("M-m menu", slots.render("bottom", "f-1"))
+
+    def test_a_frame_in_the_operators_own_tmux_advertises_no_hotkey(self):
+        """Charter binds no key at all inside a tmux it did not start — a key table is
+        server-wide in tmux with no per-window form, and taking one from every window
+        the operator has open to reach a menu whose only entry is "Detach" (which their
+        own prefix already does) is a worse trade than none. A panel still printing
+        `F2 menu` there would be telling every operator about a key that does nothing,
+        on every repaint, forever — the same defect
+        `test_the_bottom_row_names_the_configured_hotkey_not_a_hardcoded_one` exists
+        for, reached through the other server instead of the wrong config value."""
+        state.record_server("f-in-tmux", "/private/tmp/tmux-502/default")
+        with mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
+            out = slots.render("bottom", "f-in-tmux")
+        self.assertNotIn("menu", out)
+        self.assertIn("todo", out, "the rest of the row is untouched")
+
+    def test_a_frame_on_charters_own_server_still_advertises_it(self):
+        """The other side of the same switch — a `_bottom` that simply stopped printing
+        a hotkey would pass the test above on its own."""
+        state.record_server("f-own", "charter")
+        with mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
+            self.assertIn("F1 menu", slots.render("bottom", "f-own"))
 
     def test_an_unknown_slot_is_named_rather_than_drawn_blank(self):
         """`panel.run` (Task 7) refuses an unknown slot before ever spawning a pane for

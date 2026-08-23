@@ -217,5 +217,139 @@ class PanelGeometry(unittest.TestCase):
         self.assertEqual(_size(right), "22")
 
 
+class WindowInTheOperatorsServer(unittest.TestCase):
+    """`new-window` and `respawn-pane` — the frame built INSIDE a tmux the operator is
+    already in, instead of a private server nested in their pane.
+
+    Two commands rather than one for a measured reason (tmux 3.7c). `remain-on-exit` is
+    what keeps a dead harness pane askable long enough for its exit status to be read,
+    and there is no way to set it ON a pane that does not exist yet — every option tmux
+    would otherwise inherit it from is global or session-scoped, and writing either on
+    somebody else's server is exactly what this path exists not to do. So the window is
+    created running a placeholder that never exits, `remain-on-exit` is set on that
+    pane, and only THEN is the harness respawned into the same pane (`respawn-pane -k`
+    keeps the pane's `%N` id, verified against 3.7c). The race the private-server path
+    closes with `_PLACEHOLDER_CONF` is not narrowed here — it is removed.
+    """
+
+    def test_the_window_is_created_in_the_operators_own_session(self):
+        cmd = layout.window_argv(socket="/private/tmp/tmux-502/default", session="$1",
+                                 window="charter-demo-1234", cwd="/work/repo")
+        self.assertEqual(cmd[:3], ["tmux", "-S", "/private/tmp/tmux-502/default"])
+        self.assertIn("new-window", cmd)
+        self.assertEqual(cmd[cmd.index("-t") + 1], "$1")
+        self.assertEqual(cmd[cmd.index("-n") + 1], "charter-demo-1234")
+
+    def test_the_window_is_created_in_the_background(self):
+        """`-d`: the operator is switched to the frame once it is BUILT, never onto a
+        half-drawn window with a placeholder running in it."""
+        cmd = layout.window_argv(socket="/s", session="$1", window="f", cwd="/work/repo")
+        self.assertIn("-d", cmd)
+
+    def test_both_the_window_and_the_pane_ids_are_asked_for(self):
+        """The pane id scopes every split and the exit-status query; the window id is
+        what `kill-window` targets at the end. Indices are useless for both — tmux
+        renumbers windows and panes (see this module's own docstring)."""
+        cmd = layout.window_argv(socket="/s", session="$1", window="f", cwd="/work/repo")
+        self.assertEqual(cmd[cmd.index("-F") + 1], "#{window_id} #{pane_id}")
+        self.assertIn("-P", cmd)
+
+    def test_the_placeholder_is_what_the_window_is_created_running(self):
+        """After the `--`, so tmux runs it as a program rather than reading it as one
+        of `new-window`'s own options — the same placement `session_argv` and
+        `panel_argvs` already use for the harness and the panels.
+
+        That the placeholder never exits on its own cannot be asserted from an argv;
+        `tests/test_frame_tmux_integration.py` runs this exact command against a real
+        server and reads back a pane still alive."""
+        cmd = layout.window_argv(socket="/s", session="$1", window="f", cwd="/work/repo")
+        self.assertTrue(layout.PLACEHOLDER, "a window has to be created running something")
+        self.assertEqual(cmd[cmd.index("--") + 1:], layout.PLACEHOLDER)
+        self.assertEqual(cmd.count("--"), 1)
+
+    def test_the_harness_replaces_the_placeholder_in_the_same_pane(self):
+        cmd = layout.respawn_argv(socket="/s", harness_pane="%7", env={}, cwd="/work/repo",
+                                  harness_argv=["claude", "--resume", "a;b"])
+        self.assertIn("respawn-pane", cmd)
+        self.assertIn("-k", cmd)
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%7")
+        self.assertEqual(cmd[cmd.index("--") + 1:], ["claude", "--resume", "a;b"])
+
+    def test_the_harness_argv_is_never_joined(self):
+        """The same rule the rest of this module pins: `a;b` reaching tmux as one
+        element is inert, and as part of a joined string is a command separator."""
+        cmd = layout.respawn_argv(socket="/s", harness_pane="%7", env={}, cwd="/work/repo",
+                                  harness_argv=["claude", "-p", "hi; touch INJ"])
+        self.assertEqual(cmd[-1], "hi; touch INJ")
+
+    def test_charters_environment_rides_on_the_respawn_not_the_session(self):
+        """`-e` puts a variable on THIS pane's own process and nowhere else. The
+        private-server path carries `CHARTER_SESSION_ID` in the environment
+        `new-session` inherits, which is not available here — the server is already
+        running, and it is the operator's. `set-environment -t <their session>` would
+        reach the harness, and would also hand every new shell they open a frame id
+        that is not theirs.
+
+        Measured against tmux 3.7c: `respawn-pane -e` REPLACES the pane's environment
+        rather than adding to what `new-window -e` set, so everything the harness needs
+        has to be on this call, not the one that made the window."""
+        cmd = layout.respawn_argv(socket="/s", harness_pane="%7", cwd="/work/repo",
+                                  env={"CHARTER_SESSION_ID": "demo-1",
+                                       "CHARTER_HARNESS": "claude-code"},
+                                  harness_argv=["claude"])
+        self.assertIn("-e", cmd)
+        pairs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-e"]
+        self.assertEqual(sorted(pairs),
+                         ["CHARTER_HARNESS=claude-code", "CHARTER_SESSION_ID=demo-1"])
+        # ...and before the `--`, so they are `respawn-pane`'s own options and never
+        # get grafted onto the harness's argv.
+        self.assertTrue(all(cmd.index(p) < cmd.index("--") for p in pairs))
+
+
+    def test_the_harness_starts_where_charter_was_typed(self):
+        """A pane in a server charter did not start inherits the SESSION's directory —
+        wherever the operator was when they first ran `tmux`, which is not where they
+        typed `charter claude`. The panels split off this pane inherit its directory in
+        turn, and `workspace.resolve()` reads exactly that."""
+        for cmd in (layout.window_argv(socket="/s", session="$1", window="f",
+                                       cwd="/work/repo"),
+                    layout.respawn_argv(socket="/s", harness_pane="%7", env={},
+                                        cwd="/work/repo", harness_argv=["claude"])):
+            with self.subTest(cmd=cmd[3]):
+                self.assertEqual(cmd[cmd.index("-c") + 1], "/work/repo")
+
+
+    def test_a_panel_can_be_handed_an_environment_of_its_own(self):
+        """A pane created on a server charter did not start inherits THAT SERVER's
+        environment — whatever the operator's shell had when they first ran `tmux`, days
+        ago. On charter's own server the panels inherit the launcher's environment
+        because `new-session` is what starts the server; there is no such moment here, so
+        the same values ride on `split-window -e`, exactly as the harness's do on
+        `respawn-pane -e`.
+
+        Omitted entirely when there is nothing to carry, so the private-server path's
+        command is byte-for-byte what it always was."""
+        with_env = layout.panel_argvs(slots=["top"], session="f", socket="/s",
+                                      charter_argv=["charter"], harness_pane="%3",
+                                      env={"CHARTER_ROOT": "/plane"})[0]
+        self.assertEqual(with_env[with_env.index("-e") + 1], "CHARTER_ROOT=/plane")
+        self.assertLess(with_env.index("-e"), with_env.index("--"),
+                        "`-e` is `split-window`'s own option, never part of the panel's "
+                        "argv")
+        without = layout.panel_argvs(slots=["top"], session="f", socket="/s",
+                                     charter_argv=["charter"], harness_pane="%3")[0]
+        self.assertNotIn("-e", without)
+
+
+class ServerSelection(unittest.TestCase):
+    def test_a_split_can_be_aimed_at_the_operators_server_too(self):
+        """`panel_argvs` and `session_argv` grew no new parameter for this: the socket
+        they already take is now either charter's own server NAME or a socket PATH, and
+        `tmuxctl.server_argv` is the one place that difference turns into `-L` or `-S`."""
+        cmds = layout.panel_argvs(slots=["top"], session="f", socket="/tmp/tmux-1/default",
+                                  charter_argv=["charter"], harness_pane="%3")
+        self.assertEqual(cmds[0][:3], ["tmux", "-S", "/tmp/tmux-1/default"])
+
+
 if __name__ == "__main__":
     unittest.main()

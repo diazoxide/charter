@@ -7,6 +7,7 @@ remedy that does not exist costs more than an honest gap".
 
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 from unittest import mock
@@ -153,6 +154,83 @@ class RunGuardsTheTimeout(unittest.TestCase):
         self.assertNotIn("timeout", kwargs)
         self.assertNotIn("capture_output", kwargs)
         self.assertEqual(kwargs["env"], {"A": "b"})
+
+
+class OperatorServer(unittest.TestCase):
+    """Reading `$TMUX` — the one fact that decides whether charter nests or not.
+
+    Measured against tmux 3.7c by printing `$TMUX` inside a real pane: the value is
+    `<socket path>,<server pid>,<session id>`, where the session id is the NUMBER off
+    tmux's own `#{session_id}` (`$1` -> `1`). Both halves matter to the launcher — the
+    socket says WHICH server the operator is already talking to, and the session id says
+    which session of theirs the new window belongs in — so both are parsed here rather
+    than one being re-queried from tmux later.
+    """
+
+    def test_a_real_tmux_environment_yields_the_socket_and_the_session(self):
+        env = {"TMUX": "/private/tmp/tmux-502/default,70029,1"}
+        self.assertEqual(tmuxctl.operator_server(env),
+                         ("/private/tmp/tmux-502/default", "$1"))
+
+    def test_no_tmux_variable_means_charter_is_not_inside_one(self):
+        self.assertIsNone(tmuxctl.operator_server({}))
+
+    def test_an_empty_tmux_variable_is_not_inside_one_either(self):
+        """An exported-but-empty `$TMUX` is what a shell that once ran `unset`-less
+        cleanup leaves behind; treating it as "inside tmux" would send the launcher at a
+        socket path of `""`."""
+        self.assertIsNone(tmuxctl.operator_server({"TMUX": ""}))
+
+    def test_a_value_charter_cannot_read_is_refused_rather_than_guessed(self):
+        """Two commas and a numeric third field is the whole contract. Anything else —
+        a truncated value, a non-numeric session id — is not shaped into a target that
+        would then be interpolated into `new-window -t`; charter falls back to its own
+        private server, which nests but is never wrong about what it is talking to."""
+        for bad in ("/tmp/sock", "/tmp/sock,70029", "/tmp/sock,70029,abc",
+                    ",70029,1", "/tmp/sock,70029,1,extra"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(tmuxctl.operator_server({"TMUX": bad}))
+
+    def test_a_relative_socket_path_is_refused(self):
+        """`server_argv` picks `-S` over `-L` on a leading slash alone, so a socket
+        path that is not absolute would silently be sent to tmux as a `-L` SERVER NAME
+        and start a brand-new server — the nesting this whole path exists to stop,
+        reached by a different route."""
+        self.assertIsNone(tmuxctl.operator_server({"TMUX": "sock,70029,1"}))
+
+    def test_the_default_source_is_the_real_environment(self):
+        with mock.patch.dict(os.environ, {"TMUX": "/tmp/s,1,2"}):
+            self.assertEqual(tmuxctl.operator_server(), ("/tmp/s", "$2"))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(tmuxctl.operator_server())
+
+
+class ServerArgv(unittest.TestCase):
+    """`tmux -L <name>` and `tmux -S <path>` are the same command against two different
+    servers, and every argv charter builds has to pick one.
+
+    A leading `/` is the whole discriminator, and it is total rather than heuristic: a
+    socket path only ever reaches charter from `$TMUX`, which tmux itself writes
+    absolute (measured), and a `-L` name may not contain a separator at all — tmux joins
+    it onto its own socket directory to make the path.
+    """
+
+    def test_a_plain_name_selects_charters_own_private_server(self):
+        self.assertEqual(tmuxctl.server_argv("charter", "list-sessions"),
+                         ["tmux", "-L", "charter", "list-sessions"])
+
+    def test_an_absolute_path_selects_the_operators_existing_server(self):
+        self.assertEqual(
+            tmuxctl.server_argv("/private/tmp/tmux-502/default", "list-windows", "-a"),
+            ["tmux", "-S", "/private/tmp/tmux-502/default", "list-windows", "-a"])
+
+    def test_nothing_is_ever_joined(self):
+        """The argv rule, at the one place every tmux command in charter now passes
+        through: a joined string is shell-interpreted by tmux and a separate argv is
+        not (pinned against 3.7c)."""
+        argv = tmuxctl.server_argv("charter", "new-window", "--", "claude", "-p", "a;b")
+        self.assertEqual(argv[-1], "a;b")
+        self.assertTrue(all(isinstance(a, str) for a in argv))
 
 
 if __name__ == "__main__":

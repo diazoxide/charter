@@ -7,8 +7,19 @@ a fallback for the race described below — and this process waits for tmux, rea
 recorded (or queried) code, and exits with it. `exec` survives only on the bypass path,
 where there is no frame in the way.
 
-**Every frame shares one tmux server (`SOCKET`), told apart by session name (the frame
-id), not one server per frame.** That single choice is what makes the rest of this module
+**There are TWO paths through this module, and almost everything below is about the
+first.** Started from a plain terminal, charter runs the frame as a SESSION on a private
+server of its own (`SOCKET`) and blocks in `attach`. Started from inside a tmux the
+operator already has (`$TMUX`, read by `tmuxctl.operator_server`), it runs the frame as a
+WINDOW on THEIR server, writes not one option or key binding of theirs, and watches the
+harness pane instead of attaching — see `_launch_in_operator_tmux`, which is where every
+difference lives, and `docs/frame.md` for what the second path costs. The paragraphs
+below — the private server, `-f` versus `source-file`, both `pane-died` hooks, and the
+install race they close — describe the FIRST path only; the second has no hooks at all,
+for a reason `_launch_in_operator_tmux` gives.
+
+**Every frame on charter's own server shares one tmux server (`SOCKET`), told apart by
+session name (the frame id), not one server per frame.** That single choice is what makes the rest of this module
 non-obvious, and it is why the session-scoped/hook-installing config reaches tmux through
 `source-file`/direct `set-hook`/`set-environment` commands rather than through the `-f`
 flag `layout.session_argv` also carries. Measured against tmux 3.7c: `-f` is read only at
@@ -93,6 +104,13 @@ quoting the pane (`_pane_last_words`, read BEFORE `kill-session` destroys it) wh
 shell already said what was wrong, and answering for itself when a failed `execvp` left
 the pane empty and a bare exit 1.
 
+This is the one paragraph in this run that is NOT about the first path alone.
+`_launch_in_operator_tmux` makes the same eager ask for the same reason and skips the
+same everything after it, so the same command dies just as silently there — more so, in
+fact, since the operator is looking at that tmux the whole time and their window never
+even changes. Both call sites report, both read the pane before they close it, and both
+say nothing for a clean 0.
+
 **Every tmux command here goes through `frame/tmuxctl.py`, and the timeout is the
 reason.** `cmd_launch` used to issue eleven `subprocess.run(…, timeout=15)` calls of its
 own with nothing catching `subprocess.TimeoutExpired`. Ten of them run AFTER
@@ -112,6 +130,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 from . import config, harness, util, workspace
 from .frame import gather, layout, menu, state, tmuxctl
@@ -168,6 +187,30 @@ _CHARTER_PY_ENV = tmuxctl.CHARTER_PY_ENV
 #: `cmd_launch` on to `attach` a session with nothing left to end it, recreating the
 #: exact hang the eager check exists to close, just from a signal instead of a race.
 _UNKNOWN_DEATH_CODE = 1
+
+#: The one format every "is the harness still there?" query asks for, named once so the
+#: two readers of its three possible answers (`_pane_state`, and the fake in
+#: `tests/test_frame_launcher.py`) cannot drift apart. See `_pane_state` for what an
+#: EMPTY answer means, which is neither of the two obvious ones.
+_DEAD_FORMAT = "#{pane_dead}:#{pane_dead_status}"
+
+#: The format that reports the size of the WINDOW a pane is in, rather than the pane's
+#: own. Used only inside an operator's tmux: `os.get_terminal_size()` there measures the
+#: pane `charter` was typed in, which is a fraction of the window the frame gets whenever
+#: they have a split open, and sizing the slots from it would drop panels a full-width
+#: window has ample room for.
+_WINDOW_SIZE_FORMAT = "#{window_width}:#{window_height}"
+
+#: How long `_wait_for_harness` leaves between asks. There is no `attach` to block on
+#: inside an operator's tmux — the operator is already attached, to their own server —
+#: so the launcher watches the pane instead, and this is the cost of that: one local
+#: `display-message` against a unix socket, four times a second, for the life of the
+#: frame. Deliberately NOT closed with a `pane-died` hook signalling `wait-for`: the only
+#: hook that could wake this launcher would have to fire BEFORE the one that reads the
+#: pane's status, and tmux runs a hook array in index order with no way to interleave a
+#: read between them, so the wake would race the teardown for the answer it exists to
+#: collect. Four asks a second is a cost; a lost exit code is a defect.
+_POLL_SECONDS = 0.25
 
 
 #: tmux's own trailer, drawn INTO a dead pane by `remain-on-exit` and therefore the last
@@ -420,8 +463,8 @@ def _charter_py_env_argv(*, socket: str, session: str) -> list[str]:
     write would hand frame N's interpreter to frame N-1 — the same "last launched wins"
     trap `conf_text`'s docstring already names for `mouse`/`history-limit`.
     """
-    return ["tmux", "-L", socket, "set-environment", "-t", session, _CHARTER_PY_ENV,
-           sys.executable]
+    return tmuxctl.server_argv(socket, "set-environment", "-t", session, _CHARTER_PY_ENV,
+                               sys.executable)
 
 
 #: `PYTHONSAFEPATH`'s real name — a genuine interpreter environment variable, read by
@@ -449,8 +492,15 @@ def _charter_pythonsafepath_env_argv(*, socket: str, session: str) -> list[str]:
     that function's contract is "the interpreter", used elsewhere as exactly that value
     (`docs`, `conf_text`'s own text); overloading it to also carry an unrelated variable
     would break that contract for a caller that only wanted the interpreter path.
+
+    `tmuxctl.server_argv` like every other builder here, even though the only caller
+    passes `SOCKET`: this module addresses two servers now, one by name and one by socket
+    path, and a hand-built `-L` is correct only until somebody reuses the builder from
+    `_launch_in_operator_tmux` — where it would quietly aim a `set-environment` at
+    charter's own private server instead of failing.
     """
-    return ["tmux", "-L", socket, "set-environment", "-t", session, _PYTHONSAFEPATH_ENV, "1"]
+    return tmuxctl.server_argv(socket, "set-environment", "-t", session,
+                               _PYTHONSAFEPATH_ENV, "1")
 
 
 def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[str]:
@@ -462,8 +512,8 @@ def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[
     SESSION-scoped `set-environment` (no `-g`) reaching a hook fired for a pane in that
     session.
     """
-    return ["tmux", "-L", socket, "set-environment", "-t", session, _EXIT_PATH_ENV,
-           status_path]
+    return tmuxctl.server_argv(socket, "set-environment", "-t", session, _EXIT_PATH_ENV,
+                               status_path)
 
 
 def _session_id_env_argv(*, socket: str, session: str) -> list[str]:
@@ -492,8 +542,8 @@ def _session_id_env_argv(*, socket: str, session: str) -> list[str]:
     which is why this hands the session right back to itself rather than taking a
     separate value the way `_exit_path_env_argv` takes `status_path`.
     """
-    return ["tmux", "-L", socket, "set-environment", "-t", session, "CHARTER_SESSION_ID",
-           session]
+    return tmuxctl.server_argv(socket, "set-environment", "-t", session,
+                               "CHARTER_SESSION_ID", session)
 
 
 def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
@@ -521,7 +571,8 @@ def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
     action = ('run-shell "v=#{pane_dead_status}; echo '
              f'\\"\\${{v:-{_UNKNOWN_DEATH_CODE}}}\\" > '
              f'\\"\\${_EXIT_PATH_ENV}\\""')
-    return ["tmux", "-L", socket, "set-hook", "-p", "-t", harness_pane, "pane-died", action]
+    return tmuxctl.server_argv(socket, "set-hook", "-p", "-t", harness_pane, "pane-died",
+                               action)
 
 
 def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
@@ -543,8 +594,8 @@ def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str
     `tests/test_frame_tmux_integration.py`'s own test of this exact array-replacement
     behaviour against a real server.
     """
-    return ["tmux", "-L", socket, "set-hook", "-p", "-t", harness_pane, "pane-died[1]",
-           "kill-session"]
+    return tmuxctl.server_argv(socket, "set-hook", "-p", "-t", harness_pane,
+                               "pane-died[1]", "kill-session")
 
 
 #: Which `resize-pane` flag re-asserts a slot's fixed dimension: `-y` (rows) for the
@@ -611,8 +662,8 @@ def _resize_hook_argv(*, socket: str, harness_pane: str, panes: dict[str, str]) 
     action = " ; ".join(
         f"resize-pane -t {pane} {_RESIZE_FLAG[slot]} {layout.SLOT_SIZE[slot]}"
         for slot, pane in panes.items())
-    return ["tmux", "-L", socket, "set-hook", "-w", "-t", harness_pane,
-           "window-resized", action]
+    return tmuxctl.server_argv(socket, "set-hook", "-w", "-t", harness_pane,
+                               "window-resized", action)
 
 
 def _live_sessions(socket: str) -> set[str]:
@@ -627,7 +678,8 @@ def _live_sessions(socket: str) -> set[str]:
     that happens to be the first one on this machine.
     """
     out = tmuxctl.run("listing the frames already running",
-                      ["tmux", "-L", socket, "list-sessions", "-F", "#{session_name}"],
+                      tmuxctl.server_argv(socket, "list-sessions", "-F",
+                                          "#{session_name}"),
                       timeout=5, report=False)
     return {line.strip() for line in out.stdout.splitlines() if line.strip()}
 
@@ -654,23 +706,487 @@ def _query_pane_dead_status(socket: str, harness_pane: str) -> int | None:
     dead — the exact hang the eager check exists to close, reopened by a signal instead
     of a timing race. See `_UNKNOWN_DEATH_CODE`.
     """
+    status, code = _pane_state(socket, harness_pane)
+    return code if status == _DEAD else None
+
+
+#: The three answers `_pane_state` distinguishes. `_GONE` is the one that is easy to miss
+#: and the one a wait loop cannot do without — see `_pane_state`.
+_ALIVE, _DEAD, _GONE = "alive", "dead", "gone"
+
+
+def _pane_state(socket: str, harness_pane: str) -> tuple[str, int | None]:
+    """Is *harness_pane* still running, dead-but-askable, or no longer there at all?
+
+    Three answers rather than two, and the third is measured rather than defensive:
+    against tmux 3.7c, `display-message -p -t <a pane that no longer exists>` does NOT
+    fail. It returns 0 and expands every format variable to NOTHING — confirmed for a
+    pane id that never existed (`%1234`) and for a real one whose window was killed. A
+    caller that only tests `#{pane_dead} == "1"` therefore reads a window the operator
+    closed as "still running", which is harmless for the eager check
+    (`_query_pane_dead_status`, which means "cannot tell" by `None` anyway) and is a
+    spin that never ends for `_wait_for_harness`.
+
+    **The EMPTY answer is the `#{pane_dead}` FIELD, not the whole line — and that
+    distinction was a live bug for the length of one test run.** :data:`_DEAD_FORMAT`
+    carries a literal `:` between its two variables, and tmux prints the format's own
+    literal text whether or not anything expands into it: a gone pane answers `":"`, not
+    `""`. A guard written against the whole line being empty passed every unit test
+    (whose fake returned what the author expected) and was caught only by
+    `tests/test_frame_tmux_integration.py` asking a real server. Testing the FIELD
+    covers the whole-line case too — `"".partition(":")` yields an empty `dead` just as
+    `":"` does — so there is one check here rather than two, the second of which no test
+    could ever have failed.
+
+    `remain-on-exit` is what makes `_DEAD` reachable at all rather than every death
+    going straight to `_GONE`: it keeps the dead pane in place, still holding its
+    `#{pane_dead_status}`, until charter has read it. It is armed pane-scoped before the
+    harness is ever started inside an operator's tmux (see `layout.window_argv`), and
+    server-globally on charter's own private server (see `_PLACEHOLDER_CONF`).
+
+    A `_DEAD` pane whose `#{pane_dead_status}` is EMPTY is still `_DEAD`, reported as
+    `_UNKNOWN_DEATH_CODE`: measured against tmux 3.7c, that is what a harness killed by
+    a signal (SIGKILL/SIGTERM/SIGSEGV) looks like, and calling it "cannot tell" is what
+    used to send `cmd_launch` on to attach a session provably over.
+
+    A query that FAILS is `_GONE` too. All three of `tmuxctl.run`'s failure shapes reach
+    here (a real tmux error, a timeout folded into `TIMED_OUT`, a tmux that could not be
+    started at all), and every one of them means the same thing to a caller: there is
+    nothing left here to wait for. `report=False` because both callers handle the answer
+    themselves.
+    """
     dm = tmuxctl.run("asking whether the harness pane died",
-                     ["tmux", "-L", socket, "display-message", "-p", "-t", harness_pane,
-                      "#{pane_dead}:#{pane_dead_status}"],
+                     tmuxctl.server_argv(socket, "display-message", "-p", "-t",
+                                         harness_pane, _DEAD_FORMAT),
                      timeout=5, report=False)
     if dm.returncode != 0:
-        # Includes the timeout and could-not-run cases `tmuxctl.run` folds into a
-        # return code (see its own docstring): all three mean the same thing here —
-        # "cannot tell" — and `report=False` keeps a query that answers `None` from
-        # printing an error for a question `cmd_launch` is about to handle either way.
-        return None
+        return _GONE, None
     dead, _, status = dm.stdout.strip().partition(":")
+    if not dead:
+        return _GONE, None
     if dead != "1":
-        return None
+        return _ALIVE, None
     status = status.strip()
     if status.lstrip("-").isdigit():
-        return int(status)
-    return _UNKNOWN_DEATH_CODE
+        return _DEAD, int(status)
+    return _DEAD, _UNKNOWN_DEATH_CODE
+
+
+def _live_windows(socket: str) -> set[str] | None:
+    """Every window name *socket*'s server currently reports, or ``None`` when it did
+    not answer at all.
+
+    The inside-a-tmux counterpart of `_live_sessions`, and the difference in return type
+    is the point. A frame on charter's own server is a SESSION named by frame id; a
+    frame in an operator's tmux is a WINDOW named by frame id, so this is the list
+    `state.reap` has to be given there.
+
+    ``None`` rather than an empty set for a non-zero return, because here that failure
+    MEANS something: `$TMUX` can outlive the server it names (a value captured by `env`
+    and re-exported, a `tmux kill-server` while a script was still running), and charter
+    is then not inside a tmux at all no matter what the variable says. `cmd_launch` uses
+    that to fall back to its own private server rather than issue a dozen commands one
+    by one at a socket nothing is listening on. An empty SET is a different answer — a
+    live server with no windows — and must not be confused with it.
+    """
+    out = tmuxctl.run("listing the frames already in this tmux",
+                      tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
+                                          "#{window_name}"),
+                      timeout=5, report=False)
+    if out.returncode != 0:
+        return None
+    return {line.strip() for line in out.stdout.splitlines() if line.strip()}
+
+
+def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
+    """Block until the harness in *harness_pane* is over. Its exit code, or ``None``.
+
+    What `attach` does on charter's own private server, done by watching instead: inside
+    an operator's tmux the operator is ALREADY attached, to their own server, so there is
+    no client for charter to own and no blocking call to read a code out of. `charter
+    claude` still has to behave like a foreground command — it is one — so this is where
+    it waits.
+
+    ``None`` is the pane vanishing rather than dying askably: the operator closed the
+    window (their own `prefix-&`), or the server went away under it. Charter cannot know
+    what the harness would have exited with in that case and says so rather than
+    inventing a 0; see `cmd_launch`'s own handling.
+    """
+    while True:
+        status, code = _pane_state(socket, harness_pane)
+        if status == _DEAD:
+            return code
+        if status == _GONE:
+            return None
+        time.sleep(_POLL_SECONDS)
+
+
+def _drawable_slots(cols: int, rows: int) -> list[str]:
+    """Which configured slots this frame will actually draw, at *cols* x *rows*.
+
+    `[frame] slots` can accept a slot (`instance.FRAME_SLOTS`, sized by
+    `layout.SLOT_SIZE`) that `frame.slots.SLOTS` — the RENDERER registry — has no
+    renderer for (as `left`/`right` were until Task 3 (#385) gave them one). Left
+    unfiltered, `panel_argvs` would still split a real pane for it; `panel.run`
+    correctly refuses or exits 2 (Task 7's own "no empty pane" rule), but with
+    `remain-on-exit on` keeping that pane alive, the operator is left with a permanently
+    dead, wrapped-error 22-column pane and no explanation at the point the frame
+    actually came up. Skipping an unimplemented slot here instead means the harness pane
+    simply keeps that space — the same degrade `visible_slots` itself already makes
+    under a tight terminal.
+
+    Silently, and that is the deliberate half: which slots have a renderer is a property
+    of THIS BUILD, not of this launch, so a warning here repeats an unchanging fact on
+    every single start — and repeats it into a terminal that is about to switch to
+    tmux's alternate screen, where nobody reads it (measured; see `frame_ready`'s own
+    docstring). `--probe`, `charter frame-probe` and `charter doctor` all name it on
+    demand instead, from the same `frame_slots.unimplemented` this filters on.
+    """
+    frame = config.FRAME
+    slots = layout.visible_slots(frame["slots"], cols, rows,
+                                 frame["min_cols"], frame["min_rows"])
+    unimplemented = frame_slots.unimplemented(slots)
+    return [s for s in slots if s not in unimplemented]
+
+
+def _frame_env(fid: str, h) -> dict[str, str]:
+    """The environment the harness runs in, whichever server it runs on.
+
+    Shared by both paths deliberately, because they deliver it by opposite mechanisms
+    and only the CONTENT is the same: on charter's own server it is handed to
+    `new-session`, whose server inherits it whole; inside an operator's tmux the server
+    is already running and is not charter's, so it rides on `respawn-pane -e` instead
+    (see `layout.respawn_argv`). A second copy of "what a framed harness's environment
+    is" would be two answers to one question.
+
+    COLUMNS/LINES go, and that is belt and braces rather than the fix itself: every pane
+    (harness or panel) measures its OWN tty (`frame/slots.py`, `frame/panel.py`), so a
+    stale value here cannot mislay anything charter draws. But this environment is
+    inherited WHOLE by every process tmux starts for this frame — the harness's shell
+    among them — and both variables describe the LAUNCHING terminal, not any pane the
+    frame creates.
+
+    TMUX/TMUX_PANE go for a sharper reason, and only matter on the inside-a-tmux path:
+    they describe the pane `charter` was TYPED in. tmux sets both itself for a pane it
+    creates, and carrying the launcher's own values across would tell the harness — and
+    `session.terminal()`, which reads `TMUX_PANE` — that it is running in a pane it is
+    not. That is the identity collision `WINDOWID` was removed for
+    (`docs/superpowers/specs/2026-08-21-harness-wrapper-design.md`), reached through a
+    different variable.
+    """
+    env = dict(os.environ, CHARTER_SESSION_ID=fid)
+    for stale in ("COLUMNS", "LINES", "TMUX", "TMUX_PANE"):
+        env.pop(stale, None)
+    if h:
+        env["CHARTER_HARNESS"] = h.name
+    return env
+
+
+def _remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
+    """`set-option -p`: keep THIS pane in place after its program exits, and no other.
+
+    PANE-scoped, which is the only scope that works on a server charter is a guest on.
+    `remain-on-exit` is a window option in tmux with a global default; `-g` there would
+    leave every pane the operator closes hanging around as a dead pane, and `-w` would do
+    it to every pane in a window charter does not own until it does. `-p` names one pane
+    — the harness's — and tmux keeps it, and its `#{pane_dead_status}`, until charter has
+    read the status and closed the window itself.
+
+    Charter's own private server arms the same setting globally instead
+    (`_PLACEHOLDER_CONF`), because there is nothing on that server that is not charter's.
+    """
+    return tmuxctl.server_argv(socket, "set-option", "-p", "-t", harness_pane,
+                               "remain-on-exit", "on")
+
+
+def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[str],
+                             h, v: tuple[int, int]) -> int | None:
+    """Build the frame as a WINDOW in the tmux the operator is already in.
+
+    The same layout as the private-server path — harness in the middle, charter's panels
+    on the edges — with no second tmux underneath it and no second prefix key on top of
+    it. ADR 0018 and the design spec both settle this; what shipped before it was a
+    private server started INSIDE the operator's own pane, which works and stacks two
+    prefix layers on one terminal.
+
+    ``None`` means "not actually inside a tmux after all" — `$TMUX` named a server that
+    did not answer — and `cmd_launch` falls back to its own private server. Any `int` is
+    this launch's own exit code.
+
+    **Nothing of the operator's is written.** No `source-file`, no `set -g`, no
+    session-scoped `set`, and no key binding. Each of those reaches past charter's own
+    window: `status`/`mouse`/`history-limit` are session options, so charter's values
+    for them would become theirs in every window they have open; `escape-time` and
+    `remain-on-exit` are server options; `set-environment` hands every new shell they
+    open a frame id that is not theirs; and a key table is server-wide with no
+    per-window form at all. The costs are real and named in `docs/frame.md`: the frame
+    inside a tmux keeps THEIR scrollback limit and THEIR mouse setting, and charter
+    binds no hotkey there at all.
+
+    The spec allows a PREFIX-scoped binding here rather than none. Charter takes the
+    stricter option, for a reason the spec could not have known: the bind's action has
+    to resolve which frame it belongs to at the moment the key fires, and the only
+    mechanism tmux offers for that is the session-scoped `set-environment` this path
+    must not use (see `_session_id_env_argv`). The menu's one entry today is "Detach",
+    which an operator already inside tmux has their own prefix key for. A key taken from
+    every window on their server to reach a redundant menu is a worse trade than no key
+    — `frame/slots.py` drops the hotkey hint from the bottom panel to match.
+
+    **The exit code travels without hooks here, and that is a real difference.** The
+    private-server path needs `pane-died[0]`/`pane-died[1]` because it blocks in
+    `attach` and has nothing else watching; this launcher is awake for the whole life of
+    the frame (`_wait_for_harness`), so it reads the status and closes the window
+    itself. Installing the teardown hook as well would actively LOSE the exit code: a
+    hook array runs in index order and `kill-window` would destroy the pane before this
+    process's next ask. The cost is honest and bounded — if this launcher is itself
+    killed while the harness is running, the harness keeps running and its window is
+    left in the operator's own window list, where their own `prefix-&` closes it. That
+    is strictly better than the failure it replaces on the other path (a session nothing
+    can end, with `attach` blocked on it forever), because the operator is already
+    attached and in control of the server it happened on.
+    """
+    # Doubles as the check that `$TMUX` still names a live server: `list-windows` is
+    # both the liveness list `state.reap` needs here (a frame is a WINDOW on this
+    # server, named by frame id) and the cheapest possible "is anybody home".
+    live_before = _live_windows(socket)
+    if live_before is None:
+        return None
+    state.reap(live_before, server=socket)
+
+    fdir = state.frame_dir(fid, create=True)
+    if fdir is None:
+        util.err(f"charter frame: could not create state for frame {fid!r}")
+        return 1
+    # The same recycled-pid adoption #383 fixed on the private-server path, and nothing
+    # about it is private-server-specific: `fid` is `<workspace>-<launcher pid>` on
+    # either server, `reap` keeps a directory for as long as that pid is live, and on a
+    # launch it is live because it is ours — so an earlier launcher for this workspace
+    # that landed on the same pid leaves its whole directory here to be adopted.
+    #
+    # `gather.json` is the one that costs something on this path: `gather.read` has no
+    # freshness check by design (a panel's hot path) and a panel repaints only on a
+    # version bump, so a dead frame's repos and CI would sit beside a live harness until
+    # the session's first hook fires. `exit` is not read back as this launch's result
+    # here — the code comes off the pane, not the file — but it IS charter's record of
+    # how this frame ended, and a launcher killed mid-run would leave a dead frame's
+    # number standing as this one's. Cleared for the same reason `bump` moves the
+    # version: whatever is under the id predates the frame now claiming it.
+    state.clear_exit(fid)
+    gather.discard(fid)
+    # Rewritten, not merely written: an adopted directory may name the OTHER server, and
+    # a stale marker would make `reap` there skip a frame that is now genuinely ours.
+    state.record_server(fid, socket)
+    state.bump(fid)
+
+    env = _frame_env(fid, h)
+    cwd = os.getcwd()
+    opened = tmuxctl.run(
+        "opening a window for the frame",
+        layout.window_argv(socket=socket, session=session, window=fid, cwd=cwd))
+    if opened.returncode != 0:
+        return 1
+    window_id, _, harness_pane = opened.stdout.strip().partition(" ")
+    if not window_id or not _PANE_ID_RE.fullmatch(harness_pane.strip()):
+        util.err("charter frame: tmux opened the window but did not report a window "
+                 "and pane id — cannot scope the frame to it")
+        return 1
+    harness_pane = harness_pane.strip()
+
+    def _close_window() -> None:
+        tmuxctl.run("closing the frame's window",
+                    tmuxctl.server_argv(socket, "kill-window", "-t", window_id))
+
+    # Before the harness exists, not after: this is what keeps the pane (and its
+    # `#{pane_dead_status}`) in place once the harness exits, and there is no way to
+    # set it on a pane that does not exist yet. See `layout.window_argv`.
+    armed = tmuxctl.run("keeping the harness pane askable",
+                        _remain_on_exit_argv(socket=socket, harness_pane=harness_pane))
+    if armed.returncode != 0:
+        util.warn("charter frame: continuing without it — this frame's window may "
+                  "close before charter can read the harness's exit code")
+
+    started = tmuxctl.run(
+        "starting the harness in it",
+        layout.respawn_argv(socket=socket, harness_pane=harness_pane, env=env, cwd=cwd,
+                            harness_argv=argv))
+    if started.returncode != 0:
+        # The placeholder is still running in a window the operator never asked for and
+        # would never learn the purpose of. Take it back.
+        _close_window()
+        return 1
+
+    # The same eager ask the private-server path makes right after installing its
+    # hooks, for the same reason: a harness that is already over leaves nothing worth
+    # building a frame around, and switching the operator's client to it would park
+    # them on a dead pane.
+    status, code = _pane_state(socket, harness_pane)
+    if status != _ALIVE:
+        if code is not None:
+            state.record_exit(fid, code)
+        if code is not None and code != 0:
+            # #384 reaches THIS path too, and reaches it harder. Nothing below runs — no
+            # panels, no `select-window` — so the operator is never switched to the
+            # frame's window at all: it is created, filled with a corpse, and killed
+            # again, all before their screen changes. On charter's own private server
+            # the silence is at least explained by there being no attach; here the
+            # operator is watching a tmux the whole time and still sees nothing.
+            #
+            # Read the pane BEFORE `_close_window`, for the same reason `cmd_launch`
+            # reads it before `kill-session`: afterwards there is nothing left to read.
+            # Nonzero only, and by the same argument — `charter frame -- true` lands
+            # here with 0, and what it wrote was its own stdout.
+            util.err(early_death_message(argv, code,
+                                         _pane_last_words(socket, harness_pane)))
+        _close_window()
+        _reap_this_server(socket)
+        return code if code is not None else _UNKNOWN_DEATH_CODE
+
+    cols, rows = _window_size(socket, harness_pane)
+    slots = _drawable_slots(cols, rows)
+    # *env* is what the tmux CLIENT process runs with (nothing depends on it here — the
+    # server is already up and is not charter's); *pane_env* is what each panel's own
+    # process gets, which on somebody else's server has to be carried explicitly. See
+    # `layout.panel_argvs`.
+    _draw_panels(socket, slots=slots, fid=fid, harness_pane=harness_pane,
+                 env=None, v=v, pane_env=env)
+    tmuxctl.run("focusing the harness pane",
+                tmuxctl.server_argv(socket, "select-pane", "-t", harness_pane))
+    # `select-window`, never `attach`: the operator has a client already, on this very
+    # server. A second attach IS the nesting this path exists to remove.
+    tmuxctl.run("switching to the frame",
+                tmuxctl.server_argv(socket, "select-window", "-t", window_id))
+
+    code = _wait_for_harness(socket, harness_pane)
+    if code is None:
+        # The pane vanished rather than dying askably — the operator closed the window
+        # (their own `prefix-&`), or the server went with it. Nonzero and named: charter
+        # cannot know what the harness would have exited with, and reporting a killed
+        # agent as a clean 0 is the fabricated success this module refuses everywhere
+        # else. Nothing is killed here either; there is nothing left to kill.
+        util.err("charter frame: the frame's window is gone — the harness's exit code "
+                 "is not something charter can know now.")
+        code = _UNKNOWN_DEATH_CODE
+    else:
+        state.record_exit(fid, code)
+        _close_window()
+    _reap_this_server(socket)
+    return code
+
+
+def _reap_this_server(socket: str) -> None:
+    """Clear out state for frames of *socket* that are gone — and only if it answered.
+
+    An empty window list and NO window list are opposite facts, and `_live_windows`
+    keeps them apart for exactly this reason: an empty set means the server is up with
+    nothing on it, so every frame directory recorded against it is stale; `None` means
+    the server did not answer at all (a wedged one, a timeout), and reaping on that
+    would delete a sibling frame's version file and recorded exit code over a question
+    charter could not get an answer to. Not reaping costs a directory until the next
+    launch; reaping on no information costs a running frame its state.
+    """
+    live = _live_windows(socket)
+    if live is not None:
+        state.reap(live, server=socket)
+
+
+def _window_size(socket: str, harness_pane: str) -> tuple[int, int]:
+    """The size of the WINDOW *harness_pane* is in, or `_FALLBACK_SIZE`.
+
+    Never `os.get_terminal_size()` on this path: that measures the pane `charter` was
+    typed in, which is a fraction of the window the frame gets the moment the operator
+    has a split open — and `_drawable_slots` would then drop panels a full-width window
+    has ample room for.
+    """
+    out = tmuxctl.run("measuring the frame's window",
+                      tmuxctl.server_argv(socket, "display-message", "-p", "-t",
+                                          harness_pane, _WINDOW_SIZE_FORMAT),
+                      timeout=5, report=False)
+    w, _, hgt = out.stdout.strip().partition(":")
+    if out.returncode != 0 or not w.isdigit() or not hgt.isdigit():
+        return _FALLBACK_SIZE
+    return int(w), int(hgt)
+
+
+def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
+                 env: dict | None, v: tuple[int, int],
+                 pane_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Split one pane per slot off *harness_pane*, then install the resize hook.
+
+    Shared by both paths: a panel is a panel wherever the frame is, the splits target
+    the harness pane's `%N` id for the reason `layout.py`'s docstring measures (tmux
+    renumbers pane INDICES on every split), and the `window-resized` hook is scoped
+    through that same pane to its containing window — so even on the operator's server
+    it reaches charter's own window and nothing else of theirs.
+
+    `util.self_relaunch_argv()` (#390), and sharing it is the point: a panel is spawned
+    with the PANE's cwd, so `-m` alone prepends whatever directory the operator typed
+    `charter` in to the child's `sys.path` — and from a charter checkout that imports
+    the checkout instead of the install, which is how both panels once came up reading
+    `Pane is dead (status 2)`. Nothing about that is specific to charter's own server;
+    inside an operator's tmux the cwd is the same cwd, so the hole is the same hole.
+    """
+    panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
+                                    charter_argv=util.self_relaunch_argv(),
+                                    harness_pane=harness_pane, env=pane_env)
+    # Zipped with `slots`, not just iterated: `_resize_hook_argv` below needs to know
+    # WHICH slot each successfully-created pane belongs to (for its size and its
+    # resize-pane flag), and `panel_argvs` returns exactly one command per slot, in the
+    # same order (see its own docstring).
+    panes: dict[str, str] = {}
+    for slot, cmd in zip(slots, panel_cmds):
+        # Reported by `tmuxctl.run` but not fatal: one decorative panel failing to draw
+        # must not take down a harness pane that is already up and running (correction 2
+        # asks for every return code to be CHECKED, not every failure refused).
+        p = tmuxctl.run("drawing a panel", cmd, env=env)
+        if p.returncode != 0:
+            continue
+        pane_id = p.stdout.strip()
+        if pane_id and _PANE_ID_RE.fullmatch(pane_id):
+            panes[slot] = pane_id
+
+    if panes and v < tmuxctl.RESIZE_HOOK_FLOOR:
+        # Below RESIZE_HOOK_FLOOR, `window-resized` is not a hook name THIS tmux
+        # recognises at all — `set-hook` fails with `invalid option: <name>` for any
+        # name it does not know (see RESIZE_HOOK_FLOOR's own docstring for exactly what
+        # was, and was not, confirmed by hand) — skip the attempt rather than printing
+        # that confusing text on every single launch. One quiet, honest note instead,
+        # naming the real consequence (item 4's own standard: every degrade in this
+        # launcher says what it costs).
+        util.warn(f"charter frame: tmux {v[0]}.{v[1]} predates the resize-recovery hook "
+                  f"(needs {tmuxctl.RESIZE_HOOK_FLOOR[0]}.{tmuxctl.RESIZE_HOOK_FLOOR[1]}+)"
+                  f" — panels may drift out of shape if this terminal is resized")
+    elif panes:
+        # Only once any panel actually exists — a resize hook with nothing to resize
+        # would just be a wasted `set-hook` call, and (per the module docstring's "belt
+        # and braces" framing) every pane already measures its own tty on every repaint
+        # regardless, so this hook is purely cosmetic geometry upkeep, not something a
+        # launch's correctness depends on.
+        resize_cmd = _resize_hook_argv(socket=socket, harness_pane=harness_pane,
+                                       panes=panes)
+        # `report=False`: this is the one call site that reads a failure's own stderr
+        # before deciding whether it IS one — an unrecognised hook name here is a
+        # capability ceiling to note quietly, not an integration to report loudly, and
+        # `tmuxctl.run`'s default would have printed the loud version first regardless
+        # of which branch runs below.
+        resize = tmuxctl.run("installing the resize hook", resize_cmd, env=env,
+                             report=False)
+        if resize.returncode != 0:
+            if _INVALID_HOOK_NAME in (resize.stderr or ""):
+                # RESIZE_HOOK_FLOOR believed this tmux would recognise the hook name and
+                # it does not — the constant is wrong, not the launch. Trust what THIS
+                # tmux just said over the constant and degrade the same quiet way the
+                # version-gate above already does, rather than report it as a broken
+                # integration (a capability ceiling, not a failure — see the module's own
+                # "belt and braces" framing and `harness.base.Deficit`'s same philosophy
+                # for a harness-level capability gap).
+                util.warn("charter frame: this tmux does not support the "
+                          "resize-recovery hook — panels may drift out of shape if this "
+                          "terminal is resized")
+            else:
+                tmuxctl.report_failure("installing the resize hook", resize_cmd, resize)
+                util.warn("charter frame: continuing without it — panels may drift out "
+                          "of shape if this terminal is resized")
+    return panes
 
 
 def _pane_last_words(socket: str, harness_pane: str) -> list[str]:
@@ -691,10 +1207,18 @@ def _pane_last_words(socket: str, harness_pane: str) -> list[str]:
     explain. An empty answer needs no special casing — `early_death_message` has a
     complete message either way, which is the property that keeps a failed capture from
     putting the launch back to the zero bytes #384 is about.
+
+    `tmuxctl.server_argv`, never a hand-built `-L`: BOTH launch paths call this now. The
+    frame that dies before it is drawn dies exactly the same way inside an operator's own
+    tmux (`_launch_in_operator_tmux`), and that server is reached by socket PATH — a
+    hard-coded `-L` there would aim the capture at charter's own private server, find no
+    such pane, and hand `early_death_message` an empty list. The message would still be
+    printed, so nothing would look broken; it would simply have lost the one thing only
+    the pane knows.
     """
     out = tmuxctl.run("reading what the harness printed before it died",
-                      ["tmux", "-L", socket, "capture-pane", "-p", "-S", "-",
-                       "-t", harness_pane],
+                      tmuxctl.server_argv(socket, "capture-pane", "-p", "-S", "-",
+                                          "-t", harness_pane),
                       timeout=5, report=False)
     if out.returncode != 0:
         return []
@@ -847,6 +1371,20 @@ def cmd_launch(args) -> int:
     ws = workspace.resolve()
     fid = state.frame_id(ws, os.getpid())
 
+    # Inside a tmux the operator already has, the frame is a WINDOW in THEIR server —
+    # same layout, no second tmux, no second prefix key (ADR 0018 and the design spec
+    # both settle this; `docs/frame.md` describes what it costs). Read from `$TMUX`,
+    # which tmux exports into every process it starts in a pane, and CONFIRMED against
+    # the server before anything is built on it: that variable outlives the server it
+    # names often enough to matter (`env` captures, a `tmux kill-server` under a running
+    # script), and charter is then not inside a tmux whatever it says. `None` back means
+    # exactly that, and the private-server path below is the right one after all.
+    inside = tmuxctl.operator_server()
+    if inside is not None:
+        rc = _launch_in_operator_tmux(inside[0], inside[1], fid=fid, argv=argv, h=h, v=v)
+        if rc is not None:
+            return rc
+
     # Reap BEFORE this frame's own directory exists, not after: `frame_dir(create=True)`
     # below makes that directory, and a `reap()` run afterward — but still before
     # `session_argv` starts this frame's OWN tmux session — would see a directory with
@@ -868,8 +1406,8 @@ def cmd_launch(args) -> int:
         # still wrong, and worth closing the same way the placeholder closes the
         # first-frame-ever case.
         tmuxctl.run("arming remain-on-exit ahead of an already-running server",
-                    ["tmux", "-L", SOCKET, "set", "-g", "remain-on-exit", "on"])
-    state.reap(live_before)
+                    tmuxctl.server_argv(SOCKET, "set", "-g", "remain-on-exit", "on"))
+    state.reap(live_before, server=SOCKET)
 
     fdir = state.frame_dir(fid, create=True)
     if fdir is None:
@@ -892,6 +1430,10 @@ def cmd_launch(args) -> int:
     # moving it is `state.bump`'s job, one line below.
     state.clear_exit(fid)
     gather.discard(fid)
+    # And the `server` marker is rewritten for the same reason: an adopted directory
+    # may name the OTHER server, and a stale marker would make `reap` on this one skip
+    # a frame that is now genuinely ours.
+    state.record_server(fid, SOCKET)
     state.bump(fid)
 
     try:
@@ -902,45 +1444,8 @@ def cmd_launch(args) -> int:
         # is the deliberate choice; see `_FALLBACK_SIZE`'s own docstring for why 80x24.
         cols, rows = _FALLBACK_SIZE
 
-    frame = config.FRAME
-    slots = layout.visible_slots(frame["slots"], cols, rows, frame["min_cols"], frame["min_rows"])
-
-    # `[frame] slots` can accept a slot (`instance.FRAME_SLOTS`, sized by
-    # `layout.SLOT_SIZE`) that `frame.slots.SLOTS` — the RENDERER registry — has no
-    # renderer for (as `left`/`right` were until Task 3 (#385) gave them one). Left
-    # unfiltered, `panel_argvs` below would still split a real pane for it;
-    # `panel.run` correctly refuses or exits 2 (Task 7's own "no empty pane" rule),
-    # but with `remain-on-exit on` keeping that pane alive, the operator is left with
-    # a permanently dead, wrapped-error 22-column pane and no explanation at the
-    # point the frame actually came up. Skipping an unimplemented slot here instead
-    # means the harness pane simply keeps that space — the same degrade
-    # `visible_slots` itself already makes under a tight terminal.
-    #
-    # Silently, and that is the deliberate half: which slots have a renderer is a
-    # property of THIS BUILD, not of this launch, so a warning here repeats an
-    # unchanging fact on every single start — and repeats it into a terminal that is
-    # about to switch to tmux's alternate screen, where nobody reads it (measured; see
-    # `frame_ready`'s own docstring). `--probe`, `charter frame-probe` and `charter
-    # doctor` all name it on demand instead, from the same `frame_slots.unimplemented`
-    # this line filters on.
-    unimplemented = frame_slots.unimplemented(slots)
-    if unimplemented:
-        slots = [s for s in slots if s not in unimplemented]
-
-    env = dict(os.environ, CHARTER_SESSION_ID=fid)
-    # Belt and braces, not the fix itself: every pane (harness or panel) measures its
-    # OWN tty rather than trusting these (`frame/slots.py`, `frame/panel.py`), so a
-    # stale value here cannot mislay anything charter draws. But `env` is inherited
-    # WHOLE by every process tmux starts on this launch — the harness's shell among
-    # them — and COLUMNS/LINES describe the LAUNCHING terminal, not any pane this frame
-    # creates. Left in place, a shell inside a pane that echoes them back (or a
-    # program, charter's own or not, still reading `$COLUMNS` the way `tui.term_width`
-    # deliberately does for the status line) would report the wrong size for no reason
-    # charter needs to accept.
-    env.pop("COLUMNS", None)
-    env.pop("LINES", None)
-    if h:
-        env["CHARTER_HARNESS"] = h.name
+    slots = _drawable_slots(cols, rows)
+    env = _frame_env(fid, h)
 
     conf_path = fdir / "tmux.conf"
     status_path = fdir / "exit"
@@ -957,10 +1462,12 @@ def cmd_launch(args) -> int:
                  "— cannot scope the exit-code hook to it")
         return 1
 
+    frame = config.FRAME
     conf_path.write_text(conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
                                    history_limit=frame["history_limit"], session=fid))
     src = tmuxctl.run("loading the frame's config",
-                      ["tmux", "-L", SOCKET, "source-file", str(conf_path)], env=env)
+                      tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
+                      env=env)
     if src.returncode != 0:
         util.warn("charter frame: continuing without it — mouse/history-limit/hotkey "
                   "settings may not be in effect for this frame")
@@ -1015,7 +1522,7 @@ def cmd_launch(args) -> int:
     # normally has exactly one attached client, but `-s` is correct even if it ever has
     # more than one.
     menu.record(fid=fid, entries=[
-        ("Detach", ["tmux", "-L", SOCKET, "detach-client", "-s", fid]),
+        ("Detach", tmuxctl.server_argv(SOCKET, "detach-client", "-s", fid)),
     ])
 
     write_hook = tmuxctl.run(
@@ -1057,7 +1564,7 @@ def cmd_launch(args) -> int:
             util.err(early_death_message(argv, code,
                                          _pane_last_words(SOCKET, harness_pane)))
         tmuxctl.run("ending the frame after an early death",
-                    ["tmux", "-L", SOCKET, "kill-session", "-t", fid], env=env)
+                    tmuxctl.server_argv(SOCKET, "kill-session", "-t", fid), env=env)
 
     attach = None
     attach_cmd = None
@@ -1077,72 +1584,8 @@ def cmd_launch(args) -> int:
                      f"detached; reattach manually if you must: "
                      f"tmux -L {SOCKET} attach -t {fid}")
         else:
-            panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=SOCKET,
-                                            charter_argv=util.self_relaunch_argv(),
-                                            harness_pane=harness_pane)
-            # Zipped with `slots`, not just iterated: `_resize_hook_argv` below needs to
-            # know WHICH slot each successfully-created pane belongs to (for its size and
-            # its resize-pane flag), and `panel_argvs` returns exactly one command per
-            # slot, in the same order (see its own docstring).
-            panes: dict[str, str] = {}
-            for slot, cmd in zip(slots, panel_cmds):
-                # Reported by `tmuxctl.run` but not fatal: one decorative panel failing
-                # to draw must not take down a harness pane that is already up and
-                # running (correction 2 asks for every return code to be CHECKED, not
-                # every failure refused).
-                p = tmuxctl.run("drawing a panel", cmd, env=env)
-                if p.returncode != 0:
-                    continue
-                pane_id = p.stdout.strip()
-                if pane_id and _PANE_ID_RE.fullmatch(pane_id):
-                    panes[slot] = pane_id
-
-            if panes and v < tmuxctl.RESIZE_HOOK_FLOOR:
-                # Below RESIZE_HOOK_FLOOR, `window-resized` is not a hook name THIS
-                # tmux recognises at all — `set-hook` fails with `invalid option:
-                # <name>` for any name it does not know (see RESIZE_HOOK_FLOOR's own
-                # docstring for exactly what was, and was not, confirmed by hand) —
-                # skip the attempt rather than printing that confusing text on every
-                # single launch. One quiet, honest note instead, naming the real
-                # consequence (item 4's own standard: every degrade in this launcher
-                # says what it costs).
-                util.warn(f"charter frame: tmux {v[0]}.{v[1]} predates the "
-                         f"resize-recovery hook (needs "
-                         f"{tmuxctl.RESIZE_HOOK_FLOOR[0]}.{tmuxctl.RESIZE_HOOK_FLOOR[1]}+)"
-                         f" — panels may drift out of shape if this terminal is resized")
-            elif panes:
-                # Only once any panel actually exists — a resize hook with nothing to
-                # resize would just be a wasted `set-hook` call, and (per the module
-                # docstring's "belt and braces" framing) every pane already measures its
-                # own tty on every repaint regardless, so this hook is purely cosmetic
-                # geometry upkeep, not something a launch's correctness depends on.
-                resize_cmd = _resize_hook_argv(socket=SOCKET, harness_pane=harness_pane,
-                                               panes=panes)
-                # `report=False`: this is the one call site that reads a failure's own
-                # stderr before deciding whether it IS one — an unrecognised hook name
-                # here is a capability ceiling to note quietly, not an integration to
-                # report loudly, and `tmuxctl.run`'s default would have printed the loud
-                # version first regardless of which branch runs below.
-                resize = tmuxctl.run("installing the resize hook", resize_cmd, env=env,
-                                     report=False)
-                if resize.returncode != 0:
-                    if _INVALID_HOOK_NAME in (resize.stderr or ""):
-                        # RESIZE_HOOK_FLOOR believed this tmux would recognise the
-                        # hook name and it does not — the constant is wrong, not the
-                        # launch. Trust what THIS tmux just said over the constant and
-                        # degrade the same quiet way the version-gate above already
-                        # does, rather than report it as a broken integration (a
-                        # capability ceiling, not a failure — see the module's own
-                        # "belt and braces" framing and `harness.base.Deficit`'s same
-                        # philosophy for a harness-level capability gap).
-                        util.warn("charter frame: this tmux does not support the "
-                                 "resize-recovery hook — panels may drift out of "
-                                 "shape if this terminal is resized")
-                    else:
-                        tmuxctl.report_failure("installing the resize hook", resize_cmd,
-                                               resize)
-                        util.warn("charter frame: continuing without it — panels may "
-                                 "drift out of shape if this terminal is resized")
+            _draw_panels(SOCKET, slots=slots, fid=fid, harness_pane=harness_pane,
+                         env=env, v=v)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —
@@ -1152,12 +1595,13 @@ def cmd_launch(args) -> int:
             # introduced, but leaving the frame in a state the operator can actually type
             # into is this launcher's job.
             tmuxctl.run("focusing the harness pane",
-                        ["tmux", "-L", SOCKET, "select-pane", "-t", harness_pane], env=env)
+                        tmuxctl.server_argv(SOCKET, "select-pane", "-t", harness_pane),
+                        env=env)
 
             # `tmuxctl.interact`, not `tmuxctl.run`: no capture and no timeout — this
             # IS the operator's own terminal for as long as the harness runs, not an
             # admin command whose output (or lifetime) charter should own.
-            attach_cmd = ["tmux", "-L", SOCKET, "attach", "-t", fid]
+            attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", fid)
             attach = tmuxctl.interact(attach_cmd, env=env)
 
             code = state.exit_code(fid)
@@ -1169,7 +1613,7 @@ def cmd_launch(args) -> int:
                 code = _query_pane_dead_status(SOCKET, harness_pane)
 
     live_after = _live_sessions(SOCKET)
-    state.reap(live_after)
+    state.reap(live_after, server=SOCKET)
     if code is not None:
         return code
     if refused_to_attach:

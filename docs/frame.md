@@ -67,11 +67,41 @@ Charter never touches `~/.tmux.conf` — the frame's settings go into a private 
 charter's own (`tmux -L charter`), one server shared by every frame on the machine, with
 each frame a session on it.
 
-**Run from inside an existing tmux session, the frame nests.** charter starts its own
-server regardless, so you end up with two tmux layers and two prefix keys — charter's
-frame does not currently read `$TMUX` or open a window in your own server instead. That
-non-nesting path is not built. If you already live in tmux, `charter <harness> --no-frame`
-is the honest answer for now.
+## Inside a tmux you already have
+
+**Run from inside an existing tmux session, the frame does not nest.** Charter reads
+`$TMUX`, and instead of starting a server of its own it opens **one window in your
+server**, in the session you were in, with the identical layout inside it. One tmux, one
+prefix key, your own window list. `charter claude` switches you to that window and waits;
+when the harness exits, charter closes the window, tmux puts you back where you were, and
+`charter claude` exits with the harness's own code.
+
+Charter is a guest there, and behaves like one — it writes **nothing** of yours. Not a
+server option, not a session option, not a key binding. That has costs, and they are the
+honest price of the sentence above:
+
+- **Your scrollback limit and your mouse setting apply, not charter's.** `history-limit`
+  and `mouse` are session options in tmux; setting them for the frame would set them for
+  every other window in that session too. `[frame] history-limit` and `[frame] mouse` are
+  ignored inside your tmux.
+- **No hotkey.** tmux key tables are server-wide with no per-window form, so any key
+  charter bound would be taken from every window you have open. The spec allowed a
+  prefix-scoped bind here; charter takes the stricter option, because the menu's one
+  entry is "Detach" and your own prefix key already does that better. The bottom panel
+  drops its hotkey hint to match rather than advertising a key that does nothing.
+- **Your status bar stays.** The frame gets the window, not the screen.
+- **If `charter` itself is killed while the harness is running**, the harness keeps
+  running and its window stays in your window list — close it with your own `prefix-&`.
+  On charter's private server that same case is handled by a teardown hook; here a hook
+  that closed the window would destroy the pane before charter could read the exit code
+  out of it, so charter watches instead and does the closing itself.
+- **Charter asks tmux four times a second** whether the harness is still there, for as
+  long as the frame is up. There is no `attach` to block on when you are already
+  attached, and this is what replaces it.
+
+A `$TMUX` that names a server nothing answers on — one captured by `env` and re-exported,
+or a `tmux kill-server` under a running script — is not a tmux you are inside. Charter
+checks before it builds anything, and falls back to its own private server.
 
 ## Exit codes
 
@@ -120,6 +150,11 @@ leaves the pane completely empty and a bare exit 1 — charter answers for itsel
 telling apart the three states that need three different remedies: on `$PATH`, a file that
 exists but is not executable, or neither.
 
+The same report comes back inside a tmux you already have, where the wording is if
+anything an understatement: you are attached the whole time, to your own server, but
+charter never switches you to the frame's window — it is opened, filled with a corpse and
+closed again without your screen changing at all.
+
 A command that finishes *successfully* before the frame comes up (`charter frame -- true`)
 is not reported, and its output is not reprinted: that was its stdout, and charter will not
 invent it on stderr. If you want a short command's output, `--no-frame` — or a pipe, which
@@ -127,6 +162,10 @@ bypasses the frame on its own — is the right tool; the frame is for something 
 front of.
 
 ## When the terminal is too small
+
+The size those floors are measured against is the terminal — or, inside a tmux you
+already have, the tmux WINDOW the frame gets, which is what charter asks tmux for rather
+than measuring the pane it was typed in.
 
 Below `[frame]`'s `min-cols`/`min-rows`, the side panels (`left`/`right`) are the first to
 drop — any shortage costs them, since neither can spare its own divider. A further shortage
@@ -162,6 +201,7 @@ resolved settings charter's own code reads back use an underscore
 is silently not recognized — the hyphenated spelling above is the one that is read.
 
 The hotkey (`F2` by default) opens a small menu on whichever frame you are attached to —
-today, a single "Detach" entry. However you detach — that entry, or tmux's own prefix key
+today, a single "Detach" entry. It exists only on charter's own server; inside a tmux you
+already have, charter binds no key at all (see above). However you detach — that entry, or tmux's own prefix key
 — charter notices the session is still running and prints how to get back in
 (`tmux -L charter attach -t <frame-id>`) rather than leaving you to remember the flags.
