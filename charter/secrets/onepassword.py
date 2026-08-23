@@ -237,7 +237,9 @@ class OnePasswordProvider(VaultProvider):
 
         Verified afterwards: a concurrent writer can land between the read and the write
         and drop this field, and silently losing a credential somebody believes they
-        stored is worse than failing.
+        stored is worse than failing. That verification has **two** failure modes, and
+        they are reported as two things (#399): a read-back that came back and DISAGREED,
+        and a read-back that could not be made at all.
 
         **One read** (#355). Values, presence and ids are three questions with one answer
         — :meth:`_document` — rather than three ``op item get`` calls that could return
@@ -247,7 +249,48 @@ class OnePasswordProvider(VaultProvider):
         fields = self._fields_of(doc)
         fields[key] = value
         self._write(fields, ids=self._ids_of(doc), creating=doc is None)
-        if self.get(key) != value:
+        try:
+            got = self.get(key)
+        except VaultError as e:
+            # A read-back that could not be MADE is not a secret that is not there (#399).
+            # `get` answers a failed `op read` with `SecretNotFound`, which is the right
+            # answer on a read path and a lie on this one: charter has just written the
+            # credential, so letting that raise escape tells the operator "no secret
+            # 'NEW_KEY'" about the very key it stored a moment ago — the #322 species
+            # again, a failure arriving as a benign absence, here on the write path where
+            # the absence is also demonstrably false.
+            #
+            # `SecretNotFound`'s own words are therefore NOT repeated into this message.
+            # They are a diagnosis this branch exists to contradict, and quoting a wrong
+            # diagnosis inside a right one is how an operator ends up believing the wrong
+            # half. What `op` actually justifies saying is the exit status and its
+            # ambiguity. Any OTHER `VaultError` describes something charter did check, so
+            # that one is quoted verbatim; `raise ... from e` keeps the original either way.
+            #
+            # The likeliest cause is named because the race it comes from is now the
+            # ORDINARY outcome rather than a corner of one: #355 made the write in that
+            # race unconditionally `op item create`, so another writer creating the item
+            # after charter proved it absent leaves two items sharing a title, and reading
+            # a field by title cannot say which is meant. A rate limit or an expired
+            # session arrives in the same shape — hence a cause offered with the command
+            # that confirms it, never asserted.
+            why = ("`op read` exited non-zero, which it does both for a field that is "
+                   "not there and for every way a read can fail, so charter cannot tell "
+                   "which happened"
+                   if isinstance(e, SecretNotFound) else str(e))
+            raise VaultError(
+                f"wrote '{key}' to 1Password item '{self.op_item}' in "
+                f"'{self.op_vault}' but could not read it back, so charter cannot "
+                f"confirm what the item now holds — {why}. The likeliest cause is TWO "
+                f"items titled '{self.op_item}' in '{self.op_vault}': another writer "
+                f"creating it between charter proving it absent and charter's own `op "
+                f"item create` leaves the title ambiguous, and a field read by title "
+                f"then fails. `op item list --vault {self.op_vault}` shows whether the "
+                f"title appears twice; a rate limit or an expired `op` session looks the "
+                f"same from here. Do not treat this as the secret being absent — "
+                f"1Password keeps item history, so check the item before re-provisioning "
+                f"anything.") from e
+        if got != value:
             raise VaultError(
                 f"wrote '{key}' to 1Password item '{self.op_item}' but reading it back "
                 f"did not return what was written. Another writer may have replaced the "
