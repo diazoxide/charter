@@ -331,6 +331,19 @@ class LeftRenderer(PersonaIso, unittest.TestCase):
         self.assertIn("!12", out, "the open change must survive")
 
     def test_a_cjk_heavy_repo_name_still_fits_a_narrow_pane(self):
+        """Fix round 2, finding 1: pins the width invariant end-to-end through
+        `_left`/`_repo_line` for a real CJK repo name — it does NOT by itself
+        pin that `_row`'s name truncation is cell-aware rather than
+        char-aware. A repo's `name_markup` carries an ANSI colour prefix
+        (`_PALETTE`), and naive `name_markup[:name_w]` character-slicing
+        spends several of the budgeted characters on the escape bytes rather
+        than the CJK text — which happens to *under*-consume the intended
+        cell budget for this fixture, so this test stays green under that
+        mutation (verified: reverting `_row`'s `tui.truncate(name_markup,
+        name_w)` to `name_markup[:name_w]` does not red this test, with or
+        without the trailing safety-net truncate). `_piece_line`'s CJK test
+        below is the one that actually pins cell-awareness — a piece name
+        carries no ANSI prefix to accidentally absorb the mistake."""
         cjk = "測" * 30  # 30 characters, 60 display cells
         _seed("f-1", repos=[_row(cjk)])
         with mock.patch("os.get_terminal_size", return_value=os.terminal_size((20, 24))), \
@@ -338,6 +351,61 @@ class LeftRenderer(PersonaIso, unittest.TestCase):
             out = slots.render("left", "f-1")
         for line in out.splitlines():
             self.assertLessEqual(tui.width(line), 20)
+
+    def test_a_cjk_heavy_piece_name_does_not_crowd_out_its_branch_or_markers(self):
+        """Fix round 2, finding 1: the genuinely fragile field. A piece's name
+        (`_piece_line`, `p["name"]`) carries no ANSI prefix, so nothing
+        absorbs a char-vs-cell counting mistake the way the repo-name test
+        above happens to. With `tui.truncate` doing the real truncation, the
+        branch and its markers survive alongside a correctly-shrunk CJK name
+        (`'╰─ 測測測… main* ✗'`); under naive `name_markup[:name_w]` slicing
+        the name alone consumes 2x its intended cell budget (each CJK
+        character sliced in COUNT costs 2 cells), so the branch, the dirty
+        marker and the CI glyph are all pushed out entirely by the trailing
+        safety-net truncate — the SAME false-clean failure mode fix round 1
+        closed for the branch field, reopened here through the name field."""
+        cjk = "測" * 30  # 30 characters, 60 display cells
+        _seed("f-1", repos=[_row("demo", worktree_count=1)],
+             worktrees=[_row(cjk, repo="demo", branch="main",
+                             dirty=True, ci="failed")])
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((20, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("left", "f-1")
+        for line in out.splitlines():
+            with self.subTest(line=line):
+                self.assertLessEqual(tui.width(line), 20)
+        piece_line = tui.strip_ansi(out.splitlines()[-1])
+        self.assertIn("main", piece_line, "the branch must survive")
+        self.assertIn("*", piece_line, "the dirty marker must survive")
+        self.assertIn("✗", piece_line, "the CI glyph must survive")
+
+    def test_a_starved_pane_drops_lowest_priority_fields_first(self):
+        """Fix round 2, finding 2: reachable in production despite the
+        22-column DEFAULT — `layout.py`'s own module docstring measures real
+        tmux 3.7c redistributing every pane proportionally on a resize, `-l
+        size` notwithstanding ("growing a 120x30 frame to 200x50 stretched two
+        one-row panels to 8 and 7 rows" before a corrective `window-resized`
+        hook snapped them back): an ORDINARY window resize, not a future
+        configurability feature. `_width()` measures the real pane rather
+        than trusting `layout.SLOT_SIZE` for exactly this reason.
+
+        Pins `_row`'s priority order (CI drops before the dirty marker, which
+        `_left`'s own overflow-quiet logic and `_tree_cells`' wide-table
+        counterpart both treat as the higher-priority fact) rather than
+        merely the total width bound `test_never_exceeds_the_pane_width_...`
+        above already covers."""
+        _seed("f-1", repos=[_row("ab", branch="main", dirty=True, ci="failed")])
+        # (width, marker expected, CI glyph expected) — matches this fixture
+        # measured directly: 'ab main* ✗' / 'ab m…* ✗' / 'ab m…*' / 'ab …'.
+        cases = [(10, True, True), (8, True, True), (6, True, False), (4, False, False)]
+        for width, want_marker, want_ci in cases:
+            with mock.patch("os.get_terminal_size", return_value=os.terminal_size((width, 24))), \
+                 mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+                line = tui.strip_ansi(slots.render("left", "f-1").splitlines()[0])
+            with self.subTest(width=width):
+                self.assertLessEqual(tui.width(line), width)
+                self.assertEqual("*" in line, want_marker)
+                self.assertEqual("✗" in line, want_ci)
 
     def test_a_failing_gather_read_yields_a_line_rather_than_an_exception(self):
         """A panel that raises leaves a hole in the frame — `slots.render`'s own
