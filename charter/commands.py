@@ -921,24 +921,220 @@ def _as_rule(pattern: str) -> str:
     return f"Bash({p})"
 
 
+#: The one status in a `guard` result that no harness returns — charter's own word for a
+#: file that PASSED the check and then would not take the write. `Harness.apply_ask_rule`
+#: owns the other four; this one is produced by `_guard_apply` from an `OSError`, because
+#: only the caller knows the write was part of a transaction that had already committed
+#: elsewhere. Kept distinct from ``malformed`` on purpose: that one means the content is
+#: unparseable, and a file charter could not write is usually perfectly valid.
+_UNWRITABLE = "unwritable"
+
+
+def _say_write_failed(name: str, detail: str) -> None:
+    """Report a harness whose file passed the check and then refused the write.
+
+    Deliberately does not name a cause. *detail* carries the OS's own `strerror` beside the
+    path, which is the only account of it charter has; guessing between permissions,
+    ownership and a full disk would be the ADR 0009 failure of naming a cause charter only
+    inferred. The remedy is honest and does not need the cause: this is not charter's file
+    to repair, and re-running is what applies the rule once the write can happen.
+    """
+    util.err(f"{name}: could not write {detail} — left untouched.")
+    util.info("  charter asked every harness before writing any of them, so this arrived "
+              "AFTER the check. Re-run once that file can be written.")
+
+
+def _guard_apply(method: str, root: Path, pattern: str,
+                 local: bool) -> tuple[list[tuple], bool]:
+    """Give *pattern* to every harness that can hold it, or to none of them (#376).
+
+    Returns ``(results, blocked)`` — one ``(harness, status, detail)`` per registered
+    harness in registration order, and whether the command wrote nothing because a harness
+    refused. Shared by both verbs through *method*, so `ask` and `allow` cannot come to
+    disagree about when a command has half-happened.
+
+    **Two phases, because aborting on the first refusal is not enough.** Claude Code is
+    first in the registry; by the time opencode refuses, Claude Code's file is written.
+    So every harness is asked first with ``dry_run=True`` and nothing is committed unless
+    all of them can take it. The check is the write path minus the write rather than a
+    validator of its own — `Harness.apply_ask_rule` records why.
+
+    **Only ``malformed`` blocks**, and that is the design rather than an implementation
+    detail. `unsupported` is a harness saying it has no such rule to write at all, which
+    is permanent: Codex answers it to every pattern, and opencode to every `--local` one,
+    so a transaction that stopped there would write nothing anywhere, forever. A rule
+    absent because a file is broken is somebody's five-minute fix; a rule absent because a
+    harness has nowhere to put it is a standing fact `guard` states rather than resolves.
+
+    **Permanent is not the same as harness-wide, and #374 is why that matters here.**
+    opencode now also answers `unsupported` to one PATTERN — a `FLAT_ONLY_PERMISSIONS` key
+    with a real glob, `WebFetch(https://x/*)`, which opencode's config genuinely cannot
+    say. The line above still holds and the reason is unchanged: re-running never changes
+    it, so it is reported and stepped over, and Claude Code takes the rule it CAN express.
+    Worth saying because the enumeration used to read as a property of the harness alone,
+    and a later reader tempted to key the transaction off "does this harness ever support
+    anything" would now be keying it off the wrong question.
+
+    What this does NOT claim: the commit phase writes several files in sequence with no
+    rollback primitive, so an IO failure between them still leaves the plane uneven. That
+    residue is why `_say_if_uneven` survives — it went from the ordinary outcome to the one
+    charter cannot rule out.
+
+    **An IO failure is REPORTED, not raised.** The paragraph above was the design from the
+    start, and it was not true of the code: a `.claude/settings.json` or `opencode.json`
+    that parses and cannot be written — read-only, wrong owner, full disk — reached
+    `write_text` and the `OSError` escaped as a traceback, after the earlier harnesses had
+    already been written. The plane was split and charter said nothing at all, which is the
+    #369 failure with the message removed rather than moved. The commit call is wrapped
+    here, at the one place that knows how far the transaction had got, and the failure
+    becomes :data:`_UNWRITABLE` so it flows into the same uneven-landing report as a file
+    that changed underneath the command.
+
+    It is a status of charter's own, not a fifth answer asked of harnesses, and it is
+    deliberately NOT reported as ``malformed``: the file parses. Telling an operator their
+    valid JSON "is not valid" would send them to fix content that is fine, and the issue
+    names *malformed OR unwritable* as two triggers, not one.
+
+    The wrap is on the COMMIT phase alone. A check that fails this way is unreachable —
+    `dry_run` opens nothing for writing, and every harness already answers ``malformed``
+    to an `OSError` while reading — so a branch for it would be a branch no test can drive.
+    """
+    from .harness import registry
+
+    checked = [(h, *getattr(h, method)(root, pattern, local=local, dry_run=True))
+               for h in registry.all()]
+    if any(status == "malformed" for _h, status, _detail in checked):
+        return checked, True
+    committed = []
+    for h, status, detail in checked:
+        if status == "added":
+            try:
+                status, detail = getattr(h, method)(root, pattern, local=local)
+            except OSError as e:
+                status = _UNWRITABLE
+                detail = f"{detail} ({e.strerror or e.__class__.__name__})"
+        committed.append((h, status, detail))
+    return committed, False
+
+
+def _say_nothing_landed(results: list[tuple], pattern: str) -> int:
+    """Report a `guard` command that wrote nowhere, and return its exit code.
+
+    The `✗` used to sit beside a `✓`, and the operator had to work out which harnesses now
+    disagreed (#369). It now means what every reader already assumed it meant, and saying
+    so out loud is the point: somebody taught by the old behaviour goes and checks the
+    other files otherwise, which is exactly the doubt the transaction exists to remove.
+
+    **"Nothing was written" is not "the rule is nowhere", and the difference had to be said
+    out loud.** This command aborts on a broken file whether or not an EARLIER command
+    already put the rule in place, and the commonest way to meet a broken file is to hit it
+    on a re-run — a bad merge, a teammate's machine. In that state the plane really is
+    uneven: `.claude/settings.json` holds the rule and `opencode.json` does not. The first
+    draft of this reported only what THIS command did, and an operator reading it had no way
+    to tell that case from a first attempt that reached nowhere. That was strictly less than
+    the per-harness `✓ already asking for …` the old half-writing loop printed — a
+    transaction that says less about the plane than the split it replaced. So both halves
+    are named: where the rule already stands, and where it would have gone.
+
+    **And a rule that already stands still outranks whatever it outranked (#374).** This
+    path replaces the loop, so it also replaces the loop's `_warn_if_outranking` call, and
+    dropping it silently was a real regression rather than a theoretical one: with
+    `.claude/settings.json` malformed and `opencode.json` already holding `plan_*`,
+    `charter guard allow mcp__plan` is blocked, and two of opencode's OWN denies are
+    allowed right now by a rule this operator is being told nothing about. Measured against
+    a `git archive origin/main` export, same plane, same command — main printed the line.
+
+    It fires on ``present`` ALONE, and not on the same two statuses the loop uses. That
+    filter is `_warn_if_outranking`'s "the rule is in force", and here only half of it
+    still holds: nothing was written, so an ``added`` harness's rule is NOT in force and
+    warning about its consequences would describe a rule that does not exist. Printed
+    after the "ALREADY in force" line and well below the malformed one, so the sentence
+    that needs acting on stays first — the other half of that filter's reasoning.
+    """
+    for h, status, detail in results:
+        if status == "malformed":
+            util.err(f"{h.name}: {detail} is not valid — left untouched.")
+            util.info("  Fix it by hand, then re-run. charter never repairs these files.")
+    util.warn("  NOTHING was written, under any harness — `charter guard` is all-or-nothing "
+              "across the harnesses that can hold a rule, so the plane is exactly as it was "
+              "before this command.")
+    already = [h.name for h, status, _d in results if status == "present"]
+    if already:
+        util.info(f"  The rule is ALREADY in force under {', '.join(already)}, from an "
+                  f"earlier command — this run neither added it nor took it away. The plane "
+                  f"is uneven right now, and fixing the file above is what evens it up.")
+    for h, status, _d in results:
+        if status == "present":
+            _warn_if_outranking(h, pattern, status)
+    pending = [h.name for h, status, _d in results if status == "added"]
+    if pending:
+        util.info(f"  {', '.join(pending)} would have taken the rule and did not. Re-run "
+                  f"once the file above parses.")
+    return 1
+
+
+def _say_where_it_cannot_reach(results: list[tuple]) -> None:
+    """Name the harnesses with nowhere to put the rule, as a limit and not as a failure.
+
+    All-or-nothing across the harnesses that CAN hold a rule leaves exactly one way for a
+    rule to be in force unevenly, and it is the honest one — so the uneven landing still
+    has to be visible, just no longer as a defect. Each such harness prints its own reason
+    above; what this adds is the word that stops a reader filing it beside the broken case.
+    Their remedies are opposites: a malformed file is fixed and the command re-run, and
+    re-running does nothing whatever here.
+
+    ``unsupported`` ONLY, and that is load-bearing rather than an accident of which status
+    was handy. Every other answer means the harness has somewhere to put the rule: widening
+    this to include ``present`` would print "Not in force under claude-code" over a rule
+    that is in force under claude-code — on the second run of any command, i.e. constantly.
+
+    The sentence deliberately says nothing about WHY, and #374 is what makes that pay. The
+    reason now varies by pattern as well as by harness — Codex has no command patterns at
+    all, opencode has no machine-local file, and since #374 opencode also cannot put a URL
+    glob under a `FLAT_ONLY_PERMISSIONS` key — and each harness has already printed its own
+    account of it on the line above. This adds only the word that files it as a limit
+    rather than a break; assembling the reason here would mean restating three of them, and
+    getting one wrong the day a fourth appears.
+    """
+    names = [h.name for h, status, _d in results if status == "unsupported"]
+    if not names:
+        return
+    util.info(f"  Not in force under {', '.join(names)} — nowhere to write it there, which "
+              f"is a standing limit of the harness rather than a failed write. Re-running "
+              f"will not change that.")
+
+
 def _say_if_uneven(wrote: bool, refused: bool) -> None:
     """Say so when one command left the rule in force under some harnesses and not others.
 
-    The refusal to touch a malformed file is per-harness, not per-command: the caller goes
-    on to the next harness, so a `✗` beside a `✓` means one invocation left the plane
-    holding the rule under opencode and not under Claude Code. An operator who sees the `✗`
-    reads it as "nothing was written" (#369), and a re-run after the fix then makes the
-    other harness's copy a duplicate write rather than a first one.
+    This was the ORDINARY outcome of a malformed config file: the refusal was per-harness,
+    so a `✗` beside a `✓` meant one invocation left the plane holding the rule under
+    opencode and not under Claude Code, and an operator reading the `✗` as "nothing was
+    written" (#369) then re-ran after the fix and made opencode's copy a duplicate write.
+    `_guard_apply` closed that: a harness that would refuse is found before anything is
+    written, and the command writes nowhere.
 
-    Making the command all-or-nothing is a two-phase apply across three file formats with
-    no rollback primitive — a design change, and not this one. Naming what actually
-    happened costs nothing and is true today. Shared by both verbs so `ask` and `allow`
-    cannot come to describe the same half-write differently.
+    It stays because the closure is not total, and pretending otherwise would be the same
+    species of overstatement. The commit phase writes several files one after another with
+    no rollback primitive, so a file that changed underneath the command, or an IO error
+    between two writes, still splits the plane. That is now the only way here, and it is
+    the one charter cannot rule out — which makes this message rarer and more important,
+    not obsolete. Shared by both verbs so `ask` and `allow` cannot describe it differently.
+
+    The message names BOTH shapes of late refusal rather than the first one, because both
+    reach here and the second one used to reach nowhere: an unwritable file raised out of
+    `_guard_apply` before any of this ran. Naming the two is not charter guessing between
+    them — the line immediately above says which it was, in its own words ("is not valid"
+    against "could not write"). Saying only "changed underneath" would have been the wrong
+    cause printed with total confidence, for the case this round added.
     """
     if wrote and refused:
         util.warn("  The rule landed UNEVENLY — it is in force under the harnesses ticked "
-                  "above and NOT under the one refused, from this one command. Fix that "
-                  "file and re-run; the harnesses that already have it will say so.")
+                  "above and NOT under the one refused, from this one command. Every "
+                  "harness accepted it when charter asked, so the refusal above arrived "
+                  "AFTER the check: that file changed underneath this command, or would "
+                  "not take the write. Fix what it names and re-run; the harnesses that "
+                  "already have it will say so.")
 
 
 def _refuse_unexpressible(pattern: str) -> str | None:
@@ -994,8 +1190,8 @@ def _load_json_settings(path: Path):
     return (doc, path) if isinstance(doc, dict) else (None, path)
 
 
-def add_permission_rule(root: Path, rule: str, bucket: str,
-                        local: bool = False) -> tuple[str, str]:
+def add_permission_rule(root: Path, rule: str, bucket: str, local: bool = False,
+                        dry_run: bool = False) -> tuple[str, str]:
     """Append *rule* to ``permissions.<bucket>`` in the plane's `.claude/settings.json`.
 
     Extracted from `cmd_guard_ask` when a second harness needed the same command: the
@@ -1004,11 +1200,14 @@ def add_permission_rule(root: Path, rule: str, bucket: str,
     and a `permissions` or bucket of the wrong type is somebody's deliberate structure —
     charter reports it and writes nothing HERE.
 
-    "Writes nothing here" is the whole of the promise, and the docstring used to overstate
-    it as "reports it and stops" (#369). The refusal is per-harness: the caller goes on to
-    the next one, so a malformed Claude Code file leaves the rule in force under opencode
-    and absent under Claude Code from a single command. That is worth knowing at this level
-    because it is what the callers have to say out loud.
+    "Writes nothing here" is the whole of the promise, and this function is deliberately
+    still not where the promise gets any bigger. The refusal remains per-harness — it
+    returns ``malformed`` and knows nothing about the other harnesses — but the CALLER no
+    longer steps over it: `_guard_apply` asks every harness with `dry_run=True` and writes
+    nowhere if any of them answers this way (#376), so a malformed Claude Code file no
+    longer leaves the rule in force under opencode. The docstring first claimed the stop
+    happened here ("reports it and stops"), then recorded that it did not happen at all
+    (#369). It happens one level up, where something can see every harness at once.
 
     Parameterised over the bucket when `guard allow` arrived: `ask` and `allow` are the
     same job with opposite verbs, and two copies of this function would eventually
@@ -1018,8 +1217,13 @@ def add_permission_rule(root: Path, rule: str, bucket: str,
     init`, so the rule is one person's, on one machine. Same reasoning one level down: the
     two files differ only in blast radius, so they must not differ in how carefully they
     are parsed or how firmly a malformed one is refused.
+
+    `dry_run=True` returns the answer and touches nothing — including `.gitignore`, which
+    `local` would otherwise amend before the settings file is even read. A check with a
+    side effect is not a check: the plane has to be exactly as it was when a transaction
+    decides not to commit.
     """
-    if local:
+    if local and not dry_run:
         _ensure_local_settings_ignored(root)
     settings, path = (_load_json_settings(Path(root) / LOCAL_SETTINGS) if local
                       else _load_settings(root))
@@ -1033,6 +1237,8 @@ def add_permission_rule(root: Path, rule: str, bucket: str,
         return "malformed", f"{path} (`permissions.{bucket}` is not a list)"
     if rule in entries:
         return "present", str(path)
+    if dry_run:
+        return "added", str(path)
     entries.append(rule)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n")
@@ -1072,14 +1278,16 @@ def _ensure_local_settings_ignored(root: Path) -> None:
                           "added by `charter guard --local`")
 
 
-def add_ask_rule(root: Path, rule: str, local: bool = False) -> tuple[str, str]:
+def add_ask_rule(root: Path, rule: str, local: bool = False,
+                 dry_run: bool = False) -> tuple[str, str]:
     """`permissions.ask` — force a prompt for *rule*."""
-    return add_permission_rule(root, rule, "ask", local=local)
+    return add_permission_rule(root, rule, "ask", local=local, dry_run=dry_run)
 
 
-def add_allow_rule(root: Path, rule: str, local: bool = False) -> tuple[str, str]:
+def add_allow_rule(root: Path, rule: str, local: bool = False,
+                   dry_run: bool = False) -> tuple[str, str]:
     """`permissions.allow` — stop prompting for *rule*."""
-    return add_permission_rule(root, rule, "allow", local=local)
+    return add_permission_rule(root, rule, "allow", local=local, dry_run=dry_run)
 
 
 def cmd_guard_allow(args) -> int:
@@ -1107,9 +1315,11 @@ def cmd_guard_allow(args) -> int:
     from .harness import registry
 
     root = Path(config.ROOT)
+    results, blocked = _guard_apply("apply_allow_rule", root, pattern, local)
+    if blocked:
+        return _say_nothing_landed(results, pattern)
     rc, wrote = 0, False
-    for h in registry.all():
-        status, detail = h.apply_allow_rule(root, pattern, local=local)
+    for h, status, detail in results:
         if status == "added":
             util.ok(f"{h.name}: allowing {h.allow_rule(pattern)} → {detail}")
             wrote = True
@@ -1119,6 +1329,9 @@ def cmd_guard_allow(args) -> int:
         elif status == "malformed":
             util.err(f"{h.name}: {detail} is not valid — left untouched.")
             util.info("  Fix it by hand, then re-run. charter never repairs these files.")
+            rc = 1
+        elif status == _UNWRITABLE:
+            _say_write_failed(h.name, detail)
             rc = 1
         else:
             util.info(f"  {h.name}: {detail} — nothing to relax there.")
@@ -1143,6 +1356,7 @@ def cmd_guard_allow(args) -> int:
                   "prompt, never the secret, credential, plane-root or release denials.")
         util.info("  Nothing lifts those — by design. `charter docs show hooks` → *When a "
                   "guard is wrong* for what to do when one of them is wrong about you.")
+    _say_where_it_cannot_reach(results)
     _say_if_uneven(wrote, rc == 1)
     return rc
 
@@ -1174,9 +1388,11 @@ def cmd_guard_ask(args) -> int:
     from .harness import registry
 
     root = Path(config.ROOT)
+    results, blocked = _guard_apply("apply_ask_rule", root, pattern, local)
+    if blocked:
+        return _say_nothing_landed(results, pattern)
     rc, wrote = 0, False
-    for h in registry.all():
-        status, detail = h.apply_ask_rule(root, pattern, local=local)
+    for h, status, detail in results:
         if status == "added":
             util.ok(f"{h.name}: asking for {h.ask_rule(pattern)} → {detail}")
             wrote = True
@@ -1186,6 +1402,9 @@ def cmd_guard_ask(args) -> int:
         elif status == "malformed":
             util.err(f"{h.name}: {detail} is not valid — left untouched.")
             util.info("  Fix it by hand, then re-run. charter never repairs these files.")
+            rc = 1
+        elif status == _UNWRITABLE:
+            _say_write_failed(h.name, detail)
             rc = 1
         else:
             # Not a failure. The harness has no command-pattern permissions, so charter's
@@ -1202,6 +1421,7 @@ def cmd_guard_ask(args) -> int:
             util.info("  These files are committed, so the rule applies to everyone on this "
                       "repo — no sync step, and nothing that can drift (ADR 0014).")
         _warn_if_shadowing(registry.get(registry.CLAUDE_CODE).ask_rule(pattern))
+    _say_where_it_cannot_reach(results)
     _say_if_uneven(wrote, rc == 1)
     return rc
 

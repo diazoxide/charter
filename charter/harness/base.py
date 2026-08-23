@@ -134,14 +134,46 @@ class Harness:
         """
         return None
 
-    def apply_ask_rule(self, root: Path, pattern: str,
-                       local: bool = False) -> tuple[str, str]:
+    def apply_ask_rule(self, root: Path, pattern: str, local: bool = False,
+                       dry_run: bool = False) -> tuple[str, str]:
         """Write the rule under *root*. ``(status, detail)``.
 
         ``"added"``, ``"present"``, ``"malformed"`` (refused, never repaired), or
         ``"unsupported"`` with a reason. A harness that cannot express command patterns
         says so: charter's own hook still guards the command, and the difference between
         naming that limit and staying quiet is the difference between a limit and a lie.
+
+        Two of those four are refusals, and they are **not the same refusal**. That
+        distinction is load-bearing rather than descriptive, because `charter guard` is
+        all-or-nothing across harnesses (#376) and has to decide which refusals stop it:
+
+        * ``malformed`` is a condition of a FILE. Somebody can fix it, and until they do,
+          writing the other harnesses is what leaves the plane holding a rule here and not
+          there from one command. It stops the whole command.
+        * ``unsupported`` is a standing property of the HARNESS **and this pattern**. Re-
+          running never changes it — Codex answers it to every pattern there is, opencode
+          to every `--local` one, and since #374 to a URL glob under one of the five
+          permissions opencode will only take a bare action for — so treating it as a
+          failure would mean charter could never write a guard rule anywhere. It is
+          reported and stepped over, and the rule is honestly not in force there.
+
+          "And this pattern" is worth the words. It read as harness-wide when only whole
+          harnesses answered it, and a transaction keyed off "does this harness support
+          anything" would still have passed every test then and be wrong now. What the
+          caller must key off is this answer, to this pattern, on this call.
+
+        ``dry_run=True`` answers the same question and writes nothing: the status is what
+        a real call would return, so the caller can ask every harness before committing to
+        any of them. It has to be the write path minus the write, never a validator of its
+        own — a second implementation of "can this harness take the rule" eventually
+        answers differently from the one that writes, and a transaction whose check
+        disagrees with its commit prints a tick either way.
+
+        Those four are the whole of what a harness answers. A write that RAISES is not a
+        fifth answer to add here: an implementation cannot know whether the command has
+        already written somebody else, which is the only thing that makes the failure worth
+        distinguishing. `commands._guard_apply` catches the `OSError` and reports it under a
+        status of its own, so a harness is free to let one out.
         """
         return "unsupported", f"{self.name} has no command-pattern permissions"
 
@@ -155,16 +187,20 @@ class Harness:
         """
         return self.ask_rule(pattern)
 
-    def apply_allow_rule(self, root: Path, pattern: str,
-                         local: bool = False) -> tuple[str, str]:
+    def apply_allow_rule(self, root: Path, pattern: str, local: bool = False,
+                         dry_run: bool = False) -> tuple[str, str]:
         """Write the allow rule under *root*. ``(status, detail)``, as
-        :meth:`apply_ask_rule`.
+        :meth:`apply_ask_rule` — same four answers, same meaning, same ``dry_run``.
 
         ``local=True`` asks for the harness's MACHINE-LOCAL file — a rule that is one
         person's, on one machine. A harness with no such file must return ``unsupported``
         and say why rather than falling back to a shared one: an `allow` rule widens what
         runs unprompted, so a silent fallback would publish a personal trust decision to
         everybody, which is the failure the flag exists to prevent.
+
+        That is also the sharpest case for ``unsupported`` not blocking anybody else:
+        opencode answers it to every ``--local`` rule, so a transaction that stopped on it
+        would turn the flag into a command that writes nothing at all.
         """
         return "unsupported", f"{self.name} has no command-pattern permissions"
 

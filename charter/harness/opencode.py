@@ -612,19 +612,20 @@ class OpenCodeHarness(Harness):
                  "config is ~/.config/opencode, which applies to every project on this "
                  "machine, so charter will not narrow a team rule into a broader one")
 
-    def apply_ask_rule(self, root: Path, pattern: str,
-                       local: bool = False) -> tuple[str, str]:
+    def apply_ask_rule(self, root: Path, pattern: str, local: bool = False,
+                       dry_run: bool = False) -> tuple[str, str]:
         if local:
             return "unsupported", self._NO_LOCAL
-        return self._apply_rule(root, pattern, "ask")
+        return self._apply_rule(root, pattern, "ask", dry_run=dry_run)
 
-    def apply_allow_rule(self, root: Path, pattern: str,
-                         local: bool = False) -> tuple[str, str]:
+    def apply_allow_rule(self, root: Path, pattern: str, local: bool = False,
+                         dry_run: bool = False) -> tuple[str, str]:
         if local:
             return "unsupported", self._NO_LOCAL
-        return self._apply_rule(root, pattern, "allow")
+        return self._apply_rule(root, pattern, "allow", dry_run=dry_run)
 
-    def _apply_rule(self, root: Path, pattern: str, decision: str) -> tuple[str, str]:
+    def _apply_rule(self, root: Path, pattern: str, decision: str,
+                    dry_run: bool = False) -> tuple[str, str]:
         """Write it into `opencode.json`, IF ABSENT and never repairing.
 
         A `permission` block of the wrong shape is somebody's deliberate structure, and
@@ -656,6 +657,20 @@ class OpenCodeHarness(Harness):
         rule that could not fire, this wrote a file that stops opencode running. It was
         introduced by #374's own fix, which gave `doom_loop` its new meaning — before it,
         `mcp__doom__loop` was an inert `bash` key and the file still loaded.
+
+        `dry_run` is the same restraint applied one step earlier, and for the same reason
+        this method is shared: every judgement above the write runs, and only the two
+        lines that touch the disk are skipped. `charter guard` asks every harness before
+        it writes any of them (#376), so this answer has to be the one the write would
+        give — and it is, because it is the same code arriving at it.
+
+        That sharing is what keeps the flat-only branch above honest under a transaction.
+        Its ``unsupported`` and its ``malformed`` are reached by the check exactly as the
+        write reaches them, so `_guard_apply` blocks the whole command on the second and
+        steps over the first — and a `WebFetch(https://x/*)` that opencode cannot express
+        does not stop Claude Code from taking the rule it CAN express. A separate
+        validator would have had to learn :data:`FLAT_ONLY_PERMISSIONS` a second time and
+        would have been the copy that went stale when opencode adds a sixth name.
         """
         tool, glob = self.ask_rule(pattern)
         p = Path(root) / "opencode.json"
@@ -690,6 +705,8 @@ class OpenCodeHarness(Harness):
             if block.get(glob) == decision:
                 return "present", str(p)
             block[glob] = decision
+        if dry_run:
+            return "added", str(p)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(doc, indent=2) + "\n")
         return "added", str(p)
