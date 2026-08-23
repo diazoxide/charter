@@ -40,6 +40,12 @@ rule while one who reads a bare refusal files an issue.
   matcher at all.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone.
+- **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root
+  that would take commits off the branch which no remote has a copy of — the command that
+  destroyed eleven memory commits in one session. Only that: the unstage
+  (`git reset HEAD -- <path>`), `--soft`/`--mixed`, a reset with no ref, and any reset over
+  commits that are already pushed all run untouched. It clears itself — `charter save` lands
+  the commits and the same command is allowed.
 - **One credential.** SSH to a forge, `GIT_SSH_COMMAND`, `-S`/`--gpg-sign`, and the
   `core.sshCommand` family that reaches the same transport by another road (`-c`,
   `--config-env`, `GIT_CONFIG_KEY_n`, and a `git config` write of it). This one *is*
@@ -49,7 +55,7 @@ rule while one who reads a bare refusal files an issue.
   push tags, or `gh release create` / `gh pr merge`. `bypassPermissions` means *stop asking
   me*, not *stop knowing things*, and a published version number can never be reused.
 
-A sixth path is not a guard but an allowance: a binary the **active persona** declares in
+A seventh path is not a guard but an allowance: a binary the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then.
 
 ## When a guard is wrong
@@ -73,11 +79,13 @@ the harness's tools — they govern what an agent does with your authority insid
 Your own shell is on the other side of that boundary and always was. Open a terminal and run
 it. Nothing is being worked around: the rule never applied to you.
 
-Two guards name a narrower move first, and it is usually the one you want:
+Three guards name a narrower move first, and it is usually the one you want:
 
 - **Release floor** — re-run the step **attended**. This is a mode, and it is yours to set.
 - **One credential** — `charter git-policy --apply` configures every clone for the token
   transport, which is what most denials of it are actually asking for.
+- **Plane-root history wipe** — `charter save`. The guard is measuring commits that exist
+  nowhere else; push them and it stops firing, on that command and every other one.
 
 **If a guard is wrong about you *every time*, that is not an override problem.** It means
 charter is holding a policy your organisation does not — an org that mandates signed

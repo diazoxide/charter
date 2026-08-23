@@ -23,8 +23,8 @@ the agent — and there is deliberately no switch charter can read. That is not 
 * A `PreToolUse` hook governs the harness's tools. The operator's own shell was never on
   that side of the line, so running it there works around nothing.
 
-**Appended in `_deny`, not at the five call sites**, which is the assertion with the most
-value here: a sixth guard added tomorrow carries the override without anyone remembering to,
+**Appended in `_deny`, not at the six call sites**, which is the assertion with the most
+value here: a seventh guard added tomorrow carries the override without anyone remembering to,
 and the trace tally keys — computed from the reason BEFORE it reaches `_deny` — cannot drift.
 """
 
@@ -32,12 +32,13 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
 from tests._isolation import PersonaIso, run_hook
 from tests.test_hooks import InAControlPlane
-from charter import hooks, trace
+from charter import config, hooks, trace
 
 DOC = Path(__file__).resolve().parents[1] / "docs" / "hooks.md"
 SECTION = "## When a guard is wrong"
@@ -52,15 +53,56 @@ DENIALS = {
                           {"tool_input": {"command": "git clone git@github.com:a/b.git"}}),
     "plane-root-branch": (hooks.pretooluse,
                           {"tool_input": {"command": "git checkout -b feature"}}),
+    "plane-root-reset": (hooks.pretooluse,
+                         {"tool_input": {"command": "git reset --hard origin/main"}}),
     "release-floor": (hooks.pretooluse,
                       {"tool_input": {"command": "gh release create v9.9.9"},
                        "permission_mode": "bypassPermissions"}),
 }
 
 
+def _root_ahead_of_its_upstream(case) -> None:
+    """Give the tmp plane a real upstream and one commit that never reached it.
+
+    The only denial here whose condition is a fact about the WORLD rather than about the
+    command: the reset guard measures whether commits would actually be destroyed, and
+    stands aside when they would not. A bare tmp plane is that "would not", so without this
+    the fixture would land in the `assertIsNotNone` above as "never reached the guard" —
+    which is exactly the failure the precondition assertion exists to name.
+    """
+    root = Path(config.ROOT)
+    if (root / ".git").exists():
+        return
+    remote = root / "origin.git"
+
+    def git(*args, cwd=root):
+        subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)],
+                   check=True, capture_output=True)
+    for k, v in (("commit.gpgsign", "false"), ("user.email", "t@e"), ("user.name", "t")):
+        git("config", k, v)
+    git("remote", "add", "origin", str(remote))
+    (root / "README").write_text("plane\n")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    git("push", "-q", "-u", "origin", "main")
+    (root / "memory.md").write_text("learned\n")
+    git("add", "-A")
+    git("commit", "-qm", "memory: one")
+
+
+#: Fixture work a denial needs before its command is refusable. Keyed rather than folded
+#: into `setUp` so each guard's precondition stays visible next to the guard.
+SETUP = {"plane-root-reset": _root_ahead_of_its_upstream}
+
+
 class DenialCase(InAControlPlane):
     def reason(self, name: str, sid: str = "s") -> str:
         handler, payload = DENIALS[name]
+        SETUP.get(name, lambda _case: None)(self)
         r = run_hook(handler, {"cwd": str(self.tmp), "session_id": sid, **payload})
         self.assertIsNotNone(r, f"{name}: fixture never reached the guard")
         out = r["hookSpecificOutput"]
@@ -70,9 +112,9 @@ class DenialCase(InAControlPlane):
 
 
 class TestEveryDenialNamesTheOverride(DenialCase):
-    def test_all_five_of_them(self):
-        """The precondition is the count: five guards deny, and all five must say it."""
-        self.assertEqual(5, len(DENIALS))
+    def test_all_six_of_them(self):
+        """The precondition is the count: six guards deny, and all six must say it."""
+        self.assertEqual(6, len(DENIALS))
         for name in DENIALS:
             with self.subTest(guard=name):
                 self.assertIn(hooks._OVERRIDE_NOTE, self.reason(name))
@@ -117,6 +159,7 @@ class TestTheTallyKeysAreUnchanged(DenialCase):
             "vault-read": "reads a vault/secret file directly (would print plaintext)",
             "single-credential": "single-credential",
             "plane-root-branch": "plane-root-branch",
+            "plane-root-reset": "plane-root-reset",
             "release-floor": "release-floor"}
 
     def test_each_guard_still_traces_the_key_it_always_did(self):
@@ -174,7 +217,7 @@ class TestANewGuardCannotForgetIt(PersonaIso):
     def test_every_deny_call_passes_prose_and_not_a_prebuilt_message(self):
         """Precondition for the test above: the call sites really do exist and route here."""
         calls = re.findall(r"_deny\(\s*\"PreToolUse\"", self._source())
-        self.assertGreaterEqual(len(calls), 5, "precondition: the guards were not found")
+        self.assertGreaterEqual(len(calls), 6, "precondition: the guards were not found")
 
 
 class TestTheDocumentationExists(unittest.TestCase):
