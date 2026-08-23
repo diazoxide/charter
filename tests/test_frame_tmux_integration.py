@@ -687,13 +687,31 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink, never two separately-registered `addCleanup`
+        # calls in that order — `addCleanup` runs LIFO, so `addCleanup(kill-server)`
+        # followed by `addCleanup(unlink)` actually runs unlink FIRST — see
+        # `_teardown_socket`'s own docstring below for why that is backwards and
+        # when it stops being harmless.
+        self.addCleanup(self._teardown_socket)
         (self.tmp / "charter.toml").write_text("")
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)  # let it derive under CHARTER_ROOT, like this
                                             # process's own PersonaIso-isolated config
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `TmuxIntegration._teardown_socket` for why the file survives `kill-server`
+        on its own. Order matters here specifically, not just tidily: two separate
+        `addCleanup` calls (`kill-server`, then `unlink`) run LIFO — unlink FIRST,
+        kill-server SECOND — which reconnects to nothing once the socket's own
+        directory entry is already gone. Harmless for THIS class today (its
+        sessions never arm `remain-on-exit`, so `_kill_pid` on each pane's own
+        process already ends the session, then the server, on tmux's own
+        `exit-empty` default before `kill-server` is ever asked to do anything) —
+        fixed anyway so this class cannot silently start leaking the day it, or a
+        test added to it, ever does."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def _spawn_panel(self, session: str, fid: str) -> None:
         """One `charter panel bottom --session <fid>` pane, in a fresh session named
@@ -851,12 +869,19 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink — see `PanelIntegration._teardown_socket`'s own
+        # docstring for why two separately-registered `addCleanup` calls in that
+        # order run backwards (`addCleanup` is LIFO).
+        self.addCleanup(self._teardown_socket)
         (self.tmp / "charter.toml").write_text("")
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `PanelIntegration._teardown_socket` for the full reasoning, identical here."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def test_a_hostile_label_never_reaches_what_the_resolved_action_runs(self):
         fid = state.frame_id("menu-integ", os.getpid())
@@ -930,9 +955,16 @@ class MenuFormatIntegration(_NeedsAttachedClient, unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink — see `PanelIntegration._teardown_socket`'s own
+        # docstring for why two separately-registered `addCleanup` calls in that
+        # order run backwards (`addCleanup` is LIFO).
+        self.addCleanup(self._teardown_socket)
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `PanelIntegration._teardown_socket` for the full reasoning, identical here."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def _new_session(self, fid: str) -> None:
         """A fresh `cat`-backed session named *fid*, with its pane's OWN pid registered
@@ -1123,9 +1155,35 @@ class MenuClientIntegration(_NeedsAttachedClient, unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink — see `_teardown_socket`'s own docstring below:
+        # THIS class, unlike its siblings above, is not merely defending against a
+        # hypothetical here.
+        self.addCleanup(self._teardown_socket)
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file.
+
+        Two separately-registered `addCleanup` calls (`kill-server`, then `unlink`)
+        run LIFO — unlink FIRST, kill-server SECOND — and a `kill-server` issued
+        after the socket's own directory entry is already gone cannot reconnect to
+        the still-live server at all (see `FourEdgeIntegration.setUp`'s own
+        docstring for the measured leak this produces). That reversed order is
+        harmless for `PanelIntegration`/`MenuIntegration`/`MenuFormatIntegration`
+        above only because none of THEIR sessions arm `remain-on-exit`. **This
+        class is the one exception, and arms it globally, not incidentally**:
+        `_install_real_bind` below sources `commands_frame.conf_text(...)` for
+        real, which emits `set -g remain-on-exit on` (`commands_frame.py`) —
+        server-wide, not scoped to one session. It survives today with the two-call
+        ordering bug anyway (confirmed by removing only `_new_session`'s own
+        `addCleanup(_kill_pid, server_pid)`, which alone still leaves a PPID-1
+        orphan) because `_new_session` ALSO SIGKILLs the server's own process
+        directly by pid — a second, independent teardown path that has nothing to
+        do with `kill-server` succeeding or failing. This fix removes the
+        dependency on that second path rather than continuing to rely on it being
+        present on every test added to this class in the future.
+        """
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def _charter_py_env(self) -> dict:
         """The environment this class's tmux server starts with: an INTERPRETER shim
@@ -1354,6 +1412,18 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
     a panel showing "no repos" would be ALIVE and would tell you nothing about
     whether any of that chain actually works (see this module's own task brief).
 
+    **Fix round 1 closed three links this proof left unproven, all the same shape
+    (green even with the actual mechanism disabled):** a real, uncommitted file in
+    the fixture repo (mutation testing found `left`'s row shows a clean repo as
+    clean whether or not `gather.scan`'s own `_repo_states` sweep — the real `git
+    status --porcelain --branch` half — ever ran at all, since name/branch alone
+    come from `_repo_trees`/`_branch`, neither of which touches it); a direct read
+    of the cache FILE (`gather._cache_file`), not only the pane's own text, both
+    right after priming and right after the real hook fires (mutation testing
+    found `gather.save` could be neutered outright and every content assertion
+    still passed, because `gather.read`'s own missing-cache fallback recomputes a
+    live scan whenever there is nothing to read).
+
     The repaint proof mutates the repo's BRANCH, not its dirty bit, deliberately:
     `gather.py`'s `_branch` reads `.git/HEAD` straight, with no cache of its own,
     while dirty/ahead/behind ride `statusline._repo_states`' 5-second TTL
@@ -1361,39 +1431,50 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
     two gathers taken seconds apart — a dirty-bit mutation immediately after the
     frame's first (TTL-warming) gather would be flaky against the very caching
     behaviour this plan depends on, for a reason that has nothing to do with
-    whether the repaint actually worked. A branch switch has no such cache to race.
+    whether the repaint actually worked. A branch switch has no such cache to race
+    — which is exactly why the ALIVE test above needs its OWN, separate dirty file
+    (created before the frame ever launches, so no TTL race is possible) to prove
+    the `_repo_states` half at all.
+
+    **Capability, not presence — this module's own opening promise, checked for
+    this class specifically.** Every tmux primitive `_spawn_frame`/the tests above
+    use — `new-session -x/-y -P -F`, `split-window -t <pane-id> -l N`,
+    `select-pane`, `#{pane_dead}`/`#{pane_active}`/`#{pane_pid}`,
+    `capture-pane -p`, `set -g remain-on-exit` — predates charter's own declared
+    floor (`tmuxctl.FLOOR`, tmux 3.2), which CI's tmux 3.4 already clears; none of
+    it is gated behind a version this class would need to probe. Unlike
+    `MenuFormatIntegration`/`MenuClientIntegration` above, nothing here attaches a
+    real client (`display-menu`'s "no current client" refusal, and `TERM=dumb`'s
+    inability to give it one, are why those two classes need
+    `_NeedsAttachedClient` at all) — `capture-pane`/`display-message` read a
+    pane's state and content directly, needing no client attached to it, so
+    `TERM=dumb`'s specific failure mode (a pty-attached CLIENT that cannot
+    register) never applies to this class. Confirmed directly, not merely
+    inferred: this whole module, `FourEdgeIntegration` included, passes 17/17
+    under `TERM=dumb` with nothing skipped. `_HAS_TMUX` (presence) is therefore
+    the right and only gate for this class — no narrower capability probe is
+    missing here the way one was for the classes this module's own opening
+    docstring describes.
     """
 
     def setUp(self) -> None:
         super().setUp()
-        # ONE combined cleanup, kill-server THEN unlink — never two separate
-        # `addCleanup` calls in that order, which is what `PanelIntegration`/
-        # `MenuIntegration`/`MenuFormatIntegration`/`MenuClientIntegration` above
-        # each do. `addCleanup` runs LIFO (confirmed by hand: two cleanups
-        # registered `kill-server` then `unlink` run `unlink` FIRST, `kill-server`
-        # SECOND — backwards), which is harmless for every one of those classes
-        # because none of them arms `remain-on-exit`: their sessions hold exactly
-        # one long-lived pane process, `_kill_pid` SIGKILLs it directly, and with
-        # `remain-on-exit` at tmux's own default (off) that ends the pane, which
-        # ends the session, which ends the server on its own (`exit-empty`'s
-        # default) — `kill-server` there is only ever a no-op confirming a death
-        # that already happened. This class is different: `_spawn_frame` writes
-        # `commands_frame._PLACEHOLDER_CONF` (`remain-on-exit on`) into its `-f`
-        # config, the same placeholder `cmd_launch` itself loads, specifically so a
-        # panel that crashes leaves an inspectable pane rather than vanishing. With
-        # `remain-on-exit` ON, killing every pane's own process (`_kill_pid`, in
-        # `_spawn_frame`) does NOT end the session — only an explicit
-        # `kill-session`/`kill-server` does. Reversed order was measured to leak: a
-        # `kill-server` call issued AFTER the socket's own directory entry is
-        # already unlinked cannot reconnect to the still-running server at all (a
-        # UNIX socket path removed from the filesystem cannot be dialled again,
-        # even though the process holding the listening end is still very much
-        # alive), so the server — with its `sleep 600` harness pane and four dead
-        # `charter panel` panes, `remain-on-exit` keeping all of them around —
-        # never exits and outlives the test process. `TmuxIntegration.
-        # _teardown_socket` above already gets this order right, in one function;
-        # this repeats that shape rather than the two-call one every other class
-        # in this file happens to get away with.
+        # ONE combined cleanup, kill-server THEN unlink — never two separately
+        # registered `addCleanup` calls in that order (`addCleanup` runs LIFO, so
+        # that shape runs unlink FIRST, kill-server SECOND — backwards). Every
+        # class in this module now uses this same combined shape (see
+        # `MenuClientIntegration._teardown_socket` for the measured leak the
+        # reversed order produces once a session's `remain-on-exit` is armed,
+        # which is this class's own situation too: `_spawn_frame` writes
+        # `commands_frame._PLACEHOLDER_CONF` — `set -g remain-on-exit on` — into
+        # its `-f` config, the same placeholder `cmd_launch` itself loads, so a
+        # crashed panel leaves an inspectable pane rather than vanishing. With it
+        # on, killing every pane's own process (`_kill_pid`, in `_spawn_frame`)
+        # does NOT end the session; only an explicit `kill-session`/`kill-server`
+        # does, and unlike `MenuClientIntegration` this class has no second,
+        # independent teardown path (a directly-SIGKILLed server pid) to fall
+        # back on if the ordering is wrong — getting it right here is the only
+        # thing standing between a `sleep 600` harness pane and an orphan).
         self.addCleanup(self._teardown_socket)
         (self.tmp / "charter.toml").write_text("")
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
@@ -1401,6 +1482,8 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                                             # this process's own PersonaIso-isolated config
 
     def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `setUp`'s own comment for why the order is load-bearing here specifically."""
         _tmux("kill-server")
         (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
@@ -1430,6 +1513,32 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
 
     def _alive(self, pane: str) -> str:
         return _tmux("display-message", "-p", "-t", pane, "#{pane_dead}").stdout.strip()
+
+    def _wait_for(self, pane: str, needle: str, timeout: float = 5.0) -> str:
+        """Poll `capture-pane` for *pane* until *needle* appears or *timeout*
+        elapses, returning whatever was last captured either way.
+
+        Fix round 1: a fixed `time.sleep(1.5)` used to stand where this is called
+        from — a guess about how long a cold `charter` import plus a full
+        `gather.scan` (subprocess git calls included) takes on THIS machine,
+        wrong in both directions: measured content landing in ~0.08s on a normal
+        run (so the sleep was mostly wasted time, four such waits per test in the
+        heaviest class in this module), and a hard, unrecoverable failure on any
+        runner slow enough to still be starting up at 1.5s — exactly the
+        "polling makes a slow machine slow rather than wrong" property
+        `_await_file` above already established for this file's other classes,
+        applied here to a first paint rather than a repaint. Content, not mere
+        pane existence: a pane can be alive and blank (or alive and still on its
+        LAST paint) well before it has the real content a caller wants to assert
+        on, so this waits for the actual needle, not a fixed delay standing in
+        for "probably done by now".
+        """
+        deadline = time.monotonic() + timeout
+        content = self._capture(pane)
+        while time.monotonic() < deadline and needle not in content:
+            time.sleep(0.1)
+            content = self._capture(pane)
+        return content
 
     def _spawn_frame(self, fid: str) -> tuple[str, dict[str, str]]:
         """Launch a real four-slot frame: `layout.session_argv` for the harness pane,
@@ -1487,11 +1596,25 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         real content a broken renderer (or an empty, never-gathered cache) could
         not have produced, and the harness pane — not the last panel
         `split-window` happened to draw — holds keyboard focus once the launch
-        finishes."""
+        finishes.
+
+        **Fix round 1: the repo is made DIRTY before the frame ever launches, not
+        left pristine.** `_init_repo`'s own repo has nothing uncommitted, so
+        without this, `left`'s row shows no marker regardless of whether
+        `gather.scan`'s `_repo_states` half (a real `git status --porcelain
+        --branch` subprocess) ran at all — a mutation that replaced that whole
+        sweep with `{}` left every assertion in this test green, because
+        everything asserted before this fix (repo name, branch) comes from
+        `_repo_trees`/`_branch` alone, neither of which touches `_repo_states`.
+        The `*` dirty marker asserted below is the one thing in this test that
+        can only come from that sweep actually running and actually landing in
+        the cache `left` reads back.
+        """
         repo_name = f"cnry{os.getpid() % 10000}"
         branch = f"br{os.getpid() % 10000}a"
         repo = config.WORKSPACES_DIR / "demo" / repo_name
         _init_repo(repo, branch)
+        (repo / "scratch.txt").write_text("uncommitted\n")
         todos.add("demo", "a todo the bottom panel should count")
         persona_name = self.make_persona(f"p{os.getpid() % 100}")
 
@@ -1499,7 +1622,17 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         harness_pane, panes = self._spawn_frame(fid)
         self.assertEqual(set(panes), {"top", "bottom", "left", "right"})
 
-        time.sleep(1.5)
+        # Poll for real content (`_wait_for`'s own docstring — fix round 1:
+        # replaces a fixed `time.sleep(1.5)` that guessed at how long four cold
+        # `charter` imports plus four `gather.scan` git sweeps take). This also
+        # does the flat sleep's OTHER job — giving a genuine startup crash time
+        # to register — for free: a dead pane never satisfies its needle, so
+        # `_wait_for` spends its own timeout before falling through to the alive
+        # check below, same as a deliberate wait would have.
+        top = self._wait_for(panes["top"], "demo")
+        left = self._wait_for(panes["left"], repo_name)
+        right = self._wait_for(panes["right"], persona_name)
+        bottom = self._wait_for(panes["bottom"], "1 todo")
 
         for slot, pane in panes.items():
             self.assertEqual(self._alive(pane), "0",
@@ -1508,18 +1641,19 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                              f"green-suite gap `PanelIntegration`'s own docstring "
                              f"names, now for all four slots at once)")
 
-        top = self._capture(panes["top"])
         self.assertIn("demo", top, f"top never showed the real workspace name:\n{top!r}")
 
-        left = self._capture(panes["left"])
         self.assertIn(repo_name, left, f"left never showed the real repo:\n{left!r}")
         self.assertIn(branch, left, f"left never showed the real branch:\n{left!r}")
+        self.assertIn("*", left,
+                      f"left never showed the dirty marker for a real uncommitted "
+                      f"file — either gather.scan's own git-status sweep never "
+                      f"ran, or nothing carried its result into the cached "
+                      f"row:\n{left!r}")
 
-        right = self._capture(panes["right"])
         self.assertIn(persona_name, right,
                       f"right never showed the real persona:\n{right!r}")
 
-        bottom = self._capture(panes["bottom"])
         self.assertIn("1 todo", bottom,
                       f"bottom never showed the real todo count:\n{bottom!r}")
 
@@ -1580,9 +1714,23 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # session's own environment the way every panel below does.
         gather.refresh(fid, workspace="demo")
 
-        time.sleep(1.5)
-        left_before = self._capture(panes["left"])
-        bottom_before = self._capture(panes["bottom"])
+        # Fix round 1: prove the CACHE FILE itself exists and holds *branch_a* —
+        # not only that `left` shows the right text, which `gather.read`'s own
+        # missing-cache fallback (a fresh, live scan) can produce with `gather.
+        # save` neutered outright and no cache ever written at all. This is the
+        # direct check that `gather.refresh` did the WRITE half of its job, not
+        # only the read a panel happens to see regardless.
+        cache = gather._cache_file(fid, create=False)
+        self.assertTrue(cache is not None and cache.exists(),
+                        "gather.refresh's own save() never produced a cache file "
+                        "for this frame — priming succeeded at reading but not "
+                        "at writing")
+        self.assertIn(branch_a, cache.read_text(),
+                      f"the primed cache file exists but does not hold the "
+                      f"starting branch:\n{cache.read_text()!r}")
+
+        left_before = self._wait_for(panes["left"], branch_a)
+        bottom_before = self._wait_for(panes["bottom"], "1 todo")
         self.assertIn(branch_a, left_before,
                       f"left never showed the starting branch:\n{left_before!r}")
         self.assertIn("1 todo", bottom_before,
@@ -1620,18 +1768,12 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
             })
         self.assertIsNone(out, "posttooluse should emit nothing for a plain Read")
 
-        def _wait_for_change(pane: str, before: str) -> str:
-            deadline = time.monotonic() + 3
-            after = before
-            while time.monotonic() < deadline:
-                after = self._capture(pane)
-                if after != before:
-                    return after
-                time.sleep(0.2)
-            return after
-
-        left_after = _wait_for_change(panes["left"], left_before)
-        bottom_after = _wait_for_change(panes["bottom"], bottom_before)
+        # `self._wait_for` — the SAME poll `_wait_for` already uses for the FIRST
+        # paint (fix round 1) — waits for the specific new fact each panel is
+        # expected to show, rather than a fixed sleep or an undifferentiated
+        # "content changed" check.
+        left_after = self._wait_for(panes["left"], branch_b)
+        bottom_after = self._wait_for(panes["bottom"], "2 todos")
 
         self.assertNotEqual(left_after, left_before,
                             f"left never repainted after a real hooks.posttooluse() "
@@ -1641,6 +1783,16 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         self.assertNotIn(branch_a, left_after,
                          f"left kept showing the OLD branch after the switch — a "
                          f"stale cache surviving its own refresh:\n{left_after!r}")
+
+        # Fix round 1: the cache FILE on disk, not only the pane's own capture,
+        # now holds the new branch — proving the hook's `gather.refresh` call did
+        # the WRITE `notify.plane_changed` is supposed to perform, the same
+        # direct check made against `branch_a` above, repeated here against the
+        # value only a SECOND, successful refresh could have produced.
+        self.assertIn(branch_b, cache.read_text(),
+                      f"left repainted (or the panel's own live fallback masked "
+                      f"a broken refresh) but the cache file itself was never "
+                      f"updated with the new branch:\n{cache.read_text()!r}")
 
         self.assertNotEqual(bottom_after, bottom_before,
                             f"bottom never repainted after the same real hook call; "
