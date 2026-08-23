@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from .. import __version__
@@ -43,6 +44,55 @@ TOOL_NAMES = {
     "task": "Task",
 }
 
+#: opencode's OWN permission names — the table charter's rule joins, not a list charter
+#: invents. Read off opencode 1.18.21 itself rather than off its docs: the running
+#: server's `/experimental/tool/ids`, the built-in ruleset `Permission.fromConfig` is
+#: seeded with (`{"*":"allow", doom_loop:"ask", external_directory:{…}, question:"deny",
+#: plan_enter:"deny", plan_exit:"deny", read:{…}}`), the three MCP-resource tool ids
+#: (`list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`), and the
+#: "Known permission keys" list the binary carries for its own config authoring.
+#:
+#: It matters because `Permission.evaluate` glob-matches the permission NAME and takes
+#: the LAST match — `findLast((r) => match(name, r.permission) && match(pattern,
+#: r.pattern))` — and charter's rule comes from config, which resolves after the
+#: built-ins. So a name that collides here does not sit beside opencode's decision, it
+#: replaces it.
+#:
+#: Whole names with no `_` (`bash`, `read`, `list`) can never be hit by an MCP
+#: translation, which always carries the separator. They are kept anyway: the list is
+#: opencode's table, and `_shadowed_builtins` decides what is reachable. A hand-curated
+#: "reachable" subset would need re-curating the day opencode adds an underscored name,
+#: and would go stale silently — the exact failure this whole issue is about.
+BUILTIN_PERMISSIONS = (
+    "apply_patch", "bash", "doom_loop", "edit", "external_directory", "glob", "grep",
+    "invalid", "list", "list_mcp_resource_templates", "list_mcp_resources", "lsp",
+    "plan_enter", "plan_exit", "question", "read", "read_mcp_resource", "skill", "task",
+    "todowrite", "webfetch", "websearch", "write",
+)
+
+#: The permission names opencode accepts ONLY as a bare ``"ask"``/``"allow"``/``"deny"``,
+#: never as a ``{pattern: decision}`` object. Writing the object form under one of these
+#: does not lose the pattern — it makes the whole `opencode.json` invalid, and opencode
+#: refuses to start in that project at all.
+#:
+#: A subset of :data:`BUILTIN_PERMISSIONS`, and it cannot be derived from it: nothing about
+#: a name says which shape it takes. Two independent sources, both checked against opencode
+#: 1.18.21 rather than reasoned from:
+#:
+#: * The published schema (``https://opencode.ai/config.json``). ``$defs.PermissionConfig``
+#:   types twelve of its named keys ``PermissionRuleConfig`` (``anyOf`` a bare action or an
+#:   object) and exactly these five ``PermissionActionConfig`` (``enum: ask|allow|deny``).
+#:   Its ``additionalProperties: {$ref: PermissionRuleConfig}`` — which is what lets charter
+#:   write an invented MCP name at all — rescues invented names only, never these five.
+#: * The binary. Every one of the 23 names in :data:`BUILTIN_PERMISSIONS` was fed to
+#:   `opencode debug agent build` in both shapes; these five and only these five answer
+#:   ``Expected PermissionActionConfig | undefined, got {"*":"ask"}`` to the object form.
+#:
+#: A GLOB is not one of these — ``doom_*`` goes through `additionalProperties` and takes the
+#: object form happily. Only the exact name is flat-only, which is why membership is tested
+#: rather than matched with `_shadowed_builtins`.
+FLAT_ONLY_PERMISSIONS = ("doom_loop", "question", "todowrite", "webfetch", "websearch")
+
 #: Tools whose output charter may append to. Deliberately NOT the ones that return
 #: content: a `read` whose output carries charter's nudge is a false record of that file,
 #: and the agent may write it back. These three report an action instead, so a note
@@ -51,6 +101,24 @@ TOOL_NAMES = {
 #: Claude Code needs no such list — its `additionalContext` arrives BESIDE the result.
 #: This restriction is the price of opencode having no channel of its own.
 EFFECTFUL_TOOLS = ("bash", "edit", "write")
+
+def _shadowed_builtins(name: str) -> tuple[str, ...]:
+    """The names in :data:`BUILTIN_PERMISSIONS` an opencode rule keyed *name* matches.
+
+    opencode's own matcher, transcribed rather than approximated — `Wildcard.match`
+    escapes ``[.+^${}()|[\\]\\\\]``, turns ``*`` into ``.*`` and ``?`` into ``.``, and
+    anchors ``^…$`` with the `s` flag — which is what `fullmatch` spells in Python.
+
+    Both anchors are load-bearing and each fails in its own direction. Without the
+    leading one, `lan_*` "collides" with `plan_enter` and charter warns about something
+    that cannot happen; without the trailing one, `plan_ent` "collides" too, and a rule
+    keyed `plan_ent` matches nothing in opencode at all. One `fullmatch` rather than
+    ``^…$`` plus `.match`, so there is one anchoring mechanism to be wrong about.
+    """
+    rx = re.escape(name).replace(r"\*", ".*").replace(r"\?", ".")
+    matcher = re.compile(rx, re.S)
+    return tuple(b for b in BUILTIN_PERMISSIONS if matcher.fullmatch(b))
+
 
 def global_dir() -> Path:
     """Where opencode reads plugins, commands and config for EVERY project.
@@ -397,13 +465,143 @@ class OpenCodeHarness(Harness):
     def ask_rule(self, pattern: str) -> tuple[str, str]:
         """``(tool, glob)``. opencode's permissions are `{tool: {pattern: decision}}` with
         `*`/`?` wildcards — not Claude Code's `Tool(pattern)` string, so the same operator
-        sentence has to come apart differently here."""
+        sentence has to come apart differently here.
+
+        An MCP pattern comes apart differently again, and used to fall through to `bash`
+        instead — writing a rule over a bash command literally named `mcp__slack__send`,
+        which nothing can ever run, under a tick saying the guard was in force (#374). The
+        same silent direction #365 fixed for Claude Code, one harness over.
+
+        Naming that limit and returning ``unsupported`` was the other honest answer, and it
+        is unavailable because opencode CAN express this — the only thing that was wrong
+        was the name. Verified against opencode 1.18.21:
+
+        * MCP tools are registered under ``McpCatalog.toolName(server, tool)`` —
+          ``sanitize(server) + "_" + sanitize(tool)``, ``sanitize`` being
+          ``s.replace(/[^a-zA-Z0-9_-]/g, "_")`` — and the wrapper asks under exactly that
+          id: ``ask({permission: <tool id>, patterns: ["*"]})``.
+        * `permission` takes keys beyond the five it documents; `Permission.fromConfig`
+          turns ``{"<id>": {"*": "ask"}}`` into ``{permission: "<id>", pattern: "*"}``,
+          which `opencode debug agent build` prints back in the resolved rule list.
+        * `Permission.evaluate` glob-matches the permission NAME as well as the pattern —
+          how opencode's own ``{permission: "*"}`` default works — so a whole server is
+          ``<server>_*``.
+
+        `commands._MCP_RULE_RE` decides what an MCP pattern IS, rather than a second regex
+        here: two harnesses disagreeing about that is how one of them ends up writing a
+        rule the other refused. It also confines the pattern to ``[A-Za-z0-9_-]``, exactly
+        the set opencode's `sanitize` leaves alone, so no character ever needs rewriting.
+
+        What charter cannot check is that opencode's `mcp` block names the server the same
+        way. That is the contract Claude Code's rule already has — the name is the
+        operator's, not charter's guess — and `guard` prints what it wrote so they can read
+        it back. Which is what makes that read-back load-bearing rather than cosmetic: it
+        currently renders as the repr of this tuple (`('slack_send', '*')`) and not as
+        anything `opencode.json` holds, so it is the one line an operator cannot check the
+        translation against. Filed as #395 rather than fixed here — the return type is
+        the harness rule interface, and three harnesses answer it.
+
+        The whole-server glob is as tight as opencode's own names allow and no tighter:
+        `_` is both the separator `toolName` joins with and a legal character either side
+        of it, so ``slack_*`` covers a server called `slack_admin` too. No glob can tell
+        those apart, and refusing the whole-server form over it would trade a rule that is
+        occasionally wider than asked for one that does not exist. Worth saying because
+        `allow_rule` shares this translation, and wider is the direction that costs
+        something there.
+
+        **And the sibling server is the cheap half of that.** opencode's own permission
+        names live in the same flat namespace as the MCP tool ids, so a translated name
+        can also collide with `BUILTIN_PERMISSIONS` — ``mcp__plan`` becomes ``plan_*``,
+        which matches opencode's `plan_enter` and `plan_exit`, and `evaluate` takes the
+        LAST match while config resolves after the built-ins. `charter guard allow
+        mcp__plan` therefore does not merely reach a server that may not exist; it turns
+        two of opencode's own denies into allows. Before #374 the same command wrote an
+        inert `bash` rule and did nothing, so this widening is new here and charter's to
+        name. :meth:`rule_outranks` names it at write time, the only moment the operator
+        can still change their mind.
+
+        **A collision can also decide the file's SHAPE, not just its meaning.** Five of
+        those names — :data:`FLAT_ONLY_PERMISSIONS` — take a bare action string and reject
+        the ``{glob: decision}`` object this pair describes, invalidating the whole file
+        rather than the one rule. The pair returned here is unchanged, because it is still
+        what opencode resolves to (`{"doom_loop": "ask"}` builds
+        ``{permission: doom_loop, pattern: "*"}``, measured); `_apply_rule` chooses the
+        shape, so the operator's read-back stays true to the rule that is in force.
+        """
+        from .. import commands
+
         p = (pattern or "").strip()
+        if commands._MCP_RULE_RE.match(p):
+            server, _, tool = p[len("mcp__"):].partition("__")
+            return f"{server}_{tool or '*'}", "*"
         for oc_id, name in TOOL_NAMES.items():
             for prefix in (f"{name}(", f"{oc_id}("):
                 if p.startswith(prefix) and p.endswith(")"):
                     return oc_id, p[len(prefix):-1]
         return "bash", p
+
+    def rule_outranks(self, pattern: str) -> str:
+        """opencode's own permission names this rule will decide for too, or ``""``.
+
+        **Only for an MCP pattern**, and that is the whole judgement rather than a
+        shortcut. Every other rule charter writes here is keyed by an opencode built-in
+        ON PURPOSE — `charter guard ask 'git push *'` lands on `bash` because `bash` is
+        what the operator meant — so warning on those would fire on nearly every
+        invocation and teach the operator to skip the line. An MCP pattern names a
+        *server*, and landing
+        on `plan_enter` is never what was meant: it is a collision between two namespaces
+        opencode flattened into one, which is exactly the case nobody can see coming.
+
+        Matched with opencode's own glob semantics rather than `fnmatch`, in
+        `_shadowed_builtins`. `fnmatch` would differ on `[`, which `_MCP_RULE_RE` cannot
+        admit today — so the difference is unreachable, and that is precisely why it is
+        worth not depending on. The name being matched is the one charter WRITES, so this
+        stays right if the translation ever changes.
+
+        The narrower form is rebuilt from the NAME that was written, not echoed back from
+        the operator's pattern. `_MCP_RULE_RE` admits a trailing separator — `mcp__plan__`
+        is read as the whole server, same as `mcp__plan` — and echoing that back would
+        advise `mcp__plan____<tool>`, four separators, a rule charter itself refuses. A
+        remedy nobody can type is worse than none, because it reads as one that works.
+
+        Asked with a pattern and no verb, so it answers for `ask` and `allow` alike — and
+        it reads the name back through :meth:`ask_rule` for both. That is right only while
+        this harness keeps `base.allow_rule`'s shared default, which is the whole point of
+        that default ("keeps one operator sentence from acquiring two spellings"). An
+        override here would have to reach this too, and
+        `TestBothVerbsTranslateTheSameWay` fails the day one appears rather than leaving
+        the allow path quietly naming the ask path's collisions.
+
+        What it claims is only that charter's rule is the LAST word on those names. Not
+        that it replaces a rule opencode wrote for each: opencode seeds name-specific
+        defaults for a handful (`doom_loop`, `question`, `plan_enter`, `plan_exit`,
+        `read`, `external_directory`) and covers the rest with one ``{permission: "*"}``
+        allow — so `list_*` outranks a catch-all, while `plan_*` outranks two real denies.
+        Both are "this decides those too"; only one is a replacement, and the seeded set
+        is partly machine-specific (`external_directory` carries local paths), so it is
+        not charter's to enumerate in a sentence.
+        """
+        from .. import commands
+
+        p = (pattern or "").strip()
+        if not commands._MCP_RULE_RE.match(p):
+            return ""
+        name, _glob = self.ask_rule(p)
+        hit = _shadowed_builtins(name)
+        if not hit:
+            return ""
+        plural = len(hit) > 1
+        narrower = (f" Naming the tool instead (`mcp__{name[:-2]}__<tool>`) keeps this "
+                    f"to your server, unless the tool is spelled like one of those."
+                    if name.endswith("_*") else
+                    " opencode has no narrower name for it — your server's tool and "
+                    "opencode's own permission are spelled the same.")
+        return (f"`{name}` also matches opencode's OWN "
+                f"{'permissions' if plural else 'permission'} "
+                f"{', '.join('`%s`' % h for h in hit)}, and opencode takes the LAST "
+                f"matching rule — so this decides {'those' if plural else 'that'} too, "
+                f"ahead of whatever opencode had decided for "
+                f"{'them' if plural else 'it'}.{narrower}")
 
     #: Declined deliberately, not unimplemented. opencode's only uncommitted config is
     #: `global_dir()` (`~/.config/opencode`), which applies to EVERY project on the machine.
@@ -436,6 +634,28 @@ class OpenCodeHarness(Harness):
         One writer for both verbs: opencode's model is `{tool: {glob: decision}}`, so
         `ask` and `allow` differ by a single string and a second copy would only be a
         place for the two to drift.
+
+        **Except for :data:`FLAT_ONLY_PERMISSIONS`, where that model is not opencode's.**
+        Those five names take a bare action string, and the object form does not merely
+        fail to match — it makes the whole file invalid and opencode refuses to start in
+        the project. Two names are reachable: `mcp__doom__loop` translates to `doom_loop`,
+        and `WebFetch(...)` is keyed `webfetch` through `TOOL_NAMES`. So the shape has to
+        be chosen per key rather than assumed, and the choice splits on the glob:
+
+        * ``*`` — write the flat form. Measured, not assumed to be equivalent:
+          `opencode debug agent build` resolves ``{"doom_loop": "ask"}`` to
+          ``{permission: doom_loop, pattern: "*", action: "ask"}``, the same entry in the
+          same last-wins position the object form was reaching for. Nothing is lost.
+        * anything else — ``unsupported``, with the reason. The flat form would silently
+          drop the pattern and apply the decision to EVERY fetch, and an `allow` widened
+          from one URL to all of them is the failure `--local`'s own refusal exists to
+          prevent. `Harness.apply_ask_rule` keeps ``unsupported`` for exactly this: a
+          pattern the harness genuinely cannot express, named rather than approximated.
+
+        This is the same defect as #374 in the other direction, and worse: #374 wrote a
+        rule that could not fire, this wrote a file that stops opencode running. It was
+        introduced by #374's own fix, which gave `doom_loop` its new meaning — before it,
+        `mcp__doom__loop` was an inert `bash` key and the file still loaded.
         """
         tool, glob = self.ask_rule(pattern)
         p = Path(root) / "opencode.json"
@@ -450,12 +670,26 @@ class OpenCodeHarness(Harness):
         perms = doc.setdefault("permission", {})
         if not isinstance(perms, dict):
             return "malformed", f"{p} (`permission` is not an object)"
-        block = perms.setdefault(tool, {})
-        if not isinstance(block, dict):
-            return "malformed", f"{p} (`permission.{tool}` is not an object)"
-        if block.get(glob) == decision:
-            return "present", str(p)
-        block[glob] = decision
+        if tool in FLAT_ONLY_PERMISSIONS:
+            if glob != "*":
+                return "unsupported", (
+                    f"opencode's `{tool}` permission takes only a bare ask/allow/deny, "
+                    f"never a per-pattern rule, so `{glob}` cannot be written there — and "
+                    f"dropping it would apply this to every `{tool}` instead of the one "
+                    f"you named")
+            existing = perms.get(tool)
+            if existing is not None and not isinstance(existing, str):
+                return "malformed", f"{p} (`permission.{tool}` is not an action)"
+            if existing == decision:
+                return "present", str(p)
+            perms[tool] = decision
+        else:
+            block = perms.setdefault(tool, {})
+            if not isinstance(block, dict):
+                return "malformed", f"{p} (`permission.{tool}` is not an object)"
+            if block.get(glob) == decision:
+                return "present", str(p)
+            block[glob] = decision
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(doc, indent=2) + "\n")
         return "added", str(p)
