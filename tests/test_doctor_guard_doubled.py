@@ -36,6 +36,18 @@ class _Plane(unittest.TestCase):
         self.settings = self.root / ".claude" / "settings.json"
         self.enterContext(mock.patch.object(config, "ROOT", self.root))
         self.enterContext(mock.patch.object(config, "HAS_CONTROL_PLANE", True))
+        # STATE_DIR follows ROOT in `config.derive`, so redirecting ROOT alone leaves it
+        # pointing at the developer's real `.charter/` — and `guardseen.mark` below
+        # WRITES there (`guardseen.path()` reads `config.STATE_DIR` at call time).
+        # Measured: running this module rewrote the real sighting file, which is the one
+        # input `doctor.check_guard_wired` trusts about the developer's own plane.
+        self.enterContext(mock.patch.object(config, "STATE_DIR", self.root / ".charter"))
+        # Asserted rather than assumed: the patch above is only worth anything if the
+        # function that does the writing actually resolves through it, and `guardseen`
+        # reads `config.STATE_DIR` at call time precisely so that it can.
+        self.assertTrue(guardseen.path().is_relative_to(self.root),
+                        f"guard sightings would be written to {guardseen.path()}, "
+                        f"outside this test's own throwaway plane ({self.root})")
         # No ambient plugin install and no plugin-owned process: each test says which.
         self.enterContext(mock.patch.dict("os.environ", {}, clear=True))
         self.dispatching = self.enterContext(

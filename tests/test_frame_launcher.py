@@ -42,6 +42,35 @@ from tests._isolation import PersonaIso
 from charter import commands_frame, config, util
 from charter.frame import gather, menu, slots, state
 
+#: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
+#: has had a chance to repoint `config`, so it is unavoidably the developer's REAL
+#: `.charter/`. Only ever compared against; never read from, never written to.
+_REAL_STATE_DIR = Path(config.STATE_DIR)
+
+
+def _refuse_the_real_plane() -> None:
+    """Refuse to run the real `cmd_launch` against the developer's own control plane.
+
+    Every tmux call in this module is faked, which made it easy to read the whole file
+    as harmless — but `cmd_launch` is REAL, and its first act on either path is
+    `state.reap`: an `rmtree` of every directory under `config.STATE_DIR/frame/` that
+    the server does not report live. `_FakeTmux` reports none, and a frame directory
+    with no `server` marker matches every server, so an unisolated call here deletes the
+    state of whatever frames the developer has open. Measured, not supposed: three tests
+    in this module were creating `frame/demo-<pid>` in the real `.charter/` on every
+    suite run, which means they had already run that `rmtree` to get there.
+
+    Called by the two helpers that reach `cmd_launch` rather than left to each class's
+    base list, because the base list is exactly what a new class copies from its
+    neighbour without re-deriving. A class that forgets `PersonaIso` fails here, loudly,
+    before anything is deleted.
+    """
+    if Path(config.STATE_DIR) == _REAL_STATE_DIR:
+        raise AssertionError(
+            "this test is about to run the real `cmd_launch` — `state.reap` and all — "
+            f"against the developer's own control plane ({_REAL_STATE_DIR}). The class "
+            "must derive from `PersonaIso` (see `tests/_isolation.py`).")
+
 
 def _harness_binary_installed(resolver=None):
     """Make "is the harness's binary installed?" deterministic for the framed path.
@@ -104,6 +133,11 @@ class MissingHarnessBinary(PersonaIso, unittest.TestCase):
     longer reaps its OWN directory (its pid is necessarily still alive), so the
     accident stopped covering for the leak and a `demo-<pid>` directory survived every
     suite run — which is how this was found.
+
+    A base list is not where that guarantee is enforced, though: the next class copies
+    one from its neighbour without re-deriving it. `_launch` calls
+    `_refuse_the_real_plane()` so a class that forgets this base fails loudly, before
+    anything is deleted.
 
     `bypass` called `os.execvp` raw, so `FileNotFoundError` reached `cli.main`'s
     `except Exception`, which files a charter crash report and re-raises a traceback.
@@ -848,6 +882,7 @@ def _outside_tmux():
 
 def _launch(fake: _FakeTmux, *, cols=200, rows=50, version=(3, 7), harness="claude",
            rest=(), which=None):
+    _refuse_the_real_plane()
     args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False)
     with _outside_tmux(), \
          mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
@@ -1900,10 +1935,10 @@ class BypassRouting(PersonaIso, unittest.TestCase):
     test the DECISION, not what `bypass()` does once reached.
 
     `PersonaIso` for the same reason `MissingHarnessBinary` above carries it: the
-    negative case here (`test_a_tty_without_no_frame_does_not_bypass`) proves the
-    launch was NOT bypassed by letting a full `_launch` run, and a full launch writes
-    frame state under `config.STATE_DIR` — the developer's real `.charter/` without
-    this."""
+    negative case here (`test_a_tty_without_no_frame_does_not_bypass`) proves the launch
+    was NOT bypassed by letting a full `_launch` run — the whole real launcher,
+    `state.reap` and all — which writes frame state under `config.STATE_DIR` and reaps
+    everything beside it. That was the developer's real `.charter/` until this."""
 
     def test_the_no_frame_flag_routes_to_bypass(self):
         args = SimpleNamespace(harness="claude", rest=[], no_frame=True)
@@ -2606,6 +2641,7 @@ def _frame_id():
 def _launch_inside(fake: _FakeOperatorTmux, *, version=(3, 7), harness="claude",
                    rest=(), tmux_env=OPERATOR_TMUX, slots=None):
     """Run `cmd_launch` as if the operator typed it inside their own tmux."""
+    _refuse_the_real_plane()
     args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False)
     env = dict(os.environ, TMUX=tmux_env, TMUX_PANE="%0")
     ctx = [mock.patch.dict(os.environ, env, clear=True),

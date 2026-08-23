@@ -75,6 +75,26 @@ SOCKET = f"charter-integration-test-{os.getpid()}"
 #: (`ReportIso`, worktree scaffolding) — just its config-path redirection.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
+#: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
+#: has had a chance to repoint `config`, so it is unavoidably the developer's REAL
+#: `.charter/`. Kept only so `_TmuxServerFixture.setUp` can refuse to run a test against
+#: it (see that method); nothing here ever reads or writes under this path.
+_REAL_STATE_DIR = Path(config.STATE_DIR)
+
+
+def _a_dead_pid() -> int:
+    """A real pid that has exited and been reaped.
+
+    Load-bearing since #383, not a flourish: `state.reap` reads the number at the end of
+    a frame id as the launcher's pid and KEEPS any directory whose launcher is still
+    running. A hand-written `-1` reads as pid 1 — `launchd`/`init`, which never exits —
+    so a fixture named that way is kept by the pid rule and an "it was reaped" assertion
+    about it can never fail. A pid that genuinely ended is the only way to leave the
+    server/liveness rule as the one thing deciding."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
 
 def _tmux(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     """*env* is `None` by every existing call site (inherit this process's own
@@ -346,9 +366,37 @@ class _TmuxServerFixture:
     time — each one starting its own real tmux server — which is how a "14 tests"
     surprise showed up the first time this module grew a second class. Mixing the
     fixture in leaves each class owning exactly its own tests.
+
+    **Mixed in OVER `PersonaIso`, never over a bare `unittest.TestCase`, and `setUp`
+    enforces that rather than trusting it.** This module runs charter's REAL command
+    handlers, and `commands_frame.cmd_launch`'s very first act on either path is
+    `state.reap(...)` — an `rmtree` of every frame directory under `config.STATE_DIR`
+    that the named server does not report, which for a directory carrying no `server`
+    marker is every server there is. Against an unisolated `config` that is the
+    developer's own `.charter/frame/`, and a single test run silently deletes the state
+    of the live frames on the machine. Measured, not theorised: a marker frame directory
+    planted in the real plane was gone after one run of
+    `test_nothing_of_the_operators_tmux_is_written_by_a_whole_launch`, back when this
+    class's own subclass listed `unittest.TestCase` here instead.
     """
 
     def setUp(self) -> None:
+        # FIRST, and cooperatively: `PersonaIso.setUp` is what repoints `config`, and it
+        # only runs if this method hands control up the MRO. A `setUp` that quietly
+        # skipped this line would leave a class whose bases READ as isolated running
+        # against the real plane anyway — invisible from the subclass, which is the
+        # shape of the defect this whole docstring is about.
+        super().setUp()
+        # Then check that it actually took, because "the bases say PersonaIso" and "the
+        # config in front of this test is a throwaway" are different claims and only the
+        # second one is the safe one. Fails LOUDLY, naming the fix, rather than letting
+        # a real `rmtree` run over the developer's frames.
+        self.assertNotEqual(
+            Path(config.STATE_DIR), _REAL_STATE_DIR,
+            "this test would run charter's real command handlers against the "
+            "developer's own control plane, whose frame state `state.reap` deletes — "
+            "a class using _TmuxServerFixture must mix it in over `PersonaIso` "
+            "(`class X(_TmuxServerFixture, PersonaIso)`), not over `unittest.TestCase`")
         self.addCleanup(self._teardown_socket)
         self._pane_counter = 0
         self._gate_dir = tempfile.mkdtemp(prefix="charter-integ-gate-")
@@ -423,7 +471,12 @@ class _TmuxServerFixture:
                 "the capability these tests measure is not present to measure")
 
 
-class TmuxIntegration(_TmuxServerFixture, unittest.TestCase):
+class TmuxIntegration(_TmuxServerFixture, PersonaIso):
+    """`PersonaIso`, not `unittest.TestCase` — see `_TmuxServerFixture`'s own docstring.
+    Nothing in THIS class writes plane state today, so the isolation here is inert; it
+    is listed anyway because the fixture requires it of every class, and a requirement
+    with an exception in it is one the next class copies the exception from."""
+
     # -- 0. The hotkey is not a free string ----------------------------------------- #
 
     def _source_hotkey(self, conf_dir: Path, hotkey: str, name: str
@@ -2039,7 +2092,7 @@ class EarlyDeathIntegration(unittest.TestCase):
 SOCKET_PATH = str(Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
 
 
-class WindowInsideAnOperatorsTmux(_TmuxServerFixture, unittest.TestCase):
+class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
     """The frame built as a WINDOW in a tmux charter did not start (#381).
 
     Stands a real server up and treats it as the operator's: charter reaches it by
@@ -2052,6 +2105,11 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, unittest.TestCase):
     No attached client anywhere in this class, deliberately: every command is issued
     against a detached session, so nothing here needs the terminal capability
     `_NeedsAttachedClient` probes for and none of it is skipped on a headless CI step.
+
+    `PersonaIso`, and it is load-bearing rather than tidy: the last test below calls the
+    real `cmd_launch`, which reaps and writes frame state under `config.STATE_DIR`. The
+    tmux server this class stands up is a throwaway; without `PersonaIso` the PLANE it
+    writes to would not be. See `_TmuxServerFixture`'s docstring for what that cost.
     """
 
     def _operator_server(self, harness_dies_by="exit 0"):
@@ -2215,7 +2273,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, unittest.TestCase):
         self.assertEqual(Path(Path(out).read_text().strip()).resolve(),
                          Path(self._gate_dir).resolve())
 
-    def test_nothing_of_the_operators_is_written_by_a_whole_launch(self):
+    def test_nothing_of_the_operators_tmux_is_written_by_a_whole_launch(self):
         """The boundary, checked against tmux's own reported state rather than against
         charter's argv: every server option, every option of the operator's own session,
         and the entire key table are read before and after a REAL `cmd_launch` runs
@@ -2223,9 +2281,36 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, unittest.TestCase):
 
         `cmd_launch` itself, not the argv builders — this is the one test that can catch
         a command the launcher issues that nobody thought to look for.
+
+        **Their TMUX, which is not the same claim as "nothing at all is written"** — the
+        name says `tmux` for that reason. A launch writes charter's own frame state, and
+        the first thing it writes is a DELETION: `state.reap` rmtrees every frame
+        directory the named server does not report, and a directory carrying no `server`
+        marker (the migration case `state.reap` documents) is not reported by any server
+        at all. The decoy below is exactly that shape — no marker, and named after a pid
+        that has genuinely exited, so neither of `reap`'s two keep-rules covers it — and
+        asserting it is gone afterward pins the blast radius of one launch — which is also why this class cannot run
+        without `PersonaIso`: the same rmtree against an unisolated `config.STATE_DIR`
+        lands on the developer's live frames. The decoy is checked to be inside this
+        test's throwaway plane BEFORE the launch, so the assertion that it was deleted
+        can never be evidence about the real one.
         """
         name, sid, op_pane, _ = self._operator_server()
         gate = os.path.join(self._gate_dir, "e2e-gate")
+
+        # Named after a pid that has genuinely exited: since #383 `reap` keeps any
+        # directory whose launcher is still alive, and the `-1` this once carried reads
+        # as `launchd`/`init` — the decoy would have survived for that reason and this
+        # assertion would have been unfailable.
+        decoy = state.frame_dir(
+            f"a-frame-from-a-charter-that-had-no-server-marker-{_a_dead_pid()}",
+            create=True)
+        self.assertIsNotNone(decoy)
+        (decoy / "version").write_text("1\n")
+        self.assertTrue(decoy.is_relative_to(self.tmp),
+                        f"the frame state this test is about to have charter delete is "
+                        f"at {decoy} — outside this test's own throwaway plane "
+                        f"({self.tmp}), so it belongs to somebody real")
 
         def _snapshot():
             return tuple(_tmux(*args).stdout for args in (
@@ -2267,6 +2352,11 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, unittest.TestCase):
         self.assertNotIn("demo-", _tmux("list-windows", "-a", "-F",
                                         "#{window_name}").stdout,
                          "the frame's window was left behind")
+        self.assertFalse(decoy.exists(),
+                         "a launch is expected to reap a frame directory with no "
+                         "`server` marker — if it has stopped doing that, `state.reap`'s "
+                         "migration case changed and the isolation this class rests on "
+                         "is no longer being exercised by anything")
 
 
 if __name__ == "__main__":
