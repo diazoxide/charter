@@ -14,6 +14,24 @@ asserts on probed capability rather than a version string." Every assertion belo
 tmux's own reported state (`show-hooks`, `display-message`, a file a real hook wrote) —
 never a version string.
 
+**Presence is not capability, and that gap cost a whole CI matrix.** These tests were
+first written against tmux 3.7c on a developer's Mac, inside a real terminal, and gated
+on `shutil.which("tmux")` alone — so on `ubuntu-latest` (tmux 3.4, `TERM=dumb`, no
+controlling terminal) seven of them failed rather than skipped, and each failure
+described the environment rather than charter. Three capabilities are now PROBED, each
+where it is needed, each skipping with a message that names what was missing:
+
+* an attachable tmux CLIENT (`_NeedsAttachedClient`) — `tmux attach` refuses a terminal
+  that cannot clear, which is what a headless CI step's `TERM=dumb` is;
+* a `pane-died` hook that FIRES (`TmuxIntegration._require_pane_died_fires`) — the one
+  thing the two exit-status tests cannot substitute for;
+* a tmux parser that lets the hotkey injection through at all
+  (`test_the_hotkey_injection_this_guards_against_is_live_on_this_tmux`) — tmux 3.4's
+  refuses it outright, so on 3.4 there is no live exploit to control against.
+
+None of these weakens an assertion: every test that RUNS asserts exactly what it always
+did, and a machine that cannot run one says which capability it lacked.
+
 Every test gets its own tmux SESSION (hooks are per-pane, so a shared session would let
 one test's hook leak into another's pane) on the ONE socket this module owns, and every
 test kills that socket's server on the way out via `addCleanup` — so a failing test
@@ -96,11 +114,215 @@ def _kill_pid(pid_str: str) -> None:
         pass  # already dead — exactly what this cleanup is trying to ensure
 
 
+def _gate_argv(gate: str, dies_by: str) -> list[str]:
+    """A pane program that waits for the file *gate* and then dies by *dies_by*.
+
+    **Never tmux's default pane command, and never driven by `send-keys`.** Both of those
+    were how this module used to kill a pane, and both were measured wrong:
+
+    * tmux's default is `default-shell` run as a LOGIN shell, which charter never
+      launches — `frame/layout.session_argv` always ends `new-session … -- <harness
+      argv>`. On `ubuntu-latest` (tmux 3.4, Ubuntu 24.04) a login `bash` exiting runs the
+      runner's own `~/.bash_logout`, after which tmux reports the pane `#{pane_dead}` `1`
+      with `#{pane_dead_status}` EMPTY and **fires no `pane-died` hook at all** — so the
+      file these tests read was never written. Every CI job failed that way.
+    * `send-keys` into an INTERACTIVE shell, telling it to `exit 42` or `kill -9 $$`, is
+      not reliable: measured 30 trials per shape on tmux 3.4, `send-keys` shapes fired
+      the hook 26-28 times out of 30, while a pane whose own program died on its own
+      fired it 30/30 (`exit 42` through this gate, `kill -9 $$` through this gate, and an
+      external SIGKILL to `#{pane_pid}` — all three perfect). The failures all looked
+      identical: `#{pane_dead}` `1`, `#{pane_dead_status}` empty, no hook. That is tmux
+      3.4's own `server_destroy_pane` refusing to fire `pane-died` until `PANE_STATUSREADY`
+      is set, and an interactive shell's job-control handling of a keyed-in death
+      sometimes leaves it unset. It is also nothing charter does: a harness dies because
+      it exited or was signalled, never because someone typed at it.
+
+    So a pane here dies the way a harness dies — its own program reaching its own end —
+    and the test says WHEN by opening the gate. That is both the faithful shape and the
+    reliable one.
+
+    Three argv words, also deliberately: tmux runs a ONE-ARGUMENT pane command through a
+    shell (`$SHELL -c '<the argument>'`) and only `execvp`s it directly when there is
+    more than one, so a single-word command can leave the pane's own process a `sh -c`
+    WRAPPER with the real program as its child — measured in an Ubuntu 24.04 container,
+    where that wrapper turned a SIGKILLed child into a normal exit with status 137.
+    """
+    return ["/bin/sh", "-c", f"while [ ! -f '{gate}' ]; do sleep 0.05; done; {dies_by}"]
+
+#: Terminal types tried, in order, when this module forks a tmux CLIENT onto a pty.
+#:
+#: `tmux attach` REFUSES to start a client on an unsuitable terminal — "open terminal
+#: failed: terminal does not support clear" — and a headless CI step is exactly that:
+#: measured on `ubuntu-latest`, a workflow `run:` step has `TERM=dumb`. That is a
+#: property of the ENVIRONMENT, not of tmux's version and not of anything charter does:
+#: the same tmux 3.4 that refuses `TERM=dumb` attaches immediately when the forked
+#: client's own `TERM` names a terminal that can clear. A real operator's `charter
+#: <harness>` always has one; a test's forked client has to be given one.
+#:
+#: `$TERM` first when this process has a usable one (a developer's own terminal is the
+#: most faithful thing to attach with), then two entries carried by every terminfo
+#: database on a machine that has tmux at all. `dumb` is never tried — tmux's refusal of
+#: it is the measured fact above, so retrying it would only spend the timeout.
+_TERM_CANDIDATES = tuple(dict.fromkeys(
+    ([os.environ["TERM"]] if os.environ.get("TERM", "dumb") != "dumb" else [])
+    + ["xterm-256color", "screen", "vt100"]))
+
+#: Whether a pane-scoped `pane-died` hook FIRES on this machine — probed once per test
+#: process by `TmuxIntegration._require_pane_died_fires`, and a list rather than a bool
+#: so "not probed yet" and "probed, and the answer is False" stay distinguishable.
+_PANE_DIED_FIRES: list[bool] = []
+
+#: How long ONE forked client gets to register with tmux before this gives up on it.
+#:
+#: Generous on purpose, and NOT the thing that detects a refusal: a refused `tmux attach`
+#: EXITS, which `_await_client` notices immediately, so the next terminal type is tried
+#: without spending this at all. Cutting it short instead would abandon a client that was
+#: merely slow and move on to a terminal type whose KEY ENCODINGS differ — and every test
+#: using an attached client drives it by writing a raw key sequence to the pty, so a
+#: silently-substituted terminal type is a silently-broken test rather than an honest
+#: skip. (Measured: that is exactly what a 2s cap did on a loaded developer machine —
+#: `MenuClientIntegration` failed roughly one run in ten with the menu never opening.)
+_ATTACH_TIMEOUT = 10.0
+
+
+def _fork_attach(session: str, term: str) -> tuple[int, int]:
+    """`tmux attach -t session` under a fresh pty, with *term* as the client's `$TERM`.
+
+    Returns the child's pid and the pty's master fd. The child never returns — the
+    `finally` is there so a failed `execvp` cannot fall through into the test process's
+    own code as a second copy of the whole suite.
+    """
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            os.environ["TERM"] = term
+            os.execvp("tmux", ["tmux", "-L", SOCKET, "attach", "-t", session])
+        finally:
+            os._exit(127)
+    return pid, fd
+
+
+def _reap_pty(pid: int, fd: int) -> None:
+    """SIGKILL, reap, close — a pty-forked child is THIS process's own zombie to reap,
+    unlike a tmux-spawned pane's process, which reparents away (see `_kill_pid`)."""
+    _kill_pid(str(pid))
+    try:
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _refusal(fd: int) -> str:
+    """Whatever a refused `tmux attach` printed to its pty — tmux's own words, so a skip
+    can name the capability that was missing instead of guessing at it."""
+    try:
+        os.set_blocking(fd, False)
+        out = os.read(fd, 4096)
+    except OSError:
+        return ""
+    finally:
+        try:
+            os.set_blocking(fd, True)
+        except OSError:
+            pass
+    return out.decode("utf-8", "replace").strip()
+
+
+def _await_file(path: str, timeout: float = 5.0) -> bool:
+    """Wait for a hook-written file to appear, up to *timeout*.
+
+    A fixed `time.sleep(1)` here was a guess about how long a `run-shell` takes to fork a
+    shell and redirect one line — which is the wrong shape of question for a test whose
+    assertion is about the file's CONTENT. Polling makes a slow machine slow rather than
+    wrong, and a machine where the hook never fires still reaches the same assertion with
+    the same missing file (see `TmuxIntegration._require_pane_died_fires`, which is what
+    tells those two apart).
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not os.path.exists(path):
+        time.sleep(0.1)
+    return os.path.exists(path)
+
+
+def _await_client(session: str, exclude: frozenset, pid: int) -> str:
+    """The name of a client attached to *session* that the caller does not already know
+    about, or `""` when the forked client at *pid* will never register.
+
+    Two ways to learn that, and the fast one is watching the CHILD: a `tmux attach` that
+    the terminal type was wrong for exits at once, so `waitpid(WNOHANG)` reporting it gone
+    is a definitive refusal, available in milliseconds and independent of tmux's wording.
+    :data:`_ATTACH_TIMEOUT` is only the backstop for a client that neither registers nor
+    exits.
+    """
+    deadline = time.monotonic() + _ATTACH_TIMEOUT
+    while time.monotonic() < deadline:
+        out = _tmux("list-clients", "-t", session, "-F", "#{client_name}")
+        fresh = {n.strip() for n in out.stdout.splitlines() if n.strip()} - exclude
+        if fresh:
+            return next(iter(fresh))
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                return ""   # the client exited rather than attaching — a refusal
+        except OSError:
+            return ""
+        time.sleep(0.1)
+    return ""
+
+
+class _NeedsAttachedClient:
+    """`_attach_pty` for the two classes that need a REAL, ATTACHED client, and the
+    capability probe that decides whether this machine can give them one.
+
+    `display-menu` refuses outright ("no current client") without an attached client, so
+    both classes below are unrunnable — not passable, not failable — where tmux will not
+    attach one. They skip, naming what they could not get and quoting tmux's own refusal,
+    rather than asserting anything about a menu nothing drew.
+    """
+
+    def _attach_pty(self, session: str, exclude: frozenset = frozenset()) -> tuple[str, int]:
+        """Forks a real `tmux attach -t session` under a pty — the one way to hand
+        `display-menu` a client it will actually accept for `-c`/`-t` targeting.
+
+        *exclude* names clients the caller already knows about: `list-clients -t session`
+        lists every client attached to it, not only the one just forked, so a SECOND pty
+        on the same session has to pick its own name out from among several.
+
+        Registers the fork's own cleanup (SIGKILL, then reap — see `_reap_pty`) before
+        returning the attached client's name (`#{client_name}`, read back from tmux
+        itself once the attachment has had time to register) and the pty's own master fd
+        — writing a KEY to the fd (not `tmux send-keys`, confirmed by hand: `send-keys`
+        feeds a PANE's own input queue, which an active menu overlay never reads from) is
+        the only way found to actually select a menu item from here.
+        """
+        refusals = []
+        for term in _TERM_CANDIDATES:
+            pid, fd = _fork_attach(session, term)
+            try:
+                name = _await_client(session, exclude, pid)
+            except Exception:
+                _reap_pty(pid, fd)
+                raise
+            if name:
+                self.addCleanup(_reap_pty, pid, fd)
+                return name, fd
+            refusals.append(f"TERM={term}: {_refusal(fd) or '(tmux printed nothing)'}")
+            _reap_pty(pid, fd)
+        self.skipTest(
+            "no tmux client can attach on this machine, and a rendered `display-menu` "
+            "needs one — tmux refused every terminal type tried: " + " | ".join(refusals))
+
+
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
 class TmuxIntegration(unittest.TestCase):
     def setUp(self) -> None:
         self.addCleanup(self._teardown_socket)
         self._pane_counter = 0
+        self._gate_dir = tempfile.mkdtemp(prefix="charter-integ-gate-")
+        self.addCleanup(shutil.rmtree, self._gate_dir, True)
 
     def _teardown_socket(self) -> None:
         """`kill-server` ends the SERVER but does not remove its own socket FILE —
@@ -114,59 +336,129 @@ class TmuxIntegration(unittest.TestCase):
         _tmux("kill-server")
         (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
-    def _new_pane(self) -> str:
-        """A fresh session on `SOCKET`, `remain-on-exit` armed, its one pane's id."""
+    def _new_pane(self, dies_by: str = "exit 0") -> tuple[str, str, str]:
+        """A fresh session on `SOCKET`, `remain-on-exit` armed; its name, pane id and GATE.
+
+        The pane runs a program that WAITS for its gate file and then dies by *dies_by* —
+        the caller opens the gate (`_release`) when it wants the death. See `_gate_argv`
+        for why the pane is never driven with `send-keys` instead, which is the shape this
+        module used to use and the reason it failed roughly one CI run in ten.
+        """
         self._pane_counter += 1
         name = f"p{self._pane_counter}"
+        gate = os.path.join(self._gate_dir, f"gate-{name}")
         r = _tmux("new-session", "-d", "-s", name, "-x", "80", "-y", "24",
-                  "-P", "-F", "#{pane_id}")
+                  "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, dies_by))
         self.assertEqual(r.returncode, 0, r.stderr)
         # Global on this socket's server — cheap to repeat per pane, and every frame
         # wants it regardless (see `commands_frame._PLACEHOLDER_CONF`'s own docstring).
         _tmux("set", "-g", "remain-on-exit", "on")
-        return name, r.stdout.strip()
+        return name, r.stdout.strip(), gate
+
+    @staticmethod
+    def _release(gate: str) -> None:
+        """Open a pane's gate: its program stops waiting and dies the way it was built to."""
+        Path(gate).touch()
+
+    def _require_pane_died_fires(self) -> None:
+        """Skip unless a pane-scoped `pane-died` hook actually FIRES on this machine.
+
+        The two exit-status tests below read a file a hook WROTE. If the hook never runs
+        there is no file, and `open()` raises a `FileNotFoundError` that says nothing
+        about which of the four moving parts (`remain-on-exit`, `set-hook -p`,
+        `set-environment`, `run-shell`) was missing — the shape this module's CI failure
+        actually took. This probes the ONE capability those tests cannot substitute for,
+        against a real pane dying the same way theirs do, and does it with a hook whose
+        action is a CONSTANT path: no `set-environment` value, no `#{pane_dead_status}`,
+        nothing but "did tmux run this at all". A machine that passes this and then fails
+        a test below has a real defect in what the test is about; a machine that fails
+        this could not have run the test in the first place.
+
+        Probed once per process (`_PANE_DIED_FIRES`) — the answer is a property of this
+        tmux and this environment, not of any one test, and each probe costs a pane.
+        """
+        if not _PANE_DIED_FIRES:
+            _, pane, gate = self._new_pane("exit 7")
+            tmp = tempfile.mkdtemp(prefix="charter-integ-probe-")
+            self.addCleanup(shutil.rmtree, tmp, True)
+            marker = os.path.join(tmp, "fired")
+            _tmux("set-hook", "-p", "-t", pane, "pane-died",
+                  f'run-shell "touch {marker}"')
+            self._release(gate)
+            _PANE_DIED_FIRES.append(_await_file(marker))
+        if not _PANE_DIED_FIRES[0]:
+            self.skipTest(
+                "a pane-scoped `pane-died` hook does not fire on this machine, so "
+                "nothing here can carry a harness's exit status out of a dead pane — "
+                "the capability these tests measure is not present to measure")
 
     # -- 0. The hotkey is not a free string ----------------------------------------- #
 
-    def test_a_hostile_hotkey_from_charter_toml_runs_nothing_at_launch(self):
-        """CRITICAL, against a real tmux 3.7c: `[frame] hotkey` reaches
-        `source-file`'s PARSER, and until `instance._HOTKEY_RE` it was type-checked as a
-        `str` and nothing else.
+    def _source_hotkey(self, conf_dir: Path, hotkey: str, name: str
+                       ) -> subprocess.CompletedProcess:
+        """`conf_text`'s own output for *hotkey*, written out and `source-file`'d for
+        real — never a hand-retyped config."""
+        conf = conf_dir / f"{name}.conf"
+        conf.write_text(commands_frame.conf_text(
+            hotkey=hotkey, mouse=False, history_limit=1, session="p1"))
+        return _tmux("source-file", str(conf))
 
-        Three parts, and the middle one is what makes this test able to fail. First the
-        exploit is run for real, unfiltered, and the canary MUST appear — that is the
-        positive control, and without it a fix that broke `conf_text` entirely would
-        look like a pass. Then the same charter.toml goes through `instance.frame_of`,
-        the way `config.FRAME` builds it, and the resolved hotkey must produce no canary
-        at all. Note what the exploit does not need: no keypress, no attached client,
-        nothing but `source-file` returning 0, which it does, silently."""
-        payload = f"/tmp/charter-c1-{os.getpid()}"
-        armed, disarmed = f"{payload}-armed", f"{payload}-disarmed"
-        for path in (armed, disarmed):
-            self.addCleanup(lambda p=path: Path(p).unlink(missing_ok=True))
+    def test_the_hotkey_injection_this_guards_against_is_live_on_this_tmux(self):
+        """The POSITIVE CONTROL for the test below, and the reason it can fail at all:
+        an unfiltered `[frame] hotkey` really does run a command at launch — no keypress,
+        no attached client, nothing but `source-file` accepting the file.
+
+        **Its own capability, and not every tmux has it.** Measured against tmux 3.7c the
+        injected line parses and the canary appears. Measured against tmux 3.4 (Ubuntu
+        24.04, the `ubuntu-latest` runner) tmux's OWN parser refuses the whole file first
+        — `command run-shell: too many arguments (need at most 2)`, `source-file` returns
+        1 — and no canary is ever created. charter's `instance._HOTKEY_RE` is what closes
+        the hole on both, but on a tmux whose parser refuses the exploit outright there is
+        no live exploit here to control against, so this skips and says so rather than
+        asserting that a hostile value is dangerous on a tmux where it is not. Split out
+        of the test below for exactly that reason: the property charter owns must keep
+        running everywhere, and only the control it is a control FOR is version-shaped.
+        """
+        armed = f"/tmp/charter-c1-{os.getpid()}-armed"
+        self.addCleanup(lambda: Path(armed).unlink(missing_ok=True))
         conf_dir = Path(tempfile.mkdtemp(prefix="charter-integ-hotkey-"))
         self.addCleanup(shutil.rmtree, conf_dir, True)
         self._new_pane()
 
-        def _source(hotkey: str, name: str) -> int:
-            conf = conf_dir / f"{name}.conf"
-            conf.write_text(commands_frame.conf_text(
-                hotkey=hotkey, mouse=False, history_limit=1, session="p1"))
-            return _tmux("source-file", str(conf)).returncode
-
-        # 1. The exploit itself, unfiltered — proof this test can fail.
-        self.assertEqual(_source(f"F2\nrun-shell 'touch {armed}'", "armed"), 0,
-                         "`source-file` returns 0 for this; that silence is the defect")
+        r = self._source_hotkey(conf_dir, f"F2\nrun-shell 'touch {armed}'", "armed")
+        if r.returncode != 0:
+            self.skipTest(
+                "this tmux's own parser refuses the injected hotkey before running any "
+                "of it (`source-file` returned "
+                f"{r.returncode}: {(r.stdout + r.stderr).strip()!r}), so the exploit "
+                "this controls for is not reachable here")
         time.sleep(0.5)
         self.assertTrue(os.path.exists(armed),
-                        "the positive control never fired — this test cannot fail as "
-                        "written, so its other half proves nothing")
+                        "`source-file` accepted the hostile hotkey and returned 0, but "
+                        "the injected command never ran — the control proves nothing in "
+                        "that state, and neither does the test it controls for")
 
-        # 2. The same value, arriving the way charter.toml actually delivers it.
+    def test_a_hostile_hotkey_from_charter_toml_runs_nothing_at_launch(self):
+        """CRITICAL: `[frame] hotkey` reaches `source-file`'s PARSER, and until
+        `instance._HOTKEY_RE` it was type-checked as a `str` and nothing else.
+
+        The hostile charter.toml goes through `instance.frame_of`, the way `config.FRAME`
+        builds it, and the resolved hotkey must produce no canary at all. Two assertions,
+        either of which fails if `_HOTKEY_RE` is removed: the resolved value must BE the
+        default, and sourcing it must run nothing. See the test above for the positive
+        control — the proof that an unfiltered value really does execute — which is its
+        own test because not every tmux's parser lets the exploit through.
+        """
+        disarmed = f"/tmp/charter-c1-{os.getpid()}-disarmed"
+        self.addCleanup(lambda: Path(disarmed).unlink(missing_ok=True))
+        conf_dir = Path(tempfile.mkdtemp(prefix="charter-integ-hotkey-"))
+        self.addCleanup(shutil.rmtree, conf_dir, True)
+        self._new_pane()
+
         resolved = instance.frame_of(
             {"frame": {"hotkey": f"F2\nrun-shell 'touch {disarmed}'"}})["hotkey"]
         self.assertEqual(resolved, "F2", "the hostile value must degrade to the default")
-        self.assertEqual(_source(resolved, "disarmed"), 0)
+        self.assertEqual(self._source_hotkey(conf_dir, resolved, "disarmed").returncode, 0)
         time.sleep(0.5)
         self.assertFalse(os.path.exists(disarmed),
                          "a charter.toml hotkey ran a command at launch, with no "
@@ -183,7 +475,7 @@ class TmuxIntegration(unittest.TestCase):
         (the trap), the teardown hook is silently deleted the moment the write hook
         lands — which is precisely the mutation that reintroduced the original hang
         when the two `cmd_launch` calls were swapped."""
-        _, pane_correct = self._new_pane()
+        _, pane_correct, _ = self._new_pane()
         write = commands_frame._pane_died_write_hook_argv(socket=SOCKET, harness_pane=pane_correct)
         teardown = commands_frame._pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=pane_correct)
         self.assertEqual(_run(write).returncode, 0)
@@ -192,7 +484,7 @@ class TmuxIntegration(unittest.TestCase):
         self.assertIn("pane-died[0]", hooks)
         self.assertIn("pane-died[1]", hooks)
 
-        _, pane_wrong = self._new_pane()
+        _, pane_wrong, _ = self._new_pane()
         write2 = commands_frame._pane_died_write_hook_argv(socket=SOCKET, harness_pane=pane_wrong)
         teardown2 = commands_frame._pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=pane_wrong)
         self.assertEqual(_run(teardown2).returncode, 0)
@@ -213,7 +505,8 @@ class TmuxIntegration(unittest.TestCase):
         containing a space, a literal `'`, and a `$(touch ...)` injection attempt all at
         once: the file at that exact path must hold the harness's real exit code, and
         nothing embedded in the path may execute."""
-        session, pane = self._new_pane()
+        self._require_pane_died_fires()
+        session, pane, gate = self._new_pane("exit 42")
         tmp = tempfile.mkdtemp(prefix="charter-integ-inj-")
         self.addCleanup(shutil.rmtree, tmp, True)
         canary = os.path.join(tmp, "canary")
@@ -229,8 +522,8 @@ class TmuxIntegration(unittest.TestCase):
         teardown_cmd = commands_frame._pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=pane)
         self.assertEqual(_run(teardown_cmd).returncode, 0)
 
-        _tmux("send-keys", "-t", pane, "exit 42", "Enter")
-        time.sleep(1)
+        self._release(gate)
+        _await_file(status_path)
 
         self.assertFalse(os.path.exists(canary),
                          "the $(touch ...) inside the plane path must never execute")
@@ -240,14 +533,19 @@ class TmuxIntegration(unittest.TestCase):
     # -- 3. Signal death -------------------------------------------------------------- #
 
     def test_a_signal_death_writes_the_unknown_death_sentinel_not_an_empty_line(self):
-        """Measured against tmux 3.7c: a pane killed by SIGKILL reports `#{pane_dead}`
-        `1` with `#{pane_dead_status}` EMPTY, not a number — `display-message` is
-        checked directly to confirm that is still what THIS tmux does, not merely
-        assumed. The write hook's own `${v:-N}` fallback must turn that empty value into
-        `_UNKNOWN_DEATH_CODE` at the point of writing, so the file it produces is always
-        a parseable integer; `state.exit_code` cannot parse an empty line and would
-        silently read it back as "nothing was ever recorded"."""
-        session, pane = self._new_pane()
+        """Measured against tmux 3.7c and re-measured against tmux 3.4: a pane killed by
+        SIGKILL reports `#{pane_dead}` `1` with `#{pane_dead_status}` EMPTY, not a number
+        — `display-message` is checked directly to confirm that is still what THIS tmux
+        does, not merely assumed. The write hook's own `${v:-N}` fallback must turn that
+        empty value into `_UNKNOWN_DEATH_CODE` at the point of writing, so the file it
+        produces is always a parseable integer; `state.exit_code` cannot parse an empty
+        line and would silently read it back as "nothing was ever recorded".
+
+        The pane's own program signals ITSELF once its gate opens, rather than the test
+        typing the same thing at an interactive shell — see `_gate_argv` for the 30-trial
+        measurement that made the difference between the two shapes."""
+        self._require_pane_died_fires()
+        session, pane, gate = self._new_pane("kill -9 $$")
         tmp = tempfile.mkdtemp(prefix="charter-integ-sig-")
         self.addCleanup(shutil.rmtree, tmp, True)
         status_path = os.path.join(tmp, "exit")
@@ -258,8 +556,8 @@ class TmuxIntegration(unittest.TestCase):
         write_cmd = commands_frame._pane_died_write_hook_argv(socket=SOCKET, harness_pane=pane)
         self.assertEqual(_run(write_cmd).returncode, 0)
 
-        _tmux("send-keys", "-t", pane, "kill -9 $$", "Enter")
-        time.sleep(1)
+        self._release(gate)
+        _await_file(status_path)
 
         dead, _, status = _tmux("display-message", "-p", "-t", pane,
                                 "#{pane_dead}:#{pane_dead_status}").stdout.strip().partition(":")
@@ -616,7 +914,7 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
-class MenuFormatIntegration(unittest.TestCase):
+class MenuFormatIntegration(_NeedsAttachedClient, unittest.TestCase):
     """The CRITICAL finding from the first review round, proved against a REAL,
     RENDERED `display-menu` — not only the argv shape `tests/test_frame_menu.py`'s
     `LabelSafety` checks. `display-menu`'s own docs: "The name and command are formats"
@@ -627,7 +925,8 @@ class MenuFormatIntegration(unittest.TestCase):
 
     A REAL, ATTACHED client is unavoidable here — `display-menu` refuses outright ("no
     current client") without one — which is why every OTHER test in this file avoids
-    attaching one at all. `_attach_pty` is the one place in the suite that does.
+    attaching one at all. `_NeedsAttachedClient._attach_pty` is the one place in the
+    suite that does, and the one place that decides this machine cannot.
     """
 
     def setUp(self) -> None:
@@ -648,45 +947,6 @@ class MenuFormatIntegration(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         pid = _tmux("display-message", "-p", "-t", fid, "#{pane_pid}").stdout.strip()
         self.addCleanup(_kill_pid, pid)
-
-    def _attach_pty(self, session: str) -> tuple[str, int]:
-        """Forks a real `tmux attach -t session` under a pty — the one way to hand
-        `display-menu` a client it will actually accept for `-c`/`-t` targeting.
-        Registers the fork's own cleanup (SIGKILL, then reap — `_kill_pid` alone only
-        signals; a pty-forked child is THIS process's own, so it is also this process's
-        own zombie to reap, unlike a tmux-spawned pane's process, which reparents away)
-        before returning the attached client's name (`#{client_name}`, read back from
-        tmux itself once the attachment has had time to register) and the pty's own
-        master fd — writing a KEY to the fd (not `tmux send-keys`, confirmed by hand:
-        `send-keys` feeds a PANE's own input queue, which an active menu overlay never
-        reads from) is the only way found to actually select a menu item from here.
-        """
-        pid, fd = pty.fork()
-        if pid == 0:
-            os.execvp("tmux", ["tmux", "-L", SOCKET, "attach", "-t", session])
-
-        def _reap():
-            _kill_pid(str(pid))
-            try:
-                os.waitpid(pid, 0)
-            except OSError:
-                pass
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        self.addCleanup(_reap)
-
-        deadline = time.monotonic() + 3
-        name = ""
-        while time.monotonic() < deadline:
-            out = _tmux("list-clients", "-t", session, "-F", "#{client_name}")
-            name = out.stdout.strip()
-            if name:
-                break
-            time.sleep(0.1)
-        self.assertTrue(name, "the pty-attached client never registered with tmux")
-        return name, fd
 
     def _drive_menu(self, fd: int, cmd: list[str]) -> None:
         """Bind *cmd* (a real `display-menu` invocation) to a throwaway key and press
@@ -824,7 +1084,7 @@ class MenuFormatIntegration(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
-class MenuClientIntegration(unittest.TestCase):
+class MenuClientIntegration(_NeedsAttachedClient, unittest.TestCase):
     """Fix round 2, IMPORTANT-1, proved with two real ptys attached to ONE frame at
     once: the hotkey must open the menu on the PRESSER's own screen, never a
     different attached client's — the defect an earlier version of this mechanism
@@ -948,41 +1208,6 @@ class MenuClientIntegration(unittest.TestCase):
         self.addCleanup(_kill_pid, server_pid)
         pid = _tmux("display-message", "-p", "-t", fid, "#{pane_pid}").stdout.strip()
         self.addCleanup(_kill_pid, pid)
-
-    def _attach_pty(self, session: str, exclude: frozenset = frozenset()) -> tuple[str, int]:
-        """Same shape as `MenuFormatIntegration`'s own helper, extended for a SECOND
-        client on the same session: `list-clients -t session` lists every client
-        attached to it, not only the one just forked, so a second pty here has to
-        pick its OWN name out from among possibly several already there — *exclude*
-        names the ones a caller already knows about."""
-        pid, fd = pty.fork()
-        if pid == 0:
-            os.execvp("tmux", ["tmux", "-L", SOCKET, "attach", "-t", session])
-
-        def _reap():
-            _kill_pid(str(pid))
-            try:
-                os.waitpid(pid, 0)
-            except OSError:
-                pass
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        self.addCleanup(_reap)
-
-        deadline = time.monotonic() + 3
-        name = ""
-        while time.monotonic() < deadline:
-            out = _tmux("list-clients", "-t", session, "-F", "#{client_name}")
-            names = {n.strip() for n in out.stdout.splitlines() if n.strip()}
-            fresh = names - exclude
-            if fresh:
-                name = next(iter(fresh))
-                break
-            time.sleep(0.1)
-        self.assertTrue(name, "the pty-attached client never registered with tmux")
-        return name, fd
 
     def _install_real_bind(self, fid: str) -> None:
         """`conf_text`'s own bind line, `source-file`'d for real — byte for byte, no
