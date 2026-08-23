@@ -70,14 +70,16 @@ class ClaudeCodeHarness(Harness):
 
         return commands._as_rule(pattern)
 
-    def apply_ask_rule(self, root: Path, pattern: str,
-                       local: bool = False) -> tuple[str, str]:
+    def apply_ask_rule(self, root: Path, pattern: str, local: bool = False,
+                       dry_run: bool = False) -> tuple[str, str]:
         from .. import commands
 
-        return commands.add_ask_rule(root, self.ask_rule(pattern), local=local)
+        return commands.add_ask_rule(root, self.ask_rule(pattern), local=local,
+                                     dry_run=dry_run)
 
-    def apply_allow_rule(self, root: Path, pattern: str,
-                         local: bool = False) -> tuple[str, str]:
+    def apply_allow_rule(self, root: Path, pattern: str, local: bool = False,
+                         dry_run: bool = False) -> tuple[str, str]:
         from .. import commands
 
-        return commands.add_allow_rule(root, self.allow_rule(pattern), local=local)
+        return commands.add_allow_rule(root, self.allow_rule(pattern), local=local,
+                                       dry_run=dry_run)
