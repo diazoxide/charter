@@ -19,10 +19,32 @@ import sys
 import unittest
 from unittest import mock
 
-from charter import config, tui
-from charter.frame import slots
+from charter import config, statusline, tui
+from charter.frame import gather, slots
 
 from tests._isolation import PersonaIso
+
+
+def _row(name, *, branch="main", dirty=False, tracked_dirty=False, ahead=0, behind=0,
+        ci=None, change=None, sigil="", current=False, repo=None) -> dict:
+    """A `gather`-cache-shaped row — the exact fields `gather._entry` writes, built
+    directly rather than through a real `git`/`gather.scan`: these tests pin `left`'s
+    own COMPOSITION (what it does with a row already in the cache), which
+    `tests/test_frame_gather.py` already covers the gather side of independently."""
+    d = {"name": name, "branch": branch, "dirty": dirty, "tracked_dirty": tracked_dirty,
+        "ahead": ahead, "behind": behind, "ci": ci, "change": change, "sigil": sigil,
+        "current": current}
+    if repo is not None:
+        d["repo"] = repo
+    return d
+
+
+def _seed(fid: str, **overrides) -> dict:
+    data = {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+           "repos": [], "worktrees": []}
+    data.update(overrides)
+    gather.save(fid, data)
+    return data
 
 
 class Render(PersonaIso, unittest.TestCase):
@@ -83,18 +105,22 @@ class Unimplemented(unittest.TestCase):
     splitting a pane that would be permanently dead under `remain-on-exit on`),
     `frame_ready` (`--probe`) and `doctor.check_frame`."""
 
-    def test_the_two_sized_but_unrendered_slots_are_named(self):
-        self.assertEqual(slots.unimplemented(["top", "left", "bottom", "right"]),
-                         ["left", "right"])
+    def test_all_four_slots_now_have_a_renderer(self):
+        """Task 3 landed `left`/`right` beside `top`/`bottom`: every slot
+        `instance.FRAME_SLOTS` accepts now has a renderer, so a fully-configured
+        frame names nothing missing."""
+        self.assertEqual(slots.unimplemented(["top", "left", "bottom", "right"]), [])
 
     def test_an_all_implemented_configuration_names_nothing(self):
         self.assertEqual(slots.unimplemented(["top", "bottom"]), [])
 
     def test_the_answer_comes_from_the_registry_not_a_hardcoded_pair(self):
-        """`left`/`right` are today's answer, not the rule. A renderer landing for one
-        of them must take it off this list without anybody remembering to edit a
-        literal — so the registry is patched and the answer must follow."""
-        with mock.patch.dict(slots.SLOTS, {"left": lambda fid: "drawn"}):
+        """`left`/`right` having renderers today is not the rule this function follows
+        — the registry is. Proved here from the other direction now that both are
+        implemented: temporarily REMOVE one from the registry and the answer must
+        follow, exactly as it would the day a real slot's renderer regresses."""
+        with mock.patch.dict(slots.SLOTS):
+            del slots.SLOTS["right"]
             self.assertEqual(slots.unimplemented(["top", "left", "right"]), ["right"])
 
 
@@ -159,6 +185,134 @@ class WideGlyphs(PersonaIso, unittest.TestCase):
                          return_value=os.terminal_size((20, 3))):
             line = slots.render("top", "f-1")
         self.assertLessEqual(tui.width(line), 20)
+
+
+class LeftRenderer(PersonaIso, unittest.TestCase):
+    """`left`: repo rows composed narrow straight from `gather`'s cache — never a
+    `git` call, never `glstate`, never `_repo_rows`' `tui.Node`s (built for a wide
+    boxed frame; `_NAME_W`=32 alone exceeds this whole pane)."""
+
+    def test_lists_a_repo_from_the_cache(self):
+        _seed("f-1", repos=[_row("demo")])
+        self.assertIn("demo", slots.render("left", "f-1"))
+
+    def test_degrades_to_a_readable_line_with_an_empty_cache(self):
+        _seed("f-1")
+        out = slots.render("left", "f-1")
+        self.assertTrue(out.strip())
+        self.assertIn("no repos", tui.strip_ansi(out))
+
+    def test_a_dirty_repo_shows_the_dirty_marker(self):
+        _seed("f-1", repos=[_row("demo", dirty=True)])
+        self.assertIn("*", tui.strip_ansi(slots.render("left", "f-1")))
+
+    def test_a_clean_repo_shows_no_dirty_marker(self):
+        _seed("f-1", repos=[_row("demo", dirty=False)])
+        self.assertNotIn("*", tui.strip_ansi(slots.render("left", "f-1")))
+
+    def test_an_open_change_shows_its_sigil_and_number(self):
+        _seed("f-1", repos=[_row("demo", change=42, sigil="!")])
+        self.assertIn("!42", tui.strip_ansi(slots.render("left", "f-1")))
+
+    def test_a_failing_ci_status_shows_its_glyph(self):
+        _seed("f-1", repos=[_row("demo", ci="failed")])
+        self.assertIn("✗", tui.strip_ansi(slots.render("left", "f-1")))
+
+    def test_a_piece_from_the_worktrees_cache_field_is_shown(self):
+        _seed("f-1", repos=[_row("demo")],
+             worktrees=[_row("piece-one", repo="demo")])
+        self.assertIn("piece-one", tui.strip_ansi(slots.render("left", "f-1")))
+
+    def test_picks_the_dirty_repo_over_clean_ones_when_over_budget(self):
+        """`_pick_rows` is CALLED here, not reinvented — the same ranking
+        `statusline.py`'s own regression (an unranked slice of 18 clones showed
+        thirteen clean repos and hid the one dirty one) was filed against. A plain
+        `dirs[:budget]` slice would keep `clean-0..clean-N` (they sort first) and
+        drop `zzz-dirty` off the end."""
+        clean = [_row(f"clean-{i}") for i in range(statusline._MAX_REPO_LINES)]
+        dirty = _row("zzz-dirty-one-past-the-cap", dirty=True)
+        _seed("f-1", repos=clean + [dirty])
+        self.assertIn("zzz-dirty-one-past-the-cap",
+                      tui.strip_ansi(slots.render("left", "f-1")))
+
+    def test_never_exceeds_the_pane_width(self):
+        _seed("f-1", repos=[_row("a-repo-with-quite-a-long-descriptive-name",
+                                change=999999, ci="failed", ahead=12, behind=34)])
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("left", "f-1")
+        for line in out.splitlines():
+            with self.subTest(line=line):
+                self.assertLessEqual(tui.width(line), 22)
+
+    def test_a_cjk_heavy_repo_name_still_fits_a_narrow_pane(self):
+        cjk = "測" * 30  # 30 characters, 60 display cells
+        _seed("f-1", repos=[_row(cjk)])
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((20, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("left", "f-1")
+        for line in out.splitlines():
+            self.assertLessEqual(tui.width(line), 20)
+
+    def test_a_failing_gather_read_yields_a_line_rather_than_an_exception(self):
+        """A panel that raises leaves a hole in the frame — `slots.render`'s own
+        promise, pinned here against a renderer that actually reaches into a real
+        dependency (`gather.read`) rather than the generic lambda `Render`'s own
+        `test_a_failing_renderer...` uses."""
+        with mock.patch.object(gather, "read", side_effect=RuntimeError("boom")):
+            self.assertIn("charter", slots.render("left", "f-1"))
+
+
+class RightRenderer(PersonaIso, unittest.TestCase):
+    """`right`: `statusline._persona_chips` called, not reassembled — each chip
+    already carries its own memory badge, in-flight badge and vault dot."""
+
+    def test_lists_a_persona_chip(self):
+        self.make_persona("alice")
+        self.assertIn("alice", tui.strip_ansi(slots.render("right", "f-1")))
+
+    def test_degrades_to_a_readable_line_with_no_personas(self):
+        out = slots.render("right", "f-1")
+        self.assertTrue(out.strip())
+        self.assertIn("no personas", tui.strip_ansi(out))
+
+    def test_calls_persona_chips_rather_than_reassembling_it(self):
+        """A fix to a chip (its vault dot, its memory badge, its in-flight badge)
+        must land here the moment it lands in the status line — pinned by handing
+        `_persona_chips` a value nothing in `_right` could have produced on its
+        own, and requiring it survive to the pane byte-for-byte."""
+        with mock.patch("charter.statusline._persona_chips",
+                        return_value=["SENTINEL-CHIP-0xF00D"]):
+            out = slots.render("right", "f-1")
+        self.assertIn("SENTINEL-CHIP-0xF00D", out)
+
+    def test_never_exceeds_the_pane_width(self):
+        self.make_persona("a-persona-with-quite-a-long-descriptive-name")
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("right", "f-1")
+        for line in out.splitlines():
+            with self.subTest(line=line):
+                self.assertLessEqual(tui.width(line), 22)
+
+    def test_a_cjk_heavy_persona_name_still_fits_a_narrow_pane(self):
+        cjk = "測" * 30  # 30 characters, 60 display cells
+        self.make_persona(cjk)
+        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((20, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("right", "f-1")
+        for line in out.splitlines():
+            self.assertLessEqual(tui.width(line), 20)
+
+    def test_a_failing_persona_chips_call_yields_a_line_rather_than_an_exception(self):
+        """`_right` carries no guard of its own around the call (`_persona_chips`
+        already swallows its own failures) — this pins `render`'s own outer
+        `try/except` as the thing that actually catches whatever gets past that,
+        the same generic promise `Render.test_a_failing_renderer_yields_a_line...`
+        pins for an arbitrary slot, exercised here through a real dependency."""
+        with mock.patch("charter.statusline._persona_chips",
+                        side_effect=RuntimeError("boom")):
+            self.assertIn("charter", slots.render("right", "f-1"))
 
 
 if __name__ == "__main__":
