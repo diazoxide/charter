@@ -188,6 +188,184 @@ class WideGlyphs(PersonaIso, unittest.TestCase):
         self.assertLessEqual(tui.width(line), 20)
 
 
+class TopRenderer(PersonaIso, unittest.TestCase):
+    """Task 4 (#385) investigated `top`'s "context/session when available" bullet —
+    `statusline._session_strip`/`_context_gauge` — and found neither can produce
+    anything from a panel process: both are gated at every branch on Claude Code's
+    per-turn stdin payload, which only `statusline.main` ever receives, never a
+    long-lived tmux pane command. See `slots._top`'s own docstring for the full
+    argument. These tests pin that finding as a regression rather than a one-time
+    observation: a future edit that wires either call back into `_top` "because it
+    compiles" must turn one of these red, since the call would return `[]` forever and
+    add nothing but a docstring gone stale."""
+
+    def test_the_context_gauge_is_never_called_by_top(self):
+        with mock.patch("charter.statusline._context_gauge") as gauge:
+            slots.render("top", "f-1")
+        gauge.assert_not_called()
+
+    def test_the_session_strip_is_never_called_by_top(self):
+        with mock.patch("charter.statusline._session_strip") as strip:
+            slots.render("top", "f-1")
+        strip.assert_not_called()
+
+    def test_context_gauge_confirmed_empty_with_no_payload_the_premise_top_relies_on(self):
+        """The load-bearing fact behind leaving the gauge out: with no live per-turn
+        payload — exactly what a panel process always has — `_context_gauge` produces
+        nothing, not a misleading zero. `tests/test_statusline_gauge.py` already pins
+        this generically (`test_silent_before_first_api_call`); repeated here because
+        it is the premise `_top`'s design decision rests on."""
+        self.assertEqual(statusline._context_gauge(None), [])
+        self.assertEqual(statusline._context_gauge({}), [])
+
+
+class BottomRenderer(PersonaIso, unittest.TestCase):
+    """`bottom` composes a fourth field now — `statusline._session_news` — alongside
+    the todo count, the top alert, and the hotkey hint already there. See
+    `slots._bottom`'s own docstring for the priority-drop design and why a single
+    trailing `tui.truncate` over the whole joined line is not enough by itself."""
+
+    def test_session_news_appears_alongside_the_alerts(self):
+        with mock.patch("charter.statusline._session_news", return_value=["⛊ 1 denied"]), \
+             mock.patch("charter.statusline._alerts", return_value=["⚠ something"]):
+            out = tui.strip_ansi(slots.render("bottom", "f-1"))
+        self.assertIn("⛊ 1 denied", out)
+        self.assertIn("⚠ something", out)
+
+    def test_session_news_uses_this_panels_own_session_id(self):
+        """A panel has no per-turn payload to hand `_session_news` a session id — the
+        identical point `_top`'s docstring makes about the gauge. `session.current()`
+        supplies it, the same fallback `_right` already trusts for `_persona_chips`.
+        Pinned with a sentinel id nothing in `_bottom` could have produced on its own,
+        and requiring it actually reach the call."""
+        with mock.patch("charter.session.current", return_value="SID-SENTINEL-0xF00D"), \
+             mock.patch("charter.statusline._session_news", return_value=[]) as news:
+            slots.render("bottom", "f-1")
+        news.assert_called_once_with("SID-SENTINEL-0xF00D")
+
+    def test_never_exceeds_the_pane_width(self):
+        with mock.patch("charter.statusline._session_news",
+                        return_value=["⛊ 1 denied", "⚡ 2"]), \
+             mock.patch("charter.statusline._alerts",
+                        return_value=["⚠ reinit: charter ws reinit needed right now"]), \
+             mock.patch("charter.statusline._todo_count", return_value=7), \
+             mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 3))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("bottom", "f-1")
+        for line in out.splitlines():
+            self.assertLessEqual(tui.width(line), 22)
+
+    def test_a_starved_pane_drops_the_hotkey_and_todo_before_the_alert_or_news(self):
+        """Sweeps a few widths against the same four fields, matching
+        `LeftRenderer.test_a_starved_pane_drops_lowest_priority_fields_first`'s style:
+        the alert survives everywhere it is asked to, and the hotkey — the one thing
+        always rediscoverable another way — is first to give up its columns."""
+        with mock.patch("charter.statusline._alerts", return_value=["AAAAA"]), \
+             mock.patch("charter.statusline._session_news", return_value=["NNNNN"]), \
+             mock.patch("charter.statusline._todo_count", return_value=3), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            for w, want_alert, want_news, want_todo, want_hotkey in (
+                (80, True, True, True, True),
+                (10, True, False, False, False),
+                (20, True, True, False, False),
+            ):
+                with mock.patch("os.get_terminal_size",
+                                return_value=os.terminal_size((w, 3))), \
+                     mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+                    out = tui.strip_ansi(slots.render("bottom", "f-1"))
+                with self.subTest(width=w):
+                    self.assertLessEqual(tui.width(out), w)
+                    self.assertEqual("AAAAA" in out, want_alert)
+                    self.assertEqual("NNNNN" in out, want_news)
+                    self.assertEqual("3 todos" in out, want_todo)
+                    self.assertEqual("F2 menu" in out, want_hotkey)
+
+    def test_a_failing_session_news_call_yields_a_line_rather_than_an_exception(self):
+        with mock.patch("charter.statusline._session_news",
+                        side_effect=RuntimeError("boom")):
+            self.assertIn("charter", slots.render("bottom", "f-1"))
+
+    def test_empty_fields_leave_no_stray_separator(self):
+        """No alerts, no session news — `_fit_fields` must SKIP an empty field rather
+        than keep it and let ` · `.join emit a blank slot between separators
+        (`"5 todos ·  · F2 menu"`, say). Asserts the exact string rather than just
+        `in`/`not in`, so a stray separator cannot hide inside a substring match."""
+        with mock.patch("charter.statusline._alerts", return_value=[]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=5), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            out = tui.strip_ansi(slots.render("bottom", "f-1"))
+        self.assertEqual(out, "5 todos · F2 menu")
+
+    def test_the_todo_count_still_shows_at_zero_unlike_the_new_news_field(self):
+        """`todo` predates Task 4 and keeps its own, different presence rule: `_bottom`
+        showed `0 todo` even at zero before this task touched the function, unlike
+        `_session_news`'s "silent unless something happened" discipline — Task 4 must
+        not quietly fold the two together. Caught for real during this task: an earlier
+        draft gated `todo_text` on `if todos`, which passed every test in this file (all
+        of them mock a non-zero todo count) and only broke three tests in OTHER files
+        (`test_frame_panel.py`, `test_frame_tmux_integration.py`) that render `bottom`
+        against a real, empty environment where the todo count is genuinely 0."""
+        with mock.patch("charter.statusline._todo_count", return_value=0):
+            out = tui.strip_ansi(slots.render("bottom", "f-1"))
+        self.assertIn("0 todo", out)
+
+    def test_a_failing_session_current_call_yields_a_line_rather_than_an_exception(self):
+        with mock.patch("charter.session.current", side_effect=RuntimeError("boom")):
+            self.assertIn("charter", slots.render("bottom", "f-1"))
+
+    def test_never_exceeds_the_pane_width_even_narrower_than_a_single_field(self):
+        """`_fit_fields` always force-keeps the first non-empty field so the row is
+        never blank on its own account (mirrors `_row`'s `max(1, ...)` branch floor) —
+        which means the trailing `tui.truncate` at the call site, not the budgeting
+        loop, is what actually protects a pane narrower than that one field. Mirrors
+        `LeftRenderer.test_never_exceeds_the_pane_width_even_when_narrower_than_the_markers`."""
+        with mock.patch("charter.statusline._alerts",
+                        return_value=["a very long alert that will not fit at all"]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=0), \
+             mock.patch("os.get_terminal_size", return_value=os.terminal_size((3, 3))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = slots.render("bottom", "f-1")
+        self.assertLessEqual(tui.width(out), 3)
+
+
+class FitFields(unittest.TestCase):
+    """`slots._fit_fields` in isolation, free of `_bottom`'s other, always-present
+    fields (todo, hotkey) — so a test can construct the exact width pressure it wants
+    without those competing for the same budget."""
+
+    def test_the_first_field_is_kept_even_when_it_alone_exceeds_the_width(self):
+        self.assertEqual(slots._fit_fields([("a", "AAAAAAAAAA")], 3), {"a"})
+
+    def test_a_later_field_is_dropped_whole_once_the_budget_runs_out(self):
+        self.assertEqual(
+            slots._fit_fields([("a", "AAA"), ("b", "BBBBBBBBBB")], 6), {"a"})
+
+    def test_measures_in_display_cells_not_characters(self):
+        """`"測"` is one character but TWO display cells. Sized so a `len()`-based
+        mistake (which would compute 1, leaving 4 of the 5-wide budget spare after
+        `"A"`) says there is room for it, while the real width-based measurement
+        (2, against a `budget - sep` of only... the arithmetic is spelled out in the
+        comment below) correctly says there is not. Unlike `_row`, nothing here ever
+        slices a field's TEXT, so a trailing safety-net truncate can never paper over
+        this mistake the way it did for the predecessor's CJK repo-name test — this
+        asserts on `_fit_fields`'s own return value, before any string is even
+        assembled.
+
+        budget=5: `"A"` costs 1 -> 4 left. `"測"` needs `width("測")=2 + sep(3) = 5`
+        against that `4` -> doesn't fit, correctly dropped. A `len()`-based version
+        would compute `len("測")=1 + 3 = 4`, which DOES fit against `4` -> wrongly
+        kept.
+        """
+        self.assertEqual(slots._fit_fields([("alert", "A"), ("news", "測")], 5),
+                         {"alert"})
+        # One column more and the real (width-based) arithmetic agrees it fits too —
+        # confirms this is a boundary case, not `_fit_fields` refusing CJK outright.
+        self.assertEqual(slots._fit_fields([("alert", "A"), ("news", "測")], 6),
+                         {"alert", "news"})
+
+
 class LeftRenderer(PersonaIso, unittest.TestCase):
     """`left`: repo rows composed narrow straight from `gather`'s cache — never a
     `git` call, never `glstate`, never `_repo_rows`' `tui.Node`s (built for a wide

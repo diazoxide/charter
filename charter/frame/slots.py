@@ -44,7 +44,41 @@ def _width() -> int:
 
 
 def _top(fid: str) -> str:
-    """Identity: where you are, pinned or not, and who you are being."""
+    """Identity: where you are, pinned or not, and who you are being.
+
+    **Task 4 investigation (#385) — the context/cache gauge cannot run here, and this
+    deliberately does not call it.** The plan's slot table lists "context/session when
+    available" for `top`, naming `statusline._session_strip(payload, sid)` and
+    `statusline._context_gauge(payload)` as the wide layout's source for it. Read end to
+    end before writing anything here, per the task brief's own instruction:
+
+    `_context_gauge(payload)` is gated on `payload.get("context_window")` at every single
+    branch — `ctx NN%` needs `cw["used_percentage"]`, `cache NN%` needs
+    `cw["current_usage"]`'s two token counts, and even the REBUILD/cold-streak history
+    (`_record_turn`, `_rebuilds`, `_cache_hint`) only runs *nested inside* the
+    `if read or write:` block those same live numbers gate — so there is no path through
+    this function that produces anything without a payload carrying real numbers THIS
+    turn. And there is exactly one source for that payload: `statusline.main` does
+    `payload = json.load(sys.stdin)` — Claude Code's per-turn JSON, sent only to the
+    process it invokes as the configured `statusLine` command. A frame panel is started
+    once, as a long-lived tmux pane command (`panel.run`, polling `state.version`), never
+    re-invoked per turn and never handed that stdin — `gather.py`'s own module docstring
+    already establishes this identically for the gather side ("No per-session payload").
+
+    So `_context_gauge({})`/`_context_gauge(None)` is not a degraded case here, it is
+    the ONLY case, forever, no matter what the session has done — calling it would add a
+    line of code whose return value this docstring can already prove is always `[]`.
+    Composing `_session_strip(payload, sid)` instead would not help: it is exactly
+    `[*_context_gauge(payload), *_session_news(sid)]`, so with the gauge half structurally
+    dead the call would only ever surface `_session_news`'s half — which is `bottom`'s
+    own, explicit assignment (see `_bottom`'s docstring), not `top`'s. Calling it here
+    too would either duplicate `bottom` byte-for-byte or (worse, since a panel's `sid` may
+    differ in nothing from `bottom`'s) read as two different panes agreeing by
+    coincidence. Per the task brief: "a gauge that silently reads zero is worse than no
+    gauge" — so this is left out, not stubbed in, until #386 (which owns the suppression
+    and recording question this finding feeds) decides a panel should have its own
+    persisted usage snapshot to read. Pinned by `tests.test_frame_slots.TopRenderer`.
+    """
     from .. import __version__, statusline, workspace
     ws = workspace.resolve()
     src = workspace.source()
@@ -331,29 +365,109 @@ def _right(fid: str) -> str:
     return "\n".join(tui.truncate(c, w) for c in chips)
 
 
+def _fit_fields(priority: list[tuple[str, str]], width: int) -> set[str]:
+    """Which names among *priority* — an ordered list of ``(name, text)`` pairs, highest
+    priority first — fit *width* once joined with `` · ``, decided one at a time in that
+    order: each field's FULL text counted against what is left, included whole or
+    dropped whole, never character-sliced. The first non-empty field is always kept even
+    when it alone is over budget (so a row this feeds is never blank on its own account —
+    a trailing `tui.truncate` at the call site is what actually protects the pane in that
+    case, the same "safety net, not the fix" role it plays in :func:`_row`).
+
+    Factored out of :func:`_bottom` so this priority-and-width logic is testable against
+    exactly the fields a test wants, in isolation — `_bottom` also always carries a todo
+    count and a hotkey hint that would otherwise compete for the same narrow budgets an
+    adversarial test needs to construct.
+    """
+    sep_w = tui.width(" · ")
+    budget = width
+    keep: set[str] = set()
+    for name, text in priority:
+        if not text:
+            continue
+        need = tui.width(text) + (sep_w if keep else 0)
+        if need > budget and keep:
+            continue          # doesn't fit and something already does — drop it whole
+        keep.add(name)
+        budget -= need
+    return keep
+
+
 def _bottom(fid: str) -> str:
     """What still wants attention, and how to act on it.
 
-    Only the first alert, deliberately: bottom is a fixed single-row pane, and
-    `_alerts()` already returns its entries in priority order, so this picks which one
-    survives rather than leaving it to whichever one happens to fit before
-    `tui.truncate`'s ellipsis — the same truncation-order reasoning `statusline.py`
-    names inline wherever a row has to choose what to drop.
+    Only the first alert, deliberately: `_alerts()` already returns its entries in
+    priority order, so this picks which one survives rather than leaving it to whichever
+    happens to fit before an ellipsis — the same truncation-order reasoning
+    `statusline.py` names inline wherever a row has to choose what to drop.
+
+    **Task 4 (#385) adds `statusline._session_news(sid)`** — this session's own
+    denied/recorded/dispatched counters, deliberately silent unless something actually
+    happened (see `_session_news`'s own docstring). Unlike the context/cache gauge (see
+    `_top`'s docstring for why THAT stays out), `_session_news` needs no per-turn Claude
+    Code payload at all — `inflight.live()` reads a shared on-disk tracker and
+    `trace.read(sid)` reads the session's own trace log, both real independent of any
+    stdin JSON. It only needs a session id, which — like `_right`'s persona chips — a
+    panel has none passed to it; `session.current()` reads the same
+    `$CHARTER_SESSION_ID`/`$CLAUDE_CODE_SESSION_ID` a launched panel inherits whole from
+    the harness (`_right`'s docstring makes the identical point for `_persona_chips`).
+
+    **Four candidate fields now, not three, each shown WHOLE or dropped WHOLE — never
+    one assembled string cut once from the right.** `bottom` is one fixed row
+    (`layout.SLOT_SIZE["bottom"] == 1`) but its WIDTH is the frame's own, not a narrow
+    side panel's, so ordinarily every field fits comfortably and this never has to choose.
+    But `layout.py`'s own module docstring records a REAL tmux 3.7c resize that
+    transiently starves a fixed-size pane before the corrective hook snaps it back — not
+    hypothetical, reachable by an ordinary window resize at any moment (Task 3's fix
+    round 2 pinned the identical shape for `left`). A naive single `tui.truncate` over the
+    joined line would risk Task 3's own Critical on perfectly ordinary data: an alert
+    exists specifically to carry the command that fixes it, and slicing into that command
+    mid-word reads as "no problem here" — the exact false-clean failure this plan's
+    Global Constraints call out by name.
+
+    Priority order, highest first: the one alert (`_alerts()`'s own top pick — an
+    actionable control-plane problem, carrying its own fix); `_session_news` (this
+    session's own activity — silent unless it already has something to say, so its mere
+    presence is the signal); the todo count (persistent state, not urgent); the
+    configured hotkey hint (the one thing always rediscoverable another way, so it is
+    first to give up its columns). Once decided, the survivors are RE-JOINED in the
+    original reading order (todo, alert, news, hotkey) — priority governs only who is
+    dropped when the pane is starved, not how a healthy pane reads.
 
     The hotkey is READ, not spelled out: `[frame] hotkey` is configurable, and this row
-    hardcoded `F2 menu` — so a plane on `hotkey = "F1"` had its own panel telling every
-    operator the wrong key, on every repaint, forever. `config.FRAME` is the resolved
-    value `commands_frame.conf_text` binds, so there is one source for what the panel
-    says and what the frame actually does.
+    used to hardcode `F2 menu` — so a plane on `hotkey = "F1"` had its own panel telling
+    every operator the wrong key, on every repaint, forever. `config.FRAME` is the
+    resolved value `commands_frame.conf_text` binds, so there is one source for what the
+    panel says and what the frame actually does.
     """
-    from .. import config, statusline, workspace
+    from .. import config, session as _session, statusline as sl, workspace
     ws = workspace.resolve()
-    todos = statusline._todo_count(ws)
-    alerts = statusline._alerts(ws)
-    parts = [f"{todos} todo" + ("s" if todos != 1 else "")]
-    parts.extend(alerts[:1])
-    parts.append(f"{config.FRAME['hotkey']} menu")
-    return tui.truncate(" · ".join(p for p in parts if p), _width())
+    todos = sl._todo_count(ws)
+    alerts = sl._alerts(ws)
+    news = sl._session_news(_session.current())
+    w = _width()
+
+    # Unconditional, unlike `news` below — this predates Task 4 and stays exactly as it
+    # was (`0 todo` included) rather than adopting `_session_news`'s "silent unless
+    # something happened" discipline on the side; changing an existing field's own
+    # presence rule is not this task's job.
+    todo_text = f"{todos} todo" + ("s" if todos != 1 else "")
+    alert_text = alerts[0] if alerts else ""
+    news_text = f"{sl._DIM} · {sl._R}".join(news) if news else ""
+    hotkey_text = f"{config.FRAME['hotkey']} menu"
+
+    # Decide who survives, highest priority first (see this function's own docstring
+    # above for why); `_fit_fields` does the actual budgeting so it can be tested in
+    # isolation.
+    keep = _fit_fields(
+        [("alert", alert_text), ("news", news_text),
+         ("todo", todo_text), ("hotkey", hotkey_text)], w)
+
+    # Re-assembled in the original reading order, not priority order — priority decided
+    # only who was cut.
+    fields = {"alert": alert_text, "news": news_text, "todo": todo_text, "hotkey": hotkey_text}
+    parts = [fields[n] for n in ("todo", "alert", "news", "hotkey") if n in keep]
+    return tui.truncate(" · ".join(parts), w)
 
 
 #: Every slot charter can draw. `panel.run` refuses a name that is not in here rather
