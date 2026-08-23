@@ -65,6 +65,12 @@ ADOPTED_ID = "27r3gphb4fnsonx5ikcaw3cxwq"
 ADOPTED_LABEL = "PROD_KUBECONFIG"
 ADOPTED_VALUE = "kubeconfig-body-fixture"
 
+#: A second adopted field, left EMPTY in 1Password — which omits the ``value`` key
+#: entirely for such a field rather than sending `""`. Its id is deliberately a DIFFERENT
+#: op-shaped id from `ADOPTED_ID`, so a test cannot pass by reading the other field's.
+EMPTY_ID = "3xkyq7dz2n4v6b8m0p1r5s9tuw"
+EMPTY_LABEL = "GITHUB_TOKEN"
+
 #: Stands in for whatever `op item get --format json` puts in a concealed field's `value`
 #: when `--reveal` was not asked for. A MODEL of the behaviour this module's own docstring
 #: records — "conceals values, so a naive round-trip would write masks back over every
@@ -444,7 +450,71 @@ class AbsentAndEmptyStayDifferentAnswers(OpCase):
         self.assertNotIn("item edit", op.subs())
 
 
-class ASuccessfulReadCanNeverMeanAbSENT(OpCase):
+class AnAdoptedFieldLeftEmpty(OpCase):
+    """The two readings of one document differ ON PURPOSE, and the difference is reachable.
+
+    `_fields_of` skips a field with no ``value`` key; `_ids_of` keeps its id. Until this
+    class existed, both halves of that difference could be deleted with every op test still
+    green — and `_ids_of`'s docstring said the extra entries were "inert", which is the
+    reading that makes deleting them look like tidying.
+
+    They are not inert. 1Password omits ``value`` for a field left EMPTY, so an adopted
+    ``{"id": <op's id>, "label": "GITHUB_TOKEN"}`` contributes nothing to `_fields_of` —
+    and then `set("GITHUB_TOKEN", …)` puts that name INTO the fields, at which point
+    `_write`'s ``ids.get(k, k)`` finds the `_ids_of` entry and writes 1Password's own id
+    back. Narrow `_ids_of` to match `_fields_of` and charter renumbers a field on an item
+    it does not own: #354's silent mutation, with no race, no rate limit and no failed
+    call. The skip on the `_fields_of` side is load-bearing too — without it ``f["value"]``
+    raises `KeyError` on an ordinary hand-made item.
+
+    Fixture values here are inert strings; `EMPTY_ID` is an op-shaped id no key name could
+    equal, and a different one from `ADOPTED_ID`.
+    """
+
+    EMPTY = {"id": EMPTY_ID, "label": EMPTY_LABEL, "type": "CONCEALED"}
+
+    def item(self, *extra):
+        return [dict(self.EMPTY)] + [dict(f) for f in extra]
+
+    def test_the_precondition_charter_really_read_a_field_carrying_no_value(self):
+        """Guards the fixture rather than the code: if `EMPTY` ever gained a ``value``, or
+        the read stopped seeing it, the tests below would still pass and would no longer be
+        about an empty field at all."""
+        op, p = self.make(raw_fields=self.item(), conceal=True)
+        p.set(EMPTY_LABEL, "ghp-fixture")
+        self.assertNotIn("value", self.EMPTY, "the fixture field is not empty any more")
+        self.assertEqual([c["labels"] for c in op.gets()], [[EMPTY_LABEL]], op.subs())
+
+    def test_filling_it_in_keeps_1passwords_id(self):
+        """The adoption guarantee, on the one field `_fields_of` cannot see.
+
+        `ids.get(k, k)` falls back to the KEY NAME, so a missing entry does not fail — it
+        renumbers. The assertion is therefore on the id itself, never on "an id was
+        written": `EMPTY_LABEL` is exactly what the fallback would produce.
+        """
+        op, p = self.make(raw_fields=self.item(), conceal=True)
+        p.set(EMPTY_LABEL, "ghp-fixture")
+        self.assertEqual(op.written_ids(), {EMPTY_LABEL: EMPTY_ID},
+                         "charter renumbered an empty field of an item it does not own")
+
+    def test_an_empty_field_is_not_a_secret_and_reading_one_is_not_a_crash(self):
+        """`keys()` runs from `vault list`. An item with an empty field is an ordinary
+        hand-made item, and the field holds nothing to list."""
+        op, p = self.make(raw_fields=self.item(*OpCase.ADOPTED), conceal=True)
+        self.assertEqual(p.keys(), [ADOPTED_LABEL])
+
+    def test_an_empty_field_charter_is_not_writing_is_dropped_by_the_next_write(self):
+        """The other half of the same rule difference, pinned because the docstring on
+        `_ids_of` now states it: `_write` replaces the item with exactly `_fields_of`'s
+        keys, so an empty field nobody is writing does not survive. No secret is lost — an
+        empty field holds none — but a reader meeting it should find it recorded rather
+        than have to discover it."""
+        op, p = self.make(raw_fields=self.item(*OpCase.ADOPTED), conceal=True)
+        p.set("NEW_KEY", "new-fixture")
+        self.assertEqual(sorted(op.written_ids()), ["NEW_KEY", ADOPTED_LABEL], op.written())
+
+
+class ASuccessfulReadCanNeverMeanAbsent(OpCase):
     """The one hazard the collapse INTRODUCED, rather than removed.
 
     "Proven absent" is now a `None` returned from the read, so a successful `op item get`

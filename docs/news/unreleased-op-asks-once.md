@@ -38,6 +38,16 @@ anywhere:
   secret was gone and `set` returned success. It now creates, which against a title that is
   now taken fails loudly on the read-back instead of destroying a credential quietly.
 
+**What that second one trades away, said plainly.** One read cannot close that race, only
+move where it lands. The write is now always `op item create`, so the outcome is a **duplicate
+item** — two 1Password items sharing a title, after which `op item get <title>` is ambiguous
+until a human deletes one. #354 called the duplicate item the worst outcome of its own set,
+and this change routes more of the race into it on purpose: an ambiguous title is repaired by
+hand, from history 1Password still keeps, whereas a replaced secret is simply gone and was
+reported as success. What is still wrong is the sentence you get when it happens — the
+read-back cannot resolve an ambiguous title, so `secret set` says *no secret 'KEY' in vault
+'devops'* about a credential it has just written. That is issue #399, not fixed here.
+
 Reads are unchanged. `charter secret get` still fetches one field through `op read` and never
 the whole item, and `vault list` and `doctor` still never ask for a value — the shared read
 takes `--reveal` only on the write path, so routine status cannot trigger a re-auth prompt.

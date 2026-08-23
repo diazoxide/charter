@@ -350,6 +350,19 @@ class OnePasswordProvider(VaultProvider):
           `_item_present` existed. Getting it wrong creates a second item with a title the
           vault already holds, after which `op item get <title>` is ambiguous and the vault
           is unreadable until a human deletes one by hand.
+
+        **The trade this makes, named rather than left to be discovered.** One read cannot
+        close the create-race, only move where it lands. Absence is still proven before the
+        write, another writer can still land after that proof, and the write is now always
+        `op item create` — so what used to end as a silent REPLACEMENT of that writer's
+        secret now ends as a DUPLICATE ITEM and a raise. #354 called the duplicate item the
+        worst outcome of its own set, and this deliberately routes more of that race into
+        it: an ambiguous vault is repaired by a human deleting one item, from history that
+        1Password still holds, while a replaced secret is gone and reported as success.
+        Loud beats silent, and the choice is only defensible said out loud. What is NOT
+        good about it is the sentence the operator gets — see #399; `set()`'s carefully
+        written duplicate-item message is unreachable when the read-back FAILS rather than
+        disagreeing, which is exactly what an ambiguous title makes it do.
         """
         argv = ["item", "get", self.op_item, "--vault", self.op_vault, "--format", "json"]
         if reveal:
@@ -412,6 +425,12 @@ class OnePasswordProvider(VaultProvider):
         ``{}`` here means *this document has no fields*, which is not the same statement
         as *there is no document*; only ``doc is None`` says that, and only the caller
         that still holds ``doc`` can tell.
+
+        A field carrying no ``value`` KEY is skipped rather than read as ``""``:
+        1Password omits ``value`` entirely for a field left empty, an empty field is not a
+        secret, and the skip is also what keeps ``f["value"]`` below from raising on an
+        ordinary hand-made item. :meth:`_ids_of` deliberately keeps such a field's id —
+        see there for why that difference is load-bearing rather than untidy.
         """
         out: dict = {}
         for f in (doc or {}).get("fields") or []:
@@ -430,15 +449,18 @@ class OnePasswordProvider(VaultProvider):
             out[name] = f["value"]
         return out
 
-    def _fields(self, reveal: bool = False) -> dict:
+    def _fields(self) -> dict:
         """This vault's secrets as ``{field: value}``. ``{}`` if there is no item yet, and
         a :class:`VaultError` if charter could not tell — never ``{}`` for a failed read.
 
-        The read path's shorthand for :meth:`_document` + :meth:`_fields_of`. The write
-        path deliberately does NOT use it: it needs the document itself, because presence
-        and the field ids are questions this return value cannot answer.
+        The READ path's shorthand for :meth:`_document` + :meth:`_fields_of`, and it never
+        reveals. It used to take ``reveal`` for the write path's sake; the write path now
+        holds the document itself, because presence and the field ids are questions this
+        return value cannot answer, so the parameter had no caller left that passed it.
+        Dropping it rather than leaving it defaulted keeps `--reveal` a decision made in
+        exactly one place: :meth:`set` and :meth:`delete` ask for it, nothing else can.
         """
-        return self._fields_of(self._document(reveal=reveal))
+        return self._fields_of(self._document())
 
     @staticmethod
     def _ids_of(doc: dict | None) -> dict:
@@ -456,10 +478,25 @@ class OnePasswordProvider(VaultProvider):
         values, so a rename landing mid-write can no longer key them by a different label.
 
         Deliberately a different rule from :meth:`_fields_of` over the same document: a
-        field with an id but no ``value`` keeps its id, and a field with no id contributes
-        none. `_write` only ever looks up names that ARE in the fields, so the extra
-        entries are inert — they are kept because narrowing the rule to match would be a
-        silent behaviour change dressed as tidying.
+        field with an id but no ``value`` keeps its id here, and a field with no id
+        contributes none.
+
+        Those entries are **not inert**, and the difference is reachable without a race,
+        without a rate limit and without any `op` call failing. 1Password omits ``value``
+        for a field left EMPTY, so an adopted ``{"id": <op's id>, "label": "GITHUB_TOKEN"}``
+        contributes nothing to :meth:`_fields_of` — and then ``set("GITHUB_TOKEN", …)``
+        puts that very name INTO the fields, at which point `_write`'s ``ids.get(k, k)``
+        finds this entry and writes 1Password's own id back. Narrowing this rule to match
+        `_fields_of` would renumber an empty field on an item charter does not own, which
+        is #354's silent mutation arriving by the front door. `AnAdoptedFieldLeftEmpty`
+        in tests/test_op_reads_the_item_once.py is the test that says so; before it, both
+        halves of this difference could be deleted with every op test still green.
+
+        The other half of the same difference, recorded because a reader will meet it: an
+        empty field charter is NOT writing does not survive the next write, since `_write`
+        replaces the item with exactly `_fields_of`'s keys. That is the behaviour on both
+        sides of #355 and it loses no secret — an empty field holds none — but it follows
+        from the rule rather than from an accident, so it is pinned too.
         """
         out = {}
         for f in (doc or {}).get("fields") or []:
