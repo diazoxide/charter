@@ -39,7 +39,7 @@ from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter import commands_frame, config, util
-from charter.frame import menu, slots, state
+from charter.frame import gather, menu, slots, state
 
 
 def _harness_binary_installed(resolver=None):
@@ -85,9 +85,24 @@ class Bypass(unittest.TestCase):
         ex.assert_called_once_with("claude", ["claude", "-p", "hi"])
 
 
-class MissingHarnessBinary(unittest.TestCase):
+class MissingHarnessBinary(PersonaIso, unittest.TestCase):
     """`charter claude` before `claude` is installed — the most likely FIRST-RUN state
     of this whole feature.
+
+    `PersonaIso` because one test below (`test_an_installed_harness_is_not_short_circuited`)
+    runs a FULL `_launch`, and `cmd_launch` reads `config.STATE_DIR` — the developer's
+    own `.charter/` without it. Writing there was the smaller half: `cmd_launch` also
+    calls `state.reap(live_before)`, and `_FakeTmux` answers the pre-`new-session`
+    `list-sessions` with an EMPTY set, so every framed test here ran `reap(set())`
+    against the real plane and deleted the operator's own frame directories — the
+    unread-`exit`-file state #383 exists to protect, on a machine that has live frames
+    on it. Verified by watching a real `.charter/frame/` across a suite run.
+
+    It stayed invisible because the litter cleaned itself up: `cmd_launch`'s closing
+    `reap()` took this launch's own directory back out again. Since #383 a launcher no
+    longer reaps its OWN directory (its pid is necessarily still alive), so the
+    accident stopped covering for the leak and a `demo-<pid>` directory survived every
+    suite run — which is how this was found.
 
     `bypass` called `os.execvp` raw, so `FileNotFoundError` reached `cli.main`'s
     `except Exception`, which files a charter crash report and re-raises a traceback.
@@ -1113,6 +1128,12 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertTrue(any("detach" in m.lower() and fake.fid in m for m in buf),
                         f"no reattach message was printed: {buf}")
         # The frame's own directory must not be reaped while the session is still live.
+        # Weak evidence for the live-session rule specifically, and deliberately not
+        # dressed up as more: since #383 this directory is kept by EITHER rule, because
+        # `fid` ends in the launcher's pid and the launcher is this test process. That
+        # is inherent — a launch's own id always names a live pid — so `Reap`'s fixtures
+        # in tests/test_frame_state.py are where the live-session rule is pinned alone,
+        # deliberately named after dead pids so nothing else can keep them.
         self.assertTrue(state.frame_dir(fake.fid).exists())
 
     def test_refuses_to_attach_when_the_teardown_hook_fails_to_install(self):
@@ -1552,6 +1573,36 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertTrue(any("detach" in m.lower() for m in buf),
                         f"no reattach message — the stale code suppressed it: {buf}")
 
+    def test_a_launch_does_not_inherit_a_cached_scan_from_an_earlier_life_of_its_pid(self):
+        """The second file the recycled directory carries, and the second reader that
+        inherits it. `exit` is read once, by this launcher; `gather.json` is read by
+        every PANEL, on every repaint, and `gather.read` has no freshness check by
+        design — it is a panel's hot path, kept current by `notify.plane_changed`.
+
+        So a launch adopting a dead frame's directory draws that frame's repos,
+        branches and CI, and nothing corrects it: a panel repaints only on a
+        `state.version` bump, so a scan from another day sits on screen until the
+        session's first hook fires. Before #383 this was unreachable — `reap` had
+        deleted the directory and `read` fell through to a live `scan` — and clearing
+        the file on the launch path is what puts it back on exactly that path.
+
+        `scan` is mocked to a sentinel, so this fails if the stale cache is served AND
+        distinguishes that from "a live gather happened to agree"."""
+        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
+        gather.save(stale, {"gathered_at": 1.0, "workspace": "from-a-dead-frame",
+                            "current_repo": None, "repos": [], "worktrees": []})
+
+        fake = _FakeTmux(still_live=True)
+        _launch(fake)
+
+        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
+        fresh = {"gathered_at": 0.0, "workspace": "sentinel", "current_repo": None,
+                 "repos": [], "worktrees": []}
+        with mock.patch.object(gather, "scan", return_value=fresh):
+            self.assertEqual(gather.read(fake.fid), fresh,
+                             "a panel of this frame would draw a dead frame's scan "
+                             "until the session's first hook bump")
+
 
 class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
     """#384: a command that dies before the frame is drawn must not die in silence.
@@ -1768,12 +1819,18 @@ class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
                          "a file that is right there is not a $PATH problem")
 
 
-class BypassRouting(unittest.TestCase):
+class BypassRouting(PersonaIso, unittest.TestCase):
     """`Bypass.test_a_pipe_gets_no_frame` pins `bypass()`'s OWN argv shape but never
     calls `cmd_launch` at all — it cannot catch a `cmd_launch` that stopped routing to
     `bypass()` in the first place (confirmed: deleting the routing check, or replacing
     it with `if False:`, left the full suite green before this class existed). These
-    test the DECISION, not what `bypass()` does once reached."""
+    test the DECISION, not what `bypass()` does once reached.
+
+    `PersonaIso` for the same reason `MissingHarnessBinary` above carries it: the
+    negative case here (`test_a_tty_without_no_frame_does_not_bypass`) proves the
+    launch was NOT bypassed by letting a full `_launch` run, and a full launch writes
+    frame state under `config.STATE_DIR` — the developer's real `.charter/` without
+    this."""
 
     def test_the_no_frame_flag_routes_to_bypass(self):
         args = SimpleNamespace(harness="claude", rest=[], no_frame=True)

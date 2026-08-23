@@ -207,22 +207,41 @@ class ClearExit(PersonaIso, unittest.TestCase):
 
 
 class Reap(PersonaIso, unittest.TestCase):
+    """Every fixture in here is named after a pid that has genuinely exited, the KEPT
+    ones as deliberately as the removed ones.
+
+    Up to #383 the trailing number in these names was decoration (`dead-1`, `live-1`,
+    `old-1`); `reap` now reads it as the launcher's pid, and **pid 1 is `launchd`/`init`,
+    which never exits**. On the remove side that is loud — a fixture reap refuses to
+    remove fails its own assertion. On the KEEP side it is silent and worse: `live-1`
+    and `old-1` were kept by the pid rule, the `live` argument stopped deciding anything,
+    and both tests passed with the live-session check deleted outright. `_a_dead_pid()`
+    on both sides puts membership in `live` back to being the only thing that can keep
+    a directory here.
+    """
+
     def test_a_directory_whose_session_is_gone_is_removed(self):
-        # `dead-1` up to #383: the trailing number was decoration, and pid 1 is
-        # `launchd`/`init`, so reap would now refuse to remove it. A frame that is
-        # genuinely finished has to be named after a pid that is genuinely finished.
         dead = f"dead-{_a_dead_pid()}"
+        live = f"live-{_a_dead_pid()}"
         state.bump(dead)
-        state.bump("live-1")
-        removed = state.reap({"live-1"})
+        state.bump(live)
+        removed = state.reap({live})
         self.assertEqual(removed, [dead])
         self.assertFalse(state.frame_dir(dead).exists())
-        self.assertTrue(state.frame_dir("live-1").exists())
+        self.assertTrue(state.frame_dir(live).exists(),
+                        "the live session's directory was reaped — and since its "
+                        "launcher is dead, `live` is the only thing that could have "
+                        "saved it")
 
     def test_a_live_frame_is_never_reaped_by_age(self):
-        """A long-lived frame is exactly what an age heuristic would eat."""
-        state.bump("old-1")
-        self.assertEqual(state.reap({"old-1"}), [])
+        """A long-lived frame is exactly what an age heuristic would eat.
+
+        The pid is a dead one on purpose (see the class docstring): this is the test
+        that pins "reap never deletes by age", so the only reason its fixture may
+        survive is the session being live."""
+        old = f"old-{_a_dead_pid()}"
+        state.bump(old)
+        self.assertEqual(state.reap({old}), [])
 
     def test_a_sibling_exit_code_survives_a_reap_that_beats_its_own_launcher(self):
         """#383. `reap` runs at EVERY frame launch, and the set it is handed names the

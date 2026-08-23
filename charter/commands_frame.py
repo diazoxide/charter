@@ -114,7 +114,7 @@ import subprocess
 import sys
 
 from . import config, harness, util, workspace
-from .frame import layout, menu, state, tmuxctl
+from .frame import gather, layout, menu, state, tmuxctl
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -881,9 +881,17 @@ def cmd_launch(args) -> int:
     # The pid this launch was handed may have belonged to an earlier launcher for the
     # same workspace, which mints the SAME `fid` — and since #383 `reap` keeps that
     # earlier directory for as long as the pid in its name is live, which right now it
-    # is, because it is ours. Any `exit` recorded under this id therefore predates this
-    # frame, and `state.exit_code(fid)` below would read it back as this launch's own.
+    # is, because it is ours. Everything recorded under this id therefore predates this
+    # frame, and a launch beginning is the one moment that can be certain of it.
+    #
+    # Two files, because two readers inherit: `state.exit_code(fid)` below would read a
+    # dead frame's `exit` back as this launch's own return value, and `gather.read(fid)`
+    # (no freshness check, by design — it is a panel's hot path) would serve a dead
+    # frame's scan to every panel until the session's first hook bump. `version` is
+    # deliberately left: it is a counter panels compare against their last reading, and
+    # moving it is `state.bump`'s job, one line below.
     state.clear_exit(fid)
+    gather.discard(fid)
     state.bump(fid)
 
     try:
