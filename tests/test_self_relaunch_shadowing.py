@@ -124,15 +124,21 @@ class SelfRelaunchArgvIsImmuneToTheDecoy(WithADecoyCwd):
 
 class APanelSpawnedTheWayCmdLaunchSpawnsIt(WithADecoyCwd):
     """#390's own reported symptom, proved against the REAL production call site:
-    `commands_frame.cmd_launch` builds the panel argv via
-    ``layout.panel_argvs(..., charter_argv=util.self_relaunch_argv())``
-    (charter/commands_frame.py:868). tmux itself is never started here — `panel_argvs`
-    is pure (see its own docstring), so the argv it builds is extracted and run directly
-    as the subprocess a real tmux pane would otherwise run."""
+    `commands_frame.cmd_launch` builds the panel argv via `layout.panel_argvs`, whose
+    `panel_command` calls `util.self_relaunch_argv()` itself. tmux itself is never
+    started here — `panel_argvs` is pure (see its own docstring), so the argv it builds
+    is extracted and run directly as the subprocess a real tmux pane would otherwise
+    run.
+
+    Nothing is passed in: the interpreter half used to be a `charter_argv` argument this
+    test handed the helper's own output to, which meant this test proved the helper was
+    immune and said nothing about what production passed. `panel_command` now owns that
+    half for the launcher and for `cmd_respawn` alike, so the argv below is production's
+    with nothing supplied by the test — which is also what makes `RespawnRunsTheSameArgv`
+    below cover the respawn path for free."""
 
     def _panel_argv(self) -> list[str]:
         [cmd] = layout.panel_argvs(slots=["top"], session="f-1", socket="testsock",
-                                   charter_argv=util.self_relaunch_argv(),
                                    harness_pane="%0")
         dashdash = cmd.index("--")
         return cmd[dashdash + 1:]
@@ -148,6 +154,39 @@ class APanelSpawnedTheWayCmdLaunchSpawnsIt(WithADecoyCwd):
                     out, err = proc.communicate()
                     self.fail(f"panel exited early (rc={rc}) instead of running — the "
                              f"#390 symptom itself:\nstdout={out!r}\nstderr={err!r}")
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+
+
+class RespawnRunsTheSameArgvAgainstTheDecoy(WithADecoyCwd):
+    """The respawn path, against the same decoy — the site that actually regressed.
+
+    `commands_frame.cmd_respawn` runs `respawn-pane -t %N -- <layout.panel_command(...)>`,
+    and `respawn-pane` starts that command in THE PANE'S OWN cwd. For anyone dogfooding
+    charter that is a charter checkout, so a respawn argv without `-P` is #390 verbatim,
+    on the one path where the panel has already died once and tmux's own
+    `Pane is dead (status 2)` is all the operator gets. Same decoy, same measurement as
+    the launcher's argv above; what differs is only which production function built it.
+    """
+
+    def test_the_respawn_command_runs_rather_than_exiting_2(self):
+        argv = layout.panel_command(slot="top", session="f-1")
+        with subprocess.Popen(argv, cwd=self.tmp, env=self.env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True) as proc:
+            try:
+                time.sleep(0.6)
+                rc = proc.poll()
+                if rc is not None:
+                    out, err = proc.communicate()
+                    self.fail(f"the respawn argv exited early (rc={rc}) instead of "
+                              f"running — #390 on the respawn path:\n"
+                              f"stdout={out!r}\nstderr={err!r}")
             finally:
                 proc.terminate()
                 try:

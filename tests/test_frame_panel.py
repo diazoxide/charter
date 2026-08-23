@@ -20,7 +20,7 @@ import os
 import signal
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from charter import tui
@@ -43,6 +43,92 @@ class Draw(PersonaIso, unittest.TestCase):
     def test_an_unknown_slot_is_refused_rather_than_drawn_blank(self):
         rc = panel.run("sideways", "f-1", once=True)
         self.assertNotEqual(rc, 0)
+
+
+class FailureIsVisibleInThePane(PersonaIso, unittest.TestCase):
+    """A panel that cannot do its job must PAINT the reason and stay alive, because a
+    panel that exits leaves nothing an operator can read.
+
+    Measured against real tmux 3.7c, which is the whole reason this class exists.
+    `remain-on-exit on` keeps a dead pane, and tmux then writes `Pane is dead (status
+    N, <date>)` into it — but it writes that message by moving the cursor to the LAST
+    row and issuing a linefeed first, which scrolls the pane up by exactly one line. In
+    a six-row pane that costs the first of three stderr lines (`L1` gone, `L2`/`L3`
+    still readable); in the ONE-ROW panes charter actually uses for `top` and `bottom`
+    (`layout.SLOT_SIZE`) that one scrolled line is the entire pane, so a panel's stderr
+    is provably unreadable there and `Pane is dead (status 2)` is all that is left. A
+    pane whose process is still ALIVE keeps whatever it painted (measured the same way).
+
+    So the fix is not "write the error somewhere better" — it is "do not exit". This is
+    `slots.render`'s never-raise promise (`charter/frame/slots.py`) extended to the
+    failures that happen BEFORE any renderer is reached, which is the exact gap it
+    cannot cover from where it sits.
+    """
+
+    def test_an_unknown_slot_paints_the_reason_into_the_pane(self):
+        """`Draw.test_an_unknown_slot_is_refused_rather_than_drawn_blank` above already
+        pins the refusal; it passes just as well when the only trace is a stderr line
+        tmux is about to scroll away. This pins the half that survives: the reason is on
+        the pane's own SCREEN — stdout, the same file descriptor `_paint` writes to —
+        naming the slot that was refused."""
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = panel.run("sideways", "f-1", once=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("sideways", out.getvalue(),
+                      f"the refusal never reached the pane's own screen: {out.getvalue()!r}")
+
+    def test_a_crash_before_render_is_painted_rather_than_ending_the_pane(self):
+        """`slots.render` catches whatever a RENDERER raises, so the hole it guards is
+        the one it cannot see from inside itself: anything raising on the way to it.
+        Stood up here by making `render` itself raise — the one mock that reproduces
+        every such failure at once (a `tui` helper blowing up, a `state` read this
+        module calls directly, an fd that has gone away) without pretending to know
+        which of them it will be."""
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("charter.frame.panel.slots.render",
+                        side_effect=RuntimeError("boom")):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = panel.run("bottom", "f-1", once=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("RuntimeError", out.getvalue(),
+                      f"the crash never reached the pane's own screen: {out.getvalue()!r}")
+
+    def test_a_failed_panel_holds_the_pane_open_instead_of_exiting(self):
+        """The half the painted text depends on. Painting the reason and then RETURNING
+        is worth nothing: the process exits, tmux writes `Pane is dead (...)` over the
+        one row this panel owns, and the reason is gone. `once=True` — the only way
+        every other test in this file can call `run` at all — is exactly the mode that
+        cannot show this, so this one runs the real loop and interrupts it from inside
+        `time.sleep`. `KeyboardInterrupt` deliberately, not a plain exception: it is a
+        `BaseException`, so it proves the hold is not merely being swallowed by the
+        same `except Exception` that put us here."""
+        slept = []
+
+        def _interrupt(delay):
+            slept.append(delay)
+            raise KeyboardInterrupt
+
+        with mock.patch("charter.frame.panel.time.sleep", side_effect=_interrupt):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                with self.assertRaises(KeyboardInterrupt):
+                    panel.run("sideways", "f-1")
+        self.assertTrue(slept, "a refused panel exited instead of holding its pane open")
+
+    def test_the_painted_reason_is_clamped_to_the_panes_own_width(self):
+        """The failure paint shares nothing with `slots.render` — deliberately, so a
+        failure INSIDE the render path cannot take the message about it down too — which
+        means it also does not inherit `render`'s own truncation. A message wider than a
+        22-column `left` pane would wrap and scroll itself out of a pane it was written
+        to be readable in."""
+        out = io.StringIO()
+        with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch("os.get_terminal_size", return_value=os.terminal_size((24, 1))):
+            with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                panel.run("a-very-long-slot-name-indeed", "f-1", once=True)
+        painted = out.getvalue().split("\x1b[2J", 1)[1]
+        for line in painted.split("\n"):
+            self.assertLessEqual(tui.width(line), 24, painted)
 
 
 class Height(unittest.TestCase):

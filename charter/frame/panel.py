@@ -40,6 +40,38 @@ happens to bump the version next — on an idle agent, that could be a long wait
 pane looks broken for all of it. The handler only sets a flag; a signal handler runs
 between bytecodes on the main thread, wherever the run loop happens to be, so it must not
 itself call anything that could block or recurse.
+
+**A panel that fails does not exit — it paints why and holds the pane open.** This is
+the half `slots.render`'s never-raise promise cannot reach from where it sits: it
+guards what a RENDERER raises, and a panel that dies on the way to it (an unknown slot,
+a crash in this module's own poll, a `tui` helper blowing up) bypasses that guarantee
+entirely, leaving the operator a hole in the frame with nothing in it to read. Writing
+the reason to stderr does not fix that, and the measurement is why (real tmux 3.7c,
+`remain-on-exit on`): tmux writes its own `Pane is dead (status N, <date>)` message by
+moving to the pane's LAST row and issuing a linefeed first, which scrolls the pane up by
+exactly one line — in a six-row pane the first of three stderr lines is lost and the
+rest survive, but `top` and `bottom` are ONE row (`layout.SLOT_SIZE`), so that one
+scrolled line is the whole pane and `Pane is dead (status 2)` is provably all that is
+left. It cost a real debugging session, whose only way through was running the panel's
+argv by hand outside tmux. A pane whose process is still ALIVE keeps what it painted
+(measured the same way), so `_hold` paints the reason and then simply does not return.
+
+A panel that is held is also a panel tmux never sees die, so the respawn hook
+`commands_frame._panel_died_hook_argv` installs never fires for it — deliberately: the
+two mechanisms divide at exactly the line between a failure charter's own Python can
+see (painted here, once, and left readable) and one it cannot (the interpreter itself
+failing to start, a SIGKILL), which is the only kind respawning could ever help.
+
+**Holding rather than exiting into that hook is a decision, so here is the argument.**
+Exiting would let a crashed panel be retried three times, which sounds strictly better
+until you ask what can actually reach the handler: `slots.render` catches everything a
+renderer raises, `state.version` catches everything a read raises, and `_rows` catches
+its own `OSError` — so what is left is a genuine bug in charter, or a pane whose fd has
+gone away. Neither is transient, so all a retry buys is three more identical crashes,
+and the cost is certain: three deaths, and then tmux's own message scrolling the reason
+out of a one-row pane — the exact failure this whole section exists to end. The pane
+that HAS gone away needs no special case either; `_hold`'s own write raises in turn, the
+process dies for real, and the respawn hook takes it from there.
 """
 
 from __future__ import annotations
@@ -49,6 +81,7 @@ import signal
 import sys
 import time
 
+from .. import tui
 from . import slots, state
 
 #: How often the version file is checked when nothing else has woken this panel. A
@@ -78,6 +111,20 @@ def _rows() -> int:
         return _DEFAULT_ROWS
 
 
+def _write(text: str) -> None:
+    """Clear the pane and put *text* in it, clamped to this pane's real row count.
+
+    The one place anything reaches the pane's screen, shared by the ordinary paint and
+    by the failure paint below — so a panel saying why it stopped goes through exactly
+    the same clear-then-write discipline as a panel doing its job, rather than a second
+    hand-rolled write that could leave half of tmux's own dead-pane text on screen
+    beside it.
+    """
+    lines = text.split("\n")[:_rows()]
+    sys.stdout.write("\x1b[H\x1b[2J" + "\n".join(lines))
+    sys.stdout.flush()
+
+
 def _paint(slot: str, fid: str) -> None:
     """Clear the pane and draw *slot* whole, clamped to this pane's real row count.
 
@@ -86,9 +133,40 @@ def _paint(slot: str, fid: str) -> None:
     contract (one string) carries no notion of height at all — see the module
     docstring's "Height is this module's job" section.
     """
-    lines = slots.render(slot, fid).split("\n")[:_rows()]
-    sys.stdout.write("\x1b[H\x1b[2J" + "\n".join(lines))
-    sys.stdout.flush()
+    _write(slots.render(slot, fid))
+
+
+def _hold(reason: str, *, once: bool, rc: int) -> int:
+    """Paint *reason* into the pane and then stay alive, so it can still be read.
+
+    The whole of this module's answer to a panel that cannot run: **returning is the
+    bug**. A panel process that exits hands its pane to `remain-on-exit`, and tmux then
+    scrolls the pane by exactly one line to write `Pane is dead (status N, <date>)` over
+    it — which in the one-row `top`/`bottom` panes is the entire pane (measured against
+    real tmux 3.7c; see the module docstring). So the reason is painted and the process
+    simply does not leave, which is the only state in which a pane keeps what was
+    written to it.
+
+    Reaches no renderer on purpose — the failure being reported may BE a failure of
+    that path, and a message about a broken renderer must not need the renderer to
+    work. It does still measure through `slots._width`, which is deliberate and not an
+    exception to that: measuring is one `os.get_terminal_size` call with its own
+    `OSError` fallback, it is the module docstring's stated reason for not owning width
+    here at all, and an unclamped line wraps in a 22-column `left` pane and scrolls
+    itself out of the pane it was written to be readable in.
+
+    *rc* is what `run` returns when it cannot hold — `once=True`, which only tests pass
+    (`charter panel` itself never does). The distinction matters for exactly one reader:
+    a test can still assert a panel REFUSED a bad slot, without the production path
+    having to exit to say so.
+    """
+    _write(tui.truncate(f" charter: {reason}", slots._width()))
+    while not once:
+        # Not `signal.pause()`: SIGWINCH is armed for the ordinary loop and would wake
+        # this one on every resize into a tight spin. A tick is the same idle cost the
+        # live loop already pays (see `TICK`), and there is nothing here to recompute.
+        time.sleep(TICK)
+    return rc
 
 
 def _install_sigwinch(resized: dict) -> object:
@@ -139,21 +217,15 @@ def _tick(resized: dict, seen: str, slot: str, fid: str) -> str:
     return seen
 
 
-def run(slot: str, fid: str, *, once: bool = False) -> int:
-    """Run one panel: refuse an unknown slot, then paint on every version bump or
-    resize until killed (`once=True` — never passed by `charter panel` itself, only by
-    tests — paints exactly once and returns).
+def _watch(slot: str, fid: str, *, once: bool) -> int:
+    """The live loop: paint on every version bump or resize until killed.
 
-    Refuses rather than drawing an empty pane for a *slot* not in `slots.SLOTS`: an
-    empty pane reads as a broken frame, and `layout.panel_argvs` can in principle be
-    handed a slot name `slots.py` does not (yet) implement a renderer for (`left`/
-    `right` today — see `layout.SLOT_SIZE`).
+    Split out of `run` so the SIGWINCH handler it arms is restored by its own `finally`
+    before `run`'s failure path can hold the pane open — a handler left installed for
+    the rest of a held process's life would keep waking a loop that has nothing left to
+    repaint, and `RunOnceLoop.test_once_true_restores_the_previous_sigwinch_handler`
+    already pins that this module leaks no handler past its own work.
     """
-    if slot not in slots.SLOTS:
-        print(f"charter panel: unknown slot {slot!r} "
-              f"(known: {', '.join(sorted(slots.SLOTS))})", file=sys.stderr)
-        return 2
-
     resized = {"flag": True}  # the first pass always paints, resized or not
     old_handler = _install_sigwinch(resized)
     try:
@@ -165,3 +237,40 @@ def run(slot: str, fid: str, *, once: bool = False) -> int:
             time.sleep(TICK)
     finally:
         signal.signal(signal.SIGWINCH, old_handler)
+
+
+def run(slot: str, fid: str, *, once: bool = False) -> int:
+    """Run one panel: refuse an unknown slot, then paint on every version bump or
+    resize until killed (`once=True` — never passed by `charter panel` itself, only by
+    tests — paints exactly once and returns).
+
+    Refuses rather than drawing an empty pane for a *slot* not in `slots.SLOTS`: an
+    empty pane reads as a broken frame, and `layout.panel_argvs` can in principle be
+    handed a slot name `slots.py` does not (yet) implement a renderer for (`left`/
+    `right` today — see `layout.SLOT_SIZE`).
+
+    **Neither refusal nor a crash exits.** Both end in `_hold`, which paints the reason
+    into the pane and stays there, because a panel process that returns hands its pane
+    to tmux's own `Pane is dead (status N)` message — which scrolls a one-row `top`/
+    `bottom` pane clean (measured; see the module docstring). The stderr line is kept
+    beside the paint rather than replaced by it: it is the only trace left when this is
+    run by hand for debugging with stdout redirected (`charter panel top --session x >
+    /tmp/log`), the case `_DEFAULT_ROWS` already exists for, and inside a real pane the
+    paint's own `\\x1b[2J` wipes it a moment later anyway.
+
+    `except Exception`, matching `slots.render`'s own guard and for the same reason —
+    `KeyboardInterrupt` and `SystemExit` are how this process is MEANT to end, and
+    swallowing either would hold a pane open against the operator killing it.
+    """
+    if slot not in slots.SLOTS:
+        reason = (f"unknown slot {slot!r} "
+                  f"(known: {', '.join(sorted(slots.SLOTS))})")
+        print(f"charter panel: {reason}", file=sys.stderr)
+        return _hold(reason, once=once, rc=2)
+
+    try:
+        return _watch(slot, fid, once=once)
+    except Exception as e:
+        reason = f"{slot} panel stopped ({type(e).__name__}: {e})"
+        print(f"charter panel: {reason}", file=sys.stderr)
+        return _hold(reason, once=once, rc=1)

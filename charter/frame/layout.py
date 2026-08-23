@@ -4,6 +4,15 @@ Pure on purpose. Everything that decides *what the frame looks like* lives here 
 returns plain lists of strings, so the whole shape is under test on a machine with no
 tmux, and so the argv rule below is enforced mechanically instead of by review.
 
+The one thing this module reads from outside its own arguments is the running
+interpreter's path, via `util.self_relaunch_argv()` in `panel_command` — no process is
+started, nothing is measured, and the result is as deterministic as any other string
+here. It is read HERE rather than passed in because the two callers that start a panel
+otherwise each hand in their own copy of that argv, and one of them promptly got it
+wrong (#390's `-P`, missing from the respawn path — see `panel_command`'s own
+docstring). Same reasoning as the never-join-argv rule below: the property is worth more
+enforced by construction than remembered at every call site.
+
 **Nothing here ever joins argv.** Pinned against tmux 3.7c: `new-session … printf
 'hello;touch INJ'` passed as separate arguments creates no file, and the same text as one
 string creates it. Workspace, repo, branch and persona names all reach a frame from
@@ -30,6 +39,7 @@ creation time (`-P -F '#{pane_id}'`); the caller reads it off stdout and hands i
 from __future__ import annotations
 
 from . import tmuxctl
+from .. import util
 
 #: The order slots are dropped in as the terminal shrinks. Sides first — a side panel
 #: costs the harness columns, so it goes as soon as space is tight in EITHER dimension,
@@ -175,8 +185,35 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
     return [x for name in sorted(env or {}) for x in ("-e", f"{name}={env[name]}")]
 
 
+def panel_command(*, slot: str, session: str) -> list[str]:
+    """The command one panel pane runs — the part after `split-window`'s own `--`.
+
+    Split out of :func:`panel_argvs` because a panel is started TWICE by two different
+    modules: once by the launcher's `split-window`, and again by
+    `commands_frame.cmd_respawn`'s `respawn-pane` after the pane's `pane-died` hook
+    fires (#382). Two hand-written copies of this argv is exactly the drift that ends
+    with a respawned panel running a slightly different command from the one the
+    launcher spawned — a stale flag, a missing `--session` — and failing in a way that
+    only ever reproduces after something has already died once.
+
+    **The interpreter half is built here too, not passed in.** This function used to
+    take a *charter_argv* and both callers handed it one, which left the ONE part of
+    the argv that actually differs between them outside the shared helper — and it
+    promptly drifted: the launcher moved to `util.self_relaunch_argv()` for #390's `-P`
+    while `cmd_respawn`, written against the same seam a release earlier, kept a
+    hand-built `[sys.executable, "-m", "charter"]`. That is #390's own failure with a
+    delay fuse on it: `respawn-pane` starts the new process in the PANE's cwd, which for
+    anyone dogfooding charter is a charter checkout, so the respawned panel would import
+    that tree rather than the installed one and die again — this time for a reason
+    nothing in the frame could show. Owning the whole argv here is what makes the
+    extraction actually deliver the no-drift property it was created for: there is no
+    longer a parameter for a caller to get wrong.
+    """
+    return [*util.self_relaunch_argv(), "panel", slot, "--session", session]
+
+
 def panel_argvs(*, slots: list[str], session: str, socket: str,
-                charter_argv: list[str], harness_pane: str,
+                harness_pane: str,
                 env: dict[str, str] | None = None) -> list[list[str]]:
     """One `split-window` per slot in *slots*, each carving its rectangle off *harness_pane*.
 
@@ -215,5 +252,5 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
                           direction, *before, "-l", str(size),
                           *_env_argv(env),
                           "-P", "-F", "#{pane_id}", "--",
-                          *charter_argv, "panel", slot, "--session", session))
+                          *panel_command(slot=slot, session=session)))
     return cmds

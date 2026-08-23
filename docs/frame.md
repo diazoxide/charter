@@ -63,6 +63,27 @@ changed.
 shell's environment whole, so trusting `$COLUMNS` there would lay a panel out at the outer
 terminal's width and wrap inside its own much narrower one.
 
+**A panel that fails says so in its own pane.** Anything charter's own code can see — an
+unknown slot, a renderer that raises, a crash in the panel's poll — is painted into the
+pane as one line, and the panel then stays alive holding it there rather than exiting. That
+last part is the point: a panel process that exits hands its pane to tmux, which writes
+`Pane is dead (status N)` over it after scrolling the pane up one line, and `top` and
+`bottom` are one line tall, so exiting is what made the reason unreadable.
+
+**A panel whose process is gone is respawned, three times.** Deaths charter's own code
+cannot see — the interpreter failing to start, a kill, an out-of-memory — fire that panel's
+own `pane-died` hook, and charter brings the pane back after a growing pause (1s, 2s, 4s).
+After the third attempt it stops and leaves the pane dead with tmux's own message visible.
+That message really is all there is for this half, and not because charter throws anything
+away: an interpreter that cannot start never runs a line, so nothing is written into the
+pane to preserve (measured — a pane whose command is a nonexistent python shows
+`Pane is dead (status 1)` and an empty scrollback behind it). Restarting is the only thing
+that can help a failure like that, which is why it is the half that gets a retry.
+The count is per slot, per frame, and is not reset by a respawn that appears to work: three
+deaths in one frame's life is a broken panel, not a streak to start over. A panel has never
+been able to take the agent down with it; the hook is scoped to the panel's own pane, so it
+cannot reach the harness pane's hooks, which are what carry the agent's exit code.
+
 Charter never touches `~/.tmux.conf` — the frame's settings go into a private server of
 charter's own (`tmux -L charter`), one server shared by every frame on the machine, with
 each frame a session on it.
