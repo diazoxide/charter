@@ -82,6 +82,50 @@ the harness's real status and exits with that. `--no-frame` and the automatic by
 stdout is not a terminal both skip the frame entirely and `exec` straight into the harness,
 so a pipe (`charter claude -p … | jq`) carries the real exit code with no help needed.
 
+## What `charter frame -- <cmd>` accepts
+
+The escape hatch runs whatever **tmux** runs, and charter refuses nothing up front. That
+rule is tmux's rather than charter's, and it has one edge worth knowing (measured against
+tmux 3.7c):
+
+    charter frame -- 'ulimit -n; exit 3'    # ONE argument  → handed to a shell
+    charter frame -- ./build.sh --release   # TWO OR MORE   → exec'd directly, no shell
+
+So a single argument can be a whole command line — builtins, `;`, pipelines, redirection —
+while two or more are looked up as a program and its arguments, with nothing in between to
+expand or resolve them.
+
+Charter deliberately does **not** check the command against `$PATH` before starting it.
+Such a check answers the wrong question for the first form (that text is not even one
+word), and for the second it is a guess where a real answer arrives milliseconds later: a
+command that resolves can still exit 127 on its own, or carry a broken shebang.
+
+## When the command dies before the frame is drawn
+
+This is the one case where you were never attached to anything, so without a report there
+is nothing at all to see — and until 0.50 there wasn't. `charter frame -- nosuchthing`
+returned 127 having printed **zero bytes**; so did anything else that died in the opening
+milliseconds, a harness crashing on a bad config included. Charter now says what happened,
+after the fact, out of what tmux actually did:
+
+    ✗ charter frame: `nosuchthing` exited 127 before the frame was drawn — you were never
+      attached, so nothing it printed was ever on screen.
+      the pane still had this in it:
+        zsh:1: command not found: nosuchthing
+
+The dead pane's own last words are quoted back when there are any — that second line is
+your shell's, whichever shell tmux starts on this machine, and it is more accurate than
+anything charter could write in its place. When there are none — a failed direct exec
+leaves the pane completely empty and a bare exit 1 — charter answers for itself instead,
+telling apart the three states that need three different remedies: on `$PATH`, a file that
+exists but is not executable, or neither.
+
+A command that finishes *successfully* before the frame comes up (`charter frame -- true`)
+is not reported, and its output is not reprinted: that was its stdout, and charter will not
+invent it on stderr. If you want a short command's output, `--no-frame` — or a pipe, which
+bypasses the frame on its own — is the right tool; the frame is for something you sit in
+front of.
+
 ## When the terminal is too small
 
 Below `[frame]`'s `min-cols`/`min-rows`, the side panels (`left`/`right`) are the first to
