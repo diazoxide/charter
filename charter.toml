@@ -9,3 +9,9 @@ share = "local"
 
 [persona]
 default = "steward"
+
+[frame]
+# All four slots: repos down the left, persona chips down the right, the wide repo
+# table across the bottom. `left`/`right` need a terminal at least `min-cols` wide —
+# below that `layout.visible_slots` drops them rather than cramping the harness.
+slots = ["top", "left", "right", "bottom"]
