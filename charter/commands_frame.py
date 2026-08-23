@@ -73,6 +73,26 @@ the write hook second would wipe out the teardown hook the moment it lands — r
 end to end by swapping the two `cmd_launch` calls: the session hung exactly the way it
 did before either hook existed. See `_pane_died_teardown_hook_argv`'s own docstring.
 
+**A command that dies before the frame is drawn is reported AFTER the fact, never
+refused before it (#384).** The eager `#{pane_dead}` check above is exactly what makes
+that death total: it catches the dead pane, runs `kill-session`, and because `code is
+not None` from that moment the entire attach branch — panels, `select-pane`, `attach` —
+is skipped, so there is no pane, no attach, and nothing drawn. Measured under a pty
+against a real tmux 3.7c: **zero bytes**, both for `charter frame -- nosuchthing` and
+for `charter frame -- sh -c 'echo boom >&2; exit 9'` — a far wider class than a missing
+binary. A `shutil.which(argv[0])` pre-check would not have covered that class and would
+have cost something real, because what `charter frame --` accepts is TMUX's rule, not
+charter's: verified against 3.7c that a SINGLE argument is handed to a shell (so
+`charter frame -- 'ulimit -n; exit 3'` is a whole command line — builtins, `;`,
+redirection) while TWO OR MORE are `execvp`'d directly. `which` over the first form asks
+the wrong question of text that is not even one word; over the second it is a prediction
+where a real answer arrives for free a few milliseconds later (a binary that resolves
+can still exit 127 for its own reasons, or carry a broken shebang). So nothing is
+refused, and `early_death_message` builds the report out of what tmux actually did —
+quoting the pane (`_pane_last_words`, read BEFORE `kill-session` destroys it) when the
+shell already said what was wrong, and answering for itself when a failed `execvp` left
+the pane empty and a bare exit 1.
+
 **Every tmux command here goes through `frame/tmuxctl.py`, and the timeout is the
 reason.** `cmd_launch` used to issue eleven `subprocess.run(…, timeout=15)` calls of its
 own with nothing catching `subprocess.TimeoutExpired`. Ten of them run AFTER
@@ -148,6 +168,24 @@ _CHARTER_PY_ENV = tmuxctl.CHARTER_PY_ENV
 #: `cmd_launch` on to `attach` a session with nothing left to end it, recreating the
 #: exact hang the eager check exists to close, just from a signal instead of a race.
 _UNKNOWN_DEATH_CODE = 1
+
+
+#: tmux's own trailer, drawn INTO a dead pane by `remain-on-exit` and therefore the last
+#: line of every capture `_pane_last_words` ever takes (measured against tmux 3.7c: `Pane
+#: is dead (status 127, Sun Aug 23 18:15:16 2026)`). Stripped, because repeating it would
+#: be charter answering in tmux's words immediately after answering in its own — and
+#: because the timestamp makes the line different on every run, which is exactly the kind
+#: of noise an operator learns to skip past. Safe by construction rather than by tmux's
+#: wording holding still: a trailer that stopped matching this is repeated back, which is
+#: merely untidy, never silent.
+_PANE_IS_DEAD = re.compile(r"^Pane is dead\b")
+
+#: How many of a dead pane's own lines charter repeats back. A TAIL, not a head:
+#: `capture-pane -S -` returns the pane's whole history (up to `[frame] history-limit`,
+#: 50 000 by default) and the reason a thing died is at the end of what it printed. Ten
+#: covers a shell's one-line `command not found` and a short traceback, and keeps a
+#: harness that managed a screenful on its way out from burying charter's own line.
+_PANE_LINES_SHOWN = 10
 
 
 def bypass(argv: list[str]) -> int:
@@ -635,6 +673,109 @@ def _query_pane_dead_status(socket: str, harness_pane: str) -> int | None:
     return _UNKNOWN_DEATH_CODE
 
 
+def _pane_last_words(socket: str, harness_pane: str) -> list[str]:
+    """Everything a dead pane still holds, tmux's own trailer stripped off.
+
+    **`-S -` is why this is not a bare `capture-pane -p`, and it was measured rather than
+    reasoned.** `remain-on-exit` appends its own `Pane is dead (…)` line at the bottom,
+    which scrolls the visible screen down by one — so the DEFAULT (visible-screen-only)
+    capture of a command that printed exactly one line comes back with that line already
+    pushed into history and blanks where it used to be. Verified against tmux 3.7c with
+    a missing command: `capture-pane -p` returned tmux's trailer and nothing else, while
+    `capture-pane -p -S -` returned `zsh:1: command not found: …` as well. The single
+    line that matters here is precisely the one the default form loses.
+
+    `report=False`, for the same shape of reason `_query_pane_dead_status` gives: this
+    runs only when `cmd_launch` is already reporting a real failure, and a second,
+    louder line about the DIAGNOSTIC having failed would bury the failure it was sent to
+    explain. An empty answer needs no special casing — `early_death_message` has a
+    complete message either way, which is the property that keeps a failed capture from
+    putting the launch back to the zero bytes #384 is about.
+    """
+    out = tmuxctl.run("reading what the harness printed before it died",
+                      ["tmux", "-L", socket, "capture-pane", "-p", "-S", "-",
+                       "-t", harness_pane],
+                      timeout=5, report=False)
+    if out.returncode != 0:
+        return []
+    lines = [ln.rstrip() for ln in out.stdout.splitlines()]
+    lines = [ln for ln in lines if ln.strip() and not _PANE_IS_DEAD.match(ln)]
+    return lines[-_PANE_LINES_SHOWN:]
+
+
+def _could_not_have_run(word: str) -> str | None:
+    """Why *word* cannot have been a program at all, or ``None`` when it could have.
+
+    Three states, not two, because they take three different remedies and because tmux
+    collapses the last two into one indistinguishable answer (see
+    `early_death_message`): resolvable on `$PATH` — nothing to say, something ran and the
+    exit code is its own; a path that EXISTS but is not executable — `chmod +x`, or name
+    the interpreter; and neither — a typo, or something never installed.
+
+    **Asked only AFTER a launch has already failed, never before one.** The same call
+    used as a pre-check would decide what `charter frame --` ACCEPTS, and it is not
+    entitled to: `shutil.which` answers a question about `execvp`, while tmux hands a
+    lone argument to a shell (see `early_death_message`). Used here it decides only how
+    an error that has already happened is worded, which narrows nothing.
+    """
+    if shutil.which(word):
+        return None
+    if os.path.exists(word):
+        return (f"`{word}` is a file that exists but is not executable — `chmod +x` it, "
+                f"or put its interpreter first")
+    return (f"`{word}` is neither on $PATH nor a path that exists, and with two or more "
+            f"words there is no shell in the way to resolve it — so nothing ran")
+
+
+def early_death_message(argv: list[str], code: int, last_words: list[str]) -> str:
+    """What an operator is told when their command died before the frame was ever drawn.
+
+    **The design call #384 left open, and the argument for taking it this way.** `charter
+    <harness>` can refuse a missing binary before tmux (see `cmd_launch`'s `if h and not
+    shutil.which(h.binary)`), because charter chose that name itself. `charter frame --
+    <cmd>` cannot be closed the same way without changing what it ACCEPTS, and what it
+    accepts is tmux's rule, not charter's — verified against tmux 3.7c:
+
+    * ONE argument is handed to a shell. `charter frame -- 'ulimit -n; exit 3'` is a
+      whole command line: builtins, `;`, pipelines, redirection. `shutil.which` over that
+      argument is not a stricter check, it is a check of the wrong thing — the text is
+      not even one word.
+    * TWO OR MORE arguments are `execvp`'d directly, with no shell anywhere.
+
+    So nothing is refused up front. The failure is reported afterwards, out of what tmux
+    actually did — which costs one `capture-pane` on a path that has already failed, and
+    is an ANSWER where a pre-check could only ever have been a prediction (a binary that
+    resolves can still exit 127 for its own reasons, or have a broken shebang).
+
+    The two forms leave two different residues, which is why this message has two shapes:
+
+    * one argument, missing command — the shell runs, prints its own `command not found`,
+      exits **127**. Accurate words already exist; they are just in a pane nobody ever
+      attached to, so charter repeats them back rather than inventing worse ones.
+    * two or more, missing command — `execvp` fails inside tmux's own child, which exits
+      **1** with the pane completely EMPTY. There is nothing to repeat, and a bare 1 is
+      indistinguishable from a program that ran and failed. Only there does charter
+      answer the resolution question itself (`_could_not_have_run`), and only because
+      with no shell involved the inference is sound: a word that resolves to nothing
+      provably could not have run.
+
+    Charter fills SILENCE and does not argue with a pane that already spoke — hence the
+    early return. A program that printed and then failed plainly did run, so a `$PATH`
+    note layered on top of its own words would be wrong as often as not.
+    """
+    lines = [f"charter frame: `{' '.join(argv)}` exited {code} before the frame was "
+             f"drawn — you were never attached, so nothing it printed was ever on screen."]
+    if last_words:
+        lines.append("  the pane still had this in it:")
+        lines.extend(f"    {ln}" for ln in last_words)
+        return "\n".join(lines)
+    lines.append("  the pane was empty — it printed nothing at all.")
+    note = _could_not_have_run(argv[0]) if len(argv) > 1 else None
+    if note:
+        lines.append(f"  {note}")
+    return "\n".join(lines)
+
+
 def cmd_launch(args) -> int:
     """One launcher, shared by every registered harness and by `charter frame --`."""
     if getattr(args, "probe", False):
@@ -681,7 +822,11 @@ def cmd_launch(args) -> int:
     # verbatim word, and it is allowed to be a shell builtin, a relative path, or
     # anything else tmux's own resolution accepts — a `which` check over THAT would
     # narrow what the escape hatch accepts, which is a design change and not this fix.
-    # So the escape hatch keeps its current behaviour exactly, unchanged.
+    #
+    # The escape hatch's ACCEPTANCE is still exactly that: nothing is refused for it, and
+    # #384 deliberately did not change that either (see the module docstring, and
+    # `early_death_message`'s own). Its SILENCE is what changed — the same death is now
+    # legible from the other end, once tmux has already answered.
     if h and not shutil.which(h.binary):
         return bypass(argv)
 
@@ -884,6 +1029,19 @@ def cmd_launch(args) -> int:
     code = _query_pane_dead_status(SOCKET, harness_pane)
     if code is not None:
         state.record_exit(fid, code)
+        if code != 0:
+            # The one path on which NOTHING is ever drawn (#384): no panels, no
+            # `select-pane`, no `attach` — the whole `if code is None:` block below is
+            # skipped from here on — so this is the only chance the operator has of
+            # learning anything at all. Read the pane BEFORE `kill-session` destroys it;
+            # afterwards there is nothing left to read.
+            #
+            # Only for a FAILURE. A command that finished cleanly before the frame came
+            # up (`charter frame -- true`) reaches this same branch with 0, and whatever
+            # it wrote was its stdout — charter repeating that onto stderr would be
+            # inventing output on the wrong stream. Its exit code is the whole message.
+            util.err(early_death_message(argv, code,
+                                         _pane_last_words(SOCKET, harness_pane)))
         tmuxctl.run("ending the frame after an early death",
                     ["tmux", "-L", SOCKET, "kill-session", "-t", fid], env=env)
 

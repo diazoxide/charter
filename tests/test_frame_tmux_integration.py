@@ -273,6 +273,24 @@ def _await_client(session: str, exclude: frozenset, pid: int) -> str:
     return ""
 
 
+def _await_dead(pane: str, timeout: float = 5.0) -> int | None:
+    """Poll the launcher's OWN `_query_pane_dead_status` until *pane* is gone.
+
+    Polled rather than slept for the same reason `_await_file` is: how long tmux takes to
+    reap a child and mark its pane dead is a property of the machine, and a fixed sleep
+    turns a loaded one into a failure instead of a slow pass. `None` back means the pane
+    was still alive when time ran out — which the caller asserts on, since every command
+    handed to this module's own helper is built to die at once.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        code = commands_frame._query_pane_dead_status(SOCKET, pane)
+        if code is not None:
+            return code
+        time.sleep(0.1)
+    return None
+
+
 class _NeedsAttachedClient:
     """`_attach_pty` for the two classes that need a REAL, ATTACHED client, and the
     capability probe that decides whether this machine can give them one.
@@ -1803,6 +1821,146 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         for slot, pane in panes.items():
             self.assertEqual(self._alive(pane), "0",
                              f"the {slot!r} panel died sometime after repainting")
+
+
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class EarlyDeathIntegration(unittest.TestCase):
+    """#384: what a command that dies before the frame is drawn actually leaves behind.
+
+    `commands_frame.early_death_message`'s whole design rests on facts about TMUX, not
+    about charter — which of `sh -c` and `execvp` runs a given `charter frame -- <cmd>`,
+    and what each leaves in the pane when the command is not there. Those were measured
+    by hand against tmux 3.7c while deciding not to add a `shutil.which()` pre-check;
+    this class is that hand-measurement turned into something that reruns.
+
+    **The acceptance contract is the first two tests, and they are the reason the
+    pre-check was refused.** tmux's own rule: ONE argument is handed to a shell, TWO OR
+    MORE are `execvp`'d directly. So `charter frame -- 'exit 7'` is a shell command line
+    — `shutil.which` over that text would be asking the wrong question of the wrong
+    string — while `charter frame -- exit 7` is a direct exec of a program called `exit`
+    that does not exist. Neither test names a version; both read what this tmux does.
+
+    Assertions are deliberately about the exit code and about what reaches the MESSAGE,
+    never about a shell's exact wording (`sh`, `bash`, `dash` and `zsh` all phrase
+    "command not found" differently, and tmux's `default-shell` is whatever the machine
+    says) and never about a tmux version string.
+    """
+
+    #: A word no `$PATH` will resolve and no file is named — the same shape
+    #: `tests/test_frame_launcher.py` uses, spelled long enough that a machine that
+    #: somehow HAS it would be telling us something worth knowing.
+    MISSING = "charter-definitely-not-a-real-binary-xyz"
+
+    def setUp(self) -> None:
+        self.addCleanup(self._teardown_socket)
+        self._conf_dir = Path(tempfile.mkdtemp(prefix="charter-integ-death-"))
+        self.addCleanup(shutil.rmtree, self._conf_dir, True)
+        self._n = 0
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own server, THEN unlink its socket file — see
+        `PanelIntegration._teardown_socket` for the full reasoning, identical here.
+        Load-bearing rather than tidy for THIS class specifically: its sessions arm
+        `remain-on-exit`, so a dead pane's session does not end on its own and tmux's
+        `exit-empty` default never gets the chance to retire the server."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
+
+    def _die(self, *harness_argv: str) -> tuple[str, int | None]:
+        """Run *harness_argv* the way `cmd_launch` runs it, and wait for it to die.
+
+        Built from `layout.session_argv` and `commands_frame._PLACEHOLDER_CONF` rather
+        than a hand-retyped `new-session`, so this measures the exact bytes the launcher
+        sends — including `--`, which is what stops tmux reading a leading `-` in an
+        operator's own command as one of its own flags.
+
+        `remain-on-exit` is armed BOTH ways for the same reason `cmd_launch` arms it both
+        ways: the placeholder's `-f` is honoured only by the call that STARTS the server,
+        so the second and later sessions in one test would otherwise let their pane
+        vanish the instant it died — and a pane that is gone answers nothing, which would
+        make every assertion below vacuous rather than red.
+        """
+        self._n += 1
+        name = f"d{self._n}"
+        conf = self._conf_dir / f"{name}.conf"
+        conf.write_text(commands_frame._PLACEHOLDER_CONF)
+        _tmux("set", "-g", "remain-on-exit", "on")  # no-op (and an error) before the
+                                                    # first session; `-f` covers that one
+        r = _run(layout.session_argv(session=name, conf=str(conf), socket=SOCKET,
+                                     cols=80, rows=24, harness_argv=list(harness_argv)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pane = r.stdout.strip()
+        self.assertTrue(pane, "tmux reported no pane id for the new session")
+        return pane, _await_dead(pane)
+
+    def test_a_lone_argument_reaches_a_shell_not_execvp(self):
+        """Half of the contract `charter frame --` is not allowed to narrow. `exit 7` is
+        not a program on any machine — it is shell syntax, and it comes back as 7 only if
+        tmux ran it through a shell. A `shutil.which(argv[0])` pre-check would refuse
+        this text outright (it is not even one word), which is why #384's fix reports
+        after the fact instead of predicting beforehand."""
+        pane, code = self._die("exit 7")
+        self.assertEqual(code, 7,
+                         "a single argument must reach a shell — `charter frame -- "
+                         "'ulimit -n; exit 3'` and every other one-liner depend on it")
+
+    def test_two_or_more_arguments_are_exec_d_directly_with_no_shell(self):
+        """The other half, and what makes charter's own `$PATH` note SOUND rather than a
+        guess: split into two arguments, the same text is `execvp`'d, so `exit` is looked
+        up as a program, is not found, and cannot possibly have run. A word that resolves
+        to nothing in THIS form provably never executed — which is the one condition
+        under which `_could_not_have_run` is allowed to speak."""
+        pane, code = self._die("exit", "7")
+        self.assertIsNotNone(code, "the pane should have died at once")
+        self.assertNotEqual(code, 7,
+                            "`exit 7` must NOT be interpreted by a shell once it is two "
+                            "arguments — charter's own diagnosis depends on the split")
+        self.assertNotEqual(code, 0)
+
+    def test_a_missing_commands_own_words_survive_into_the_report(self):
+        """The fix's load-bearing measurement: the shell's `command not found` is still
+        readable in the dead pane, so charter never has to invent a worse sentence.
+
+        This is also what fails if `-S -` is ever dropped from `_pane_last_words`.
+        Measured against tmux 3.7c: `remain-on-exit` appends its own `Pane is dead (…)`
+        line, which scrolls the visible screen by one — so a plain `capture-pane -p` of a
+        command that printed exactly ONE line comes back with blanks where that line was.
+        The whole message lives in the line the default form loses.
+
+        No shell's exact phrasing is asserted (`sh`, `dash`, `bash` and `zsh` all differ,
+        and tmux uses the machine's own `default-shell`) — only that the missing word
+        itself comes back, which every one of them names."""
+        pane, code = self._die(self.MISSING)
+        self.assertIsNotNone(code, "the pane should have died at once")
+        self.assertNotEqual(code, 0)
+        words = commands_frame._pane_last_words(SOCKET, pane)
+        self.assertTrue(any(self.MISSING in ln for ln in words),
+                        f"the shell said what was wrong and charter could not read it "
+                        f"back: {words!r}")
+        self.assertFalse(any("Pane is dead" in ln for ln in words),
+                         f"tmux's own trailer must not be quoted back: {words!r}")
+        msg = commands_frame.early_death_message([self.MISSING], code, words)
+        self.assertIn(self.MISSING, msg)
+
+    def test_the_operator_is_named_the_command_whichever_residue_tmux_left(self):
+        """End to end for the form that leaves charter nothing to quote. Measured
+        against tmux 3.7c: a failed `execvp` exits tmux's own child with 1 and an
+        entirely EMPTY pane — no shell ran, so nothing said `command not found`, and a
+        bare 1 is indistinguishable from a program that ran and failed.
+
+        Asserted on the MESSAGE rather than on the pane being empty, deliberately. Which
+        residue a given tmux leaves is that tmux's business, and charter is correct
+        either way — it quotes the pane when there is one and answers for itself when
+        there is not. What must never differ is that the operator is told which command
+        died, which is the whole of #384. The branch-specific wording is pinned where it
+        can be pinned exactly, in `tests/test_frame_launcher.py::EarlyDeathIsLegible`."""
+        pane, code = self._die(self.MISSING, "--flag")
+        self.assertIsNotNone(code, "the pane should have died at once")
+        self.assertNotEqual(code, 0)
+        words = commands_frame._pane_last_words(SOCKET, pane)
+        msg = commands_frame.early_death_message([self.MISSING, "--flag"], code, words)
+        self.assertIn(self.MISSING, msg)
+        self.assertIn(str(code), msg)
 
 
 if __name__ == "__main__":

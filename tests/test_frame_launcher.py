@@ -650,14 +650,17 @@ class _FakeTmux:
 
     def __init__(self, *, pane_id="%7", exit_code=None, race_death_status=None,
                 still_live=False, pre_existing_sessions=frozenset(),
-                panel_pane_ids=None,
+                panel_pane_ids=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
-                kill_rc=0, arm_rc=0, resize_hook_rc=0,
+                kill_rc=0, arm_rc=0, resize_hook_rc=0, capture_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
         self.exit_code = exit_code
         self.race_death_status = race_death_status
+        # What `capture-pane` reports the dead pane still had in it — the ONLY place a
+        # command that died before `attach` ever got the chance to say anything (#384).
+        self.pane_capture = pane_capture
         self.still_live = still_live
         self.pre_existing_sessions = pre_existing_sessions
         # slot -> pane id `split-window` reports for it. Empty by default (see
@@ -676,6 +679,7 @@ class _FakeTmux:
         self.kill_rc = kill_rc
         self.arm_rc = arm_rc
         self.resize_hook_rc = resize_hook_rc
+        self.capture_rc = capture_rc
         # Distinct from every other stderr string in this fake — a test needs to
         # control it independently to exercise the "invalid option" degrade (fix
         # round 3, item 2) separately from an ordinary resize-hook failure.
@@ -737,6 +741,10 @@ class _FakeTmux:
         if "display-message" in cmd:
             out = f"1:{self.race_death_status}" if self.race_death_status is not None else "0:"
             return subprocess.CompletedProcess(cmd, self.dm_rc, stdout=out, stderr="")
+        if "capture-pane" in cmd:
+            return subprocess.CompletedProcess(cmd, self.capture_rc,
+                                               stdout=self.pane_capture if self.capture_rc == 0 else "",
+                                               stderr="" if self.capture_rc == 0 else "no such pane")
         if "kill-session" in cmd:
             self.kill_session_called = True
             return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
@@ -1490,6 +1498,221 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertIn("frame_dir_create", order)
         self.assertLess(order.index("reap"), order.index("frame_dir_create"),
                         f"reap must run before this frame's own directory is created: {order}")
+
+
+class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
+    """#384: a command that dies before the frame is drawn must not die in silence.
+
+    The exact shape of that silence, measured under a pty against a real tmux 3.7c:
+    `new-session` starts the command, it dies instantly, the eager
+    `_query_pane_dead_status` catches the dead pane, `kill-session` runs, and because
+    `code is not None` from that moment the ENTIRE `if code is None:` block — panels,
+    `select-pane`, `attach` — is skipped. There is no pane and no attach, so **zero
+    bytes** reach the operator and the launch returns a number with no explanation.
+
+    `MissingHarnessBinary` above closes this for a REGISTERED harness by refusing before
+    tmux is ever reached — charter chose that binary's name, so `shutil.which` is asking
+    about charter's own claim. The escape hatch cannot be closed that way, and that is
+    the design call #384 left open: `charter frame -- <cmd>` runs whatever TMUX runs, and
+    tmux's own rule (verified against 3.7c) is that ONE argument goes to a shell — so
+    `charter frame -- 'ulimit -n; exit 3'` is a whole shell command line, builtin and
+    all — while TWO OR MORE are `execvp`'d directly. A `shutil.which(argv[0])` pre-check
+    answers neither question: it would refuse the shell form outright, and for the
+    `execvp` form it would still be a prediction where an answer is available for free a
+    few milliseconds later. So nothing is refused up front; the failure is reported
+    afterwards, out of what tmux actually did.
+
+    Charter has to say two different things because tmux leaves two different residues
+    (both measured against 3.7c, both pinned by
+    `tests/test_frame_tmux_integration.py::EarlyDeathIntegration`):
+
+    * ONE argument, missing command — the shell runs, prints `command not found`, exits
+      **127**. The accurate words already exist; they are just in a pane nobody ever
+      attached to. Charter repeats them back.
+    * TWO OR MORE arguments, missing command — `execvp` fails inside tmux's own child,
+      which exits **1** with the pane completely EMPTY. Nothing to repeat, and a bare 1
+      is indistinguishable from a program that ran and failed. Only there does charter
+      answer the resolution question itself.
+    """
+
+    def test_a_command_that_dies_before_the_frame_is_drawn_says_so(self):
+        """The headline defect. Nothing on `$PATH` resolves for the duration — the
+        strongest form of the question and the one that pins the CONTRACT at the same
+        time: the launch must still reach `new-session` (refusing here would narrow what
+        the escape hatch accepts) and must still come back with charter's own account of
+        what happened.
+
+        Asserts charter's OWN framing — the phrase and the exit code — rather than the
+        command's name, which also appears in the pane text
+        `test_the_dead_panes_own_last_words_are_repeated_back` covers. Deleting only the
+        `capture-pane` call leaves this test green and that one red, and vice versa;
+        asserting on the name alone would have collapsed the two into one."""
+        fake = _FakeTmux(race_death_status=127,
+                         pane_capture="zsh:1: command not found: nosuchthing-xyz\n")
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake, harness="", rest=["--", "nosuchthing-xyz"],
+                         which=lambda name, *a, **k: None)
+        self.assertEqual(rc, 127)
+        self.assertTrue(any("new-session" in c for c in fake.calls),
+                        "the escape hatch must still run a command that is not on $PATH")
+        self.assertTrue(any("charter frame:" in m and "127" in m for m in buf),
+                        f"the operator was told nothing about a dead frame: {buf}")
+
+    def test_the_dead_panes_own_last_words_are_repeated_back(self):
+        """The half charter cannot write itself. A lone `nosuchthing-xyz` reaches a
+        SHELL (tmux's one-argument rule), and the shell's own `command not found` names
+        the word, the interpreter and the line — all of it accurate, all of it in a pane
+        that is about to be killed without ever having been drawn. Reading it back out
+        before `kill-session` is what turns tmux's silence into a report."""
+        fake = _FakeTmux(race_death_status=127,
+                         pane_capture="zsh:1: command not found: nosuchthing-xyz\n")
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            _launch(fake, harness="", rest=["--", "nosuchthing-xyz"])
+        self.assertTrue(any("command not found: nosuchthing-xyz" in m for m in buf),
+                        f"the pane's own last words never reached the operator: {buf}")
+
+    def test_the_pane_is_read_before_the_session_is_killed(self):
+        """Ordering, and load-bearing rather than incidental — `kill-session` destroys
+        the pane, so a capture issued after it can only ever come back empty. Pinned by
+        comparing indices, the same way
+        `test_the_write_hook_is_installed_before_the_teardown_hook` pins the other
+        ordering this launcher depends on.
+
+        `"set-hook" not in c` is not decoration: `_pane_died_teardown_hook_argv`'s ACTION
+        is the literal string `kill-session`, so an unfiltered search finds the hook
+        INSTALL — issued long before either the capture or the real teardown — and this
+        test failed against a correct implementation until it stopped matching that."""
+        fake = _FakeTmux(race_death_status=127, pane_capture="boom\n")
+        with mock.patch("charter.util.err"):
+            _launch(fake, harness="", rest=["--", "nosuchthing-xyz"])
+        capture_idx = next(i for i, c in enumerate(fake.calls) if "capture-pane" in c)
+        kill_idx = next(i for i, c in enumerate(fake.calls)
+                        if "kill-session" in c and "set-hook" not in c)
+        self.assertLess(capture_idx, kill_idx,
+                        "the pane must be read BEFORE it is destroyed, or there is "
+                        "nothing left to read")
+
+    def test_a_clean_early_exit_is_not_reported_as_a_failure(self):
+        """`charter frame -- true` finishes before the frame is drawn too, and reaches
+        this exact path with status 0. Nothing is wrong, so nothing is said — and the
+        pane is not even read: whatever a SUCCESSFUL command wrote was its stdout, and
+        charter repeating it onto stderr would be inventing output on the wrong stream.
+        The exit code is the whole message."""
+        fake = _FakeTmux(race_death_status=0, pane_capture="hi\n")
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake, harness="", rest=["--", "true"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(buf, [], f"a clean early exit must say nothing: {buf}")
+        self.assertFalse(any("capture-pane" in c for c in fake.calls),
+                         "a successful command's own output is not charter's to reprint")
+
+    def test_a_launch_that_reaches_attach_never_reads_the_pane(self):
+        """The ordinary path: the operator WAS attached and watched the harness live and
+        die on their own screen. Reading the pane back there and printing it would
+        replay the entire session onto stderr after the fact. The report belongs to the
+        one path where nothing was ever shown."""
+        fake = _FakeTmux(exit_code=3, pane_capture="a whole session\n")
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 3)
+        self.assertFalse(any("capture-pane" in c for c in fake.calls),
+                         "a frame the operator actually saw must not be replayed at them")
+        self.assertEqual(buf, [])
+
+    def test_tmuxs_own_dead_pane_trailer_is_not_repeated_back(self):
+        """`remain-on-exit` draws `Pane is dead (status 127, <date>)` INTO the pane —
+        measured against tmux 3.7c, and it is the last line every capture of a dead pane
+        comes back with. Echoing it would be charter reporting in tmux's words, at
+        length, immediately after saying the same thing in its own; and the timestamp
+        makes the line different on every single run. Filtered out — and the filter is
+        safe by construction rather than by tmux's wording never changing: a trailer that
+        stopped matching would be repeated back, which is merely noisy, never silent."""
+        fake = _FakeTmux(
+            race_death_status=127,
+            pane_capture="zsh:1: command not found: nope\n\n"
+                         "Pane is dead (status 127, Sun Aug 23 18:15:16 2026)\n")
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            _launch(fake, harness="", rest=["--", "nope"])
+        self.assertTrue(any("command not found: nope" in m for m in buf), buf)
+        self.assertFalse(any("Pane is dead" in m for m in buf),
+                         f"tmux's own trailer was repeated back at the operator: {buf}")
+
+    def test_a_capture_that_fails_still_leaves_charters_own_account(self):
+        """The capture is additive, never the report itself. A `capture-pane` that fails
+        outright (the pane raced away, a wedged server) must not take the message down
+        with it — that would put the launch straight back to the zero bytes #384 is
+        about. Nor is the failed capture itself reported: the operator is already being
+        told about a real failure, and a second line about the diagnostic charter tried
+        to run buries it."""
+        fake = _FakeTmux(race_death_status=127, capture_rc=1)
+        errored, warned = [], []
+        with mock.patch("charter.util.err", side_effect=lambda m: errored.append(m)), \
+             mock.patch("charter.util.warn", side_effect=lambda m: warned.append(m)):
+            rc = _launch(fake, harness="", rest=["--", "nosuchthing-xyz"])
+        self.assertEqual(rc, 127)
+        self.assertEqual(len(errored), 1,
+                         f"exactly one account of the failure, not two: {errored}")
+        self.assertIn("127", errored[0])
+        self.assertEqual(warned, [])
+
+    def test_a_multi_word_command_that_printed_nothing_is_diagnosed_against_the_path(self):
+        """The case tmux leaves charter nothing to work with. Measured against 3.7c: two
+        or more arguments are `execvp`'d directly, and a failed `execvp` exits tmux's own
+        child with **1** and an EMPTY pane — no shell was ever involved, so nothing said
+        `command not found`. A bare 1 is indistinguishable from a program that ran and
+        failed, so this is the one place charter answers the resolution question itself.
+
+        Sound, not a guess: with no shell in the way, a word that resolves to nothing
+        provably could not have run."""
+        with mock.patch("charter.commands_frame.shutil.which", return_value=None):
+            msg = commands_frame.early_death_message(["nosuchthing-xyz", "--flag"], 1, [])
+        self.assertIn("nosuchthing-xyz", msg)
+        self.assertIn("$PATH", msg)
+
+    def test_a_lone_word_is_never_diagnosed_against_the_path(self):
+        """The contract, stated as a message rather than as a refusal — and the test
+        that fails if anyone "simplifies" the diagnosis into a blanket check of
+        `argv[0]`. tmux hands a SINGLE argument to a shell, so that argument is a shell
+        command line: `ulimit` is a builtin no `$PATH` will ever hold, and the text here
+        is not even one word. `shutil.which` has nothing to say about it, so charter
+        does not pretend otherwise — the shell already spoke, and
+        `test_the_dead_panes_own_last_words_are_repeated_back` is how that reaches the
+        operator."""
+        with mock.patch("charter.commands_frame.shutil.which", return_value=None):
+            msg = commands_frame.early_death_message(["ulimit -n; exit 3"], 3, [])
+        self.assertNotIn("$PATH", msg)
+        self.assertIn("3", msg)
+
+    def test_a_pane_that_spoke_for_itself_is_never_second_guessed(self):
+        """The second half of the same rule: charter fills SILENCE, it does not argue
+        with a pane that already said what went wrong. A command whose own words came
+        back gets those words and no `$PATH` speculation layered on top — which would be
+        wrong as often as not, since a program that printed and then failed plainly did
+        run."""
+        with mock.patch("charter.commands_frame.shutil.which", return_value=None):
+            msg = commands_frame.early_death_message(
+                ["nosuchthing-xyz", "--flag"], 1, ["config: no such profile 'x'"])
+        self.assertIn("config: no such profile 'x'", msg)
+        self.assertNotIn("$PATH", msg)
+
+    def test_an_existing_but_unexecutable_path_is_told_apart_from_a_missing_one(self):
+        """Three states, not two — "resolvable on `$PATH`", "a path that exists", and
+        "neither" — because they need three different remedies and `execvp` fails
+        identically for the last two (exit 1, empty pane). Telling an operator to check
+        their `$PATH` for a script sitting right there, missing only `chmod +x`, sends
+        them looking in the wrong place."""
+        script = self.tmp / "not-executable.sh"
+        script.write_text("#!/bin/sh\necho hi\n")  # deliberately never chmod +x'd
+        with mock.patch("charter.commands_frame.shutil.which", return_value=None):
+            msg = commands_frame.early_death_message([str(script), "--flag"], 1, [])
+        self.assertIn("not executable", msg)
+        self.assertNotIn("$PATH", msg,
+                         "a file that is right there is not a $PATH problem")
 
 
 class BypassRouting(unittest.TestCase):
