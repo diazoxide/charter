@@ -1,9 +1,11 @@
 """Every nudge charter emits is countable, including the dispatch one (#367).
 
-`_ask` leaves an `ask-pending` marker so the outcome can be tallied: `posttooluse_bash`
-clears it when the tool actually runs, and that clearing is recorded as `ask-approved`. It
-deliberately does not trace the ask itself — "callers trace their own event name, so they
-must not also record an 'ask' that never reached anybody".
+`_ask` leaves an `ask-pending` marker so the outcome can be tallied: `_ask_approved` clears
+it when the tool actually runs, and that clearing is recorded as `<kind>-approved` — named
+for the nudge that earned it since #375, so `dispatch-ask` pairs with
+`dispatch-ask-approved` rather than both guards sharing one counter. `_ask` deliberately
+does not trace the ask itself — "callers trace their own event name, so they must not also
+record an 'ask' that never reached anybody".
 
 Three sites called it. `pretooluse` traced `ask`, `pretooluse_edit` traces `routing-ask`,
 and `pretooluse_dispatch` traced nothing while still passing `data` — so its approvals were

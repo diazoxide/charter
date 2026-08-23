@@ -113,11 +113,27 @@ def _unattended(data: dict) -> bool:
     return (data or {}).get("permission_mode") == UNATTENDED_MODE
 
 
-def _ask(event: str, reason: str, data: dict | None = None) -> bool:
+#: Every nudge charter can raise, named by the ask event its site records — and therefore
+#: by the approval event that nudge earns (``<kind>-approved``). This is the list
+#: :func:`_ask_mark_take` looks in, so a nudge missing from it leaves a marker nothing ever
+#: takes: its asks are counted, its approvals never are, and the ratio reads as "nobody
+#: ever approves this" — which is the shape of the conclusion #371 acted on, reached
+#: falsely. Nothing in the type system can hold that, so
+#: `test_ask_approval_names_its_nudge.py` ties this tuple to the actual `_ask` call sites.
+_ASK_KINDS = ("routing-ask", "dispatch-ask")
+
+
+def _ask(event: str, reason: str, kind: str, data: dict | None = None) -> bool:
     """Surface a nudge and let the developer decide (not a hard block).
 
+    *kind* is the ask event this call site records — one of :data:`_ASK_KINDS`. It is what
+    makes the approval attributable: the marker is named with it, so :func:`_ask_approved`
+    can record ``<kind>-approved`` without `PostToolUse` — which knows a tool family and
+    never which guard asked — having to be told anything. Required rather than defaulted,
+    so a third nudge cannot arrive uncountable by omission (#375).
+
     Pass ``data`` (the hook payload) to make the outcome countable: it leaves a marker
-    keyed by this call's ``tool_use_id``, which :func:`posttooluse_bash` clears if the tool
+    keyed by this call's ``tool_use_id``, which :func:`_ask_approved` clears if the tool
     actually runs. Without it an ask is unmeasurable — which is how 231 clone-commit
     prompts accumulated with no evidence for or against keeping the guard (#290).
 
@@ -140,7 +156,7 @@ def _ask(event: str, reason: str, data: dict | None = None) -> bool:
         _trace("ask-unattended", data.get("session_id"), reason=reason[:70])
         return False
     if data is not None:
-        _ask_mark_set(data.get("session_id"), data.get("tool_use_id"))
+        _ask_mark_set(data.get("session_id"), data.get("tool_use_id"), kind)
     _emit({"hookSpecificOutput": {
         "hookEventName": event,
         "permissionDecision": "ask",
@@ -149,17 +165,29 @@ def _ask(event: str, reason: str, data: dict | None = None) -> bool:
     return True
 
 
-def _ask_mark(sid, tuid):
+def _ask_mark(sid, tuid, kind):
     """One file per PENDING ask. Same shape as `_route_mark` — a marker in the sessions
-    dir, named by ids only. No prompt text, no command, nothing but the correlation key."""
-    if not sid or not tuid:
+    dir, named by ids only. No prompt text, no command, nothing but the correlation key
+    and which nudge raised it.
+
+    **The kind is in the NAME, and the file stays empty** (#375). It has to travel somehow:
+    a `PostToolUse` payload says which tool family ran and never which guard asked, so
+    before this every approval landed in one undifferentiated `ask-approved` and "is THIS
+    nudge earning its interruptions" — the only form the question is ever asked in — had no
+    answer. The name keeps the property this marker was designed for, where contents would
+    not: a kind is a fixed string chosen in code (:data:`_ASK_KINDS`), never a value out of
+    the payload, so nothing about the work can reach the filesystem through it. It also
+    keeps creation atomic — the `touch` IS the record, with no second write to be torn
+    across — and keeps the read side a `stat()`.
+    """
+    if not sid or not tuid or not kind:
         return None
     safe = lambda v: re.sub(r"[^A-Za-z0-9._-]", "", str(v))  # noqa: E731 — becomes a filename
-    return config.SESSIONS_DIR / f"{safe(sid)}.{safe(tuid)}.ask-pending"
+    return config.SESSIONS_DIR / f"{safe(sid)}.{safe(tuid)}.{safe(kind)}.ask-pending"
 
 
-def _ask_mark_set(sid, tuid) -> None:
-    f = _ask_mark(sid, tuid)
+def _ask_mark_set(sid, tuid, kind) -> None:
+    f = _ask_mark(sid, tuid, kind)
     if f is None:
         return
     try:
@@ -169,17 +197,26 @@ def _ask_mark_set(sid, tuid) -> None:
         pass
 
 
-def _ask_mark_take(sid, tuid) -> bool:
-    """True exactly once per pending ask — the unlink IS the idempotency, so a replayed
-    PostToolUse cannot inflate the approval count."""
-    f = _ask_mark(sid, tuid)
-    if f is None or not f.exists():
-        return False
-    try:
-        f.unlink()
-        return True
-    except OSError:
-        return False
+def _ask_mark_take(sid, tuid) -> str | None:
+    """The kind of the pending ask, exactly once — the unlink IS the idempotency, so a
+    replayed PostToolUse cannot inflate the approval count. ``None`` when none is pending.
+
+    One `stat()` per registered nudge (two today) rather than one overall, because the
+    caller knows the ids and not the kind. Deliberately not a `glob`: this runs on every
+    call of every tool a nudge can be raised on, and a directory scan there grows with the
+    number of markers in the sessions dir, while a fixed pair of `stat()`s on a path that
+    is almost always absent does not.
+    """
+    for kind in _ASK_KINDS:
+        f = _ask_mark(sid, tuid, kind)
+        if f is None or not f.exists():
+            continue
+        try:
+            f.unlink()
+            return kind
+        except OSError:
+            return None
+    return None
 
 
 def _ask_approved(data: dict) -> None:
@@ -196,18 +233,30 @@ def _ask_approved(data: dict) -> None:
     and the two nudges that remain raise on ``Task|Agent`` and on ``Write|Edit|MultiEdit``
     — so every approval either of them ever received was already uncountable, and the
     deletion would have pinned the numerator at zero for good. Two code paths answering
-    "was this nudge approved?" is how that stayed invisible; there is now one.
+    "was this nudge approved?" is how that stayed invisible; there is now one. The kind
+    travels in the marker's NAME for that same reason: a per-family approval event would
+    put the question back into three places, one per handler.
 
-    **Kept to a stat() on the common path.** Every caller is registered against every call
-    of its tool, so the overwhelming majority of invocations must find no marker and return
-    having written nothing — no trace line, no read of the trace, no import beyond what is
-    already loaded.
+    **Recorded as ``<kind>-approved``, never as a bare ``ask-approved``** (#375). The ask
+    half already names its guard — `routing-ask` and `dispatch-ask` are separate events on
+    purpose, so a judgement about one is never made from rows belonging to another — and an
+    approval counter shared between them gives back exactly what that separation bought.
+    Pairing by NAME rather than by a field is what makes it readable: `charter trace
+    --summary` aggregates event names and nothing else, so `routing-ask=5,
+    routing-ask-approved=3` is a ratio on the line that already exists, where a `reason`
+    field would not appear in the summary at all.
+
+    **Kept to a stat() on the common path** — now one per registered nudge. Every caller is
+    registered against every call of its tool, so the overwhelming majority of invocations
+    must find no marker and return having written nothing: no trace line, no read of the
+    trace, no read of any marker, no import beyond what is already loaded.
     """
     try:
         sid, tuid = data.get("session_id"), data.get("tool_use_id")
-        if not _ask_mark_take(sid, tuid):
+        kind = _ask_mark_take(sid, tuid)
+        if kind is None:
             return
-        _trace("ask-approved", sid)
+        _trace(f"{kind}-approved", sid)
     except Exception:
         return  # bookkeeping must never break a turn
 
@@ -2195,11 +2244,14 @@ def pretooluse_dispatch() -> int:
                 f"`{agent}` writes code and {peers} "
                 f"{'is' if len(others) == 1 else 'are'} already running. They share one "
                 f"working tree, so parallel edits interleave silently. Dispatch this one "
-                f"with `isolation: worktree`, or let the other finish first.", data):
+                f"with `isolation: worktree`, or let the other finish first.",
+                "dispatch-ask", data):
             # The ask half of the tally. Passing `data` above already leaves the marker
-            # `posttooluse_bash` turns into an `ask-approved`, so without this row those
-            # approvals counted against a denominator nothing ever incremented — the exact
-            # shape #290 was filed to remove, left behind at the third of three sites.
+            # `_ask_approved` turns into a `dispatch-ask-approved` — named for this nudge
+            # since #375, so the ratio is this guard's and not a pool shared with the
+            # routing one — so without this row those approvals counted against a
+            # denominator nothing ever incremented, the exact shape #290 was filed to
+            # remove, left behind at the third of three sites.
             #
             # Its own event name, not `ask`: every historical `ask` row means the
             # clone-commit guard, and folding this in would corrupt the series a judgement
@@ -2608,7 +2660,8 @@ def pretooluse_edit() -> int:
     if _ask("PreToolUse",
             f"the roster was shown this turn and nothing was dispatched — you are editing "
             f"as the acting persona. Available: {who}. charter is not saying this is "
-            f"theirs; approve to carry on, or dispatch instead. (`routing: require`)", data):
+            f"theirs; approve to carry on, or dispatch instead. (`routing: require`)",
+            "routing-ask", data):
         _trace("routing-ask", data.get("session_id"))
     return 0
 
