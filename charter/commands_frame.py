@@ -337,8 +337,8 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     environment goes through, and the two do not behave alike.
 
     **`"$CHARTER_PY" -m charter`, never a bare `charter`.** The panels already launch
-    charter as `[sys.executable, "-m", "charter"]` (see `cmd_launch`'s `panel_argvs`
-    call) precisely because the `charter` an operator's `$PATH` resolves may be a
+    charter via `util.self_relaunch_argv()` (see `cmd_launch`'s `panel_argvs` call)
+    precisely because the `charter` an operator's `$PATH` resolves may be a
     different install, or no install at all — a `uv tool` shim not on the tmux server's
     own PATH, a checkout run as `python -m charter`. This line had kept the bare name,
     and the failure lands in the worst possible place: `run-shell` reports a non-zero
@@ -384,6 +384,35 @@ def _charter_py_env_argv(*, socket: str, session: str) -> list[str]:
     """
     return ["tmux", "-L", socket, "set-environment", "-t", session, _CHARTER_PY_ENV,
            sys.executable]
+
+
+#: `PYTHONSAFEPATH`'s real name — a genuine interpreter environment variable, read by
+#: `python` itself at startup, not a charter-invented one. Carried alongside
+#: `CHARTER_PY_ENV`, never folded into it: see `_charter_pythonsafepath_env_argv`.
+_PYTHONSAFEPATH_ENV = "PYTHONSAFEPATH"
+
+
+def _charter_pythonsafepath_env_argv(*, socket: str, session: str) -> list[str]:
+    """`set-environment`: closes the same hole `util.self_relaunch_argv`'s `-P` closes
+    for every OTHER self-relaunch site (#390), for the one shape that cannot take a flag.
+
+    `"$CHARTER_PY" -m charter ...` — the hotkey bind (`conf_text`) and every menu item's
+    own action (`frame.menu.menu_argv`) — is a shell TEMPLATE shared by every session on
+    `SOCKET`, built once and never per-invocation; there is nowhere in it to splice a
+    `-P` without re-embedding per-machine text, the exact construction `conf_text`'s own
+    docstring already bans for `status_path`. `PYTHONSAFEPATH=1` is `-P`'s own
+    environment-variable form — carried the identical session-scoped way
+    `_charter_py_env_argv` carries `$CHARTER_PY` itself, so it reaches the same shell
+    that call already proves reaches: without this, a pane whose cwd happens to be a
+    charter checkout would have the hotkey menu import THAT tree the moment it opens,
+    same failure shape as the panel argv, just one layer further from the operator.
+
+    A separate `set-environment` call rather than folded into `_charter_py_env_argv`'s:
+    that function's contract is "the interpreter", used elsewhere as exactly that value
+    (`docs`, `conf_text`'s own text); overloading it to also carry an unrelated variable
+    would break that contract for a caller that only wanted the interpreter path.
+    """
+    return ["tmux", "-L", socket, "set-environment", "-t", session, _PYTHONSAFEPATH_ENV, "1"]
 
 
 def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[str]:
@@ -807,6 +836,18 @@ def cmd_launch(args) -> int:
         util.warn("charter frame: continuing without it — the hotkey menu may not open "
                   "on this frame")
 
+    # #390: the same "-m prepends the cwd to sys.path" hole `util.self_relaunch_argv`'s
+    # `-P` closes for the panel argv below, closed here as `PYTHONSAFEPATH=1` because
+    # the hotkey/menu template above has no room for a per-invocation flag — see
+    # `_charter_pythonsafepath_env_argv`'s own docstring.
+    safepath_set = tmuxctl.run("carrying PYTHONSAFEPATH to the hotkey menu",
+                               _charter_pythonsafepath_env_argv(socket=SOCKET, session=fid),
+                               env=env)
+    if safepath_set.returncode != 0:
+        util.warn("charter frame: continuing without it — the hotkey menu may import "
+                  "the wrong charter if this pane's directory has its own `charter/` "
+                  "package")
+
     # The menu itself: what the hotkey actually opens. A single "Detach" entry — the
     # spec's own words, "Detach is allowed and prints how to reattach" — proves the
     # mechanism end to end (bind → menu → opaque id → real command) without inventing a
@@ -865,7 +906,7 @@ def cmd_launch(args) -> int:
                      f"tmux -L {SOCKET} attach -t {fid}")
         else:
             panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=SOCKET,
-                                            charter_argv=[sys.executable, "-m", "charter"],
+                                            charter_argv=util.self_relaunch_argv(),
                                             harness_pane=harness_pane)
             # Zipped with `slots`, not just iterated: `_resize_hook_argv` below needs to
             # know WHICH slot each successfully-created pane belongs to (for its size and

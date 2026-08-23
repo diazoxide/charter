@@ -271,6 +271,34 @@ def branch_of(tree: Path) -> str:
     return txt[:7] if txt else "?"            # detached HEAD → short sha
 
 
+def self_relaunch_argv(*args: str) -> list[str]:
+    """The argv that re-launches charter as *this interpreter's own install* — never
+    whatever ``charter/`` package happens to sit under the child's cwd (#390).
+
+    ``python -m charter`` prepends the CURRENT WORKING DIRECTORY to ``sys.path`` before
+    it even looks for the module to run — ``-m``'s own documented behaviour, not a bug in
+    it. Every charter self-relaunch site sets its child's cwd to something outside
+    charter's own control (a project directory, a workspace root, wherever an operator's
+    pane happened to start), and when THAT directory contains its own ``charter/``
+    package — a charter checkout dogfooding itself, the common case for anyone
+    developing charter — the child imports that tree instead of the installed one. On a
+    tree that predates a command the installed one has, the failure lands as an
+    argparse ``invalid choice`` and exit 2, which is how this shipped: ``charter claude``
+    came up with both panels dead, and the harness pane survived only because ``claude``
+    is a real binary rather than another self-relaunch.
+
+    ``-P`` (3.11+; ``pyproject.toml`` already requires it) is ``-m``'s own switch for
+    "don't do that". One helper, not a `[sys.executable, "-m", "charter", ...]` hand-built
+    at every call site — the same shape as the frame's own "never join argv" rule: correct
+    by construction rather than remembered at five (now seven) separate places. A shell
+    TEMPLATE that embeds ``"$CHARTER_PY" -m charter`` (the tmux hotkey bind and its menu
+    items — see ``commands_frame.py``'s own module docstring) cannot use this helper
+    directly; those carry ``PYTHONSAFEPATH=1`` instead, the environment-variable form of
+    the same switch, alongside ``$CHARTER_PY`` itself.
+    """
+    return [sys.executable, "-P", "-m", "charter", *args]
+
+
 def detach_self(args: list[str]) -> bool:
     """Re-run ``charter <args>`` in a process that outlives this one. True if it started.
 
@@ -285,7 +313,7 @@ def detach_self(args: list[str]) -> bool:
     """
     try:
         subprocess.Popen(
-            [sys.executable, "-m", "charter", *args],
+            self_relaunch_argv(*args),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
         )

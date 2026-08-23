@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 from . import config, util
@@ -80,11 +79,12 @@ def _origin_https(root) -> str | None:
 # --------------------------------------------------------------------------- #
 def _spawn_bg_push(root) -> None:
     """Fire a detached background push of HEAD (best-effort) so a slow push never blocks
-    the turn — the same mechanism the workspace Stop-hook auto-save uses."""
-    import subprocess
-    import sys
+    the turn — the same mechanism the workspace Stop-hook auto-save uses
+    (`commands_workspace._spawn_pushbg`). `util.self_relaunch_argv` (#390) is what keeps
+    the child from importing whatever `charter/` package happens to sit under *root*
+    instead of the installed one."""
     try:
-        subprocess.Popen([sys.executable, "-m", "charter", "workspace", "_pushbg"],
+        subprocess.Popen(util.self_relaunch_argv("workspace", "_pushbg"),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          stdin=subprocess.DEVNULL, start_new_session=True, cwd=str(root))
     except Exception:

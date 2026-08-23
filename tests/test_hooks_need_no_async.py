@@ -60,7 +60,9 @@ class Detaching(unittest.TestCase):
         with mock.patch.object(util.subprocess, "Popen") as popen:
             self.assertTrue(util.detach_self(["persona", "_gc"]))
         argv = popen.call_args.args[0]
-        self.assertEqual(argv[1:], ["-m", "charter", "persona", "_gc"])
+        # -P (#390): `-m` prepends the cwd to sys.path, so a hook run from a charter
+        # checkout would otherwise respawn that tree instead of the installed package.
+        self.assertEqual(argv[1:], ["-P", "-m", "charter", "persona", "_gc"])
         self.assertNotIn("--detach", argv)
 
     def test_the_child_outlives_the_hook(self):

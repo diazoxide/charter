@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import time
 import urllib.parse
 from pathlib import Path
@@ -222,8 +221,11 @@ def maybe_spawn(dirs, workspace: str | None = None) -> None:
     # Target the installed package via `-m`, not a path inside the control plane —
     # a control plane has no `bin/edm` (that script lived in the old monorepo the
     # engine was extracted from); `-m charter` resolves through the same
-    # interpreter/venv that is already running this process.
-    cmd = [sys.executable, "-m", "charter", "gl-refresh"]
+    # interpreter/venv that is already running this process. `-P` (util.self_relaunch_argv,
+    # #390) is what keeps that resolution honest: this runs on the status line's own
+    # render path, so a project directory that happens to have its own `charter/` package
+    # (any charter checkout) would otherwise get shadowed on every single render.
+    cmd = util.self_relaunch_argv("gl-refresh")
     if workspace:
         cmd += ["--workspace", workspace]
     try:
