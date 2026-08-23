@@ -70,6 +70,29 @@ BUILTIN_PERMISSIONS = (
     "todowrite", "webfetch", "websearch", "write",
 )
 
+#: The permission names opencode accepts ONLY as a bare ``"ask"``/``"allow"``/``"deny"``,
+#: never as a ``{pattern: decision}`` object. Writing the object form under one of these
+#: does not lose the pattern — it makes the whole `opencode.json` invalid, and opencode
+#: refuses to start in that project at all.
+#:
+#: A subset of :data:`BUILTIN_PERMISSIONS`, and it cannot be derived from it: nothing about
+#: a name says which shape it takes. Two independent sources, both checked against opencode
+#: 1.18.21 rather than reasoned from:
+#:
+#: * The published schema (``https://opencode.ai/config.json``). ``$defs.PermissionConfig``
+#:   types twelve of its named keys ``PermissionRuleConfig`` (``anyOf`` a bare action or an
+#:   object) and exactly these five ``PermissionActionConfig`` (``enum: ask|allow|deny``).
+#:   Its ``additionalProperties: {$ref: PermissionRuleConfig}`` — which is what lets charter
+#:   write an invented MCP name at all — rescues invented names only, never these five.
+#: * The binary. Every one of the 23 names in :data:`BUILTIN_PERMISSIONS` was fed to
+#:   `opencode debug agent build` in both shapes; these five and only these five answer
+#:   ``Expected PermissionActionConfig | undefined, got {"*":"ask"}`` to the object form.
+#:
+#: A GLOB is not one of these — ``doom_*`` goes through `additionalProperties` and takes the
+#: object form happily. Only the exact name is flat-only, which is why membership is tested
+#: rather than matched with `_shadowed_builtins`.
+FLAT_ONLY_PERMISSIONS = ("doom_loop", "question", "todowrite", "webfetch", "websearch")
+
 #: Tools whose output charter may append to. Deliberately NOT the ones that return
 #: content: a `read` whose output carries charter's nudge is a false record of that file,
 #: and the agent may write it back. These three report an action instead, so a note
@@ -496,6 +519,14 @@ class OpenCodeHarness(Harness):
         inert `bash` rule and did nothing, so this widening is new here and charter's to
         name. :meth:`rule_outranks` names it at write time, the only moment the operator
         can still change their mind.
+
+        **A collision can also decide the file's SHAPE, not just its meaning.** Five of
+        those names — :data:`FLAT_ONLY_PERMISSIONS` — take a bare action string and reject
+        the ``{glob: decision}`` object this pair describes, invalidating the whole file
+        rather than the one rule. The pair returned here is unchanged, because it is still
+        what opencode resolves to (`{"doom_loop": "ask"}` builds
+        ``{permission: doom_loop, pattern: "*"}``, measured); `_apply_rule` chooses the
+        shape, so the operator's read-back stays true to the rule that is in force.
         """
         from .. import commands
 
@@ -532,6 +563,23 @@ class OpenCodeHarness(Harness):
         is read as the whole server, same as `mcp__plan` — and echoing that back would
         advise `mcp__plan____<tool>`, four separators, a rule charter itself refuses. A
         remedy nobody can type is worse than none, because it reads as one that works.
+
+        Asked with a pattern and no verb, so it answers for `ask` and `allow` alike — and
+        it reads the name back through :meth:`ask_rule` for both. That is right only while
+        this harness keeps `base.allow_rule`'s shared default, which is the whole point of
+        that default ("keeps one operator sentence from acquiring two spellings"). An
+        override here would have to reach this too, and
+        `TestBothVerbsTranslateTheSameWay` fails the day one appears rather than leaving
+        the allow path quietly naming the ask path's collisions.
+
+        What it claims is only that charter's rule is the LAST word on those names. Not
+        that it replaces a rule opencode wrote for each: opencode seeds name-specific
+        defaults for a handful (`doom_loop`, `question`, `plan_enter`, `plan_exit`,
+        `read`, `external_directory`) and covers the rest with one ``{permission: "*"}``
+        allow — so `list_*` outranks a catch-all, while `plan_*` outranks two real denies.
+        Both are "this decides those too"; only one is a replacement, and the seeded set
+        is partly machine-specific (`external_directory` carries local paths), so it is
+        not charter's to enumerate in a sentence.
         """
         from .. import commands
 
@@ -552,7 +600,8 @@ class OpenCodeHarness(Harness):
                 f"{'permissions' if plural else 'permission'} "
                 f"{', '.join('`%s`' % h for h in hit)}, and opencode takes the LAST "
                 f"matching rule — so this decides {'those' if plural else 'that'} too, "
-                f"replacing opencode's built-in one.{narrower}")
+                f"ahead of whatever opencode had decided for "
+                f"{'them' if plural else 'it'}.{narrower}")
 
     #: Declined deliberately, not unimplemented. opencode's only uncommitted config is
     #: `global_dir()` (`~/.config/opencode`), which applies to EVERY project on the machine.
@@ -585,6 +634,28 @@ class OpenCodeHarness(Harness):
         One writer for both verbs: opencode's model is `{tool: {glob: decision}}`, so
         `ask` and `allow` differ by a single string and a second copy would only be a
         place for the two to drift.
+
+        **Except for :data:`FLAT_ONLY_PERMISSIONS`, where that model is not opencode's.**
+        Those five names take a bare action string, and the object form does not merely
+        fail to match — it makes the whole file invalid and opencode refuses to start in
+        the project. Two names are reachable: `mcp__doom__loop` translates to `doom_loop`,
+        and `WebFetch(...)` is keyed `webfetch` through `TOOL_NAMES`. So the shape has to
+        be chosen per key rather than assumed, and the choice splits on the glob:
+
+        * ``*`` — write the flat form. Measured, not assumed to be equivalent:
+          `opencode debug agent build` resolves ``{"doom_loop": "ask"}`` to
+          ``{permission: doom_loop, pattern: "*", action: "ask"}``, the same entry in the
+          same last-wins position the object form was reaching for. Nothing is lost.
+        * anything else — ``unsupported``, with the reason. The flat form would silently
+          drop the pattern and apply the decision to EVERY fetch, and an `allow` widened
+          from one URL to all of them is the failure `--local`'s own refusal exists to
+          prevent. `Harness.apply_ask_rule` keeps ``unsupported`` for exactly this: a
+          pattern the harness genuinely cannot express, named rather than approximated.
+
+        This is the same defect as #374 in the other direction, and worse: #374 wrote a
+        rule that could not fire, this wrote a file that stops opencode running. It was
+        introduced by #374's own fix, which gave `doom_loop` its new meaning — before it,
+        `mcp__doom__loop` was an inert `bash` key and the file still loaded.
         """
         tool, glob = self.ask_rule(pattern)
         p = Path(root) / "opencode.json"
@@ -599,12 +670,26 @@ class OpenCodeHarness(Harness):
         perms = doc.setdefault("permission", {})
         if not isinstance(perms, dict):
             return "malformed", f"{p} (`permission` is not an object)"
-        block = perms.setdefault(tool, {})
-        if not isinstance(block, dict):
-            return "malformed", f"{p} (`permission.{tool}` is not an object)"
-        if block.get(glob) == decision:
-            return "present", str(p)
-        block[glob] = decision
+        if tool in FLAT_ONLY_PERMISSIONS:
+            if glob != "*":
+                return "unsupported", (
+                    f"opencode's `{tool}` permission takes only a bare ask/allow/deny, "
+                    f"never a per-pattern rule, so `{glob}` cannot be written there — and "
+                    f"dropping it would apply this to every `{tool}` instead of the one "
+                    f"you named")
+            existing = perms.get(tool)
+            if existing is not None and not isinstance(existing, str):
+                return "malformed", f"{p} (`permission.{tool}` is not an action)"
+            if existing == decision:
+                return "present", str(p)
+            perms[tool] = decision
+        else:
+            block = perms.setdefault(tool, {})
+            if not isinstance(block, dict):
+                return "malformed", f"{p} (`permission.{tool}` is not an object)"
+            if block.get(glob) == decision:
+                return "present", str(p)
+            block[glob] = decision
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(doc, indent=2) + "\n")
         return "added", str(p)

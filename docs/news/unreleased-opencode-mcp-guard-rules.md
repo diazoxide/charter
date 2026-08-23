@@ -31,6 +31,16 @@ The whole-server glob stays as tight as opencode's own names allow and no tighte
 both the separator and a legal character either side of it, so `slack_*` covers a server
 called `slack_admin` too, and no glob can tell them apart.
 
+**Five of opencode's permissions take a bare `ask`/`allow`/`deny` and reject the
+`{pattern: decision}` form**, and writing the wrong shape there does not spoil one rule —
+opencode calls the whole `opencode.json` invalid and refuses to start in the project. Two
+are reachable: `mcp__doom__loop` translates to `doom_loop`, and `WebFetch(…)` is keyed
+`webfetch`. Where the rule covers everything, charter now writes the flat form, which
+opencode resolves to the identical rule. Where it carries a real pattern —
+`charter guard ask 'WebFetch(https://example.com/*)'` — charter says it cannot write that
+one and leaves the file alone, because the only other option is to quietly apply your
+decision to *every* fetch instead of the one you named.
+
 Verified against opencode 1.18.21 rather than inferred: `opencode debug agent build` prints
 the resolved rule list, and with `plan_*` in `opencode.json` it shows `plan_enter` and
 `plan_exit` denied at indices 9 and 10 and `plan_*` allowed at 17 — last match wins.

@@ -38,6 +38,15 @@ opencode's own `mcp` block. That is the same contract Claude Code's rule has —
 comes from the operator, not from a guess — and the difference from the defect is total: a
 mistyped server makes the rule inert for that server, while `bash` made it inert for every
 possible one.
+
+**And the rename can land on a name whose SHAPE is not the shape charter writes.** Five of
+opencode's permissions take a bare action string and reject the ``{glob: decision}``
+object — one of them, `doom_loop`, is reachable by the rename (`mcp__doom__loop`) and one,
+`webfetch`, by `TOOL_NAMES`. Writing the object form there does not make one rule inert; it
+makes the file invalid and opencode refuses to run in the project. That regression arrived
+with this fix, in this file's own fixture: `mcp__doom__loop` acquired a new meaning the day
+the rename shipped, and the two tests using it asserted only on the warning's wording, so
+nothing was left watching the file. `TestTheFileOpencodeWillActuallyLoad` watches it now.
 """
 
 from __future__ import annotations
@@ -54,6 +63,53 @@ from charter.harness import opencode as oc
 from charter.harness import registry
 from charter.harness.base import Harness
 from tests._isolation import PersonaIso
+
+#: The words the collision caveat is asserted to be ABSENT from, in one place so the
+#: negative assertion and its anti-vacuity guard cannot drift apart.
+_CAVEAT_PHRASE = "LAST matching rule"
+
+#: opencode's `permission` schema, transcribed here a SECOND time on purpose.
+#:
+#: `charter.harness.opencode.FLAT_ONLY_PERMISSIONS` is the same fact, and asserting
+#: against it would make every test below circular: a mutation dropping `doom_loop` from
+#: the production tuple would drop it from the expectation in the same breath and stay
+#: green. So this copy comes from the other source — `$defs.PermissionConfig` in the
+#: published `https://opencode.ai/config.json`, which types exactly these five named keys
+#: `PermissionActionConfig` (``enum: ask|allow|deny``) and the rest `PermissionRuleConfig`
+#: (``anyOf`` a bare action or a ``{pattern: action}`` object). The binary agrees: each of
+#: opencode 1.18.21's 23 permission names was fed to `opencode debug agent build` in both
+#: shapes, and only these five answer ``Expected PermissionActionConfig | undefined``.
+_SCHEMA_FLAT_ONLY = ("doom_loop", "question", "todowrite", "webfetch", "websearch")
+
+_SCHEMA_ACTIONS = ("ask", "allow", "deny")
+
+
+def _schema_complaint(doc) -> str:
+    """What opencode would refuse about *doc*, or ``""`` — the check the tests below make.
+
+    Deliberately not a general JSON-Schema validator: charter carries no dependencies, and
+    a validator vendored into the suite would be a third transcription to keep right. This
+    is only the one rule that was broken — the shape a permission's VALUE may take —
+    which is the rule `permission.doom_loop` violated while every test in this file
+    stayed green.
+    """
+    perms = doc.get("permission", {})
+    if not isinstance(perms, dict):
+        return "`permission` is not an object"
+    for name, value in perms.items():
+        if isinstance(value, str):
+            if value not in _SCHEMA_ACTIONS:
+                return f"permission.{name} is {value!r}, not one of {_SCHEMA_ACTIONS}"
+            continue
+        if name in _SCHEMA_FLAT_ONLY:
+            return (f"Expected PermissionActionConfig | undefined, got "
+                    f"{json.dumps(value, separators=(',', ':'))} permission.{name}")
+        if not isinstance(value, dict):
+            return f"permission.{name} is neither an action nor a rule object"
+        for pat, action in value.items():
+            if action not in _SCHEMA_ACTIONS:
+                return f"permission.{name}[{pat!r}] is {action!r}, not an action"
+    return ""
 
 
 class TestTheMcpNameOpencodeActuallyUses(unittest.TestCase):
@@ -142,6 +198,135 @@ class TestWhatLandsInOpencodeJson(PersonaIso):
         self.assertEqual(self.config_path().read_text(), before)
 
 
+class TestTheFileOpencodeWillActuallyLoad(PersonaIso):
+    """The subject is the JSON on disk, not the sentence printed beside it.
+
+    #374's fix gave `mcp__doom__loop` a new meaning — it stopped being an inert `bash`
+    key and became the literal opencode permission name `doom_loop` — and two tests went
+    on using it as a fixture while asserting only on the warning's prose. Both stayed
+    green over a rule that does not merely fail to fire: `{"doom_loop": {"*": "ask"}}` is
+    the object form of a name opencode types as a bare action, so opencode rejects the
+    WHOLE file and will not run in the project.
+
+        $ opencode run 'hi'
+        Error: Configuration is invalid at .../opencode.json
+          ↳ Expected PermissionActionConfig | undefined, got {"*":"ask"} permission.doom_loop
+
+    That is #374's own defect one turn further on — a tick over a rule that cannot fire,
+    now over a config that cannot load — and it is charter's and new: at the branch point
+    the same command wrote `{"bash": {"mcp__doom__loop": "ask"}}`, inert but loadable.
+
+    So these tests read the file back and check its SHAPE against `_schema_complaint`,
+    which is opencode's rule transcribed from the published schema rather than from
+    charter's own table. A test that had done this would have caught it on the day.
+    """
+
+    def config_path(self) -> Path:
+        return Path(config.ROOT) / "opencode.json"
+
+    def written(self) -> dict:
+        return json.loads(self.config_path().read_text())
+
+    def test_the_checker_these_tests_lean_on_rejects_what_opencode_rejects(self):
+        """Anti-vacuity, first, because everything below is worthless if this returns ""
+        for everything. The argument is the exact document charter used to write."""
+        broken = {"permission": {"doom_loop": {"*": "ask"}}}
+        self.assertIn("doom_loop", _schema_complaint(broken))
+        self.assertEqual(_schema_complaint({"permission": {"doom_loop": "ask"}}), "")
+        self.assertEqual(_schema_complaint({"permission": {"bash": {"*": "ask"}}}), "")
+
+    def test_a_tool_whose_id_is_a_flat_only_permission_is_written_flat(self):
+        status, _ = registry.get("opencode").apply_ask_rule(Path(config.ROOT),
+                                                            "mcp__doom__loop")
+        self.assertEqual(status, "added")
+        self.assertEqual(self.written()["permission"], {"doom_loop": "ask"})
+        self.assertEqual(_schema_complaint(self.written()), "")
+
+    def test_the_flat_form_is_the_same_rule_and_not_a_weaker_one(self):
+        """Nothing is traded away by dropping the object. Measured on opencode 1.18.21:
+        `{"doom_loop": "ask"}` resolves to ``{permission: doom_loop, pattern: '*',
+        action: 'ask'}`` — the same entry, in the same last-wins position, that the
+        object form was reaching for. Which is why this key is written rather than
+        refused, while a key carrying a real pattern is refused rather than flattened."""
+        h = registry.get("opencode")
+        self.assertEqual(h.ask_rule("mcp__doom__loop"), ("doom_loop", "*"))
+        h.apply_ask_rule(Path(config.ROOT), "mcp__doom__loop")
+        self.assertEqual(self.written()["permission"]["doom_loop"], "ask")
+
+    def test_allow_writes_the_flat_form_too(self):
+        registry.get("opencode").apply_allow_rule(Path(config.ROOT), "mcp__doom__loop")
+        self.assertEqual(self.written()["permission"], {"doom_loop": "allow"})
+        self.assertEqual(_schema_complaint(self.written()), "")
+
+    def test_writing_the_flat_form_twice_is_not_an_edit(self):
+        h = registry.get("opencode")
+        h.apply_ask_rule(Path(config.ROOT), "mcp__doom__loop")
+        before = self.config_path().read_text()
+        self.assertEqual(h.apply_ask_rule(Path(config.ROOT), "mcp__doom__loop")[0],
+                         "present")
+        self.assertEqual(self.config_path().read_text(), before)
+
+    def test_a_flat_only_key_someone_shaped_by_hand_is_refused_not_repaired(self):
+        """The same restraint the object branch keeps. An operator who wrote an object
+        under `doom_loop` has a broken file, but it is theirs and charter does not know
+        what they meant — reporting beats overwriting."""
+        self.config_path().write_text(
+            json.dumps({"permission": {"doom_loop": {"*": "deny"}}}))
+        before = self.config_path().read_text()
+        status, detail = registry.get("opencode").apply_ask_rule(Path(config.ROOT),
+                                                                 "mcp__doom__loop")
+        self.assertEqual(status, "malformed")
+        self.assertIn("doom_loop", detail)
+        self.assertEqual(self.config_path().read_text(), before)
+
+    def test_a_glob_over_a_flat_only_name_still_takes_the_object_form(self):
+        """`doom_*` is not `doom_loop`. It reaches opencode through the schema's
+        `additionalProperties`, which is `PermissionRuleConfig` — the object form is legal
+        there, and flattening it would be a different rule. Confirmed against the binary:
+        `{"doom_*": {"*": "ask"}}` loads."""
+        registry.get("opencode").apply_ask_rule(Path(config.ROOT), "mcp__doom")
+        self.assertEqual(self.written()["permission"], {"doom_*": {"*": "ask"}})
+        self.assertEqual(_schema_complaint(self.written()), "")
+
+    def test_a_flat_only_key_with_a_real_pattern_is_refused_rather_than_widened(self):
+        """`WebFetch(https://example.com/*)` is keyed `webfetch` through `TOOL_NAMES`, and
+        `webfetch` is flat-only too. Writing the flat form here would silently trade the
+        one URL the operator named for every fetch there is — an `allow` widened past
+        what was asked, which is the failure `--local`'s refusal already exists to
+        prevent. `Harness.apply_ask_rule` keeps `unsupported` for exactly this."""
+        status, detail = registry.get("opencode").apply_ask_rule(
+            Path(config.ROOT), "WebFetch(https://example.com/*)")
+        self.assertEqual(status, "unsupported")
+        self.assertIn("webfetch", detail)
+        self.assertIn("https://example.com/*", detail)
+        self.assertFalse(self.config_path().exists(),
+                         "a refused rule must not leave a file behind")
+
+    def test_the_same_key_with_no_pattern_at_all_is_written_rather_than_refused(self):
+        """`WebFetch(*)` asks for every fetch, which is what the flat form says. Refusing
+        it would name a limit opencode does not have."""
+        status, _ = registry.get("opencode").apply_ask_rule(Path(config.ROOT),
+                                                            "WebFetch(*)")
+        self.assertEqual(status, "added")
+        self.assertEqual(self.written()["permission"], {"webfetch": "ask"})
+
+    def test_every_rule_this_harness_writes_is_a_file_opencode_can_load(self):
+        """The catch-all the two prose tests were standing in for. One fresh plane per
+        pattern, so an earlier key cannot carry a later one."""
+        h = registry.get("opencode")
+        for pattern in ("mcp__slack__send", "mcp__slack", "mcp__doom", "mcp__doom__loop",
+                        "mcp__plan", "mcp__list", "mcp__read_mcp", "git push *",
+                        "Read(./secrets/**)", "WebFetch(*)", "Task(*)"):
+            with self.subTest(pattern=pattern):
+                root = Path(config.ROOT) / "planes" / pattern.replace("*", "_star")
+                root.mkdir(parents=True, exist_ok=True)
+                status, detail = h.apply_ask_rule(root, pattern)
+                self.assertIn(status, ("added", "unsupported"), detail)
+                if status == "added":
+                    doc = json.loads((root / "opencode.json").read_text())
+                    self.assertEqual(_schema_complaint(doc), "", f"{pattern} → {doc}")
+
+
 class TestThroughTheCommandBothHarnessesGetIt(PersonaIso):
     """One operator sentence, and neither harness is left holding a rule that cannot fire."""
 
@@ -173,6 +358,30 @@ class TestThroughTheCommandBothHarnessesGetIt(PersonaIso):
         _rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__slack__send",
                                local=False)
         self.assertIn("slack_send", out)
+
+    def test_the_whole_command_leaves_a_file_opencode_can_load(self):
+        """End to end, over the fixture that broke. The tick and the collision warning
+        were both already right about `doom_loop`; the file underneath them was not."""
+        rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__doom__loop",
+                              local=False)
+        self.assertEqual(rc, 0)
+        self.assertIn("doom_loop", out)
+        doc = json.loads((Path(config.ROOT) / "opencode.json").read_text())
+        self.assertEqual(_schema_complaint(doc), "")
+
+    def test_a_rule_opencode_cannot_shape_is_reported_not_ticked(self):
+        """The `unsupported` half through the command. Claude Code takes the rule
+        verbatim, opencode says why it cannot, and no `✓` is printed for a file that was
+        never written — the distinction #374 is about."""
+        rc, out = self.invoke(commands.cmd_guard_ask,
+                              pattern="WebFetch(https://example.com/*)", local=False)
+        self.assertEqual(rc, 0)
+        self.assertIn("webfetch", out)
+        self.assertNotIn("opencode: asking for", out)
+        rules = json.loads(
+            (Path(config.ROOT) / ".claude" / "settings.json").read_text()
+        )["permissions"]["ask"]
+        self.assertIn("WebFetch(https://example.com/*)", rules)
 
 
 class TestWhenTheTranslatedNameIsOpencodesOwn(unittest.TestCase):
@@ -305,7 +514,19 @@ class TestTheOperatorHearsAboutItAtWriteTime(PersonaIso):
     def test_an_ordinary_rule_gets_no_such_line(self):
         _rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__slack__send",
                                local=False)
-        self.assertNotIn("LAST matching rule", out)
+        self.assertNotIn(_CAVEAT_PHRASE, out)
+
+    def test_the_phrase_asserted_absent_above_is_one_the_caveat_really_says(self):
+        """Anti-vacuity for the test above it, which is otherwise reworded into silence.
+
+        `assertNotIn("LAST matching rule", …)` passes for two different reasons — the
+        caveat did not fire, or the caveat no longer uses those words — and only the
+        first is the subject. Rewording the sentence to "the LAST rule that matches"
+        leaves the whole guard suite green today. Pinning the same literal against a
+        pattern that DOES collide makes a rewording redden here instead of quietly
+        emptying the negative assertion.
+        """
+        self.assertIn(_CAVEAT_PHRASE, registry.get("opencode").rule_outranks("mcp__plan"))
 
     def test_nothing_is_warned_about_where_nothing_was_written(self):
         """`--local` is `unsupported` under opencode — its only uncommitted config is
@@ -313,6 +534,63 @@ class TestTheOperatorHearsAboutItAtWriteTime(PersonaIso):
         consequence of a rule that was refused is the same species of lie as #374."""
         _rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__plan", local=True)
         self.assertNotIn("plan_enter", out)
+
+
+class TestTheCaveatClaimsOnlyTheLastWord(unittest.TestCase):
+    """It says charter's rule decides those names. Not that it replaced a rule opencode
+    wrote for each of them, which is only sometimes true.
+
+    Measured on opencode 1.18.21 with an empty `opencode.json`: the seeded ruleset carries
+    name-specific entries for `*`, `doom_loop`, `external_directory`, `question`,
+    `plan_enter`, `plan_exit` and `read` and nothing else, so `plan_*` really does outrank
+    two denies while `list_*` only outranks the index-0 ``{permission: "*"}`` allow. The
+    difference is not charter's to spell out — part of that seed is machine-specific
+    (`external_directory` carries this machine's own paths) — so the sentence claims the
+    half that is true either way.
+    """
+
+    def setUp(self) -> None:
+        self.h = registry.get("opencode")
+
+    def test_it_does_not_claim_to_have_replaced_a_rule_opencode_wrote(self):
+        said = self.h.rule_outranks("mcp__list")
+        self.assertIn("list_mcp_resources", said)
+        self.assertNotIn("replacing", said)
+
+    def test_it_still_says_charters_rule_is_the_one_that_decides(self):
+        self.assertIn("decides those too", self.h.rule_outranks("mcp__list"))
+
+    def test_the_pronoun_follows_the_number_of_names_it_just_listed(self):
+        """One `permission`/`that`/`it`, several `permissions`/`those`/`them`. The
+        plural branch used to end on a singular "opencode's built-in one"."""
+        one = self.h.rule_outranks("mcp__doom__loop")
+        many = self.h.rule_outranks("mcp__plan")
+        self.assertIn("decides that too, ahead of whatever opencode had decided for it",
+                      one)
+        self.assertIn("decides those too, ahead of whatever opencode had decided for "
+                      "them", many)
+
+
+class TestBothVerbsTranslateTheSameWay(unittest.TestCase):
+    """`rule_outranks` takes a pattern and no verb, and reads the name back through
+    `ask_rule` for the allow path as well as the ask path.
+
+    Correct only while opencode keeps `base.allow_rule`'s shared default — which that
+    default exists to guarantee ("keeps one operator sentence from acquiring two
+    spellings"). If opencode ever overrides `allow_rule`, `guard allow` would start
+    warning about the collisions of a name it did not write, and nothing else in the
+    suite would notice. This fails on that day and names the caller.
+    """
+
+    def test_opencode_answers_both_verbs_with_the_same_name(self):
+        h = registry.get("opencode")
+        for p in ("mcp__plan", "mcp__doom__loop", "mcp__slack__send", "git push *",
+                  "WebFetch(*)"):
+            with self.subTest(pattern=p):
+                self.assertEqual(h.allow_rule(p), h.ask_rule(p),
+                                 "OpenCodeHarness.rule_outranks reads the rule name back "
+                                 "through ask_rule for BOTH verbs — override allow_rule "
+                                 "and it must be taught the difference")
 
 
 if __name__ == "__main__":
