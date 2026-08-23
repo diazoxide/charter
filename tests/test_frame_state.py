@@ -7,11 +7,24 @@ the other's activity.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter.frame import state
+
+
+def _a_dead_pid() -> int:
+    """A real pid that has exited and been reaped. Preferred over a large made-up
+    number, which is a guess about the machine rather than a fact about it — and since
+    #383 the number at the end of a frame id is asked about rather than ignored, a made-up
+    one could name somebody else's live process and quietly change what a test proves."""
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
 
 
 class FrameId(unittest.TestCase):
@@ -59,11 +72,18 @@ class Version(PersonaIso, unittest.TestCase):
 
     def test_reap_then_version_does_not_resurrect_the_directory(self):
         """If `version()` ever called `bump()` on a miss, this would fight `reap()`
-        forever: reap deletes, the next poll recreates, reap deletes again."""
-        state.bump("gone-1")
+        forever: reap deletes, the next poll recreates, reap deletes again.
+
+        The pid in the name is load-bearing since #383 — `reap` refuses to remove a
+        directory whose launcher is still running, so the frame this test needs reaped
+        has to be named after a pid that is genuinely over. `gone-1` used to read as a
+        throwaway label; pid 1 is `launchd`/`init`, and reap would now (rightly) keep it.
+        """
+        gone = f"gone-{_a_dead_pid()}"
+        state.bump(gone)
         state.reap(set())
-        self.assertEqual(state.version("gone-1"), "0")
-        self.assertFalse(state.frame_dir("gone-1").exists())
+        self.assertEqual(state.version(gone), "0")
+        self.assertFalse(state.frame_dir(gone).exists())
 
 
 class FrameDirContainment(PersonaIso, unittest.TestCase):
@@ -147,19 +167,162 @@ class ExitCode(PersonaIso, unittest.TestCase):
         self.assertEqual(state.exit_code("f-1"), 42)
 
 
+class ClearExit(PersonaIso, unittest.TestCase):
+    """A new frame adopting a recycled pid inherits the directory of the frame that had
+    that pid before it (#383 keeps a directory while its pid is live, and on a launch
+    that pid is the launcher's own). `clear_exit` is what stops it inheriting the dead
+    frame's exit code along with the directory."""
+
+    def test_a_recorded_code_is_gone_afterwards(self):
+        state.record_exit("f-1", 99)
+        state.clear_exit("f-1")
+        self.assertIsNone(state.exit_code("f-1"))
+
+    def test_the_version_a_panel_polls_is_left_alone(self):
+        """Only `exit` is stale on a relaunch. `version` is a monotonic counter panels
+        compare against their last reading, and moving it backwards — or removing it —
+        is `bump`'s business, not this function's."""
+        state.bump("f-1")
+        before = state.version("f-1")
+        state.clear_exit("f-1")
+        self.assertEqual(state.version("f-1"), before)
+
+    def test_clearing_a_frame_that_was_never_recorded_creates_nothing(self):
+        """It runs on the launch path against an id that usually has no directory at
+        all — the ordinary first launch for a workspace. A read must not mint one, the
+        same rule `version()` follows."""
+        state.clear_exit("never-existed")
+        self.assertFalse(state.frame_dir("never-existed").exists())
+
+    def test_clearing_a_hostile_fid_does_not_raise(self):
+        state.clear_exit("../../escaped")  # must not raise
+        self.assertFalse(state._root().exists())
+
+    def test_clearing_survives_a_failing_unlink(self):
+        """Nothing in this module raises: a launch is not worth failing over a file
+        that could not be deleted."""
+        state.record_exit("f-1", 99)
+        with mock.patch("charter.frame.state.Path.unlink", side_effect=OSError("read-only")):
+            state.clear_exit("f-1")  # must not raise
+
+
 class Reap(PersonaIso, unittest.TestCase):
     def test_a_directory_whose_session_is_gone_is_removed(self):
-        state.bump("dead-1")
+        # `dead-1` up to #383: the trailing number was decoration, and pid 1 is
+        # `launchd`/`init`, so reap would now refuse to remove it. A frame that is
+        # genuinely finished has to be named after a pid that is genuinely finished.
+        dead = f"dead-{_a_dead_pid()}"
+        state.bump(dead)
         state.bump("live-1")
         removed = state.reap({"live-1"})
-        self.assertEqual(removed, ["dead-1"])
-        self.assertFalse(state.frame_dir("dead-1").exists())
+        self.assertEqual(removed, [dead])
+        self.assertFalse(state.frame_dir(dead).exists())
         self.assertTrue(state.frame_dir("live-1").exists())
 
     def test_a_live_frame_is_never_reaped_by_age(self):
         """A long-lived frame is exactly what an age heuristic would eat."""
         state.bump("old-1")
         self.assertEqual(state.reap({"old-1"}), [])
+
+    def test_a_sibling_exit_code_survives_a_reap_that_beats_its_own_launcher(self):
+        """#383. `reap` runs at EVERY frame launch, and the set it is handed names the
+        tmux sessions live at that instant. A sibling frame whose session has just ended
+        is therefore absent from it while its own launcher is still inside `cmd_launch`,
+        one line short of reading the `exit` file it just recorded. Removing the
+        directory there does not merely lose bookkeeping: `exit_code` answers `None`,
+        `cmd_launch` turns that into a returned 0, and a harness that actually failed is
+        reported as a success to whatever `&&` chain or CI step called charter.
+
+        This test process's own pid stands in for that launcher. It is not a charter
+        launcher, which is the point — `reap` cannot tell the difference and must not
+        try: all it may ask is whether the process named at the end of the directory is
+        still there to come back for its answer."""
+        fid = state.frame_id("sibling", os.getpid())
+        state.record_exit(fid, 42)
+        state.reap({"some-other-frames-session"})
+        self.assertEqual(state.exit_code(fid), 42,
+                         "reap deleted a live launcher's frame directory, and with it "
+                         "the exit code that launcher had not read yet")
+
+    def test_a_frame_whose_launcher_has_exited_is_still_removed(self):
+        """The other half of #383, and the one that keeps the fix from being a no-op
+        dressed as a fix: once the pid in the name is gone there is nobody left to read
+        the `exit` file, so the directory is `reap`'s to remove exactly as before."""
+        fid = state.frame_id("finished", _a_dead_pid())
+        state.bump(fid)
+        self.assertEqual(state.reap(set()), [fid])
+        self.assertFalse(state.frame_dir(fid).exists())
+
+    def test_a_directory_that_names_no_pid_is_still_removed(self):
+        """Not everything under the frame root was minted by `frame_id`: debris, a
+        hand-made directory, a name from an older charter. With no pid to ask about,
+        the live-session test is the only evidence there is — and it is the one `reap`
+        already had, so an unparseable name must not become undeletable."""
+        state.bump("debris")
+        self.assertEqual(state.reap(set()), ["debris"])
+
+    def test_a_bare_number_is_not_read_as_a_pid(self):
+        """`frame_id` always emits `<workspace>-<pid>` with a non-empty workspace (its
+        `or "frame"` fallback guarantees one), so a directory that is nothing but digits
+        did not come from it and those digits are not a claim about any process. Named
+        after THIS process's pid — as live as a pid gets — so reading it as one would
+        make the directory undeletable for as long as the suite runs."""
+        name = str(os.getpid())
+        state.bump(name)
+        self.assertEqual(state.reap(set()), [name])
+
+    def test_a_trailing_zero_is_not_read_as_a_pid(self):
+        """`kill(2)` reads 0 as "every process in my group", not as a process, so
+        `os.kill(0, 0)` SUCCEEDS and a frame named `ws-0` would look alive forever.
+        `frame_id` can only ever have written a real `os.getpid()` there, and that is
+        never 0 — so the number is debris and the directory stays reapable."""
+        state.bump("ws-0")
+        self.assertEqual(state.reap(set()), ["ws-0"])
+
+    def test_a_launcher_this_user_may_not_signal_still_counts_as_alive(self):
+        """EPERM is an ANSWER, and the opposite of what it looks like. `os.kill(pid, 0)`
+        raises `PermissionError` for a process that exists and belongs to somebody else —
+        another operator's frame on a shared machine, or one launched under `sudo`.
+        Read as "gone", it would make every such frame reapable while its harness was
+        still running, which is #383 again with a different cast.
+
+        Forced rather than found: pid 1 answers this way for an unprivileged run and
+        answers plain success for a root CI container, so asking the real machine would
+        pin the branch on a laptop and quietly stop pinning it in CI."""
+        state.bump("another-users-frame-4242")
+        with mock.patch("charter.frame.state.os.kill",
+                        side_effect=PermissionError(1, "Operation not permitted")):
+            self.assertEqual(state.reap(set()), [])
+
+    def test_liveness_is_never_asked_off_posix(self):
+        """`os.kill(pid, 0)` is a question on POSIX and an ANSWER on Windows, where it
+        maps to `TerminateProcess` — asking it there would kill whatever process the
+        number in a directory name happened to land on. `news._outer_probe` documents
+        the same trap and this file's own suite pins it there; this pins it here, where
+        the number comes off a filesystem name rather than an environment variable.
+
+        Asserted on the helper rather than through `reap`, and not for tidiness:
+        `mock.patch` of `os.name` is global for its duration, and `_root()` builds a
+        `Path` — under a patched `os.name` pathlib refuses to instantiate at all
+        ("cannot instantiate 'WindowsPath' on your system"), so a test driving the whole
+        of `reap` would fail on the wrong line and prove nothing about `os.kill`. The
+        pid handed over is real and live (ours), so a helper that asked anyway would get
+        a truthful "alive" back — the assertion has to be that the question was never
+        PUT, not that the answer came out a particular way."""
+        with mock.patch("charter.frame.state.os.name", "nt"), \
+             mock.patch("charter.frame.state.os.kill") as kill:
+            self.assertTrue(state._launcher_is_alive(os.getpid()))
+        kill.assert_not_called()
+
+    def test_a_number_too_large_to_be_a_pid_neither_raises_nor_survives(self):
+        """`reap` runs on the launch path, where this module's own docstring promises
+        nothing raises. A trailing number beyond what a `pid_t` can hold parses as an
+        int perfectly well and then makes `os.kill` raise `OverflowError` — which is
+        NOT an `OSError`, so guarding only that would let it escape into a launch. It
+        also names no process, so the directory stays reapable."""
+        name = "ws-99999999999999999999"
+        state.bump(name)
+        self.assertEqual(state.reap(set()), [name])
 
 
 if __name__ == "__main__":

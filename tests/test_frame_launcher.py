@@ -1499,6 +1499,59 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertLess(order.index("reap"), order.index("frame_dir_create"),
                         f"reap must run before this frame's own directory is created: {order}")
 
+    def test_a_launch_does_not_eat_a_sibling_frames_unread_exit_code(self):
+        """#383, at the altitude where it costs something. Ordering the reap first (the
+        test above) NARROWS the window in which a sibling's `exit` file can be deleted
+        out from under its own launcher; it cannot close it, because the sibling's tmux
+        session is genuinely gone by then and so is genuinely absent from `live`. What
+        closes it is that the sibling's LAUNCHER is still running, and the frame id says
+        so: `frame_id` puts that launcher's pid at the end of the name.
+
+        The stand-in is a real child process, deliberately not this test process: this
+        launch's own frame id is `frame_id("demo", os.getpid())`, so borrowing our pid
+        would test the launcher not reaping ITSELF — a different property, and one that
+        would still pass with the sibling case broken. The child sleeps far longer than
+        the launch and is killed on cleanup."""
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        sibling = state.frame_id("other-workspace", child.pid)
+        state.record_exit(sibling, 42)
+
+        _launch(_FakeTmux(exit_code=0))
+
+        self.assertEqual(state.exit_code(sibling), 42,
+                         "a launch reaped a sibling frame whose launcher was still "
+                         "alive — that launcher now returns a fabricated 0 for a "
+                         "harness that exited 42")
+
+    def test_a_launch_does_not_inherit_an_exit_code_from_an_earlier_life_of_its_pid(self):
+        """The bill for #383's fix, paid here rather than left to be discovered. A frame
+        id is `<workspace>-<launcher pid>` and pids are recycled — Linux wraps at
+        `kernel.pid_max`, 32768 by default — so a launcher for the same workspace really
+        does land on a pid an earlier launcher already used. `reap` now keeps a directory
+        for as long as the pid in its name is live, and on THIS launch that pid is live
+        because it is ours: the earlier frame's directory, `exit` file and all, is still
+        there when this launch adopts the same id.
+
+        Read back, that stale code becomes this launch's own return value. Asserted on
+        the DETACH path, where nothing new is ever recorded and the stale file is
+        therefore the only thing `state.exit_code` can find — a harness running perfectly
+        well, detached, would be reported as having failed with a dead frame's number and
+        the reattach line would never print."""
+        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
+        state.record_exit(stale, 99)
+
+        fake = _FakeTmux(still_live=True)
+        buf = []
+        with mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+
+        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
+        self.assertEqual(rc, 0, "a previous frame's exit code was returned as this one's")
+        self.assertTrue(any("detach" in m.lower() for m in buf),
+                        f"no reattach message — the stale code suppressed it: {buf}")
+
 
 class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
     """#384: a command that dies before the frame is drawn must not die in silence.

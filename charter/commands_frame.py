@@ -878,6 +878,12 @@ def cmd_launch(args) -> int:
         # ENAMETOOLONG) must not be treated as a Path here just because it usually is one.
         util.err(f"charter frame: could not create state for frame {fid!r}")
         return 1
+    # The pid this launch was handed may have belonged to an earlier launcher for the
+    # same workspace, which mints the SAME `fid` — and since #383 `reap` keeps that
+    # earlier directory for as long as the pid in its name is live, which right now it
+    # is, because it is ours. Any `exit` recorded under this id therefore predates this
+    # frame, and `state.exit_code(fid)` below would read it back as this launch's own.
+    state.clear_exit(fid)
     state.bump(fid)
 
     try:

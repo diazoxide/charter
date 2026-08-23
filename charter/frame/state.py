@@ -176,6 +176,36 @@ def record_exit(fid: str, code: int) -> None:
         return
 
 
+def clear_exit(fid: str) -> None:
+    """Forget any exit code recorded under *fid*, because a new frame is claiming the id.
+
+    The bill for #383's rule, and the reason it is only a bill and not a defect. A frame
+    id is ``<workspace>-<launcher pid>`` and pids are recycled — Linux wraps at
+    ``kernel.pid_max``, 32768 by default — so a launcher for the same workspace really
+    does land on a pid an earlier launcher already used. Since :func:`reap` keeps a
+    directory for as long as the pid in its name is live, and on a launch that pid is
+    live BECAUSE IT IS THE LAUNCHER'S OWN, the earlier frame's directory survives to be
+    adopted by the new one, ``exit`` file included. `cmd_launch` then reads that stale
+    code back as its own and returns it: a harness running perfectly well, detached, is
+    reported as having failed with a dead frame's number.
+
+    A launch beginning is the one moment that can be certain about this — whatever is
+    recorded under the id was recorded before this frame existed. Only ``exit`` is
+    removed: ``version`` is a counter panels poll, and moving it is :func:`bump`'s job.
+    Never raises, and never creates, for the same reasons as everything else here.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        (d / "exit").unlink(missing_ok=True)
+    except OSError:
+        # Same must-not-raise promise the rest of this module makes: a launch is not
+        # worth failing over a file that could not be deleted, and the stale-code
+        # reading below is the caller's own to notice.
+        return
+
+
 def exit_code(fid: str) -> int | None:
     """The recorded exit code, or ``None`` when the frame has not finished (or exist)."""
     d = frame_dir(fid)
@@ -187,6 +217,61 @@ def exit_code(fid: str) -> int | None:
         return None
 
 
+def _launcher_pid(name: str) -> int | None:
+    """The launcher pid :func:`frame_id` put at the end of *name*, or ``None``.
+
+    The inverse of :func:`frame_id`'s last line and nothing more — a reader, not a
+    parser of arbitrary text. ``None`` means "this name carries no pid", which is a real
+    answer and not a failure: the frame root can hold debris, a hand-made directory, or a
+    name minted by an older charter, and none of those may become undeletable just
+    because nothing can be read out of them.
+
+    Requires the separator, so a bare ``12345`` reads as ``None`` rather than as a pid —
+    :func:`frame_id` always emits ``<workspace>-<pid>`` with a non-empty workspace (its
+    ``or "frame"`` fallback guarantees it), so a name without one did not come from here
+    and its digits are not a claim about any process. ``rpartition`` rather than
+    ``split``, because a workspace may contain ``-`` itself (``harness-wrapper-4242``).
+    """
+    head, sep, tail = name.rpartition("-")
+    if not sep or not head or not tail.isdigit():
+        return None
+    pid = int(tail)
+    # `0` is "every process in my group" to `kill(2)`, not a process — and `frame_id`
+    # can only ever have written a real `os.getpid()` here, which is never 0 or negative.
+    return pid if pid > 0 else None
+
+
+def _launcher_is_alive(pid: int) -> bool:
+    """Is the process *pid* names still running? Asks; never signals anything.
+
+    ``os.kill(pid, 0)`` is a QUESTION on POSIX and an ANSWER on Windows, where it maps to
+    ``TerminateProcess`` and would kill whatever the name happened to hold (the same trap
+    ``news._outer_probe`` documents). Off POSIX the pid is taken at its word — a frame
+    directory that outlives its launcher there costs a few hundred bytes, where getting
+    it wrong costs somebody else's process. Belt and braces in practice: :func:`reap` is
+    only ever called from `commands_frame.cmd_launch`, which has already refused if there
+    is no tmux, and there is no tmux off POSIX.
+
+    ``PermissionError`` (EPERM) is an ANSWER too, and the opposite of what it looks like:
+    the process exists, it simply is not ours to signal. Reading it as "gone" would make
+    every frame launched by another user reapable while it was still running.
+    """
+    if os.name != "posix":
+        return True
+    try:
+        os.kill(pid, 0)   # signal 0 asks whether it exists; it sends nothing
+    except ProcessLookupError:
+        return False
+    except OverflowError:
+        # A number too large for a `pid_t` — `int()` accepted it happily and `os.kill`
+        # would raise straight out of a launch. NOT an `OSError`, so it needs naming
+        # separately. It cannot name a live process, so the directory stays reapable.
+        return False
+    except OSError:
+        return True       # alive, and not ours to signal
+    return True
+
+
 def reap(live: set[str]) -> list[str]:
     """Remove state for frames whose tmux session is gone. Returns what was removed.
 
@@ -194,13 +279,48 @@ def reap(live: set[str]) -> list[str]:
     heuristic would delete precisely that one. *live* names the sessions `tmux
     list-sessions` still reports, so the only frames removed are ones nothing is watching
     any more.
+
+    **And never on a live session alone, because a frame outlives its session (#383).**
+    Between a harness exiting and its launcher reading :func:`exit_code`, the session is
+    already gone from `tmux list-sessions` while the launcher is still sitting in
+    `cmd_launch` with the answer one line away. A `reap()` from a SIBLING frame's launch
+    — and one runs at every launch — landing in that window deleted the `exit` file
+    before it was ever read: `exit_code` answered ``None``, `cmd_launch` turned that into
+    a returned ``0``, and a harness that had genuinely failed was reported as a success
+    to whatever `&&` chain or CI step invoked charter. Ordering `cmd_launch`'s reap
+    before its own `frame_dir(create=True)` narrows that window; it cannot close it,
+    because by then the sibling's session is genuinely absent from *live*.
+
+    So a second question is asked, and :func:`frame_id` is what makes it answerable
+    without inventing any new state: the id ENDS in the launcher's own pid. A directory
+    whose launcher is still a live process is one somebody may still come back to, and
+    is left alone — no age, no timestamps, no extra file, nothing to keep in sync.
+
+    Both ways of being wrong point the same way, deliberately. A pid the OS has recycled
+    onto an unrelated process reads as "alive" and costs one directory's cleanup, deferred
+    until that process ends and some later launch reaps it — bounded, silent, and measured
+    in bytes. Reading a live launcher as dead costs a real exit code, which is the defect
+    above. A launcher also no longer reaps its OWN directory on the way out (its pid is,
+    necessarily, still alive); the next launch takes it, which is what already happens for
+    every frame that ended while nothing else was starting.
+
+    Recycling has one sharper form that is NOT paid for in bytes, and it is paid for in
+    :func:`clear_exit` rather than here: a pid recycled onto a launcher for the SAME
+    workspace mints the same id, so the kept directory is not merely litter, it is the id
+    the new frame is about to adopt — stale ``exit`` file included. Deciding that here
+    would mean guessing which of two frames a directory belongs to; the launcher knows,
+    because it is the one claiming the id, so it clears the file as it starts.
     """
     root = _root()
     if not root.is_dir():
         return []
     removed = []
     for d in sorted(root.iterdir()):
-        if d.is_dir() and d.name not in live:
-            shutil.rmtree(d, ignore_errors=True)
-            removed.append(d.name)
+        if not d.is_dir() or d.name in live:
+            continue
+        pid = _launcher_pid(d.name)
+        if pid is not None and _launcher_is_alive(pid):
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        removed.append(d.name)
     return removed
