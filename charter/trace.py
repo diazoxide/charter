@@ -6,6 +6,27 @@ This is **not** OpenTelemetry — no collector, no network, no deps. It's a stdl
 JSONL record under gitignored ``.charter/persona-state/trace/<session>.jsonl`` so you can
 answer "what did the agent/personas just do?" and feed the eval loop. Capture is
 best-effort and never raises — observability must never break the thing it observes.
+
+**Nothing here filters, and nothing here is marked "not really yours."** Every row in
+``<session>.jsonl`` is a fact about that session, and ``charter trace --summary`` counts
+rows without exception. That is a decision, and #372 is the case that forced it: the summary
+once reported 581 guard denials of which 556 were recorded while charter's own test suite
+ran — a suite run resolves its plane by walking up for ``charter.toml``, so a checkout
+sitting inside somebody's plane writes into THAT plane, under the ambient
+``$CHARTER_SESSION_ID``. Two fixes were available at the reader and both were refused:
+
+* Dropping the suite's rows from the count would make "quiet because nothing happened" and
+  "quiet because we filtered" print identically. A trace that can be silent for two
+  different reasons is worse than a loud one.
+* Marking rows instead — *"556 of these were the test suite"* — reads honestly, but the mark
+  has to come from something the runtime can see, an env var or a config key. That is an
+  override the observed agent could set on its own denials, and
+  ``hooks._OVERRIDE_NOTE`` spends a paragraph refusing exactly that trade for the guards
+  themselves. The record of a guard does not get a weaker rule than the guard.
+
+So the boundary is the WRITER: a test pins its own root and never reaches the operator's
+plane (#227, and ``tests/test_the_suite_writes_no_trace_into_the_operators_plane.py``, which
+holds the invariant). Rows that exist happened; a count of them is the truth.
 """
 
 from __future__ import annotations
