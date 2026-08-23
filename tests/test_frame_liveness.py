@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from charter import hooks
-from charter.frame import notify, state
+from charter.frame import gather, notify, state
 
 from tests._isolation import PersonaIso, run_hook
 
@@ -37,24 +37,74 @@ class Notify(PersonaIso, unittest.TestCase):
         """Not just "does not raise" — `state.bump` is itself hardened against a bad id
         (`contain.segment_ok` rejects a non-str/`None` name harmlessly), so a version of
         this guard that forwarded a missing id to `state.bump` anyway would still not
-        raise. Spying on `state.bump` catches that the guard-removed version wouldn't:
-        it proves nothing was even attempted, not merely that nothing blew up.
+        raise. Spying on `state.bump`/`gather.refresh` catches that the guard-removed
+        version wouldn't: it proves nothing was even attempted, not merely that nothing
+        blew up — the property this task's brief calls "must cost nothing outside a
+        frame," checked before any gather work, not just before the bump.
 
         `_last["at"]` is reset here too, same as the other cases — otherwise the
         debounce window left over from a test that ran moments earlier (`_last["at"]`
         being very recent) would return early and mask a missing/broken `fid` guard
         just as effectively as a correct one, and this test would pass either way."""
         with mock.patch.dict(os.environ, {}, clear=True), \
-             mock.patch.object(state, "bump") as bump:
+             mock.patch.object(state, "bump") as bump, \
+             mock.patch.object(gather, "refresh") as refresh:
             notify._last["at"] = 0.0
             notify.plane_changed()   # must not raise
             bump.assert_not_called()
+            refresh.assert_not_called()
 
     def test_a_broken_state_directory_never_reaches_the_hook(self):
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
              mock.patch.object(state, "bump", side_effect=OSError("read-only")):
             notify._last["at"] = 0.0
             notify.plane_changed()   # must not raise
+
+    def test_a_bump_refreshes_the_gather_cache(self):
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+             mock.patch.object(gather, "refresh") as refresh:
+            notify._last["at"] = 0.0
+            notify.plane_changed()
+            refresh.assert_called_once_with("f-1")
+
+    def test_a_second_call_inside_the_debounce_window_skips_the_refresh_too(self):
+        """The cache refresh rides the SAME debounce as the version bump (see the
+        module docstring on why one gate rather than two) — a second call within the
+        250ms window must not gather again, exactly like it must not bump again."""
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+             mock.patch.object(gather, "refresh") as refresh:
+            notify._last["at"] = 0.0
+            notify.plane_changed()
+            notify.plane_changed()
+            refresh.assert_called_once()
+
+    def test_a_failure_to_gather_does_not_raise_and_the_bump_still_happens(self):
+        """The property this task's brief puts first: a `gather.refresh` that somehow
+        raises must not escape `plane_changed()` — proven here with a real
+        `RuntimeError`, not by trusting `gather`'s own advertised politeness. And
+        because the version bump is this function's original, load-bearing promise
+        (pinned separately by `test_a_change_bumps_the_running_frame`), a broken
+        refresh must not take the bump down with it: the version still has to move."""
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+             mock.patch.object(gather, "refresh", side_effect=RuntimeError("boom")):
+            before = state.version("f-1")
+            notify._last["at"] = 0.0
+            notify.plane_changed()   # must not raise
+            self.assertNotEqual(before, state.version("f-1"))
+
+    def test_the_cache_refreshes_before_the_version_bumps(self):
+        """So a panel that polls `state.version` and then reads the cache never finds
+        the version already moved but the cache still stale — see the module
+        docstring's "refresh happens BEFORE the bump" note."""
+        order = []
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+             mock.patch.object(gather, "refresh",
+                                side_effect=lambda fid: order.append("refresh")), \
+             mock.patch.object(state, "bump",
+                                side_effect=lambda fid: order.append("bump")):
+            notify._last["at"] = 0.0
+            notify.plane_changed()
+        self.assertEqual(order, ["refresh", "bump"])
 
 
 #: Every hook family the spec names as a liveness trigger, and what each one buys.

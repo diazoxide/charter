@@ -53,8 +53,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import commands_frame, hooks, instance, todos
-from charter.frame import menu, notify, state
+from charter import commands_frame, config, hooks, instance, todos
+from charter.frame import gather, layout, menu, notify, state
 
 from tests._isolation import PersonaIso, run_hook
 
@@ -687,13 +687,31 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink, never two separately-registered `addCleanup`
+        # calls in that order — `addCleanup` runs LIFO, so `addCleanup(kill-server)`
+        # followed by `addCleanup(unlink)` actually runs unlink FIRST — see
+        # `_teardown_socket`'s own docstring below for why that is backwards and
+        # when it stops being harmless.
+        self.addCleanup(self._teardown_socket)
         (self.tmp / "charter.toml").write_text("")
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)  # let it derive under CHARTER_ROOT, like this
                                             # process's own PersonaIso-isolated config
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `TmuxIntegration._teardown_socket` for why the file survives `kill-server`
+        on its own. Order matters here specifically, not just tidily: two separate
+        `addCleanup` calls (`kill-server`, then `unlink`) run LIFO — unlink FIRST,
+        kill-server SECOND — which reconnects to nothing once the socket's own
+        directory entry is already gone. Harmless for THIS class today (its
+        sessions never arm `remain-on-exit`, so `_kill_pid` on each pane's own
+        process already ends the session, then the server, on tmux's own
+        `exit-empty` default before `kill-server` is ever asked to do anything) —
+        fixed anyway so this class cannot silently start leaking the day it, or a
+        test added to it, ever does."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def _spawn_panel(self, session: str, fid: str) -> None:
         """One `charter panel bottom --session <fid>` pane, in a fresh session named
@@ -851,12 +869,19 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink — see `PanelIntegration._teardown_socket`'s own
+        # docstring for why two separately-registered `addCleanup` calls in that
+        # order run backwards (`addCleanup` is LIFO).
+        self.addCleanup(self._teardown_socket)
         (self.tmp / "charter.toml").write_text("")
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `PanelIntegration._teardown_socket` for the full reasoning, identical here."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def test_a_hostile_label_never_reaches_what_the_resolved_action_runs(self):
         fid = state.frame_id("menu-integ", os.getpid())
@@ -930,9 +955,16 @@ class MenuFormatIntegration(_NeedsAttachedClient, unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink — see `PanelIntegration._teardown_socket`'s own
+        # docstring for why two separately-registered `addCleanup` calls in that
+        # order run backwards (`addCleanup` is LIFO).
+        self.addCleanup(self._teardown_socket)
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `PanelIntegration._teardown_socket` for the full reasoning, identical here."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def _new_session(self, fid: str) -> None:
         """A fresh `cat`-backed session named *fid*, with its pane's OWN pid registered
@@ -1123,9 +1155,35 @@ class MenuClientIntegration(_NeedsAttachedClient, unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.addCleanup(_tmux, "kill-server")
-        self.addCleanup(lambda: (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
-                        .unlink(missing_ok=True))
+        # kill-server THEN unlink — see `_teardown_socket`'s own docstring below:
+        # THIS class, unlike its siblings above, is not merely defending against a
+        # hypothetical here.
+        self.addCleanup(self._teardown_socket)
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file.
+
+        Two separately-registered `addCleanup` calls (`kill-server`, then `unlink`)
+        run LIFO — unlink FIRST, kill-server SECOND — and a `kill-server` issued
+        after the socket's own directory entry is already gone cannot reconnect to
+        the still-live server at all (see `FourEdgeIntegration.setUp`'s own
+        docstring for the measured leak this produces). That reversed order is
+        harmless for `PanelIntegration`/`MenuIntegration`/`MenuFormatIntegration`
+        above only because none of THEIR sessions arm `remain-on-exit`. **This
+        class is the one exception, and arms it globally, not incidentally**:
+        `_install_real_bind` below sources `commands_frame.conf_text(...)` for
+        real, which emits `set -g remain-on-exit on` (`commands_frame.py`) —
+        server-wide, not scoped to one session. It survives today with the two-call
+        ordering bug anyway (confirmed by removing only `_new_session`'s own
+        `addCleanup(_kill_pid, server_pid)`, which alone still leaves a PPID-1
+        orphan) because `_new_session` ALSO SIGKILLs the server's own process
+        directly by pid — a second, independent teardown path that has nothing to
+        do with `kill-server` succeeding or failing. This fix removes the
+        dependency on that second path rather than continuing to rely on it being
+        present on every test added to this class in the future.
+        """
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
     def _charter_py_env(self) -> dict:
         """The environment this class's tmux server starts with: an INTERPRETER shim
@@ -1286,6 +1344,465 @@ class MenuClientIntegration(_NeedsAttachedClient, unittest.TestCase):
             time.sleep(0.2)
         self.assertTrue(os.path.exists(canary_b),
                         "B's own hotkey press must open B's own, selectable menu")
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def _init_repo(path: Path, branch: str) -> Path:
+    """A real git repo with one commit, on *branch* — the same fixture shape
+    `tests/test_frame_gather.py`'s own `_init_repo` uses, duplicated here (rather
+    than imported across test modules) so this module stays as self-contained as
+    every other fixture in it already is. `FourEdgeIntegration` below is the only
+    caller: it needs a repo a real `charter panel left --session <fid>` subprocess
+    can gather for itself, through `gather.scan`, exactly the way an operator's own
+    clone would be gathered."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", branch, str(path)],
+                   check=True, capture_output=True)
+    _git(path, "config", "user.email", "t@example.com")
+    _git(path, "config", "user.name", "t")
+    _git(path, "config", "gc.auto", "0")
+    _git(path, "config", "maintenance.auto", "false")
+    (path / "README.md").write_text("hello\n")
+    _git(path, "add", "README.md")
+    _git(path, "-c", "commit.gpgsign=false", "commit", "-qm", "init")
+    return path
+
+
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class FourEdgeIntegration(PersonaIso, unittest.TestCase):
+    """Task 5 (#385), the closing proof for this whole plan: a frame configured with
+    ALL FOUR slots comes up with all four panes alive and drawing REAL content, and
+    repaints after a real `state.bump`. Tasks 1-4 were each unit-tested — a mocked
+    `scan()`, an in-process cache read, a renderer called directly against a fixed
+    `width`. Nothing before this class has ever run `gather.scan`,
+    `notify.plane_changed`, `slots.render` and a real tmux pane together, in the
+    same process tree, against a real git repo — this is the one place the whole
+    composition (gather -> cache -> hook -> panel -> renderer -> a pane an operator
+    can actually read) is proven at once.
+
+    `PanelIntegration` above already proves ONE panel end to end (`bottom`, driven
+    by a direct `charter panel bottom --session <fid>` new-session). This class
+    proves the COMPOSITION `layout.panel_argvs` exists for instead: four real
+    splits off the SAME harness pane id, in the same launch — the exact multi-split
+    scenario `layout.py`'s own module docstring names as the index-churn hazard
+    pane ids were built to close (tmux renumbers pane INDICES on every split;
+    `PanelIntegration` only ever creates one pane total, so it can never exercise a
+    second or third split landing on the wrong rectangle). `_spawn_frame` below
+    calls `layout.session_argv` then `layout.panel_argvs` — the same two real,
+    production argv-building functions `commands_frame.cmd_launch` calls, run here
+    without the parts of `cmd_launch` this task is not about (the hotkey menu, the
+    exit-code hooks) — those are already proven end to end by `TmuxIntegration`/
+    `MenuIntegration`/`MenuFormatIntegration`/`MenuClientIntegration` above, and
+    duplicating them here would only be a second, weaker copy.
+
+    **Only `left` is asserted through content that could only have come from the
+    cache Tasks 1/2 built.** `top` (workspace/persona/version), `right` (persona
+    chips) and `bottom` (todo count/alerts) all read live at render time —
+    `slots.py`'s own docstrings for `_top`/`_right`/`_bottom` each say so — real
+    subprocess, real data, but none of it through `gather.py`'s cache. `left` is
+    the one slot `slots._left` reads EXCLUSIVELY from `gather.read(fid)` (see that
+    function's own docstring: "never a repo directory listing, a `git status`, or a
+    `glstate.read_for` of its own"), so a real repo's real branch name showing up
+    in a captured `left` pane is the one assertion in this whole file that proves
+    the actual thing this plan is for: a real `git` sweep, gathered ONCE, cached to
+    disk by a hook, and read back by a panel process that never itself calls git —
+    a panel showing "no repos" would be ALIVE and would tell you nothing about
+    whether any of that chain actually works (see this module's own task brief).
+
+    **Fix round 1 closed three links this proof left unproven, all the same shape
+    (green even with the actual mechanism disabled):** a real, uncommitted file in
+    the fixture repo (mutation testing found `left`'s row shows a clean repo as
+    clean whether or not `gather.scan`'s own `_repo_states` sweep — the real `git
+    status --porcelain --branch` half — ever ran at all, since name/branch alone
+    come from `_repo_trees`/`_branch`, neither of which touches it); a direct read
+    of the cache FILE (`gather._cache_file`), not only the pane's own text, both
+    right after priming and right after the real hook fires (mutation testing
+    found `gather.save` could be neutered outright and every content assertion
+    still passed, because `gather.read`'s own missing-cache fallback recomputes a
+    live scan whenever there is nothing to read).
+
+    The repaint proof mutates the repo's BRANCH, not its dirty bit, deliberately:
+    `gather.py`'s `_branch` reads `.git/HEAD` straight, with no cache of its own,
+    while dirty/ahead/behind ride `statusline._repo_states`' 5-second TTL
+    (`_STATE_TTL`), keyed by directory path and blind to a file appearing between
+    two gathers taken seconds apart — a dirty-bit mutation immediately after the
+    frame's first (TTL-warming) gather would be flaky against the very caching
+    behaviour this plan depends on, for a reason that has nothing to do with
+    whether the repaint actually worked. A branch switch has no such cache to race
+    — which is exactly why the ALIVE test above needs its OWN, separate dirty file
+    (created before the frame ever launches, so no TTL race is possible) to prove
+    the `_repo_states` half at all.
+
+    **Capability, not presence — this module's own opening promise, checked for
+    this class specifically.** Every tmux primitive `_spawn_frame`/the tests above
+    use — `new-session -x/-y -P -F`, `split-window -t <pane-id> -l N`,
+    `select-pane`, `#{pane_dead}`/`#{pane_active}`/`#{pane_pid}`,
+    `capture-pane -p`, `set -g remain-on-exit` — predates charter's own declared
+    floor (`tmuxctl.FLOOR`, tmux 3.2), which CI's tmux 3.4 already clears; none of
+    it is gated behind a version this class would need to probe. Unlike
+    `MenuFormatIntegration`/`MenuClientIntegration` above, nothing here attaches a
+    real client (`display-menu`'s "no current client" refusal, and `TERM=dumb`'s
+    inability to give it one, are why those two classes need
+    `_NeedsAttachedClient` at all) — `capture-pane`/`display-message` read a
+    pane's state and content directly, needing no client attached to it, so
+    `TERM=dumb`'s specific failure mode (a pty-attached CLIENT that cannot
+    register) never applies to this class. Confirmed directly, not merely
+    inferred: this whole module, `FourEdgeIntegration` included, passes 17/17
+    under `TERM=dumb` with nothing skipped. `_HAS_TMUX` (presence) is therefore
+    the right and only gate for this class — no narrower capability probe is
+    missing here the way one was for the classes this module's own opening
+    docstring describes.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # ONE combined cleanup, kill-server THEN unlink — never two separately
+        # registered `addCleanup` calls in that order (`addCleanup` runs LIFO, so
+        # that shape runs unlink FIRST, kill-server SECOND — backwards). Every
+        # class in this module now uses this same combined shape (see
+        # `MenuClientIntegration._teardown_socket` for the measured leak the
+        # reversed order produces once a session's `remain-on-exit` is armed,
+        # which is this class's own situation too: `_spawn_frame` writes
+        # `commands_frame._PLACEHOLDER_CONF` — `set -g remain-on-exit on` — into
+        # its `-f` config, the same placeholder `cmd_launch` itself loads, so a
+        # crashed panel leaves an inspectable pane rather than vanishing. With it
+        # on, killing every pane's own process (`_kill_pid`, in `_spawn_frame`)
+        # does NOT end the session; only an explicit `kill-session`/`kill-server`
+        # does, and unlike `MenuClientIntegration` this class has no second,
+        # independent teardown path (a directly-SIGKILLed server pid) to fall
+        # back on if the ordering is wrong — getting it right here is the only
+        # thing standing between a `sleep 600` harness pane and an orphan).
+        self.addCleanup(self._teardown_socket)
+        (self.tmp / "charter.toml").write_text("")
+        self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
+        self.env.pop("CHARTER_HOME", None)  # derive STATE_DIR under CHARTER_ROOT, like
+                                            # this process's own PersonaIso-isolated config
+
+    def _teardown_socket(self) -> None:
+        """Kill this class's own tmux server, THEN unlink its socket file — see
+        `setUp`'s own comment for why the order is load-bearing here specifically."""
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
+
+    def _run_env(self, cmd: list[str]) -> subprocess.CompletedProcess:
+        """Run a full tmux argv — already built by `layout.py`'s own functions, never
+        hand-retyped — under this class's own throwaway plane. Mirrors
+        `commands_frame.cmd_launch`'s own behaviour exactly: it passes `env=env` to
+        EVERY tmux call it makes on a launch, not only the first (`new-session`
+        alone is not enough — a split's own local tmux-CLIENT invocation does not
+        need `$CHARTER_ROOT` itself, since a spawned pane's environment comes from
+        the SESSION's tracked environment set at `new-session` time, not from
+        whatever invoked the later `split-window` — but this matches production
+        rather than relying on that distinction holding forever). `cwd` is pinned
+        to the checkout root for the same reason `PanelIntegration._spawn_panel`
+        pins it: `python3 -m charter` needs `charter` importable off the CURRENT
+        DIRECTORY when the package is not installed, and nothing here should depend
+        on wherever `unittest discover` happens to have been invoked from.
+        """
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                              env=self.env, cwd=str(_REPO_ROOT))
+
+    def _pane_pid(self, pane: str) -> str:
+        return _tmux("display-message", "-p", "-t", pane, "#{pane_pid}").stdout.strip()
+
+    def _capture(self, pane: str) -> str:
+        return _tmux("capture-pane", "-p", "-t", pane).stdout
+
+    def _alive(self, pane: str) -> str:
+        return _tmux("display-message", "-p", "-t", pane, "#{pane_dead}").stdout.strip()
+
+    def _wait_for(self, pane: str, needle: str, timeout: float = 5.0) -> str:
+        """Poll `capture-pane` for *pane* until *needle* appears or *timeout*
+        elapses, returning whatever was last captured either way.
+
+        Fix round 1: a fixed `time.sleep(1.5)` used to stand where this is called
+        from — a guess about how long a cold `charter` import plus a full
+        `gather.scan` (subprocess git calls included) takes on THIS machine,
+        wrong in both directions: measured content landing in ~0.08s on a normal
+        run (so the sleep was mostly wasted time, four such waits per test in the
+        heaviest class in this module), and a hard, unrecoverable failure on any
+        runner slow enough to still be starting up at 1.5s — exactly the
+        "polling makes a slow machine slow rather than wrong" property
+        `_await_file` above already established for this file's other classes,
+        applied here to a first paint rather than a repaint. Content, not mere
+        pane existence: a pane can be alive and blank (or alive and still on its
+        LAST paint) well before it has the real content a caller wants to assert
+        on, so this waits for the actual needle, not a fixed delay standing in
+        for "probably done by now".
+        """
+        deadline = time.monotonic() + timeout
+        content = self._capture(pane)
+        while time.monotonic() < deadline and needle not in content:
+            time.sleep(0.1)
+            content = self._capture(pane)
+        return content
+
+    def _spawn_frame(self, fid: str) -> tuple[str, dict[str, str]]:
+        """Launch a real four-slot frame: `layout.session_argv` for the harness pane,
+        then `layout.panel_argvs` for all four splits off its id — the same two
+        calls `cmd_launch` makes. Returns the harness pane id and a `slot -> pane
+        id` map; every pane's own pid (`#{pane_pid}`, captured immediately — never
+        the session or pane id, which name tmux objects, not the OS process
+        underneath) is registered for `_kill_pid` cleanup as it is created, exactly
+        the way `PanelIntegration`/`MenuIntegration` above already have to (see
+        `_kill_pid`'s own docstring for why `kill-server` alone leaves orphans).
+        """
+        conf_dir = Path(tempfile.mkdtemp(prefix="charter-integ-4edge-"))
+        self.addCleanup(shutil.rmtree, conf_dir, True)
+        conf_path = conf_dir / "tmux.conf"
+        # The same placeholder `cmd_launch` writes ahead of its own `new-session`
+        # call — `commands_frame._PLACEHOLDER_CONF` arms `remain-on-exit` from the
+        # very first moment, so a panel that crashes at startup leaves a pane this
+        # test can still inspect rather than one that simply vanishes.
+        conf_path.write_text(commands_frame._PLACEHOLDER_CONF)
+
+        session_cmd = layout.session_argv(session=fid, conf=str(conf_path), socket=SOCKET,
+                                          cols=120, rows=40, harness_argv=["sleep", "600"])
+        r = self._run_env(session_cmd)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        self.assertTrue(harness_pane, "tmux did not report the harness pane's id")
+        self.addCleanup(_kill_pid, self._pane_pid(harness_pane))
+
+        slots = ["top", "bottom", "left", "right"]
+        panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=SOCKET,
+                                        charter_argv=[sys.executable, "-m", "charter"],
+                                        harness_pane=harness_pane)
+        panes: dict[str, str] = {}
+        for slot, cmd in zip(slots, panel_cmds):
+            p = self._run_env(cmd)
+            self.assertEqual(p.returncode, 0, f"splitting {slot!r}: {p.stderr}")
+            pane_id = p.stdout.strip()
+            self.assertTrue(pane_id, f"tmux did not report {slot!r}'s pane id")
+            panes[slot] = pane_id
+            self.addCleanup(_kill_pid, self._pane_pid(pane_id))
+
+        # The same refocus `cmd_launch` performs once every panel is drawn (its own
+        # comment: `split-window` makes the newly created pane active by default,
+        # so after four splits the LAST panel drawn — never the harness — has
+        # focus unless something puts it back). A literal `select-pane`, not one of
+        # the argv-building functions above: it targets a tmux-ASSIGNED pane id,
+        # carrying nothing an operator or a config file ever supplied, so there is
+        # no injection surface here for a helper to guard against.
+        self._run_env(["tmux", "-L", SOCKET, "select-pane", "-t", harness_pane])
+        return harness_pane, panes
+
+    def test_all_four_panels_come_up_alive_with_real_content_and_the_harness_keeps_focus(self):
+        """Launch composition, proven end to end: a frame with `top`/`left`/`right`/
+        `bottom` all configured comes up with all four panes alive, each showing
+        real content a broken renderer (or an empty, never-gathered cache) could
+        not have produced, and the harness pane — not the last panel
+        `split-window` happened to draw — holds keyboard focus once the launch
+        finishes.
+
+        **Fix round 1: the repo is made DIRTY before the frame ever launches, not
+        left pristine.** `_init_repo`'s own repo has nothing uncommitted, so
+        without this, `left`'s row shows no marker regardless of whether
+        `gather.scan`'s `_repo_states` half (a real `git status --porcelain
+        --branch` subprocess) ran at all — a mutation that replaced that whole
+        sweep with `{}` left every assertion in this test green, because
+        everything asserted before this fix (repo name, branch) comes from
+        `_repo_trees`/`_branch` alone, neither of which touches `_repo_states`.
+        The `*` dirty marker asserted below is the one thing in this test that
+        can only come from that sweep actually running and actually landing in
+        the cache `left` reads back.
+        """
+        repo_name = f"cnry{os.getpid() % 10000}"
+        branch = f"br{os.getpid() % 10000}a"
+        repo = config.WORKSPACES_DIR / "demo" / repo_name
+        _init_repo(repo, branch)
+        (repo / "scratch.txt").write_text("uncommitted\n")
+        todos.add("demo", "a todo the bottom panel should count")
+        persona_name = self.make_persona(f"p{os.getpid() % 100}")
+
+        fid = state.frame_id("four-edge-alive", os.getpid())
+        harness_pane, panes = self._spawn_frame(fid)
+        self.assertEqual(set(panes), {"top", "bottom", "left", "right"})
+
+        # Poll for real content (`_wait_for`'s own docstring — fix round 1:
+        # replaces a fixed `time.sleep(1.5)` that guessed at how long four cold
+        # `charter` imports plus four `gather.scan` git sweeps take). This also
+        # does the flat sleep's OTHER job — giving a genuine startup crash time
+        # to register — for free: a dead pane never satisfies its needle, so
+        # `_wait_for` spends its own timeout before falling through to the alive
+        # check below, same as a deliberate wait would have.
+        top = self._wait_for(panes["top"], "demo")
+        left = self._wait_for(panes["left"], repo_name)
+        right = self._wait_for(panes["right"], persona_name)
+        bottom = self._wait_for(panes["bottom"], "1 todo")
+
+        for slot, pane in panes.items():
+            self.assertEqual(self._alive(pane), "0",
+                             f"the {slot!r} panel died at startup — a hole in the "
+                             f"frame, not a degraded row (the launcher-days-of-a-"
+                             f"green-suite gap `PanelIntegration`'s own docstring "
+                             f"names, now for all four slots at once)")
+
+        self.assertIn("demo", top, f"top never showed the real workspace name:\n{top!r}")
+
+        self.assertIn(repo_name, left, f"left never showed the real repo:\n{left!r}")
+        self.assertIn(branch, left, f"left never showed the real branch:\n{left!r}")
+        self.assertIn("*", left,
+                      f"left never showed the dirty marker for a real uncommitted "
+                      f"file — either gather.scan's own git-status sweep never "
+                      f"ran, or nothing carried its result into the cached "
+                      f"row:\n{left!r}")
+
+        self.assertIn(persona_name, right,
+                      f"right never showed the real persona:\n{right!r}")
+
+        self.assertIn("1 todo", bottom,
+                      f"bottom never showed the real todo count:\n{bottom!r}")
+
+        focus = _tmux("display-message", "-p", "-t", harness_pane,
+                      "#{pane_active}").stdout.strip()
+        self.assertEqual(focus, "1",
+                         "the harness pane lost focus to the last panel drawn — an "
+                         "operator's harness must be able to receive a keystroke "
+                         "the instant the frame comes up")
+
+    def test_a_state_bump_through_the_real_hook_repaints_left_and_bottom_with_new_facts(self):
+        """Closes the gap `PanelIntegration`'s own hook test
+        (`test_a_real_hook_call_repaints_a_live_panel_without_a_direct_state_bump`)
+        leaves open for THIS plan: that test drives `hooks.posttooluse` against
+        `bottom` alone, which never touches `gather.py` at all. This drives the
+        SAME real hook — never a direct `state.bump` or `gather.refresh` call — and
+        watches `left` repaint with a NEW branch name that only exists because
+        `notify.plane_changed` ran `gather.refresh` BEFORE `state.bump` (Task 2's
+        own contract, and its own docstring's reason: refresh-then-bump closes the
+        window where a poller sees the new version and still reads the stale
+        cache). A version bump into a stale or never-refreshed cache would leave
+        `left` showing the OLD branch forever — this is the one test in the file
+        that would catch that. `bottom` is watched in the same pass, from the SAME
+        single hook call, to pin that one refresh/bump serves every slot that asks,
+        not only the one `PanelIntegration` already covers.
+
+        **The cache is warmed with one direct `gather.refresh` call before any
+        assertion runs — this is load-bearing, not incidental.** Caught by
+        mutation: with no cache file on disk yet, `gather.read`'s OWN fallback
+        (`_left` calls it, this file's `left` panel does not) recomputes a FRESH
+        scan on every call regardless of whether the cache was ever written — so
+        with `notify.plane_changed`'s `gather.refresh` call deleted outright (a
+        real mutation tried while writing this test), `left` still showed the new
+        branch every time, because it was never reading a cache at all, only ever
+        falling through to a live scan. That passed for the wrong reason and would
+        have shipped a vacuous proof of Task 2's whole contract. Priming the cache
+        first (real production `gather.refresh`, called directly — the same
+        function `notify.plane_changed` is supposed to call) means the SECOND
+        gather event below can only show the new branch by successfully
+        OVERWRITING an already-valid cache file — the one behaviour that
+        distinguishes "the hook refreshed the cache" from "the panel quietly
+        recovered on its own."
+        """
+        repo_name = f"cnry{os.getpid() % 10000}"
+        branch_a = f"br{os.getpid() % 10000}a"
+        branch_b = f"br{os.getpid() % 10000}b"
+        repo = config.WORKSPACES_DIR / "demo" / repo_name
+        _init_repo(repo, branch_a)
+        todos.add("demo", "the first todo")
+
+        fid = state.frame_id("four-edge-repaint", os.getpid())
+        _harness_pane, panes = self._spawn_frame(fid)
+
+        # Prime the cache for real, mirroring an already-fired prior hook (see the
+        # docstring above for why this is load-bearing) — `workspace="demo"`
+        # explicit rather than relying on `$CHARTER_WORKSPACE`, since this call
+        # runs IN this test process, not a subprocess that inherited the tmux
+        # session's own environment the way every panel below does.
+        gather.refresh(fid, workspace="demo")
+
+        # Fix round 1: prove the CACHE FILE itself exists and holds *branch_a* —
+        # not only that `left` shows the right text, which `gather.read`'s own
+        # missing-cache fallback (a fresh, live scan) can produce with `gather.
+        # save` neutered outright and no cache ever written at all. This is the
+        # direct check that `gather.refresh` did the WRITE half of its job, not
+        # only the read a panel happens to see regardless.
+        cache = gather._cache_file(fid, create=False)
+        self.assertTrue(cache is not None and cache.exists(),
+                        "gather.refresh's own save() never produced a cache file "
+                        "for this frame — priming succeeded at reading but not "
+                        "at writing")
+        self.assertIn(branch_a, cache.read_text(),
+                      f"the primed cache file exists but does not hold the "
+                      f"starting branch:\n{cache.read_text()!r}")
+
+        left_before = self._wait_for(panes["left"], branch_a)
+        bottom_before = self._wait_for(panes["bottom"], "1 todo")
+        self.assertIn(branch_a, left_before,
+                      f"left never showed the starting branch:\n{left_before!r}")
+        self.assertIn("1 todo", bottom_before,
+                      f"bottom never showed the starting todo count:\n{bottom_before!r}")
+
+        # The mutation: a real branch switch (see the class docstring for why this,
+        # not a dirty-bit change, is what a repaint proof here mutates) and a
+        # second todo — both real plane-state changes, the kind `notify.
+        # plane_changed` exists to notice.
+        _git(repo, "checkout", "-q", "-b", branch_b)
+        todos.add("demo", "the second todo")
+
+        # Reset the debounce (see `PanelIntegration`'s own identical line): a
+        # window left over from another test in this same process must not mask a
+        # broken hook wiring by silently no-op'ing this call.
+        notify._last["at"] = 0.0
+        # `CHARTER_WORKSPACE`, not only `CHARTER_SESSION_ID`: this hook call runs
+        # IN-PROCESS (`run_hook`, not a subprocess), so `gather.refresh` inside it
+        # resolves the active workspace through THIS process's real `os.environ` —
+        # unlike every panel subprocess in this class, which inherits `demo` from
+        # the tmux SESSION environment `_spawn_frame` set at `new-session` time
+        # (via `self.env`). Without this, `workspace.resolve()` falls through to
+        # this throwaway plane's own `DEFAULT_WORKSPACE` instead (this process's
+        # cwd is the checkout root, not inside `demo`'s own tree, so the cwd rung
+        # cannot rescue it either) — `gather.refresh` would then cache a scan of
+        # the WRONG, repo-less workspace, and `left` would repaint to "no repos"
+        # rather than the new branch, for a reason that has nothing to do with
+        # whether the refresh/bump wiring itself works.
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid,
+                                          "CHARTER_WORKSPACE": "demo"}):
+            out = run_hook(hooks.posttooluse, {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/nonexistent"},
+                "session_id": "four-edge-hook-session",
+            })
+        self.assertIsNone(out, "posttooluse should emit nothing for a plain Read")
+
+        # `self._wait_for` — the SAME poll `_wait_for` already uses for the FIRST
+        # paint (fix round 1) — waits for the specific new fact each panel is
+        # expected to show, rather than a fixed sleep or an undifferentiated
+        # "content changed" check.
+        left_after = self._wait_for(panes["left"], branch_b)
+        bottom_after = self._wait_for(panes["bottom"], "2 todos")
+
+        self.assertNotEqual(left_after, left_before,
+                            f"left never repainted after a real hooks.posttooluse() "
+                            f"call; still showing:\n{left_before!r}")
+        self.assertIn(branch_b, left_after,
+                      f"left repainted but not with the NEW branch:\n{left_after!r}")
+        self.assertNotIn(branch_a, left_after,
+                         f"left kept showing the OLD branch after the switch — a "
+                         f"stale cache surviving its own refresh:\n{left_after!r}")
+
+        # Fix round 1: the cache FILE on disk, not only the pane's own capture,
+        # now holds the new branch — proving the hook's `gather.refresh` call did
+        # the WRITE `notify.plane_changed` is supposed to perform, the same
+        # direct check made against `branch_a` above, repeated here against the
+        # value only a SECOND, successful refresh could have produced.
+        self.assertIn(branch_b, cache.read_text(),
+                      f"left repainted (or the panel's own live fallback masked "
+                      f"a broken refresh) but the cache file itself was never "
+                      f"updated with the new branch:\n{cache.read_text()!r}")
+
+        self.assertNotEqual(bottom_after, bottom_before,
+                            f"bottom never repainted after the same real hook call; "
+                            f"still showing:\n{bottom_before!r}")
+        self.assertIn("2 todos", bottom_after,
+                      f"bottom repainted but not with the NEW todo count:\n{bottom_after!r}")
+
+        for slot, pane in panes.items():
+            self.assertEqual(self._alive(pane), "0",
+                             f"the {slot!r} panel died sometime after repainting")
 
 
 if __name__ == "__main__":

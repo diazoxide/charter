@@ -39,7 +39,7 @@ from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter import commands_frame, config
-from charter.frame import menu, state
+from charter.frame import menu, slots, state
 
 
 def _harness_binary_installed(resolver=None):
@@ -457,13 +457,21 @@ class Probe(unittest.TestCase):
 
     def test_a_slot_with_no_renderer_is_named_by_probe(self):
         """The second standing ceiling that moved off the launch path: `[frame] slots`
-        accepts `left`/`right` and `layout.SLOT_SIZE` sizes them, but `frame.slots.SLOTS`
-        implements neither, so the harness pane silently keeps that space. Read from
-        `config.FRAME` with nothing started — the probe's own read-only promise."""
+        accepts a slot charter sizes but `frame.slots.SLOTS` has no renderer for, so
+        the harness pane silently keeps that space. Read from `config.FRAME` with
+        nothing started — the probe's own read-only promise.
+
+        `left`/`right` shipped renderers in Task 3 (#385) — both are removed from the
+        registry here (restored after, via `mock.patch.dict`) to simulate the one
+        still-standing case the same way, rather than asserting against a pair that
+        no longer names it."""
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch.dict(config.FRAME, {"slots": ["top", "left", "right"]}), \
+             mock.patch.dict(slots.SLOTS), \
              mock.patch("charter.commands_frame.subprocess.run") as run, \
              mock.patch("builtins.print") as p:
+            del slots.SLOTS["left"]
+            del slots.SLOTS["right"]
             rc = commands_frame.cmd_probe()
         self.assertEqual(rc, 0, "an unimplemented slot is a ceiling, not a failure")
         run.assert_not_called()
@@ -1367,17 +1375,23 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertNotIn("LINES", fake.new_session_env)
 
     def test_a_configured_slot_with_no_renderer_is_skipped_not_spawned_dead(self):
-        """`[frame] slots` accepts `left`/`right` (`instance.FRAME_SLOTS`, sized by
-        `layout.SLOT_SIZE`) even though `frame.slots.SLOTS` — the renderer registry —
-        has no renderer for either yet. Spawning a real pane for one anyway would leave
-        the operator a permanently dead, wrapped-error pane under `remain-on-exit on`
-        (`panel.run` correctly refuses it, exit 2, but nothing then explains why at the
-        point the frame actually comes up). This pins that no such pane is even
-        attempted, one warning names it, and the implemented slots still draw."""
+        """`[frame] slots` accepts a slot (`instance.FRAME_SLOTS`, sized by
+        `layout.SLOT_SIZE`) that `frame.slots.SLOTS` — the renderer registry — has no
+        renderer for. Spawning a real pane for one anyway would leave the operator a
+        permanently dead, wrapped-error pane under `remain-on-exit on` (`panel.run`
+        correctly refuses it, exit 2, but nothing then explains why at the point the
+        frame actually comes up). This pins that no such pane is even attempted, one
+        warning names it, and the implemented slots still draw.
+
+        `left` shipped a renderer in Task 3 (#385) — removed from the registry here
+        (restored after, via `mock.patch.dict`) to keep simulating the one
+        still-standing case, rather than asserting against a slot that now draws."""
         fake = _FakeTmux(exit_code=0)
         buf = []
         with mock.patch.dict(config.FRAME, {"slots": ["top", "bottom", "left"]}), \
+             mock.patch.dict(slots.SLOTS), \
              mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            del slots.SLOTS["left"]
             rc = _launch(fake)
         self.assertEqual(rc, 0)
         self.assertFalse(any("panel" in c and "left" in c for c in fake.calls),

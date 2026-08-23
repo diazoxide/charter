@@ -717,15 +717,16 @@ def cmd_launch(args) -> int:
     frame = config.FRAME
     slots = layout.visible_slots(frame["slots"], cols, rows, frame["min_cols"], frame["min_rows"])
 
-    # `[frame] slots` accepts `left`/`right` (`instance.FRAME_SLOTS`, sized by
-    # `layout.SLOT_SIZE`) even though `frame.slots.SLOTS` — the RENDERER registry —
-    # does not implement either one yet. Left unfiltered, `panel_argvs` below would
-    # still split a real pane for it; `panel.run` correctly refuses or exits 2 (Task
-    # 7's own "no empty pane" rule), but with `remain-on-exit on` keeping that pane
-    # alive, the operator is left with a permanently dead, wrapped-error 22-column
-    # pane and no explanation at the point the frame actually came up. Skipping an
-    # unimplemented slot here instead means the harness pane simply keeps that space —
-    # the same degrade `visible_slots` itself already makes under a tight terminal.
+    # `[frame] slots` can accept a slot (`instance.FRAME_SLOTS`, sized by
+    # `layout.SLOT_SIZE`) that `frame.slots.SLOTS` — the RENDERER registry — has no
+    # renderer for (as `left`/`right` were until Task 3 (#385) gave them one). Left
+    # unfiltered, `panel_argvs` below would still split a real pane for it;
+    # `panel.run` correctly refuses or exits 2 (Task 7's own "no empty pane" rule),
+    # but with `remain-on-exit on` keeping that pane alive, the operator is left with
+    # a permanently dead, wrapped-error 22-column pane and no explanation at the
+    # point the frame actually came up. Skipping an unimplemented slot here instead
+    # means the harness pane simply keeps that space — the same degrade
+    # `visible_slots` itself already makes under a tight terminal.
     #
     # Silently, and that is the deliberate half: which slots have a renderer is a
     # property of THIS BUILD, not of this launch, so a warning here repeats an

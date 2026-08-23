@@ -13,7 +13,8 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from charter import doctor
+from charter import config, doctor
+from charter.frame import slots
 
 
 class FrameRow(unittest.TestCase):
@@ -56,12 +57,20 @@ class FrameRow(unittest.TestCase):
 
     def test_a_slot_with_no_renderer_is_a_ceiling_this_row_names(self):
         """The second standing condition that moved off the launch path (see
-        `commands_frame.frame_ready`): `[frame] slots` accepts `left`/`right`, charter
-        sizes them, and nothing draws in them. It used to be a `util.warn` printed
-        microseconds before tmux switched the terminal to the alternate screen."""
+        `commands_frame.frame_ready`): `[frame] slots` accepts a slot charter sizes
+        but has no renderer for, and nothing draws in it. It used to be a
+        `util.warn` printed microseconds before tmux switched the terminal to the
+        alternate screen.
+
+        `left`/`right` shipped renderers in Task 3 (#385), so the registry — not a
+        hardcoded pair — is patched to simulate the one still-standing case: a slot
+        `config.FRAME["slots"]` accepts with nothing in `frame.slots.SLOTS` to draw
+        it, the same gap `left`/`right` used to be until this task closed it."""
         from charter import config
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
-             mock.patch.dict(config.FRAME, {"slots": ["top", "right"]}):
+             mock.patch.dict(config.FRAME, {"slots": ["top", "right"]}), \
+             mock.patch.dict(slots.SLOTS):
+            del slots.SLOTS["right"]
             r = doctor.check_frame()
         self.assertEqual(r.status, doctor.WARN)
         self.assertIn("right", r.hint)
