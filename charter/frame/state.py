@@ -206,6 +206,49 @@ def clear_exit(fid: str) -> None:
         return
 
 
+def record_server(fid: str, server: str) -> None:
+    """Write down which tmux server this frame's session (or window) lives on.
+
+    Charter runs frames on two servers now: its own private one (``tmux -L charter``,
+    where a frame is a SESSION named by frame id) and, when charter is started from
+    inside a tmux the operator already has, theirs (``tmux -S <socket>``, where a frame
+    is a WINDOW named by frame id). Neither server's liveness list mentions the other's
+    frames, so :func:`reap` needs to know which server each directory belongs to before
+    it can decide that "not live" means "dead" rather than "not this server's".
+
+    Same must-not-raise, atomic-write shape as :func:`bump` and :func:`record_exit`, and
+    for the same reason: this runs on the launch path, where an id ``frame_dir`` refuses
+    (or a filesystem that will not take the write) has to degrade to "unknown server"
+    rather than take the launch down with it.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "server.tmp"
+    try:
+        tmp.write_text(f"{server}\n")
+        os.replace(tmp, d / "server")
+    except OSError:
+        return
+
+
+def frame_server(fid: str) -> str | None:
+    """Which server *fid* was launched on, or ``None`` when charter does not know.
+
+    ``None`` is the migration case and nothing else: every frame this charter starts
+    records one (see :func:`record_server`), so a directory without the marker was
+    written by a charter that only ever ran frames on its own private server. See
+    :func:`reap` for what that means there.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "server").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def exit_code(fid: str) -> int | None:
     """The recorded exit code, or ``None`` when the frame has not finished (or exist)."""
     d = frame_dir(fid)
@@ -272,24 +315,39 @@ def _launcher_is_alive(pid: int) -> bool:
     return True
 
 
-def reap(live: set[str]) -> list[str]:
-    """Remove state for frames whose tmux session is gone. Returns what was removed.
+def reap(live: set[str], *, server: str) -> list[str]:
+    """Remove state for frames of *server* that are gone. Returns what was removed.
 
     Never by age: a frame open for two days is exactly a working frame, and an age
-    heuristic would delete precisely that one. *live* names the sessions `tmux
-    list-sessions` still reports, so the only frames removed are ones nothing is watching
-    any more.
+    heuristic would delete precisely that one. *live* names what that server still
+    reports — sessions on charter's own private one, windows on an operator's — so the
+    only frames removed are ones nothing is watching any more.
 
-    **And never on a live session alone, because a frame outlives its session (#383).**
-    Between a harness exiting and its launcher reading :func:`exit_code`, the session is
-    already gone from `tmux list-sessions` while the launcher is still sitting in
-    `cmd_launch` with the answer one line away. A `reap()` from a SIBLING frame's launch
-    — and one runs at every launch — landing in that window deleted the `exit` file
-    before it was ever read: `exit_code` answered ``None``, `cmd_launch` turned that into
-    a returned ``0``, and a harness that had genuinely failed was reported as a success
-    to whatever `&&` chain or CI step invoked charter. Ordering `cmd_launch`'s reap
-    before its own `frame_dir(create=True)` narrows that window; it cannot close it,
-    because by then the sibling's session is genuinely absent from *live*.
+    **Scoped to one server, because "not live" is only an answer the frame's OWN server
+    can give.** A frame launched inside the operator's tmux is a window on their socket
+    and appears in no `tmux -L charter list-sessions` output at all; reaping on that
+    list alone deletes a running frame's version file (its panels stop noticing the
+    agent) and its recorded exit code (its launcher reads back `None` and reports the
+    wrong status) while the frame is still on screen. *server* is matched against
+    :func:`frame_server`, which the launcher records when it creates the directory.
+
+    A directory with NO recorded server matches every one, and that is the migration
+    case rather than a loophole: only a charter that predates :func:`record_server`
+    leaves one, every such frame was on the private server, and refusing to reap them
+    would trade one release's transient wrongness for a permanent leak.
+
+    **And never on a live session alone either, because a frame outlives its session
+    (#383).** Between a harness exiting and its launcher reading :func:`exit_code`, the
+    session is already gone from `tmux list-sessions` while the launcher is still
+    sitting in `cmd_launch` with the answer one line away. A `reap()` from a SIBLING
+    frame's launch — and one runs at every launch — landing in that window deleted the
+    `exit` file before it was ever read: `exit_code` answered ``None``, `cmd_launch`
+    turned that into a returned ``0``, and a harness that had genuinely failed was
+    reported as a success to whatever `&&` chain or CI step invoked charter. Ordering
+    `cmd_launch`'s reap before its own `frame_dir(create=True)` narrows that window; it
+    cannot close it, because by then the sibling's session is genuinely absent from
+    *live*. Server scoping does not close it either — a sibling on the SAME server is
+    exactly the case that bites — so the two guards are independent and both are asked.
 
     So a second question is asked, and :func:`frame_id` is what makes it answerable
     without inventing any new state: the id ENDS in the launcher's own pid. A directory
@@ -317,6 +375,13 @@ def reap(live: set[str]) -> list[str]:
     removed = []
     for d in sorted(root.iterdir()):
         if not d.is_dir() or d.name in live:
+            continue
+        # Two independent reasons to keep a directory, and BOTH must be absent before
+        # anything is deleted. They answer different questions and neither implies the
+        # other: the frame may belong to the OTHER tmux server (#381), or its launcher
+        # may still be running on this one (#383).
+        owner = frame_server(d.name)
+        if owner is not None and owner != server:
             continue
         pid = _launcher_pid(d.name)
         if pid is not None and _launcher_is_alive(pid):

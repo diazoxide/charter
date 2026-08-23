@@ -18,9 +18,11 @@ rather than pushed through a tmux-shaped helper that would have to lie about wha
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 
 from .. import util
 
@@ -82,6 +84,72 @@ CHARTER_PY_ENV = "CHARTER_PY"
 TIMEOUT = 15
 
 _VERSION = re.compile(r"^tmux (\d+)\.(\d+)")
+
+#: What tmux writes into `$TMUX` for every process it starts inside a pane:
+#: `<socket path>,<server pid>,<session id>`, the session id being the NUMBER off
+#: tmux's own `#{session_id}` (`$1` is written `1`). Measured against tmux 3.7c by
+#: printing the variable from inside a real pane. The socket path is required to be
+#: ABSOLUTE here because :func:`server_argv` discriminates on a leading `/` alone — a
+#: relative path would be handed to tmux as a `-L` server NAME and quietly start a
+#: brand-new server, which is the nesting `commands_frame` reads this to avoid.
+_TMUX_ENV = re.compile(r"^(/[^,]*),\d+,(\d+)$")
+
+#: The variable itself, named once so :func:`operator_server` and the tests that fake it
+#: cannot drift apart.
+_TMUX_ENV_NAME = "TMUX"
+
+
+def operator_server(env: Mapping[str, str] | None = None) -> tuple[str, str] | None:
+    """``(socket path, session target)`` for the tmux the operator is ALREADY inside.
+
+    ``None`` means charter is not running inside one — which is the ordinary case, and
+    also what a `$TMUX` charter cannot make sense of degrades to. Refusing a value that
+    does not match :data:`_TMUX_ENV` exactly is deliberate: the session target this
+    returns is interpolated into `new-window -t`, and a half-parsed `$TMUX` would aim
+    that at whatever tmux decided "current" meant — someone else's session, on a launch
+    whose entire point is not to disturb it. Falling back to charter's own private
+    server nests, which is worse UX but never wrong about what it is talking to.
+
+    Both halves are parsed here rather than one being re-queried from tmux, because both
+    are already in the variable and a query is a second chance to get a different answer
+    (the operator can switch a client's session between the two calls).
+    """
+    raw = (env if env is not None else os.environ).get(_TMUX_ENV_NAME, "")
+    m = _TMUX_ENV.match(raw)
+    if not m:
+        return None
+    return m.group(1), f"${m.group(2)}"
+
+
+def server_argv(server: str, *args: str) -> list[str]:
+    """`tmux`, the flags that select ONE server, then *args* — every element separate.
+
+    Charter talks to two different servers now, and this is the one place that difference
+    is spelled: its own private one by NAME (`-L charter`, see `commands_frame.SOCKET`),
+    and the operator's existing one by SOCKET PATH (`-S /private/tmp/tmux-502/default`,
+    read out of `$TMUX` by :func:`operator_server`). A leading `/` is the whole
+    discriminator, and it is total rather than a heuristic: a socket path only ever
+    reaches charter from `$TMUX`, which tmux writes absolute, and a `-L` name may not
+    contain a separator at all — tmux joins that name onto its own socket directory to
+    build the path, so a name with a `/` in it names a directory that does not exist.
+
+    Nothing is ever joined, here or anywhere downstream of here: a joined string is
+    shell-interpreted by tmux and a separate argv is not (pinned against 3.7c, see
+    `frame/layout.py`'s module docstring).
+    """
+    return ["tmux", "-S" if is_operator_socket(server) else "-L", server, *args]
+
+
+def is_operator_socket(server: str | None) -> bool:
+    """Is *server* a tmux charter did not start — one it is a guest on?
+
+    The same leading-slash test :func:`server_argv` turns into `-S`, named so the two
+    places that care about the difference cannot answer it differently. The second is
+    `frame/slots.py`: charter binds no hotkey on a server it is a guest on (a key table
+    is server-wide in tmux, with no per-window form), so the bottom panel must not
+    advertise one there.
+    """
+    return bool(server) and server.startswith("/")
 
 #: What :func:`run` reports as the return code of a command that never answered.
 #: `timeout(1)`'s own convention, and deliberately not `1`: every caller in

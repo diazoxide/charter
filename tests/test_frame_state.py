@@ -81,7 +81,7 @@ class Version(PersonaIso, unittest.TestCase):
         """
         gone = f"gone-{_a_dead_pid()}"
         state.bump(gone)
-        state.reap(set())
+        state.reap(set(), server="charter")
         self.assertEqual(state.version(gone), "0")
         self.assertFalse(state.frame_dir(gone).exists())
 
@@ -225,7 +225,7 @@ class Reap(PersonaIso, unittest.TestCase):
         live = f"live-{_a_dead_pid()}"
         state.bump(dead)
         state.bump(live)
-        removed = state.reap({live})
+        removed = state.reap({live}, server="charter")
         self.assertEqual(removed, [dead])
         self.assertFalse(state.frame_dir(dead).exists())
         self.assertTrue(state.frame_dir(live).exists(),
@@ -241,7 +241,7 @@ class Reap(PersonaIso, unittest.TestCase):
         survive is the session being live."""
         old = f"old-{_a_dead_pid()}"
         state.bump(old)
-        self.assertEqual(state.reap({old}), [])
+        self.assertEqual(state.reap({old}, server="charter"), [])
 
     def test_a_sibling_exit_code_survives_a_reap_that_beats_its_own_launcher(self):
         """#383. `reap` runs at EVERY frame launch, and the set it is handed names the
@@ -258,7 +258,7 @@ class Reap(PersonaIso, unittest.TestCase):
         still there to come back for its answer."""
         fid = state.frame_id("sibling", os.getpid())
         state.record_exit(fid, 42)
-        state.reap({"some-other-frames-session"})
+        state.reap({"some-other-frames-session"}, server="charter")
         self.assertEqual(state.exit_code(fid), 42,
                          "reap deleted a live launcher's frame directory, and with it "
                          "the exit code that launcher had not read yet")
@@ -269,7 +269,7 @@ class Reap(PersonaIso, unittest.TestCase):
         the `exit` file, so the directory is `reap`'s to remove exactly as before."""
         fid = state.frame_id("finished", _a_dead_pid())
         state.bump(fid)
-        self.assertEqual(state.reap(set()), [fid])
+        self.assertEqual(state.reap(set(), server="charter"), [fid])
         self.assertFalse(state.frame_dir(fid).exists())
 
     def test_a_directory_that_names_no_pid_is_still_removed(self):
@@ -278,7 +278,7 @@ class Reap(PersonaIso, unittest.TestCase):
         the live-session test is the only evidence there is — and it is the one `reap`
         already had, so an unparseable name must not become undeletable."""
         state.bump("debris")
-        self.assertEqual(state.reap(set()), ["debris"])
+        self.assertEqual(state.reap(set(), server="charter"), ["debris"])
 
     def test_a_bare_number_is_not_read_as_a_pid(self):
         """`frame_id` always emits `<workspace>-<pid>` with a non-empty workspace (its
@@ -288,7 +288,7 @@ class Reap(PersonaIso, unittest.TestCase):
         make the directory undeletable for as long as the suite runs."""
         name = str(os.getpid())
         state.bump(name)
-        self.assertEqual(state.reap(set()), [name])
+        self.assertEqual(state.reap(set(), server="charter"), [name])
 
     def test_a_trailing_zero_is_not_read_as_a_pid(self):
         """`kill(2)` reads 0 as "every process in my group", not as a process, so
@@ -296,7 +296,7 @@ class Reap(PersonaIso, unittest.TestCase):
         `frame_id` can only ever have written a real `os.getpid()` there, and that is
         never 0 — so the number is debris and the directory stays reapable."""
         state.bump("ws-0")
-        self.assertEqual(state.reap(set()), ["ws-0"])
+        self.assertEqual(state.reap(set(), server="charter"), ["ws-0"])
 
     def test_a_launcher_this_user_may_not_signal_still_counts_as_alive(self):
         """EPERM is an ANSWER, and the opposite of what it looks like. `os.kill(pid, 0)`
@@ -311,7 +311,7 @@ class Reap(PersonaIso, unittest.TestCase):
         state.bump("another-users-frame-4242")
         with mock.patch("charter.frame.state.os.kill",
                         side_effect=PermissionError(1, "Operation not permitted")):
-            self.assertEqual(state.reap(set()), [])
+            self.assertEqual(state.reap(set(), server="charter"), [])
 
     def test_liveness_is_never_asked_off_posix(self):
         """`os.kill(pid, 0)` is a question on POSIX and an ANSWER on Windows, where it
@@ -341,7 +341,91 @@ class Reap(PersonaIso, unittest.TestCase):
         also names no process, so the directory stays reapable."""
         name = "ws-99999999999999999999"
         state.bump(name)
-        self.assertEqual(state.reap(set()), [name])
+        self.assertEqual(state.reap(set(), server="charter"), [name])
+
+
+class ReapAcrossServers(PersonaIso, unittest.TestCase):
+    """A frame lives on ONE tmux server, and only that server can say it is dead.
+
+    Charter now runs frames on two: its own private one (`tmux -L charter`, sessions
+    named by frame id) and, when charter is started from inside a tmux the operator
+    already has, THEIRS (`tmux -S <socket>`, windows named by frame id). Neither
+    server's liveness list mentions the other's frames at all, so an unscoped `reap`
+    deletes the other's state on sight — a running frame's panels lose the version file
+    they poll, and its recorded exit code goes with it, while the frame itself is still
+    on screen. The frame's own server is written down when its directory is created and
+    checked here.
+
+    Every fixture here is named after a pid that has genuinely exited, for the reason
+    `Reap`'s own docstring gives: since #383 `reap` reads the trailing number as the
+    launcher's pid and keeps any directory whose launcher is still running. `mine-1` and
+    `theirs-1` read as throwaway labels, but pid 1 is `launchd`/`init` — the pid rule
+    would have kept every one of them and these tests would have passed with the server
+    check deleted outright.
+    """
+
+    THEIRS = "/private/tmp/tmux-502/default"
+
+    def _frame_on(self, stem, server):
+        fid = f"{stem}-{_a_dead_pid()}"
+        state.bump(fid)
+        state.record_server(fid, server)
+        return fid
+
+    def test_a_frame_on_another_server_survives_this_servers_reap(self):
+        mine = self._frame_on("mine", "charter")
+        theirs = self._frame_on("theirs", self.THEIRS)
+        self.assertEqual(state.reap(set(), server="charter"), [mine])
+        self.assertTrue(state.frame_dir(theirs).exists(),
+                        "the other server's frame was reaped — and since its launcher "
+                        "is dead too, the recorded server is the only thing that could "
+                        "have saved it")
+
+    def test_the_other_server_reaps_its_own(self):
+        """The same test from the other side, so a `reap` that simply never removed
+        anything would not pass both."""
+        mine = self._frame_on("mine", "charter")
+        theirs = self._frame_on("theirs", self.THEIRS)
+        self.assertEqual(state.reap(set(), server=self.THEIRS), [theirs])
+        self.assertTrue(state.frame_dir(mine).exists())
+
+    def test_a_live_frame_on_this_server_is_still_kept(self):
+        gone = self._frame_on("mine", "charter")
+        live = self._frame_on("mine", "charter")
+        self.assertEqual(state.reap({live}, server="charter"), [gone])
+
+    def test_a_live_launcher_on_this_server_is_still_kept(self):
+        """The two guards are independent and BOTH are asked (#381 + #383). This one
+        matches the server exactly and is absent from `live`, so the server check has
+        nothing left to say — only the pid rule can keep it, and it must, or #383's
+        fix stops reaching frames that record a server (which, since #381, is all of
+        them)."""
+        fid = state.frame_id("sibling", os.getpid())
+        state.record_server(fid, "charter")
+        state.record_exit(fid, 42)
+        self.assertEqual(state.reap(set(), server="charter"), [])
+        self.assertEqual(state.exit_code(fid), 42)
+
+    def test_a_frame_from_before_charter_recorded_this_is_still_reapable(self):
+        """The migration case, and the one place an unknown server matches every
+        server. A directory with no marker was written by a charter that only ever ran
+        frames on its own private server; leaving it unreapable forever would trade a
+        transient bug for a permanent leak."""
+        fid = f"legacy-{_a_dead_pid()}"
+        state.bump(fid)
+        self.assertIsNone(state.frame_server(fid))
+        self.assertEqual(state.reap(set(), server=self.THEIRS), [fid])
+
+    def test_the_recorded_server_reads_back(self):
+        state.record_server("f-1", self.THEIRS)
+        self.assertEqual(state.frame_server("f-1"), self.THEIRS)
+
+    def test_recording_a_server_for_an_id_no_directory_can_be_made_for_is_a_no_op(self):
+        """`record_server` runs on the launch path, where an id `contain.child` refuses
+        must degrade rather than raise — the same promise every other writer in this
+        module makes."""
+        state.record_server("../escape", "charter")
+        self.assertIsNone(state.frame_server("../escape"))
 
 
 if __name__ == "__main__":
