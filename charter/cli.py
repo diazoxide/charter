@@ -676,7 +676,7 @@ def _add_frame_parsers(sub) -> None:
     # naming `frame-probe` silently launching a harness instead of reading tmux's own
     # version (see `commands_frame.cmd_probe`'s own docstring).
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
-                                         "frame-probe"}
+                                         "frame-probe", "frame-respawn"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -747,6 +747,17 @@ def _add_frame_parsers(sub) -> None:
     act = sub.add_parser("frame-action")
     act.add_argument("action_id")
     act.set_defaults(func=commands_frame.cmd_action)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # two above. Fired by a PANEL pane's own `pane-died` hook (#382,
+    # `commands_frame._panel_died_hook_argv`) — never typed by an operator, and never by
+    # the harness pane's hooks, which carry the exit code instead. The frame it belongs
+    # to is resolved from `$CHARTER_SESSION_ID` at the moment the hook fires, exactly
+    # like `frame-menu`; only the slot and the pane to revive travel on the argv.
+    rs = sub.add_parser("frame-respawn")
+    rs.add_argument("slot")
+    rs.add_argument("--pane", dest="pane", required=True)
+    rs.set_defaults(func=commands_frame.cmd_respawn)
 
     # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-menu`/
     # `frame-action` above: those two exist because `_split_frame_argv` eats everything

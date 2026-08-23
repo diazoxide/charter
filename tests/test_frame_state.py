@@ -206,6 +206,148 @@ class ClearExit(PersonaIso, unittest.TestCase):
             state.clear_exit("f-1")  # must not raise
 
 
+class RespawnAttempts(PersonaIso, unittest.TestCase):
+    """The counter that stops a broken panel respawning forever.
+
+    A panel pane's `pane-died` hook survives the respawn it triggers (verified against
+    real tmux 3.7c: `show-hooks -p` reads the hook back unchanged after `respawn-pane`),
+    so a panel that dies instantly on every start would respawn in a hot loop with
+    nothing anywhere counting. tmux cannot count; this is where the count lives.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # `respawn_attempt` never creates a frame's directory (see its own docstring),
+        # so these tests stand up the state a live frame always already has: `cmd_launch`
+        # creates and bumps it before a single pane is split.
+        for fid in ("f-1", "f-2"):
+            state.bump(fid)
+
+    def test_the_first_attempt_is_one_and_each_call_claims_the_next(self):
+        self.assertEqual(state.respawn_attempt("f-1", "top"), 1)
+        self.assertEqual(state.respawn_attempt("f-1", "top"), 2)
+        self.assertEqual(state.respawn_attempt("f-1", "top"), 3)
+
+    def test_each_slot_counts_on_its_own(self):
+        """One broken panel must not spend another's attempts — a `left` renderer that
+        crashes on every start would otherwise use up `bottom`'s budget and stop a
+        perfectly healthy panel being brought back after an unrelated death."""
+        state.respawn_attempt("f-1", "top")
+        state.respawn_attempt("f-1", "top")
+        self.assertEqual(state.respawn_attempt("f-1", "bottom"), 1)
+
+    def test_each_frame_counts_on_its_own(self):
+        state.respawn_attempt("f-1", "top")
+        self.assertEqual(state.respawn_attempt("f-2", "top"), 1)
+
+    def test_a_frame_already_reaped_cannot_count_and_is_not_recreated(self):
+        """Counting must not resurrect a directory `reap` has deleted — the hazard this
+        module's own docstring records for `version()`, reached here through a write
+        path instead of a read.
+
+        Reached from a real frame's teardown, though less often since #383: the panels
+        all die when the session is killed, so every panel's `pane-died` hook fires on
+        the way out, and `reap` now KEEPS a directory whose launcher pid is still live —
+        which the launcher's own closing `reap()` always is. So the directory usually
+        survives that moment and is taken by a later launch instead; this is the case
+        after that, where the count arrives at a name nothing owns any more. `f-gone`
+        carries no pid at all (`_launcher_pid` needs `<name>-<digits>`), so `reap`
+        removes it exactly as it did before #383."""
+        state.bump("f-gone")
+        state.reap(set(), server="charter")
+        self.assertIsNone(state.respawn_attempt("f-gone", "top"))
+        self.assertFalse(state.frame_dir("f-gone").exists(),
+                         "counting a respawn recreated a frame directory reap removed")
+
+    def test_a_frame_id_the_directory_layer_refuses_cannot_count(self):
+        """`None`, never a number — and the caller reads that as "give up", not as
+        "attempt zero". A count that cannot be recorded is exactly the state in which
+        respawning is unbounded, so the safe degrade is to stop, leaving the dead pane
+        and its own message visible."""
+        self.assertIsNone(state.respawn_attempt("../../etc", "top"))
+
+    def test_a_slot_name_with_a_separator_is_refused_rather_than_joined(self):
+        """The slot is part of a FILE name. `commands_frame.cmd_respawn` already refuses
+        a slot with no renderer before reaching here, but this module's own rule is that
+        a name handed to it is resolved through `contain.child` rather than trusted by
+        whoever called it (see `frame_dir`'s own docstring).
+
+        `../y`, not the obvious `../../../etc/passwd`, and the difference IS the test.
+        The obvious one lands under directories that do not exist, so a version with no
+        containment check at all still answers `None` — from the failed write, not from
+        any refusal — and the test passes green over a deleted guard (confirmed by
+        mutation twice: the first shape of both this test and the code under it was
+        green with `contain.child` replaced by a bare join). `../y` climbs exactly one
+        level, out of the per-slot directory and back into the frame's own, where the
+        write really would succeed — so only a refusal can produce `None`, and the file
+        it would have left behind is checked for directly.
+        """
+        d = state.frame_dir("f-1", create=True)
+        self.assertIsNone(state.respawn_attempt("f-1", "../y"))
+        self.assertFalse((d / "y").exists(),
+                         "the slot name was joined onto the path instead of refused")
+        self.assertIsNone(state.respawn_attempt("f-1", "../../../etc/passwd"))
+
+    def test_a_write_that_fails_cannot_count_rather_than_raising(self):
+        """Same must-not-raise promise as `bump`: this runs from a tmux hook."""
+        state.respawn_attempt("f-1", "top")
+        with mock.patch("pathlib.Path.write_text", side_effect=OSError("full")):
+            self.assertIsNone(state.respawn_attempt("f-1", "top"))
+
+
+class ClearRespawn(PersonaIso, unittest.TestCase):
+    """The other half of `clear_exit`'s bill, for the counter rather than the exit code.
+
+    Same cause: since #383 `reap` keeps a directory while the pid in its name is live,
+    so a launcher landing on a recycled pid for the SAME workspace mints the same id and
+    adopts the previous frame's whole directory. `respawn_attempt` never resets, so an
+    adopted count is a budget already spent on deaths that happened to another frame.
+    """
+
+    def test_the_next_attempt_starts_from_one_again(self):
+        state.bump("f-1")
+        state.respawn_attempt("f-1", "top")
+        state.respawn_attempt("f-1", "top")
+        state.clear_respawn("f-1")
+        self.assertEqual(state.respawn_attempt("f-1", "top"), 1)
+
+    def test_every_slot_is_cleared_not_only_the_one_that_died(self):
+        """A frame's panels each keep their own file, and all of them are the previous
+        frame's. Clearing one slot would leave the rest of the new frame's panels with a
+        budget spent by a frame they were never part of."""
+        state.bump("f-1")
+        for slot in ("top", "bottom", "left"):
+            state.respawn_attempt("f-1", slot)
+        state.clear_respawn("f-1")
+        for slot in ("top", "bottom", "left"):
+            self.assertEqual(state.respawn_attempt("f-1", slot), 1, slot)
+
+    def test_only_this_frames_counts_go(self):
+        state.bump("f-1")
+        state.bump("f-2")
+        state.respawn_attempt("f-2", "top")
+        state.clear_respawn("f-1")
+        self.assertEqual(state.respawn_attempt("f-2", "top"), 2)
+
+    def test_the_version_a_panel_polls_is_left_alone(self):
+        """Same rule `clear_exit` follows: moving the counter panels compare against is
+        `bump`'s business, and `cmd_launch` calls it one line later anyway."""
+        state.bump("f-1")
+        before = state.version("f-1")
+        state.clear_respawn("f-1")
+        self.assertEqual(state.version("f-1"), before)
+
+    def test_clearing_a_frame_that_never_counted_creates_nothing(self):
+        """The ordinary first launch for a workspace has no directory here at all, and
+        a launch must not mint one just to empty it."""
+        state.clear_respawn("never-existed")
+        self.assertFalse(state.frame_dir("never-existed").exists())
+
+    def test_clearing_a_hostile_fid_does_not_raise(self):
+        state.clear_respawn("../../escaped")  # must not raise
+        self.assertFalse(state._root().exists())
+
+
 class Reap(PersonaIso, unittest.TestCase):
     """Every fixture in here is named after a pid that has genuinely exited, the KEPT
     ones as deliberately as the removed ones.

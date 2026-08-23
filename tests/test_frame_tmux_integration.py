@@ -582,6 +582,80 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                          "behaviour is the entire reason cmd_launch's install order is "
                          "load-bearing")
 
+    def test_arming_a_panel_pane_leaves_the_harness_panes_hook_array_alone(self):
+        """#382's own warning, checked against a real server rather than argued.
+
+        A panel pane now gets its OWN `pane-died` hook (`_panel_died_hook_argv`), and
+        `pane-died` is the same event whose array the harness pane uses for the exit
+        code — where an unindexed `set-hook` REPLACES THE WHOLE ARRAY, as the test above
+        measures. A third writer of that array would delete `[1]` and bring back the
+        hang. It is safe only because pane options are PER PANE, which is exactly the
+        thing to verify here: the harness pane's array is read back before and after the
+        panel pane is armed and must be byte-identical, and the panel's own array must
+        hold only its own hook."""
+        _, harness_pane, _ = self._new_pane()
+        _run(commands_frame._pane_died_write_hook_argv(socket=SOCKET,
+                                                       harness_pane=harness_pane))
+        _run(commands_frame._pane_died_teardown_hook_argv(socket=SOCKET,
+                                                          harness_pane=harness_pane))
+        before = _tmux("show-hooks", "-p", "-t", harness_pane).stdout
+
+        panel_pane = _tmux("split-window", "-t", harness_pane, "-v", "-l", "1",
+                           "-P", "-F", "#{pane_id}", "--",
+                           *_gate_argv(os.path.join(self._gate_dir, "never"), "exit 0")
+                           ).stdout.strip()
+        self.assertTrue(panel_pane.startswith("%"), panel_pane)
+        armed = _run(commands_frame._panel_died_hook_argv(
+            socket=SOCKET, panel_pane=panel_pane, slot="bottom"))
+        self.assertEqual(armed.returncode, 0, armed.stderr)
+
+        after = _tmux("show-hooks", "-p", "-t", harness_pane).stdout
+        self.assertEqual(before, after,
+                         "arming a PANEL pane for respawn changed the HARNESS pane's "
+                         "own pane-died array — the exit code and the teardown both "
+                         "live there")
+        self.assertIn("pane-died[0]", after)
+        self.assertIn("pane-died[1]", after)
+        panel_hooks = _tmux("show-hooks", "-p", "-t", panel_pane).stdout
+        self.assertIn("frame-respawn", panel_hooks)
+        self.assertNotIn("kill-session", panel_hooks,
+                         "a panel's own hook must never be able to end the frame")
+
+    def test_a_dead_panels_hook_runs_charter_with_the_slot_and_pane_it_must_revive(self):
+        """The whole respawn mechanism end to end, minus the respawn itself: does the
+        action string `_panel_died_hook_argv` builds actually FIRE, reach a shell, and
+        deliver the right argv?
+
+        Four separate things have to hold at once and none of them can be checked by
+        reading the string: tmux must not eat the `$` before the shell sees it (the
+        failure `_pane_died_write_hook_argv`'s docstring measures for double quotes),
+        `$CHARTER_PY` must be resolvable from a `run-shell` spawned by a PANE-scoped
+        hook, `run-shell -b` must still run the command at all, and the slot and pane id
+        must arrive as separate argv words. `$CHARTER_PY` is pointed at a script that
+        records its own argv, so what is asserted is what charter would really have been
+        invoked with."""
+        self._require_pane_died_fires()
+        session, pane, gate = self._new_pane("exit 3")
+        tmp = tempfile.mkdtemp(prefix="charter-integ-respawn-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        marker = os.path.join(tmp, "argv")
+        fake_py = os.path.join(tmp, "fake-charter-py")
+        Path(fake_py).write_text(
+            f'#!/bin/sh\nprintf "%s" "$*" > {marker}\n')
+        os.chmod(fake_py, 0o755)
+        self.assertEqual(
+            _run(commands_frame._charter_py_env_argv(socket=SOCKET, session=session)
+                 [:-1] + [fake_py]).returncode, 0)
+        self.assertEqual(
+            _run(commands_frame._panel_died_hook_argv(socket=SOCKET, panel_pane=pane,
+                                                      slot="top")).returncode, 0)
+        self._release(gate)
+        self.assertTrue(_await_file(marker),
+                        "the panel's own pane-died hook never reached a shell — "
+                        f"hooks: {_tmux('show-hooks', '-p', '-t', pane).stdout!r}")
+        self.assertEqual(Path(marker).read_text().split(),
+                         ["-m", "charter", "frame-respawn", "top", "--pane", pane])
+
     # -- 2. Path delivery and injection ---------------------------------------------- #
 
     def test_the_exit_status_path_round_trips_a_hostile_plane_path(self):

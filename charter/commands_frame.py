@@ -598,6 +598,67 @@ def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str
                                "pane-died[1]", "kill-session")
 
 
+#: How many times one slot's panel may be brought back before charter stops trying, per
+#: frame. The spec's own number ("a dead panel stays visible with its error, respawns
+#: with backoff, and gives up after 3 attempts"). The cap is the entire reason a count
+#: exists on disk at all: verified against tmux 3.7c that a pane's `pane-died` hook
+#: SURVIVES the `respawn-pane` it triggers, so a panel that dies instantly on every
+#: start would otherwise respawn forever with nothing anywhere counting.
+_RESPAWN_ATTEMPTS = 3
+
+#: What each attempt waits before bringing the pane back, indexed by attempt number.
+#: Backoff rather than three immediate retries because a panel that fails AT STARTUP
+#: fails in milliseconds: fired back to back, all three attempts land inside the same
+#: broken condition and the whole budget is spent before anything transient (a
+#: filesystem hiccup, a plane mid-upgrade replacing charter's own files) could clear.
+#: The sleep happens in a `run-shell -b` child, never in tmux's own command queue — see
+#: `_panel_died_hook_argv` for why the `-b` is load-bearing and not tidiness.
+_RESPAWN_BACKOFF = (1.0, 2.0, 4.0)
+
+
+def _panel_died_hook_argv(*, socket: str, panel_pane: str, slot: str) -> list[str]:
+    """`pane-died`, scoped to ONE PANEL pane: bring that panel back.
+
+    **Not the harness pane's hook array, and this is the property to keep.** The two
+    exit-code hooks (`_pane_died_write_hook_argv`, `_pane_died_teardown_hook_argv`) live
+    in the HARNESS pane's own `pane-died` array, where an unindexed `set-hook` replaces
+    the whole array — the trap their install order exists to work around. This hook is
+    `-p -t <panel pane>`: a different pane, a different option array. Verified against
+    tmux 3.7c that installing it leaves the harness pane's `pane-died[0]`/`[1]` read back
+    byte-identical, and that a panel dying fires only this hook and not the harness
+    pane's `kill-session`. It is unindexed because nothing else installs a hook on a
+    panel pane at all — there is no `[1]` here to delete.
+
+    **`run-shell -b`, backgrounded, and both halves of that matter.** Un-backgrounded,
+    tmux prints a non-zero command's own `'…' returned N` INTO THE HARNESS PANE and
+    drops it into copy-mode — charter drawing in the one rectangle ADR 0018 says it
+    never draws, which `conf_text`'s docstring records happening for real. Measured with
+    `-b` against 3.7c: a command that both writes to stdout and exits non-zero produced
+    nothing in the harness pane and left it out of copy-mode. The second half is timing:
+    the command deliberately SLEEPS for its backoff, and a blocking `run-shell` in a
+    hook stalls tmux's command queue for that whole time.
+
+    **Single-quoted, so tmux does not eat the `$`.** `_pane_died_write_hook_argv`'s
+    docstring measures the opposite case — an unescaped `$` inside a tmux DOUBLE-quoted
+    argument is consumed by tmux's own parsing before any shell sees it. Single quotes
+    are what `conf_text`'s hotkey bind already uses for the identical job, and the exact
+    action string this function builds was run end to end against tmux 3.7c: the hook
+    fires, `/bin/sh` expands `$CHARTER_PY` itself, and the argv arrives intact with
+    `$CHARTER_SESSION_ID` present in the spawned shell's environment.
+
+    Only two values are interpolated and both are safe BY CONSTRUCTION, not by
+    good behaviour: *panel_pane* is tmux's own `%<digits>`, already checked against
+    `_PANE_ID_RE` by `cmd_launch` before it is kept, and *slot* is a key of
+    `frame_slots.SLOTS` — `cmd_launch` filters everything else out (`unimplemented`)
+    before a pane is ever split for it. Nothing operator- or plane-derived reaches this
+    text, which is the same rule the module docstring's "constant string" section sets
+    for `status_path`.
+    """
+    action = (f"run-shell -b '\"${_CHARTER_PY_ENV}\" -m charter frame-respawn "
+              f"{slot} --pane {panel_pane}'")
+    return ["tmux", "-L", socket, "set-hook", "-p", "-t", panel_pane, "pane-died", action]
+
+
 #: Which `resize-pane` flag re-asserts a slot's fixed dimension: `-y` (rows) for the
 #: horizontal strips, `-x` (columns) for the side columns — the same axis `layout.py`'s
 #: own `-v`/`-h` split direction already encodes for the same slots, read here rather
@@ -1422,18 +1483,23 @@ def cmd_launch(args) -> int:
     # is, because it is ours. Everything recorded under this id therefore predates this
     # frame, and a launch beginning is the one moment that can be certain of it.
     #
-    # Two files, because two readers inherit: `state.exit_code(fid)` below would read a
-    # dead frame's `exit` back as this launch's own return value, and `gather.read(fid)`
+    # Three things, because three readers inherit. `state.exit_code(fid)` below would
+    # read a dead frame's `exit` back as this launch's own return value. `gather.read(fid)`
     # (no freshness check, by design — it is a panel's hot path) would serve a dead
-    # frame's scan to every panel until the session's first hook bump. `version` is
-    # deliberately left: it is a counter panels compare against their last reading, and
-    # moving it is `state.bump`'s job, one line below.
+    # frame's scan to every panel until the session's first hook bump. And
+    # `state.respawn_attempt` never resets (#382), so the dead frame's respawn counts —
+    # at least one per slot, since every panel's `pane-died` hook fired during ITS
+    # teardown, and possibly already at `_RESPAWN_ATTEMPTS` — would be charged to this
+    # frame's panels, which would then die once and stay dead. `version` is deliberately
+    # left: it is a counter panels compare against their last reading, and moving it is
+    # `state.bump`'s job, one line below.
     state.clear_exit(fid)
     gather.discard(fid)
     # And the `server` marker is rewritten for the same reason: an adopted directory
     # may name the OTHER server, and a stale marker would make `reap` on this one skip
     # a frame that is now genuinely ours.
     state.record_server(fid, SOCKET)
+    state.clear_respawn(fid)
     state.bump(fid)
 
     try:
@@ -1584,8 +1650,31 @@ def cmd_launch(args) -> int:
                      f"detached; reattach manually if you must: "
                      f"tmux -L {SOCKET} attach -t {fid}")
         else:
-            _draw_panels(SOCKET, slots=slots, fid=fid, harness_pane=harness_pane,
-                         env=env, v=v)
+            panes = _draw_panels(SOCKET, slots=slots, fid=fid, harness_pane=harness_pane,
+                                 env=env, v=v)
+            for slot, pane_id in panes.items():
+                # This panel's OWN `pane-died` hook, so a panel whose process dies
+                # outright is brought back instead of leaving a hole for the frame's
+                # whole life (#382). Scoped to this pane — never the harness pane, whose
+                # `pane-died` array carries the exit code and must not gain a third
+                # writer (see `_panel_died_hook_argv`). Reported but never fatal, like
+                # every other decorative tmux command here: a panel that cannot be armed
+                # for respawn is still a panel that came up.
+                #
+                # Private-server-only, deliberately, and not folded into `_draw_panels`
+                # itself: `cmd_respawn` (the hook's own action) and
+                # `_panel_died_hook_argv` both assume `SOCKET`, charter's own server
+                # NAME — `-L`, never `-S` — which is correct here and wrong on the
+                # operator's own tmux, where the frame's server is a socket PATH read
+                # from `$TMUX`. Arming a panel there today would install a hook whose
+                # action targets the wrong tmux server entirely. Extending #382 across
+                # that boundary is real work — resolving `cmd_respawn`'s target from
+                # `state.frame_server(fid)` and its liveness check from windows rather
+                # than sessions — not something to invent as a side effect of this
+                # rebase.
+                tmuxctl.run(f"arming the {slot} panel for respawn",
+                           _panel_died_hook_argv(socket=SOCKET, panel_pane=pane_id,
+                                                 slot=slot), env=env)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —
@@ -1689,6 +1778,71 @@ def cmd_menu(args) -> int:
     # no-capture, no-timeout side of `tmuxctl` — time-boxing it would close a menu for
     # the crime of being read slowly.
     return tmuxctl.interact(menu.menu_argv(fid, SOCKET, client=args.client)).returncode
+
+
+def cmd_respawn(args) -> int:
+    """`charter frame-respawn <slot> --pane %N` — bring one dead panel back, or stop.
+
+    Fired only by a panel pane's own `pane-died` hook (`_panel_died_hook_argv`), never
+    typed. It exists as a charter command because the two things standing between "a
+    panel died" and "respawn it forever" — a count, and a wait — are both things tmux
+    itself cannot do.
+
+    **Which failures reach here at all.** `frame/panel.py` now holds its pane open for
+    every failure charter's own Python can see, painting the reason into the pane rather
+    than exiting into tmux's `Pane is dead (status N)` message (#382's first half). So a
+    panel that reaches this hook is one whose PROCESS is gone — the interpreter failing
+    to start, a SIGKILL, an OOM — which is the only kind restarting could ever help.
+
+    **Always 0.** This is a `run-shell -b` child; nothing reads its status, and a
+    non-zero exit is exactly what makes tmux print into the harness pane on the
+    un-backgrounded path (see `_panel_died_hook_argv`). Every refusal below is a quiet
+    no-op for the same reason: there is no screen left to report it on that is not the
+    agent's own.
+
+    Refusals, in the order they are checked:
+
+    * no `$CHARTER_SESSION_ID` — not fired by a frame at all, so there is no frame to
+      resolve or count against (`cmd_menu` treats the same gap the same way);
+    * a *slot* with no renderer — bringing it back would recreate exactly the
+      permanently-dead pane `cmd_launch`'s `unimplemented` filter exists to prevent;
+    * a *pane* that is not tmux's own `%<digits>` — the value arrived through text tmux
+      re-parsed, so it gets the same treatment `_PANE_ID_RE` already gives the resize
+      hook's target;
+    * a count `state.respawn_attempt` could not record (`None`) — treating that as
+      "attempt 1" would respawn forever, the one outcome the cap exists to prevent;
+    * the cap itself, `_RESPAWN_ATTEMPTS`. Giving up is not a failure here: the pane
+      stays dead with tmux's own message in it, which is the spec's own "a dead panel
+      stays visible with its error".
+
+    **The liveness check is AFTER the backoff, deliberately.** Every panel pane dies
+    when the frame is torn down, so every panel's hook fires on the way out — the
+    ordinary end of every frame, not an edge case. Asking before the sleep would race
+    `kill-session`; asking after it means the teardown has had the whole backoff to
+    finish, and a respawn into a session that no longer exists (one failure report per
+    panel, for nothing being wrong) is avoided rather than reported.
+    """
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    if not fid or args.slot not in frame_slots.SLOTS:
+        return 0
+    if not _PANE_ID_RE.fullmatch(args.pane or ""):
+        return 0
+    attempt = state.respawn_attempt(fid, args.slot)
+    if attempt is None or attempt > _RESPAWN_ATTEMPTS:
+        return 0
+    # `min(...)`: the two constants are the same length today and `attempt` is already
+    # capped above, so this changes nothing now — it is here so raising
+    # `_RESPAWN_ATTEMPTS` alone degrades to "wait the longest backoff again" instead of
+    # an IndexError inside a tmux hook, where nothing would print it.
+    time.sleep(_RESPAWN_BACKOFF[min(attempt, len(_RESPAWN_BACKOFF)) - 1])
+    if fid not in _live_sessions(SOCKET):
+        return 0
+    tmuxctl.run(
+        f"bringing the {args.slot} panel back",
+        ["tmux", "-L", SOCKET, "respawn-pane", "-t", args.pane, "--",
+         *layout.panel_command(slot=args.slot, session=fid,
+                               charter_argv=[sys.executable, "-m", "charter"])])
+    return 0
 
 
 def cmd_action(args) -> int:

@@ -40,7 +40,7 @@ from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter import commands_frame, config, util
-from charter.frame import gather, menu, slots, state
+from charter.frame import gather, layout, menu, slots, state, tmuxctl
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
 #: has had a chance to repoint `config`, so it is unavoidably the developer's REAL
@@ -427,6 +427,253 @@ class PaneDiedHooks(unittest.TestCase):
                               "CHARTER_SESSION_ID", "demo-1"])
 
 
+class PanelRespawnHook(unittest.TestCase):
+    """`pane-died`, scoped to a PANEL pane — the other half of #382.
+
+    `remain-on-exit` keeps a dead panel visible with its error, which is the half that
+    already worked. This is the half that was specced and never built: a panel that dies
+    stays dead for the frame's whole life. `charter/frame/panel.py` now holds its pane
+    open for every failure charter's own Python can SEE, so what is left for this hook
+    is exactly the kind it cannot — the interpreter failing to start, a SIGKILL, an OOM.
+
+    Every property below was verified by hand against a real tmux 3.7c before being
+    written down here, because none of it can be from inside this suite (see the module
+    docstring's "never start a real tmux server" rule):
+
+    * a pane-scoped `pane-died` hook on a PANEL pane fires when that panel's process
+      dies, and does NOT fire the harness pane's own hooks;
+    * installing it leaves the harness pane's `pane-died[0]`/`[1]` array byte-identical
+      (`show-hooks -p` before and after) — pane options are per pane, so the array
+      replacement `_pane_died_teardown_hook_argv`'s docstring measures cannot reach
+      across panes;
+    * `run-shell -b` (backgrounded, unlike `conf_text`'s hotkey bind) prints NOTHING
+      into the harness pane and does not drop it into copy-mode even when the command
+      it runs exits non-zero — the exact failure `conf_text`'s docstring records for
+      the un-backgrounded form;
+    * the single-quoted inner command reaches `/bin/sh` with `$CHARTER_PY` unexpanded by
+      tmux, so the SHELL expands it, and `$CHARTER_SESSION_ID` is in that shell's
+      environment (`set-environment -t <session>`, already issued by `cmd_launch`);
+    * the hook SURVIVES the `respawn-pane` it triggers, which is why an attempt count on
+      disk is the only thing bounding the loop.
+    """
+
+    def test_it_is_scoped_to_the_panel_pane_never_the_harness_pane(self):
+        """`-p -t <panel pane>`: an unscoped (or session-scoped) `pane-died` hook fires
+        for ANY pane, so it would respawn a panel every time the HARNESS died — and,
+        worse, would be a second writer of the same option array the exit-code hooks
+        live in."""
+        cmd = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
+                                                   slot="top")
+        self.assertIn("-p", cmd)
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%11")
+        self.assertEqual(cmd[cmd.index("set-hook") + 1], "-p")
+
+    def test_the_action_names_the_slot_and_the_pane_it_must_bring_back(self):
+        action = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
+                                                      slot="bottom")[-1]
+        self.assertIn("frame-respawn", action)
+        self.assertIn("bottom", action)
+        self.assertIn("%11", action)
+
+    def test_the_action_never_names_a_bare_charter_off_the_path(self):
+        """The same trap `conf_text`'s own docstring measures for the hotkey bind: a
+        bare `charter` resolves against the tmux SERVER's `$PATH`, which need not have
+        charter on it at all. The interpreter is carried out of band in
+        `$CHARTER_PY` (`_charter_py_env_argv`) and expanded by the shell this action
+        spawns — single-quoted, so tmux's own parsing leaves the `$` alone (verified
+        against 3.7c: `show-hooks` reads the action back with the dollar escaped and
+        the spawned shell receives the expanded path)."""
+        action = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
+                                                      slot="top")[-1]
+        self.assertIn(f'"${tmuxctl.CHARTER_PY_ENV}" -m charter', action)
+
+    def test_the_action_is_backgrounded_so_it_cannot_draw_in_the_harness_pane(self):
+        """`run-shell -b`, not a bare `run-shell`. Un-backgrounded, tmux prints a
+        non-zero command's own `'…' returned N` into the HARNESS pane and drops it into
+        copy-mode — charter drawing in the one rectangle ADR 0018 says it never draws
+        (`conf_text`'s docstring records that happening for real). Backgrounded, the
+        same failing command produced no output there at all (measured against 3.7c).
+        This also matters because the command deliberately SLEEPS for its backoff: a
+        blocking `run-shell` would stall tmux's command queue for seconds."""
+        action = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
+                                                      slot="top")[-1]
+        self.assertTrue(action.startswith("run-shell -b "), action)
+
+    def test_it_is_a_clean_argv_list_naming_charters_own_socket(self):
+        cmd = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
+                                                   slot="top")
+        self.assertTrue(all(isinstance(a, str) for a in cmd))
+        self.assertEqual(cmd[:4], ["tmux", "-L", "charter", "set-hook"])
+
+
+class _RespawnTmux:
+    """A tmux that answers only what `cmd_respawn` asks: is the session still live, and
+    did the pane come back."""
+
+    def __init__(self, *, live=("f-1",), respawn_rc=0):
+        self.live = list(live)
+        self.respawn_rc = respawn_rc
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append(list(cmd))
+        if "list-sessions" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(self.live),
+                                               stderr="")
+        if "respawn-pane" in cmd:
+            return subprocess.CompletedProcess(cmd, self.respawn_rc, stdout="",
+                                               stderr="" if self.respawn_rc == 0
+                                               else "no such pane")
+        raise AssertionError(f"unexpected tmux command in test: {cmd}")
+
+    @property
+    def respawns(self):
+        return [c for c in self.calls if "respawn-pane" in c]
+
+
+def _respawn(fake, *, slot="bottom", pane="%11", fid="f-1", slept=None):
+    args = SimpleNamespace(slot=slot, pane=pane)
+    env = {"CHARTER_SESSION_ID": fid} if fid is not None else {}
+    with mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
+         mock.patch.dict(os.environ, env, clear=True), \
+         mock.patch("charter.commands_frame.time.sleep",
+                    side_effect=(slept.append if slept is not None else lambda _d: None)):
+        return commands_frame.cmd_respawn(args)
+
+
+class Respawn(PersonaIso, unittest.TestCase):
+    """`charter frame-respawn` — what the panel pane's `pane-died` hook actually runs.
+
+    The spec's own sentence, in full: "A dead panel stays visible with its error,
+    respawns with backoff, and gives up after 3 attempts. A panel must never be able to
+    take the agent down with it." The first clause and the last already held; these are
+    the middle two.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A live frame always has its own state directory: `cmd_launch` creates and
+        # bumps it before the first pane is split. `state.respawn_attempt` deliberately
+        # does not create one (it would resurrect a directory `reap` just deleted at
+        # teardown), so a test standing in for a running frame has to stand it up.
+        state.bump("f-1")
+
+    def test_the_first_death_brings_the_panel_back_with_its_own_argv(self):
+        """Not an approximation of the panel's command — the SAME list
+        `layout.panel_command` gave `panel_argvs` at launch, so a respawned panel cannot
+        drift from the one the launcher spawned."""
+        fake = _RespawnTmux()
+        rc = _respawn(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(fake.respawns), 1, fake.calls)
+        cmd = fake.respawns[0]
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%11")
+        self.assertEqual(cmd[cmd.index("--") + 1:],
+                         layout.panel_command(slot="bottom", session="f-1",
+                                              charter_argv=[sys.executable, "-m", "charter"]))
+
+    def test_it_gives_up_after_three_attempts_and_leaves_the_pane_dead(self):
+        """The cap the spec names. Without it, a panel that dies instantly on every
+        start respawns forever — the hook survives each respawn (measured against tmux
+        3.7c), so nothing else would ever stop it. The fourth death must leave the pane
+        exactly as tmux left it: dead, with its own `Pane is dead (status N)` still
+        readable, which is the outcome the spec asks for rather than a failure."""
+        fake = _RespawnTmux()
+        for _ in range(commands_frame._RESPAWN_ATTEMPTS):
+            _respawn(fake)
+        self.assertEqual(len(fake.respawns), commands_frame._RESPAWN_ATTEMPTS)
+        _respawn(fake)
+        self.assertEqual(len(fake.respawns), commands_frame._RESPAWN_ATTEMPTS,
+                         "a fourth death was respawned — the cap is not holding")
+
+    def test_each_attempt_waits_longer_than_the_one_before(self):
+        """"With backoff", and the reason is a real one rather than politeness: a panel
+        that fails at startup fails in milliseconds, so three back-to-back respawns
+        would all land inside the same broken condition and burn the whole budget before
+        anything transient (a filesystem hiccup, a plane mid-upgrade) could clear."""
+        slept = []
+        fake = _RespawnTmux()
+        for _ in range(commands_frame._RESPAWN_ATTEMPTS):
+            _respawn(fake, slept=slept)
+        self.assertEqual(len(slept), commands_frame._RESPAWN_ATTEMPTS)
+        self.assertEqual(slept, sorted(slept))
+        self.assertLess(slept[0], slept[-1], slept)
+
+    def test_a_frame_whose_session_has_already_ended_is_not_respawned(self):
+        """Every panel pane dies when the frame is torn down, so every panel's hook
+        fires on the way out — the ORDINARY case, not an edge one. Respawning into a
+        session that no longer exists would fail once per panel and report each failure
+        as if something had gone wrong. Checked AFTER the backoff sleep, not before:
+        that is the window in which the teardown actually completes."""
+        fake = _RespawnTmux(live=())
+        rc = _respawn(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.respawns, [], "a finished frame's panel was respawned")
+
+    def test_a_slot_with_no_renderer_is_refused_rather_than_respawned(self):
+        """Same rule `cmd_launch` already applies when it declines to split a pane for
+        an unimplemented slot: bringing one back would recreate exactly the permanently
+        dead pane that filter exists to prevent."""
+        fake = _RespawnTmux()
+        rc = _respawn(fake, slot="sideways")
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.respawns, [])
+
+    def test_a_pane_id_of_the_wrong_shape_is_never_used_as_a_target(self):
+        """The value arrives via a tmux hook action, which is text tmux re-parsed — the
+        same reason `_PANE_ID_RE` guards `_resize_hook_argv`. A target that is not
+        `%<digits>` is treated as no target at all."""
+        fake = _RespawnTmux()
+        rc = _respawn(fake, pane="-t;kill-server")
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.respawns, [])
+
+    def test_no_frame_id_in_the_environment_is_a_quiet_no_op(self):
+        """`$CHARTER_SESSION_ID` is how every `run-shell`-spawned charter command
+        resolves its own frame (`cmd_menu` does the same). Arriving without one means
+        this was not fired by a frame at all; there is nothing to respawn and nowhere to
+        report it."""
+        fake = _RespawnTmux()
+        rc = _respawn(fake, fid=None)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.respawns, [])
+
+    def test_a_panel_of_an_already_reaped_frame_is_not_respawned(self):
+        """The frame is over and its state is gone — `state.respawn_attempt` refuses to
+        count for a directory `reap` removed, and refusing to count is refusing to
+        respawn. Belt to the liveness check's braces: that check happens after the
+        backoff, so a `reap` that lands in between still has to leave a panel unrespawned
+        rather than counted from zero.
+
+        The pid at the end of the id is load-bearing since #383: `reap` keeps a directory
+        while the launcher named in it is still running, and this class's own `f-1`
+        fixture ends in pid 1 — `launchd`/`init`, which never exits — so `reap(set())`
+        would rightly keep it and the test would prove the opposite of its name. A pid
+        that has genuinely exited is a fact about this machine rather than a guess about
+        it (the same reason `test_frame_state._a_dead_pid` exists)."""
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        fid = f"f-{dead.pid}"
+        state.bump(fid)
+        fake = _RespawnTmux(live=(fid,))
+        state.reap(set(), server=commands_frame.SOCKET)
+        self.assertFalse(state.frame_dir(fid).exists(), "the fixture was not reaped")
+
+        rc = _respawn(fake, fid=fid)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.respawns, [])
+
+    def test_a_count_that_cannot_be_recorded_gives_up_rather_than_looping(self):
+        """`state.respawn_attempt` answers `None` when it cannot record the attempt at
+        all. Treating that as "attempt 1" would respawn forever — the one outcome the
+        cap exists to prevent — so it degrades the same way exceeding the cap does."""
+        fake = _RespawnTmux()
+        with mock.patch("charter.frame.state.respawn_attempt", return_value=None):
+            rc = _respawn(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.respawns, [])
+
+
 class MissingTmux(unittest.TestCase):
     def test_an_absent_tmux_names_the_remedy_and_does_not_start_a_frame(self):
         """Adapted from the task brief's own draft, which mocked `tmuxctl.available()`.
@@ -757,6 +1004,7 @@ class _FakeTmux:
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
                 kill_rc=0, arm_rc=0, resize_hook_rc=0, capture_rc=0,
+                respawn_hook_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
         self.exit_code = exit_code
@@ -783,6 +1031,7 @@ class _FakeTmux:
         self.arm_rc = arm_rc
         self.resize_hook_rc = resize_hook_rc
         self.capture_rc = capture_rc
+        self.respawn_hook_rc = respawn_hook_rc
         # Distinct from every other stderr string in this fake — a test needs to
         # control it independently to exercise the "invalid option" degrade (fix
         # round 3, item 2) separately from an ordinary resize-hook failure.
@@ -816,6 +1065,12 @@ class _FakeTmux:
             return subprocess.CompletedProcess(cmd, self.env_set_rc, stdout="",
                                                stderr="" if self.env_set_rc == 0 else "bad session")
         if "set-hook" in cmd:
+            if any("frame-respawn" in a for a in cmd):
+                # A PANEL pane's own respawn hook (#382) — a different pane's option
+                # array from the harness pane's two exit-code hooks, and given its own
+                # knob here so a test can fail it without touching those.
+                return subprocess.CompletedProcess(cmd, self.respawn_hook_rc, stdout="",
+                                                   stderr="" if self.respawn_hook_rc == 0 else "bad panel target")
             if "pane-died[1]" in cmd:
                 return subprocess.CompletedProcess(cmd, self.teardown_hook_rc, stdout="",
                                                    stderr="" if self.teardown_hook_rc == 0 else "bad teardown target")
@@ -1344,6 +1599,71 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertTrue(any("attach" in c for c in fake.calls),
                         "a decorative panel failing must not cancel the attach")
 
+    def test_every_drawn_panel_is_armed_for_its_own_respawn(self):
+        """#382's second half at the launcher: a panel that dies must be brought back,
+        and nothing can bring it back unless a hook was installed on ITS pane while it
+        was alive. One hook per drawn panel, each targeting the pane tmux actually
+        reported for that slot and naming that slot."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        hooks = [c for c in fake.calls
+                 if "set-hook" in c and any("frame-respawn" in a for a in c)]
+        self.assertEqual(len(hooks), 2, fake.calls)
+        by_pane = {c[c.index("-t") + 1]: c[-1] for c in hooks}
+        self.assertIn("top", by_pane["%11"])
+        self.assertIn("bottom", by_pane["%12"])
+
+    def test_a_panel_whose_pane_id_was_never_learned_is_not_armed(self):
+        """Same guard the resize hook already has, for the same reason: without a valid
+        `%<digits>` there is no target, and a hook installed against a guessed one would
+        either fail outright or arm the wrong pane. `top` reports a value of the wrong
+        shape and `bottom` a real one — only `bottom` may be armed."""
+        fake = _FakeTmux(exit_code=0,
+                         panel_pane_ids={"top": "not-a-pane-id", "bottom": "%12"})
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        hooks = [c for c in fake.calls
+                 if "set-hook" in c and any("frame-respawn" in a for a in c)]
+        self.assertEqual([c[c.index("-t") + 1] for c in hooks], ["%12"])
+
+    def test_arming_the_panels_never_touches_the_harness_panes_own_hooks(self):
+        """The regression this issue explicitly forbids. The harness pane's `pane-died`
+        array holds the exit-code write hook at `[0]` and `kill-session` at `[1]`, and
+        an unindexed `set-hook pane-died` REPLACES a whole array — so a third
+        `pane-died` writer is exactly the shape that deletes teardown and brings back
+        the hang. It is safe only because it targets a DIFFERENT PANE, which is a
+        property of the argv and therefore testable here: no respawn hook may name the
+        harness pane, and the harness pane's own two hooks must still be exactly two,
+        write before teardown. (Verified against real tmux 3.7c as well: `show-hooks -p`
+        on the harness pane reads back identically before and after a panel pane is
+        armed, and a panel dying does not fire `kill-session`.)"""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
+        _launch(fake)
+        harness_hooks = [c for c in fake.calls
+                         if "set-hook" in c and "pane-died" in " ".join(c)
+                         and c[c.index("-t") + 1] == fake.pane_id]
+        self.assertEqual(len(harness_hooks), 2,
+                         f"the harness pane's hook array gained a writer: {harness_hooks}")
+        self.assertNotIn("pane-died[1]", harness_hooks[0])
+        self.assertIn("pane-died[1]", harness_hooks[1])
+        for c in fake.calls:
+            if any("frame-respawn" in a for a in c):
+                self.assertNotEqual(c[c.index("-t") + 1], fake.pane_id,
+                                    "a respawn hook was installed on the harness pane")
+
+    def test_a_failed_respawn_arming_is_reported_but_not_fatal(self):
+        """Same treatment every other decorative tmux command in this launcher gets: a
+        panel that cannot be armed for respawn is still a panel that came up, and the
+        harness pane is already running."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11"}, respawn_hook_rc=1)
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("respawn" in m for m in buf), buf)
+        self.assertTrue(any("attach" in c for c in fake.calls))
+
     def test_a_resize_hook_is_installed_reasserting_every_drawn_panels_size(self):
         """Cross-task fix round, item 3: tmux's own layout engine redistributes EVERY
         pane proportionally on any resize, `-l size` notwithstanding — verified by hand
@@ -1710,6 +2030,31 @@ class Launch(PersonaIso, unittest.TestCase):
             self.assertEqual(gather.read(fake.fid), fresh,
                              "a panel of this frame would draw a dead frame's scan "
                              "until the session's first hook bump")
+
+    def test_a_launch_does_not_inherit_a_spent_respawn_budget_from_its_pid(self):
+        """The third thing the recycled directory carries (#382 meeting #383), and the
+        one whose inheritance is not merely stale but already exhausted.
+
+        `state.respawn_attempt` never resets — three deaths across a frame's whole life,
+        deliberately — and every panel's `pane-died` hook fires during its own frame's
+        TEARDOWN, so a directory left behind by a finished frame always has counts in it
+        and may well be at `_RESPAWN_ATTEMPTS` already. Adopted by a new frame, those
+        counts are charged to panels that have not died once: the first real death of
+        this frame's `top` panel would be refused as attempt 4, and a panel that charter
+        promises to bring back would simply stay dead, with nothing anywhere saying it
+        was another frame's budget that ran out."""
+        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
+        state.bump(stale)
+        for _ in range(commands_frame._RESPAWN_ATTEMPTS + 1):
+            state.respawn_attempt(stale, "top")
+
+        fake = _FakeTmux(still_live=True)
+        _launch(fake)
+
+        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
+        self.assertEqual(state.respawn_attempt(fake.fid, "top"), 1,
+                         "this frame's first panel death was charged to a dead frame's "
+                         "budget and would never be respawned")
 
 
 class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):

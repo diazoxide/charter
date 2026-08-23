@@ -260,6 +260,114 @@ def exit_code(fid: str) -> int | None:
         return None
 
 
+#: The subdirectory :func:`respawn_attempt` counts in, named once so
+#: :func:`clear_respawn` cannot drift away from it — the two are only correct together.
+_RESPAWN_DIR = "respawn"
+
+
+def respawn_attempt(fid: str, slot: str) -> int | None:
+    """Claim the next respawn attempt for *slot* in *fid*, or ``None`` when it cannot.
+
+    Read-increment-write of a single integer, one file per slot. tmux has no way to
+    count anything, and a panel pane's `pane-died` hook SURVIVES the respawn it triggers
+    (verified against real tmux 3.7c — `show-hooks -p` reads the hook back unchanged
+    afterwards), so without a count on disk a panel that dies instantly on every start
+    respawns in a hot loop forever. This is the only thing bounding it; see
+    `commands_frame._RESPAWN_ATTEMPTS`.
+
+    **Never reset, and not by oversight.** A successful respawn does not zero the count,
+    so the budget is three deaths across the whole life of one frame rather than three
+    in a row. The alternative needs a definition of "the panel came back up and stayed
+    up" that nothing here can observe — tmux only reports that a process was started,
+    not that it kept running — and guessing at one is how a panel that dies every
+    ninety seconds gets respawned forever while still looking healthy at each individual
+    check. What keeps that budget attached to a FRAME rather than to a reused id is
+    :func:`clear_respawn`, which a launch calls as it claims the id.
+
+    ``None`` — never ``0``, never a silent restart of the count — for every way this can
+    fail to record: an *fid* or *slot* :func:`contain.child` refuses, a directory that
+    cannot be made, a write that cannot complete. The caller reads it as "give up",
+    which is the safe direction: the failure mode of counting wrong here is an unbounded
+    respawn loop, and a dead pane still shows tmux's own `Pane is dead (status N)`.
+
+    **``create=False``, deliberately, even though this writes.** A frame that still
+    exists always has its directory (`cmd_launch` creates and `bump`s it before any pane
+    is split), so refusing to count for a frame whose state is already gone costs a live
+    frame nothing. What `create=True` would buy is the power to REMAKE a directory
+    :func:`reap` has removed — one orphan per frame, surviving until some later launch
+    reaps it, which is exactly the resurrect-what-reap-just-deleted hazard this module's
+    own docstring records for `version()`. Every panel pane dies when its frame is torn
+    down, so every panel's `pane-died` hook fires on the way out and lands here; since
+    #383 :func:`reap` keeps a directory while the launcher pid in its name is live, so on
+    that path the directory is usually still present and a count is spent on a frame that
+    is already over. Harmless, and deliberately not special-cased: `cmd_respawn` re-asks
+    whether the session exists after its backoff, and the directory goes when the next
+    launch reaps it or clears it.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    root = d / _RESPAWN_DIR
+    try:
+        root.mkdir(exist_ok=True)
+    except OSError:
+        return None
+    # One file per slot under a directory of their own, rather than a `respawn-<slot>`
+    # sibling of `version`/`exit` in the frame directory itself. The prefix version put
+    # the slot in the SECOND path component, where every separator-carrying name lands
+    # under a `respawn-<x>` directory that never exists — so the write failed and this
+    # function answered `None` whether `contain.child` was here or not, making the
+    # guard unobservable and, by the only test that could have pinned it, dead. With
+    # the slot as the first component under a directory that DOES exist, a name like
+    # `../y` would really be written outside this frame's own directory, and refusing
+    # it is a behaviour a test can tell apart from a failed write.
+    f = contain.child(root, slot)
+    if f is None:
+        return None
+    try:
+        previous = int(f.read_text().strip())
+    except (OSError, ValueError):
+        # No file yet is the ordinary case (the first death of this frame's own panel);
+        # unparseable content is treated identically rather than specially, exactly as
+        # `version` and `exit_code` above treat theirs — this is a counter, not a
+        # record anything else has to agree with.
+        previous = 0
+    n = previous + 1
+    try:
+        f.write_text(f"{n}\n")
+    except OSError:
+        return None
+    return n
+
+
+def clear_respawn(fid: str) -> None:
+    """Forget every respawn count under *fid*, because a NEW frame is claiming the id.
+
+    The third line on :func:`clear_exit`'s bill, and the same recycled pid underneath it
+    (#383). A frame id is ``<workspace>-<launcher pid>``; since #383 :func:`reap` keeps a
+    directory for as long as the pid in its name is live, and on a launch that pid is
+    live BECAUSE IT IS THE LAUNCHER'S OWN — so a launcher landing on a pid an earlier
+    launcher for the SAME workspace already used adopts that earlier frame's whole
+    directory, its ``respawn/`` counts included.
+
+    Inheriting those is not litter, it is a budget already spent. :func:`respawn_attempt`
+    never resets, and every panel's `pane-died` hook fires during the previous frame's
+    teardown, so an adopted count is at least one per slot and may already sit at
+    `commands_frame._RESPAWN_ATTEMPTS`. The new frame's panels would then die once and
+    stay dead without ever being brought back — the precise outcome the count exists to
+    ration, handed out for a pid number rather than for anything that happened. Clearing
+    as the id is claimed keeps "three deaths" a property of a frame, not of a name.
+
+    Never raises, and never creates: ``rmtree(ignore_errors=True)`` is the same tool
+    :func:`reap` uses for the same must-not-fail reason, and the ordinary first launch
+    for a workspace has no directory here at all — it must not mint one just to empty it.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return
+    shutil.rmtree(d / _RESPAWN_DIR, ignore_errors=True)
+
+
 def _launcher_pid(name: str) -> int | None:
     """The launcher pid :func:`frame_id` put at the end of *name*, or ``None``.
 

@@ -175,6 +175,20 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
     return [x for name in sorted(env or {}) for x in ("-e", f"{name}={env[name]}")]
 
 
+def panel_command(*, slot: str, session: str, charter_argv: list[str]) -> list[str]:
+    """The command one panel pane runs — the part after `split-window`'s own `--`.
+
+    Split out of :func:`panel_argvs` because a panel is started TWICE by two different
+    modules: once by the launcher's `split-window`, and again by
+    `commands_frame.cmd_respawn`'s `respawn-pane` after the pane's `pane-died` hook
+    fires (#382). Two hand-written copies of this argv is exactly the drift that ends
+    with a respawned panel running a slightly different command from the one the
+    launcher spawned — a stale flag, a missing `--session` — and failing in a way that
+    only ever reproduces after something has already died once.
+    """
+    return [*charter_argv, "panel", slot, "--session", session]
+
+
 def panel_argvs(*, slots: list[str], session: str, socket: str,
                 charter_argv: list[str], harness_pane: str,
                 env: dict[str, str] | None = None) -> list[list[str]]:
@@ -215,5 +229,6 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
                           direction, *before, "-l", str(size),
                           *_env_argv(env),
                           "-P", "-F", "#{pane_id}", "--",
-                          *charter_argv, "panel", slot, "--session", session))
+                          *panel_command(slot=slot, session=session,
+                                         charter_argv=charter_argv)))
     return cmds

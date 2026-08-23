@@ -155,6 +155,34 @@ class PanelArgvs(unittest.TestCase):
         self.assertEqual(targets, {"%0"})
 
 
+class PanelCommand(unittest.TestCase):
+    """One definition of what a panel pane runs, because two modules start one.
+
+    The launcher splits a pane for it; `commands_frame.cmd_respawn` brings the same
+    panel back with `respawn-pane` after its `pane-died` hook fires (#382). Two
+    hand-written copies of this argv drift, and the drift only ever shows up after
+    something has already died once — which is the worst possible moment to discover
+    the respawned panel is running a slightly different command.
+    """
+
+    def test_the_split_runs_exactly_what_a_respawn_would_run(self):
+        charter_argv = ["/usr/bin/python3", "-m", "charter"]
+        split = layout.panel_argvs(slots=["bottom"], session="f-1", socket="charter",
+                                   charter_argv=charter_argv, harness_pane="%0")[0]
+        self.assertEqual(split[split.index("--") + 1:],
+                         layout.panel_command(slot="bottom", session="f-1",
+                                              charter_argv=charter_argv))
+
+    def test_it_carries_the_slot_and_the_session_the_cli_requires(self):
+        """`cli.build_parser`'s `panel` parser takes `<slot> --session <fid>` and makes
+        `--session` required — a command missing either is a pane that fails at startup,
+        which is the hole #382's first half exists to make legible rather than to
+        create a second source of."""
+        self.assertEqual(
+            layout.panel_command(slot="top", session="f-9", charter_argv=["c"]),
+            ["c", "panel", "top", "--session", "f-9"])
+
+
 class PanelGeometry(unittest.TestCase):
     """Pins the one property nothing else in this file checks: each slot's actual shape.
 
