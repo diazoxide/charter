@@ -25,6 +25,22 @@ handlers, and the cases below assert it on each tool family. The fixtures are re
 real committed frontmatter, and each one asserts the ask actually fired before asserting
 anything about the count — a fixture that stops reaching `_ask` must fail loudly rather than
 report zero approvals of zero asks.
+
+**The approval event is named for its nudge** (#375): `dispatch-ask-approved`, not a bare
+`ask-approved`. Every assertion below therefore names the kind the fixture actually raises.
+That matters more than a rename usually would — the negative cases here (`assertNotIn`,
+`count`) would go vacuously green against the string `ask-approved`, which no code path can
+produce any more, so a test asserting the old name would still pass while testing nothing.
+
+**And the negative cases are asserted on the approval SHAPE, not on one approval's name.**
+Naming a single kind is the *other* half of the same trap, and it is the half #375 opened
+rather than closed: while `ask-approved` was the only approval there was, `assertNotIn("ask
+-approved", …)` said "no approval row was invented"; once approvals have one name per nudge,
+`assertNotIn("dispatch-ask-approved", …)` says only "no *dispatch* approval was invented",
+and a row invented under any other name — `routing-ask-approved`, or the `None-approved` a
+dropped ``if kind is None`` guard produces — walks straight past it. The universal claim is
+what these cases are for ("It must never invent a row"), so they read every `-approved` row
+in the session and assert the whole list. `_approvals` below is that reading.
 """
 
 import unittest
@@ -39,6 +55,9 @@ class AskOutcomeCase(InAControlPlane):
 
     SID = "s"
     TUID = "tu_1"
+    #: What this fixture's nudge is called, and so what its approval is called (#375).
+    KIND = "dispatch-ask"
+    APPROVED = "dispatch-ask-approved"
 
     def setUp(self) -> None:
         super().setUp()
@@ -61,6 +80,18 @@ class AskOutcomeCase(InAControlPlane):
     def events(self, sid=None):
         return [e["event"] for e in trace.read(sid or self.SID)]
 
+    def approvals(self, sid=None):
+        """Every approval row in the session, found by SHAPE rather than by name.
+
+        The claim the negative cases carry is universal — charter must not invent an
+        approval — and after #375 no single name can express it. `_ASK_KINDS` is two
+        strings today and a suffix match covers a third the day it arrives, including the
+        kinds that are not supposed to exist: `None-approved` is what `_ask_approved`
+        writes if its ``if kind is None: return`` is ever dropped, and it contains neither
+        "dispatch" nor even "ask".
+        """
+        return [e for e in self.events(sid) if e.endswith("-approved")]
+
     def markers(self):
         return list(config.SESSIONS_DIR.glob("*.ask-pending"))
 
@@ -68,12 +99,21 @@ class AskOutcomeCase(InAControlPlane):
 class TestAnApprovedAskIsRecorded(AskOutcomeCase):
     def test_the_tool_running_marks_it_approved(self):
         self.approve(self.ask())
-        self.assertIn("ask-approved", self.events())
+        self.assertIn(self.APPROVED, self.events())
 
     def test_the_ask_itself_is_still_traced(self):
         """Both halves, or the ratio has no denominator."""
         self.ask()
-        self.assertIn("dispatch-ask", self.events())
+        self.assertIn(self.KIND, self.events())
+
+    def test_the_two_halves_pair_by_name(self):
+        """Why the approval is named for its nudge (#375): `charter trace --summary`
+        aggregates event NAMES, so `dispatch-ask` beside `dispatch-ask-approved` is a
+        ratio on the line that already exists. A shared counter could not be attributed
+        to either guard, and a `reason` field would not reach the summary at all."""
+        self.approve(self.ask())
+        self.assertEqual([self.KIND, self.APPROVED],
+                         [e for e in self.events() if "ask" in e])
 
     def test_the_marker_is_consumed(self):
         p = self.ask()
@@ -86,12 +126,13 @@ class TestAnUnansweredAskIsNotRecordedAsApproved(AskOutcomeCase):
     def test_no_post_tool_use_means_no_approval(self):
         """A declined ask blocks the tool, so PostToolUse never fires for it."""
         self.ask()
-        self.assertNotIn("ask-approved", self.events())
+        self.assertEqual([], self.approvals(), "an unanswered ask was counted as approved")
 
     def test_a_different_tool_call_does_not_resolve_it(self):
         p = self.ask()
         self.approve({**p, "tool_use_id": "tu_other"})
-        self.assertNotIn("ask-approved", self.events())
+        self.assertEqual([], self.approvals(),
+                         "another tool call resolved a pending ask that was not its own")
 
 
 class TestItIsCheapAndSafeOnTheHotPath(AskOutcomeCase):
@@ -100,14 +141,16 @@ class TestItIsCheapAndSafeOnTheHotPath(AskOutcomeCase):
         return. It must never invent a row."""
         self.approve({"tool_name": "Task", "tool_input": {"subagent_type": "coder"},
                       "session_id": self.SID, "tool_use_id": "tu_never_asked"})
-        self.assertNotIn("ask-approved", self.events())
+        self.assertEqual([], self.approvals(),
+                         "a PostToolUse with no pending ask invented an approval row")
 
     def test_it_resolves_only_once(self):
         """The unlink IS the idempotency — a replayed PostToolUse cannot inflate the count."""
         p = self.ask()
         self.approve(p)
         self.approve(p)
-        self.assertEqual(1, self.events().count("ask-approved"))
+        self.assertEqual([self.APPROVED], self.approvals(),
+                         "the replay was counted, or was counted under another nudge's name")
 
 
 class TestEveryToolFamilyThatCanAskCanAlsoRecordTheApproval(InAControlPlane):
@@ -117,27 +160,36 @@ class TestEveryToolFamilyThatCanAskCanAlsoRecordTheApproval(InAControlPlane):
     Asserted directly on the marker rather than through a nudge fixture, because the claim
     is about the HANDLER — that each PostToolUse family consumes a pending ask — and a
     per-family nudge fixture would make three different preconditions carry one assertion.
+
+    Each row carries the KIND its pending marker was left under, and the handler is checked
+    against `<kind>-approved` (#375). The kinds differ per row on purpose: a handler must
+    take whatever nudge is pending on its tool_use_id, not one kind it is hardcoded for.
+    `posttooluse_bash` gets `routing-ask` precisely because no nudge raises on **Bash**
+    today — the handler still has to work the day one does, which is the property whose
+    absence #371 exposed.
     """
 
-    HANDLERS = (("posttooluse_bash", {"tool_name": "Bash"}),
-                ("posttooluse", {"tool_name": "Edit", "tool_input": {"file_path": "/x/y.py"}}),
-                ("posttooluse_dispatch", {"tool_name": "Task",
-                                          "tool_input": {"subagent_type": "coder"},
-                                          "tool_response": ""}))
+    HANDLERS = (("posttooluse_bash", "routing-ask", {"tool_name": "Bash"}),
+                ("posttooluse", "routing-ask",
+                 {"tool_name": "Edit", "tool_input": {"file_path": "/x/y.py"}}),
+                ("posttooluse_dispatch", "dispatch-ask",
+                 {"tool_name": "Task", "tool_input": {"subagent_type": "coder"},
+                  "tool_response": ""}))
 
     def test_each_one_consumes_a_pending_ask_and_records_it(self):
-        for name, payload in self.HANDLERS:
+        for name, kind, payload in self.HANDLERS:
             with self.subTest(handler=name):
                 sid, tuid = f"s-{name}", "tu_1"
-                hooks._ask_mark_set(sid, tuid)
-                self.assertTrue(hooks._ask_mark(sid, tuid).exists(),
+                hooks._ask_mark_set(sid, tuid, kind)
+                self.assertTrue(hooks._ask_mark(sid, tuid, kind).exists(),
                                 "precondition: an ask is pending")
                 run_hook(getattr(hooks, name), {**payload, "session_id": sid,
                                                 "tool_use_id": tuid})
-                self.assertFalse(hooks._ask_mark(sid, tuid).exists(),
+                self.assertFalse(hooks._ask_mark(sid, tuid, kind).exists(),
                                  f"{name} left the marker behind")
-                self.assertIn("ask-approved", [e["event"] for e in trace.read(sid)],
-                              f"{name} consumed the marker without recording the approval")
+                self.assertIn(f"{kind}-approved", [e["event"] for e in trace.read(sid)],
+                              f"{name} consumed the marker without recording the approval "
+                              f"under the name of the nudge that earned it")
 
 
 if __name__ == "__main__":
