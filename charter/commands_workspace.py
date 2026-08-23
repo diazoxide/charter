@@ -16,7 +16,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-from . import config, contain, gitpolicy, util, workspace, worktree
+from . import config, contain, gitpolicy, planegit, util, workspace, worktree
 from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory_reactive,
                        commit_push)
 
@@ -707,23 +707,26 @@ def cmd_workspace_autosave(args) -> int:
 
 def cmd_workspace_pushbg(args) -> int:
     """Internal: push HEAD to the control plane via its own forge's CLI (the background
-    half of autosave)."""
-    root = config.ROOT
-    https = _origin_https(root)
-    if not https:
-        return 0
-    cred = _cred_flag(gitpolicy.forge_for(root))
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=root).stdout.strip()
-    p = _git([*cred, "push", https, f"HEAD:{branch}"], cwd=root)
-    if p.returncode != 0 and any(s in (p.stderr or "") for s in ("fetch first", "non-fast-forward", "rejected")):
-        _git([*cred, "fetch", https, branch], cwd=root)
-        if _git(["rebase", "FETCH_HEAD"], cwd=root).returncode == 0:
-            p = _git([*cred, "push", https, f"HEAD:{branch}"], cwd=root)
-        else:
-            _git(["rebase", "--abort"], cwd=root)
-            return 0
-    if p.returncode == 0:
-        _git(["update-ref", f"refs/remotes/origin/{branch}", "HEAD"], cwd=root)
+    half of autosave, and of every reactive `persona remember`).
+
+    **This used to be a second implementation of the push, and that was #373.** It had its
+    own rebase-retry, no protected-branch recognition, and ``return 0`` on every failure —
+    so on a plane whose default branch requires a pull request, `charter save` landed the
+    change on `charter/<sha>` (#167) while a reactive memory commit was rejected, kept, and
+    never mentioned again. Eleven commits were stranded on a local `main` in one session,
+    each one destroyed by the next ordinary `git reset --hard origin/main`. Delegating is
+    the fix: `planegit.push_head` is the only pusher, so the policy holds here by
+    construction rather than by keeping two lists of forge signatures in step.
+
+    ``announce=False`` because this runs DETACHED with stdout and stderr on ``/dev/null``
+    (`planegit._spawn_bg_push`). Nothing printed here can reach anybody, which is exactly
+    why `push_head` records the outcome as well as saying it — `charter doctor` is where
+    this process gets to speak.
+
+    Still rc 0 on every outcome: it is spawned from a Stop hook and must never break a
+    turn. What changed is that rc 0 is no longer the only thing it leaves behind.
+    """
+    planegit.push_head(config.ROOT, announce=False)
     return 0
 
 

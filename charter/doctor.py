@@ -347,6 +347,62 @@ def _plane_default_branch(root: Path) -> str | None:
     return None
 
 
+def _stranded_push(root) -> tuple[str, str] | None:
+    """A ``(finding, action)`` for a memory commit whose push did not reach `origin`, or
+    ``None`` — the surface for `planegit.record_push` (#373).
+
+    The reactive memory push runs detached with ``/dev/null`` for stdout and stderr, so it
+    has no caller to tell when a protected default branch refuses it. It writes down what
+    happened instead, and this is where that gets read: `doctor` runs from SessionStart,
+    which is the surface ADR 0008 already chose for everything else about the plane root.
+
+    **The record is checked, not believed.** A file saying "this did not land" is only true
+    until somebody lands it, and a warning that cannot clear itself is one people learn to
+    scroll past — which is the failure ADR 0008 spent its whole second half on. So the
+    recorded commit is tested against the world: once it is an ancestor of the tracked
+    upstream, the condition is over whatever the file still says. That check is a local ref
+    read, never a fetch, because this runs from a hook that must not reach the network.
+
+    ``unreachable`` is deliberately not reported. A plane with no origin on a forge charter
+    knows has a CONFIGURATION to fix, which `commit_push` already says out loud at the
+    moment it happens; repeating it here every session would put this row permanently in
+    the yellow — the exact cost `check_plane_root` refuses to pay for untracked memory
+    files, and it would buy nothing.
+
+    Never raises: the caller is a preflight check, and `push_record` already degrades a
+    malformed file to ``None`` rather than to an exception.
+    """
+    from . import planegit
+
+    rec = planegit.push_record()
+    if not rec or rec.get("outcome") == planegit.UNREACHABLE:
+        return None
+    head = str(rec.get("head") or "")
+    # `--is-ancestor` exits 0 for yes, 1 for no, and non-zero-not-1 for an unresolvable
+    # ref — a plane with no tracking branch, say. Only a clean 0 is allowed to clear the
+    # notice: "I could not check" must not read as "it landed", which is rule 1 of ADR 0013
+    # in the one place where getting it wrong loses the memory.
+    if head and _git_in(root, "merge-base", "--is-ancestor", head,
+                        "@{upstream}").returncode == 0:
+        return None
+    landed, url, branch = rec.get("landed"), rec.get("url"), rec.get("branch") or "main"
+    if rec.get("outcome") == planegit.BRANCHED and landed:
+        # It IS on the remote — under another name, waiting for a pull request. Naming the
+        # branch matters because the remedy is completely different from the stranded case:
+        # nothing is at risk, something is unfinished.
+        open_it = f"Open it: {url}" if url else "Open a pull request for it."
+        return (f"a memory commit went to '{landed}', not {branch}",
+                f"'{branch}' requires a pull request, so charter pushed {landed} "
+                f"instead. {open_it}")
+    # Nothing reached the remote. The HAZARD is named, not merely the fault, because
+    # `git reset --hard origin/<branch>` is the standard move on noticing a divergence and
+    # it deletes this commit without a trace — the specific way #373's memories were lost.
+    # A reader told only "it is unpushed" runs exactly that command next.
+    return ("a memory commit was committed but never pushed",
+            f"Push it with `charter save` before anything runs `git reset --hard "
+            f"origin/{branch}` in {root}, which would delete it silently.")
+
+
 def check_plane_root() -> Result:
     """Is anyone working in the plane root?
 
@@ -422,8 +478,15 @@ def check_plane_root() -> Result:
         # tracking branch (a plane `git init`-ed by hand), which is not a fault.
         behind = _git_in(root, "rev-list", "--count", "HEAD..@{upstream}")
         behind_n = int(behind.stdout.strip() or 0) if behind.returncode == 0 else 0
+        # And how far it has run AHEAD, which is the other half and the one #373 is about.
+        # A root drifts behind because nobody works in it; it can only get ahead because
+        # something committed here and the push did not land. Read the same way, from an
+        # already-fetched ref, for the same reason.
+        ahead = _git_in(root, "rev-list", "--count", "@{upstream}..HEAD")
+        ahead_n = int(ahead.stdout.strip() or 0) if ahead.returncode == 0 else 0
         upstream = _git_in(root, "rev-parse", "--abbrev-ref", "@{upstream}")
         upstream_ref = upstream.stdout.strip() if upstream.returncode == 0 else ""
+        stranded = _stranded_push(root)
     except (util.ProcTimeout, OSError) as e:
         return Result(name, WARN, detail=f"not checked ({e})",
                       hint=_NOT_CHECKED_HINT)
@@ -439,6 +502,12 @@ def check_plane_root() -> Result:
     if dirty:
         findings.append(f"{len(dirty)} uncommitted file(s)")
         actions.append("Commit control-plane content with `charter save`.")
+    # A FINDING, unlike the drift counts below, because it is not a resting state: it says a
+    # write charter was asked to make did not arrive, and it clears itself the moment the
+    # commit reaches the remote.
+    if stranded:
+        findings.append(stranded[0])
+        actions.append(stranded[1])
     # Said in the DETAIL and never as a finding: a root behind its upstream is the normal
     # resting state of a directory nobody works in, so warning about it would put this row
     # permanently in the yellow — the cost this check already refuses to pay for untracked
@@ -459,6 +528,21 @@ def check_plane_root() -> Result:
     # names — in the check whose whole job is to report state honestly.
     drift = (f", {behind_n} behind {upstream_ref or 'upstream'} at last fetch"
              if behind_n else "")
+    # Stated alongside `behind`, and for the sharper version of the same reason. `clean on
+    # main` over a root three commits AHEAD of its remote is not merely incomplete — it is
+    # the sentence that made `git log <tag>..main` look authoritative while three real
+    # commits sat between them, and turned "nothing to release" into an honest-looking
+    # wrong answer (#373). Unlike `behind`, this is never the resting state of a directory
+    # nobody works in, so it costs no permanent yellow to say.
+    #
+    # The count and nothing more. An earlier draft appended "and unpushed", which is a
+    # different claim and is FALSE in the commonest case that reaches here: after a
+    # protected-branch rejection the commit is on the remote under `charter/<sha>`, so the
+    # root is ahead of `main` and the commit is pushed. Whether anything is at risk is the
+    # finding's job, which knows; the drift clause only knows the two counts. Rule 1 of
+    # ADR 0013, in the row whose whole job is reporting state honestly.
+    if ahead_n:
+        drift += f", {ahead_n} ahead of {upstream_ref or 'upstream'} at last fetch"
     if not findings:
         return Result(name, OK, detail=f"clean on {branch}{drift}")
     # Where the work belongs is said ONCE, after the per-finding actions. Saying it per

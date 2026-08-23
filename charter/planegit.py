@@ -22,9 +22,12 @@ across that seam. With them here, reuse is the cheap path and there is one place
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import time
 from pathlib import Path
+from typing import NamedTuple
 
 from . import config, util
 
@@ -151,7 +154,97 @@ def _compare_url(https: str, branch: str) -> str | None:
     return (f"{base}/-/merge_requests/new?merge_request%5Bsource_branch%5D={branch}")
 
 
-def _land_via_branch(root, https: str, cred: list, default_branch: str) -> int:
+#: What a push of the plane root's HEAD did, in one word. Recorded as well as printed —
+#: see :func:`record_push` — so the answer survives a pusher nobody was listening to.
+PUSHED = "pushed"              # it landed on the branch HEAD is on
+BRANCHED = "branched"          # the branch requires a PR → it landed on `charter/<sha>`
+STRANDED = "stranded"          # the branch requires a PR and THAT push failed too
+FAILED = "failed"              # an ordinary push failure, reported rather than diagnosed
+CONFLICT = "conflict"          # the remote moved and the rebase onto it conflicted
+UNREACHABLE = "unreachable"    # no origin on a forge charter knows — nothing to push to
+
+
+class PushResult(NamedTuple):
+    """What :func:`push_head` did, in a shape both a human and `doctor` can read.
+
+    ``branch`` is the branch charter tried to advance (the plane root's HEAD). ``landed``
+    is the remote branch the commit actually reached when that is a *different* one, which
+    is the distinction #373 turns on: "it is on the remote under another name" and "it is
+    on this laptop only" are one exit code apart and worlds apart in consequence.
+    """
+    outcome: str
+    branch: str
+    landed: str | None = None
+    url: str | None = None
+    detail: str = ""
+
+
+def _push_record_path():
+    """Read from :mod:`charter.config` at CALL time, never bound at import — the test
+    harness re-points the plane with `config.use`, and a path captured at import would
+    write into the developer's real ``.charter/``."""
+    return config.STATE_DIR / "plane-push.json"
+
+
+def record_push(res: PushResult, head: str = "") -> PushResult:
+    """Write down what a push of the plane root's HEAD did, and return *res* unchanged.
+
+    **Why a file and not a printed line.** The reactive-memory push is the one path
+    SessionStart tells an agent to use, and it runs DETACHED with stdout and stderr on
+    ``/dev/null`` (`_spawn_bg_push`) so a slow push cannot block the turn. That process has
+    no caller to tell. Before #373 it therefore told nobody: a push rejected by a protected
+    `main` returned 0 into the void, and the memory commit sat on a local branch until the
+    next ``git reset --hard origin/main`` — the standard move on noticing a divergence —
+    deleted it without a trace.
+
+    A record is the honest shape for that. Charter's house rule is to NAME a limit rather
+    than degrade quietly, and the limit here is real: a background push cannot report to a
+    caller that has already returned. So it reports to the next `doctor` instead
+    (`doctor._stranded_push`), which is the surface ADR 0008 already chose for the plane
+    root.
+
+    ``head`` is the commit the outcome is ABOUT, and it is what lets the reader of the
+    record check it against the world instead of trusting it: `doctor` treats a record
+    whose commit has since become an ancestor of the upstream as spent. Without it the
+    file could only be believed, and a stale believed file is the failure ADR 0013 names.
+
+    A clean push DELETES the file rather than writing "pushed": the record exists to carry
+    a condition that outlives the process, and there is no condition left to carry.
+
+    Never raises. Every caller is a push, and a push that cannot write a note must still
+    have pushed.
+    """
+    p = _push_record_path()
+    try:
+        if res.outcome == PUSHED:
+            p.unlink(missing_ok=True)
+            return res
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "outcome": res.outcome, "branch": res.branch, "landed": res.landed,
+            "url": res.url, "detail": res.detail, "head": head, "at": time.time(),
+        }, indent=2))
+    except OSError:
+        pass
+    return res
+
+
+def push_record() -> dict | None:
+    """The last recorded push outcome, or ``None`` when there is nothing to report.
+
+    ``None`` for a missing file AND for an unreadable or malformed one, deliberately: the
+    only consumer runs from the SessionStart hook, where a hook may cost a session its
+    briefing and must never cost it the turn. A defect in this file is charter's own to
+    fix, not a reason to take the session down."""
+    try:
+        data = json.loads(_push_record_path().read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and data.get("outcome") else None
+
+
+def _land_via_branch(root, https: str, cred: list, default_branch: str,
+                     announce: bool = True) -> PushResult:
     """Push the commit that is already on HEAD to a NEW remote branch, and hand back a URL.
 
     The sanctioned path for a control plane whose own repo requires pull requests (#167).
@@ -171,23 +264,109 @@ def _land_via_branch(root, https: str, cred: list, default_branch: str) -> int:
     The cost, stated rather than hidden: local `<default_branch>` is left one commit ahead
     of the remote until the pull request lands, and the caller says so with the command that
     reconciles it.
+
+    ``announce`` is False for the background pusher, whose stdout and stderr are
+    ``/dev/null``. It still returns the same `PushResult`, because that is what `doctor`
+    reads back — saying it and recording it are two audiences, not two policies.
     """
     sha = _git(["rev-parse", "--short", "HEAD"], cwd=root).stdout.strip() or "change"
     branch = f"charter/{sha}"
     p = _git([*cred, "push", https, f"HEAD:refs/heads/{branch}"], cwd=root)
     if p.returncode != 0:
-        util.err(f"'{default_branch}' requires a pull request, and pushing the branch "
-                 f"'{branch}' also failed:")
-        for ln in (p.stderr or p.stdout or "").splitlines()[-4:]:
-            util.err("  " + ln)
-        return 1
-    util.ok(f"'{default_branch}' requires a pull request — pushed {branch} instead.")
+        tail = "\n".join((p.stderr or p.stdout or "").splitlines()[-4:])
+        if announce:
+            util.err(f"'{default_branch}' requires a pull request, and pushing the branch "
+                     f"'{branch}' also failed:")
+            for ln in tail.splitlines():
+                util.err("  " + ln)
+        return PushResult(STRANDED, default_branch, detail=tail)
     url = _compare_url(https, branch)
-    if url:
-        util.info(f"  open it: {url}")
-    util.info(f"  the commit is also on your local {default_branch}, one ahead of the "
-              f"remote. After the PR merges: git -C {root} pull --rebase")
-    return 0
+    if announce:
+        util.ok(f"'{default_branch}' requires a pull request — pushed {branch} instead.")
+        if url:
+            util.info(f"  open it: {url}")
+        util.info(f"  the commit is also on your local {default_branch}, one ahead of the "
+                  f"remote. After the PR merges: git -C {root} pull --rebase")
+    return PushResult(BRANCHED, default_branch, landed=branch, url=url)
+
+
+def push_head(root, announce: bool = True) -> PushResult:
+    """Push the plane root's HEAD to its own branch on origin — **the one pusher**.
+
+    Extracted from `commit_push` for the reason this module exists one layer up: there were
+    two committers, and the copy was the one breaking the rule. #373 was that same fault
+    repeated on the push. `commands_workspace.cmd_workspace_pushbg` — the detached
+    background half of every reactive memory commit — had grown its own push and
+    rebase-retry and stopped there, with no protected-branch recognition and ``return 0``
+    on every failure. So on a plane whose `main` requires a pull request, `charter save`
+    landed the change on `charter/<sha>` (#167) while `charter persona remember` stranded
+    it on local `main` and said nothing:
+
+        charter save            → rejected → _land_via_branch → PR URL printed
+        persona remember (bg)   → rejected → return 0
+
+    With one implementation the protected-branch policy is true on both paths by
+    construction, rather than by two lists of forge signatures somebody keeps in step.
+
+    **Why the branch is never predicted.** Nothing here asks the forge whether `main` is
+    protected before committing, which is the first thing #373 proposes. charter cannot
+    know that without a network call it has no business making from a Stop hook, and
+    guessing it from the branch name is precisely the unearned diagnosis ADR 0009 forbids.
+    The rejection IS the evidence, and it arrives only after the commit exists — so the
+    commit is made, and the *outcome* is what gets reported honestly.
+
+    Always records its outcome (:func:`record_push`), foreground and background alike. The
+    foreground caller also has a human in front of it, so it *says* it too — but a printed
+    line is not a record, and `charter save` on a protected plane leaves a pull request to
+    open whether or not the operator was reading at the time.
+    """
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=root).stdout.strip()
+    head = _git(["rev-parse", "HEAD"], cwd=root).stdout.strip()
+    https = _origin_https(root)
+    if not https:
+        if announce:
+            util.warn("origin isn't on a forge charter knows (gitlab.com/github.com/…) — "
+                      "committed locally; push manually.")
+        return record_push(PushResult(UNREACHABLE, branch), head)
+
+    from . import gitpolicy
+    forge = gitpolicy.forge_for(root)
+    cred = _cred_flag(forge)
+
+    def push():
+        return _git([*cred, "push", https, f"HEAD:{branch}"], cwd=root)
+
+    p = push()
+    if p.returncode != 0 and any(s in (p.stderr or "") for s in ("fetch first", "non-fast-forward", "rejected")):
+        if announce:
+            util.info("remote moved — fetching + rebasing, then retrying …")
+        _git([*cred, "fetch", https, branch], cwd=root)
+        if _git(["rebase", "FETCH_HEAD"], cwd=root).returncode != 0:
+            _git(["rebase", "--abort"], cwd=root)
+            if announce:
+                util.warn("Committed locally, but rebase hit a conflict — resolve manually, then `charter save`.")
+            return record_push(PushResult(CONFLICT, branch), head)
+        # The rebase rewrote it, so the commit the record names is a different one now.
+        head = _git(["rev-parse", "HEAD"], cwd=root).stdout.strip()
+        p = push()
+    if p.returncode == 0:
+        _git(["update-ref", f"refs/remotes/origin/{branch}", "HEAD"], cwd=root)  # sync tracking
+        if announce:
+            util.ok(f"Pushed {branch} via {forge.cli} (HTTPS token — no SSH, no 1Password).")
+        return record_push(PushResult(PUSHED, branch), head)
+    if _is_protected_rejection(p.stderr or p.stdout or ""):
+        # The plane's own repo requires a pull request. That is a supported shape (#167),
+        # not a failure to report and abandon: without this the change is stranded in the
+        # one tree #157 forbids branching, and the operator has to make the same edit again
+        # somewhere else and discard this one.
+        return record_push(_land_via_branch(root, https, cred, branch, announce), head)
+    tail = "\n".join((p.stderr or p.stdout or "").splitlines()[-4:])
+    if announce:
+        util.warn(f"Committed, but the {forge.cli} push failed:")
+        for ln in tail.splitlines():
+            util.warn("  " + ln)
+        util.info(f"Check `{forge.cli} auth status`.")
+    return record_push(PushResult(FAILED, branch, detail=tail), head)
 
 
 def commit_push(root, add_cmd: list, message: str | None,
@@ -265,45 +444,27 @@ def commit_push(root, add_cmd: list, message: str | None,
     if no_push:
         util.info("Skipped push (--no-push).")
         return 0
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=root).stdout.strip()
-    https = _origin_https(root)
-    if not https:
+    # Asked here as well as inside `push_head`, and only to decide whether spawning is
+    # worth it: a plane with no origin charter recognises has nowhere to push, and firing a
+    # detached child to discover that would leave an `unreachable` record behind for
+    # `doctor` to warn about on a plane whose configuration — not whose commit — is the
+    # thing to fix. The warning is the same one `push_head` gives, said by whichever of
+    # them gets there first.
+    if not _origin_https(root):
         util.warn("origin isn't on a forge charter knows (gitlab.com/github.com/…) — "
                   "committed locally; push manually.")
         return 0
     if background:
         _spawn_bg_push(root)
-        util.info("→ pushing to the control plane in the background.")
+        # Says WHERE the answer will turn up, because this line cannot carry it: the push
+        # happens in a detached child with `/dev/null` for a voice. `charter doctor` reads
+        # what that child recorded (`record_push`). Before #373 this was the last word on a
+        # push that could still be rejected seconds later, unheard — a success line about
+        # something charter had not done yet, which is rule 1 of ADR 0013.
+        util.info("→ pushing to the control plane in the background "
+                  "(`charter doctor` reports the outcome).")
         return 0
-
-    from . import gitpolicy
-    forge = gitpolicy.forge_for(root)
-    cred = _cred_flag(forge)
-
-    def push():
-        return _git([*cred, "push", https, f"HEAD:{branch}"], cwd=root)
-
-    p = push()
-    if p.returncode != 0 and any(s in (p.stderr or "") for s in ("fetch first", "non-fast-forward", "rejected")):
-        util.info("remote moved — fetching + rebasing, then retrying …")
-        _git([*cred, "fetch", https, branch], cwd=root)
-        if _git(["rebase", "FETCH_HEAD"], cwd=root).returncode != 0:
-            _git(["rebase", "--abort"], cwd=root)
-            util.warn("Committed locally, but rebase hit a conflict — resolve manually, then `charter save`.")
-            return 0
-        p = push()
-    if p.returncode == 0:
-        _git(["update-ref", f"refs/remotes/origin/{branch}", "HEAD"], cwd=root)  # sync tracking
-        util.ok(f"Pushed {branch} via {forge.cli} (HTTPS token — no SSH, no 1Password).")
-    elif _is_protected_rejection(p.stderr or p.stdout or ""):
-        # The plane's own repo requires a pull request. That is a supported shape (#167),
-        # not a failure to report and abandon: without this the change is stranded in the
-        # one tree #157 forbids branching, and the operator has to make the same edit again
-        # somewhere else and discard this one.
-        return _land_via_branch(root, https, cred, branch)
-    else:
-        util.warn(f"Committed, but the {forge.cli} push failed:")
-        for ln in (p.stderr or p.stdout or "").splitlines()[-4:]:
-            util.warn("  " + ln)
-        util.info(f"Check `{forge.cli} auth status`.")
-    return 0
+    # rc 1 only when the commit reached NOWHERE — a pull-request branch that also failed.
+    # An ordinary push failure has been reported and stays rc 0, unchanged: `charter save`
+    # having committed successfully is not a failed command.
+    return 1 if push_head(root).outcome == STRANDED else 0
