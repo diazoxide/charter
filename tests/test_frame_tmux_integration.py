@@ -1023,28 +1023,68 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         reason string is printed to stderr by a process that then exits 2, in a pane of
         the identical size, on the same tmux:
 
-        * the VISIBLE screen holds tmux's own `Pane is dead (status 2, ...)` and NOT the
-          reason — the operator's whole view, the `Pane is dead (status 2)` of the field
-          report. The wording half of that is probed rather than assumed: it is
-          `remain-on-exit-format`, an option, and this socket's server loads whatever
-          `~/.tmux.conf` the machine has. The half that matters — the reason is NOT
-          there — is asserted unconditionally;
+        * the VISIBLE screen does NOT hold the reason — the operator's whole view, the
+          `Pane is dead (status 2)` of the field report;
         * the reason IS in the pane's history one line up. That second assertion is what
           makes this a measurement rather than a guess: it rules out the other
           explanation for an empty screen — that a panel's stderr never reaches its pane
           at all, which is what the issue originally reported and which would call for a
-          completely different fix. It reaches the pane; tmux scrolls it away by moving
-          to the last row and issuing a linefeed before writing its own message.
+          completely different fix. It reaches the pane, and the pane cannot hold it.
+
+        **Neither tmux's dead-pane MESSAGE nor the exit status tmux records is asserted
+        here, and that is a measurement rather than a concession.** An earlier version
+        of this test asserted `Pane is dead` was on the visible screen, guarded by a
+        probe of `remain-on-exit-format` — which is an option, and says only what tmux
+        WOULD write. It went green on tmux 3.7c and on three of the four `ubuntu-latest`
+        jobs, and failed the fourth with `capture-pane` reporting a single blank line
+        for a pane tmux had already answered `#{pane_dead}` `1` for. Asserting
+        `#{pane_dead_status}` instead — the structural half of the same sentence — would
+        have failed the same job for the same reason.
+
+        Re-measured against tmux 3.4 in an Ubuntu 24.04 container, running this exact
+        fixture. On an idle box it behaves exactly like 3.7c: `#{pane_dead_status}` `2`,
+        the message in the pane, every time. Pinned to ONE cpu against four spin loops —
+        a busy shared runner — 11 of 120 deaths, and 5 of a further 60, ended
+        `#{pane_dead}` `1` with an EMPTY status and NOTHING written into the pane. And
+        permanently, not briefly: polling the status for a further 8 seconds never
+        filled it in. It is the same shape `_gate_argv`'s own docstring already records
+        for 3.4 — dead pane, empty status, `pane-died` never fires — from tmux 3.4's
+        `server_destroy_pane` not having the child's status when the pane's fd closes.
+        tmux 3.7c writes both, every time.
+
+        So on the two tmuxes this suite must pass on, the fd closing (`#{pane_dead}`) is
+        the only thing tmux reports about a death that can be relied on, and everything
+        else below is read from the pane's own CONTENT. Nothing is widened to accept two
+        outcomes: the version-dependent facts are not asserted weakly, they are not
+        asserted at all, because they are not what this test measures. (It is also why
+        `TmuxIntegration`'s exit-status tests wait on the FILE a `pane-died` hook wrote
+        rather than on `#{pane_dead}` — that file cannot appear until tmux has the
+        child's status, so it is a synchronisation point where `#{pane_dead}` is not.)
+        The three assertions this test does keep were then run 60 times under that same
+        one-cpu load: 3 runs landed in the window above, and none of the three
+        assertions moved.
 
         **One row is the fixture's load-bearing half, and for a sharper reason than
-        "small".** That linefeed scrolls the pane by exactly ONE line, so what is lost is
-        whatever sits on the pane's TOP row — a six-row pane loses its first line and
-        keeps the other five. A one-row pane's only row IS its top row, so a reason
-        written there cannot survive whatever else it says or however little of it there
-        is. That is why `top` and `bottom` (`layout.SLOT_SIZE`: 1) were the panels that
-        left an operator with nothing, and it is the property the mutation check for this
-        test flips: at six rows, with one filler line printed ahead of the reason, the
-        reason lands off the top row, survives the scroll, and this assertion goes red.
+        "small".** Measured against tmux 3.7c with the process still ALIVE and no death
+        to write a message about yet: this 74-column reason, `print`ed to a 40-column
+        ONE-row pane, leaves the visible screen ALREADY blank — the wrap and the print's
+        own trailing newline each scroll the pane's only row into history. So at the
+        size `top` and `bottom` actually are (`layout.SLOT_SIZE`: 1) the operator's
+        nothing does not wait for the death, and does not depend on which tmux is
+        running: the dead-pane message, where a tmux writes one, lands on a row that was
+        already empty. It is also why `panel._write` — the one path `_hold` paints
+        through — ends its write with NO trailing newline: at this geometry a newline is
+        indistinguishable from never having painted.
+
+        Bigger panes are where tmux's own behaviour starts to matter, which is exactly
+        why this fixture does not use one, and the mutation check for this assertion is
+        that boundary: at `-y 6` with one filler line printed AHEAD of the reason, the
+        reason's first wrapped line — the one carrying the slot name — survives on the
+        visible screen and this assertion goes red. (`-y 6` alone does NOT flip it on
+        3.7c: measured, tmux's one-line scroll evicts precisely that first wrapped line
+        and leaves the second, so the assertion still passes for a reason that has
+        nothing to do with what it claims. The filler line is what moves the slot name
+        clear of that scroll.)
         """
         gate_dir = tempfile.mkdtemp(prefix="charter-integ-gate-")
         self.addCleanup(shutil.rmtree, gate_dir, True)
@@ -1066,20 +1106,9 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
                          "the control process never died — nothing is being measured")
 
         visible = self._capture("panel-oldshape")
-        # Probed, not assumed — this module's own rule. What tmux writes over a dead
-        # pane is `remain-on-exit-format`, an OPTION, and unlike every other session in
-        # this file's classes these tests run on a server that loaded whatever
-        # `~/.tmux.conf` the machine has (charter's own frames pass `-f`; a shared
-        # socket cannot). A runner that has customised it is not a charter failure, so
-        # the field report's own wording is checked only where tmux still produces it.
-        # The two assertions that follow are the measurement and are never skipped.
-        fmt = _tmux("show-options", "-gv", "remain-on-exit-format").stdout
-        if "Pane is dead" in fmt:
-            self.assertIn("Pane is dead", visible,
-                          f"tmux did not write its own message: {visible!r}")
         self.assertNotIn(self._BAD_SLOT, visible,
                          "the reason survived on the visible screen of a ONE-row pane — "
-                         "tmux no longer evicts the top row to write its own message, "
+                         "a pane that small no longer loses a newline-terminated write, "
                          "so `panel._hold` is solving a problem that no longer exists: "
                          f"{visible!r}")
         with_history = self._capture("panel-oldshape", "-S", "-3")
