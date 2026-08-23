@@ -649,6 +649,22 @@ def _ws_meta_paths(name: str) -> list[str]:
                       wd / "todos") if p.exists()]
 
 
+def _spawn_pushbg(root) -> None:
+    """Fire a detached background push of the workspace's just-committed metadata
+    (best-effort) so a slow push never blocks the turn — the same mechanism, for the
+    same reason, as `planegit._spawn_bg_push` (`discover`'s own background push of
+    HEAD). `util.self_relaunch_argv` (#390) is what keeps the child from importing
+    whatever `charter/` package happens to sit under *root* instead of the installed
+    package — this always runs with cwd set to the control plane root, which for
+    anyone developing charter itself IS a checkout with its own `charter/` package."""
+    try:
+        subprocess.Popen(util.self_relaunch_argv("workspace", "_pushbg"),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True, cwd=str(root))
+    except Exception:
+        pass
+
+
 def cmd_workspace_autosave(args) -> int:
     """Internal (Stop hook): debounced, secret-scanned auto-save of the active workspace's
     manifest + memory — a reactive, agent-triggered commit, so it honours the control
@@ -683,9 +699,7 @@ def cmd_workspace_autosave(args) -> int:
         marker.write_text(str(time.time()))
         if share == "push":
             # detached background push — the turn returns immediately
-            subprocess.Popen([sys.executable, "-m", "charter", "workspace", "_pushbg"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             stdin=subprocess.DEVNULL, start_new_session=True, cwd=str(config.ROOT))
+            _spawn_pushbg(config.ROOT)
     except Exception:
         pass
     return 0

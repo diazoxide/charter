@@ -14,11 +14,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
-from . import config
+from . import config, util
 
 #: PyPI distribution name. The *command* is `charter`; the *package* is `charter-cp`
 #: (PyPI would not allow `charter`), so the metadata lives under the latter.
@@ -181,8 +180,12 @@ def maybe_spawn() -> None:
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
         lock.touch()          # touch FIRST: a spawn storm is worse than a missed check
+        # -P (util.self_relaunch_argv, #390): this ALSO runs on the status line's own
+        # render path (see the module docstring's mirror of glstate) — without it, a
+        # project directory with its own `charter/` package would shadow the installed
+        # one on every render, exactly as quietly as glstate's own gl-refresh did.
         subprocess.Popen(
-            [sys.executable, "-m", "charter", "_version-check"],
+            util.self_relaunch_argv("_version-check"),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
         )

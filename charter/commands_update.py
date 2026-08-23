@@ -52,6 +52,12 @@ def installer_for(executable: Path) -> tuple[str, list[str] | None]:
     else's environment. Ambiguity resolves to *named, not run* — the same restraint charter
     keeps for a host's plugin command, for the same reason: a wrong guess here mutates the
     reader's machine.
+
+    Not one of #390's self-relaunch sites, checked directly: *executable* here is
+    STRING-MATCHED against `_MARKERS` to identify which tool owns the install
+    (`uv`/`pipx`/unknown) — it is never handed to `-m` or otherwise used to import
+    `charter`, so `-m`'s cwd-prepend hole (`util.self_relaunch_argv`'s own docstring)
+    does not apply to this function at all.
     """
     p = str(executable)
     for name, markers in _MARKERS:

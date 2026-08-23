@@ -40,7 +40,9 @@ class MaybeSpawnCommandTests(PersonaIso):
         cmd = captured["cmd"]
         self.assertEqual(cmd[0], sys.executable)
         # -m charter, not a script path inside the control plane (no bin/edm here).
-        self.assertEqual(cmd[1:4], ["-m", "charter", "gl-refresh"])
+        # -P (#390): without it, spawned with this render path's own cwd, `-m` would
+        # import a `charter/` package sitting under that cwd instead of the installed one.
+        self.assertEqual(cmd[1:5], ["-P", "-m", "charter", "gl-refresh"])
         joined = " ".join(str(c) for c in cmd)
         self.assertNotIn("bin/edm", joined)
         self.assertNotIn(str(glstate.config.ROOT), joined)

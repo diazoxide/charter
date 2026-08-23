@@ -38,7 +38,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests._isolation import PersonaIso
-from charter import commands_frame, config
+from charter import commands_frame, config, util
 from charter.frame import menu, slots, state
 
 
@@ -871,6 +871,46 @@ class Launch(PersonaIso, unittest.TestCase):
                          "charter installs, so a `-g` write would hand frame N's "
                          "interpreter to frame N-1")
         self.assertEqual(cmd[-1], sys.executable)
+
+    def test_pythonsafepath_is_carried_to_the_hotkey_menu_too(self):
+        """#390: `"$CHARTER_PY" -m charter ...` (the bind `Conf` pins, and every menu
+        item's own action — `frame.menu.menu_argv`) is a shell TEMPLATE shared by every
+        session on `SOCKET`, so there is nowhere in it to put a per-invocation `-P` the
+        way the panel argv gets one (see `test_panels_are_launched_via_self_relaunch_argv`
+        below) without re-embedding per-machine text `conf_text`'s own docstring already
+        bans. `PYTHONSAFEPATH=1`, carried the same session-scoped way as `CHARTER_PY`
+        itself, is `-P`'s equivalent for exactly this case: an interpreter env var every
+        `"$CHARTER_PY" -m charter` the hotkey or a menu item runs inherits, immune to
+        whatever `charter/` package happens to sit under the pane's own cwd."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        safepath_calls = [c for c in fake.calls
+                          if "set-environment" in c and "PYTHONSAFEPATH" in c]
+        self.assertEqual(len(safepath_calls), 1,
+                         f"PYTHONSAFEPATH must be carried exactly once: {fake.calls}")
+        cmd = safepath_calls[0]
+        self.assertEqual(cmd[cmd.index("-t") + 1], fake.fid,
+                         "session-scoped, same reasoning as CHARTER_PY: two planes on "
+                         "one laptop can be two different charter installs")
+        self.assertEqual(cmd[-1], "1")
+
+    def test_panels_are_launched_via_self_relaunch_argv(self):
+        """#390's visible failure: the panel argv (`layout.panel_argvs`'s `charter_argv`)
+        used to be a hand-built `[sys.executable, "-m", "charter"]` with no `-P`. Spawned
+        with the pane's cwd set to wherever the operator launched from, a charter checkout
+        cwd made the child import THAT tree instead of the installed one — on a tree
+        without a `panel` command, argparse exits 2 before charter ever runs, and both
+        panels came up dead. `tests/test_self_relaunch_shadowing.py` proves the mechanism
+        against a real decoy package; this pins that the production call site actually
+        uses it."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        panel_calls = [c for c in fake.calls if "split-window" in c]
+        self.assertTrue(panel_calls, "no panel was drawn — this test would be vacuous")
+        for c in panel_calls:
+            dd = c.index("--")
+            self.assertEqual(c[dd + 1:dd + 5], util.self_relaunch_argv(),
+                             f"panel argv was not built via self_relaunch_argv: {c}")
 
     def test_the_harness_name_reaches_the_harness_environment(self):
         """`harness.current()` reads `$CHARTER_HARNESS` FIRST, before any native
