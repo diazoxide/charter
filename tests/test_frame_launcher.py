@@ -569,8 +569,14 @@ class Respawn(PersonaIso, unittest.TestCase):
         cmd = fake.respawns[0]
         self.assertEqual(cmd[cmd.index("-t") + 1], "%11")
         self.assertEqual(cmd[cmd.index("--") + 1:],
-                         layout.panel_command(slot="bottom", session="f-1",
-                                              charter_argv=[sys.executable, "-m", "charter"]))
+                         layout.panel_command(slot="bottom", session="f-1"))
+        # Not only "the same as the launcher's": #390's own shape, spelled out, so this
+        # cannot pass by both sides losing `-P` together. `respawn-pane` starts the new
+        # process in the PANE's cwd, which for a dogfooding operator IS a charter
+        # checkout — a respawn without `-P` is #390 again, on the one path where the
+        # panel has already failed once and there is nothing left to show why.
+        self.assertEqual(cmd[cmd.index("--") + 1:][:4],
+                         [sys.executable, "-P", "-m", "charter"])
 
     def test_it_gives_up_after_three_attempts_and_leaves_the_pane_dead(self):
         """The cap the spec names. Without it, a panel that dies instantly on every
@@ -1278,7 +1284,7 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(cmd[-1], "1")
 
     def test_panels_are_launched_via_self_relaunch_argv(self):
-        """#390's visible failure: the panel argv (`layout.panel_argvs`'s `charter_argv`)
+        """#390's visible failure: the panel argv (built inside `layout.panel_command`)
         used to be a hand-built `[sys.executable, "-m", "charter"]` with no `-P`. Spawned
         with the pane's cwd set to wherever the operator launched from, a charter checkout
         cwd made the child import THAT tree instead of the installed one — on a tree

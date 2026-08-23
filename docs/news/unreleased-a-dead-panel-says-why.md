@@ -24,3 +24,10 @@ charter stops and leaves the dead pane and its message exactly where you can rea
 hook is scoped to the panel's own pane, so nothing about it touches the harness pane, whose
 own `pane-died` hooks carry your agent's real exit code. A panel still cannot take the agent
 down with it; now it also cannot stay dead for the frame's whole life.
+
+The respawn runs the launcher's own panel argv, built in one place for both — including the
+`-P` that 0.50.1 added so charter never imports the `charter/` package sitting in the
+directory a pane happens to have started in. That matters more here than anywhere: a respawn
+starts in the dead pane's own directory, which for anyone working on charter is a charter
+checkout, and a panel that came back importing the wrong tree would die again with nothing
+left to say why.

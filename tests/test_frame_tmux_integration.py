@@ -96,6 +96,30 @@ def _a_dead_pid() -> int:
     return proc.pid
 
 
+def _importable_env(env: dict) -> dict:
+    """*env* with this checkout on `$PYTHONPATH`, so a panel spawned with `-P` can still
+    import it.
+
+    Every panel argv in this module now comes from `layout.panel_command`, which builds
+    its interpreter half with `util.self_relaunch_argv()` — `[sys.executable, "-P", "-m",
+    "charter", ...]`. `-P` is the whole point (#390: without it a panel spawned into a
+    cwd that happens to hold a `charter/` package imports THAT tree), and it is also
+    exactly what stops `cwd=_REPO_ROOT` from making `charter` importable the way these
+    classes used to rely on. `$PYTHONPATH` is the substitute `tests/
+    test_self_relaunch_shadowing.py` already established and measured for this: `-P`
+    strips only the cwd/script-dir entry `-m` auto-prepends, never a `PYTHONPATH` entry
+    or a real site-packages one, so a checkout reached this way stands in for a real
+    install without weakening the flag being tested.
+
+    Prepended rather than assigned: a runner that already exports `$PYTHONPATH` keeps it,
+    and this checkout still wins over anything else on it — a panel under test must be
+    THIS tree's panel.
+    """
+    existing = env.get("PYTHONPATH", "")
+    return dict(env, PYTHONPATH=(f"{_REPO_ROOT}{os.pathsep}{existing}" if existing
+                                 else str(_REPO_ROOT)))
+
+
 def _tmux(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     """*env* is `None` by every existing call site (inherit this process's own
     environment, unchanged) — `PanelIntegration` is the one caller that needs a
@@ -856,6 +880,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)  # let it derive under CHARTER_ROOT, like this
                                             # process's own PersonaIso-isolated config
+        self.env = _importable_env(self.env)  # the panel argv carries -P — see the helper
 
     def _teardown_socket(self) -> None:
         """Kill this class's own tmux server, THEN unlink its socket file — see
@@ -863,29 +888,205 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         on its own. Order matters here specifically, not just tidily: two separate
         `addCleanup` calls (`kill-server`, then `unlink`) run LIFO — unlink FIRST,
         kill-server SECOND — which reconnects to nothing once the socket's own
-        directory entry is already gone. Harmless for THIS class today (its
-        sessions never arm `remain-on-exit`, so `_kill_pid` on each pane's own
-        process already ends the session, then the server, on tmux's own
-        `exit-empty` default before `kill-server` is ever asked to do anything) —
-        fixed anyway so this class cannot silently start leaking the day it, or a
-        test added to it, ever does."""
+        directory entry is already gone. It was harmless when this class was
+        written (no session of its own armed `remain-on-exit`, so `_kill_pid` on
+        each pane's own process already ended the session, then the server, on
+        tmux's own `exit-empty` default before `kill-server` was ever asked to do
+        anything) and was fixed anyway, so this class could not silently start
+        leaking the day a test added to it armed one. That day has arrived: the two
+        failure tests below arm `remain-on-exit` for their own window, exactly as a
+        real frame has it armed, and with it on a killed pane leaves the session
+        standing — only this `kill-server`, running FIRST, takes it down."""
         _tmux("kill-server")
         (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
 
-    def _spawn_panel(self, session: str, fid: str) -> None:
-        """One `charter panel bottom --session <fid>` pane, in a fresh session named
+    def _spawn_panel(self, session: str, fid: str, *,
+                     slot: str = "bottom", rows: int = 5) -> None:
+        """One `charter panel <slot> --session <fid>` pane, in a fresh session named
         *session* on this class's socket. Registers `_kill_pid` as a cleanup — see its
         own docstring for why `kill-server` alone leaves this process orphaned — using
         the pane's OWN pid (`#{pane_pid}`), captured immediately, rather than the
         session or pane id: those name tmux objects, not the OS process underneath
         them, and killing the process is the actual guarantee this method exists to
-        give every caller."""
-        argv = [sys.executable, "-m", "charter", "panel", "bottom", "--session", fid]
-        r = _tmux("new-session", "-d", "-s", session, "-x", "40", "-y", "5",
+        give every caller.
+
+        The argv comes from `layout.panel_command` — the launcher's own — rather than
+        being retyped here. Retyped, it drifted once already and in the direction that
+        matters: it kept a bare `[sys.executable, "-m", "charter"]` after production had
+        moved to `util.self_relaunch_argv()`, which is exactly the difference #390 is
+        about, so this class was spawning a shape production no longer spawns.
+
+        *rows* defaults to the five this class's original three tests use; the failure
+        tests below pass `1`, because ONE row is the size `layout.SLOT_SIZE` gives `top`
+        and `bottom` and the only size at which tmux's own dead-pane message costs the
+        whole pane rather than one line of it."""
+        argv = layout.panel_command(slot=slot, session=fid)
+        r = _tmux("new-session", "-d", "-s", session, "-x", "40", "-y", str(rows),
                   "-c", str(_REPO_ROOT), "--", *argv, env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
         pid = _tmux("display-message", "-p", "-t", session, "#{pane_pid}").stdout.strip()
         self.addCleanup(_kill_pid, pid)
+
+    # -- A panel that cannot start, and what the operator is left looking at ---------- #
+
+    #: The slot no renderer exists for, so `panel.run` refuses it before reaching any
+    #: state at all — the cheapest genuine startup failure charter's own Python can see,
+    #: and one of the two the issue names.
+    _BAD_SLOT = "nosuchslot"
+
+    #: What that refusal writes to stderr, byte for byte (`frame/panel.py`'s `run`).
+    #: Shared by the two tests below so the control below fails for the same REASON, and
+    #: differs only in what the process does after printing it.
+    _BAD_SLOT_STDERR = (f"charter panel: unknown slot '{_BAD_SLOT}' "
+                        f"(known: bottom, left, right, top)")
+
+    #: A pane program that waits for a gate file, prints *stderr text* and exits 2 — the
+    #: pre-#382 panel, reduced to the only two things about it that mattered. The gate
+    #: is what makes `remain-on-exit` arm-able in time: `set -w` cannot be issued before
+    #: the session exists, and without the gate the process would already be gone.
+    _DYING_PROGRAM = ("import os, sys, time\n"
+                      "while not os.path.exists(sys.argv[1]): time.sleep(0.02)\n"
+                      "print(sys.argv[2], file=sys.stderr)\n"
+                      "sys.exit(2)\n")
+
+    def _capture(self, target: str, *history: str) -> str:
+        """What `capture-pane` reports for *target* — the VISIBLE screen by default,
+        which is the whole point: it is what an operator sees without knowing to scroll
+        a one-row pane's history. Pass `"-S", "-3"` to look into that history instead."""
+        return _tmux("capture-pane", "-p", *history, "-t", target).stdout
+
+    def _dead(self, target: str) -> str:
+        return _tmux("display-message", "-p", "-t", target, "#{pane_dead}").stdout.strip()
+
+    def _remain_on_exit(self, session: str) -> None:
+        """Arm `remain-on-exit` for *session*'s own window, the way a real frame has it
+        armed from its very first moment (`commands_frame._PLACEHOLDER_CONF`).
+
+        Window-scoped (`set -w -t`), not `set -g`: this class runs several sessions on
+        one socket in sequence, and a global option would outlive the test that set it
+        and change how every LATER test's pane behaves when its process ends — the exact
+        cross-test leak the module docstring gives each test its own session to avoid."""
+        r = _tmux("set", "-w", "-t", session, "remain-on-exit", "on")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def _wait_for(self, target: str, needle: str, timeout: float = 8.0) -> str:
+        """Poll `capture-pane` until *needle* is on the visible screen, returning the
+        last capture either way — the same "poll for content, never sleep a guess"
+        shape `_await_file` uses, so a slow runner is slow rather than wrong."""
+        deadline = time.monotonic() + timeout
+        seen = self._capture(target)
+        while time.monotonic() < deadline and needle not in seen:
+            time.sleep(0.1)
+            seen = self._capture(target)
+        return seen
+
+    def test_a_panel_that_cannot_start_paints_the_reason_into_a_one_row_pane(self):
+        """#382's FIRST half, against a real tmux at the real size — the half that cost
+        a debugging session, and the half nothing until now actually observed.
+
+        Every other test of `_hold` in this suite calls `panel.run(..., once=True)`
+        in-process and reads the return value, which proves the refusal happens and
+        proves nothing at all about what an operator sees: the failure being fixed is
+        specifically that the reason DID reach the pane and was then scrolled out of it
+        by tmux's own dead-pane message. So this spawns the real `charter panel` argv
+        into a real ONE-ROW pane (`layout.SLOT_SIZE["bottom"]`) with `remain-on-exit`
+        armed exactly as a real frame arms it, and asserts on `capture-pane` — what is
+        on the screen — not on a return code.
+
+        Two assertions, and both are load-bearing. The reason must be READABLE, and the
+        pane must still be ALIVE (`#{pane_dead}` `0`): a panel that painted the reason
+        and then exited would satisfy the first for a few milliseconds and lose it to
+        `Pane is dead (status 2)` immediately after, which is precisely the pre-#382
+        behaviour. The companion test below is the control for the second half of that
+        sentence — it measures what this pane WOULD have shown had `_hold` returned.
+        """
+        fid = state.frame_id("panel-integ-badslot", os.getpid())
+        self._spawn_panel("panel-badslot", fid, slot=self._BAD_SLOT, rows=1)
+        self._remain_on_exit("panel-badslot")
+
+        needle = f"unknown slot '{self._BAD_SLOT}'"
+        seen = self._wait_for("panel-badslot", needle)
+        self.assertIn(needle, seen,
+                      "a panel that cannot start left nothing readable in its own "
+                      f"one-row pane — all the operator has is: {seen!r}")
+        self.assertEqual(self._dead("panel-badslot"), "0",
+                         "the panel painted its reason and then EXITED — tmux is about "
+                         "to write `Pane is dead (status 2)` over the only row this "
+                         "pane has, which is the whole failure #382 is about")
+
+    def test_the_same_reason_on_stderr_alone_is_scrolled_out_of_a_one_row_pane(self):
+        """The control, and the measurement `_hold` exists because of.
+
+        Without this, the test above proves only "text can appear in a pane" — it does
+        not establish that the OLD shape (print the reason, exit) genuinely fails, so a
+        reader has no way to tell whether `_hold` bought anything. Here the identical
+        reason string is printed to stderr by a process that then exits 2, in a pane of
+        the identical size, on the same tmux:
+
+        * the VISIBLE screen holds tmux's own `Pane is dead (status 2, ...)` and NOT the
+          reason — the operator's whole view, the `Pane is dead (status 2)` of the field
+          report. The wording half of that is probed rather than assumed: it is
+          `remain-on-exit-format`, an option, and this socket's server loads whatever
+          `~/.tmux.conf` the machine has. The half that matters — the reason is NOT
+          there — is asserted unconditionally;
+        * the reason IS in the pane's history one line up. That second assertion is what
+          makes this a measurement rather than a guess: it rules out the other
+          explanation for an empty screen — that a panel's stderr never reaches its pane
+          at all, which is what the issue originally reported and which would call for a
+          completely different fix. It reaches the pane; tmux scrolls it away by moving
+          to the last row and issuing a linefeed before writing its own message.
+
+        **One row is the fixture's load-bearing half, and for a sharper reason than
+        "small".** That linefeed scrolls the pane by exactly ONE line, so what is lost is
+        whatever sits on the pane's TOP row — a six-row pane loses its first line and
+        keeps the other five. A one-row pane's only row IS its top row, so a reason
+        written there cannot survive whatever else it says or however little of it there
+        is. That is why `top` and `bottom` (`layout.SLOT_SIZE`: 1) were the panels that
+        left an operator with nothing, and it is the property the mutation check for this
+        test flips: at six rows, with one filler line printed ahead of the reason, the
+        reason lands off the top row, survives the scroll, and this assertion goes red.
+        """
+        gate_dir = tempfile.mkdtemp(prefix="charter-integ-gate-")
+        self.addCleanup(shutil.rmtree, gate_dir, True)
+        gate = os.path.join(gate_dir, "die")
+
+        r = _tmux("new-session", "-d", "-s", "panel-oldshape", "-x", "40", "-y", "1",
+                  "--", sys.executable, "-c", self._DYING_PROGRAM, gate,
+                  self._BAD_SLOT_STDERR, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.addCleanup(_kill_pid, _tmux("display-message", "-p", "-t",
+                                         "panel-oldshape", "#{pane_pid}").stdout.strip())
+        self._remain_on_exit("panel-oldshape")
+        Path(gate).write_text("x")
+
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and self._dead("panel-oldshape") != "1":
+            time.sleep(0.1)
+        self.assertEqual(self._dead("panel-oldshape"), "1",
+                         "the control process never died — nothing is being measured")
+
+        visible = self._capture("panel-oldshape")
+        # Probed, not assumed — this module's own rule. What tmux writes over a dead
+        # pane is `remain-on-exit-format`, an OPTION, and unlike every other session in
+        # this file's classes these tests run on a server that loaded whatever
+        # `~/.tmux.conf` the machine has (charter's own frames pass `-f`; a shared
+        # socket cannot). A runner that has customised it is not a charter failure, so
+        # the field report's own wording is checked only where tmux still produces it.
+        # The two assertions that follow are the measurement and are never skipped.
+        fmt = _tmux("show-options", "-gv", "remain-on-exit-format").stdout
+        if "Pane is dead" in fmt:
+            self.assertIn("Pane is dead", visible,
+                          f"tmux did not write its own message: {visible!r}")
+        self.assertNotIn(self._BAD_SLOT, visible,
+                         "the reason survived on the visible screen of a ONE-row pane — "
+                         "tmux no longer evicts the top row to write its own message, "
+                         "so `panel._hold` is solving a problem that no longer exists: "
+                         f"{visible!r}")
+        with_history = self._capture("panel-oldshape", "-S", "-3")
+        self.assertIn(self._BAD_SLOT, with_history,
+                      "the reason never reached the pane AT ALL — that is a different "
+                      "failure from the one #382 fixes, and `_hold` would not cure it: "
+                      f"{with_history!r}")
 
     def test_a_bottom_panel_draws_and_repaints_on_a_real_state_bump(self):
         """Minimal shape: a real pane running `charter panel bottom --session <fid>`
@@ -1694,6 +1895,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)  # derive STATE_DIR under CHARTER_ROOT, like
                                             # this process's own PersonaIso-isolated config
+        self.env = _importable_env(self.env)  # the panel argv carries -P — see the helper
 
     def _teardown_socket(self) -> None:
         """Kill this class's own tmux server, THEN unlink its socket file — see
@@ -1783,7 +1985,6 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
 
         slots = ["top", "bottom", "left", "right"]
         panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=SOCKET,
-                                        charter_argv=[sys.executable, "-m", "charter"],
                                         harness_pane=harness_pane)
         panes: dict[str, str] = {}
         for slot, cmd in zip(slots, panel_cmds):

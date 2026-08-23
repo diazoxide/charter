@@ -74,6 +74,11 @@ last part is the point: a panel process that exits hands its pane to tmux, which
 cannot see — the interpreter failing to start, a kill, an out-of-memory — fire that panel's
 own `pane-died` hook, and charter brings the pane back after a growing pause (1s, 2s, 4s).
 After the third attempt it stops and leaves the pane dead with tmux's own message visible.
+That message really is all there is for this half, and not because charter throws anything
+away: an interpreter that cannot start never runs a line, so nothing is written into the
+pane to preserve (measured — a pane whose command is a nonexistent python shows
+`Pane is dead (status 1)` and an empty scrollback behind it). Restarting is the only thing
+that can help a failure like that, which is why it is the half that gets a retry.
 The count is per slot, per frame, and is not reset by a respawn that appears to work: three
 deaths in one frame's life is a broken panel, not a streak to start over. A panel has never
 been able to take the agent down with it; the hook is scoped to the panel's own pane, so it

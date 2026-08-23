@@ -13,8 +13,10 @@ build the splits — see `charter/frame/layout.py`'s module docstring for the me
 
 from __future__ import annotations
 
+import sys
 import unittest
 
+from charter import util
 from charter.frame import layout
 
 
@@ -22,8 +24,7 @@ SESSION = dict(session="charter-demo-1234", conf="/tmp/f/tmux.conf",
                socket="charter", cols=200, rows=50,
                harness_argv=["claude", "--resume", "a;b"])
 
-PANELS = dict(session="charter-demo-1234", socket="charter",
-              charter_argv=["charter"], harness_pane="%0")
+PANELS = dict(session="charter-demo-1234", socket="charter", harness_pane="%0")
 
 
 def _direction(cmd: list[str]) -> str:
@@ -166,12 +167,10 @@ class PanelCommand(unittest.TestCase):
     """
 
     def test_the_split_runs_exactly_what_a_respawn_would_run(self):
-        charter_argv = ["/usr/bin/python3", "-m", "charter"]
         split = layout.panel_argvs(slots=["bottom"], session="f-1", socket="charter",
-                                   charter_argv=charter_argv, harness_pane="%0")[0]
+                                   harness_pane="%0")[0]
         self.assertEqual(split[split.index("--") + 1:],
-                         layout.panel_command(slot="bottom", session="f-1",
-                                              charter_argv=charter_argv))
+                         layout.panel_command(slot="bottom", session="f-1"))
 
     def test_it_carries_the_slot_and_the_session_the_cli_requires(self):
         """`cli.build_parser`'s `panel` parser takes `<slot> --session <fid>` and makes
@@ -179,8 +178,23 @@ class PanelCommand(unittest.TestCase):
         which is the hole #382's first half exists to make legible rather than to
         create a second source of."""
         self.assertEqual(
-            layout.panel_command(slot="top", session="f-9", charter_argv=["c"]),
-            ["c", "panel", "top", "--session", "f-9"])
+            layout.panel_command(slot="top", session="f-9"),
+            [*util.self_relaunch_argv(), "panel", "top", "--session", "f-9"])
+
+    def test_the_interpreter_half_is_the_shared_helpers_and_carries_dash_p(self):
+        """#390, and the reason this function stopped taking a *charter_argv* at all.
+
+        A `charter_argv` PARAMETER is what let the launcher and `cmd_respawn` disagree:
+        the launcher moved to `util.self_relaunch_argv()` and the respawn kept a
+        hand-built `[sys.executable, "-m", "charter"]`, so a respawned panel would have
+        imported whatever `charter/` package sat in the pane's own cwd — a charter
+        checkout, for anyone dogfooding. Asserted against the LITERAL prefix as well as
+        against the helper, so a helper that itself lost `-P` cannot make this test
+        agree with a broken production path (the helper's own shape is pinned in
+        `tests/test_self_relaunch_argv.py`, but a test that only compares two things
+        that move together proves neither)."""
+        cmd = layout.panel_command(slot="bottom", session="f-1")
+        self.assertEqual(cmd[:4], [sys.executable, "-P", "-m", "charter"])
 
 
 class PanelGeometry(unittest.TestCase):
@@ -358,14 +372,14 @@ class WindowInTheOperatorsServer(unittest.TestCase):
         Omitted entirely when there is nothing to carry, so the private-server path's
         command is byte-for-byte what it always was."""
         with_env = layout.panel_argvs(slots=["top"], session="f", socket="/s",
-                                      charter_argv=["charter"], harness_pane="%3",
+                                      harness_pane="%3",
                                       env={"CHARTER_ROOT": "/plane"})[0]
         self.assertEqual(with_env[with_env.index("-e") + 1], "CHARTER_ROOT=/plane")
         self.assertLess(with_env.index("-e"), with_env.index("--"),
                         "`-e` is `split-window`'s own option, never part of the panel's "
                         "argv")
         without = layout.panel_argvs(slots=["top"], session="f", socket="/s",
-                                     charter_argv=["charter"], harness_pane="%3")[0]
+                                     harness_pane="%3")[0]
         self.assertNotIn("-e", without)
 
 
@@ -375,7 +389,7 @@ class ServerSelection(unittest.TestCase):
         they already take is now either charter's own server NAME or a socket PATH, and
         `tmuxctl.server_argv` is the one place that difference turns into `-L` or `-S`."""
         cmds = layout.panel_argvs(slots=["top"], session="f", socket="/tmp/tmux-1/default",
-                                  charter_argv=["charter"], harness_pane="%3")
+                                  harness_pane="%3")
         self.assertEqual(cmds[0][:3], ["tmux", "-S", "/tmp/tmux-1/default"])
 
 

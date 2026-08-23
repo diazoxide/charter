@@ -418,7 +418,8 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     environment goes through, and the two do not behave alike.
 
     **`"$CHARTER_PY" -m charter`, never a bare `charter`.** The panels already launch
-    charter via `util.self_relaunch_argv()` (see `cmd_launch`'s `panel_argvs` call)
+    charter via `util.self_relaunch_argv()` (inside `layout.panel_command`, which owns
+    that half of the panel argv for both the launcher and `cmd_respawn`)
     precisely because the `charter` an operator's `$PATH` resolves may be a
     different install, or no install at all — a `uv tool` shim not on the tmux server's
     own PATH, a checkout run as `python -m charter`. This line had kept the bare name,
@@ -1187,7 +1188,6 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     inside an operator's tmux the cwd is the same cwd, so the hole is the same hole.
     """
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
-                                    charter_argv=util.self_relaunch_argv(),
                                     harness_pane=harness_pane, env=pane_env)
     # Zipped with `slots`, not just iterated: `_resize_hook_argv` below needs to know
     # WHICH slot each successfully-created pane belongs to (for its size and its
@@ -1840,8 +1840,7 @@ def cmd_respawn(args) -> int:
     tmuxctl.run(
         f"bringing the {args.slot} panel back",
         ["tmux", "-L", SOCKET, "respawn-pane", "-t", args.pane, "--",
-         *layout.panel_command(slot=args.slot, session=fid,
-                               charter_argv=[sys.executable, "-m", "charter"])])
+         *layout.panel_command(slot=args.slot, session=fid)])
     return 0
 
 
