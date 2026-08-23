@@ -238,18 +238,15 @@ class OnePasswordProvider(VaultProvider):
         Verified afterwards: a concurrent writer can land between the read and the write
         and drop this field, and silently losing a credential somebody believes they
         stored is worse than failing.
+
+        **One read** (#355). Values, presence and ids are three questions with one answer
+        — :meth:`_document` — rather than three ``op item get`` calls that could return
+        three different ones. See that method for why the redundancy was worth removing.
         """
-        # Three `op item get` calls happen below — here, in `_item_present`, and in
-        # `_existing_ids` — all fetching the SAME document, which the first one already
-        # holds in full. That redundancy is why #354 was reachable at all: three chances
-        # to be rate-limited on the path where being rate-limited is most expensive, and
-        # ids that come from a different fetch than the values they are paired with.
-        # Collapsing them into one read is #355; it is deliberately not done here, because
-        # its correctness lives in the `op item edit`/`item create` round trip that no
-        # machine in this project can exercise against a real vault.
-        fields = self._fields(reveal=True)
+        doc = self._document(reveal=True)
+        fields = self._fields_of(doc)
         fields[key] = value
-        self._write(fields, creating=fields is not None and not self._item_present())
+        self._write(fields, ids=self._ids_of(doc), creating=doc is None)
         if self.get(key) != value:
             raise VaultError(
                 f"wrote '{key}' to 1Password item '{self.op_item}' but reading it back "
@@ -258,12 +255,18 @@ class OnePasswordProvider(VaultProvider):
                 f"check the item's previous versions before retrying.")
 
     def delete(self, key: str) -> None:
-        """Remove one field. The item itself survives — it is the vault, not the secret."""
-        fields = self._fields(reveal=True)
+        """Remove one field. The item itself survives — it is the vault, not the secret.
+
+        One read, for the same reasons as :meth:`set`. ``creating`` is unconditionally
+        false here and needs no presence question of its own: reaching the write at all
+        means the key was found among this document's fields, so the item exists.
+        """
+        doc = self._document(reveal=True)
+        fields = self._fields_of(doc)
         if key not in fields:
             raise SecretNotFound(f"no secret '{key}' in vault '{self.name}'")
         del fields[key]
-        self._write(fields, creating=False)
+        self._write(fields, ids=self._ids_of(doc), creating=False)
 
     def keys(self) -> list[str]:
         """The item's field names. Empty when the item PROVABLY does not exist yet.
@@ -300,40 +303,66 @@ class OnePasswordProvider(VaultProvider):
     def _exists(self, title: str) -> bool:
         return title in self._list_items()
 
-    def _item_present(self) -> bool:
-        """Whether the item exists — ``False`` only when that is PROVEN (#354).
+    def _document(self, reveal: bool = False) -> dict | None:
+        """The item as ``op item get`` returns it, or ``None`` when it PROVABLY is not
+        there. Raises when charter could not tell — never ``None`` for a failed read.
 
-        This chooses between `op item create` and `op item edit`, and it used to be
-        `return proc.returncode == 0`. `op item get` exits non-zero both for "there is no
-        such item" and for every way a read can fail, so a rate limit read as *absent* and
-        charter created an item whose title was already taken. 1Password permits duplicate
-        titles, so nothing refused it: the vault ends up holding two items called
-        `charter-<vault>`, `op item get <title>` can no longer say which one is meant, and
-        the vault stays unreadable until a human deletes one. Worse than the renumbering
-        in :meth:`_existing_ids`, and from the same swallow.
+        **The only `op item get` on any path** (#355). `set()` used to make three, and
+        `delete()` two, all fetching this same document: one for the values, one to ask
+        whether the item exists, one for the field ids. Traced on 0.50.1::
 
-        Absence is proven the way #322 taught: ask this vault's own identity to list the
-        vault, untagged because an adopted item carries no charter tag. Not in the listing
-        means not there. A listing that fails is the answer, and propagates.
-        """
-        proc = self._run(self._argv("item", "get", self.op_item,
-                                    "--vault", self.op_vault, "--format", "json"))
-        if proc.returncode != 0 and self.op_item in self._list_items(tagged=False):
-            raise self._fail(f"reading vault '{self.name}'", proc)
-        return proc.returncode == 0
+            0: item get --reveal      <- _fields(reveal=True)
+            1: item get               <- _item_present()
+            2: item get               <- _existing_ids()
 
-    def _fields(self, reveal: bool = False) -> dict:
-        """This vault's secrets as ``{field: value}``. ``{}`` if there is no item yet, and
-        a :class:`VaultError` if charter could not tell — never ``{}`` for a failed read.
+        Call 0 already fetched strictly more than the other two needed. Three costs, all
+        real:
 
-        ``reveal`` is **off by default and belongs only to the write path.** With it, `op`
-        returns real values — which is what makes the read-modify-write safe, since writing
-        back a concealed item would replace every sibling secret with a mask. Without it,
-        the field NAMES are still all there, which is all `keys()` and `health()` need.
+        * **three chances to be rate-limited** on the write path, which is where being
+          rate-limited is most expensive. #322 and #354 were both reported from rate
+          limiting, and the redundancy is what made #354's window exist at all;
+        * **the answers could disagree.** The ids came from a different fetch than the
+          values they were paired with, so a rename landing between call 0 and call 2 made
+          `_existing_ids` key its answer by the NEW label while the values were keyed by
+          the old one — charter then found no id for the field and minted a fresh one,
+          renumbering a field on an item it does not own. No call failed. Likewise a
+          creation landing between call 0 and call 1 turned "proven absent" into "present"
+          and flipped `op item create` to `op item edit`, which REPLACES: the template held
+          only the key being written and the other writer's secret was gone, with `set()`
+          returning success;
+        * **one source of truth.** Three code paths answering the same question is the
+          shape most of this repo's bugs have turned out to be.
 
-        That distinction is not cosmetic: `vault list` and `doctor` call `health()`
-        routinely, and revealing there would pull every secret in the vault into memory on
-        a listing, and could prompt for re-authentication each time.
+        Two things the split reads did that this one still has to do, because collapsing
+        onto the wrong answer would be worse than the redundancy:
+
+        * ``reveal`` stays a parameter and stays **off by default**. It belongs to the
+          write path alone: with it `op` returns the real values, which is what makes the
+          read-modify-write safe, since writing back a concealed item would replace every
+          sibling secret with a mask. `keys()` and `health()` run from `vault list` and
+          `doctor` and must not reveal — that would pull every secret in the vault into
+          memory on a listing and could prompt for re-authentication each time. The field
+          NAMES are all there without it, which is all those two need.
+        * ``None`` and ``{"fields": []}`` are **different answers**, and callers must keep
+          telling them apart with ``is None``. An item that exists with no fields and an
+          item that is not there choose different subcommands, and `_fields`' return value
+          cannot express the difference — `{}` means both, which is precisely why
+          `_item_present` existed. Getting it wrong creates a second item with a title the
+          vault already holds, after which `op item get <title>` is ambiguous and the vault
+          is unreadable until a human deletes one by hand.
+
+        **The trade this makes, named rather than left to be discovered.** One read cannot
+        close the create-race, only move where it lands. Absence is still proven before the
+        write, another writer can still land after that proof, and the write is now always
+        `op item create` — so what used to end as a silent REPLACEMENT of that writer's
+        secret now ends as a DUPLICATE ITEM and a raise. #354 called the duplicate item the
+        worst outcome of its own set, and this deliberately routes more of that race into
+        it: an ambiguous vault is repaired by a human deleting one item, from history that
+        1Password still holds, while a replaced secret is gone and reported as success.
+        Loud beats silent, and the choice is only defensible said out loud. What is NOT
+        good about it is the sentence the operator gets — see #399; `set()`'s carefully
+        written duplicate-item message is unreachable when the read-back FAILS rather than
+        disagreeing, which is exactly what an ambiguous title makes it do.
         """
         argv = ["item", "get", self.op_item, "--vault", self.op_vault, "--format", "json"]
         if reveal:
@@ -364,13 +393,47 @@ class OnePasswordProvider(VaultProvider):
             # an empty vault, which is the bug.
             if self.op_item in self._list_items(tagged=False):
                 raise self._fail(f"reading vault '{self.name}'", proc)
-            return {}
+            return None
         try:
             doc = json.loads(proc.stdout or "{}")
         except json.JSONDecodeError as e:
+            # charter's inability to READ the answer is still a failure, never an absence.
+            # #354 had a second parse of these same bytes that swallowed this and returned
+            # "no ids" — the same document getting two different answers, which is the
+            # class of thing there is now only one parse to have.
             raise VaultError(f"could not parse 1Password item '{self.op_item}': {e}")
+        if not isinstance(doc, dict):
+            # `None` is this method's sentinel for PROVEN ABSENCE, and `op` exiting 0 is
+            # proof of the opposite — so the sentinel has to be unreachable from a
+            # successful read, or it is not a sentinel. A body that parses to `null` would
+            # otherwise return `None` from here and tell `set` there is no item, on the
+            # strength of a read that succeeded: `op item create` against a title the vault
+            # already holds, which is the duplicate-item outcome `_item_present` was
+            # hardened against in #354. A list or a string would reach `.get` and raise an
+            # AttributeError with no vault in the message. This is the one hazard the
+            # collapse introduced rather than removed, and it is checked rather than
+            # argued away.
+            raise VaultError(
+                f"could not parse 1Password item '{self.op_item}': `op item get` "
+                f"succeeded but did not return a JSON object")
+        return doc
+
+    def _fields_of(self, doc: dict | None) -> dict:
+        """A document's secrets as ``{field: value}``; ``{}`` for ``None``.
+
+        Pure — no `op` call — so the values and the ids below describe ONE instant.
+        ``{}`` here means *this document has no fields*, which is not the same statement
+        as *there is no document*; only ``doc is None`` says that, and only the caller
+        that still holds ``doc`` can tell.
+
+        A field carrying no ``value`` KEY is skipped rather than read as ``""``:
+        1Password omits ``value`` entirely for a field left empty, an empty field is not a
+        secret, and the skip is also what keeps ``f["value"]`` below from raising on an
+        ordinary hand-made item. :meth:`_ids_of` deliberately keeps such a field's id —
+        see there for why that difference is load-bearing rather than untidy.
+        """
         out: dict = {}
-        for f in doc.get("fields") or []:
+        for f in (doc or {}).get("fields") or []:
             name = _field_name(f)
             if not name or "value" not in f:
                 continue
@@ -386,53 +449,73 @@ class OnePasswordProvider(VaultProvider):
             out[name] = f["value"]
         return out
 
-    def _existing_ids(self) -> dict:
-        """``{field name: 1Password's id}`` for the item as it stands.
+    def _fields(self) -> dict:
+        """This vault's secrets as ``{field: value}``. ``{}`` if there is no item yet, and
+        a :class:`VaultError` if charter could not tell — never ``{}`` for a failed read.
+
+        The READ path's shorthand for :meth:`_document` + :meth:`_fields_of`, and it never
+        reveals. It used to take ``reveal`` for the write path's sake; the write path now
+        holds the document itself, because presence and the field ids are questions this
+        return value cannot answer, so the parameter had no caller left that passed it.
+        Dropping it rather than leaving it defaulted keeps `--reveal` a decision made in
+        exactly one place: :meth:`set` and :meth:`delete` ask for it, nothing else can.
+        """
+        return self._fields_of(self._document())
+
+    @staticmethod
+    def _ids_of(doc: dict | None) -> dict:
+        """A document's ``{field name: 1Password's id}``; ``{}`` for ``None``.
 
         Adoption must be non-destructive: a field charter did not create carries an id
         1Password generated, and rewriting it to the key name on the next write would
         mutate an identifier the user never chose on an item charter does not own.
 
-        Both failures below used to `return {}` (#354). That is the swallow #322 was about,
-        arriving as a silent MUTATION rather than a false diagnosis: `{}` here does not
-        report anything, it tells :meth:`_write` there are no ids to keep, and every field
-        of the adopted item is renumbered on the next write while `set` returns success.
-        A rate limit is enough — no race with another writer required.
+        This used to be `_existing_ids`, a **second** `op item get` (#354, #355). Two
+        failures of that fetch used to `return {}` — the #322 swallow arriving as a silent
+        MUTATION rather than a false diagnosis, since `{}` does not report anything, it
+        tells :meth:`_write` there are no ids to keep. Both are gone with the fetch: there
+        is nothing left to fail here, and the ids now come from the same bytes as the
+        values, so a rename landing mid-write can no longer key them by a different label.
 
-        Unlike :meth:`_fields` and :meth:`_item_present`, there is nothing to prove here
-        and so no listing to make. This runs only from `_write(creating=False)`, which
-        means presence was just established, so no non-zero exit is a legitimate "no item"
-        — every one of them is a failed read. If the item did vanish in between, raising
-        names the read that failed instead of letting the `item edit` fail more obscurely.
+        Deliberately a different rule from :meth:`_fields_of` over the same document: a
+        field with an id but no ``value`` keeps its id here, and a field with no id
+        contributes none.
 
-        The parse is refused for the same reason and not a weaker one: `_fields` already
-        raises on a document it cannot read, and the same bytes must not get two different
-        answers. That the failure is charter's inability to READ the answer rather than
-        1Password's inability to give one still makes it a failure, never an absence.
+        Those entries are **not inert**, and the difference is reachable without a race,
+        without a rate limit and without any `op` call failing. 1Password omits ``value``
+        for a field left EMPTY, so an adopted ``{"id": <op's id>, "label": "GITHUB_TOKEN"}``
+        contributes nothing to :meth:`_fields_of` — and then ``set("GITHUB_TOKEN", …)``
+        puts that very name INTO the fields, at which point `_write`'s ``ids.get(k, k)``
+        finds this entry and writes 1Password's own id back. Narrowing this rule to match
+        `_fields_of` would renumber an empty field on an item charter does not own, which
+        is #354's silent mutation arriving by the front door. `AnAdoptedFieldLeftEmpty`
+        in tests/test_op_reads_the_item_once.py is the test that says so; before it, both
+        halves of this difference could be deleted with every op test still green.
+
+        The other half of the same difference, recorded because a reader will meet it: an
+        empty field charter is NOT writing does not survive the next write, since `_write`
+        replaces the item with exactly `_fields_of`'s keys. That is the behaviour on both
+        sides of #355 and it loses no secret — an empty field holds none — but it follows
+        from the rule rather than from an accident, so it is pinned too.
         """
-        proc = self._run(self._argv("item", "get", self.op_item, "--vault", self.op_vault,
-                                    "--format", "json"))
-        if proc.returncode != 0:
-            raise self._fail(f"reading vault '{self.name}'", proc)
-        try:
-            doc = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError as e:
-            raise VaultError(f"could not parse 1Password item '{self.op_item}': {e}")
         out = {}
-        for f in doc.get("fields") or []:
+        for f in (doc or {}).get("fields") or []:
             name = _field_name(f)
             if name and f.get("id"):
                 out[name] = str(f["id"])
         return out
 
-    def _write(self, fields: dict, creating: bool) -> None:
+    def _write(self, fields: dict, ids: dict, creating: bool) -> None:
         """Replace the item with exactly *fields*. The template travels on stdin.
 
         Existing ids are carried through so adopting a hand-made item does not renumber
         its fields; only genuinely new ones take the key as their id, which is what makes
         charter-created items round-trip identically.
+
+        *ids* is passed in rather than fetched here (#355). Fetching meant a second `op
+        item get`, and the pairing this template asserts — *this label has this id and this
+        value* — is only true if both halves came from one document.
         """
-        ids = {} if creating else self._existing_ids()
         template = json.dumps({
             "title": self.op_item,
             "category": _CATEGORY,
