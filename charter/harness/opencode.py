@@ -397,8 +397,52 @@ class OpenCodeHarness(Harness):
     def ask_rule(self, pattern: str) -> tuple[str, str]:
         """``(tool, glob)``. opencode's permissions are `{tool: {pattern: decision}}` with
         `*`/`?` wildcards — not Claude Code's `Tool(pattern)` string, so the same operator
-        sentence has to come apart differently here."""
+        sentence has to come apart differently here.
+
+        An MCP pattern comes apart differently again, and used to fall through to `bash`
+        instead — writing a rule over a bash command literally named `mcp__slack__send`,
+        which nothing can ever run, under a tick saying the guard was in force (#374). The
+        same silent direction #365 fixed for Claude Code, one harness over.
+
+        Naming that limit and returning ``unsupported`` was the other honest answer, and it
+        is unavailable because opencode CAN express this — the only thing that was wrong
+        was the name. Verified against opencode 1.18.21:
+
+        * MCP tools are registered under ``McpCatalog.toolName(server, tool)`` —
+          ``sanitize(server) + "_" + sanitize(tool)``, ``sanitize`` being
+          ``s.replace(/[^a-zA-Z0-9_-]/g, "_")`` — and the wrapper asks under exactly that
+          id: ``ask({permission: <tool id>, patterns: ["*"]})``.
+        * `permission` takes keys beyond the five it documents; `Permission.fromConfig`
+          turns ``{"<id>": {"*": "ask"}}`` into ``{permission: "<id>", pattern: "*"}``,
+          which `opencode debug agent build` prints back in the resolved rule list.
+        * `Permission.evaluate` glob-matches the permission NAME as well as the pattern —
+          how opencode's own ``{permission: "*"}`` default works — so a whole server is
+          ``<server>_*``.
+
+        `commands._MCP_RULE_RE` decides what an MCP pattern IS, rather than a second regex
+        here: two harnesses disagreeing about that is how one of them ends up writing a
+        rule the other refused. It also confines the pattern to ``[A-Za-z0-9_-]``, exactly
+        the set opencode's `sanitize` leaves alone, so no character ever needs rewriting.
+
+        What charter cannot check is that opencode's `mcp` block names the server the same
+        way. That is the contract Claude Code's rule already has — the name is the
+        operator's, not charter's guess — and `guard` prints what it wrote so they can read
+        it back.
+
+        The whole-server glob is as tight as opencode's own names allow and no tighter:
+        `_` is both the separator `toolName` joins with and a legal character either side
+        of it, so ``slack_*`` covers a server called `slack_admin` too. No glob can tell
+        those apart, and refusing the whole-server form over it would trade a rule that is
+        occasionally wider than asked for one that does not exist. Worth saying because
+        `allow_rule` shares this translation, and wider is the direction that costs
+        something there.
+        """
+        from .. import commands
+
         p = (pattern or "").strip()
+        if commands._MCP_RULE_RE.match(p):
+            server, _, tool = p[len("mcp__"):].partition("__")
+            return f"{server}_{tool or '*'}", "*"
         for oc_id, name in TOOL_NAMES.items():
             for prefix in (f"{name}(", f"{oc_id}("):
                 if p.startswith(prefix) and p.endswith(")"):
