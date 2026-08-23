@@ -1482,6 +1482,42 @@ def _head_detached(gitdir: Path) -> bool:
     return bool(txt) and not txt.startswith("ref:")
 
 
+def _unlanded_memory(root: Path) -> str | None:
+    """One coloured phrase for a memory commit whose push did not reach `origin`, or
+    ``None`` — the status line's rendering of `planegit.unlanded` (#373).
+
+    Two shapes, because the remedies are opposite and a reader who is told the wrong one
+    acts on it. ``branched`` means the commit IS on the remote under `charter/<sha>`
+    waiting on a pull request: nothing is at risk, something is unfinished. Anything else
+    means it reached nowhere, and the next `git reset --hard origin/<branch>` destroys it.
+    Only the second is coloured RED — the status line has one register above yellow and
+    spending it on "there is a pull request to open" is how it stops meaning anything.
+
+    Deliberately does NOT name the branch or carry the pull-request URL. This shares one
+    line with `dirty` and `detached HEAD` and truncates from the right; `doctor` and the
+    record file are where the detail lives, and a line that tries to carry a URL loses the
+    words that say what it is about. It is a pointer, not the report.
+
+    Its own subprocess rather than `_run_state`'s cached answer: `ahead` counts commits,
+    and "ahead" is the ordinary state of a plane whose pull request is open. The question
+    here is whether a specific recorded commit is still unlanded, which only
+    `merge-base --is-ancestor` answers. Timed out and swallowed like every other read on
+    this path — the status line's one hard contract is that it never raises.
+    """
+    try:
+        from . import planegit
+        rec = planegit.unlanded(lambda a: subprocess.run(
+            ["git", "-C", str(root), *a], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=3))
+    except Exception:
+        return None
+    if not rec:
+        return None
+    if rec.get("outcome") == planegit.BRANCHED and rec.get("landed"):
+        return f"{_YELLOW}memory awaiting a pull request{_R}"
+    return f"{_RED}memory commit not pushed{_R}"
+
+
 def _plane_root_alert() -> str | None:
     """One line when the **plane root** is being worked in — dirty, detached, or off its
     default branch. ``None`` otherwise, which is the ordinary case.
@@ -1511,6 +1547,20 @@ def _plane_root_alert() -> str | None:
     on screen permanently — furniture, which is the one thing this element must not
     become. The agreement: `doctor` and the status line answer the same question about
     the same tree, and two answers to one question is worse than either alone.
+
+    **A memory commit that did not land is said here too, and that is a timing fix rather
+    than a second opinion (#373).** `doctor` reports it, but `doctor` runs at SessionStart
+    and the hazard it names happens mid-session, in the SAME session that stranded the
+    commit: an agent notices `main` is ahead for reasons it did not intend and reaches for
+    `git reset --hard origin/main`, which deletes the memory without a trace. That agent
+    never saw the SessionStart row. This one renders every turn, on the near side of the
+    hazard. `planegit.unlanded` is the shared decision, so the two surfaces cannot come to
+    different answers about whether there is anything to say — the same discipline
+    ``tracked_dirty`` above exists for.
+
+    It costs no subprocess in the ordinary case: with no record file there is nothing to
+    join against, and the join only runs while something really is unlanded — which is
+    also the only state in which it can clear itself.
     """
     try:
         if not config.HAS_CONTROL_PLANE:
@@ -1559,6 +1609,9 @@ def _plane_root_alert() -> str | None:
         # branch you happened to be on.
         elif default and branch not in ("?", default):
             bits.append(f"{_DIM}on{_R} {branch}{_DIM}, not{_R} {default}")
+        unlanded = _unlanded_memory(root)
+        if unlanded:
+            bits.append(unlanded)
         if not bits:
             return None
 

@@ -179,10 +179,13 @@ class PushResult(NamedTuple):
     detail: str = ""
 
 
-def _push_record_path():
-    """Read from :mod:`charter.config` at CALL time, never bound at import — the test
-    harness re-points the plane with `config.use`, and a path captured at import would
-    write into the developer's real ``.charter/``."""
+def push_record_path():
+    """Where the push record lives — public because `doctor` NAMES it, which is what gives
+    the recorded ``detail`` (git's own words about a push nobody heard) a reader.
+
+    Read from :mod:`charter.config` at CALL time, never bound at import — the test harness
+    re-points the plane with `config.use`, and a path captured at import would write into
+    the developer's real ``.charter/``."""
     return config.STATE_DIR / "plane-push.json"
 
 
@@ -211,10 +214,33 @@ def record_push(res: PushResult, head: str = "") -> PushResult:
     A clean push DELETES the file rather than writing "pushed": the record exists to carry
     a condition that outlives the process, and there is no condition left to carry.
 
+    **ADR 0011 is the ADR that governs whether this file may exist at all**, and it is
+    cited here rather than left for a reader to notice is missing. Its rule is that a record
+    holds only what git cannot know, and that what is written is the PAST tense — never a
+    "current status" field, because a description of how things are can become false while
+    nobody is looking. What is written here is a past observation: *a push of commit
+    ``head`` at time ``at`` came out this way*. There is no reality it can contradict,
+    because the push happened in a process with ``/dev/null`` for a voice and nothing else
+    recorded it. That is the same carve-out ADR 0011 makes for liveness, which is likewise
+    overwritten rather than appended.
+
+    The ADR's other demand is that the present tense be RECONSTRUCTED at read time by
+    joining the record against git, and that is what ``head`` is for: `doctor._stranded_push`
+    joins on it (:func:`is_spent`) and reports nothing once git says the commit reached the
+    upstream. Without that join this would be exactly the marker the ADR forbids.
+
+    Two residual tensions, stated rather than hidden. ``branch`` and ``url`` are derivable
+    — the first from the root's HEAD, the second from ``origin`` plus ``landed`` — and
+    ADR 0011's forbidden list names "which branch a piece is on" outright. They are kept
+    because they are derivable *now* and the record is about *then*: an origin that has
+    since been re-pointed (which is how the `unreachable` overwrite above was found) would
+    re-derive a URL for a push that never went there. Deriving them would make the record
+    agree with a present that is not the one it describes.
+
     Never raises. Every caller is a push, and a push that cannot write a note must still
     have pushed.
     """
-    p = _push_record_path()
+    p = push_record_path()
     try:
         if res.outcome == PUSHED:
             p.unlink(missing_ok=True)
@@ -237,10 +263,80 @@ def push_record() -> dict | None:
     briefing and must never cost it the turn. A defect in this file is charter's own to
     fix, not a reason to take the session down."""
     try:
-        data = json.loads(_push_record_path().read_text())
+        data = json.loads(push_record_path().read_text())
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) and data.get("outcome") else None
+
+
+def is_spent(head: str, run) -> bool:
+    """Has the commit a record is ABOUT since reached the tracked upstream?
+
+    The join ADR 0011 demands: a record is a past observation, and the present tense is
+    reconstructed by asking git rather than by believing the file. Once ``head`` is an
+    ancestor of ``@{upstream}`` the condition the record describes is over, whatever the
+    file still says — so `doctor` stops warning and :func:`_land_via_branch` stops reusing
+    the pull-request branch it named.
+
+    ONE definition, two callers, because a "spent" the reporter and the pusher disagreed
+    about is how a warning that cannot clear itself and a branch that is reused after its
+    pull request merged both arrive. *run* takes git's arguments and returns something with
+    a ``returncode``; it is a parameter rather than a call because `doctor` must run this
+    under its SessionStart timeout budget (`doctor._git_in`) and the pusher must not.
+
+    ``--is-ancestor`` exits 0 for yes, 1 for no, and non-zero-not-1 for a ref it cannot
+    resolve — a plane with no tracking branch, say. Only a clean 0 counts: "I could not
+    check" must never read as "it landed", which is rule 1 of ADR 0013 in the one place
+    where getting it wrong loses the memory."""
+    if not head:
+        return False
+    return run(["merge-base", "--is-ancestor", head, "@{upstream}"]).returncode == 0
+
+
+def unlanded(run) -> dict | None:
+    """The recorded push outcome that is STILL true, or ``None``.
+
+    **One decision, three renderings.** `doctor._stranded_push` turns this into a row with
+    a remedy, `statusline._plane_root_alert` into one word that fits beside "dirty", and
+    :func:`_open_pull_request_branch` into "may I still advance that branch". #373 was two
+    implementations of *pushing*; letting three surfaces each decide for themselves whether
+    a record is still worth acting on is the same mistake with a longer fuse — the one that
+    disagrees is always the one nobody was looking at.
+
+    *run* takes git's arguments and returns something with a ``returncode``; see
+    :func:`is_spent` for why the runner is the caller's to choose.
+    """
+    rec = push_record()
+    if not rec:
+        return None
+    return None if is_spent(str(rec.get("head") or ""), run) else rec
+
+
+def _open_pull_request_branch(root) -> str | None:
+    """The ``charter/<sha>`` branch an earlier reactive push is STILL waiting on a pull
+    request for, or ``None`` — the branch :func:`_land_via_branch` should advance instead
+    of minting a new one.
+
+    Before #373 the reactive path pushed nothing, so #167's one-branch-per-rejection shape
+    was a handful of branches from a human typing `charter save`. Routing `persona
+    remember`, `workspace remember`, dispatch backfill, curate and autosave through the
+    same path makes it one abandoned remote branch PER MEMORY, each superseding the last
+    and none of them referenced by anything charter will ever say again. Each new HEAD is a
+    descendant of the one before, so advancing the recorded branch is a fast-forward: one
+    open pull request that accumulates the memory commits, rather than N branches nobody
+    will ever close.
+
+    Two things keep this safe rather than clever. It is only ever offered as a FIRST
+    attempt — the caller pushes it without ``--force``, so git itself refuses anything that
+    is not a fast-forward and the caller falls back to a fresh name; nothing here has to be
+    right about the remote's tip. And a record whose commit has reached the upstream is
+    :func:`is_spent`, so a merged pull request's branch is never resurrected.
+    """
+    rec = unlanded(lambda args: _git(args, cwd=root))
+    if not rec or rec.get("outcome") != BRANCHED:
+        return None
+    landed = rec.get("landed")
+    return landed if landed and isinstance(landed, str) else None
 
 
 def _land_via_branch(root, https: str, cred: list, default_branch: str,
@@ -265,18 +361,35 @@ def _land_via_branch(root, https: str, cred: list, default_branch: str,
     of the remote until the pull request lands, and the caller says so with the command that
     reconciles it.
 
+    **An open pull request is advanced rather than replaced.** The branch this pushed last
+    time is tried FIRST while its record is still live (:func:`_open_pull_request_branch`),
+    without ``--force``, so git refuses anything that is not a fast-forward and a fresh
+    ``charter/<sha>`` is minted instead. That is what keeps the reactive path from leaving
+    one abandoned remote branch per memory — see that function for why this only became a
+    problem once the reactive push existed at all.
+
     ``announce`` is False for the background pusher, whose stdout and stderr are
     ``/dev/null``. It still returns the same `PushResult`, because that is what `doctor`
     reads back — saying it and recording it are two audiences, not two policies.
     """
     sha = _git(["rev-parse", "--short", "HEAD"], cwd=root).stdout.strip() or "change"
-    branch = f"charter/{sha}"
-    p = _git([*cred, "push", https, f"HEAD:refs/heads/{branch}"], cwd=root)
-    if p.returncode != 0:
-        tail = "\n".join((p.stderr or p.stdout or "").splitlines()[-4:])
+    fresh = f"charter/{sha}"
+    reuse = _open_pull_request_branch(root)
+    branch = fresh
+    p = None
+    # A reuse that did not fast-forward is not a failure to report: the fresh name has not
+    # been tried yet, and naming a branch charter chose on the operator's behalf as the
+    # thing that went wrong would send them after a problem they do not have.
+    for candidate in ([reuse] if reuse and reuse != fresh else []) + [fresh]:
+        branch = candidate
+        p = _git([*cred, "push", https, f"HEAD:refs/heads/{candidate}"], cwd=root)
+        if p.returncode == 0:
+            break
+    if p is None or p.returncode != 0:
+        tail = "\n".join((p.stderr or p.stdout or "").splitlines()[-4:]) if p else ""
         if announce:
             util.err(f"'{default_branch}' requires a pull request, and pushing the branch "
-                     f"'{branch}' also failed:")
+                     f"'{fresh}' also failed:")
             for ln in tail.splitlines():
                 util.err("  " + ln)
         return PushResult(STRANDED, default_branch, detail=tail)
@@ -327,7 +440,20 @@ def push_head(root, announce: bool = True) -> PushResult:
         if announce:
             util.warn("origin isn't on a forge charter knows (gitlab.com/github.com/…) — "
                       "committed locally; push manually.")
-        return record_push(PushResult(UNREACHABLE, branch), head)
+        # Returned UNRECORDED, deliberately. `unreachable` is the one outcome
+        # `doctor._stranded_push` never reports — a plane with no origin charter knows has a
+        # CONFIGURATION to fix, not a commit to rescue — so writing it could only ever
+        # DESTROY a real notice, and it did. `cmd_workspace_autosave` reaches
+        # `_spawn_pushbg` through `commit_push(no_push=True)`, which returns before the
+        # `_origin_https` pre-check in `commit_push`, so re-pointing origin at an
+        # unrecognised host and letting the background child run turned
+        #     warn | a memory commit was committed but never pushed, 1 ahead of origin/main
+        # into
+        #     ok   | clean on main, 1 ahead of origin/main
+        # over a commit that existed nowhere but that laptop — measured against a real bare
+        # remote with a real pre-receive hook. A "nothing to report" outcome must never be
+        # able to erase one that had something to report.
+        return PushResult(UNREACHABLE, branch)
 
     from . import gitpolicy
     forge = gitpolicy.forge_for(root)
@@ -337,18 +463,38 @@ def push_head(root, announce: bool = True) -> PushResult:
         return _git([*cred, "push", https, f"HEAD:{branch}"], cwd=root)
 
     p = push()
+    if p.returncode != 0 and _is_protected_rejection(p.stderr or p.stdout or ""):
+        # Asked BEFORE the non-fast-forward retry, not after, and that ordering is load-
+        # bearing rather than tidy. git prints its own `! [remote rejected]` line above a
+        # server-side hook decline, so the word "rejected" in the retry test below matches a
+        # protected branch too — and taking the retry first was not merely a wasted round
+        # trip. Measured against a real bare remote with a real pre-receive hook refusing
+        # refs/heads/main in GitHub's GH006 wording: fetching an origin that is unreachable
+        # fails, which REMOVES FETCH_HEAD, so `rebase FETCH_HEAD` fails, and the outcome was
+        # recorded as `conflict` — #167's pull-request path never reached, no `charter/<sha>`
+        # branch created, the commit genuinely stranded, and charter telling the operator to
+        # resolve a conflict that did not exist.
+        return record_push(_land_via_branch(root, https, cred, branch, announce), head)
     if p.returncode != 0 and any(s in (p.stderr or "") for s in ("fetch first", "non-fast-forward", "rejected")):
         if announce:
             util.info("remote moved — fetching + rebasing, then retrying …")
-        _git([*cred, "fetch", https, branch], cwd=root)
-        if _git(["rebase", "FETCH_HEAD"], cwd=root).returncode != 0:
+        if _git([*cred, "fetch", https, branch], cwd=root).returncode != 0:
+            # A failed fetch leaves NO FETCH_HEAD to rebase onto, so rebasing anyway fails
+            # for a reason that has nothing to do with a conflict. Calling that `conflict`
+            # is the unearned diagnosis ADR 0009 forbids, and it costs more than precision:
+            # it sends the reader to resolve a conflict that does not exist while the real
+            # answer — the push failure below, in git's own words — is discarded.
+            if announce:
+                util.warn("Could not reach origin to fetch, so the retry was skipped.")
+        elif _git(["rebase", "FETCH_HEAD"], cwd=root).returncode != 0:
             _git(["rebase", "--abort"], cwd=root)
             if announce:
                 util.warn("Committed locally, but rebase hit a conflict — resolve manually, then `charter save`.")
             return record_push(PushResult(CONFLICT, branch), head)
-        # The rebase rewrote it, so the commit the record names is a different one now.
-        head = _git(["rev-parse", "HEAD"], cwd=root).stdout.strip()
-        p = push()
+        else:
+            # The rebase rewrote it, so the commit the record names is a different one now.
+            head = _git(["rev-parse", "HEAD"], cwd=root).stdout.strip()
+            p = push()
     if p.returncode == 0:
         _git(["update-ref", f"refs/remotes/origin/{branch}", "HEAD"], cwd=root)  # sync tracking
         if announce:
@@ -359,6 +505,10 @@ def push_head(root, announce: bool = True) -> PushResult:
         # not a failure to report and abandon: without this the change is stranded in the
         # one tree #157 forbids branching, and the operator has to make the same edit again
         # somewhere else and discard this one.
+        #
+        # Not redundant with the identical check above the retry: the FIRST push can fail
+        # plain non-fast-forward, and the SECOND — after a rebase that succeeded — is the
+        # one the protected branch refuses. Same policy, reached from the other side.
         return record_push(_land_via_branch(root, https, cred, branch, announce), head)
     tail = "\n".join((p.stderr or p.stdout or "").splitlines()[-4:])
     if announce:
@@ -444,12 +594,18 @@ def commit_push(root, add_cmd: list, message: str | None,
     if no_push:
         util.info("Skipped push (--no-push).")
         return 0
-    # Asked here as well as inside `push_head`, and only to decide whether spawning is
-    # worth it: a plane with no origin charter recognises has nowhere to push, and firing a
-    # detached child to discover that would leave an `unreachable` record behind for
-    # `doctor` to warn about on a plane whose configuration — not whose commit — is the
-    # thing to fix. The warning is the same one `push_head` gives, said by whichever of
-    # them gets there first.
+    # Asked here as well as inside `push_head`, and now for ONE reason only: on the
+    # background path this is the only voice the operator can hear. `_spawn_bg_push` gives
+    # the child `/dev/null` for stdout and stderr, so `push_head`'s identical warning is
+    # written to be discarded, and a plane whose origin is on no forge charter knows would
+    # say nothing at all about a configuration only a human can fix.
+    #
+    # It is NOT a guard against a spurious `unreachable` record any more. That was the
+    # earlier justification and it was the wrong shape — `cmd_workspace_autosave` reaches
+    # `_spawn_pushbg` through `commit_push(no_push=True)`, which returns above this line, so
+    # the guard was bypassed by a sibling door and a real `branched`/`stranded` notice was
+    # overwritten with "nothing to report". `push_head` no longer records `unreachable` at
+    # all, which is the rule rather than a second place to remember it.
     if not _origin_https(root):
         util.warn("origin isn't on a forge charter knows (gitlab.com/github.com/…) — "
                   "committed locally; push manually.")

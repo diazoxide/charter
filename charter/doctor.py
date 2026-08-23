@@ -360,32 +360,35 @@ def _stranded_push(root) -> tuple[str, str] | None:
     until somebody lands it, and a warning that cannot clear itself is one people learn to
     scroll past — which is the failure ADR 0008 spent its whole second half on. So the
     recorded commit is tested against the world: once it is an ancestor of the tracked
-    upstream, the condition is over whatever the file still says. That check is a local ref
-    read, never a fetch, because this runs from a hook that must not reach the network.
+    upstream, the condition is over whatever the file still says. `planegit.is_spent` is
+    that test, asked here rather than spelled out here because the PUSHER asks the same
+    question (it decides whether an open pull request's branch may still be advanced) and
+    two answers to "is this record still live" is how a warning nobody can clear and a
+    branch reused after its pull request merged both arrive. It is a local ref read, never
+    a fetch, because this runs from a hook that must not reach the network — which is why
+    the runner is passed in as `_git_in`, under this check's own timeout budget.
 
-    ``unreachable`` is deliberately not reported. A plane with no origin on a forge charter
-    knows has a CONFIGURATION to fix, which `commit_push` already says out loud at the
-    moment it happens; repeating it here every session would put this row permanently in
-    the yellow — the exact cost `check_plane_root` refuses to pay for untracked memory
-    files, and it would buy nothing.
+    ``unreachable`` is not reported, and as of the #373 review it is not RECORDED either —
+    see `planegit.push_head`. A plane with no origin on a forge charter knows has a
+    CONFIGURATION to fix, which `commit_push` already says out loud at the moment it
+    happens; a guard here would be the second line of defence for something that is now
+    impossible, and the first one failed precisely because it was written as a guard
+    somewhere else instead of as the rule itself.
 
     Never raises: the caller is a preflight check, and `push_record` already degrades a
     malformed file to ``None`` rather than to an exception.
     """
     from . import planegit
 
-    rec = planegit.push_record()
-    if not rec or rec.get("outcome") == planegit.UNREACHABLE:
-        return None
-    head = str(rec.get("head") or "")
-    # `--is-ancestor` exits 0 for yes, 1 for no, and non-zero-not-1 for an unresolvable
-    # ref — a plane with no tracking branch, say. Only a clean 0 is allowed to clear the
-    # notice: "I could not check" must not read as "it landed", which is rule 1 of ADR 0013
-    # in the one place where getting it wrong loses the memory.
-    if head and _git_in(root, "merge-base", "--is-ancestor", head,
-                        "@{upstream}").returncode == 0:
+    rec = planegit.unlanded(lambda a: _git_in(root, *a))
+    if not rec:
         return None
     landed, url, branch = rec.get("landed"), rec.get("url"), rec.get("branch") or "main"
+    # WHY it did not land is in git's own words in the record, and nowhere else — the
+    # background pusher's stderr went to /dev/null. Naming the file is what gives that
+    # field a reader; doctor's own text stays constants (ADR 0009), so nothing a remote
+    # said is interpolated into this line.
+    where = f" What the remote said is in {planegit.push_record_path()}."
     if rec.get("outcome") == planegit.BRANCHED and landed:
         # It IS on the remote — under another name, waiting for a pull request. Naming the
         # branch matters because the remedy is completely different from the stranded case:
@@ -398,9 +401,15 @@ def _stranded_push(root) -> tuple[str, str] | None:
     # `git reset --hard origin/<branch>` is the standard move on noticing a divergence and
     # it deletes this commit without a trace — the specific way #373's memories were lost.
     # A reader told only "it is unpushed" runs exactly that command next.
+    #
+    # Describing it is not preventing it. `hooks._plane_root_branch_reason` refuses a branch
+    # move in the root and could refuse this too — its docstring left `reset` out for want of
+    # evidence, and #373 is the evidence. That is #401, kept separate because it is a new
+    # REFUSAL on the Bash path with its own false-positive cost (`git reset HEAD -- <path>`
+    # is an unstage and must stay runnable), not a fix to this row.
     return ("a memory commit was committed but never pushed",
             f"Push it with `charter save` before anything runs `git reset --hard "
-            f"origin/{branch}` in {root}, which would delete it silently.")
+            f"origin/{branch}` in {root}, which would delete it silently.{where}")
 
 
 def check_plane_root() -> Result:
