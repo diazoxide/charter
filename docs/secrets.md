@@ -208,8 +208,9 @@ something that rides along inside `add`.
 If 1Password is where your credentials belong, you have two shapes to choose between,
 and the difference is who owns the item:
 
-- **`1password`** — charter owns it. `secret set` creates the item, `rm` deletes it, so
-  a credential can be provisioned for a persona without opening the 1Password UI.
+- **`1password`** — charter owns it. `secret set` creates the item and writes the field,
+  `rm` removes the field, so a credential can be provisioned for a persona without
+  opening the 1Password UI. The item itself is the vault and charter never deletes it.
 - **`reference`** — someone else owns it. charter stores only a pointer to an item that
   already exists. Right when the credential is shared with people or systems beyond
   charter, or when a human should stay in charge of rotating it.
@@ -221,6 +222,7 @@ A `1password` vault is **one 1Password item whose custom fields are the secrets*
 ```
 charter vault 'devops', key 'AWS_ACCESS_KEY_ID'
     → item  charter-devops   (override with --op-item)
+      tagged charter, charter:devops
       field AWS_ACCESS_KEY_ID, concealed
 ```
 
@@ -240,20 +242,23 @@ charter secret set devops KUBECONFIG --from-file ~/.kube/prod.yaml
 charter secret exec devops --file KUBECONFIG=KUBECONFIG -- kubectl get pods
 ```
 
-Schema — **one 1Password item per secret**, not one per vault:
+**One item per key came first, and was replaced.** It gave each secret its own item,
+`charter-<vault>-<KEY>`, with the value in that item's `password` field. It could describe
+nothing but that shape, so anyone whose 1Password already looked different kept a separate
+file of `op://` URIs alongside their vault to work around it.
 
-| charter | 1Password |
-| --- | --- |
-| vault `devops`, key `KUBECONFIG` | item `charter-devops-KUBECONFIG` |
-| | tagged `charter`, `charter:devops` |
-| | value in the item's `password` field |
+It was chosen to avoid one specific hazard, and that hazard is real: `op item get
+--format json` **conceals** values unless asked otherwise, so a naive read-modify-write
+of a multi-field item would write masks back over every sibling secret. The answer is
+`--reveal`. That flag is why the write path survives the round-trip, and why it exists at
+all — `set` and `rm` pass it, and nothing else does, because nothing else has any business
+pulling a whole vault's values into memory.
 
-One item per *vault* is the tidier-looking design and it is wrong here. Updating one
-field of a multi-field item means a read-modify-write through a JSON template, a
-template **replaces** the item rather than merging, and `op item get --format json`
-*conceals* values unless asked otherwise — so round-tripping would overwrite every
-sibling secret with a mask. One item per key removes the interaction: each write
-touches exactly the credential it was asked to touch.
+If you registered a vault under the old schema, its `charter-<vault>-<KEY>` items are
+still in 1Password and charter no longer reads them. It will not call such a vault
+healthy-and-empty either: `charter vault list` counts the leftovers and says what to do
+with them, and `charter doctor` marks the vault unhealthy rather than fine. Re-register
+each credential with `charter secret set`, then delete the old items.
 
 Deliberate properties:
 
@@ -261,9 +266,11 @@ Deliberate properties:
   get logged in your command history, and can be visible to other processes on your
   machine". Writes pipe a JSON template on **stdin** (`op item create -`,
   `op item edit <item>`); only names are ever passed as arguments.
-- **charter lists only what charter created.** `secret list` filters by the
-  `charter:<vault>` tag, so a shared 1Password vault your team also fills by hand is
-  never listed — far less offered for deletion.
+- **charter looks at one item and no others.** `secret list` reads the fields of this
+  vault's item, so a shared 1Password vault your team also fills by hand shows you
+  nothing but the item you pointed charter at. The `charter:<vault>` tag marks what
+  charter wrote; it is how `vault list` recognises leftovers from the old schema, not a
+  filter the listing runs through.
 - **Errors withhold `op`'s output.** Its stderr can echo what it was given, and on a
   read path its stdout *is* the secret; failures report the exit status only.
 - **Pin the account** with `--account` when signed into more than one. Otherwise an
