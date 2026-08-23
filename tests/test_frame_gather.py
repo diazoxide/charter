@@ -16,7 +16,9 @@ happens to be installed, and independent of the data-correctness tests above.
 
 from __future__ import annotations
 
+import json
 import subprocess
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -91,6 +93,102 @@ class ScanReusesStatuslineHelpers(ClonedRepoIso, unittest.TestCase):
         self.assertIsNone(data["current_repo"])
 
 
+class DivergedRepoIso(ClonedRepoIso):
+    """`ClonedRepoIso`'s repo, but with real ahead/behind AND an upstream to
+    diverge from — the `tests/test_worktree.py` `_add_upstream` pattern (a bare
+    repo standing in for a remote, no network needed), extended with a second
+    clone that pushes a commit of its own so `self.repo`'s ``fetch`` sees a
+    remote-tracking ref it has not merged. Real divergence from ``git status
+    --porcelain --branch``, never an asserted number — `_entry()`'s `ahead`/
+    `behind` fields are pinned by nothing (fix round 1, finding 2) precisely
+    because `RoundTrip`'s hand-built fixture never exercises the git-reading
+    code that fills them in.
+
+    Ahead and behind are made UNEQUAL (2 and 1) on purpose: the coordinator's
+    own mutation probe swapped the `ahead`/`behind` key lookups in `_entry()`
+    and the suite stayed green — which an equal-valued fixture (1 and 1) would
+    have hidden even with a correct test, since swapping two equal numbers is
+    invisible to `assertEqual`."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        origin = self.tmp / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)],
+                       check=True, capture_output=True)
+        _git(self.repo, "remote", "add", "origin", str(origin))
+        _git(self.repo, "push", "-q", "-u", "origin", "main")
+
+        # behind: someone else pushes to `origin`; `self.repo` fetches (updates
+        # the remote-tracking ref) but never merges it into its own `main`.
+        other = self.tmp / "other-clone"
+        subprocess.run(["git", "clone", "-q", str(origin), str(other)],
+                       check=True, capture_output=True)
+        _git(other, "config", "user.email", "o@example.com")
+        _git(other, "config", "user.name", "o")
+        (other / "REMOTE.md").write_text("from elsewhere\n")
+        _git(other, "add", "REMOTE.md")
+        _git(other, "-c", "commit.gpgsign=false", "commit", "-qm", "remote change")
+        _git(other, "push", "-q", "origin", "main")
+        _git(self.repo, "fetch", "-q", "origin")
+
+        # ahead: two commits of `self.repo`'s own, never pushed — 2 vs. `behind`'s
+        # 1, deliberately unequal (see the class docstring).
+        (self.repo / "LOCAL.md").write_text("local change\n")
+        _git(self.repo, "add", "LOCAL.md")
+        _git(self.repo, "-c", "commit.gpgsign=false", "commit", "-qm", "local change")
+        (self.repo / "LOCAL.md").write_text("local change 2\n")
+        _git(self.repo, "add", "LOCAL.md")
+        _git(self.repo, "-c", "commit.gpgsign=false", "commit", "-qm", "local change 2")
+
+
+class EntryFieldsAreReal(DivergedRepoIso, unittest.TestCase):
+    """Fix round 1, finding 2: `tracked_dirty`, `ahead`, `behind`, `ci`, `change`
+    and `sigil` were built by `_entry()` but exercised only through
+    `RoundTrip`'s hand-built fixture, which proves `save`/`read` round-trip JSON
+    and proves nothing about `_entry()`'s own construction — confirmed by
+    mutation (swapping the `ahead`/`behind` lookups, or hardcoding `"ci": None`,
+    both left the suite green). Each test below uses a fixture with a
+    non-default value for the field it checks, so a swapped key or a dropped
+    lookup has somewhere to be caught."""
+
+    def test_ahead_and_behind_reflect_real_divergence(self):
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.repo))
+        entry = data["repos"][0]
+        self.assertEqual(entry["ahead"], 2)
+        self.assertEqual(entry["behind"], 1)
+
+    def test_an_untracked_only_change_is_dirty_but_not_tracked_dirty(self):
+        (self.repo / "scratch.txt").write_text("x\n")
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.repo))
+        entry = data["repos"][0]
+        self.assertTrue(entry["dirty"])
+        self.assertFalse(entry["tracked_dirty"])
+
+    def test_a_tracked_edit_marks_both_dirty_and_tracked_dirty(self):
+        (self.repo / "LOCAL.md").write_text("edited\n")
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.repo))
+        entry = data["repos"][0]
+        self.assertTrue(entry["dirty"])
+        self.assertTrue(entry["tracked_dirty"])
+
+    def test_ci_change_and_sigil_come_from_glstate(self):
+        """`glstate.read_for` only matches a cache entry whose recorded branch
+        equals the tree's CURRENT branch (`glstate.py`'s own staleness rule) —
+        seeded under ``"main"`` to match `self.repo`'s real branch, not a
+        made-up one, so this proves the wiring rather than a coincidence."""
+        cache_file = config.STATE_DIR / "cache" / "glstate.json"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps({
+            str(self.repo): {"branch": "main", "ts": time.time(),
+                              "change": 7, "ci": "failed", "sigil": "!"},
+        }))
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.repo))
+        entry = data["repos"][0]
+        self.assertEqual(entry["ci"], "failed")
+        self.assertEqual(entry["change"], 7)
+        self.assertEqual(entry["sigil"], "!")
+
+
 class ScanWithNoRepos(PersonaIso, unittest.TestCase):
     def test_an_empty_workspace_scans_to_an_empty_repo_list_without_raising(self):
         data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
@@ -141,6 +239,37 @@ class CorruptCache(PersonaIso, unittest.TestCase):
     def test_a_corrupt_cache_degrades_to_a_fresh_gather(self):
         d = state.frame_dir("f-1", create=True)
         (d / "gather.json").write_text("{not valid json")
+        sentinel = {"gathered_at": 0.0, "workspace": "sentinel", "current_repo": None,
+                    "repos": [], "worktrees": []}
+        with mock.patch.object(gather, "scan", return_value=sentinel) as scan_mock:
+            got = gather.read("f-1")
+        scan_mock.assert_called_once()
+        self.assertEqual(got, sentinel)
+
+
+class WrongShapedCache(PersonaIso, unittest.TestCase):
+    """Fix round 1, finding 1: `json.loads` succeeding proves only that the
+    bytes were valid JSON, not that they are a scan. `42`, a bare string, a
+    list, and a dict missing `repos`/`worktrees` all parse cleanly — and each
+    used to come back from `read()` VERBATIM, so a renderer indexing
+    `data["repos"]` on the `42` case got `TypeError: 'int' object is not
+    subscriptable` instead of the degrade this module exists to provide."""
+
+    def test_a_bare_int_falls_through_to_a_fresh_gather(self):
+        self._assert_falls_through("42")
+
+    def test_a_bare_string_falls_through_to_a_fresh_gather(self):
+        self._assert_falls_through('"a string"')
+
+    def test_a_bare_list_falls_through_to_a_fresh_gather(self):
+        self._assert_falls_through("[1, 2, 3]")
+
+    def test_a_dict_missing_repos_and_worktrees_falls_through_to_a_fresh_gather(self):
+        self._assert_falls_through('{"foo": "bar"}')
+
+    def _assert_falls_through(self, raw_json: str) -> None:
+        d = state.frame_dir("f-1", create=True)
+        (d / "gather.json").write_text(raw_json)
         sentinel = {"gathered_at": 0.0, "workspace": "sentinel", "current_repo": None,
                     "repos": [], "worktrees": []}
         with mock.patch.object(gather, "scan", return_value=sentinel) as scan_mock:

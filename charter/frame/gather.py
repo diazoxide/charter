@@ -227,23 +227,51 @@ def save(fid: str, data: dict) -> None:
         return
 
 
+def _shaped_like_a_scan(data) -> bool:
+    """True when *data* is at least the shape a renderer can index into without
+    its own ``None``/type check — a ``dict`` carrying ``repos``/``worktrees`` as
+    lists.
+
+    Mirrors ``glstate.read_for``'s own defensive-read pattern (``glstate.py``'s
+    docstring: "an entry written by an OLDER charter... is read with a fallback
+    so a stale on-disk cache still renders... rather than raising a KeyError").
+    A cache file surviving a redeploy is the ordinary case here too, and
+    ``json.loads`` succeeding proves only that the bytes were valid JSON — ``42``,
+    ``"a string"``, ``[1, 2, 3]``, and ``{"foo": "bar"}`` all parse cleanly and
+    are all useless to :func:`read`'s caller. This is deliberately loose beyond
+    that: it does not require every field :func:`_entry` writes, so a *future*
+    ``scan()`` adding a new field does not make today's otherwise-good cache
+    file look corrupt.
+    """
+    return (isinstance(data, dict)
+            and isinstance(data.get("repos"), list)
+            and isinstance(data.get("worktrees"), list))
+
+
 def read(fid: str, *, workspace: str | None = None, cwd: str | None = None) -> dict:
-    """The cached scan for *fid*, or a fresh one when there is nothing cached to
+    """The cached scan for *fid*, or a fresh one when there is nothing valid to
     read.
 
     Degrades rather than raises at every stage a cache can go wrong: a hostile or
     never-bumped *fid* (no directory at all — the ordinary cold-start case, not
-    an error), a directory with no cache file yet, and a cache file that is not
-    valid JSON (``json.JSONDecodeError``, a ``ValueError`` subclass) all fall
-    through to a fresh :func:`scan` — the same one a caller would otherwise have
-    no data to draw from. This never returns ``None``.
+    an error), a directory with no cache file yet, a cache file that is not valid
+    JSON (``json.JSONDecodeError``, a ``ValueError`` subclass), and — because
+    ``json.loads`` succeeding says nothing about what it produced — a cache file
+    that parses to something not :func:`_shaped_like_a_scan` (a bare int/str/
+    list, a dict missing ``repos``/``worktrees``, or the wrong types for them)
+    all fall through to a fresh :func:`scan`, the same one a caller would
+    otherwise have no data to draw from. This never returns anything but a dict
+    carrying ``repos``/``worktrees`` as lists — never the raw, untrusted value a
+    corrupt or stale cache file happened to contain.
     """
     f = _cache_file(fid, create=False)
     if f is not None:
         try:
-            return json.loads(f.read_text())
+            data = json.loads(f.read_text())
         except (OSError, ValueError):
-            pass
+            data = None
+        if _shaped_like_a_scan(data):
+            return data
     try:
         return scan(workspace=workspace, cwd=cwd)
     except Exception:
