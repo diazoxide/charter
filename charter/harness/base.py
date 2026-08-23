@@ -167,3 +167,23 @@ class Harness:
         everybody, which is the failure the flag exists to prevent.
         """
         return "unsupported", f"{self.name} has no command-pattern permissions"
+
+    def rule_outranks(self, pattern: str) -> str:
+        """What of THIS harness's own built-in decisions the rule will outrank, or ``""``.
+
+        A harness has permission names of its own and its own defaults over them, and
+        charter's rule is one more entry in that same table. Where the two collide the
+        operator's sentence quietly decides something they did not name — the shape ADR
+        0014 accepts by writing the host's rules rather than keeping charter's own, and
+        the cost of accepting it is that somebody has to say when it happens.
+
+        Returned as a finished sentence rather than a list of names, for the same reason
+        :attr:`Deficit.detail` is: the *why* is the harness's, not the caller's — one
+        harness resolves rules last-wins, the next may not — and a caller assembling the
+        sentence would have to know which.
+
+        Empty is the honest default, not a stub: a harness whose names charter cannot
+        collide with has nothing to warn about, and inventing a caveat for it would train
+        the operator to skip the ones that are real.
+        """
+        return ""

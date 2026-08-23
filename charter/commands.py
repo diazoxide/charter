@@ -1122,6 +1122,7 @@ def cmd_guard_allow(args) -> int:
             rc = 1
         else:
             util.info(f"  {h.name}: {detail} — nothing to relax there.")
+        _warn_if_outranking(h, pattern, status)
     if not wrote and rc == 0:
         util.warn("  No harness took the rule.")
     if wrote:
@@ -1191,6 +1192,7 @@ def cmd_guard_ask(args) -> int:
             # own hook stays the only thing guarding this command there — which is worth
             # saying, because silence would read as "the rule is in force everywhere".
             util.info(f"  {h.name}: {detail} — charter's own guard still applies.")
+        _warn_if_outranking(h, pattern, status)
     if not wrote and rc == 0:
         util.warn("  No harness took the rule.")
     if wrote:
@@ -1267,6 +1269,32 @@ def cmd_guard_list(args) -> int:
         util.info("No guard rules in this plane. "
                   "Add one: charter guard ask 'terraform apply *'")
     return rc
+
+
+def _warn_if_outranking(h, pattern: str, status: str) -> None:
+    """Say at write time when the rule also decides something the HARNESS had decided.
+
+    The sibling of `_warn_if_shadowing`, one layer down: that one is about charter's own
+    tool-gate being outranked, this one about the *host's* built-in permissions being
+    outranked. ADR 0014 has charter write the host's rules rather than keep its own, so
+    charter's entry lands in the same table the host seeded — and where the names
+    collide, the operator's sentence quietly decides something they never named.
+    `charter guard allow mcp__plan` is the real case: under opencode it turns two
+    built-in denies into allows (see `OpenCodeHarness.rule_outranks`).
+
+    Only on `added` and `present`, because those are the two statuses that mean the
+    rule is in force. Warning after `unsupported` would describe a consequence of a rule
+    that was not written, and after `malformed` it would bury the line that needs acting
+    on.
+
+    The sentence comes from the harness. Assembling it here would put one harness's
+    resolution order — last-match-wins — into a loop that runs for all of them.
+    """
+    if status not in ("added", "present"):
+        return
+    said = h.rule_outranks(pattern)
+    if said:
+        util.warn(f"  {h.name}: {said}")
 
 
 def _warn_if_shadowing(rule: str) -> None:

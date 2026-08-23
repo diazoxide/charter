@@ -50,7 +50,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from charter import commands, config
+from charter.harness import opencode as oc
 from charter.harness import registry
+from charter.harness.base import Harness
 from tests._isolation import PersonaIso
 
 
@@ -171,6 +173,146 @@ class TestThroughTheCommandBothHarnessesGetIt(PersonaIso):
         _rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__slack__send",
                                local=False)
         self.assertIn("slack_send", out)
+
+
+class TestWhenTheTranslatedNameIsOpencodesOwn(unittest.TestCase):
+    """The expensive half of the limit, which the first pass named only the cheap half of.
+
+    `<server>_*` covering a sibling server called `slack_admin` costs the operator a rule
+    that is wider than they asked. `<server>_*` covering opencode's OWN permission names
+    costs them one of opencode's decisions: `evaluate` is
+    ``findLast(r => match(name, r.permission) && match(pattern, r.pattern))`` and config
+    resolves after the built-in ruleset, so charter's entry is the last match and wins.
+
+    Verified against opencode 1.18.21 rather than reasoned: with
+    ``{"permission": {"plan_*": {"*": "allow"}}}`` in `opencode.json`,
+    `opencode debug agent build` lists ``plan_enter``/``plan_exit`` deny at indices 9 and
+    10 and ``plan_*`` allow at 17 — so both denies are gone. Before #374 the same command
+    wrote an inert `bash` rule and nothing happened, which makes this widening charter's
+    own and new, and the reason a warning had to come with the translation.
+    """
+
+    def setUp(self) -> None:
+        self.h = registry.get("opencode")
+
+    def test_a_whole_server_glob_over_opencodes_own_names_is_named(self):
+        said = self.h.rule_outranks("mcp__plan")
+        self.assertIn("plan_enter", said)
+        self.assertIn("plan_exit", said)
+
+    def test_the_caveat_says_which_way_opencode_resolves_the_collision(self):
+        """Naming the collision without naming the direction leaves the operator to
+        guess whether their rule wins or opencode's does — which is the whole point."""
+        self.assertIn("LAST", self.h.rule_outranks("mcp__plan"))
+
+    def test_a_server_colliding_with_nothing_gets_no_caveat(self):
+        """Silence is the common case and has to stay silent, or the line stops being read
+        by the time it matters."""
+        self.assertEqual(self.h.rule_outranks("mcp__slack"), "")
+        self.assertEqual(self.h.rule_outranks("mcp__slack__send"), "")
+
+    def test_a_single_tool_can_collide_exactly_and_is_named_too(self):
+        """`mcp__doom__loop` translates to `doom_loop`, which IS opencode's own permission
+        — no glob involved. A warning that only looked at `_*` would miss it."""
+        said = self.h.rule_outranks("mcp__doom__loop")
+        self.assertIn("doom_loop", said)
+
+    def test_an_exact_collision_offers_no_narrower_form_because_there_is_none(self):
+        """The remedy for `plan_*` is "name the tool". For `doom_loop` there is no
+        narrower name, and offering one would send the operator to type something that
+        changes nothing."""
+        self.assertNotIn("Naming the tool", self.h.rule_outranks("mcp__doom__loop"))
+        self.assertIn("Naming the tool", self.h.rule_outranks("mcp__plan"))
+
+    def test_the_narrower_form_offered_is_one_charter_would_accept(self):
+        """`_MCP_RULE_RE` admits a trailing separator, so `mcp__plan__` translates to the
+        same `plan_*` as `mcp__plan`. Echoing the operator's pattern back into the remedy
+        would advise `mcp__plan____<tool>` — four separators, which charter itself refuses
+        — so the remedy is rebuilt from the name that was written."""
+        said = self.h.rule_outranks("mcp__plan__")
+        self.assertIn("`mcp__plan__<tool>`", said)
+        self.assertNotIn("___", said)
+
+    def test_the_narrower_form_keeps_a_server_name_that_has_an_underscore(self):
+        """Rebuilding from the written name must not re-split it. A server called
+        `read_mcp` translates to `read_mcp_*`, which collides with opencode's
+        `read_mcp_resource` — and the remedy is `mcp__read_mcp__<tool>`, not
+        `mcp__read__<tool>`, which names a different server entirely."""
+        said = self.h.rule_outranks("mcp__read_mcp")
+        self.assertIn("read_mcp_resource", said)
+        self.assertIn("`mcp__read_mcp__<tool>`", said)
+
+    def test_an_ordinary_command_rule_is_not_warned_about(self):
+        """`git push *` is keyed `bash`, and `bash` is one of opencode's own permission
+        names — ON PURPOSE. Warning here would fire on nearly every invocation and train
+        the operator to skip the line that matters."""
+        self.assertEqual(self.h.rule_outranks("git push *"), "")
+        self.assertEqual(self.h.rule_outranks("Read(./secrets/**)"), "")
+
+    def test_a_harness_with_no_collision_to_report_says_nothing(self):
+        """The base default is a claim, not a stub: Claude Code namespaces MCP rules under
+        `mcp__`, so nothing charter writes there can land on a built-in tool name."""
+        self.assertEqual(Harness().rule_outranks("mcp__plan"), "")
+        cc = registry.get(registry.CLAUDE_CODE)
+        self.assertEqual(cc.rule_outranks("mcp__plan"), "")
+
+
+class TestTheCollisionMatcherIsOpencodesOwn(unittest.TestCase):
+    """`Wildcard.match` anchors ``^…$``. A substring test would be wrong in the
+    reassuring direction for one half and the alarming direction for the other."""
+
+    def test_a_glob_matches_only_names_that_start_with_the_server(self):
+        self.assertEqual(oc._shadowed_builtins("plan_*"), ("plan_enter", "plan_exit"))
+
+    def test_a_name_that_is_merely_a_substring_of_a_builtin_does_not_match(self):
+        """Unanchored at the front, `lan_*` would "match" `plan_enter` and warn about a
+        collision that cannot happen."""
+        self.assertEqual(oc._shadowed_builtins("lan_*"), ())
+
+    def test_a_prefix_of_a_builtin_with_no_glob_does_not_match(self):
+        """Unanchored at the back, `plan_ent` would "match" `plan_enter` — and a rule
+        keyed `plan_ent` matches nothing at all in opencode."""
+        self.assertEqual(oc._shadowed_builtins("plan_ent"), ())
+
+    def test_an_ordinary_server_name_matches_nothing(self):
+        self.assertEqual(oc._shadowed_builtins("slack_*"), ())
+        self.assertEqual(oc._shadowed_builtins("slack_send"), ())
+
+
+class TestTheOperatorHearsAboutItAtWriteTime(PersonaIso):
+    """At write time, because that is the last moment they can change their mind — the
+    same argument `_warn_if_shadowing` already makes for the persona tool-gate."""
+
+    def invoke(self, fn, **kw) -> tuple[int, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = fn(SimpleNamespace(**kw))
+        return rc, out.getvalue() + err.getvalue()
+
+    def test_guard_allow_warns_that_it_just_relaxed_two_of_opencodes_denies(self):
+        """The reported shape: `allow` over a whole server whose name is opencode's."""
+        rc, out = self.invoke(commands.cmd_guard_allow, pattern="mcp__plan", local=False)
+        self.assertEqual(rc, 0)
+        self.assertIn("plan_enter", out)
+        self.assertIn("plan_exit", out)
+
+    def test_guard_ask_warns_too_because_deny_to_ask_is_also_a_widening(self):
+        """opencode's default for `plan_enter` is `deny`. An `ask` rule keyed `plan_*`
+        outranks it, so a thing that could not happen becomes a thing one click away."""
+        _rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__plan", local=False)
+        self.assertIn("plan_enter", out)
+
+    def test_an_ordinary_rule_gets_no_such_line(self):
+        _rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__slack__send",
+                               local=False)
+        self.assertNotIn("LAST matching rule", out)
+
+    def test_nothing_is_warned_about_where_nothing_was_written(self):
+        """`--local` is `unsupported` under opencode — its only uncommitted config is
+        machine-wide — so no opencode rule exists to outrank anything. Describing the
+        consequence of a rule that was refused is the same species of lie as #374."""
+        _rc, out = self.invoke(commands.cmd_guard_ask, pattern="mcp__plan", local=True)
+        self.assertNotIn("plan_enter", out)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from .. import __version__
@@ -43,6 +44,32 @@ TOOL_NAMES = {
     "task": "Task",
 }
 
+#: opencode's OWN permission names — the table charter's rule joins, not a list charter
+#: invents. Read off opencode 1.18.21 itself rather than off its docs: the running
+#: server's `/experimental/tool/ids`, the built-in ruleset `Permission.fromConfig` is
+#: seeded with (`{"*":"allow", doom_loop:"ask", external_directory:{…}, question:"deny",
+#: plan_enter:"deny", plan_exit:"deny", read:{…}}`), the three MCP-resource tool ids
+#: (`list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`), and the
+#: "Known permission keys" list the binary carries for its own config authoring.
+#:
+#: It matters because `Permission.evaluate` glob-matches the permission NAME and takes
+#: the LAST match — `findLast((r) => match(name, r.permission) && match(pattern,
+#: r.pattern))` — and charter's rule comes from config, which resolves after the
+#: built-ins. So a name that collides here does not sit beside opencode's decision, it
+#: replaces it.
+#:
+#: Whole names with no `_` (`bash`, `read`, `list`) can never be hit by an MCP
+#: translation, which always carries the separator. They are kept anyway: the list is
+#: opencode's table, and `_shadowed_builtins` decides what is reachable. A hand-curated
+#: "reachable" subset would need re-curating the day opencode adds an underscored name,
+#: and would go stale silently — the exact failure this whole issue is about.
+BUILTIN_PERMISSIONS = (
+    "apply_patch", "bash", "doom_loop", "edit", "external_directory", "glob", "grep",
+    "invalid", "list", "list_mcp_resource_templates", "list_mcp_resources", "lsp",
+    "plan_enter", "plan_exit", "question", "read", "read_mcp_resource", "skill", "task",
+    "todowrite", "webfetch", "websearch", "write",
+)
+
 #: Tools whose output charter may append to. Deliberately NOT the ones that return
 #: content: a `read` whose output carries charter's nudge is a false record of that file,
 #: and the agent may write it back. These three report an action instead, so a note
@@ -51,6 +78,24 @@ TOOL_NAMES = {
 #: Claude Code needs no such list — its `additionalContext` arrives BESIDE the result.
 #: This restriction is the price of opencode having no channel of its own.
 EFFECTFUL_TOOLS = ("bash", "edit", "write")
+
+def _shadowed_builtins(name: str) -> tuple[str, ...]:
+    """The names in :data:`BUILTIN_PERMISSIONS` an opencode rule keyed *name* matches.
+
+    opencode's own matcher, transcribed rather than approximated — `Wildcard.match`
+    escapes ``[.+^${}()|[\\]\\\\]``, turns ``*`` into ``.*`` and ``?`` into ``.``, and
+    anchors ``^…$`` with the `s` flag — which is what `fullmatch` spells in Python.
+
+    Both anchors are load-bearing and each fails in its own direction. Without the
+    leading one, `lan_*` "collides" with `plan_enter` and charter warns about something
+    that cannot happen; without the trailing one, `plan_ent` "collides" too, and a rule
+    keyed `plan_ent` matches nothing in opencode at all. One `fullmatch` rather than
+    ``^…$`` plus `.match`, so there is one anchoring mechanism to be wrong about.
+    """
+    rx = re.escape(name).replace(r"\*", ".*").replace(r"\?", ".")
+    matcher = re.compile(rx, re.S)
+    return tuple(b for b in BUILTIN_PERMISSIONS if matcher.fullmatch(b))
+
 
 def global_dir() -> Path:
     """Where opencode reads plugins, commands and config for EVERY project.
@@ -427,7 +472,11 @@ class OpenCodeHarness(Harness):
         What charter cannot check is that opencode's `mcp` block names the server the same
         way. That is the contract Claude Code's rule already has — the name is the
         operator's, not charter's guess — and `guard` prints what it wrote so they can read
-        it back.
+        it back. Which is what makes that read-back load-bearing rather than cosmetic: it
+        currently renders as the repr of this tuple (`('slack_send', '*')`) and not as
+        anything `opencode.json` holds, so it is the one line an operator cannot check the
+        translation against. Filed as #395 rather than fixed here — the return type is
+        the harness rule interface, and three harnesses answer it.
 
         The whole-server glob is as tight as opencode's own names allow and no tighter:
         `_` is both the separator `toolName` joins with and a legal character either side
@@ -436,6 +485,17 @@ class OpenCodeHarness(Harness):
         occasionally wider than asked for one that does not exist. Worth saying because
         `allow_rule` shares this translation, and wider is the direction that costs
         something there.
+
+        **And the sibling server is the cheap half of that.** opencode's own permission
+        names live in the same flat namespace as the MCP tool ids, so a translated name
+        can also collide with `BUILTIN_PERMISSIONS` — ``mcp__plan`` becomes ``plan_*``,
+        which matches opencode's `plan_enter` and `plan_exit`, and `evaluate` takes the
+        LAST match while config resolves after the built-ins. `charter guard allow
+        mcp__plan` therefore does not merely reach a server that may not exist; it turns
+        two of opencode's own denies into allows. Before #374 the same command wrote an
+        inert `bash` rule and did nothing, so this widening is new here and charter's to
+        name. :meth:`rule_outranks` names it at write time, the only moment the operator
+        can still change their mind.
         """
         from .. import commands
 
@@ -448,6 +508,51 @@ class OpenCodeHarness(Harness):
                 if p.startswith(prefix) and p.endswith(")"):
                     return oc_id, p[len(prefix):-1]
         return "bash", p
+
+    def rule_outranks(self, pattern: str) -> str:
+        """opencode's own permission names this rule will decide for too, or ``""``.
+
+        **Only for an MCP pattern**, and that is the whole judgement rather than a
+        shortcut. Every other rule charter writes here is keyed by an opencode built-in
+        ON PURPOSE — `charter guard ask 'git push *'` lands on `bash` because `bash` is
+        what the operator meant — so warning on those would fire on nearly every
+        invocation and teach the operator to skip the line. An MCP pattern names a
+        *server*, and landing
+        on `plan_enter` is never what was meant: it is a collision between two namespaces
+        opencode flattened into one, which is exactly the case nobody can see coming.
+
+        Matched with opencode's own glob semantics rather than `fnmatch`, in
+        `_shadowed_builtins`. `fnmatch` would differ on `[`, which `_MCP_RULE_RE` cannot
+        admit today — so the difference is unreachable, and that is precisely why it is
+        worth not depending on. The name being matched is the one charter WRITES, so this
+        stays right if the translation ever changes.
+
+        The narrower form is rebuilt from the NAME that was written, not echoed back from
+        the operator's pattern. `_MCP_RULE_RE` admits a trailing separator — `mcp__plan__`
+        is read as the whole server, same as `mcp__plan` — and echoing that back would
+        advise `mcp__plan____<tool>`, four separators, a rule charter itself refuses. A
+        remedy nobody can type is worse than none, because it reads as one that works.
+        """
+        from .. import commands
+
+        p = (pattern or "").strip()
+        if not commands._MCP_RULE_RE.match(p):
+            return ""
+        name, _glob = self.ask_rule(p)
+        hit = _shadowed_builtins(name)
+        if not hit:
+            return ""
+        plural = len(hit) > 1
+        narrower = (f" Naming the tool instead (`mcp__{name[:-2]}__<tool>`) keeps this "
+                    f"to your server, unless the tool is spelled like one of those."
+                    if name.endswith("_*") else
+                    " opencode has no narrower name for it — your server's tool and "
+                    "opencode's own permission are spelled the same.")
+        return (f"`{name}` also matches opencode's OWN "
+                f"{'permissions' if plural else 'permission'} "
+                f"{', '.join('`%s`' % h for h in hit)}, and opencode takes the LAST "
+                f"matching rule — so this decides {'those' if plural else 'that'} too, "
+                f"replacing opencode's built-in one.{narrower}")
 
     #: Declined deliberately, not unimplemented. opencode's only uncommitted config is
     #: `global_dir()` (`~/.config/opencode`), which applies to EVERY project on the machine.
