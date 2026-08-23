@@ -29,3 +29,11 @@ os.environ["XDG_CONFIG_HOME"] = os.path.join(_SANDBOX, "xdg")
 os.environ["CODEX_HOME"] = os.path.join(_SANDBOX, "codex")
 os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
 os.makedirs(os.environ["CODEX_HOME"], exist_ok=True)
+
+# The same move for the one directory that CANNOT be redirected away from every test —
+# some tests read the real plane on purpose — but that none of them may write to. See
+# `tests/_planeguard.py`: after this line, a write into the developer's own `.charter/`
+# fails the test that made it instead of quietly deleting a running frame's state (#402).
+from . import _planeguard      # noqa: E402  (env above must be set before charter loads)
+
+_planeguard.install()

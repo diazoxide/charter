@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from charter import config, persona, commands_persona
+from tests._isolation import PersonaIso
 
 _KEYS = ("ROOT", "PERSONAS_DIR", "STATE_DIR", "PERSONA_STATE_DIR", "ACTIVE_PERSONA_FILE")
 
@@ -69,7 +70,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class EveryPlaneCommitOffersTheForgeToken(unittest.TestCase):
+class EveryPlaneCommitOffersTheForgeToken(PersonaIso):
     """charter's headline rule is one credential: each repo's own forge's token over
     HTTPS, never SSH. `commands.commit_push` obeyed it; `cmd_persona_memory_sync` had
     grown a second committer that ran `git push origin HEAD` — over SSH — on the ONE
@@ -80,6 +81,15 @@ class EveryPlaneCommitOffersTheForgeToken(unittest.TestCase):
     `tests/test_persona_memory_sync.py` only ever passed `no_push=True`, so the push argv
     — the only place the difference was visible — was never exercised. This asserts the
     argv, which is what the two implementations disagreed about.
+
+    `PersonaIso`, not `unittest.TestCase`, and not for tidiness: every git call here is
+    faked, which made the class read as pure argv inspection — but `commit_push` is REAL,
+    and its last act on the pushed path is `planegit.record_push`, which DELETES
+    `<STATE_DIR>/plane-push.json`. Unisolated, that is the developer's own record of a
+    stranded push, the one `doctor` reads to tell them their plane never reached the
+    forge; the suite erased it on every run and `record_push`'s own `except OSError: pass`
+    guaranteed silence. Found by `tests/_planeguard.py` rather than by hand, which is what
+    that guard is for.
     """
 
     def test_memory_sync_delegates_to_the_one_committer(self):
