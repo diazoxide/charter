@@ -290,18 +290,26 @@ def frame_ready() -> tuple[int, str, str]:
     launcher goes on to draw regardless — a probe that lies about `cmd_launch`'s own
     behaviour is worse than one that runs nothing at all.
 
-    **The two STANDING conditions are reported here and nowhere else.** Both used to be
-    `util.warn` calls inside `cmd_launch` itself, and both were measured to be
-    unreadable there: `util.warn` for an unimplemented slot lands 86 bytes before tmux's
-    own `\\x1b[?1049h`, so the operator's terminal switches to the alternate screen
-    milliseconds later and the line is restored to view only when the frame EXITS. A
-    warning printed where it cannot be read is worse than silence, because it creates a
-    record that the operator was told. Neither is per-launch news anyway — a tmux below
-    the floor, and a configured slot with no renderer, are true on every launch on this
-    machine and this plane until something changes. They are capability ceilings, so
-    they belong to the two surfaces built to report ceilings on demand: this one, and
-    `doctor.check_frame`. (A per-launch notice mechanism, for conditions specific to one
-    launch, is deliberately NOT built here.)
+    **The three STANDING conditions are reported here and nowhere else.** All three used
+    to be `util.warn` calls inside `cmd_launch` (or, for the resize hook, inside
+    `_draw_panels`), and all three were measured to be unreadable there: `util.warn` for
+    an unimplemented slot lands 86 bytes before tmux's own `\\x1b[?1049h`, so the
+    operator's terminal switches to the alternate screen milliseconds later and the line
+    is restored to view only when the frame EXITS. A warning printed where it cannot be
+    read is worse than silence, because it creates a record that the operator was told.
+    None is per-launch news anyway — a tmux below the floor, a tmux below
+    `tmuxctl.RESIZE_HOOK_FLOOR`, and a configured slot with no renderer are true on every
+    launch on this machine and this plane until something changes. They are capability
+    ceilings, so they belong to the two surfaces built to report ceilings on demand: this
+    one, and `doctor.check_frame`. (A per-launch notice mechanism, for conditions specific
+    to one launch, is deliberately NOT built here.)
+
+    **`RESIZE_HOOK_FLOOR` is the third, and it was the one this function did not know
+    about (#387).** It sits ABOVE `FLOOR`, so an operator on tmux 3.2 passed the floor
+    cleanly, saw a green tick on both ceiling surfaces, and silently had no resize
+    recovery at all — the gap being closed here. It does NOT change this function's exit
+    code, for the same reason the other two do not: `cmd_launch` draws the frame
+    regardless, and a probe stricter than the launcher lies about the launcher.
 
     Two callers share this, both read-only for the same reason `charter/news.py`
     requires of a `check:` (reads, never acts; and this module's own tmux calls all go
@@ -318,6 +326,8 @@ def frame_ready() -> tuple[int, str, str]:
     ceilings = []
     if v < tmuxctl.FLOOR:
         ceilings.append(tmuxctl.below_floor_message(v))
+    if v < tmuxctl.RESIZE_HOOK_FLOOR:
+        ceilings.append(tmuxctl.below_resize_hook_message(v))
     missing = frame_slots.unimplemented(config.FRAME["slots"])
     if missing:
         ceilings.append(no_renderer_message(missing))
@@ -883,8 +893,15 @@ def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
         time.sleep(_POLL_SECONDS)
 
 
-def _drawable_slots(cols: int, rows: int) -> list[str]:
+def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -> list[str]:
     """Which configured slots this frame will actually draw, at *cols* x *rows*.
+
+    *configured* defaults to `config.FRAME["slots"]` — already the density-resolved list
+    (`instance.frame_of` expands a declared `[frame] density` into it, so nothing here
+    knows presets exist). `cmd_density` passes the list a level expands to instead, so a
+    frame re-laid-out by the hotkey menu goes through exactly the same two filters a launch
+    does rather than a second copy of them: below the size floors it drops the same slots
+    in the same order, and a slot with no renderer is skipped for the same reason.
 
     `[frame] slots` can accept a slot (`instance.FRAME_SLOTS`, sized by
     `layout.SLOT_SIZE`) that `frame.slots.SLOTS` — the RENDERER registry — has no
@@ -905,8 +922,8 @@ def _drawable_slots(cols: int, rows: int) -> list[str]:
     demand instead, from the same `frame_slots.unimplemented` this filters on.
     """
     frame = config.FRAME
-    slots = layout.visible_slots(frame["slots"], cols, rows,
-                                 frame["min_cols"], frame["min_rows"])
+    slots = layout.visible_slots(frame["slots"] if configured is None else configured,
+                                 cols, rows, frame["min_cols"], frame["min_rows"])
     unimplemented = frame_slots.unimplemented(slots)
     return [s for s in slots if s not in unimplemented]
 
@@ -1095,12 +1112,18 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[
     # version: whatever is under the id predates the frame now claiming it.
     state.clear_exit(fid)
     gather.discard(fid)
+    state.clear_shape(fid)
     # Rewritten, not merely written: an adopted directory may name the OTHER server, and
     # a stale marker would make `reap` there skip a frame that is now genuinely ours.
     state.record_server(fid, socket)
     state.bump(fid)
 
     env = _frame_env(fid, h)
+    # The launcher is the only process that knows this frame's own charter identity —
+    # see `state.record_identity` for the measurement. Written before any pane exists,
+    # because a `run-shell` child fired later reads the SERVER's environment, not this
+    # one's.
+    state.record_identity(fid, _frame_identity_env(env))
     cwd = os.getcwd()
     opened = tmuxctl.run(
         "opening a window for the frame",
@@ -1251,12 +1274,31 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     `Pane is dead (status 2)`. Nothing about that is specific to charter's own server;
     inside an operator's tmux the cwd is the same cwd, so the hole is the same hole.
     """
+    panes = _split_panels(socket, slots=slots, fid=fid, harness_pane=harness_pane,
+                          env=env, pane_env=pane_env)
+    _install_resize_hook(socket, harness_pane=harness_pane, panes=panes, v=v, env=env)
+    # Written down, because a frame's shape can now be CHANGED while it runs (the density
+    # menu — `cmd_density`), and nothing else afterwards can say which tmux pane charter
+    # meant as which slot. Slots only: `state.record_harness_pane` already owns the
+    # harness pane, and one fact recorded twice is one fact free to disagree with itself.
+    state.record_panes(fid, panels=panes)
+    return panes
+
+
+def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
+                  env: dict | None, pane_env: dict[str, str] | None) -> dict[str, str]:
+    """One `split-window` per slot, and the `{slot: pane id}` map that came back.
+
+    The splitting half of :func:`_draw_panels`, separated from the hook-and-record half so
+    a live re-layout (`_relayout`) can add panes to a frame that already has some without
+    re-installing hooks per batch or overwriting the map it is in the middle of building.
+    """
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
                                     harness_pane=harness_pane, env=pane_env)
-    # Zipped with `slots`, not just iterated: `_resize_hook_argv` below needs to know
-    # WHICH slot each successfully-created pane belongs to (for its size and its
-    # resize-pane flag), and `panel_argvs` returns exactly one command per slot, in the
-    # same order (see its own docstring).
+    # Zipped with `slots`, not just iterated: `_resize_hook_argv` needs to know WHICH slot
+    # each successfully-created pane belongs to (for its size and its resize-pane flag),
+    # and `panel_argvs` returns exactly one command per slot, in the same order (see its
+    # own docstring).
     panes: dict[str, str] = {}
     for slot, cmd in zip(slots, panel_cmds):
         # Reported by `tmuxctl.run` but not fatal: one decorative panel failing to draw
@@ -1268,50 +1310,138 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
         pane_id = p.stdout.strip()
         if pane_id and _PANE_ID_RE.fullmatch(pane_id):
             panes[slot] = pane_id
+    return panes
 
-    if panes and v < tmuxctl.RESIZE_HOOK_FLOOR:
+
+def _install_resize_hook(socket: str, *, harness_pane: str, panes: dict[str, str],
+                         v: tuple[int, int], env: dict | None,
+                         replacing: bool = False) -> None:
+    """Arm (or re-arm) the `window-resized` hook for exactly *panes*.
+
+    Split out of :func:`_draw_panels` because a live re-layout (`cmd_density`) changes
+    which panes exist without going through a whole launch, and the hook's action names
+    every pane it resizes — one stale entry there is a `resize-pane` aimed at a pane that
+    no longer exists, on every resize, for the life of the window. One `set-hook` replaces
+    the whole hook, so re-arming from the new map covers every case but one: an EMPTY map
+    replaces nothing. *replacing* is what tells the two apart — a launch with no panels has
+    nothing armed to remove and issues no command at all, while a re-layout that dropped
+    every slot must actively `set-hook -u`. It is reachable rather than theoretical:
+    `_drawable_slots` answers `[]` below half the size floors.
+
+    **Nothing is printed here any more, and that is #387's half of it.** This function
+    used to `util.warn` when the tmux was below `RESIZE_HOOK_FLOOR` — a STANDING fact about
+    this machine, printed into the pre-attach window measured at 86 bytes before tmux's own
+    `\\x1b[?1049h`, where the operator's terminal switches to the alternate screen
+    milliseconds later and the line comes back only once the frame exits. It is reported by
+    `frame_ready` (`--probe`, `charter frame-probe`) and `doctor.check_frame` instead, which
+    are the two surfaces built to report ceilings on demand.
+
+    The two warnings below stay, and the difference is real: those are not standing facts
+    but DISCOVERIES made at this launch — a tmux that turned out not to know the hook name
+    despite the version gate, or a `set-hook` that failed for some other reason entirely.
+    Neither is answerable by `frame_ready`, which starts nothing.
+    """
+    if v < tmuxctl.RESIZE_HOOK_FLOOR:
         # Below RESIZE_HOOK_FLOOR, `window-resized` is not a hook name THIS tmux
         # recognises at all — `set-hook` fails with `invalid option: <name>` for any
         # name it does not know (see RESIZE_HOOK_FLOOR's own docstring for exactly what
         # was, and was not, confirmed by hand) — skip the attempt rather than printing
-        # that confusing text on every single launch. One quiet, honest note instead,
-        # naming the real consequence (item 4's own standard: every degrade in this
-        # launcher says what it costs).
-        util.warn(f"charter frame: tmux {v[0]}.{v[1]} predates the resize-recovery hook "
-                  f"(needs {tmuxctl.RESIZE_HOOK_FLOOR[0]}.{tmuxctl.RESIZE_HOOK_FLOOR[1]}+)"
-                  f" — panels may drift out of shape if this terminal is resized")
-    elif panes:
-        # Only once any panel actually exists — a resize hook with nothing to resize
-        # would just be a wasted `set-hook` call, and (per the module docstring's "belt
-        # and braces" framing) every pane already measures its own tty on every repaint
-        # regardless, so this hook is purely cosmetic geometry upkeep, not something a
-        # launch's correctness depends on.
-        resize_cmd = _resize_hook_argv(socket=socket, harness_pane=harness_pane,
-                                       panes=panes)
-        # `report=False`: this is the one call site that reads a failure's own stderr
-        # before deciding whether it IS one — an unrecognised hook name here is a
-        # capability ceiling to note quietly, not an integration to report loudly, and
-        # `tmuxctl.run`'s default would have printed the loud version first regardless
-        # of which branch runs below.
-        resize = tmuxctl.run("installing the resize hook", resize_cmd, env=env,
-                             report=False)
-        if resize.returncode != 0:
-            if _INVALID_HOOK_NAME in (resize.stderr or ""):
-                # RESIZE_HOOK_FLOOR believed this tmux would recognise the hook name and
-                # it does not — the constant is wrong, not the launch. Trust what THIS
-                # tmux just said over the constant and degrade the same quiet way the
-                # version-gate above already does, rather than report it as a broken
-                # integration (a capability ceiling, not a failure — see the module's own
-                # "belt and braces" framing and `harness.base.Deficit`'s same philosophy
-                # for a harness-level capability gap).
-                util.warn("charter frame: this tmux does not support the "
-                          "resize-recovery hook — panels may drift out of shape if this "
-                          "terminal is resized")
-            else:
-                tmuxctl.report_failure("installing the resize hook", resize_cmd, resize)
-                util.warn("charter frame: continuing without it — panels may drift out "
-                          "of shape if this terminal is resized")
-    return panes
+        # that confusing text on every single launch. Nothing was ever installed below
+        # this line, so there is nothing to remove either.
+        return
+    if not panes:
+        if not replacing:
+            # A LAUNCH with no panels: the window is new, nothing has ever been armed on
+            # it, and a `set-hook -u` here would be a tmux command issued to remove a hook
+            # that does not exist — measurable in the launcher's own command list and
+            # asserted against by `Launch.test_no_resize_hook_is_installed_when_no_panel
+            # _pane_id_was_learned`. Nothing to do.
+            return
+        # A RE-LAYOUT that dropped every slot, which is reachable rather than theoretical:
+        # `_drawable_slots` answers `[]` below half of `min_cols`/`min_rows`, so shrinking
+        # a small window's frame to `minimal` kills all four panes. One `set-hook`
+        # REPLACES a hook only when there is something to replace it with — an empty map
+        # replaces nothing — so returning here would leave the launch's own hook armed and
+        # firing `resize-pane -t %1` at dead panes on every resize for the window's life.
+        tmuxctl.run("removing the resize hook",
+                    tmuxctl.server_argv(socket, "set-hook", "-w", "-u", "-t",
+                                        harness_pane, "window-resized"),
+                    env=env, report=False)
+        return
+    resize_cmd = _resize_hook_argv(socket=socket, harness_pane=harness_pane, panes=panes)
+    # `report=False`: this is the one call site that reads a failure's own stderr
+    # before deciding whether it IS one — an unrecognised hook name here is a
+    # capability ceiling to note quietly, not an integration to report loudly, and
+    # `tmuxctl.run`'s default would have printed the loud version first regardless
+    # of which branch runs below.
+    resize = tmuxctl.run("installing the resize hook", resize_cmd, env=env, report=False)
+    if resize.returncode == 0:
+        return
+    if _INVALID_HOOK_NAME in (resize.stderr or ""):
+        # RESIZE_HOOK_FLOOR believed this tmux would recognise the hook name and
+        # it does not — the constant is wrong, not the launch. Trust what THIS
+        # tmux just said over the constant and degrade the same quiet way the
+        # version-gate above already does, rather than report it as a broken
+        # integration (a capability ceiling, not a failure — see the module's own
+        # "belt and braces" framing and `harness.base.Deficit`'s same philosophy
+        # for a harness-level capability gap).
+        util.warn("charter frame: this tmux does not support the "
+                  "resize-recovery hook — panels may drift out of shape if this "
+                  "terminal is resized")
+    else:
+        tmuxctl.report_failure("installing the resize hook", resize_cmd, resize)
+        util.warn("charter frame: continuing without it — panels may drift out "
+                  "of shape if this terminal is resized")
+
+
+def _arm_panel_respawn(socket: str, *, panes: dict[str, str], env: dict | None) -> None:
+    """Give each pane in *panes* its OWN `pane-died` hook, so a dead panel comes back.
+
+    A panel whose process dies outright would otherwise leave a hole for the frame's whole
+    life (#382). Scoped to each panel's own pane — never the harness pane, whose
+    `pane-died` array carries the exit code and must not gain a third writer (see
+    `_panel_died_hook_argv`). Reported but never fatal, like every other decorative tmux
+    command here: a panel that cannot be armed for respawn is still a panel that came up.
+
+    **Private-server-only, and the guard is here rather than at the call sites.**
+    `cmd_respawn` (the hook's own action) and `_panel_died_hook_argv` both assume `SOCKET`,
+    charter's own server NAME — `-L`, never `-S` — which is correct on charter's own
+    server and wrong on the operator's, where the frame's server is a socket PATH read
+    from `$TMUX`. Arming a panel there installs a hook whose action targets the wrong tmux
+    server entirely. That used to be enforced by WHERE the loop sat (inside `cmd_launch`'s
+    private-server branch); with a second caller (`_relayout`, which runs on either
+    server) that is no longer a property of position, so it is asserted here instead.
+    Extending #382 across the boundary is real work — resolving `cmd_respawn`'s target
+    from `state.frame_server(fid)` and its liveness check from windows rather than
+    sessions — and is still not this change's job.
+    """
+    if tmuxctl.is_operator_socket(socket):
+        return
+    for slot, pane_id in panes.items():
+        tmuxctl.run(f"arming the {slot} panel for respawn",
+                    _panel_died_hook_argv(socket=socket, panel_pane=pane_id, slot=slot),
+                    env=env)
+
+
+def _disarm_panel_respawn(socket: str, *, pane_id: str) -> None:
+    """Take one panel pane's `pane-died` hook off, BEFORE that pane is killed.
+
+    Without this, changing density is self-undoing: `kill-pane` on a panel charter no
+    longer wants fires that pane's own respawn hook, `cmd_respawn` sleeps its backoff,
+    finds the session still perfectly alive (only the layout changed), and respawns the
+    panel the operator just asked to be rid of — spending one of its three lives on the
+    way. Unsetting first removes the question rather than answering it: there is no hook
+    left to fire, whichever way this tmux treats a killed pane's `pane-died`.
+
+    `report=False`: on the operator's own server no hook was ever armed
+    (:func:`_arm_panel_respawn` refuses there), so a `set-hook -u` for a hook that is not
+    set is the ORDINARY case rather than a fault — the same reason `_live_sessions` opts
+    out of reporting for a socket no server has run on.
+    """
+    tmuxctl.run("disarming a panel's respawn hook",
+                tmuxctl.server_argv(socket, "set-hook", "-p", "-u", "-t", pane_id,
+                                    "pane-died"),
+                timeout=5, report=False)
 
 
 def _pane_last_words(socket: str, harness_pane: str) -> list[str]:
@@ -1559,6 +1689,11 @@ def cmd_launch(args) -> int:
     # `state.bump`'s job, one line below.
     state.clear_exit(fid)
     gather.discard(fid)
+    # And the shape this frame starts at is this frame's own: an adopted `density` would
+    # be another session's keypress silently overriding this plane's `[frame] density`,
+    # and an adopted `panes` would name tmux panes that no longer exist. See
+    # `state.clear_shape`.
+    state.clear_shape(fid)
     # And the `server` marker is rewritten for the same reason: an adopted directory
     # may name the OTHER server, and a stale marker would make `reap` on this one skip
     # a frame that is now genuinely ours.
@@ -1576,6 +1711,10 @@ def cmd_launch(args) -> int:
 
     slots = _drawable_slots(cols, rows)
     env = _frame_env(fid, h)
+    # Same as the operator's-tmux path above, and needed harder here: charter's private
+    # server is SHARED, so a `run-shell` child on it reads whichever launcher's
+    # environment started the server. See `state.record_identity`.
+    state.record_identity(fid, _frame_identity_env(env))
 
     conf_path = fdir / "tmux.conf"
     status_path = fdir / "exit"
@@ -1662,16 +1801,8 @@ def cmd_launch(args) -> int:
                   "the wrong charter if this pane's directory has its own `charter/` "
                   "package")
 
-    # The menu itself: what the hotkey actually opens. A single "Detach" entry — the
-    # spec's own words, "Detach is allowed and prints how to reattach" — proves the
-    # mechanism end to end (bind → menu → opaque id → real command) without inventing a
-    # feature this task was never asked to build. `-s fid` (not `-t`): `detach-client`'s
-    # `-s` targets every client attached to a SESSION, `-t` a single CLIENT — this frame
-    # normally has exactly one attached client, but `-s` is correct even if it ever has
-    # more than one.
-    menu.record(fid=fid, entries=[
-        ("Detach", tmuxctl.server_argv(SOCKET, "detach-client", "-s", fid)),
-    ])
+    # The menu itself: what the hotkey actually opens.
+    menu.record(fid=fid, entries=_menu_entries(fid, SOCKET, current=_current_density(fid)))
 
     write_hook = tmuxctl.run(
         "installing the exit-status hook",
@@ -1739,31 +1870,8 @@ def cmd_launch(args) -> int:
             # below `PANE_ENV_FLOOR`, where `split-window` cannot parse the flag.
             panes = _draw_panels(
                 SOCKET, slots=slots, fid=fid, harness_pane=harness_pane, env=env, v=v,
-                pane_env=(_frame_identity_env(env)
-                          if v >= tmuxctl.PANE_ENV_FLOOR else None))
-            for slot, pane_id in panes.items():
-                # This panel's OWN `pane-died` hook, so a panel whose process dies
-                # outright is brought back instead of leaving a hole for the frame's
-                # whole life (#382). Scoped to this pane — never the harness pane, whose
-                # `pane-died` array carries the exit code and must not gain a third
-                # writer (see `_panel_died_hook_argv`). Reported but never fatal, like
-                # every other decorative tmux command here: a panel that cannot be armed
-                # for respawn is still a panel that came up.
-                #
-                # Private-server-only, deliberately, and not folded into `_draw_panels`
-                # itself: `cmd_respawn` (the hook's own action) and
-                # `_panel_died_hook_argv` both assume `SOCKET`, charter's own server
-                # NAME — `-L`, never `-S` — which is correct here and wrong on the
-                # operator's own tmux, where the frame's server is a socket PATH read
-                # from `$TMUX`. Arming a panel there today would install a hook whose
-                # action targets the wrong tmux server entirely. Extending #382 across
-                # that boundary is real work — resolving `cmd_respawn`'s target from
-                # `state.frame_server(fid)` and its liveness check from windows rather
-                # than sessions — not something to invent as a side effect of this
-                # rebase.
-                tmuxctl.run(f"arming the {slot} panel for respawn",
-                           _panel_died_hook_argv(socket=SOCKET, panel_pane=pane_id,
-                                                 slot=slot), env=env)
+                pane_env=_pane_identity_env(env, v))
+            _arm_panel_respawn(SOCKET, panes=panes, env=env)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —
@@ -1814,6 +1922,288 @@ def cmd_launch(args) -> int:
         # precisely the failure this whole module exists to stop happening silently.
         tmuxctl.report_failure("attaching to the frame", attach_cmd, attach)
         return attach.returncode
+    return 0
+
+
+#: What marks the level a frame is currently at, in the hotkey menu, and the blank that
+#: keeps the other rows aligned with it.
+#:
+#: **ASCII, deliberately.** The obvious `•` (U+2022) is East-Asian *Ambiguous*: one column
+#: in most terminals and two under a CJK locale or an ambiguous-width setting, which would
+#: shift that one row against its neighbours in a `display-menu` tmux does not pad.
+#: `statusline._persona_chips` carries a comment saying ambiguous glyphs "have broken this
+#: layout twice", and writing one in a fresh line under that rule is not a trade worth
+#: making for a prettier dot. `*` is the marker `git branch` already uses for "the one you
+#: are on", and it is unambiguously narrow everywhere.
+_DENSITY_MARK = ("*", " ")
+
+
+def _current_density(fid: str) -> str:
+    """The density *fid* is at right now: its own recorded override, else the configured
+    default. The same two-source order `frame/slots.verbosity` reads for verbosity, so the
+    menu's dot and the panels' own content can never disagree about which level is on."""
+    from . import instance
+    return (instance.density_level(state.density(fid))
+            or instance.density_level(config.FRAME["density"])
+            or "normal")
+
+
+def _menu_entries(fid: str, socket: str, *, current: str) -> list[tuple[str, list[str]]]:
+    """Every row of this frame's hotkey menu, in the order it is drawn.
+
+    **"Detach" and the three densities, and no separate key for any of them.** #387 asks
+    that a keypress change the density of the RUNNING frame; a second `bind -n` would have
+    been the obvious way and is the wrong one, because a tmux key table is server-wide with
+    no per-session form (`conf_text`'s own docstring measures what that costs). Every frame
+    on `SOCKET` would share whatever key was chosen, and an operator inside their own tmux
+    — where charter binds nothing at all — would get no density control regardless. The
+    hotkey charter already binds opens this menu, so the density lives here: one bind, one
+    server-wide cost, already paid.
+
+    **The argv is `charter frame-density <level>`, not tmux's own commands.** Re-laying out
+    a frame is several tmux calls that have to be ordered and whose results have to be
+    written back down (`_relayout`); a menu entry is one argv, run once, by
+    `cmd_action`'s plain `subprocess.run` of a LIST. `util.self_relaunch_argv()` for the
+    interpreter half, for #390's reason — a menu action starts in whatever directory the
+    pane is in, and from a charter checkout a bare `-m charter` imports the checkout.
+
+    *current* is marked, not filtered out: an operator who selects the level they are
+    already on gets a re-layout that produces the same frame, which is the harmless
+    outcome, and a menu whose rows move around depending on state is a menu nobody learns.
+    """
+    from . import instance
+    entries: list[tuple[str, list[str]]] = [
+        # The spec's own words, "Detach is allowed and prints how to reattach". `-s fid`
+        # (not `-t`): `detach-client`'s `-s` targets every client attached to a SESSION,
+        # `-t` a single CLIENT — this frame normally has exactly one attached client, but
+        # `-s` is correct even if it ever has more than one.
+        ("Detach", tmuxctl.server_argv(socket, "detach-client", "-s", fid)),
+    ]
+    on, off = _DENSITY_MARK
+    for level in instance.FRAME_DENSITY:
+        mark = on if level == current else off
+        entries.append((f"{mark} density: {level}",
+                        util.self_relaunch_argv("frame-density", level)))
+    return entries
+
+
+def _pane_identity_env(env: dict[str, str], v: tuple[int, int]) -> dict[str, str] | None:
+    """What a newly split panel pane must be TOLD, or ``None`` when tmux cannot be told.
+
+    One line of logic, named once, because there are now two callers that create panel
+    panes — `cmd_launch` and `_relayout` — and the two halves of this are each a decision
+    somebody already paid for:
+
+    * :func:`_frame_identity_env`, never the whole environment. A tmux ``-e`` is argv, and
+      argv is world-readable: measured on a real environment, `_frame_env` expanded to 138
+      argv elements and 7,696 bytes carrying two live service-account tokens. Only the five
+      names in :data:`_FRAME_IDENTITY` travel; everything else keeps arriving the way it
+      always did.
+    * :data:`tmuxctl.PANE_ENV_FLOOR`, below which ``split-window`` cannot parse the flag at
+      all — and a flag tmux refuses takes the whole command with it, so the pane is created
+      without it rather than not created.
+
+    Written as a wrapper rather than repeated at each call site so a name added to
+    `_FRAME_IDENTITY` — it has grown from four to five already — reaches every pane charter
+    creates, not just the ones somebody remembered.
+    """
+    return _frame_identity_env(env) if v >= tmuxctl.PANE_ENV_FLOOR else None
+
+
+def _relayout_pane_env(fid: str, v: tuple[int, int]) -> dict[str, str] | None:
+    """What a pane split by a LIVE RE-LAYOUT must be told. Five names, and the frame's
+    OWN values for them — never this process's.
+
+    **`os.environ` here is not this frame's identity, and that is #411 arriving on the one
+    command added since.** `cmd_density` normally runs as a `subprocess.run` child of
+    `cmd_action`, which is a `run-shell` child of the tmux server. Only
+    `CHARTER_SESSION_ID` is session-scoped (`_session_id_env_argv`); `CHARTER_ROOT`,
+    `CHARTER_WORKSPACE`, `CHARTER_HARNESS` and `CHARTER_PERSONA` all reach that child from
+    the SERVER's environment, and charter's private server is shared between every frame
+    on the machine. Measured against tmux 3.7c, the second frame's `run-shell` reported
+    the first frame's workspace and harness alongside its own id — so building a `-e`
+    payload from `os.environ` would pin ANOTHER frame's plane onto the panes this keypress
+    creates, where `$CHARTER_ROOT` and `$CHARTER_WORKSPACE` win outright over every other
+    source. The frame's new panels would draw a different plane from the survivors.
+
+    So the values come from `state.identity`, which the LAUNCHER wrote — the one process
+    that knew. Recorded in the frame's own directory rather than pushed onto the tmux
+    session, because the operator's-tmux path may not write a session option at all (ADR
+    0018), and one mechanism that works on both servers beats two that each work on one.
+
+    **A frame with no recorded identity gets the four unknown names as EMPTY, not
+    omitted.** Omitting them lets the pane inherit the server's — which is the bug. Empty
+    is what every charter reader already treats as absent (`workspace.resolve` and
+    `root.find_root` test for truth, not presence), so the pane falls back to resolving
+    from its own cwd, which it inherits from the harness pane and which is correct.
+    `_frame_identity_env`'s own docstring makes the identical argument for the launch path.
+
+    `CHARTER_SESSION_ID` is forced to *fid* rather than read back: it is the one name this
+    process can be certain of — it is how it found the frame at all — and a recorded value
+    disagreeing with it would mean the directory belongs to a different frame.
+
+    There is no matching CLIENT environment to decide here. `cmd_launch` passes one
+    because it is the call that STARTS charter's server; by the time a density change
+    runs, the server is up on either socket and a pane's environment comes from the server
+    and this `-e`, never from the tmux client's own process. A client env would have been
+    a distinction no test could tell from its absence, so the callers pass `env=None`.
+    """
+    known = state.identity(fid)
+    values = {name: known.get(name, "") for name in _FRAME_IDENTITY}
+    values["CHARTER_SESSION_ID"] = fid
+    return values if v >= tmuxctl.PANE_ENV_FLOOR else None
+
+
+def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str],
+              want: list[str], v: tuple[int, int]) -> dict[str, str]:
+    """Make the running frame's panes match *want*, and return the map that resulted.
+
+    Kill what is no longer wanted, split what is newly wanted, re-arm the hooks, re-assert
+    every size. In that order, and each step is here for a measured reason:
+
+    * **Disarm before killing.** See :func:`_disarm_panel_respawn` — otherwise the panel
+      charter just closed comes straight back, one respawn life poorer.
+    * **Split off the HARNESS pane, never off a sibling panel.** `_draw_panels` already
+      does this and it is `frame/layout.py`'s own module-docstring measurement: tmux
+      renumbers pane INDICES on every split, and a target derived from an earlier split is
+      the bug that shipped a four-slot frame with one panel. The harness pane's `%N` is
+      read back out of the frame's own state (`state.panes`), which is why that file
+      exists at all.
+    * **Re-assert every size afterwards, not only the new panes'.** A `split-window -l` or
+      a `kill-pane` makes tmux redistribute the remaining panes proportionally — the same
+      engine `_resize_hook_argv` exists to correct after a window resize. The panes that
+      merely SURVIVED a density change are the ones that get stretched by it, so they are
+      exactly the ones a `-l` on the new pane cannot fix.
+
+    Slots whose `split-window` fails are simply absent from the returned map, as at launch:
+    a decorative panel that could not be drawn must not take down a frame that is running.
+
+    **What the ordering does and does not buy.** Kill-then-split-then-re-arm means an
+    interruption cannot leave a pane armed for respawn that no longer exists, and cannot
+    leave the resize hook naming a pane that has been killed *while* a later step is still
+    running — each step's own invariant holds the moment it returns. It is NOT a
+    transaction: charter is several tmux commands here, tmux has no way to run them as
+    one, and a process killed midway can genuinely leave a frame with the old `left` gone
+    and the new `right` not yet split. That state is inconsistent but not corrupt — every
+    pane in it is real, the recorded map is rewritten from what actually came back, and
+    the next density change (or the next launch) resolves it. Claiming more than that
+    would be claiming an atomicity nothing here has.
+    """
+    # `env=None` throughout: see `_relayout_pane_env` for why a live re-layout has
+    # no client environment to decide.
+    pane_env = _relayout_pane_env(fid, v)
+    keep: dict[str, str] = {}
+    for slot, pane_id in panels.items():
+        if slot in want:
+            keep[slot] = pane_id
+            continue
+        if not _PANE_ID_RE.fullmatch(pane_id):
+            # Read back off disk, so it is not tmux's own word for it any more. Same
+            # treatment `_draw_panels` gives an id on the way in, for the same reason:
+            # this one is about to be interpolated into a hook action and a kill.
+            continue
+        _disarm_panel_respawn(socket, pane_id=pane_id)
+        tmuxctl.run(f"closing the {slot} panel",
+                    tmuxctl.server_argv(socket, "kill-pane", "-t", pane_id))
+
+    missing = [s for s in want if s not in keep]
+    if missing:
+        # Split in `want`'s order, which is the density level's own — see
+        # `instance.FRAME_DENSITY` for why that order is geometry rather than reading
+        # order. Every split targets the harness pane, so a slot added to a frame that
+        # already has the others lands exactly where a launch would have put it.
+        keep.update(_split_panels(socket, slots=missing, fid=fid,
+                                  harness_pane=harness_pane, env=None,
+                                  pane_env=pane_env))
+        _arm_panel_respawn(socket, panes={s: keep[s] for s in missing if s in keep},
+                           env=None)
+
+    _install_resize_hook(socket, harness_pane=harness_pane, panes=keep, v=v,
+                         env=None, replacing=True)
+    for slot, pane_id in keep.items():
+        tmuxctl.run(f"restoring the {slot} panel's size",
+                    tmuxctl.server_argv(socket, "resize-pane", "-t", pane_id,
+                                        _RESIZE_FLAG[slot], str(layout.SLOT_SIZE[slot])),
+                    report=False)
+    # `split-window` makes each new pane the ACTIVE one, so without this the operator is
+    # left typing into a panel. The same correction `cmd_launch` makes after its own
+    # splits, for the same reason.
+    tmuxctl.run("focusing the harness pane",
+                tmuxctl.server_argv(socket, "select-pane", "-t", harness_pane))
+    return keep
+
+
+def cmd_density(args) -> int:
+    """`charter frame-density <level>` — re-lay-out THIS frame, and write nothing else.
+
+    Fired by a hotkey-menu selection (`_menu_entries`), and typeable by hand from inside a
+    frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as `cmd_menu` and
+    `cmd_respawn` resolve theirs — never from anything baked into a menu action, since one
+    bind and one action template are shared by every frame on `SOCKET`.
+
+    **charter.toml is not touched, and that is the whole design.** `[frame] density` sets
+    what a frame STARTS at; this changes what one running frame IS. Charter's rule is that
+    machine-written config belongs somewhere a machine may rewrite whole, and a
+    hand-maintained, committed file that carries an operator's comments is the opposite of
+    that — so the override goes in the frame's own state directory (`state.record_density`),
+    which `state.reap` deletes entire when the frame ends. Relaunch, and the configured
+    default is back.
+
+    **Always 0, and every refusal is a quiet no-op**, for `cmd_respawn`'s reason: this
+    normally runs as a `run-shell` child of a menu selection, where the only screen left to
+    report on is the agent's own — the one rectangle ADR 0018 says charter never draws in.
+
+    Refusals, in order:
+
+    * no `$CHARTER_SESSION_ID` — not fired from inside a frame at all;
+    * a *level* outside `instance.FRAME_DENSITY` — a closed set of three constants charter
+      wrote itself, so this can only be a hand-typed argument;
+    * a harness pane that is not tmux's own `%<digits>` — a frame launched by a charter
+      that predates `state.record_harness_pane`, or a corrupted file. There is nothing to
+      split off, and guessing at a pane id is the one thing `frame/layout.py`'s module
+      docstring measures the cost of. (An empty PANEL map is not a refusal: a frame whose
+      panels all failed to draw can still be given some.)
+
+    The density is recorded BEFORE the panes move, so a re-layout that fails halfway still
+    leaves the panels that survive drawing at the density the operator asked for. The
+    version is bumped afterwards: that is what makes every surviving panel repaint with the
+    new verbosity, and a bump before the layout settled would repaint into the old shape.
+    """
+    from . import instance
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    level = instance.density_level(getattr(args, "level", None))
+    if not fid or level is None:
+        return 0
+    # The harness pane comes from `state.harness_pane`, the record ADR 0019's own
+    # `is_live` reads — not from a second copy of its own. `_PANE_ID_RE` still guards it:
+    # it arrives off disk here rather than off `split-window`'s stdout, and it is about to
+    # be interpolated into a hook action and a split target.
+    harness_pane = state.harness_pane(fid) or ""
+    panels = state.panes(fid)
+    if not _PANE_ID_RE.fullmatch(harness_pane):
+        return 0
+    socket = state.frame_server(fid) or SOCKET
+    v = tmuxctl.version()
+    if v is None:
+        return 0
+
+    state.record_density(fid, level)
+    cols, rows = _window_size(socket, harness_pane)
+    want = _drawable_slots(cols, rows, instance.density_slots(level))
+    panes = _relayout(socket, fid=fid, harness_pane=harness_pane, panels=panels,
+                      want=want, v=v)
+    state.record_panes(fid, panels=panes)
+    # Re-recorded so the menu's own mark moves with the frame. `menu.record` rewrites the
+    # table whole, and every action id is minted from position, so the ids the operator's
+    # currently-open menu is holding stay valid for the same rows.
+    #
+    # Private server only, matching `cmd_launch`, which records no menu inside an
+    # operator's tmux either: charter binds no key there, so there is nothing to open the
+    # menu with — and the "Detach" row it would grow targets `detach-client -s <fid>`, a
+    # SESSION name that does not exist on that server, where a frame is a window.
+    if not tmuxctl.is_operator_socket(socket):
+        menu.record(fid=fid, entries=_menu_entries(fid, socket, current=level))
+    state.bump(fid)
     return 0
 
 

@@ -676,7 +676,7 @@ def _add_frame_parsers(sub) -> None:
     # naming `frame-probe` silently launching a harness instead of reading tmux's own
     # version (see `commands_frame.cmd_probe`'s own docstring).
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
-                                         "frame-probe", "frame-respawn"}
+                                         "frame-probe", "frame-respawn", "frame-density"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -758,6 +758,20 @@ def _add_frame_parsers(sub) -> None:
     rs.add_argument("slot")
     rs.add_argument("--pane", dest="pane", required=True)
     rs.set_defaults(func=commands_frame.cmd_respawn)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # three above. Fired by a hotkey-menu selection (`commands_frame._menu_entries`), whose
+    # stored argv is exactly `util.self_relaunch_argv("frame-density", <level>)`. It
+    # changes the RUNNING frame only — never charter.toml, which is hand-maintained (see
+    # `cmd_density`'s own docstring) — and, like every other `frame-*` command here,
+    # resolves which frame from `$CHARTER_SESSION_ID` at the moment it fires rather than
+    # from anything baked into a shared menu action. Deliberately NOT `choices=` on the
+    # level: `instance.density_level` is the one gate on that closed set, and a second
+    # copy of it in argparse would mean a level added to the table and not to the parser
+    # exits 2 from inside a `run-shell` where nothing prints the reason.
+    dn = sub.add_parser("frame-density")
+    dn.add_argument("level")
+    dn.set_defaults(func=commands_frame.cmd_density)
 
     # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-menu`/
     # `frame-action` above: those two exist because `_split_frame_argv` eats everything

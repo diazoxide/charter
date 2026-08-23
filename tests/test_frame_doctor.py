@@ -48,12 +48,46 @@ class FrameRow(unittest.TestCase):
         """This hint used to say "a frame still starts, with its hotkey menu disabled".
         Nothing disables it: `cmd_launch` warns and continues, and `conf_text` emits the
         bind unchanged. The hint now comes from `tmuxctl.below_floor_message` — one
-        sentence shared with `--probe`, so the two cannot drift apart."""
+        sentence shared with `--probe`, so the two cannot drift apart.
+
+        `assertIn`, not `assertEqual`: tmux 3.0 is below `RESIZE_HOOK_FLOOR` as well as
+        below `FLOOR`, so since #387 this row carries both sentences. That is the same
+        shape the row already had for an unimplemented slot (`hint += " " + ...`), and
+        the claim being pinned is unchanged — the below-floor sentence is `tmuxctl`'s
+        own and is not re-worded here."""
         from charter.frame import tmuxctl
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 0)):
             r = doctor.check_frame()
         self.assertNotIn("hotkey menu disabled", r.hint)
-        self.assertEqual(r.hint, tmuxctl.below_floor_message((3, 0)))
+        self.assertIn(tmuxctl.below_floor_message((3, 0)), r.hint)
+
+    def test_a_tmux_without_the_resize_hook_is_a_ceiling_this_row_names(self):
+        """#387's own finding: `tmuxctl.RESIZE_HOOK_FLOOR` (3.3) sits ABOVE
+        `tmuxctl.FLOOR` (3.2), and appeared in neither this row nor `frame_ready`. So an
+        operator on tmux 3.2 passed the floor cleanly, read a green tick here, and had no
+        resize recovery at all — the panels stretch on every terminal resize and stay
+        stretched. The launcher knew (it skipped the hook) and said so only into the
+        pre-attach window, where the alternate screen hides it milliseconds later.
+
+        3.2 exactly, not 3.0: at 3.0 the below-floor sentence is also present, so a row
+        that named nothing about resizing would still have looked plausible. This version
+        is the gap itself — nothing else has anything to say about it."""
+        from charter.frame import tmuxctl
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 2)):
+            r = doctor.check_frame()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertIn(tmuxctl.below_resize_hook_message((3, 2)), r.hint)
+        self.assertNotIn(tmuxctl.below_floor_message((3, 2)), r.hint,
+                         "3.2 is AT the floor — it must not be reported as below it")
+
+    def test_a_tmux_with_the_resize_hook_is_not_warned_about_it(self):
+        """The other direction, and what stops the test above from passing against a row
+        that warns unconditionally: at 3.3 (`RESIZE_HOOK_FLOOR` exactly) the hook exists,
+        so there is no ceiling and the row is a clean tick."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 3)):
+            r = doctor.check_frame()
+        self.assertEqual(r.status, doctor.OK)
+        self.assertIsNone(r.hint or None)
 
     def test_a_slot_with_no_renderer_is_a_ceiling_this_row_names(self):
         """The second standing condition that moved off the launch path (see

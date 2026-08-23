@@ -39,7 +39,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests._isolation import PersonaIso
-from charter import commands_frame, config, util
+from charter import commands_frame, config, instance, util
 from charter.frame import gather, layout, menu, slots, state, tmuxctl
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
@@ -782,6 +782,37 @@ class Probe(unittest.TestCase):
         self.assertIn("left", printed)
         self.assertIn("right", printed)
 
+    def test_a_tmux_without_the_resize_hook_is_a_ceiling_the_probe_names(self):
+        """#387's own finding, and the third standing ceiling to move off the launch path.
+        `tmuxctl.RESIZE_HOOK_FLOOR` (3.3) sits ABOVE `tmuxctl.FLOOR` (3.2), so an operator
+        on 3.2 passed the floor cleanly, got a clean tick from this probe and from
+        `doctor`, and silently had no resize recovery — the panels stretch on every
+        terminal resize and stay stretched. The launcher knew (`_install_resize_hook`
+        skips the attempt) and said so only into the pre-attach window, where tmux's own
+        alternate screen hides it milliseconds later.
+
+        3.2 exactly, not something older: at 3.0 the below-floor sentence is present too,
+        so a probe that named nothing about resizing would still have printed something
+        and looked fine. This version is the gap itself."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 2)), \
+             mock.patch("charter.commands_frame.subprocess.run") as run:
+            code, level, line = commands_frame.frame_ready()
+        run.assert_not_called()
+        self.assertEqual((code, level), (0, "warn"),
+                         "a capability ceiling is not a refusal — cmd_launch still draws")
+        self.assertIn(tmuxctl.below_resize_hook_message((3, 2)), line)
+        self.assertNotIn(tmuxctl.below_floor_message((3, 2)), line,
+                         "3.2 is AT the floor — it must not be reported as below it")
+
+    def test_a_tmux_with_the_resize_hook_is_not_warned_about_it(self):
+        """The other direction, and what stops the test above from passing against a probe
+        that always warns: at 3.3 (`RESIZE_HOOK_FLOOR` exactly) the hook exists."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 3)), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
+            code, level, line = commands_frame.frame_ready()
+        self.assertEqual((code, level), (0, "ok"))
+        self.assertNotIn("\n", line)
+
     def test_an_ordinary_machine_gets_no_ceilings_at_all(self):
         """The other direction, and what stops the two tests above from passing against
         a probe that always warns: with a new-enough tmux and only implemented slots
@@ -1370,11 +1401,37 @@ class Launch(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(still_live=True)
         _launch(fake)
         entries = menu.build(fake.fid)
-        self.assertEqual(len(entries), 1)
         label, action_id = entries[0]
         self.assertEqual(label, "Detach")
         argv = menu.resolve(fake.fid, action_id)
         self.assertEqual(argv, ["tmux", "-L", "charter", "detach-client", "-s", fake.fid])
+
+    def test_the_menu_offers_every_density_and_marks_the_one_in_effect(self):
+        """The keypress half of #387: density is reached through the hotkey menu charter
+        already binds, not through a second `bind -n` — a tmux key table is server-wide
+        with no per-session form, so a second key would be taken from every frame on
+        `SOCKET` and, inside an operator's own tmux, could not be bound at all.
+
+        Asserted on the RESOLVED argv rather than the label, because the label is the
+        cosmetic half: what must be true is that selecting a row runs `charter
+        frame-density <level>` and nothing else — no tmux command, nothing that could
+        rewrite charter.toml. The dot is checked too, separately, because a menu that
+        offers three levels and cannot say which one is on is a menu that has to be
+        guessed at."""
+        fake = _FakeTmux(still_live=True)
+        _launch(fake)
+        rows = {}
+        for label, action_id in menu.build(fake.fid):
+            rows[label] = menu.resolve(fake.fid, action_id)
+        for level in instance.FRAME_DENSITY:
+            with self.subTest(level=level):
+                match = [(lb, argv) for lb, argv in rows.items()
+                         if argv == util.self_relaunch_argv("frame-density", level)]
+                self.assertEqual(len(match), 1, rows)
+                self.assertIn(f"density: {level}", match[0][0])
+        marked = [lb for lb in rows if lb.startswith(commands_frame._DENSITY_MARK[0])]
+        self.assertEqual(marked, [f"{commands_frame._DENSITY_MARK[0]} density: "
+                                  f"{config.FRAME['density']}"], rows)
 
     def test_the_write_hook_is_installed_before_the_teardown_hook(self):
         """Load-bearing, not incidental — see `_pane_died_teardown_hook_argv`'s own
@@ -1811,7 +1868,18 @@ class Launch(PersonaIso, unittest.TestCase):
         `test_below_the_tmux_floor_degrades_instead_of_refusing`). Below
         RESIZE_HOOK_FLOOR the hook must never even be ATTEMPTED — confirmed by hand
         that installing it on an unrecognised hook name fails with `invalid option:
-        window-resized` — one quiet note instead, naming the real version gap."""
+        window-resized`.
+
+        **And it is now skipped in SILENCE (#387).** This used to assert a `util.warn`
+        naming the version gap, which was the last standing ceiling still printed on the
+        launch path — measured at 86 bytes before tmux's own `\\x1b[?1049h`, so the
+        operator's terminal switched to the alternate screen milliseconds later and the
+        line came back only once the frame exited. It is the same argument
+        `test_below_the_tmux_floor_degrades_instead_of_refusing` already makes for the
+        floor itself, and this test is now its exact twin: the hook is not attempted, and
+        nothing is said here. Where it IS said is asserted in
+        `Probe.test_a_tmux_without_the_resize_hook_is_a_ceiling_the_probe_names` and
+        `tests/test_frame_doctor.py`."""
         fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
         buf = []
         with mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
@@ -1819,7 +1887,9 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertFalse(any("window-resized" in c for c in fake.calls),
                          "the hook must not even be attempted below its own floor")
-        self.assertTrue(any("3.2" in m and "resize" in m for m in buf), buf)
+        self.assertEqual(buf, [], "a standing ceiling must not be warned about into a "
+                                 "terminal that is about to switch to tmux's alternate "
+                                 "screen — see the docstring")
 
     def test_below_the_tmux_floor_degrades_instead_of_refusing(self):
         """Correction 5: a version below `tmuxctl.FLOOR` still launches — the frame
@@ -2154,6 +2224,49 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0, "a previous frame's exit code was returned as this one's")
         self.assertTrue(any("detach" in m.lower() for m in buf),
                         f"no reattach message — the stale code suppressed it: {buf}")
+
+    def test_a_launch_records_the_frames_own_charter_identity(self):
+        """#411 on the density path. A hotkey pressed later runs as a `run-shell` child of
+        the tmux server, and charter's private server is SHARED — that child reads
+        whichever launcher's environment started it, so only `CHARTER_SESSION_ID`
+        (session-scoped) is this frame's. Every other identity name has to be written down
+        by the one process that knows it, which is this one; `commands_frame
+        ._relayout_pane_env` is what reads it back before splitting a pane.
+
+        Asserted with a sentinel `$CHARTER_WORKSPACE` in the launcher's environment, so a
+        launch that recorded nothing — or recorded the wrong thing — is distinguishable
+        from one that happened to agree."""
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "WS-SENTINEL-0xBEEF"}):
+            fake = _FakeTmux(still_live=True)
+            _launch(fake)
+        recorded = state.identity(fake.fid)
+        self.assertEqual(recorded.get("CHARTER_WORKSPACE"), "WS-SENTINEL-0xBEEF", recorded)
+        self.assertEqual(recorded.get("CHARTER_SESSION_ID"), fake.fid, recorded)
+        self.assertEqual(sorted(recorded), sorted(commands_frame._FRAME_IDENTITY),
+                         "every identity name must be recorded, including the empty ones "
+                         "— an omitted name is inherited from the server, which is the bug")
+
+    def test_a_launch_does_not_inherit_a_density_from_an_earlier_life_of_its_pid(self):
+        """The third file the recycled directory carries (#387). `density` is written by
+        the hotkey menu and by nothing else — it is the "for the running frame only"
+        override — so a frame that adopts one has a keypress from a session that is over
+        silently outranking this plane's own `[frame] density`, with nothing anywhere to
+        explain why the frame came up narrower than the file says. `panes` goes with it:
+        it names tmux panes of a frame that no longer exists, and a launch that dies
+        before `_draw_panels` rewrites it would leave the next density change killing
+        whatever tmux has since reused those ids for."""
+        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
+        state.record_density(stale, "minimal")
+        state.record_panes(stale, panels={"left": "%98"})
+
+        fake = _FakeTmux(still_live=True)
+        _launch(fake)
+
+        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
+        self.assertIsNone(state.density(stale),
+                          "a dead frame's density override outlived it")
+        self.assertEqual(state.panes(stale), {},
+                         "a dead frame's pane map outlived it")
 
     def test_a_launch_does_not_inherit_a_cached_scan_from_an_earlier_life_of_its_pid(self):
         """The second file the recycled directory carries, and the second reader that

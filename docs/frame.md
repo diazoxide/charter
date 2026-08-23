@@ -14,9 +14,10 @@ for a command charter has no launcher for at all. That is not just naming: once 
 frame` is on the command line, everything after it is grafted onto the harness's own argv
 verbatim, before charter's own argument parser ever sees it, so `frame claude -p hi` would
 hand `claude -p hi` to the `frame --` mechanism rather than route anywhere. The same reason
-keeps `frame-menu`, `frame-action` and `frame-probe` — one command tmux's hotkey calls
-back into, one every menu action calls back into, and the read-only probe — as top-level
-names rather than nested under `frame` too.
+keeps `frame-menu`, `frame-action`, `frame-density` and `frame-probe` — the command tmux's
+hotkey calls back into, the one every menu action calls back into, the one the density
+entries run, and the read-only probe — as top-level names rather than nested under `frame`
+too.
 
 ## What it needs
 
@@ -33,14 +34,22 @@ panels can just drift out of their fixed size until the next one.
 `charter <harness> --probe` (or the standalone `charter frame-probe`) answers "can a frame
 run here, and what will it not be able to do" without starting anything: exit 0 if a frame
 can run, non-zero if tmux is missing entirely, plus a line for each standing limit — a
-tmux below 3.2, and any `[frame] slots` entry charter sizes but has no renderer for.
-`charter doctor` carries the same facts as its own `frame` row.
+tmux below 3.2, a tmux below 3.3 (no resize-recovery hook), and any `[frame] slots` entry
+charter sizes but has no renderer for. `charter doctor` carries the same facts as its own
+`frame` row.
 
-Those two limits are deliberately **not** printed when a frame launches. A warning
-written to your terminal microseconds before tmux switches to the alternate screen is not
-readable — measured at 86 bytes ahead of the switch — and it comes back into view only
-once the frame exits. Both are standing properties of this machine and this plane rather
-than news about one launch, so they live on the two surfaces you can ask on demand.
+The 3.3 line is worth calling out because the two floors are easy to conflate: 3.3 sits
+*above* the 3.2 floor, so a tmux 3.2 passes the floor cleanly and still has no
+`window-resized` hook. Charter used to say so only in the milliseconds before the frame
+came up, which is nowhere. Now both surfaces name it, and what it costs is exactly one
+thing: resize your terminal and the panels stretch, and stay stretched until the frame is
+relaunched.
+
+Those limits are deliberately **not** printed when a frame launches. A warning written to
+your terminal microseconds before tmux switches to the alternate screen is not readable —
+measured at 86 bytes ahead of the switch — and it comes back into view only once the frame
+exits. All of them are standing properties of this machine and this plane rather than news
+about one launch, so they live on the two surfaces you can ask on demand.
 
 ## What changes inside the frame
 
@@ -62,6 +71,29 @@ changed.
 **Panels measure their own pane**, never `$COLUMNS` — a tmux pane inherits the *launching*
 shell's environment whole, so trusting `$COLUMNS` there would lay a panel out at the outer
 terminal's width and wrap inside its own much narrower one.
+
+**The frame animates only while a dispatch is in flight.** A dispatch that is still
+running puts a spinner and a count on the bottom row — `⠙ 2 running` — and the panel
+repaints often enough for it to turn. Only the bottom row moves; the other three panels
+repaint when something changes and not otherwise.
+
+**Dispatches, and nothing else.** A long `charter clone` or `gl-refresh` does *not* spin
+it: charter records a dispatch when it starts, which is what makes overlapping agents
+visible, and keeps no equivalent record for its own long commands. Covering them needs a
+second kind of record — putting a clone in the dispatch tracker would make the overlap
+nudge announce it as a peer agent — and that is filed as #420. The moment the last dispatch finishes, the frame goes completely
+still again and the panel goes back to waiting for a version bump. Nothing is polled to
+find this out: charter already records a dispatch when it *starts* (that is what makes
+overlapping agents visible at all), so the panel asks one question per tick — a single
+`stat` of that tracker's own directory — and reads the records themselves only when that
+answer moves. Measured on macOS/APFS: about 5µs per tick added to the ~26µs a panel
+already spends checking the version file, five times a second, or roughly 0.003% of one
+core while idle.
+
+A dispatch charter has stopped believing in — no result after thirty minutes, so the
+process was probably killed — is still reported, and deliberately *not* animated: `⋯ 1
+stalled`. Charter keeps such a record for a day so a stuck dispatch stays visible, and a
+spinner turning next to it would be claiming progress that stopped half an hour ago.
 
 **A panel that fails says so in its own pane.** Anything charter's own code can see — an
 unknown slot, a renderer that raises, a crash in the panel's poll — is painted into the
@@ -193,7 +225,13 @@ drop — any shortage costs them, since neither can spare its own divider. A fur
 in rows drops `top` too. Below half of either floor, every panel drops and the harness
 simply gets the whole terminal, the same choice `charter`'s own status line makes when it
 runs out of width. So a narrow terminal degrades to the two strips on its own; nothing has
-to be configured for it.
+to be configured for it. A density change goes through the same floors, so choosing `full`
+in a terminal with no room for side panels gives you the edges that fit rather than a
+failed split.
+
+If a future `[frame] slots` ever names an edge charter sizes but has no renderer for, that
+slot is skipped rather than drawn as a dead pane — the harness keeps the space — and
+`charter frame-probe`/`charter doctor` say so.
 
 ## The status line goes quiet inside a frame
 
@@ -246,12 +284,55 @@ jobs. See ADR 0019.
 ```toml
 [frame]
 slots = ["top", "bottom", "left", "right"]
+density = "full"
 mouse = false
 hotkey = "F2"
 history-limit = 50000
 min-cols = 100
 min-rows = 20
 ```
+
+### How much frame
+
+`density` is a **preset over `slots`**, not a second way of configuring the same thing.
+There are three levels:
+
+| level | edges | each panel says |
+|---|---|---|
+| `minimal` | one-line `top` and `bottom` | only its most important field |
+| `normal` | `top` and `bottom` | everything it has |
+| `full` | all four edges | everything it has |
+
+`full` is the shipped frame, so writing nothing at all and writing `density = "full"`
+give you the same thing — and that is enforced rather than trusted: charter's own test
+suite refuses a `density` default that does not expand to exactly the shipped `slots`
+list, in the same order.
+
+Writing `density = "full"` is the same as writing that level's `slots` list by hand, so
+nothing else in charter has to know presets exist — the probe, `doctor`, and the size
+floors all read the one resolved list. **An explicit `slots` wins**: `slots` is the
+primitive, and if you wrote a list you meant that list.
+
+`minimal` and `normal` are how you ask for less. Both drop to the two strips; `minimal`
+also makes each panel terser — `top` drops the charter version (the workspace and the
+persona are what it exists to tell you), and `bottom` keeps only its highest-priority
+field: an alert if there is one, the spinner if work is running, otherwise the todo
+count, so the row is never blank. If you have kept the sidebars by writing `slots`
+yourself, `minimal` shows four rows in each and says how many it hid.
+
+**The hotkey changes the density of the running frame, and nothing else.** `F2` opens the
+menu, which now lists all three levels with a `•` on the one in effect; choosing one
+re-lays the frame out live — panes are split or closed, sizes re-asserted, panels repaint
+at the new verbosity. It does **not** edit `charter.toml`: that file is yours, hand
+maintained and committed, and charter's rule is that machine-written state belongs
+somewhere a machine may rewrite whole. The override lives in the frame's own state
+directory and goes with the frame; relaunch and you are back to what the file says. The
+same applies to `charter frame-density <level>` typed by hand from inside a frame, which
+is what the menu entry runs.
+
+Inside a tmux you already have, charter binds no key at all (see above), so there is no
+menu and no keypress route to density there — `[frame] density` is what sets it, and the
+command still works if you run it inside the frame's own window.
 
 `hotkey` is checked against the shape of a tmux key name — optional `C-`/`M-`/`S-`
 modifiers and then a key (`F2`, `Up`, `PPage`, `a`, `/`). Anything else falls back to
@@ -268,14 +349,16 @@ frame and the sidebars sit between the two strips, while listing it last leaves 
 the width the sidebars did not take. The bottom row is where an alert and the command that
 fixes it appear, so the shipped order gives it the full width.
 
-`slots`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`, `min-cols`
-and `min-rows` are the three that are not: charter.toml spells them with a hyphen: the
+`slots`/`density`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`,
+`min-cols` and `min-rows` are the three that are not: charter.toml spells them with a
+hyphen: the
 resolved settings charter's own code reads back use an underscore
 (`config.FRAME["history_limit"]`) instead. A key typed the underscored way in charter.toml
 is silently not recognized — the hyphenated spelling above is the one that is read.
 
 The hotkey (`F2` by default) opens a small menu on whichever frame you are attached to —
-today, a single "Detach" entry. It exists only on charter's own server; inside a tmux you
-already have, charter binds no key at all (see above). However you detach — that entry, or tmux's own prefix key
-— charter notices the session is still running and prints how to get back in
-(`tmux -L charter attach -t <frame-id>`) rather than leaving you to remember the flags.
+"Detach", and the three density levels. It exists only on charter's own server; inside a
+tmux you already have, charter binds no key at all (see above). However you detach — that
+entry, or tmux's own prefix key — charter notices the session is still running and prints
+how to get back in (`tmux -L charter attach -t <frame-id>`) rather than leaving you to
+remember the flags.

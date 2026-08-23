@@ -259,11 +259,17 @@ class BottomRenderer(PersonaIso, unittest.TestCase):
         identical point `_top`'s docstring makes about the gauge. `session.current()`
         supplies it, the same fallback `_right` already trusts for `_persona_chips`.
         Pinned with a sentinel id nothing in `_bottom` could have produced on its own,
-        and requiring it actually reach the call."""
+        and requiring it actually reach the call.
+
+        `inflight=False` travels with it since #387: the panel draws the in-flight
+        tracker itself, as a spinner that moves, and asking `_session_news` for its own
+        `⚡ N` too would print one fact twice on one row. Asserted here rather than in a
+        test of its own because it is part of THIS call, and a change that dropped it
+        would still pass a looser `assert_called_once()`."""
         with mock.patch("charter.session.current", return_value="SID-SENTINEL-0xF00D"), \
              mock.patch("charter.statusline._session_news", return_value=[]) as news:
             slots.render("bottom", "f-1")
-        news.assert_called_once_with("SID-SENTINEL-0xF00D")
+        news.assert_called_once_with("SID-SENTINEL-0xF00D", inflight=False)
 
     def test_never_exceeds_the_pane_width(self):
         with mock.patch("charter.statusline._session_news",

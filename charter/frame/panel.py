@@ -33,6 +33,18 @@ frame. `_rows` measures the pane the same way `slots._width` measures it, and `_
 clamps the LINE COUNT to that measurement the way `tui.truncate` already clamps each
 line's WIDTH.
 
+**Animation is scoped to work that is actually in flight, and idle stays one `stat`.**
+A panel repaints on a version bump, and a dispatch STARTING does not bump anything — the
+version moves from `posttooluse*` hooks, and a session that has handed work to a sub-agent
+is by definition not making tool calls while it waits. So the one thing the frame animates
+(`slots._inflight_field`) needs the panel to repaint on its own clock, and only while
+there is something to animate. `_running` below is the whole mechanism: `inflight.stamp()`
+is a single `stat` of the tracker's directory, and the records are re-read only when that
+number moves or when the earliest presumed-dead deadline passes. With nothing in flight —
+the directory absent, or present and empty — that is one syscall per tick, alongside the
+one `state.version` already pays, and the panel paints nothing. It is self-limiting by
+construction rather than by a budget: the ticking stops when the records do.
+
 **SIGWINCH matters because a resize does not bump the frame's version.** Only charter's
 own hooks call `state.bump`; the operator resizing their terminal does not. Without a
 handler, a pane sits with content painted for the OLD size until some unrelated activity
@@ -169,6 +181,72 @@ def _hold(reason: str, *, once: bool, rc: int) -> int:
     return rc
 
 
+def _new_inflight_cache() -> dict:
+    """The state :func:`_running` carries between ticks. A dict, matching `resized`'s own
+    shape in this module, so a test can build one and inspect it without a class.
+
+    ``stamp`` starts at ``None``, which is also what `inflight.stamp()` answers for "no
+    such directory" — and the collision is harmless rather than overlooked. A separate
+    "never read yet" sentinel was written here first and then removed for being a claim no
+    test could falsify: the two states agree on the only thing this cache reports. `None`
+    from `stamp()` means the tracker directory does not exist, so nothing can be in
+    flight, and ``running: 0`` is already the right answer without reading anything. Every
+    state in which the answer is NOT 0 has a real ``st_mtime_ns`` behind it, which never
+    compares equal to ``None``, so the first tick of a panel that starts while a dispatch
+    is already running does read — which is exactly how a respawned panel comes back.
+    """
+    return {"stamp": None, "running": 0, "recheck": 0.0}
+
+
+def _running(cache: dict) -> int:
+    """How many dispatches are in flight right now — one `stat` when nothing has changed.
+
+    The idle cost of the whole animation, and the reason it can be on by default. The
+    expensive answer (`inflight.live_records()`: open the directory, read every entry,
+    parse each one's JSON) is recomputed only when one of two things is true:
+
+    * the tracker's directory mtime moved — a record was created or removed, the only two
+      events that can change the set (`inflight.stamp`'s own docstring);
+    * the earliest presumed-dead deadline has passed — the one way this answer changes
+      with NO file changing, since `presumed_dead` is measured against the clock. Only
+      consulted while something is actually running, so an idle panel never computes a
+      deadline, never stores one, and never compares against one.
+
+    Counts RUNNING records only, presumed-dead ones excluded, and that is what stops a
+    killed dispatch from spinning a panel for the rest of the day: `inflight` keeps such a
+    record for `PRUNE_SECONDS` (24 hours) precisely so it stays visible, and
+    `slots._inflight_field` does still draw it — statically, with `⋯`. Animating it would
+    claim progress that stopped hours ago, on an otherwise idle machine.
+
+    Never raises: this sits in a panel's run loop, where an exception ends the pane
+    (`run`'s own `_hold` catches it, but a panel that stops repainting has already lost).
+    A tracker charter cannot read is "nothing in flight", which degrades to the stillness
+    this feature's whole promise is about.
+    """
+    from .. import inflight
+    try:
+        stamp = inflight.stamp()
+        stale = cache["running"] and time.time() >= cache["recheck"]
+        if stamp == cache["stamp"] and not stale:
+            return cache["running"]
+        records = inflight.live_records()
+        cache["stamp"] = stamp
+        cache["running"] = sum(1 for _a, _t, dead in records if not dead)
+        cache["recheck"] = min((t for _a, t, dead in records if not dead),
+                               default=0.0) + inflight.PRESUMED_DEAD_SECONDS
+        return cache["running"]
+    except Exception:
+        # The stamp is deliberately NOT reset here. `cache["stamp"]` is only ever assigned
+        # after a read that completed, so a read that raised has left it describing the
+        # last directory state charter actually understood — and the next change to the
+        # set of records moves it, which re-reads. Resetting it instead would retry a
+        # raising read on every tick, five times a second, for as long as the fault
+        # lasted. Reporting 0 is the safe direction either way: it means stillness, which
+        # is this feature's own promise for "charter does not know of any work".
+        cache["running"] = 0
+        return 0
+
+
 def _install_sigwinch(resized: dict) -> object:
     """Arm the resize handler, returning whatever was installed before it so `run` can
     put it back rather than leaking a handler past this process's own lifetime — a
@@ -178,7 +256,8 @@ def _install_sigwinch(resized: dict) -> object:
     return signal.signal(signal.SIGWINCH, lambda *_a: resized.__setitem__("flag", True))
 
 
-def _tick(resized: dict, seen: str, slot: str, fid: str) -> str:
+def _tick(resized: dict, seen: str, slot: str, fid: str, *,
+          animating: bool = False) -> str:
     """One loop iteration's decision AND its effect — split out of `run` so the
     DECISION (paint now, or wait) can be exercised without also exercising `run`'s
     `while True`/`time.sleep`, which a test cannot call directly without either hanging
@@ -208,9 +287,17 @@ def _tick(resized: dict, seen: str, slot: str, fid: str) -> str:
     (or exactly match) what was actually painted, so any bump during or after the paint
     is still visible to the next comparison — pinned directly by
     `Tick.test_a_bump_landing_during_the_paint_is_not_marked_seen`.
+
+    *animating* is the third reason to repaint, and it is the same shape as *resized*: the
+    frame's version has not moved and the pane's size has not changed, but what the panel
+    would draw NOW differs from what is on screen, because the spinner is on a different
+    frame (`slots.spinner_frame` reads the clock). Defaulted to `False` so the two callers
+    that mean "repaint only on news" — every test in this module that exercises the
+    decision directly — keep saying exactly that. `_watch` is what decides it, from
+    :func:`_running`.
     """
     now = state.version(fid)
-    if resized["flag"] or now != seen:
+    if resized["flag"] or now != seen or animating:
         resized["flag"] = False
         _paint(slot, fid)
         return now
@@ -218,7 +305,14 @@ def _tick(resized: dict, seen: str, slot: str, fid: str) -> str:
 
 
 def _watch(slot: str, fid: str, *, once: bool) -> int:
-    """The live loop: paint on every version bump or resize until killed.
+    """The live loop: paint on every version bump, resize, or spinner frame, until killed.
+
+    The third reason is the only one that repeats on its own, and it is bounded twice over
+    rather than by a timer this module owns: by the WORK, since `_running` answers 0 the
+    moment the last in-flight record clears; and by the SLOT, since only a renderer in
+    `slots.ANIMATED` draws anything that moves. A `top`, `left` or `right` panel therefore
+    behaves exactly as it did before this feature existed — including paying no `stat`,
+    because the `and` below short-circuits before `_running` is ever called.
 
     Split out of `run` so the SIGWINCH handler it arms is restored by its own `finally`
     before `run`'s failure path can hold the pane open — a handler left installed for
@@ -227,11 +321,20 @@ def _watch(slot: str, fid: str, *, once: bool) -> int:
     already pins that this module leaks no handler past its own work.
     """
     resized = {"flag": True}  # the first pass always paints, resized or not
+    inflight_cache = _new_inflight_cache()
+    # Scoped to THIS slot, and the `and` short-circuits: a panel whose renderer draws
+    # nothing that moves never repaints for the spinner and never even pays the `stat`
+    # that would have told it to. `_watch` runs one process per slot, so an unscoped
+    # check repaints all four for the length of every dispatch — three of them redrawing
+    # byte-identical output, and `right` costs 4.8ms a render to do it (see
+    # `slots.ANIMATED`).
+    animates = slot in slots.ANIMATED
     old_handler = _install_sigwinch(resized)
     try:
         seen = ""
         while True:
-            seen = _tick(resized, seen, slot, fid)
+            seen = _tick(resized, seen, slot, fid,
+                         animating=animates and bool(_running(inflight_cache)))
             if once:
                 return 0
             time.sleep(TICK)
