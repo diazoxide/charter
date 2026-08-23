@@ -957,7 +957,7 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
-class MenuFormatIntegration(_NeedsAttachedClient, unittest.TestCase):
+class MenuFormatIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase):
     """The CRITICAL finding from the first review round, proved against a REAL,
     RENDERED `display-menu` — not only the argv shape `tests/test_frame_menu.py`'s
     `LabelSafety` checks. `display-menu`'s own docs: "The name and command are formats"
@@ -970,13 +970,38 @@ class MenuFormatIntegration(_NeedsAttachedClient, unittest.TestCase):
     current client") without one — which is why every OTHER test in this file avoids
     attaching one at all. `_NeedsAttachedClient._attach_pty` is the one place in the
     suite that does, and the one place that decides this machine cannot.
+
+    **A THROWAWAY plane, `PanelIntegration`'s shape exactly, and it was not one until
+    now.** Every test here calls `menu.record`, which goes `menu._table(fid,
+    create=True)` -> `state.frame_dir(fid, create=True)` -> `config.STATE_DIR` — so
+    without `PersonaIso` this class MINTED `menu-fmt-integ*-<pid>` directories in the
+    developer's REAL `.charter/frame/` and left them there, three per run, measured by
+    listing that directory before and after. Nothing reaps them either: since #383 a
+    directory whose name ends in a live pid is kept, and while the suite is running that
+    pid is the suite's own.
+
+    `PersonaIso` alone only covers what a Python IMPORT of `charter` reads in THIS
+    process, and one test below (`test_an_escaped_label_still_lets_the_real_action_run_
+    when_selected`) fires a REAL `charter frame-action` SUBPROCESS that has to find the
+    very table `menu.record` just wrote. `$CHARTER_ROOT` carries the same throwaway plane
+    across that boundary — passed to the `new-session` that STARTS this class's server,
+    because a `run-shell` with no `-t` inherits the SERVER's own starting process
+    environment (`commands_frame._session_id_env_argv`'s own docstring measures this) —
+    and `charter.toml` has to exist at that path or `root.find_root` refuses it outright.
     """
 
     def setUp(self) -> None:
+        super().setUp()
         # kill-server THEN unlink — see `PanelIntegration._teardown_socket`'s own
         # docstring for why two separately-registered `addCleanup` calls in that
-        # order run backwards (`addCleanup` is LIFO).
+        # order run backwards (`addCleanup` is LIFO). Registered AFTER
+        # `PersonaIso.setUp`'s own plane cleanup, so LIFO runs it FIRST: the tmux
+        # server dies while the plane it was pointed at still exists.
         self.addCleanup(self._teardown_socket)
+        (self.tmp / "charter.toml").write_text("")
+        self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
+        self.env.pop("CHARTER_HOME", None)  # let it derive under CHARTER_ROOT, like this
+                                            # process's own PersonaIso-isolated config
 
     def _teardown_socket(self) -> None:
         """Kill this class's own tmux server, THEN unlink its socket file — see
@@ -992,8 +1017,14 @@ class MenuFormatIntegration(_NeedsAttachedClient, unittest.TestCase):
         around it the same way, and this class needs the identical fix (confirmed by
         hand: without this, three "cat" processes were still alive under `pgrep -f
         'tmux -L charter-integration-test'` after this class's own tests finished and
-        `kill-server` had already run)."""
-        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "cat")
+        `kill-server` had already run).
+
+        The one call in this class that carries `self.env`: it is the call that STARTS
+        the server, and a `run-shell` with no `-t` reads the server's own starting
+        environment, which is how the `charter frame-action` subprocess a menu selection
+        spawns lands on this test's throwaway plane rather than the developer's."""
+        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "cat",
+                  env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
         pid = _tmux("display-message", "-p", "-t", fid, "#{pane_pid}").stdout.strip()
         self.addCleanup(_kill_pid, pid)
@@ -1134,7 +1165,7 @@ class MenuFormatIntegration(_NeedsAttachedClient, unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
-class MenuClientIntegration(_NeedsAttachedClient, unittest.TestCase):
+class MenuClientIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase):
     """Fix round 2, IMPORTANT-1, proved with two real ptys attached to ONE frame at
     once: the hotkey must open the menu on the PRESSER's own screen, never a
     different attached client's — the defect an earlier version of this mechanism
@@ -1170,13 +1201,28 @@ class MenuClientIntegration(_NeedsAttachedClient, unittest.TestCase):
        already documents for label rendering, evidently not limited to format
        expansion. The REAL bind is not a nicety here; it is the only path observed
        to work at all.
+
+    A THROWAWAY plane, for the same reason and by the same mechanism as
+    `MenuFormatIntegration` above: `menu.record` reaches `config.STATE_DIR`, so without
+    `PersonaIso` this class minted a `menu-client-integ-<pid>` directory in the
+    developer's REAL `.charter/frame/` on every run. This class already builds its own
+    environment for the `new-session` that starts its server (`_charter_py_env`, for the
+    scrubbed `$PATH`), so `$CHARTER_ROOT` is carried there rather than in a second one —
+    and it has to reach the server's STARTING environment specifically, because that is
+    what the real bind's own `run-shell` inherits.
     """
 
     def setUp(self) -> None:
+        super().setUp()
         # kill-server THEN unlink — see `_teardown_socket`'s own docstring below:
         # THIS class, unlike its siblings above, is not merely defending against a
-        # hypothetical here.
+        # hypothetical here. Registered AFTER `PersonaIso.setUp`'s own plane cleanup,
+        # so LIFO runs it FIRST — the server dies while the plane it reads still exists.
         self.addCleanup(self._teardown_socket)
+        # `$CHARTER_ROOT` is refused outright without this marker (`root.find_root`
+        # raises rather than falling back), which would leave the real bind's own
+        # `charter frame-menu` subprocess failing instead of reading this test's plane.
+        (self.tmp / "charter.toml").write_text("")
 
     def _teardown_socket(self) -> None:
         """Kill this class's own tmux server, THEN unlink its socket file.
@@ -1256,7 +1302,16 @@ class MenuClientIntegration(_NeedsAttachedClient, unittest.TestCase):
                           "this class proves a bare `charter` is never needed — its "
                           "own $PATH must not contain one")
         self.shim = shim
-        return dict(os.environ, PATH=str(bare))
+        # `$CHARTER_ROOT` rides along here rather than in a second environment: this is
+        # the env the server STARTS under, and the real bind's `run-shell` (no `-t`)
+        # inherits exactly that. `$CHARTER_HOME` is dropped so `STATE_DIR` derives under
+        # the throwaway root the way this process's own PersonaIso-isolated config does —
+        # left in place it would win outright (`config._migrate_state_dir` returns it
+        # verbatim) and put the shim right back on the developer's real plane.
+        env = dict(os.environ, PATH=str(bare), CHARTER_ROOT=str(self.tmp),
+                   CHARTER_WORKSPACE="demo")
+        env.pop("CHARTER_HOME", None)
+        return env
 
     def _new_session(self, fid: str) -> None:
         """The one `new-session` call that starts this class's fresh server —

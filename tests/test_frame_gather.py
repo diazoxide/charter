@@ -355,6 +355,64 @@ class SaveIsHardened(PersonaIso, unittest.TestCase):
         self.assertFalse(state._root().exists())
 
 
+class Discard(PersonaIso, unittest.TestCase):
+    """A new frame adopting a recycled pid inherits the directory of the frame that
+    held that pid before it — #383's `state.reap` keeps a directory while its pid is
+    live, and on a launch that pid is the launcher's own. `state.clear_exit` stops the
+    dead frame's exit code coming with it; `discard` stops its cached SCAN coming with
+    it, which `read` would otherwise serve to every panel (no freshness check, by
+    design) until the session's first hook bump."""
+
+    _SENTINEL = {"gathered_at": 0.0, "workspace": "sentinel", "current_repo": None,
+                 "repos": [], "worktrees": []}
+
+    def test_a_saved_scan_is_gone_afterwards(self):
+        gather.save("f-1", {"gathered_at": 1.0, "workspace": "from-a-dead-frame",
+                            "current_repo": None, "repos": [], "worktrees": []})
+        gather.discard("f-1")
+        with mock.patch.object(gather, "scan", return_value=self._SENTINEL) as scan_mock:
+            got = gather.read("f-1")
+        scan_mock.assert_called_once()
+        self.assertEqual(got, self._SENTINEL,
+                         "a dead frame's cached scan was served to the frame that "
+                         "adopted its id")
+
+    def test_the_version_a_panel_polls_is_left_alone(self):
+        """`version` is a monotonic counter panels compare against their last reading;
+        moving it — or removing it — is `state.bump`'s business, not this function's.
+        Same division `state.clear_exit` makes."""
+        state.bump("f-1")
+        before = state.version("f-1")
+        gather.discard("f-1")
+        self.assertEqual(state.version("f-1"), before)
+
+    def test_the_recorded_exit_code_is_left_alone(self):
+        """The other file under the same directory has its own owner (`clear_exit`),
+        called from the same two lines of `cmd_launch`. Neither may reach across."""
+        state.record_exit("f-1", 42)
+        gather.discard("f-1")
+        self.assertEqual(state.exit_code("f-1"), 42)
+
+    def test_discarding_a_frame_that_has_no_cache_creates_nothing(self):
+        """It runs on the launch path against an id that usually has no directory at
+        all — the ordinary first launch for a workspace. A launch must not mint one
+        just to delete a file inside it, the same rule `read` follows."""
+        gather.discard("never-existed")
+        self.assertFalse(state.frame_dir("never-existed").exists())
+
+    def test_discarding_a_hostile_fid_does_not_raise_or_create(self):
+        gather.discard("../../escaped")  # must not raise
+        self.assertFalse(state._root().exists())
+
+    def test_discarding_survives_a_failing_unlink(self):
+        """Nothing in this module raises: a launch is not worth failing over a file
+        that could not be deleted."""
+        gather.save("f-1", self._SENTINEL)
+        with mock.patch("charter.frame.gather.Path.unlink",
+                        side_effect=OSError("read-only")):
+            gather.discard("f-1")  # must not raise
+
+
 class RefreshComposesScanAndSave(ClonedRepoIso, unittest.TestCase):
     def test_refresh_writes_a_cache_read_can_then_find_without_gathering_again(self):
         data = gather.refresh("f-1", workspace=config.DEFAULT_WORKSPACE, cwd=str(self.repo))

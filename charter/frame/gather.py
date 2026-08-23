@@ -318,6 +318,43 @@ def read(fid: str, *, workspace: str | None = None, cwd: str | None = None) -> d
         return _empty(workspace)
 
 
+def discard(fid: str) -> None:
+    """Forget the cached scan under *fid*, because a NEW frame is claiming the id.
+
+    The gather half of ``state.clear_exit``'s bill, and the same recycled pid
+    underneath it (#383). A frame id is ``<workspace>-<launcher pid>``; since #383
+    ``state.reap`` keeps a directory for as long as the pid in its name is live, and
+    on a launch that pid is live because it is the launcher's own — so a launcher
+    landing on a pid an earlier launcher for the same workspace already used adopts
+    that earlier frame's whole directory, ``gather.json`` included.
+
+    :func:`read` has no freshness check and needs none — it is the hot path a panel
+    polls, and the cache is kept current by ``notify.plane_changed`` — so it hands
+    back whatever parses. Nothing corrects it either: a panel repaints only on a
+    ``state.version`` bump, so the dead frame's repos, branches and CI would sit on
+    screen until the session's first hook fires, which may be minutes of the operator
+    reading a scan from another day. Before #383 this could not happen, because
+    ``reap`` had deleted the directory and :func:`read` fell through to a live
+    :func:`scan`; deleting the file here puts a launch back on exactly that path
+    rather than inventing a TTL, which would be the age heuristic ``reap``'s own
+    docstring refuses.
+
+    Never raises, and never creates — ``create=False``, the same rule :func:`read`
+    follows, because the ordinary first launch for a workspace has no directory here
+    at all and a launch must not mint one just to delete a file inside it.
+    """
+    f = _cache_file(fid, create=False)
+    if f is None:
+        return
+    try:
+        f.unlink(missing_ok=True)
+    except OSError:
+        # Same must-not-raise promise the rest of this module makes: a launch is not
+        # worth failing over a file that could not be deleted. The cost of losing here
+        # is a stale panel until the first bump, not a lost launch.
+        return
+
+
 def refresh(fid: str, *, workspace: str | None = None, cwd: str | None = None) -> dict:
     """:func:`scan` then :func:`save` — what the bumping hook (Task 2) calls.
 
