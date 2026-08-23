@@ -150,10 +150,17 @@ class Harness:
         * ``malformed`` is a condition of a FILE. Somebody can fix it, and until they do,
           writing the other harnesses is what leaves the plane holding a rule here and not
           there from one command. It stops the whole command.
-        * ``unsupported`` is a standing property of the HARNESS. Re-running never changes
-          it — Codex answers it to every pattern there is — so treating it as a failure
-          would mean charter could never write a guard rule anywhere. It is reported and
-          stepped over, and the rule is honestly not in force there.
+        * ``unsupported`` is a standing property of the HARNESS **and this pattern**. Re-
+          running never changes it — Codex answers it to every pattern there is, opencode
+          to every `--local` one, and since #374 to a URL glob under one of the five
+          permissions opencode will only take a bare action for — so treating it as a
+          failure would mean charter could never write a guard rule anywhere. It is
+          reported and stepped over, and the rule is honestly not in force there.
+
+          "And this pattern" is worth the words. It read as harness-wide when only whole
+          harnesses answered it, and a transaction keyed off "does this harness support
+          anything" would still have passed every test then and be wrong now. What the
+          caller must key off is this answer, to this pattern, on this call.
 
         ``dry_run=True`` answers the same question and writes nothing: the status is what
         a real call would return, so the caller can ask every harness before committing to
@@ -161,6 +168,12 @@ class Harness:
         own — a second implementation of "can this harness take the rule" eventually
         answers differently from the one that writes, and a transaction whose check
         disagrees with its commit prints a tick either way.
+
+        Those four are the whole of what a harness answers. A write that RAISES is not a
+        fifth answer to add here: an implementation cannot know whether the command has
+        already written somebody else, which is the only thing that makes the failure worth
+        distinguishing. `commands._guard_apply` catches the `OSError` and reports it under a
+        status of its own, so a harness is free to let one out.
         """
         return "unsupported", f"{self.name} has no command-pattern permissions"
 
