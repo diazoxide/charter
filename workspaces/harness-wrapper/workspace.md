@@ -59,3 +59,25 @@ and the injection boundary (names never reach a tmux command string; menu items 
 opaque ids).
 
 The status line path is untouched. This is a second way to run charter.
+
+## Delivered (2026-08-23)
+
+36 commits on `harness-frame`, rebased onto 0.49.0, **3624 tests green**. Installed locally
+via `uv tool install --force --editable`; revert with `uv tool install --force charter-cp`.
+
+`charter claude | codex | opencode`, `charter frame -- <cmd>`, `charter frame-probe`, plus
+`--probe` / `--no-frame` on every launcher. tmux ≥ 3.2 is now a runtime requirement of the
+framed path only.
+
+Eleven tasks, twenty-three reviews, two fix waves. Every task found at least one genuine
+defect in its own brief, and the reviews caught, among others: a frame that built one panel
+instead of four in silence, a missing binary reporting exit 0, a space in the plane path
+discarding every exit code, two infinite hangs (one introduced by a fix), a menu label that
+executed shell from a git branch name, a menu drawn on the wrong operator's terminal, and
+a `[frame] hotkey` in charter.toml running arbitrary shell at launch with no keypress.
+
+Still open, as follow-ups: the inside-tmux path (charter nests today), panel respawn with
+backoff, the resize-hook ceiling printing into the unreadable pre-attach window,
+`CHARTER_SESSION_ID` colliding with `session.current()` (load-bearing — panels follow
+`charter ws use` only because of it), pid-based reap, and `charter frame -- <cmd>` having no
+missing-binary message.

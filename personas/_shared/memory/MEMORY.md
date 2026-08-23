@@ -19,3 +19,5 @@ Written by the persona as it learns; committed and shared.
 - [A HARNESS REFUSAL IS NOT A ROUTING PROBLEM. On 2026-08-22 a dispatched a](a-harness-refusal-is-not-a-routing-problem-on-20.md)
 - [A harness refusal is not a routing problem](a-harness-refusal-is-not-a-routing-problem.md)
 - [charter repo tests: no venv committed — run 'uv run --with pytest pytest](charter-repo-tests-no-venv-committed-run-uv-run-.md)
+- [Nudge standard (#371, PR 379): a prompt is worth its interruption only i](nudge-standard-371-pr-379-a-prompt-is-worth-its-.md)
+- [The frame (charter <harness>, #345) is built on tmux and lives in charte](the-frame-charter-harness-345-is-built-on-tmux-a.md)

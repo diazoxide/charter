@@ -36,3 +36,7 @@ Written by the persona as it learns; committed and shared.
 - [STALE-MEMORY TRAP, caught cutting 0.49.0: my own note said 'NEXT MINOR I](stale-memory-trap-caught-cutting-0-49-0-my-own-n.md)
 - [Smoke-testing a release, the isolation pattern that works: pin a throwaw](smoke-testing-a-release-the-isolation-pattern-th.md)
 - [OPEN DEFECT found smoke-testing 0.49.0, NOT fixed there (pre-existing, o](open-defect-found-smoke-testing-0-49-0-not-fixed.md)
+- [Regenerating the three captures before a minor (the asset-freshness gate](regenerating-the-three-captures-before-a-minor-t.md)
+- [In this plane a release cut cannot land itself: 'gh pr merge' is refused](in-this-plane-a-release-cut-cannot-land-itself-g.md)
+- [ASSET-FRESHNESS GATE IS PATCH-EXEMPT BY CONSTRUCTION. tests/test_asset_f](asset-freshness-gate-is-patch-exempt-by-construc.md)
+- [0.50.1 SHIPPED (2026-08-23), patch for #390/PR #391 self-relaunch cwd sh](0-50-1-shipped-2026-08-23-patch-for-390-pr-391-s.md)
