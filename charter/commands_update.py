@@ -165,6 +165,10 @@ def dev_install_argv() -> tuple[str, list[str] | None]:
     ``str.format`` call between a committed config file and an install command. There is no
     format call on this path, so there is nothing to reach through.
 
+    "This path" means both ends of it — the argv is built here without interpolation and
+    :func:`_sync_dev` runs it without any either. Saying it of the build site alone is what
+    #455 was: true, and not the sentence anybody was relying on.
+
     A fresh list per call, never the table's own: the caller hands it to `util.run`, and a
     module-level list handed out is a module-level list something can edit for the life of
     the process (same reason `instance.density_slots` copies).
@@ -175,7 +179,20 @@ def dev_install_argv() -> tuple[str, list[str] | None]:
 
 
 def _sync_dev() -> tuple[bool, str]:
-    """Install :data:`DEV_SPEC` through whichever tool owns this install."""
+    """Install :data:`DEV_SPEC` through whichever tool owns this install.
+
+    **The run site of the no-interpolation rule, and it is pinned here too (#455).**
+    :func:`dev_install_argv` builds the argv with no format call; this function hands that
+    argv to `util.run` element for element — nothing interpolated, nothing appended,
+    nothing re-split, no shell. Both halves matter and only the first used to be pinned: a
+    `str.format` added *here* survived the whole suite, because the build-site canary never
+    reaches this line. `tests/test_dev_update_command.py` now watches the argv at the
+    subprocess boundary, which is where every spelling of "run it" has to arrive.
+
+    Compare :func:`_sync_to`, which legitimately DOES interpolate — ``a.format(version=…)``
+    with a version resolved from PyPI. The dev spec must never travel that line, which is
+    why these are two functions and not one with a flag.
+    """
     name, argv = dev_install_argv()
     if argv is None:
         return False, (f"charter was not installed by uv or pipx, so charter will not "
@@ -418,6 +435,46 @@ def _update_dev(args, installed: str) -> int:
     return 0
 
 
+def _update_dev_on_a_checkout(args) -> int:
+    """The half of :func:`_update_dev` that is safe over the tree you are editing.
+
+    `cmd_update` does two independent things on the dev channel: it moves the **CLI**, and
+    it force-refreshes the **plugin**. Only the first is unsafe on a charter checkout. The
+    plugin is a separate artifact under ``~/.claude/plugins/`` — outside this tree, and
+    refreshed from a marketplace clone that is not this tree either.
+
+    Refusing both was #456. `doctor`'s `plugin files` row names ``charter update`` as the
+    fix; on a checkout that command refused — on the machine most likely to be tracking the
+    dev channel at all, because a maintainer is who wants it. A remedy that refuses when
+    followed costs the reader the next hint too, so the hint is made true here rather than
+    replaced with a second command to know about.
+
+    **The CLI refusal is not weakened, it is stated.** Nothing on this path installs
+    anything: the operator's charter already IS this checkout, moved by git.
+
+    Two more things it deliberately does not do. It does not move the harness artifact —
+    `_move_harness` writes into the plane root, and on a charter checkout the plane root is
+    the tree being edited, which is the same objection one directory over. And it does not
+    stamp an update baseline, because nothing moved for a news range to be measured from.
+    """
+    from . import plugincache
+
+    util.warn("this is a charter checkout — the CLI here is the tree you are editing, so "
+              "nothing was installed over it.")
+    util.info("  the charter you run is this checkout, moved by git:  charter version")
+    if not plugincache.available():
+        util.info("  no `claude` on PATH either, so there is no plugin to refresh — "
+                  "there is nothing this command can do from here.")
+        return 0
+    util.info("  the plugin lives outside this tree, so that half still runs:")
+    _refresh_plugin()
+    if getattr(args, "bump", False):
+        util.warn("--bump moves this plane's `[charter] version` pin, which names a "
+                  "PUBLISHED release. A dev build has no such number, so the pin was left "
+                  "alone.")
+    return 0
+
+
 def cmd_update(args) -> int:
     from . import channel, doctor, instance, news
 
@@ -435,18 +492,24 @@ def cmd_update(args) -> int:
         util.info("  the entry naming `update` is the defect:  charter news --pending")
         return 2
 
+    explicit = (getattr(args, "to", None) or "").strip()
+
     if doctor._is_charter_checkout(config.ROOT):
         # `CONTRIBUTING.md` tells contributors to run `python3 -m charter …` from the
         # clone. Installing over that is never what "let me try the update command" meant,
         # and the failure is silent: the news phase would hand off to a binary that is not
         # the tree being edited, and report on it as though it were.
+        #
+        # The CLI half. NOT the plugin half — see `_update_dev_on_a_checkout`, which runs
+        # for the one shape of this command that has something left to do here.
+        if channel.is_dev() and not explicit:
+            return _update_dev_on_a_checkout(args)
         util.err("this is a charter checkout — refusing to install over the tree you are "
                  "editing.")
         util.info("  what you probably want:  charter version")
         return 2
 
     installed = _installed_version()
-    explicit = (getattr(args, "to", None) or "").strip()
     if channel.is_dev() and not explicit:
         return _update_dev(args, installed)
     if channel.is_dev():
