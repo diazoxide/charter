@@ -46,12 +46,15 @@ class TestItStillDeniesRealReads(LeakCase):
         self.assertTrue(self.denied("grep -rn secret .charter/vaults/db.json"))
 
     def test_grep_recursive_into_the_vault_directory(self):
-        """With the trailing slash — `_VAULT_PATH_RE` requires it deliberately, so that
-        `.charter/vaults.json` (the registry: provider config and paths, never values) stays
-        an ordinary read. A bare `.charter/vaults` is not matched today; that is a coverage
-        gap of its own, not this bug, and widening the pattern here would be a different
-        change smuggled into a false-positive fix."""
+        """With the trailing slash AND without it. This docstring used to say "a bare
+        `.charter/vaults` is not matched today; that is a coverage gap of its own" — it was
+        right, the gap was left open for a round, and `grep -rn TOKEN .charter/vaults`
+        printed a password. `_VAULT_PATH_RE` now anchors `vaults` to a path segment, so
+        both spellings of the directory are denied while `.charter/vaults.json` (the
+        registry: provider config and paths, never values) stays an ordinary read."""
         self.assertTrue(self.denied("grep -r . .charter/vaults/"))
+        self.assertTrue(self.denied("grep -r . .charter/vaults"))
+        self.assertFalse(self.denied("grep -rn vaults .charter/vaults.json"))
 
     def test_sed_printing_a_guarded_file(self):
         self.assertTrue(self.denied("sed -n 1p .charter/active-persona"))

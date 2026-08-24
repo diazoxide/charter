@@ -188,18 +188,22 @@ sequenceDiagram
     K-->>C: output, may echo the value
     C-->>A: output, value redacted
     A-->>M: "rollout 3/3 ready"
-    Note over M,A: no step here ever put the value in a context window
+    Note over M,A: charter put the value in no context window — step 2 chose the command
 ```
 
 Reads are masked by default, `--reveal` refuses a non-interactive stdout, and the plugin's
-guard denies both that flag and `cat`-ing a vault file outright.
+guard denies that flag and known reader programs whose argument spells out a vault path.
+Those close the accidental paths; they are not a boundary against a command chosen on
+purpose — a glob, a shell variable or an unlisted program walks past, by design and not by
+oversight — see [SECURITY.md](SECURITY.md).
 
 **Vaults are pluggable, and the provider is where the storage guarantee comes from.** Three
 ship today — `plain_file`, `reference` (point at a value that lives elsewhere) and
 **`1password`** — and more are coming. Read [docs/secrets.md](docs/secrets.md) before
 storing anything real: **`plain_file` is plaintext at mode 0600, with no encryption at
-rest.** What every provider buys you is the same and it is the point — *the model never
-sees the value*. What only a real backend buys you is encryption. The vault is not a
+rest.** What every provider buys you is the same and it is the point — ***charter never
+prints the value into the conversation***; what the command you hand it to does with it is
+that command's business. What only a real backend buys you is encryption. The vault is not a
 password manager; 1Password is, and charter will read from it.
 
 **A browser login, with the password never typed into the conversation.** `charter browser
@@ -272,8 +276,9 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
   travels — disk only, committed, or pushed to the team — is one setting, `[memory].share`,
   and it **defaults to `local`**.
 - **Vault** — where a persona's credentials live. The provider decides the storage
-  guarantee; the boundary is the same for all of them, and it is that the value never
-  enters an agent's context or transcript.
+  guarantee; the boundary is the same for all of them, and it is that **charter never puts
+  the value in an agent's context or transcript** — the command charter hands it to still
+  can.
 
 ## Also in the box
 

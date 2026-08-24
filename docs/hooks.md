@@ -34,10 +34,33 @@ A denial from these is **the rule working, not a bug** — the single most commo
 mistaken for a defect. Each prints why, because a developer who reads the reason learns the
 rule while one who reads a bare refusal files an issue.
 
-- **Secret leak.** A command whose argv would put a vault's contents into the transcript.
-  Needs argv *and* the plane's vault paths, so it cannot be expressed as a static rule.
+- **Secret leak.** A charter invocation carrying `--reveal`, or a **known** file-reading
+  program whose argument, as written, spells a path under `.charter/`. It is a name-based
+  check on the argv it can see, and that is its ceiling: an interpreter (`python3 -c`,
+  `node -e`), a program not on the list (`base64`, `cp`, `jq`, `cut`,
+  `git show HEAD:<path>`), or a shell string (`sh -c 'cat .charter/vaults/db.json'`, which
+  is one argument here and is not re-parsed) is not covered. Widening the list is not the
+  fix — the missing name is always the next one, and false positives arrive immediately.
+  The **path** is normalised before the match — redundant separators, `.`/`..` segments and
+  letter case — so `.charter//vaults/db.json`, `.charter/./vaults/db.json` and
+  `.CHARTER/vaults/db.json` all answer the same as the plain form. Two things it still
+  cannot know. A *different* path holding the same bytes: a vault registered outside
+  `.charter/`, a file `charter secret cp` wrote to a path you named, or a symlink. And
+  anything a **shell** does to the operand after the hook has answered — a glob
+  (`cat .charter/vault?/db.json`), a variable (`V=…; cat $V`), a substitution, brace or
+  tilde expansion, a preceding `cd`. The hook runs on the command line, never on what `sh`
+  turns it into, so each of those is `cat` on the same inode and allowed. See
+  [SECURITY.md](../SECURITY.md) for why that is the honest scope rather than a defect.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
-  matcher at all.
+  matcher at all. It calls the **same predicate on the same operand and adds no step of its
+  own**, so one operand gets one answer whichever route it arrives on — asserted directly, in
+  both directions, by `tests/test_vault_path_spellings.py::TestTheTwoGuardsCannotDisagree`.
+  That sentence used to read "same path pattern, so the same limits", which was false: this
+  route carried a private trailing-slash retry that the Bash route did not, so
+  `Grep(path=".charter/vaults")` was refused while `grep -rn TOKEN .charter/vaults` printed
+  plaintext. The retry is gone and the pattern anchors `vaults` to a path segment instead.
+  No shell is involved on this route, so of the limits above only the path ones apply — the
+  shell-expansion family does not arise here.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
   with the plane's own default branch as the operand, which is the one spelling that used to
