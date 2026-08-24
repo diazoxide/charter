@@ -55,8 +55,125 @@ rule while one who reads a bare refusal files an issue.
   push tags, or `gh release create` / `gh pr merge`. `bypassPermissions` means *stop asking
   me*, not *stop knowing things*, and a published version number can never be reused.
 
-A seventh path is not a guard but an allowance: a binary the **active persona** declares in
-`tools:` runs without a prompt while that persona is active, and only then.
+A seventh path is not a guard but an allowance: a program the **active persona** declares in
+`tools:` runs without a prompt while that persona is active, and only then. It approves the
+**program**, so every argument rides along — which is why seven things are not smoothed
+whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`,
+`git clean`, …), **an argument that is itself a program**, interpreters whose argument is
+the real command (`bash -c`, `python3 -c`, `env`, `xargs`, `npx`, …), any command whose
+arguments **reach** a vault or charter's own state, any tool added to that line after the
+session started — the gate answers within the set declared before this session could
+rewrite it, and `persona.md` is a file the model can write — any command carrying a
+character the shell would rewrite before the program sees it, and any command whose
+**command word is not the file the declared name refers to**. Each of those is a fall back
+to the normal prompt; this path never denies.
+
+Two of those seven are one class read from opposite ends, and the difference between them
+is the difference between a rule and a list. A command that runs a second program is not
+one program with its arguments, and only one of the two was declared. Where that second
+program is named as a **path**, charter asks the filesystem — is this a file this machine
+would execute? — and declines. That is what covers `caffeinate -s ./evil`,
+`arch -arm64 ./evil`, `flock /tmp/l ./evil`, `taskset 1 ./evil`, `runuser -u u -- ./evil`
+and the wrapper written after this sentence, none of which charter has to have heard of.
+Every one of those was an affirmative `allow` before, and for the first two the
+agent-written `./evil` was observed executing.
+
+The interpreter list is the other end, and **it is a list of names, and it is best-effort**.
+It exists for the programs that take their command as *text* — `bash -c hostname`,
+`awk 'BEGIN{system("id")}'`, `npx some-package` — where there is no file for the rule above
+to stat and nothing in `argv` that separates the string from an ordinary argument. Round
+four walked past it with `caffeinate`, which was simply not on it, while `nice`, `ionice`
+and `timeout` were. Adding names is not what closed that; asking about the file is. Read
+the list as a convenience over a residual, never as the boundary.
+
+The residual it sits on, stated: an argument that is a **bare name** is resolved by the
+program being run, through `PATH`, and charter does not treat it as a program. Doing so
+means treating every argument `shutil.which` answers as a program — and `log`, `pr`, `ps`,
+`top`, `apply` and `cp` are all binaries on an ordinary machine, so `git log`,
+`gh pr list`, `docker ps`, `kubectl top` and `kubectl apply` would each become a prompt.
+That is not one prompt; it is the end of the allowance. Exploiting it needs a program the
+agent can already reach through `PATH`, which is the same precondition as the command-word
+residual further down. `ssh host rm` is the same floor with the machine changed.
+
+The command-word rule is newer than the rest and is the same mistake as the first version
+of the one before it. `tools: gh` was matched against `os.path.basename`, so `./gh` — a shell
+script the agent wrote a moment earlier — inherited the approval, as did `/tmp/gh`,
+`bin/kubectl` and `PATH=<a directory the agent wrote> gh`. That is arbitrary unprompted
+execution under any `tools:` line at all. A command word spelled as a path is now smoothed
+only when it is, by inode, either the persona's own `personas/<n>/bin/<name>` script or
+whatever a bare invocation of that name resolves to right now — so `/usr/bin/gh` and a
+symlink to it are still `gh`, and a file of the agent's own is not. A **bare** name is
+smoothed as before: it is the declaration exactly as written, and there is nothing else to
+check it against. What that cannot see is whether the file `PATH` resolves to is the real
+`gh` — an agent that can write into a directory already on `PATH` puts its program where
+bash and charter both find it and both agree.
+
+A leading `VAR=value` is refused for the same reason, all of them, not a list of the
+variables that matter: `PATH=/tmp gh` picks the file as surely as a `/` does, and there is
+no honestly inert subset to carve out — `KUBECONFIG=… kubectl …` was the shape the old
+exemption existed for, and a kubeconfig may name an `exec` credential plugin, which is a
+kubeconfig naming a program for kubectl to run. `KUBECONFIG=… kubectl get pods` is one
+prompt now.
+
+Destructive subcommands are read as **words** of `argv`, not as whole arguments:
+`git -c alias.z=clean z -xfd` defines the alias and runs it in one command, and really does
+delete every untracked file. A word ends where a word ends, so `kubectl describe pod
+my-run-1` is not `kubectl run` and `port-forward` is still one verb — but
+`git commit -m "clean up the tests"` is a prompt now, and that is the price.
+
+*Reach* is decided about the file, not about the text of the command. Each argument is
+resolved and compared by inode to where `charter` actually keeps its state — so
+`@".charter"/vaults/x.json`, `.chart\er/…`, a symlink, a case-folded spelling, the bare
+directory name, and a directory that merely *contains* the state directory
+(`tar -cf /tmp/o.tar .` in the plane root) are all one answer. Because the question is asked
+of `charter.config` rather than of a hardcoded name, a plane with `$CHARTER_HOME` set, a
+plane still on the legacy `.edm/` directory, and a vault the registry points outside the
+plane are covered too.
+
+That comparison is only worth anything if the argument charter examines is the argument the
+program receives, and the step in between is the shell. **A command is smoothed only when
+every character in it is one the shell hands over unchanged** — letters, digits, and
+`_ - . / : , = + @ %`, plus quotes, a backslash, spaces and tabs, and any non-ASCII
+character. Anything else and the gate declines and you get the normal prompt. That is not a
+list of dangerous characters — two of those have been written here and both were bypassed
+by a character nobody had thought of. It is the inverse: a spelling this process cannot
+evaluate is refused by default.
+
+The concrete cost, so it is a decision rather than a surprise: `ls *`, `cat ~/notes.md`,
+`git commit -m "fix #12"`, `kubectl get -o jsonpath={.items}` and any command naming an
+executable file — `git add ./release.sh`, `cat ./deploy.sh` — are no longer smoothed —
+one prompt each. Brace expansion (`.charte{r..r}`), ANSI-C quoting (`$'\x2echarter'`),
+globs, `~`, `$VAR` and `$( )` all reach the same refusal, because each of them is the shell
+rewriting a word before `argv` exists: `charter secre*` is `charter secret` the moment
+something creates a file called `secret` beside it.
+
+**What it still cannot see**, stated rather than implied: this gate reads `argv` and nothing
+else. A program that takes its arguments from a *file* is outside it — `curl -K req.conf`
+runs whatever `req.conf` says, including `--upload-file .charter/vaults/devops.json`, and
+nothing charter owns appears in the command. That is not closed, and the reason is worth
+being explicit about: closing it means listing `curl -K`, `wget -i`, `tar -T`, `xargs -a`,
+`git -c include.path` and whatever comes next, and a list of the spellings somebody thought
+of is the shape that has already been bypassed three times here. There is no property in
+`argv` that separates a config file from any other argument. The same applies to a relative
+path hidden behind an unrecognised flag prefix on a plane whose state directory is named
+neither `.charter` nor `.edm`.
+
+Two more sit on that same floor, found in the fourth round and disclosed here for the same
+reason. A flag whose *value* is another program — `tar --use-compress-program=`,
+`git -c core.pager=` — runs it, and in `argv` it looks like any other `--flag=value`. Half
+of that one closed itself when the rule above arrived: where the value is a path to an
+executable file, charter stats it and declines, without knowing the flag. What is left is a
+value that is a bare name — `--use-compress-program=gzip` — on the residual described
+above. And a verb can reach the command from a file: the gate reads every word of `argv`, so
+`git -c alias.z=clean z` is seen, but a `z = clean` alias already in `.git/config` — which
+takes a plain Edit and no Bash at all — makes `git z -xfd` a command whose every word is
+innocent. Both fall back to a prompt the moment anything else in the command is unusual,
+and both are one prompt away from being seen if you would rather not have the allowance at
+all: take the tool off the `tools:` line.
+
+None of that is a denial being dodged. This path is an *allowance*: the fallback is the
+normal prompt, and every guard above — the Bash leak guard, the state-write guard — applies
+to those commands exactly as before.
 
 ## When a guard is wrong
 

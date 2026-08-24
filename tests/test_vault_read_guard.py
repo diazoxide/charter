@@ -59,6 +59,22 @@ class TestReadingAVaultIsDenied(ReadGuardCase):
         self.assertEqual(_decision(self.read(".charter/vaults", tool="Grep", pattern="token")),
                          "deny")
 
+    def test_a_grep_rooted_at_the_state_directory_itself_is_denied(self):
+        """#443. The pattern required a trailing slash after the directory name, so the one
+        target that walks EVERY vault — the state directory itself — was the one it could
+        not see. `Grep` recurses; the file it reaches is the same file naming
+        `.../vaults/devops.json` reaches."""
+        for p in ('.charter', '.charter' + "/", "/home/me/plane/" + '.charter'):
+            with self.subTest(p=p):
+                self.assertEqual(_decision(self.read(p, tool="Grep", pattern="token")),
+                                 "deny", p)
+
+    def test_the_pre_rename_directory_is_covered_too(self):
+        """`.edm` is charter's pre-rename state directory, and `config._migrate_state_dir`
+        still falls back to it when a migration cannot complete. One extra alternative
+        against a silent gap on a plane that never finished moving."""
+        self.assertEqual(_decision(self.read(".edm/vaults/devops.json")), "deny")
+
     def test_the_browser_and_active_paths_are_covered_too(self):
         """`_VAULT_PATH_RE` already covers these for Bash; the two guards must not disagree
         about what counts as a vault."""
@@ -75,6 +91,13 @@ class TestItDoesNotOverreach(ReadGuardCase):
 
     def test_an_ordinary_file_is_untouched(self):
         self.assertIsNone(_decision(self.read("charter/hooks.py")))
+
+    def test_a_path_merely_under_the_state_directory_is_not_a_vault(self):
+        """The directory alternative is anchored at the END of the operand on purpose. A
+        Read of the tool-gate's session ceiling is not a read of a credential, and turning
+        every state file into a hard denial would be a new guard smuggled in under an old
+        one's name."""
+        self.assertIsNone(_decision(self.read('.charter' + "/state/sessions/s.tools")))
 
     def test_glob_is_not_denied(self):
         """Glob returns NAMES, not contents — the same reason `ls` is absent from the Bash

@@ -81,10 +81,15 @@ class TestCharterKnowsTheDirectory(BinCase):
 class TestProvenance(BinCase):
     """Declaring a script's name must not auto-approve that name anywhere.
 
-    For `gh` or `kubectl` basename matching is right — they are system binaries and the
-    plane does not own them. For a persona's own script it inverts the guarantee: the
-    declaration looks specific and the check is not, so a file an agent wrote to /tmp with
-    the same name inherits the persona's auto-approval.
+    `personas/<n>/bin/<name>` is ground truth — the operator committed it — so the command
+    word has to be that file and a `/tmp` copy does not inherit its approval. Round four of
+    #450 found that the same argument holds for `gh` and `kubectl`, which this docstring
+    used to exempt on the grounds that they were "system binaries the plane does not own":
+    the plane does not own them, and neither does `os.path.basename`, so `./gh` was
+    smoothed too. Both halves now compare the file rather than the name — see
+    `tests/test_toolgate.py::TestTheProgramIsAFileNotAName`. What is still specific to a
+    persona's own script is the BARE spelling: `site-health.sh` alone resolves through
+    PATH, which charter cannot vouch for when it holds a file of that name itself.
     """
 
     def setUp(self):
@@ -105,10 +110,14 @@ class TestProvenance(BinCase):
         charter cannot see and therefore cannot vouch for."""
         self.assertIsNone(toolgate.decide("site-health.sh --full"))
 
-    def test_a_system_binary_is_unaffected(self):
-        """The rule tightens only where charter has ground truth. `gh` is declared and is
-        not one of this persona's scripts, so nothing about it changes."""
+    def test_a_bare_system_binary_is_unaffected(self):
+        """A bare name is the declaration exactly as written and stays smoothed. What
+        changed in round four is the PATH-spelled form: `./gh` is not `gh`, which this
+        pins alongside so the two answers cannot drift into one."""
         self.assertIsNotNone(toolgate.decide("gh pr list"))
+        (self.tmp / "gh").write_text("#!/bin/sh\necho hi\n")
+        (self.tmp / "gh").chmod(0o755)
+        self.assertIsNone(toolgate.decide("./gh pr list", None, str(self.tmp)))
 
     def test_a_declared_name_with_no_script_behind_it_is_unchanged(self):
         """No bin/ entry means charter has nothing to check against, and inventing a

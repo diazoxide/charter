@@ -116,10 +116,10 @@ structure for `charter` to route on:
 | `role` | Human-readable role, shown in listings and injected as session context. |
 | `vault` | Which vault (`docs/secrets.md`) this persona's secrets live in. Use the reserved value `none` to say it holds no credentials at all — `lint` then stops asking for one, and `charter persona secret` says so rather than hunting for a vault. A vault may therefore not be *named* `none`. Saying nothing still warns: the warning is for the author who never considered it, and only an explicit declaration is believed. |
 | `delegate-when` | The trigger phrase for auto-routing — what a request has to look like for another agent (or the default `steward` persona) to hand work to this one. Also becomes the generated sub-agent's description. |
-| `tools` | Commands auto-approved (no permission prompt) while this persona is active — the `PreToolUse` tool-gate reads this. |
+| `tools` | **Programs** auto-approved (no permission prompt) while this persona is active — the `PreToolUse` tool-gate reads this. The unit is the program and every argument rides along, so `tools: gh` is `gh` doing anything, `gh repo delete` included. Seven things are not smoothed however they are declared: destructive subcommands (`kubectl delete`, `charter secret`, `git clean`, …), read as *words* of the command so `git -c alias.z=clean z` is one of them; **an argument that is itself an executable file** — a command running a second program is not one program with its arguments, and that is decided by asking the filesystem about the path, so `caffeinate -s ./evil` and every wrapper charter has never heard of are one answer; interpreters whose *argument* is the command as *text* (`bash -c`, `python3 -c`, `awk`, `npx`, …), which is a **list of names and is best-effort** — see [hooks.md](hooks.md) for what it does not reach, including an argument that is a bare name on `PATH`; any command whose arguments reach a vault or charter's own state — decided by resolving each argument to the file it opens, not by matching its text, so quoting, escaping, a symlink, the bare directory name and a directory that contains it are one answer; anything added to this line **after the session started**, which takes effect in the next session; any command containing a character the shell would rewrite before the program sees it — a pipe, a redirect, a `;`, but equally a glob, a brace, a `~`, a `$` or a `` ` ``, quoted or not; and any command whose **command word is not the file the declared name refers to** — `./gh` is a file the agent can write, so a path in command position is smoothed only when it is, by inode, the persona's own `bin/` script or what a bare invocation resolves to, and a leading `VAR=value` (which picks the file too, via `PATH`) is never smoothed. `ls *`, `git commit -m "fix #12"` and `KUBECONFIG=… kubectl get pods` take a normal prompt for those reasons (see [hooks.md](hooks.md)). |
 | `agent-tools` | Narrows the *generated sub-agent's* tool access specifically (omit to inherit everything). |
 | `extends` | Inherit another persona's charter + tools; this persona's own charter is appended on top rather than replacing it (see "Inheritance" below). |
-| `uses` | Other personas this one may reuse — read their vault, run their tools, or delegate to their sub-agent, without becoming them. |
+| `uses` | Other personas this one may reuse — read their vault, run their tools, or delegate to their sub-agent, without becoming them. The tool half is enforced by the tool-gate; the vault half is declared, not gated (see "Reusing another persona" below). |
 | `activity` | `orchestrator` \| `standby` \| `advisory` — declares that memory *volume* isn't a fair usage signal for this persona (see `charter persona stats`), so it isn't flagged dormant for routing/reviewing rather than recording facts. |
 
 Everything below the second `---` is the **charter** itself: free prose describing the
@@ -214,6 +214,19 @@ becoming it. A persona that `uses: devops` may:
 That bound is the point: a role that needs a cluster credential for one step should borrow
 it explicitly and visibly, not acquire a transitive reach nobody declared.
 
+**Vault reach is declared, not gated — the two halves are enforced differently, and this
+is the disclosure rather than a promise.** The tool half is code: `toolgate` unions in
+exactly the personas named here (or in `borrows:`), and a binary outside that set gets a
+prompt. The vault half is not: any session can name any registered vault
+(`charter secret list <vault>`, `charter persona secret list --persona <name>`), whether or
+not it appears above. Nothing refuses it, and no warning is printed. Every persona runs as
+the same user against the same `.charter/vaults/` files, so this is a boundary charter
+*states* rather than one it holds — the vault-read guard stops an agent printing a vault
+file into the transcript, which is a different question from which persona may name one.
+`uses:`/`borrows:` is therefore a declaration of intent on the vault half and an enforced
+grant on the tool half. Same posture as `bin/` two sections up: what containment cannot
+deliver is written down instead of implied.
+
 `charter persona remove` refuses to orphan — if another persona `extends:` or `uses:` the
 one being removed, removal is refused and the dependents are named (`--force` overrides).
 Before that, a dangling reference was only discovered later, by `lint`.
@@ -230,8 +243,12 @@ dispatch and the context that goes with it.
 
 ```yaml
 uses: forge, release      # personas I may hand work to
-borrows: release          # …and whose tools/vault I may actually use
+borrows: release          # …and whose tools the gate auto-approves for me
 ```
+
+The comment says *tools* on purpose. `borrows:` decides one thing in code — which
+personas' `tools:` the gate unions in — and the vault half of the same sentence is a
+declaration nothing enforces; see the disclosure above.
 
 | Declared | What `uses:` means | Tools auto-approved from |
 | --- | --- | --- |

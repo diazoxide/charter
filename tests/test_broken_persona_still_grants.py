@@ -45,6 +45,12 @@ class BrokenPersonaStillGrants(PersonaIso):
         (config.PERSONAS_DIR / ".default").write_text(name + "\n")
         self.assertEqual(name, persona.resolve_active(),
                          "precondition: the broken persona must be the ACTIVE one")
+        # What SessionStart does (#432): the gate answers within the tools declared before
+        # the session began, so a persona this test *invents* mid-run has to be part of
+        # that roster or the gate correctly grants it nothing. Nothing asserted below
+        # changes — this is the fixture catching up with a session boundary that exists in
+        # production and not in a single test process.
+        toolgate.snapshot()
 
     # ------------------------------------------------------- the measured claim
     def test_a_broken_reference_contributes_no_tools(self):

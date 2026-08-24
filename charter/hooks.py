@@ -298,7 +298,19 @@ _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg 
 #: The vault FILES — note the trailing slash. `.charter/vaults.json` is the registry and
 #: holds provider config and paths, never values, so `grep -rn vaults .charter/vaults.json`
 #: is an ordinary read and was being hard-denied.
-_VAULT_PATH_RE = re.compile(r"\.charter/(?:vaults/|browser|active-)")
+#:
+#: The state DIRECTORY itself is the second alternative. `grep -r token .charter` walks
+#: every vault file inside it, and a pattern that required a trailing slash after
+#: `.charter` never saw the operand that named the directory (#443). Only at the end of
+#: the operand, so `.charter/vaults.json` and `.charter/state/…` are untouched, and
+#: `pretooluse_read`'s "test the target with a `/` appended too" still lands on `/?$`.
+#: `.edm` is the pre-rename spelling, kept for the reason :data:`_CHARTER_PROGS` keeps the
+#: old binary name.
+#:
+#: Known limit, and the reason the tool gate does NOT reuse this as its only answer: this
+#: is a name, and a plane with `$CHARTER_HOME` set keeps its vaults somewhere this pattern
+#: cannot spell. `toolgate._resolves_into` asks the filesystem instead.
+_VAULT_PATH_RE = re.compile(r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-)|/?$)")
 
 
 #: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost
@@ -1523,7 +1535,9 @@ def pretooluse() -> int:
     # fall through to the allow-only persona tool-gate (unchanged behaviour)
     try:
         from . import toolgate
-        result = toolgate.decide(cmd)
+        # `sid` is what bounds the answer to the tools declared BEFORE this session could
+        # rewrite them (#432) — without it the gate re-reads a model-writable file.
+        result = toolgate.decide(cmd, sid, cwd)
     except Exception:
         result = None
     if result:
@@ -2113,6 +2127,15 @@ def sessionstart() -> int:
     # below would otherwise replace the holder's mark with ours and hide the collision.
     piece_note = _piece_announcement(data)
     _touch_piece(data)
+    # Freeze what every persona's `tools:` says, before this session has had a turn in
+    # which to rewrite one (#432). Best-effort: a plane that cannot store the snapshot
+    # gets prompts, never a block. Must run before the context block below, which can
+    # return early.
+    try:
+        from . import toolgate
+        toolgate.snapshot(data.get("session_id"))
+    except Exception:
+        pass
     try:
         parts = _context_parts(data, piece_note, live=True)
         if parts:
@@ -2834,11 +2857,63 @@ def _route_mark_clear(sid: str | None) -> None:
         pass
 
 
+def _state_write_reason(data: dict) -> str | None:
+    """Deny a Write/Edit that hand-edits charter's own per-developer state.
+
+    Everything under ``config.STATE_DIR`` (`.charter/`, or ``$CHARTER_HOME``) is state a
+    charter *command* owns: the vault files, the vault registry, the active-persona
+    pointer, the per-session pointers, and the tool-gate's session ceiling. Three of
+    those decide what :func:`charter.toolgate.decide` will auto-approve, so a Write there
+    is a session widening its own permissions — "an override charter can READ is an
+    override the AGENT controls, which is exactly the party being bound" (#432).
+
+    Resolved with ``realpath``, so a symlink planted into the state directory is the same
+    answer as naming it: the guard is about the file that gets written, not its spelling.
+
+    Deliberately NOT extended to ``personas/<n>/persona.md``. Editing a persona charter on
+    request is ordinary work, and what made it dangerous was that the tool-gate re-read it
+    mid-session — which the ceiling fixes at the reading end, where it belongs. `charter
+    persona use` and every other CLI writer is unaffected: they write the file directly,
+    not through a Write tool call.
+
+    Gated on there being a control plane, for the reason A2 states: this handler runs in
+    every repo on the machine, and a denial outside a plane explains a control plane that
+    does not exist there.
+    """
+    from . import config as _cfg
+    if not _cfg.HAS_CONTROL_PLANE:
+        return None
+    ti = data.get("tool_input") or {}
+    targets = [str(ti[k]) for k in _PATH_KEYS if ti.get(k)]
+    if not targets:
+        return None
+    cwd = data.get("cwd") or os.getcwd()
+    try:
+        state = os.path.realpath(str(config.STATE_DIR))
+    except (OSError, ValueError):
+        return None
+    for t in targets:
+        try:
+            # ValueError as well as OSError: a path carrying an embedded NUL raises it,
+            # and this handler must not turn a malformed argument into a traceback.
+            p = os.path.realpath(t if os.path.isabs(t) else os.path.join(cwd, t))
+        except (OSError, ValueError):
+            continue
+        if p == state or p.startswith(state + os.sep):
+            return ("writes charter's own state directly (that directory decides which "
+                    "commands run without a prompt). Use the charter command that owns it "
+                    "— `charter persona use`, `charter vault add`, `charter secret set`")
+    return None
+
+
 def pretooluse_edit() -> int:
     """`require`'s tool-time half: ask once when a turn edits without dispatching.
 
-    Asks — never denies. A hard block would make a genuinely cross-cutting change
-    unworkable, and the fix a person reaches for then is `routing: off`, permanently.
+    The routing half asks — it never denies. A hard block would make a genuinely
+    cross-cutting change unworkable, and the fix a person reaches for then is `routing:
+    off`, permanently. :func:`_state_write_reason` above it *does* deny, and is a
+    different question: not "should someone else be doing this work" but "may this
+    session hand-write the files that decide its own permissions".
 
     The reason states a fact about this session (the roster was shown, nothing was
     dispatched) and lists who was on it. It does not say which persona should have had the
@@ -2846,6 +2921,14 @@ def pretooluse_edit() -> int:
     be wrong often enough to be dismissed on sight.
     """
     data = _read_stdin()
+    # A hard deny, before the routing ask: this one is a permission question, and asking
+    # the agent to approve a write that widens the agent's own permissions is no guard.
+    state = _state_write_reason(data)
+    if state:
+        _deny("PreToolUse", state)
+        _trace("deny", data.get("session_id"), reason=state[:70],
+               cmd=(data.get("tool_name") or "")[:40])
+        return 0
     names = _route_mark_take(data.get("session_id"))
     if not names:
         return 0
