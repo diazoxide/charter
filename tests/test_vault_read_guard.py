@@ -35,8 +35,8 @@ def _reason(r) -> str:
 
 
 class ReadGuardCase(PersonaIso):
-    def read(self, path: str, tool: str = "Read", **extra):
-        ti = {"file_path": path} if tool == "Read" else {"path": path, **extra}
+    def read(self, path: str, tool: str = "Read", key: str = "file_path", **extra):
+        ti = {key: path} if tool == "Read" else {"path": path, **extra}
         return run_hook(hooks.pretooluse_read,
                         {"tool_name": tool, "tool_input": ti, "session_id": "s", "cwd": "/tmp"})
 
@@ -58,6 +58,20 @@ class TestReadingAVaultIsDenied(ReadGuardCase):
     def test_grep_into_the_vault_directory_is_denied(self):
         self.assertEqual(_decision(self.read(".charter/vaults", tool="Grep", pattern="token")),
                          "deny")
+
+    def test_the_harnesss_own_spelling_of_the_path_key_is_denied_too(self):
+        """`file_path` is Claude Code's name for it. opencode 1.18.21's `read` takes
+        `filePath` — read off the running server's own `/experimental/tool` schema, not
+        guessed — and a guard keyed on one spelling is a guard that is ABSENT on the other
+        harness. That is half of #433: routing opencode's `read` to this handler would
+        still have allowed the read, because the payload's key had a different name.
+
+        The key belongs to the harness, so the guard reads every spelling a harness charter
+        supports uses. `hooks._PATH_KEYS` is the one place that says so."""
+        for key in ("filePath", "notebookPath"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    _decision(self.read(".charter/vaults/devops.json", key=key)), "deny")
 
     def test_the_browser_and_active_paths_are_covered_too(self):
         """`_VAULT_PATH_RE` already covers these for Bash; the two guards must not disagree

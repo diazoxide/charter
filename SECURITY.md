@@ -40,10 +40,12 @@ secret. It is not a password manager, and it is not a substitute for one. For se
 warrant real custody, use the `1password` or `reference` providers, which keep the value in
 a system built for it and resolve it on demand.
 
-**Guard rails, not guarantees.** The Claude Code plugin's `PreToolUse` guard denies
-`--reveal` on a non-interactive stdout and denies file-reading tools pointed at a vault
-file. That closes the easy accidental paths. It is a guard against mistakes, not an attacker
-with shell access as your user.
+**Guard rails, not guarantees.** charter's `PreToolUse` guard denies `--reveal` on a
+non-interactive stdout and denies file-reading tools pointed at a vault file. It runs on
+every harness charter supports: Claude Code and Codex dispatch it from the plugin's
+`hooks/hooks.json`, opencode from the plugin `charter init` generates. That closes the easy
+accidental paths. It is a guard against mistakes, not an attacker with shell access as your
+user.
 
 ## The one-credential rule
 

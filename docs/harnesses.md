@@ -18,6 +18,7 @@ charter harness install codex # Codex only — see below
       ↳ status-bar: no status-bar socket: opencode has no `statusLine` config …
           → charter statusline --watch
       ↳ prompt-hook: no per-turn prompt hook: charter's mid-session nudges ride …
+      ↳ ask-decisions: no ask channel at tool time: opencode's `tool.execute.before` …
   codex
       ↳ status-bar: `tui.status_line` takes a list of built-in segments, not a command …
           → charter statusline --watch
@@ -37,7 +38,7 @@ offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 | | how it is installed | how it updates | what it cannot carry | what to do about it |
 | --- | --- | --- | --- | --- |
 | Claude Code | the plugin (`claude plugin install charter@charter`) | `claude plugin update charter@charter` | — | — |
-| opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, stamped | no status bar; no per-turn prompt hook | `charter statusline --watch`; mid-session notes ride tool output already |
+| opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, stamped | no status bar; no per-turn prompt hook; no ask at tool time | `charter statusline --watch`; mid-session notes ride tool output already; charter's own tool-time asks allow and are not shown — denials are unaffected |
 | Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
 
 You never have to remember that third column — `charter update` asks the harness you are in

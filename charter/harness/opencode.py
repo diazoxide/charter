@@ -40,8 +40,45 @@ TOOL_NAMES = {
     "edit": "Edit",
     "glob": "Glob",
     "grep": "Grep",
+    "skill": "Skill",
     "webfetch": "WebFetch",
     "task": "Task",
+}
+
+#: ``opencode tool id -> the `charter hook` handler that guards it``, the PreToolUse half
+#: of what `hooks/hooks.json` spells as matchers for Claude Code.
+#:
+#: One entry point for every tool was the original design, on the theory that "every
+#: decision stays in Python, where it has tests". It was wrong, and #433 is what it cost:
+#: `pretooluse` reads ``tool_input["command"]`` and guards Bash — it never looks at
+#: `tool_name` — so the vault-read guard (`pretooluse_read`) was simply ABSENT here. The
+#: Bash denial still fired and still NAMED the path it refused, while opencode's own
+#: `read` on that same path was allowed. That is #90 verbatim, one harness over.
+#:
+#: The routing table is the manifest, in the one language that has both halves. A tool
+#: with no entry falls to :data:`DEFAULT_PRE_HOOK` — which is the Bash guard, and which
+#: ignores names it does not know.
+PRE_HOOKS = {
+    "read": "pretooluse-read",
+    "grep": "pretooluse-read",
+    "write": "pretooluse-edit",
+    "edit": "pretooluse-edit",
+    "task": "pretooluse-dispatch",
+}
+
+#: Where a tool with no :data:`PRE_HOOKS` entry goes. `hooks/hooks.json` registers this
+#: one against `Bash`; here it is also the catch-all, because the handler tests
+#: ``tool_input["command"]`` and a tool that carries none reaches nothing.
+DEFAULT_PRE_HOOK = "pretooluse"
+
+#: The PostToolUse half. No catch-all: unlike the pre hooks there is nothing safe to run
+#: for a tool nobody wrote a handler for, and every one of these spawns a process.
+POST_HOOKS = {
+    "bash": "posttooluse-bash",
+    "write": "posttooluse",
+    "edit": "posttooluse",
+    "skill": "posttooluse-skill",
+    "task": "posttooluse-dispatch",
 }
 
 #: opencode's OWN permission names — the table charter's rule joins, not a list charter
@@ -100,6 +137,11 @@ FLAT_ONLY_PERMISSIONS = ("doom_loop", "question", "todowrite", "webfetch", "webs
 #:
 #: Claude Code needs no such list — its `additionalContext` arrives BESIDE the result.
 #: This restriction is the price of opencode having no channel of its own.
+#:
+#: It gates the APPEND, not the dispatch — those became two questions when :data:`POST_HOOKS`
+#: grew entries for `skill` and `task`. Running the handler is how a tally gets recorded;
+#: writing into the result is what corrupts a record. Conflating them is what kept
+#: `posttooluse-skill` and `posttooluse-dispatch` from ever running here.
 EFFECTFUL_TOOLS = ("bash", "edit", "write")
 
 def _shadowed_builtins(name: str) -> tuple[str, ...]:
@@ -170,13 +212,25 @@ _SHIM_TEMPLATE = '''\
 // absent and never repairs one it finds, so your changes survive (ADR 0015).
 //
 // Charter is a Python CLI. This plugin holds no policy of its own — it names the harness
-// to every shell, and forwards tool calls to `charter hook pretooluse`, which is the same
-// handler Claude Code calls. Every decision stays in Python, where it has tests.
+// to every shell, and forwards each tool call to the `charter hook` handler that guards
+// it, which is the same handler Claude Code's hooks.json dispatches for that tool. Every
+// decision stays in Python, where it has tests.
+//
+// The ROUTING is the part that has to be here, and forwarding everything to one handler
+// was the bug (#433): `pretooluse` guards Bash by reading `tool_input.command` and never
+// looks at the tool name, so `read` reached no guard at all while the Bash denial went on
+// naming the vault path it had just refused.
 //
 // `input` is read on every call rather than cached: one opencode server hosts many
 // sessions, so a module-level "current session" would have no correct value.
 
 const TOOL_NAMES = %(tool_names)s
+
+const PRE_HOOKS = %(pre_hooks)s
+
+const DEFAULT_PRE_HOOK = %(default_pre_hook)s
+
+const POST_HOOKS = %(post_hooks)s
 
 const EFFECTFUL = %(effectful)s
 
@@ -190,6 +244,7 @@ export const CharterPlugin = async ({ $, directory }) => {
     // Awaited before the tool runs, and `Plugin.trigger` wraps each hook in
     // `Effect.promise` with no try/catch — so throwing here is what denial IS.
     "tool.execute.before": async (input, output) => {
+      const hook = PRE_HOOKS[input?.tool] ?? DEFAULT_PRE_HOOK
       const payload = {
         hook_event_name: "PreToolUse",
         session_id: input?.sessionID ?? "",
@@ -203,7 +258,7 @@ export const CharterPlugin = async ({ $, directory }) => {
         // METHOD on it. An earlier version called one, threw on every tool
         // call, and failed OPEN silently — the guard never fired while
         // everything looked wired. Verified against opencode 1.18.18.
-        const res = await $`charter hook pretooluse < ${new Blob([JSON.stringify(payload)])}`
+        const res = await $`charter hook ${hook} < ${new Blob([JSON.stringify(payload)])}`
           .env({ ...process.env, CHARTER_HARNESS: "opencode",
                  CHARTER_SESSION_ID: input?.sessionID ?? "" })
           .quiet()
@@ -224,11 +279,17 @@ export const CharterPlugin = async ({ $, directory }) => {
       }
     },
 
-    // charter's mid-session nudges. On Claude Code they arrive beside the result; here
-    // there is no such channel, so they ride the result itself — and only for EFFECTFUL
-    // tools, because a `read` carrying appended text is a false record of that file.
+    // charter's after-the-fact handlers: the tallies (skill use, dispatch) and the
+    // mid-session nudges. On Claude Code a nudge arrives beside the result; here there is
+    // no such channel, so it rides the result itself — and only for EFFECTFUL tools,
+    // because a `read` carrying appended text is a false record of that file.
+    //
+    // Two questions, not one. POST_HOOKS decides whether the handler RUNS; EFFECTFUL
+    // decides whether its answer may be written into the tool's output. Treating them as
+    // one is what kept `skill` and `task` from ever being tallied on this harness.
     "tool.execute.after": async (input, output) => {
-      if (!EFFECTFUL.includes(input?.tool)) return
+      const hook = POST_HOOKS[input?.tool]
+      if (!hook) return
       const payload = {
         hook_event_name: "PostToolUse",
         session_id: input?.sessionID ?? "",
@@ -243,7 +304,7 @@ export const CharterPlugin = async ({ $, directory }) => {
         // METHOD on it. An earlier version called one, threw on every tool
         // call, and failed OPEN silently — the guard never fired while
         // everything looked wired. Verified against opencode 1.18.18.
-        const res = await $`charter hook posttooluse < ${new Blob([JSON.stringify(payload)])}`
+        const res = await $`charter hook ${hook} < ${new Blob([JSON.stringify(payload)])}`
           .env({ ...process.env, CHARTER_HARNESS: "opencode",
                  CHARTER_SESSION_ID: input?.sessionID ?? "" })
           .quiet()
@@ -253,7 +314,7 @@ export const CharterPlugin = async ({ $, directory }) => {
       } catch (e) {
         return
       }
-      if (!note) return
+      if (!note || !EFFECTFUL.includes(input?.tool)) return
       // Fenced, so nothing here can be read back as the tool's own output.
       output.output = `${output?.output ?? ""}\n\n--- charter ---\n${note}\n--- end charter ---`
     },
@@ -272,6 +333,9 @@ _STAMP = "// charter-version: "
 SHIM = _SHIM_TEMPLATE % {
     "version": __version__,
     "tool_names": json.dumps(TOOL_NAMES, indent=2, sort_keys=True),
+    "pre_hooks": json.dumps(PRE_HOOKS, indent=2, sort_keys=True),
+    "default_pre_hook": json.dumps(DEFAULT_PRE_HOOK),
+    "post_hooks": json.dumps(POST_HOOKS, indent=2, sort_keys=True),
     "effectful": json.dumps(list(EFFECTFUL_TOOLS)),
 }
 
@@ -387,6 +451,23 @@ class OpenCodeHarness(Harness):
         Deficit("prompt-hook",
                 "no per-turn prompt hook: charter's mid-session nudges ride the output of "
                 "effectful tools (write/edit/bash) instead of arriving beside them."),
+        # DENIES are carried in full — `tool.execute.before` throwing is what denial IS,
+        # and that is the half the vault guard and the one-credential rule use. What has
+        # no spelling here is the middle answer: a hook that returns `ask` gets a decision
+        # and a sentence, and opencode's plugin API takes neither. Throwing would turn a
+        # question into a refusal, which is a different answer, so charter allows and says
+        # so here. Named rather than left implicit because #433 was precisely a guard that
+        # looked wired and was not — a routed handler whose answer is dropped is the same
+        # shape one layer down.
+        #
+        # Not `charter guard`'s asks: those become rules in `opencode.json` and opencode
+        # prompts for them itself. This is charter's own tool-time asks — the routing and
+        # overlapping-dispatch nudges.
+        Deficit("ask-decisions",
+                "no ask channel at tool time: opencode's `tool.execute.before` can allow "
+                "or throw, so charter's own tool-time asks (the routing and "
+                "overlapping-dispatch nudges) allow and are not shown. Denials are "
+                "unaffected — they throw, and every guard that refuses still refuses."),
     )
 
     cli_name = "opencode"
