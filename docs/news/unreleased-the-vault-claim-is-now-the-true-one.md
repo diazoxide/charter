@@ -105,9 +105,10 @@ more.** Put a zero-width space between two letters of the absolute word and the 
 claim renders exactly as it always did while matching nothing the file knows — the same
 trick U+3164 HANGUL FILLER played on a different guard the same night. U+200D, U+00AD and
 U+2060 do the job equally well, and an HTML comment does it in plain markdown with no
-exotic codepoint at all. So the file reads the page as *rendered* now: every character in
-Unicode category `Cf` is dropped, because "renders as nothing" is what that category
-means, and HTML comments, tags and `[link](url)` wrappers go with it. A **homoglyph** —
+exotic codepoint at all. So the file undoes what it can of the encoding before it reads:
+every character in Unicode category `Cf` is dropped, because "renders as nothing" is what
+that category means, HTML entities are decoded, and comments, tags and link wrappers in
+all four of markdown's spellings go with them. A **homoglyph** —
 one Latin letter swapped for the Cyrillic letter that looks identical — it still cannot
 read, and no confusables table ships in the standard library, so that class is refused
 rather than matched: a word spelled out of two alphabets fails the build. The exact
@@ -123,21 +124,50 @@ reads each sentence both ways. That is the fifth time in three rounds that a fix
 spelling opened another, and it is the argument for writing down the next spelling every
 time rather than waiting for the next reviewer to find it.
 
+A fourth reviewer then found five more, and the interesting thing about them is that none
+needed a new idea. Every one was **a list one entry short**, and four of them had a twin
+in the same file that already knew better. The exemption list was matched as a bare
+substring anywhere in the sentence — the question round two had taken away from the actor
+check three lines above it — so *"…in the transcript, accidentally or otherwise."* carried
+a bound phrase while asserting the opposite of a bound, and so did *"…, whatever path you
+name."* The window between a verb and its object was a count of four words, which is
+exactly what the shipped sentence uses, so one adjective walked past it. The place list
+was not pluralised while the credential list was, so the verbatim plural of an existing
+fixture passed. The markup list knew one of markdown's four link spellings. And the
+encoding rule read the file rather than the page one layer further down: `&#118;` renders
+as a `v`, and `&zwnj;` is the entity spelling of a zero-width character, which walks past
+the `Cf` drop by not being a `Cf` character in the file at all. A bound the sentence takes
+back is no longer a bound, the count is gone in favour of the clause boundary that was
+doing the work anyway, and entities are decoded by the standard library's own decoder.
+
 **What the prose test does, said no more strongly than it is true.** It is a regular
 expression over prose. It cannot tell whether a sentence is true, and every vocabulary in
 it is an open class that will stay incomplete. What it does is refuse the shapes it knows:
 a sentence in these files or in charter's own docstrings that makes an absolute claim
-about where a value ends up, *in a wording the file recognises*, fails the build unless
-the bound sits in the same sentence. An earlier draft of this paragraph said it "fails the
-build if a future sentence anywhere in these pages makes an absolute claim about where a
-value ends up without a bound beside it" — nine such sentences were appended to the README
-and the suite stayed green. The release note announcing the end of overclaiming was
-overclaiming about its own guard.
+about where a value ends up, *in a wording the file recognises*, fails the build unless a
+bound *the file recognises* sits in the same sentence **and the sentence does not take it
+back**. An earlier draft of this paragraph said it "fails the build if a future sentence
+anywhere in these pages makes an absolute claim about where a value ends up without a
+bound beside it" — nine such sentences were appended to the README and the suite stayed
+green. The draft after that dropped the two qualifications now in bold, and six more
+sentences went in. The release note announcing the end of overclaiming has now been
+overclaiming about its own guard twice.
 
-Two limits are named in the file rather than left to be found: a homoglyph is refused as a
-mixed-script word rather than read as the word it imitates, and a promise that becomes
-visible only when a borrowed pronoun antecedent *and* a skipped aside are combined is one
-the file does not see — each of those is a guess, and it will not stack two of them.
+Four limits are named in the file rather than left to be found, and the first is the one
+the earlier draft of this note got wrong. **The file does not read the rendered page**:
+the standard library has no markdown renderer, so what it undoes is an entity decoder,
+four markup constructs and two Unicode categories, and round four got past the version of
+that list which this note called reading the page "as *rendered*". The answer is not a
+fifth construct — it is that a word the page shows which the file does not spell is now
+refused outright, whatever assembled it, which is a net under the list rather than another
+entry in it. A construct a real renderer joins and this file leaves alone is still
+invisible to both. A **homoglyph** it cannot read at all, and that class is refused the
+same way, as a word spelled out of two alphabets. It cannot tell a bound *used* from a
+bound *mentioned* — a sentence that revokes its limit without quantifying over it,
+denying it or coordinating it with the general case reads as bounded, and five such
+sentences are fixtures that assert they pass. And a promise that becomes visible only
+when a borrowed pronoun antecedent *and* a skipped aside are combined is one the file does
+not see — each of those is a guess, and it will not stack two of them.
 
 **Nothing about the vault changed, and nothing needs adopting.** What changed is that the
 promise on the front page is bounded where the code bounds it, and that charter's own

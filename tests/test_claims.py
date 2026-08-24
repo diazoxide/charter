@@ -101,32 +101,87 @@ skipped.** Four more classes came out of it, one of them created by the fix itse
   three rounds that a fix for one spelling opened another, which is the argument for
   writing down the next spelling every time instead of only when a reviewer finds it.
 
+**What the fourth round changed, and why it is the last one that adds vocabulary.** Five
+more classes came out of asking the question of round three's fix, and the interesting
+thing about them is that not one needed a new idea. Each was **a list one entry short**,
+and in four cases the list had a twin in the same file that already knew better:
+
+* `_QUALIFIERS` was a **substring test over the whole sentence** — the exact question
+  round two took away from `_ACTOR`, three lines above it, and left here. So
+  *"…in the transcript, accidentally or otherwise."* carried a bound phrase and asserted
+  the opposite of a bound, and so did *"…, whatever path you name."* and *"…on the paths
+  that consume it, and on every other path as well."* — that last one following the
+  instruction this file's own failure message prints. A bound is a bound only if the
+  sentence does not take it back; see `_bounds`.
+* `_gap(4)` was **a number**, and the shipped sentence uses exactly four words between
+  the verb and the place, so one adjective walked past it: *"…in the **agent**
+  transcript."* The clause boundary was doing all the work and the count was doing none;
+  it is gone (`_SAME_CLAUSE`).
+* `_SECRET_NOUN` writes `values?` and `_PLACE` wrote `transcript`, so the **verbatim
+  plural** of a fixture already in `BYPASSED` passed. Plurality is applied once now,
+  where the list becomes a pattern.
+* `_INVISIBLE_MARKUP` knew **one of markdown's four link spellings**, so
+  *"…in the [transcript][gh-t]."* rendered as the retracted claim and matched nothing.
+* And the encoding rule read the file rather than the page one layer further down:
+  `ne&#118;er` renders as *never* through GitHub's own renderer, and `ne&zwnj;ver` is the
+  entity spelling of a zero-width character, which walks past round three's `Cf` drop by
+  not being a `Cf` character in the file at all. An encoding is decoded by its decoder,
+  so `html.unescape` runs; and because that is still a list of layers, `spliced_words`
+  **refuses** the residue — a word the page shows that the file does not spell.
+
 **What this file does not do, stated plainly, because the alternative is the defect it
 exists to catch.** It is a regular expression over prose. It cannot tell whether a
 sentence is true. It matches vocabulary — an open class of credential nouns, an open class
-of verbs meaning "arrives somewhere", an open class of words meaning "no exceptions" — and
-every one of those lists is incomplete and will stay incomplete, because English is. What
-it *can* do is refuse the shapes it knows, and the honest claim is that narrow: **a
-sentence in these files that makes an absolute claim about where a value ends up, in a
-wording this file recognises, fails the build unless the bound sits in the same
-sentence.** Anything stronger than that is a sentence someone will disprove in round four.
+of verbs meaning "arrives somewhere", an open class of words meaning "no exceptions", and
+an open class of phrases that bound a promise — and every one of those lists is incomplete
+and will stay incomplete, because English is. What it *can* do is refuse the shapes it
+knows, and the honest claim is that narrow: **a sentence in these files that makes an
+absolute claim about where a value ends up, in a wording this file recognises, fails the
+build unless a bound this file recognises sits in the same sentence and the sentence does
+not take it back.** Every clause of that is load-bearing, and each one is a way past it.
 
-Two of its limits are worth naming rather than leaving to be found. It reads the page as
-rendered, not as typed, so an invisible codepoint or a markdown wrapper no longer hides a
-word from it — but a **homoglyph** it cannot read at all, and `mixed_script_words` refuses
-that class instead of matching it. And a **borrowed antecedent** and a **skipped aside**
-are each a guess about what a sentence means; the two are never stacked, which means a
-promise that needs both to be visible is a promise this file does not see.
+Four of its limits are worth naming rather than leaving to be found, and the first is not
+the one three rounds of this docstring claimed.
+
+**It does not read the rendered page.** There is no markdown renderer in the standard
+library, so what `_rendered` knows is `html.unescape`, four markup constructs and two
+Unicode categories, and round four got past the version of that list which round three
+called "not a list to extend". It is still a list. `spliced_words` is the answer to
+*that* rather than another entry in it — a word on the page that is not in the file is
+refused outright, whatever built it — but it is a net stretched under `_rendered` and not
+a replacement for it: a construct a real renderer joins and `_rendered` leaves alone is
+invisible to both. That gap is not closable here, and it is the first thing to attack.
+
+**A homoglyph it cannot read at all**: `nеver` is Cyrillic ie, no confusables table ships
+in the standard library, and `mixed_script_words` refuses the class instead of matching
+it.
+
+**It cannot tell a bound used from a bound mentioned.** `_bounds` refuses a restriction
+the sentence quantifies over, denies or coordinates with its own complement, and those
+are shapes rather than wordings — but *"…in the transcript; the accidental case is merely
+the easiest to describe."* revokes its bound with none of them, and passes.
+`MENTIONED_NOT_USED` holds five of those and asserts that they pass.
+
+And a **borrowed antecedent** and a **skipped aside** are each a guess about what a
+sentence means; the two are never stacked, which means a promise that needs both to be
+visible is a promise this file does not see.
 
 Four things keep it from being unfailable in the other direction — passing because it
 stopped looking. `TestTheDetectorFires.SHIPPED` runs the historical wording, the actual
-sentences that shipped. `BYPASSED` runs everything three reviewers got past rounds one and
-two, plus the next spellings found by asking the same question of round three's own fix —
+sentences that shipped. `BYPASSED` runs everything four reviewers got past rounds one to
+three, plus the next spellings found by asking the same question of each round's own fix —
 one of which, *"Nobody watching this conversation ever sees the password."*, defeated the
-first draft of it, and ten of which are the invisible-codepoint, markup and aside
-spellings that defeated the second. `CONFUSABLE` pins the one class `flagged` does **not**
-catch, and asserts that it does not catch it, so the file cannot quietly come to claim
-otherwise. And the qualifier vocabulary is deliberately about *this* limit
+first draft of round three, and twenty-four of which are round four's encoding, link,
+qualifier, window and plural spellings — five of those twenty-four found by asking the
+question of round four's own fix rather than by waiting to be told. `NOT_SPLICED` and
+`CORRECTED` are the other direction again: eight sentences of ordinary markdown and
+honest prose that round four's widenings reported until each was made to tell them apart,
+because a fix that cannot distinguish an attack from `` `read`s `` is a fix that gets
+reverted. `SPLICED` pins the second class `flagged` handles by refusal rather than by
+matching, and `CONFUSABLE` and `MENTIONED_NOT_USED` pin the two classes it does **not**
+handle at all — each asserting that `flagged` still lets them past, so the file cannot
+quietly come to claim otherwise. And the qualifier vocabulary is deliberately about *this*
+limit
 (capture, transform, whose command it is, which paths); "guard rails, not guarantees" two
 paragraphs down is a different limit and does not count as covering this one.
 
@@ -138,6 +193,7 @@ quotes the wrong wording verbatim in order to correct it.
 
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 import unittest
@@ -232,9 +288,25 @@ _SUBJECT = re.compile(r"\b(?:" + _SECRET_NOUN + r")\b", re.I)
 #: matches this list on its own: a motion verb has to point at it. That is what lets the
 #: list be generous instead of careful — narrowing the *scope* of a match is what makes
 #: widening its *vocabulary* safe, and it is the trade this whole file now runs on.
+#:
+#: **A plural is not a different word, and round four's simplest bypass was that this
+#: list did not know it.** `_SECRET_NOUN` writes `secrets?|values?|tokens?` and this one
+#: wrote `transcript|conversation|chat`, so *"charter never puts the values in the
+#: transcripts."* — the verbatim plural of a fixture already in `BYPASSED` — passed. That
+#: is the same defect as the two `_PLACE` lists round two kept: one concept, spelled in
+#: two places, and one of the spellings missing something the other had.
+#:
+#: So plurality is not spelled into the entries. It is applied **once, where the list
+#: becomes a pattern** (`_places()`), which is the only place it can be applied and stay
+#: applied. Adding a noun here cannot forget it.
 _PLACE = (r"transcript|context window|context|conversation|chat|prompt|summary"
-          r"|log|logs|logfile|history|terminal|screen|console|output"
+          r"|log|logfile|history|terminal|screen|console|output"
           r"|stdout|stderr|window|scrollback|clipboard")
+
+
+def _places() -> str:
+    """`_PLACE` as a matchable noun — singular or plural, whatever the entry says."""
+    return r"(?:" + _PLACE + r")(?:e?s)?\b"
 
 #: Motion towards a place, in both voices. Round one knew `leak|escape|reach|end up` and
 #: fell to *"enters"*; round two grew the arriving half and fell to *"puts"*, because
@@ -250,39 +322,71 @@ _DELIVER_VERB = (r"put|print|write|show|display|expose|emit|send|echo|copy|rende
 _MOTION = _ARRIVE_VERB + r"|" + _DELIVER_VERB
 
 
-def _gap(n: int) -> str:
-    """Up to *n* intervening words, **inside one clause**.
-
-    Every two-part rule in this file — verb and its place, verb and its object,
-    quantifier and its verb — is a window between two words, and round three's own first
-    draft wrote that window as ``(?:\\W+\\w+){0,n}?\\W+``. `\\W` matches a comma. So the
-    window reached across a clause boundary and read the *next* clause's subject as this
-    verb's object, and README.md:290 is what that costs::
-
-        …cannot choose what it runs, what it **reads**, or where **it** writes.
-
-    `it` there is the subject of "it writes", the sentence is about a persona name and
-    not about a credential, and the rule flagged it as a promise that a reader never
-    reads the secret. Two false positives of that shape are how a guard gets deleted.
-
-    The property is grammatical, not typographic: **a verb and its object are in the same
-    clause.** So the window is made of words and the spaces between them, and nothing
-    else — a comma, a dash, a semicolon or a full stop ends it, because each of those is
-    where the clause the verb governs ends. Intra-word punctuation stays inside the
-    token, so `agent's`, `env-var` and `--dotenv` are each one word and not a boundary.
-    """
-    return r"(?:[ \t]+[-\w'’]+){0," + str(n) + r"}?[ \t]+"
+#: Any number of intervening words, **inside one clause**.
+#:
+#: Every two-part rule in this file — verb and its place, verb and its object, quantifier
+#: and its verb — is a window between two words, and round three's own first draft wrote
+#: that window as ``(?:\W+\w+){0,n}?\W+``. `\W` matches a comma. So the window reached
+#: across a clause boundary and read the *next* clause's subject as this verb's object,
+#: and README.md:290 is what that costs::
+#:
+#:     …cannot choose what it runs, what it **reads**, or where **it** writes.
+#:
+#: `it` there is the subject of "it writes", the sentence is about a persona name and not
+#: about a credential, and the rule flagged it as a promise that a reader never reads the
+#: secret. Two false positives of that shape are how a guard gets deleted.
+#:
+#: The property is grammatical, not typographic: **a verb and its object are in the same
+#: clause.** So the window is made of words and the spaces between them, and nothing else
+#: — a comma, a dash, a semicolon or a full stop ends it, because each of those is where
+#: the clause the verb governs ends. Intra-word punctuation stays inside the token, so
+#: `agent's`, `env-var` and `--dotenv` are each one word and not a boundary.
+#:
+#: **And round three then wrote a number on top of that property, which is what round
+#: four walked through.** The window was `_SAME_CLAUSE`, and the shipped sentence uses exactly
+#: four words between the verb and the place, so one adjective was a bypass::
+#:
+#:     charter never puts the value in the agent transcript.
+#:     charter never puts the value in the model's own transcript.
+#:
+#: A count is a list with one entry: whatever it is, English has a sentence one word
+#: longer. The clause boundary was already doing the whole of the work — it is what stops
+#: the window reaching the next clause's subject — and the number was doing nothing but
+#: naming the length of the sentences the author happened to think of. So it is gone.
+#: The window is *the rest of the clause*, which is what "in the same clause" means.
+_SAME_CLAUSE = r"(?:[ \t]+[-\w'’]+)*?[ \t]+"
 
 
 #: "…lands in the transcript", "…puts it in the chat" — a motion verb and a place, near
 #: enough to each other to be one statement.
 _DELIVERY = re.compile(
-    r"\b(?:" + _MOTION + r")\w*" + _gap(4) + r"(?:" + _PLACE + r")\b", re.I)
+    r"\b(?:" + _MOTION + r")\w*" + _SAME_CLAUSE + _places(), re.I)
 
 #: Somebody whose reading of a value is the leak. `it` and `they` are in here because
 #: "The model names the secret; **it** never sees it." is a sentence charter shipped.
 _READER = (r"model|agent|assistant|llm|you|your|yours|user|human|reader|anyone"
            r"|anybody|someone|somebody|it|they|them|their")
+
+#: The thing a perception verb perceives — **and where in the clause it may sit.**
+#:
+#: These two are not the same shape, and collapsing them is what the counted window was
+#: quietly papering over. Dropping the count for the clause boundary (`_SAME_CLAUSE`) is
+#: right for a full noun phrase — *"never reads the value the command produced"* puts six
+#: words between the verb and its object and is one statement — and it is wrong for a
+#: pronoun, because **an English pronoun object is adjacent to its verb**. Let a bare
+#: `it` be the object of any `read` in the same clause and README.md:290 comes straight
+#: back::
+#:
+#:     …a name charter **reads** out of a committed file cannot choose what **it** runs…
+#:
+#: where the `it` is the next clause's subject; `docs/secrets.md:124` fails the same way
+#: on *"**reads** the vault under an identity **it** never declared"*. Both were the
+#: false positives that got the window narrowed to four words in the first place, and
+#: both are fixed by the grammar rather than by a number: a noun object anywhere in the
+#: clause, a pronoun object next to the verb, with room for one particle (`reads it
+#: back`, `sees it plainly`) and no room for a clause boundary's worth of words.
+_OBJECT = (r"(?:" + _SAME_CLAUSE + r"(?:" + _SECRET_NOUN + r")\b"
+           r"|(?:[ \t]+[-\w'’]+)?[ \t]+(?:it|them)\b)")
 
 #: "…never sees it" — the same exposure told as perception rather than motion.
 #:
@@ -292,7 +396,7 @@ _READER = (r"model|agent|assistant|llm|you|your|yours|user|human|reader|anyone"
 _PERCEIVE = re.compile(
     r"\b(?:see|sees|seen|seeing|view|views|viewing|watch|watches|watching"
     r"|observe|observes|witness|witnesses|lay eyes on|look at)\b"
-    + _gap(3) + r"(?:it|them|" + _SECRET_NOUN + r")\b", re.I)
+    + _OBJECT, re.I)
 
 #: `read` is the one perception verb that is also what a program does to a file, and
 #: these docs are full of the second sense: *"charter doctor and vault list never read a
@@ -302,8 +406,7 @@ _PERCEIVE = re.compile(
 #: can only make the rule miss less, and it is not round one's "does the word appear
 #: anywhere" test wearing a hat: that one was an **exemption**, and this is a requirement.
 _PERCEIVE_READ = re.compile(
-    r"\b(?:read|reads|reading)\b" + _gap(3) + r"(?:it|them|"
-    + _SECRET_NOUN + r")\b", re.I)
+    r"\b(?:read|reads|reading)\b" + _OBJECT, re.I)
 _READER_RE = re.compile(r"\b(?:" + _READER + r")\b", re.I)
 
 #: Exposure with no verb in it at all. *"At no stage is the token **visible** to the
@@ -318,9 +421,9 @@ _VISIBLE = re.compile(r"\b(?:in)?(?:visible|readable|legible|viewable)\b"
 #: object, which is `_DELIVERY` with the sentence turned around. Round three's own first
 #: draft had only the one direction, which is the mistake this whole file keeps making.
 _HOLDING = re.compile(
-    r"\b(?:" + _PLACE + r")\b" + _gap(4)
+    r"\b" + _places() + _SAME_CLAUSE
     + r"(?:contain|hold|carry|include|keep|end up with|wind up with)\w*"
-    + _gap(3) + r"(?:it|them|" + _SECRET_NOUN + r")\b", re.I)
+    + _OBJECT, re.I)
 
 #: Absolute words whose scope is **the clause they sit in**.
 #:
@@ -337,7 +440,7 @@ _HOLDING = re.compile(
 _ABSOLUTE_LOCAL = re.compile(
     r"\b(?:never|cannot|can't|impossible|not one|not a single|never once|always"
     r"|no (?:step|byte|part|copy|trace|" + _SECRET_NOUN + r"))\b"
-    r"|\b(?:nobody|no one|no-one|nothing|none of|zero)\b" + _gap(5) + r"ever\b", re.I)
+    r"|\b(?:nobody|no one|no-one|nothing|none of|zero)\b" + _SAME_CLAUSE + r"ever\b", re.I)
 
 #: Absolute markers whose scope is **the whole sentence**, because that is what a
 #: sentence adverbial modifies.
@@ -458,7 +561,7 @@ _EXHAUSTIVE = (r"100%|every single|in (?:every|all|each|any) (?:cases?|instances
 #: **withheld** the vault from"* is two statements, and a window wide enough to join them
 #: is a window that flags any page with a quantifier and a verb on it.
 _TOTAL_REDACTION = re.compile(
-    r"\b(?:" + _REDACT_VERB + r")\w*" + _gap(4) + r"(?:from|out of|off|of)\W+"
+    r"\b(?:" + _REDACT_VERB + r")\w*" + _SAME_CLAUSE + r"(?:from|out of|off|of)\W+"
     r"(?:" + _UNIVERSAL + r")\b"
     r"|\b(?:" + _REDACT_VERB + r")\w*\s+(?:it\s+)?(?:from\s+)?(?:" + _UNIVERSAL + r")\b"
     r"|\b(?:" + _UNIVERSAL + r")\b[^,;:.()—–]{0,60}?\b(?:" + _REDACT_VERB + r")\w*"
@@ -472,8 +575,8 @@ _TOTAL_REDACTION = re.compile(
 #: rule cannot go missing from the other — which is how `chat` was reachable here and not
 #: there.
 _IMPOSSIBLE = re.compile(
-    r"\b(?:cannot|can't|never|impossible|at no point|no way)\b" + _gap(4) + r"(?:"
-    + _MOTION + r")\w*" + _gap(3) + r"(?:" + _PLACE + r")\b", re.I)
+    r"\b(?:cannot|can't|never|impossible|at no point|no way)\b" + _SAME_CLAUSE + r"(?:"
+    + _MOTION + r")\w*" + _SAME_CLAUSE + _places(), re.I)
 
 #: The one word that makes a redaction claim true: it covers what charter *captured*.
 _CAPTURED = re.compile(r"\bcaptur", re.I)
@@ -509,6 +612,118 @@ _QUALIFIERS = (
 #: clause of the worst sentence in the repo. Left in, it silently exempted the very
 #: wording this file exists to catch, and `TestTheDetectorFires` is what noticed.
 
+
+# ---------------------------------------------------------------------------
+# A bound the sentence takes back is not a bound.
+#
+# **Round two made `_ACTOR` positional and left `_QUALIFIERS` a substring test, and
+# round four walked through the half that was left.** The correction round two wrote for
+# the actor was: *"No quantity of 'charter' elsewhere in the sentence changes what the
+# clause is about"* — a name in a sentence is not a fact about the sentence. The
+# exemption three lines below it went on asking exactly that question of a different
+# list, and `in` on a lowercased string is as weak a test as `_ACTOR.search` was::
+#
+#     charter never puts the value in the transcript, accidentally or otherwise.
+#     charter never puts the value in the transcript, by accident or by design.
+#     charter never puts the value in the transcript, and no transform changes that.
+#     charter never puts the value in the transcript, whatever path you name.
+#     …in the transcript on the paths that consume it, and on every other path as well.
+#
+# Every one of those contains a `_QUALIFIERS` entry — "accidental", "by accident",
+# "transform", "path you name", "paths that consume it" — and every one is *strictly
+# stronger* than the sentence charter retracted. The fifth is the worst: it follows the
+# instruction this file's own failure message prints, names the paths the promise holds
+# on, and then extends the promise to the rest. That is the `"still can"` / `"still
+# cannot"` defect the note above records, recurring one list further down.
+#
+# So the question is no longer *does this phrase occur*. It is **does this phrase still
+# restrict anything where it occurs**, and the three ways English takes a restriction
+# back are structural rather than lexical:
+#
+# * quantify over it — `whatever path you name`, `any destination you name`;
+# * deny it — `no transform changes that`;
+# * offer it as one arm of a disjunction — `accidentally or otherwise`, `by accident or
+#   by design`. `X or ¬X` asserts both arms, and what makes it recognisable is the `or`
+#   on the phrase's heel, not the vocabulary of ¬X. `and` counts too when what follows
+#   it quantifies over the complement (`and on every other path as well`).
+#
+# None of the three is a list of the sentences found; each is a shape, and each is
+# checked at the phrase, which is where the round-two correction put the actor's.
+#
+# This fails **closed**, deliberately and at a cost: *"only into a destination you name
+# or a file you name"* is a true bounded sentence and this cancels it. That is the same
+# trade `_unquoted` makes two screens down — a false positive breaks a build and gets
+# reworded, a bypass ships — and it is why the cancellation lives here rather than in a
+# list of the four wordings above.
+#
+# **These four sentences were found by asking the question of this fix rather than
+# waiting for round five to ask it**, which is the discipline the aside note two rounds
+# up argues for. The first draft cancelled `whatever X`, `no X` and `X or ¬X` and let all
+# four of these through::
+#
+#     …in the transcript, by accident and also by design.
+#     …in the transcript, accidentally but also deliberately.
+#     …in the transcript, on purpose or by accident.
+#     …in the transcript, by accident, by design, whatever.
+#
+# The first two moved the disjunction one coordinator sideways; the third put it in front
+# of the phrase instead of behind it; the fourth dropped the coordinator entirely and
+# used a bare comma list. So the window is the phrase's whole clause and not the word on
+# its heel, and it is read on both sides — because "which side of the phrase is the
+# widener on" is not a fact about whether the sentence still restricts anything.
+#
+# `_WIDENS` is a list and this comment is not going to claim otherwise: it is the
+# vocabulary of *"the distinction I just drew does not matter"*, and English has more of
+# it than this. What is **not** a list is the two shapes around it — a coordinator on
+# either side of the phrase, and a quantifier or a denial governing it — and those are
+# what catch a widener nobody wrote down, since a widener has to be coordinated with the
+# phrase to revoke it. A wording that revokes a bound with none of them is a wording this
+# file does not see, and `TestTheDetectorFires.MENTIONED_NOT_USED` pins five of those and
+# asserts that they pass — because a limit written down is a limit, and a limit left to
+# be found is the defect this file exists to catch.
+#
+# `else`, `elsewhere` and `other` are deliberately **not** in it, though they were in the
+# first draft and they are how the bypass above names the complement. They only *name*
+# the complement, and naming it is what an honest bound does too: `docs/mcp.md:53` bounds
+# its promise and then says the limit is "the same limit `secret exec` has everywhere
+# else", which is a true sentence about scope and read as a revocation. What revokes a
+# restriction is the quantifier or the additive attached to the complement, not the word
+# for the complement — "and on **every** other path **as well**" is caught twice over
+# without either of them.
+_WIDENS = (_UNIVERSAL + r"|otherwise|also|too|as well"
+           r"|alike|equally|anyway|regardless|either way|no matter"
+           r"|by design|on purpose|deliberately|intentionally")
+_CANCELS_BEFORE = re.compile(
+    r"\b(?:" + _UNIVERSAL + r"|no|not|never|none|nothing|or)\W*$", re.I)
+_CANCELS_AFTER = re.compile(
+    r"\s*[,;:—–]?\s*or\b"
+    r"|[^.;:]*?\b(?:" + _WIDENS + r")\b", re.I)
+
+
+def _bounds(text: str) -> list[str]:
+    """The `_QUALIFIERS` phrases in *text* that *text* does not then take back.
+
+    Empty means the sentence names no limit on this promise — which is the same verdict
+    as naming none at all, and is meant to be.
+    """
+    low = text.lower()
+    kept = []
+    for phrase in _QUALIFIERS:
+        # **A whole phrase, not a substring of a longer word.** "accidental" occurs
+        # inside "accidentally or otherwise", so the cancellation below never saw the
+        # `or` — it was reading the tail of a word. This is the `"still can"` /
+        # `"still cannot"` hazard the note above records, which round two answered by
+        # deleting the one entry that tripped it; anchoring every entry answers the
+        # class, and `\bstill can\b` would not have matched `still cannot` either.
+        for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", low):
+            if _CANCELS_BEFORE.search(low[:m.start()]):
+                continue
+            if _CANCELS_AFTER.match(low[m.end():]):
+                continue
+            kept.append(phrase)
+            break
+    return kept
+
 #: The unit of judgement is the **sentence**, not the paragraph or the page.
 #:
 #: The audit's sketch allowed the bound to sit within N lines of the promise. That is too
@@ -523,10 +738,38 @@ _QUALIFIERS = (
 #: `describe()`-padding trick of round two moved into prose. A markdown link is the same
 #: shape — `[transcript](/docs/x.md)` reads as *transcript*, and only the URL is between
 #: the verb and its place.
+#:
+#: **Round four's second class is that the link arm knew one of markdown's four link
+#: spellings.** `[text](url)` was written down; `[text][ref]`, `[text][]` and the
+#: shortcut `[text]` were not, so *"charter never puts the value in the
+#: [transcript][gh-t]."* renders as the retracted claim and matched nothing. That is the
+#: same mistake as `at no point` without the rest of its family, and it is fixed the same
+#: way — by writing the construction instead of one member of it. The construction is
+#: **square brackets render as their contents**; what may follow them (a parenthesised
+#: URL, a bracketed label, an empty pair, nothing at all) is the part that varies, so it
+#: is optional and its own contents are dropped whatever they are.
+#:
+#: **A bracket renders as a gap, not as nothing, and the difference is the whole reason
+#: this arm can be widened at all.** Dropping the brackets outright glues the tokens they
+#: sat between into one word — `dict[str, int]` in a docstring becomes `dictstr`, and
+#: `spliced_words` correctly reports a word the file does not contain. On the page a link
+#: never welds its neighbours together, so the replacement keeps the spaces: the label
+#: stays a word of its own, `_SAME_CLAUSE` walks over it, and nothing is assembled. An
+#: HTML comment is the opposite case and keeps welding, because that is exactly what
+#: `ne<!-- -->ver` does on the page — which is why `spliced_words` refuses it.
 _INVISIBLE_MARKUP = (
     (re.compile(r"<!--.*?-->", re.S), ""),                  # HTML comment: renders as nothing
-    (re.compile(r"!?\[([^\]]*)\]\([^)]*\)"), r"\1"),        # [text](url) renders as text
-    (re.compile(r"</?[A-Za-z][^>]*>"), ""),                 # <b>, <br/>: renders as nothing
+    # [text](url), [text][ref], [text][] and bare [text] all render as *text*.
+    (re.compile(r"!?\[([^\][]*)\](?:\([^)]*\)|\[[^\][]*\])?"), r" \1 "),
+    # `<br>` is the one tag whose *definition* is a gap. README.md:146 puts one inside a
+    # mermaid label — `*.md<br/>one fact per file` — and deleting it welds `md` to `one`.
+    # It also means `ne<br>ver` is not a bypass: a reader sees two lines, not `never`.
+    (re.compile(r"<br\s*/?>", re.I), " "),
+    # Everything else: <b>, <span>, <a href=…> render as nothing. That is the default
+    # **because it is the direction that fails closed** — a tag wrongly treated as a gap
+    # hides a word from every pattern below and from `spliced_words` alike, while a tag
+    # wrongly treated as nothing welds two words and `spliced_words` fails the build.
+    (re.compile(r"</?[A-Za-z][^>]*>"), ""),
 )
 
 
@@ -544,13 +787,29 @@ def _plain(text: str) -> str:
     * `…in the [transcript](/docs/x.md).` — the place wrapped in a link, so the URL sits
       between the verb and its object.
 
-    None of these is a list to extend. The property is **what the page shows**, so the
-    normalisation is by Unicode property, not by codepoint: NFKD folds the compatibility
-    spellings (fullwidth letters, ligatures, U+00A0) onto their ordinary ones, and every
-    character in category `Cf` (format — zero-width and bidi controls, all of which
-    render as nothing by definition) and `Mn`/`Me` (combining marks, which render *onto*
-    the previous character rather than as a character of their own) is dropped. A
-    codepoint invented tomorrow that renders as nothing will be `Cf` too.
+    Half of that normalisation is by Unicode property and not by codepoint, and that half
+    has held: NFKD folds the compatibility spellings (fullwidth letters, ligatures,
+    U+00A0) onto their ordinary ones, and every character in category `Cf` (format —
+    zero-width and bidi controls, all of which render as nothing by definition) and
+    `Mn`/`Me` (combining marks, which render *onto* the previous character rather than as
+    a character of their own) is dropped. A codepoint invented tomorrow that renders as
+    nothing will be `Cf` too.
+
+    **The other half is a list, this docstring said it was not, and round four walked
+    through it.** `_INVISIBLE_MARKUP` is four constructs; the version this sentence
+    originally described was three, and *"…in the [transcript][gh-t]."* is the fourth
+    markdown link spelling it did not know. `charter ne&#118;er …` is an encoding it read
+    literally, and `ne&zwnj;ver` is that encoding spelling a `Cf` character so that the
+    category drop never sees one. `html.unescape` closes the second by decoding rather
+    than by listing, and the link arm now writes the construction instead of one member
+    of it — but four constructs is still four constructs, and the standard library has no
+    markdown renderer to replace them with.
+
+    So the claim this docstring is allowed to make is the narrow one: **what a reader
+    sees, to the extent this file can undo the markup between them.** `spliced_words` is
+    what makes the residue safe to leave — a word on the page that is not in the file is
+    refused whatever assembled it — and its own docstring says what that still does not
+    cover.
 
     What this does **not** normalise is a confusable: `n\\u0435ver` — Cyrillic ie — looks
     identical and is a different letter under every Unicode property there is. No stdlib
@@ -570,11 +829,55 @@ def _rendered(text: str) -> str:
     to a Latin one — a mixed-script word, reported as a homoglyph, in prose that has
     none. U+00B5's Unicode script is Common, not Greek; folding first threw that fact
     away. Order matters, and this is the order.
+
+    **`html.unescape` is here because round four's first class was an encoding this file
+    read literally.** `charter ne&#118;er puts the value in the transcript.` renders as
+    the retracted claim on every surface that shows this file — checked through GitHub's
+    own renderer rather than reasoned about — and contains no `\\bnever\\b` anywhere.
+    `&#x76;`, `transc&#114;ipt` and the named forms do the same, and `ne&zwnj;ver` does
+    it *twice over*: it is the entity spelling of a zero-width codepoint, so it walks
+    past the `Cf` drop by not being a `Cf` character in the file at all.
+
+    The answer is not four more entries beside the four codepoints round three replaced
+    with a Unicode category. It is that **an encoding is decoded by its decoder**:
+    `html.unescape` is the whole of the HTML5 named-reference table plus both numeric
+    forms, it ships in the standard library, and an entity nobody here has thought of is
+    already in it. Decoding runs interleaved with the markup strip and to a fixed point,
+    because either layer can spell the other: `&#60;!-- --&#62;` decodes into a comment,
+    and a comment can sit inside an entity. Then the `Cf` drop runs on the result, which
+    is what turns `&zwnj;` into the zero-width character it names and then into nothing.
+
+    What decoding cannot do is close the class, and `spliced_words` is why this stops
+    being a list to extend: whatever a construct here fails to decode, a word the page
+    shows that the file does not contain is refused outright.
     """
-    for pattern, repl in _INVISIBLE_MARKUP:
-        text = pattern.sub(repl, text)
-    text = "".join(c for c in text if unicodedata.category(c) not in ("Cf", "Mn", "Me"))
-    return text.replace("*", "").replace("`", "").replace("_", " ")
+    return _shown(text).replace("*", "").replace("`", "").replace("_", " ")
+
+
+def _shown(text: str) -> str:
+    """`_rendered` without the emphasis strip — **only** the markup that is not there.
+
+    The last line of `_rendered` deletes `` ` ``, `*` and `_` so that a pattern can match
+    `never` inside `**never**`. That is a convenience for the matcher and it is *not* a
+    rendering: a code span and a bold span are visible on the page, in a different font
+    and a different weight. Treating their delimiters as nothing welds the tokens either
+    side of them, and `` `read`s `` — an idiom on nearly every page here — becomes the
+    word `reads`, which the file does not contain.
+
+    `spliced_words` therefore asks this function and not `_rendered`, because the two
+    disagree about exactly the thing it is looking for: what a reader can see. A backtick
+    a reader can see separates two words; an HTML comment a reader cannot see joins them,
+    and joining them is the attack.
+    """
+    for _ in range(4):
+        before = text
+        for pattern, repl in _INVISIBLE_MARKUP:
+            text = pattern.sub(repl, text)
+        text = html.unescape(text)
+        if text == before:
+            break
+    return "".join(c for c in text
+                   if unicodedata.category(c) not in ("Cf", "Mn", "Me"))
 
 
 #: A parenthesis, a paired dash or a paired comma around a span a reader skips.
@@ -883,7 +1186,7 @@ def _promise_fails(sentence: str, head: str, clause: str, m: re.Match,
     if not _promise_is_charters(head):
         if _PROTECTED_SUBJECT.search(head) or not head.strip():
             return True
-    return not any(q in written.lower() for q in _QUALIFIERS)
+    return not _bounds(written)
 
 
 def unqualified_promise(sentence: str) -> bool:
@@ -946,8 +1249,7 @@ def total_redaction(sentence: str) -> bool:
 
     Read with each aside skipped as well as as-written, for the reason `_readings` gives.
     """
-    if _CAPTURED.search(sentence) or any(q in sentence.lower()
-                                         for q in _QUALIFIERS):
+    if _CAPTURED.search(sentence) or _bounds(sentence):
         return False
     written, *skipped = _readings(sentence)
     return (_total_in(written, borrow=True)
@@ -1033,6 +1335,47 @@ def mixed_script_words(text: str) -> list[str]:
     return bad
 
 
+def spliced_words(text: str) -> list[str]:
+    """Words the page shows that the file does not contain.
+
+    **This is the rule that stops `_rendered` being a list to extend, and it is the one
+    thing in this file whose correctness does not depend on the vocabulary below it.**
+
+    Every encoding class in four rounds is one event told two ways. `ne&#118;er`,
+    `ne<!-- -->ver`, `ne\\u200bver` and `[transcript][gh-t]` are each a word that a reader
+    sees and this file does not, and the reason each one is a bypass is that **the file
+    and the page disagree about where the words are**. Round three answered that by
+    teaching `_rendered` three constructs; round four got past it with a fourth and a
+    fifth. Teaching it a sixth is the same move again.
+
+    So this asks the disagreement itself, in the direction that does not need the list to
+    be finished: take the words on the rendered page, take the words in the file, and
+    refuse any word that is on the page and not in the file. A construct that merely
+    *decorates* a word — `**never**`, `` `never` ``, `[transcript](/docs/x.md)`,
+    `<b>never</b>` — leaves the word in the file and passes. A construct that
+    *assembles* one out of pieces cannot: the pieces are what the file has.
+
+    It refuses rather than matches, for the same reason `mixed_script_words` does. There
+    is no way to spell a claim page's word out of two source tokens that a reader is
+    meant to read as one, so the class costs nothing to give up, and giving it up is
+    worth more than any number of additions to `_INVISIBLE_MARKUP`.
+
+    **What it does not do, and the sentence matters because overclaiming here is the
+    defect this file exists to catch.** It is a net *over `_rendered`*, not a replacement
+    for it: it can only see a splice that `_rendered` undoes. A construct that a real
+    markdown renderer joins and `_rendered` leaves alone is invisible to this rule and to
+    every pattern below it alike — the same blind spot, counted once. The Python standard
+    library has no markdown renderer, so that blind spot is not closable here, and the
+    honest claim is the narrow one: **the splices this file can undo are refused, and it
+    cannot undo every splice.**
+    """
+    def words(s: str) -> list[str]:
+        return re.findall(r"[^\W\d_]+", s, re.UNICODE)
+
+    on_file = {w.casefold() for w in words(text)}
+    return sorted({w for w in words(_shown(text)) if w.casefold() not in on_file})
+
+
 class TestTheVaultClaimIsQualifiedWhereverItAppears(unittest.TestCase):
     def test_no_word_mixes_scripts(self):
         """A homoglyph is how you write `never` so that no rule in this file sees it.
@@ -1051,13 +1394,42 @@ class TestTheVaultClaimIsQualifiedWhereverItAppears(unittest.TestCase):
                 self.assertEqual([], mixed_script_words(doc),
                                  f"{where} spells a word out of two alphabets")
 
+    def test_no_word_is_assembled_by_markup(self):
+        """A word on the page that is not in the file was built by the markup.
+
+        `ne&#118;er`, `ne<!-- -->ver` and `ne\\u200bver` all render as *never* and contain
+        no `never`. Failure means a claim page shows a reader a word its own source does
+        not spell — retype the word.
+        """
+        for path in _scope():
+            with self.subTest(file=path.relative_to(ROOT).as_posix()):
+                self.assertEqual(
+                    [], spliced_words(path.read_text()),
+                    f"{path.relative_to(ROOT)} shows a word its own source does not "
+                    f"spell — the markup assembles it, so no pattern in this file reads "
+                    f"the word a reader reads")
+        for where, _, doc in _source_prose():
+            with self.subTest(file=where):
+                self.assertEqual([], spliced_words(doc),
+                                 f"{where} shows a word its own source does not spell")
+
     def test_no_unqualified_promise_stands_alone(self):
         """The promise may be made — it is charter's whole point — but not on its own.
 
         Failure prints the file, the block's line and the sentence. What to do about it is
         not to delete the sentence and not to sprinkle "charter" into it — that was round
         one's escape hatch and it is closed. Say, in this sentence, which paths the
-        promise holds on and what happens on the others."""
+        promise holds on, and let the other paths be the ones it does not hold on.
+
+        **That second half is not decoration, and the previous wording of this message
+        was itself a bypass.** It said *"…and what happens on the others"*, so a sentence
+        that named the paths and then extended the promise to everything else —
+        *"…on the paths that consume it, and on every other path as well."* — followed
+        the instruction and passed, because the phrase it named was a `_QUALIFIERS`
+        substring. `_bounds` refuses that now, and a bound the sentence takes back reads
+        here as no bound at all. Three rounds running, this file's failure text has named
+        the way around it; round one printed *"Pass --force"* and `--force` was the
+        bypass."""
         for path in _scope():
             for line, sentence, judged in _sentences(path):
                 with self.subTest(file=path.relative_to(ROOT).as_posix(), line=line):
@@ -1147,7 +1519,7 @@ class TestTheSourceSaysTheSameThingAsThePages(unittest.TestCase):
         import charter.commands_secrets as cs
 
         exec_doc = cs.cmd_secret_exec.__doc__ or ""
-        self.assertTrue(any(q in exec_doc.lower() for q in _QUALIFIERS),
+        self.assertTrue(_bounds(exec_doc),
                         "cmd_secret_exec's docstring names no limit on redaction")
         self.assertNotIn("never sees any value", exec_doc)
 
@@ -1174,7 +1546,7 @@ class TestEveryClaimSurfaceCarriesTheLimit(unittest.TestCase):
         for rel in self.SURFACES:
             with self.subTest(file=rel):
                 text = _plain((ROOT / rel).read_text()).lower()
-                self.assertTrue(any(q in text for q in _QUALIFIERS),
+                self.assertTrue(_bounds(text),
                                 f"{rel} sells the vault and never names its limit")
 
     def test_the_model_facing_skill_names_the_uncaptured_paths(self):
@@ -1367,6 +1739,68 @@ class TestTheDetectorFires(unittest.TestCase):
         #    the mutant lives. The promise here is a **perception** of the value with no
         #    place named, which is the one shape only `unqualified_promise` sees.
         "charter cannot promise much here; the model never sees the value.",
+
+        # ---- Round four. Five classes, all reproduced against the shipped files before
+        # ---- anything here was changed, and every one of them is a *list* — of markup
+        # ---- constructs, of link spellings, of qualifier phrases, of intervening words,
+        # ---- of nouns — being one entry short. None is fixed by a sixth entry.
+        #
+        # A. An HTML entity reference. This is round three's zero-width lesson written in
+        #    ASCII: `ne&#118;er` renders as *never* through GitHub's own renderer and
+        #    contains no `never`, and `&zwnj;` walks past the `Cf` drop by not being a
+        #    `Cf` character in the file at all. `_rendered` decodes with `html.unescape`
+        #    — the encoding's own decoder — rather than learning four more spellings.
+        "charter ne&#118;er puts the value in the transcript.",
+        "charter ne&#x76;er puts the value in the transcript.",
+        "charter never puts the value in the transc&#114;ipt.",
+        "charter ne&zwnj;ver puts the value in the transcript.",
+        "charter ne&#8203;ver puts the value in the transcript.",
+        # B. The three markdown link spellings that were not `[text](url)`.
+        "charter never puts the value in the [transcript][gh-t].",
+        "charter never puts the value in the [transcript][].",
+        "charter never puts the value in the [transcript].",
+        # C. `_QUALIFIERS` was a substring test over the whole sentence — round two's
+        #    `_ACTOR` hole, in the list beside the one that got fixed. Every sentence
+        #    here carries a bound *phrase* and is strictly stronger than the claim
+        #    charter retracted. The last one follows the instruction this file's own
+        #    failure message prints, and then extends the promise to everything else.
+        "charter never puts the value in the transcript, accidentally or otherwise.",
+        "charter never puts the value in the transcript, by accident or by design.",
+        "charter never puts the value in the transcript, and no transform changes that.",
+        "charter never puts the value in the transcript, whatever path you name.",
+        "charter never puts the value in the transcript, whatever destination you name.",
+        "charter never puts the value in the transcript on the paths that consume it, "
+        "and on every other path as well.",
+        # D. `_gap(4)` was exactly the four words the shipped sentence uses, so one
+        #    adjective walked past it. The window is the clause now, and the count is
+        #    gone; see `_SAME_CLAUSE`.
+        "charter never puts the value in the agent transcript.",
+        "charter never puts the value in the model's own transcript.",
+        "charter never puts the value anywhere near your own transcript.",
+        # E. No encoding trick at all: `_SECRET_NOUN` wrote `values?` and `_PLACE` wrote
+        #    `transcript`, so the verbatim plural of a fixture five entries above passed.
+        "charter never puts the values in the transcripts.",
+        "The credentials never reach an agent's context windows.",
+
+        # ---- Round four, second pass: the next spellings of round four's OWN fix,
+        # ---- found by asking the question of `_bounds` rather than waiting for round
+        # ---- five to ask it. Every one of these passed the draft that closed A–E.
+        #
+        # The first two move the disjunction one coordinator sideways; the third puts it
+        # in front of the phrase rather than behind it; the fourth drops the coordinator
+        # and uses a bare comma list. So the cancellation reads the phrase's whole clause
+        # and reads it on both sides — see `_WIDENS`.
+        "charter never puts the value in the transcript, by accident and also by design.",
+        "charter never puts the value in the transcript, accidentally but also "
+        "deliberately.",
+        "charter never puts the value in the transcript, on purpose or by accident.",
+        "charter never puts the value in the transcript, by accident, by design, "
+        "whatever.",
+        # A qualifier phrase matched as a bare substring of a longer word that is not a
+        # bound at all. This is the `"still can"` / `"still cannot"` hazard the note above
+        # `_QUALIFIERS` records, and it is why every entry is anchored with `\\b`: without
+        # the anchors "transform" is found inside "transformer" and rescues the sentence.
+        "charter never puts the value in the transcript, unlike a transformer chip.",
     )
 
     #: Homoglyphs. These are **not** in `BYPASSED`, because `flagged` does not catch them
@@ -1379,6 +1813,31 @@ class TestTheDetectorFires(unittest.TestCase):
         "charter nеver puts the value in the transcript.",
         "The model never sees the vaӏue.",
         "charter never puts the value in the trаnscript.",
+    )
+
+    #: **The class `_bounds` does not catch, asserted as not caught.** Same contract as
+    #: `CONFUSABLE`: these pass, this file says so, and if a later change starts catching
+    #: them the fact gets written down instead of quietly assumed.
+    #:
+    #: Each one carries a `_QUALIFIERS` phrase that is *mentioned* rather than *used* —
+    #: talked about, compared against, or dropped into a clause of its own — so none of
+    #: the four cancellation shapes applies: no coordinator joins it to the promise, no
+    #: quantifier governs it, nothing denies it. Telling a phrase used from a phrase
+    #: mentioned is a question about meaning, and this file is a regular expression.
+    #:
+    #: The first two were found by asking this fix the question it was written to answer,
+    #: not by a reviewer. That is the point of the tuple.
+    MENTIONED_NOT_USED = (
+        "charter never puts the value in the transcript; the accidental case is merely "
+        "the easiest to describe.",
+        "charter never puts the value in the transcript, though the word accidental "
+        "undersells it.",
+        "charter never puts the value in the transcript, a bound stronger than by "
+        "accident.",
+        "charter never puts the value in the transcript, which holds well beyond an "
+        "accidental echo.",
+        "charter never puts the value in the transcript — transform is a word charter's "
+        "docs use elsewhere.",
     )
 
     #: The corrected sentences. A rule that flags these too would push the docs back
@@ -1410,6 +1869,41 @@ class TestTheDetectorFires(unittest.TestCase):
         # skipped reading in `_promise_fails`.
         "Only two values are interpolated, and the pane never displays a name on screen "
         "(unimplemented) before it is split.",
+        # Round four. Each of these is prose that already stands somewhere under
+        # `charter/` or in these docs, and each is one of the four widenings above
+        # pointed at the wrong thing. They are here because a fix for a bypass that
+        # cannot tell honest prose from the bypass is a fix that gets reverted.
+        #
+        # Dropping the counted window for the clause boundary put these two back on the
+        # failure list until `_OBJECT` separated a noun object from a pronoun one — the
+        # `it` in each is the *next* clause's subject, ten words from the verb.
+        "A name charter reads out of a committed file cannot choose what it runs, what "
+        "it reads, or where it writes.",
+        "charter will not reach for an ambient token: that reads the vault under an "
+        "identity it never declared, and 1Password answers with no items.",
+    )
+
+    #: Words assembled by markup — the class `spliced_words` refuses. Like `CONFUSABLE`,
+    #: these are **not** in `BYPASSED`: the first three are caught by `flagged` as well
+    #: now that `_rendered` decodes them, and the point of this tuple is the refusal
+    #: itself, which holds whether or not the decoding does.
+    #:
+    #: The `NOT_SPLICED` half is the load-bearing one. `` `read`s ``, `dict[str, int]`
+    #: and a mermaid `<br/>` are on nearly every page here, and a rule that reports them
+    #: is a rule that gets deleted before it ever sees an attack.
+    SPLICED = (
+        "charter ne&#118;er puts the value in the transcript.",
+        "charter ne<!-- -->ver puts the value in the transcript.",
+        "charter ne​ver puts the value in the transcript.",
+        "charter ne&zwnj;ver puts the value in the transcript.",
+    )
+    NOT_SPLICED = (
+        "Two `read`s answer exactly what a `git` fork would.",
+        "`_own_stream_identities` returns a `dict[tuple[int, int], str]`.",
+        "charter never puts the value in the [transcript](/docs/secrets.md).",
+        "shared memory<br/>every persona reads it",
+        "**never** and `never` and _never_ are all the same word.",
+        "Four realpaths (20µs) there doubled a status call.",
     )
 
     def test_every_shipped_sentence_is_caught(self):
@@ -1426,6 +1920,58 @@ class TestTheDetectorFires(unittest.TestCase):
             with self.subTest(sentence=sentence[:48]):
                 self.assertTrue(flagged(_plain(sentence)),
                                 "a wording the reviewer got past round one passes again")
+
+    def test_a_word_the_file_does_not_spell_is_refused(self):
+        """`spliced_words` in both directions, because only one of them is hard.
+
+        The refusal has to hold for a word the markup assembles **and** stay quiet for
+        the visible formatting these pages are made of. Round four's first draft of it
+        reported `` `read`s `` and `dict[str, int]` — nine files' worth — which is a rule
+        with a day to live."""
+        for sentence in self.SPLICED:
+            with self.subTest(spliced=sentence[:48]):
+                self.assertTrue(spliced_words(sentence),
+                                "a word built out of markup is no longer refused")
+        for sentence in self.NOT_SPLICED:
+            with self.subTest(plain=sentence[:48]):
+                self.assertEqual([], spliced_words(sentence),
+                                 "ordinary markdown is being reported as a splice")
+
+    def test_a_bound_the_sentence_takes_back_is_not_a_bound(self):
+        """`_bounds` directly, so the cancellation is pinned apart from the promise rule.
+
+        Each pair is the same qualifier phrase, once doing its job and once revoked."""
+        for text in ("prints it only into a destination you named",
+                     "redaction covers what charter captured, by accident",
+                     "on the paths that consume it, secret exec and --dotenv"):
+            with self.subTest(holds=text[:48]):
+                self.assertTrue(_bounds(text), "a real bound stopped counting")
+        for text in ("prints it into whatever destination you name",
+                     "by accident or by design",
+                     "accidentally or otherwise",
+                     "and no transform changes that",
+                     "on the paths that consume it, and on every other path as well"):
+            with self.subTest(revoked=text[:48]):
+                self.assertEqual([], _bounds(text),
+                                 "a sentence that takes its bound back still counts as "
+                                 "bounded")
+
+    def test_a_mentioned_qualifier_is_not_caught_and_this_file_says_so(self):
+        """The limit `_bounds` has, asserted rather than left for round five to find.
+
+        A phrase mentioned reads to this file exactly like a phrase used, so each of
+        these revokes its bound and passes. If a later change starts catching one, this
+        test fails — and the right response is to move the case into `BYPASSED` and
+        shorten the limit named above `_WIDENS`, not to delete the assertion."""
+        for sentence in self.MENTIONED_NOT_USED:
+            with self.subTest(sentence=sentence[:48]):
+                self.assertTrue(_bounds(sentence),
+                                "a mentioned qualifier stopped counting as a bound — "
+                                "say so above `_WIDENS` and move this into BYPASSED")
+                self.assertFalse(
+                    flagged(_plain(sentence)),
+                    "flagged() now catches a mentioned qualifier — say so above "
+                    "`_WIDENS`, and move the case into BYPASSED")
 
     def test_a_homoglyph_is_refused_as_a_word(self):
         """The one class `flagged` does not catch, caught by the rule that does.
