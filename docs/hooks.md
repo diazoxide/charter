@@ -64,7 +64,13 @@ rule while one who reads a bare refusal files an issue.
   `cd` earlier in the same command, and `git -C <path>` — absolute or relative, and relative
   now means *relative to the shell*, which is the fix for `git -C ../../.. checkout <branch>`
   reaching the root from a clone. `git --git-dir=<plane>/.git` is a route this guard does
-  **not** yet follow ([#477](https://github.com/diazoxide/charter/issues/477)).
+  **not** yet follow ([#477](https://github.com/diazoxide/charter/issues/477)), and
+  `git switch -C <branch>` — where `-C` is `switch`'s own `--force-create` and not git's
+  change-directory global — is read as a directory and missed
+  ([#483](https://github.com/diazoxide/charter/issues/483)); the attached spelling
+  `-C<branch>` is refused. Both are pinned as `ALLOW` rows in the guard's corpus
+  (`tests/test_plane_root_checkout_is_two_commands.py`), so closing either turns a row red
+  rather than passing unnoticed.
 - **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root
   that would take commits off the branch which no remote has a copy of — the command that
   destroyed eleven memory commits in one session. Only that: the unstage
