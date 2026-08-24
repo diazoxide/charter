@@ -781,11 +781,15 @@ def _add_frame_parsers(sub) -> None:
     # two above. Fired by a PANEL pane's own `pane-died` hook (#382,
     # `commands_frame._panel_died_hook_argv`) — never typed by an operator, and never by
     # the harness pane's hooks, which carry the exit code instead. The frame it belongs
-    # to is resolved from `$CHARTER_SESSION_ID` at the moment the hook fires, exactly
-    # like `frame-menu`; only the slot and the pane to revive travel on the argv.
+    # to travels on the argv (`--frame`), unlike `frame-menu`'s: this hook is armed on
+    # the operator's own tmux too (#408), where `$CHARTER_SESSION_ID` is a session option
+    # charter is not allowed to write. Optional, not required, so a hook installed by a
+    # charter that predates #408 — already sitting in a running frame's pane options,
+    # outliving the upgrade — still resolves its frame from the environment.
     rs = sub.add_parser("frame-respawn")
     rs.add_argument("slot")
     rs.add_argument("--pane", dest="pane", required=True)
+    rs.add_argument("--frame", dest="frame", default=None)
     rs.set_defaults(func=commands_frame.cmd_respawn)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the

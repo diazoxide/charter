@@ -114,7 +114,9 @@ that can help a failure like that, which is why it is the half that gets a retry
 The count is per slot, per frame, and is not reset by a respawn that appears to work: three
 deaths in one frame's life is a broken panel, not a streak to start over. A panel has never
 been able to take the agent down with it; the hook is scoped to the panel's own pane, so it
-cannot reach the harness pane's hooks, which are what carry the agent's exit code.
+cannot reach the harness pane's hooks, which are what carry the agent's exit code. It works
+the same inside a tmux you already have — which it did not until recently: a panel that
+died there used to stay dead for the life of the frame.
 
 Charter never touches `~/.tmux.conf` — the frame's settings go into a private server of
 charter's own (`tmux -L charter`), one server shared by every frame on the machine, with
@@ -143,6 +145,16 @@ honest price of the sentence above:
   entry is "Detach" and your own prefix key already does that better. The bottom panel
   drops its hotkey hint to match rather than advertising a key that does nothing.
 - **Your status bar stays.** The frame gets the window, not the screen.
+- **The harness inherits your tmux SERVER's environment, not your current shell's.**
+  Charter states its own five identity variables and `$PATH` on the pane it creates, and
+  nothing else. Anything you exported in the shell you typed `charter claude` in — a key
+  for this project, a `direnv` load, a `nvm use` — does not reach the harness; whatever
+  your environment held when you first started `tmux` does. It is the same thing that
+  already happens on charter's own server, and the reason is the same: a tmux `-e` is a
+  command line, and a command line is world-readable to every local user on Linux and
+  recorded permanently by process auditing. Charter will not put your environment there.
+  Export it in the pane the frame runs in, or start the harness from a shell inside the
+  frame, if the harness needs it.
 - **If `charter` itself is killed while the harness is running**, the harness keeps
   running and its window stays in your window list — close it with your own `prefix-&`.
   On charter's private server that same case is handled by a teardown hook; here a hook

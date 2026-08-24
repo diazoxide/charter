@@ -332,9 +332,11 @@ class WindowInTheOperatorsServer(unittest.TestCase):
         reach the harness, and would also hand every new shell they open a frame id
         that is not theirs.
 
-        Measured against tmux 3.7c: `respawn-pane -e` REPLACES the pane's environment
-        rather than adding to what `new-window -e` set, so everything the harness needs
-        has to be on this call, not the one that made the window."""
+        Re-measured against tmux 3.7c, correcting what this docstring used to claim:
+        `respawn-pane -e` does NOT replace the pane's environment, it OVERLAYS it — a
+        server holding `FOO`/`BAZ`, respawned with only `-e BAR=`, produced a pane with
+        all three. That is why this call may carry a named few rather than everything
+        (#446, `commands_frame._guest_harness_env`)."""
         cmd = layout.respawn_argv(socket="/s", harness_pane="%7", cwd="/work/repo",
                                   env={"CHARTER_SESSION_ID": "demo-1",
                                        "CHARTER_HARNESS": "claude-code"},
@@ -391,6 +393,92 @@ class ServerSelection(unittest.TestCase):
         cmds = layout.panel_argvs(slots=["top"], session="f", socket="/tmp/tmux-1/default",
                                   harness_pane="%3")
         self.assertEqual(cmds[0][:3], ["tmux", "-S", "/tmp/tmux-1/default"])
+
+
+class NothingUnnamedReachesACommandLine(unittest.TestCase):
+    """#446 — a tmux `-e` is argv, and argv is not private.
+
+    #412 narrowed `session_argv`'s `-e` to a named list and left `respawn_argv`'s
+    passing `dict(os.environ, …)` whole, because the rule lived at the CALL SITES. The
+    same defect, twice, a release apart. So the rule moved to the one funnel every `-e`
+    in charter goes through (`layout._env_argv`), and these are that funnel's tests:
+    a value that has no business on a command line cannot get onto one from ANY caller,
+    including one written next month.
+
+    Never a real credential in a fixture, and never an assertion that prints a whole
+    environment: the decoy below is a synthetic string and the failure messages name
+    only which builder leaked it.
+    """
+
+    #: A value no environment could produce by accident, so "it did not appear" is a
+    #: fact about the builder rather than about the string being unlikely.
+    DECOY = "decoy-value-9f2c1b-must-never-reach-argv"
+
+    def _hostile_env(self):
+        """One decoy under every spelling this guard could plausibly be written to miss.
+
+        `CHARTER_SOMETHING` is the sharp one: a `CHARTER_`-prefix glob — the shape the
+        allowlist deliberately is NOT — would carry it happily, and it is exactly how a
+        variable invented next release gets onto a command line nobody re-reviewed.
+        """
+        return {
+            "CHARTER_SESSION_ID": "demo-1",
+            "OP_SERVICE_ACCOUNT_TOKEN": self.DECOY,
+            "CHARTER_BRIDGE_TOKEN": self.DECOY,
+            "charter_session_id": self.DECOY,
+            "CHARTER_SESSION_ID_EXTRA": self.DECOY,
+            "SSH_AUTH_SOCK": self.DECOY,
+            "": self.DECOY,
+        }
+
+    def _builders(self, env):
+        return {
+            "respawn_argv": lambda: layout.respawn_argv(
+                socket="/tmp/tmux-1/default", harness_pane="%7", env=env, cwd="/w",
+                harness_argv=["claude"]),
+            "session_argv": lambda: layout.session_argv(
+                session="f", conf="/c", socket="charter", cols=80, rows=24,
+                harness_argv=["claude"], env=env),
+            "panel_argvs": lambda: layout.panel_argvs(
+                slots=["top"], session="f", socket="charter", harness_pane="%3",
+                env=env),
+        }
+
+    def test_no_builder_will_put_an_unlisted_name_on_a_command_line(self):
+        for name, build in self._builders(self._hostile_env()).items():
+            with self.subTest(builder=name):
+                with self.assertRaises(ValueError) as caught:
+                    build()
+                # The refusal must name what it refused and NOT what was in it.
+                self.assertNotIn(self.DECOY, str(caught.exception),
+                                 f"{name}'s own refusal printed the value it refused")
+
+    def test_the_refusal_is_loud_rather_than_a_silent_drop(self):
+        """Dropping the extras quietly would leave a caller believing it had handed the
+        harness a variable that never arrived, AND would make the next leak invisible
+        instead of impossible. The raise is the guard."""
+        with self.assertRaises(ValueError):
+            layout.respawn_argv(socket="charter", harness_pane="%7",
+                                env={"CHARTER_SESSION_ID": "d", "LANG": "en_US.UTF-8"},
+                                cwd="/w", harness_argv=["claude"])
+
+    def test_every_carriable_name_really_does_travel(self):
+        """The other direction, so the guard above cannot be satisfied by a builder that
+        carries nothing at all. Asserted against `CARRIABLE` itself rather than a second
+        copy of the list — a copy is a tautology when the constant is what changed."""
+        env = {name: f"v-{name}" for name in layout.CARRIABLE}
+        cmd = layout.respawn_argv(socket="charter", harness_pane="%7", env=env, cwd="/w",
+                                  harness_argv=["claude"])
+        carried = {cmd[i + 1].split("=", 1)[0] for i, a in enumerate(cmd) if a == "-e"}
+        self.assertEqual(carried, set(layout.CARRIABLE))
+
+    def test_nothing_carriable_is_a_credential_by_name(self):
+        """The property that makes putting any of these on an argv acceptable at all.
+        A name is not proof, but a name that ANNOUNCES a secret is proof of the
+        opposite, and this is the check that fires when the list grows."""
+        for name in layout.CARRIABLE:
+            for word in ("TOKEN", "SECRET", "PASSWORD", "KEY", "CREDENTIAL", "AUTH"):
+                self.assertNotIn(word, name.upper(), name)
 
 
 if __name__ == "__main__":

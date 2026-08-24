@@ -1011,11 +1011,12 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         audit. Measured on a real environment, the full `_frame_env` came to 138 argv
         elements and 7,696 bytes carrying two live service-account tokens.
 
-        `_launch_in_operator_tmux` still passes the whole environment there, which is
-        #446 and out of scope — but new code may not reproduce it, and "out of scope"
-        is not a reason a keypress should start leaking an operator's tokens onto a
-        command line. Pinned with a sentinel that could only arrive by the whole
-        environment being handed over.
+        `_launch_in_operator_tmux` passed the whole environment there until #446 closed
+        it; `layout._env_argv` now refuses an unlisted name outright, so this cannot come
+        back at any call site. Pinned here as well with a sentinel that could only arrive
+        by the whole environment being handed over — the funnel's own guard is tested in
+        `tests/test_frame_layout.NothingUnnamedReachesACommandLine`, and this is the
+        keypress path actually reaching it.
 
         This is also what covers the launching pane's own identity: `TMUX`, `TMUX_PANE`,
         `COLUMNS` and `LINES` describe the pane `cmd_density` was FIRED in, and an equality
@@ -1054,15 +1055,24 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         self._run("full")
         self.assertTrue(menu.build(self.fid))
 
-    def test_a_new_pane_inside_an_operators_tmux_is_not_armed_for_respawn(self):
-        """`cmd_respawn` and `_panel_died_hook_argv` both assume `-L charter`, charter's
-        own server NAME. Arming a panel on the operator's server would install a hook
-        whose action targets the wrong tmux entirely — so it is refused there, and the
-        refusal now lives in `_arm_panel_respawn` rather than in where the loop happens to
-        sit, because a re-layout runs on either server."""
+    def test_a_new_pane_inside_an_operators_tmux_is_armed_against_that_server(self):
+        """#408. This used to assert the opposite — `_arm_panel_respawn` refused on the
+        operator's server, because `cmd_respawn` and `_panel_died_hook_argv` both spelled
+        `-L charter` by hand and would have aimed the hook at charter's private server.
+        Both build their argv through `tmuxctl.server_argv` now, so the pane IS armed and
+        the hook names the operator's socket by PATH.
+
+        The `-S` is what this asserts, not merely that some hook was installed: a hook
+        armed with `-L /private/tmp/…` would satisfy "a pane-died command was issued" and
+        still be the whole defect."""
         state.record_server(self.fid, "/private/tmp/tmux-502/default")
         _, fake = self._run("full")
-        self.assertFalse([c for c in fake.calls if "pane-died" in c], fake.calls)
+        armed = [c for c in fake.calls if "pane-died" in c and "-u" not in c]
+        self.assertEqual(len(armed), 2, fake.calls)
+        for cmd in armed:
+            self.assertEqual(cmd[:3],
+                             ["tmux", "-S", "/private/tmp/tmux-502/default"])
+            self.assertIn(f"--frame {self.fid}", cmd[-1])
 
     def test_a_new_pane_on_charters_own_server_is_armed_for_respawn(self):
         """The other direction, so the refusal above cannot be satisfied by never arming

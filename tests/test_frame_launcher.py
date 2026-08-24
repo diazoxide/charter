@@ -450,42 +450,53 @@ class PanelRespawnHook(unittest.TestCase):
       into the harness pane and does not drop it into copy-mode even when the command
       it runs exits non-zero — the exact failure `conf_text`'s docstring records for
       the un-backgrounded form;
-    * the single-quoted inner command reaches `/bin/sh` with `$CHARTER_PY` unexpanded by
-      tmux, so the SHELL expands it, and `$CHARTER_SESSION_ID` is in that shell's
-      environment (`set-environment -t <session>`, already issued by `cmd_launch`);
+    * the single-quoted inner command reaches `/bin/sh` intact, and since #408 it carries
+      the interpreter and the frame id as TEXT rather than reading `$CHARTER_PY` and
+      `$CHARTER_SESSION_ID` back out of the environment — both of those are session
+      options, and `_launch_in_operator_tmux` writes none on a server it is a guest on
+      (measured: a `run-shell` fired by a pane-scoped hook sees the session environment
+      and does NOT see the pane's own `-e`);
     * the hook SURVIVES the `respawn-pane` it triggers, which is why an attempt count on
       disk is the only thing bounding the loop.
     """
+
+    def _argv(self, **kw):
+        """The real builder, with the arguments a launch would hand it."""
+        return commands_frame._panel_died_hook_argv(
+            **{"socket": "charter", "panel_pane": "%11", "slot": "top",
+               "fid": "demo-1234", **kw})
 
     def test_it_is_scoped_to_the_panel_pane_never_the_harness_pane(self):
         """`-p -t <panel pane>`: an unscoped (or session-scoped) `pane-died` hook fires
         for ANY pane, so it would respawn a panel every time the HARNESS died — and,
         worse, would be a second writer of the same option array the exit-code hooks
         live in."""
-        cmd = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
-                                                   slot="top")
+        cmd = self._argv()
         self.assertIn("-p", cmd)
         self.assertEqual(cmd[cmd.index("-t") + 1], "%11")
         self.assertEqual(cmd[cmd.index("set-hook") + 1], "-p")
 
-    def test_the_action_names_the_slot_and_the_pane_it_must_bring_back(self):
-        action = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
-                                                      slot="bottom")[-1]
+    def test_the_action_names_the_slot_the_pane_and_the_frame_it_must_bring_back(self):
+        action = self._argv(slot="bottom")[-1]
         self.assertIn("frame-respawn", action)
         self.assertIn("bottom", action)
         self.assertIn("%11", action)
+        self.assertIn("--frame demo-1234", action)
 
     def test_the_action_never_names_a_bare_charter_off_the_path(self):
         """The same trap `conf_text`'s own docstring measures for the hotkey bind: a
         bare `charter` resolves against the tmux SERVER's `$PATH`, which need not have
-        charter on it at all. The interpreter is carried out of band in
-        `$CHARTER_PY` (`_charter_py_env_argv`) and expanded by the shell this action
-        spawns — single-quoted, so tmux's own parsing leaves the `$` alone (verified
-        against 3.7c: `show-hooks` reads the action back with the dollar escaped and
-        the spawned shell receives the expanded path)."""
-        action = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
-                                                      slot="top")[-1]
-        self.assertIn(f'"${tmuxctl.CHARTER_PY_ENV}" -m charter', action)
+        charter on it at all.
+
+        Since #408 the interpreter is written into the action rather than read back from
+        `$CHARTER_PY`: that variable is delivered by `set-environment -t <session>`, and
+        `_launch_in_operator_tmux` writes no session option at all, so on the operator's
+        own server the out-of-band channel does not exist. `util.self_relaunch_argv`'s
+        own bytes, `-P` and all, so a respawned panel cannot import a `charter/` package
+        that happens to sit in the pane's cwd (#390)."""
+        action = self._argv()[-1]
+        self.assertNotIn(f"${tmuxctl.CHARTER_PY_ENV}", action)
+        self.assertIn(f'"{sys.executable}" -P -m charter frame-respawn', action)
 
     def test_the_action_is_backgrounded_so_it_cannot_draw_in_the_harness_pane(self):
         """`run-shell -b`, not a bare `run-shell`. Un-backgrounded, tmux prints a
@@ -495,31 +506,108 @@ class PanelRespawnHook(unittest.TestCase):
         same failing command produced no output there at all (measured against 3.7c).
         This also matters because the command deliberately SLEEPS for its backoff: a
         blocking `run-shell` would stall tmux's command queue for seconds."""
-        action = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
-                                                      slot="top")[-1]
+        action = self._argv()[-1]
         self.assertTrue(action.startswith("run-shell -b "), action)
 
     def test_it_is_a_clean_argv_list_naming_charters_own_socket(self):
-        cmd = commands_frame._panel_died_hook_argv(socket="charter", panel_pane="%11",
-                                                   slot="top")
+        cmd = self._argv()
         self.assertTrue(all(isinstance(a, str) for a in cmd))
         self.assertEqual(cmd[:4], ["tmux", "-L", "charter", "set-hook"])
 
+    def test_the_operators_socket_is_reached_by_path_and_never_by_name(self):
+        """#408's own defect, at the arming end. This function hand-built
+        `["tmux", "-L", socket, ...]`, so handed the operator's socket PATH it would have
+        aimed a `set-hook` at a SERVER NAMED by that path — one that does not exist, or
+        that tmux would start empty. `tmuxctl.server_argv` is the one place that knows
+        `-L` from `-S`, and asking it is what makes the two shapes impossible to disagree.
+        """
+        cmd = self._argv(socket="/private/tmp/tmux-502/default")
+        self.assertEqual(cmd[:4],
+                         ["tmux", "-S", "/private/tmp/tmux-502/default", "set-hook"])
+        self.assertNotIn("-L", cmd)
+
+    def test_an_interpreter_path_that_means_something_else_is_not_armed_at_all(self):
+        """The property, not a list of known-bad paths: the action is read by THREE
+        parsers before it is argv — tmux's format expansion, where `#{...}` is replaced;
+        tmux's command parser, where a single quote ends the action; and `/bin/sh`'s,
+        where `$`, backtick, backslash and `"` have meaning inside the `"..."` the
+        interpreter sits in — and a path carrying any of those says something else by the
+        end.
+
+        Measured against tmux 3.7c in every direction, which is what makes this a guard
+        rather than a formality: an interpreter under `.../plain $(touch CANARY) dir/py`
+        CREATED the canary, an action holding the literal `/opt/py#{pane_id}/x` reached
+        the shell as `/opt/py%1/x`, and one under
+        `.../a b;c&d(e)f*g-h,i=j+k@l:m[n]o{p}q!r%s^t~u/fake py` — every other ASCII
+        punctuation character plus a space — arrived byte for byte.
+
+        Written against the CONSTANT rather than a list of its own, and the `#` case is
+        why: a first version of this guard named itself after quotes, looked only for
+        quote characters, and let a whole parser through. A test carrying its own copy of
+        the set would have agreed with it.
+        """
+        safe = "/opt/a b;c&d(e)f*g-h,i=j+k@l:m[n]o{p}q!r%s^t~u/py"
+        with mock.patch("charter.commands_frame.util.self_relaunch_argv",
+                        side_effect=lambda *a: [safe, "-P", "-m", "charter", *a]):
+            self.assertIsNotNone(self._argv())
+        for meta in commands_frame._ACTION_METACHARACTERS + "\n\x7f":
+            hostile = f"/opt/py{meta}x/python3"
+            with mock.patch("charter.commands_frame.util.self_relaunch_argv",
+                            side_effect=lambda *a, h=hostile: [h, "-P", "-m", "charter", *a]):
+                self.assertIsNone(self._argv(),
+                                  f"an interpreter path holding {meta!r} was armed")
+
+    def test_the_format_parser_is_one_of_the_three_this_guards_against(self):
+        """Named on its own, because it is the parser a guard written from the word
+        "quote" does not think of — and the one with the sharpest edge.
+        `#{pane_title}` expands to text the program running in that pane sets for ITSELF
+        with an escape sequence, so a path reaching the action unfiltered would put a
+        value under somebody else's control into a command line charter then runs.
+
+        A bare `#` is refused, not only `#{`: `##` is tmux's own escape for a literal
+        `#`, so the sequences that matter are not one character wide, and charter has
+        nothing to gain from arming a path with a `#` in it."""
+        self.assertIn("#", commands_frame._ACTION_METACHARACTERS)
+        for hostile in ("/opt/py#{pane_title}/python3", "/opt/py##/python3",
+                        "/opt/py#/python3"):
+            with mock.patch("charter.commands_frame.util.self_relaunch_argv",
+                            side_effect=lambda *a, h=hostile: [h, "-P", "-m", "charter", *a]):
+                self.assertIsNone(self._argv(), hostile)
+
+    def test_a_pane_a_slot_or_a_frame_id_that_is_not_charters_own_is_not_armed(self):
+        """Every value that reaches the action text is checked HERE, not trusted for
+        having come from `cmd_launch`. `_arm_panel_respawn` has a second caller
+        (`_relayout`) whose pane ids and frame id are read back off DISK, which is not
+        tmux's own word for them any more."""
+        self.assertIsNone(self._argv(panel_pane="%11; kill-server"))
+        self.assertIsNone(self._argv(panel_pane="all"))
+        self.assertIsNone(self._argv(slot="top; kill-server"))
+        self.assertIsNone(self._argv(fid="demo-1234 ; kill-server"))
+        self.assertIsNone(self._argv(fid=""))
+
 
 class _RespawnTmux:
-    """A tmux that answers only what `cmd_respawn` asks: is the session still live, and
-    did the pane come back."""
+    """A tmux that answers only what `cmd_respawn` asks: is the frame still live, and
+    did the pane come back.
 
-    def __init__(self, *, live=("f-1",), respawn_rc=0):
+    Both liveness questions, because a frame is a SESSION on charter's own server and a
+    WINDOW on the operator's (#408) — and `list_rc` is how a test says "that server did
+    not answer at all", which `_live_windows` reports as ``None`` and `_frame_is_live`
+    must read as "do not respawn".
+    """
+
+    def __init__(self, *, live=("f-1",), respawn_rc=0, list_rc=0):
         self.live = list(live)
         self.respawn_rc = respawn_rc
+        self.list_rc = list_rc
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
-        if "list-sessions" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(self.live),
-                                               stderr="")
+        if "list-sessions" in cmd or "list-windows" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, self.list_rc,
+                stdout="\n".join(self.live) if self.list_rc == 0 else "", stderr="")
         if "respawn-pane" in cmd:
             return subprocess.CompletedProcess(cmd, self.respawn_rc, stdout="",
                                                stderr="" if self.respawn_rc == 0
@@ -530,10 +618,18 @@ class _RespawnTmux:
     def respawns(self):
         return [c for c in self.calls if "respawn-pane" in c]
 
+    @property
+    def liveness(self):
+        return [c for c in self.calls
+                if "list-sessions" in c or "list-windows" in c]
 
-def _respawn(fake, *, slot="bottom", pane="%11", fid="f-1", slept=None):
-    args = SimpleNamespace(slot=slot, pane=pane)
-    env = {"CHARTER_SESSION_ID": fid} if fid is not None else {}
+
+def _respawn(fake, *, slot="bottom", pane="%11", fid="f-1", slept=None, on_argv=False):
+    """*on_argv* puts the frame id on `--frame` (the hook #408 installs) instead of in
+    `$CHARTER_SESSION_ID` (the hook a charter before it installed)."""
+    args = SimpleNamespace(slot=slot, pane=pane,
+                           frame=fid if on_argv else None)
+    env = {} if on_argv or fid is None else {"CHARTER_SESSION_ID": fid}
     with mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
          mock.patch.dict(os.environ, env, clear=True), \
          mock.patch("charter.commands_frame.time.sleep",
@@ -676,6 +772,66 @@ class Respawn(PersonaIso, unittest.TestCase):
         fake = _RespawnTmux()
         with mock.patch("charter.frame.state.respawn_attempt", return_value=None):
             rc = _respawn(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.respawns, [])
+
+    # -- #408: which server this is talking to ------------------------------------- #
+
+    def test_the_frame_id_may_arrive_on_the_argv_with_no_environment_at_all(self):
+        """The hook #408 installs passes `--frame`, because on the operator's own tmux
+        there is no `$CHARTER_SESSION_ID` to read: that variable is a session option
+        (`_session_id_env_argv`) and `_launch_in_operator_tmux` writes none there.
+        `clear=True` in `_respawn` is what makes this mean something — the environment
+        really is empty, so a fallback read could not accidentally supply it."""
+        fake = _RespawnTmux()
+        rc = _respawn(fake, on_argv=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(fake.respawns), 1, fake.calls)
+
+    def test_a_frame_recorded_on_the_operators_socket_is_reached_by_path(self):
+        """#408's other half. `cmd_respawn` hardcoded `["tmux", "-L", SOCKET, …]` and
+        `_live_sessions(SOCKET)`, so a hook fired inside the operator's tmux asked
+        charter's PRIVATE server whether a session it never had was alive — always no —
+        and would have aimed the respawn at that server too. Both now come from
+        `state.frame_server`.
+
+        Asserts the SHAPE of both commands, not just that a respawn happened: `-L
+        /private/tmp/…` would still be a `respawn-pane` and would still be the bug."""
+        state.record_server("f-1", "/private/tmp/tmux-502/default")
+        fake = _RespawnTmux()
+        rc = _respawn(fake, on_argv=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual([c[:3] for c in fake.liveness],
+                         [["tmux", "-S", "/private/tmp/tmux-502/default"]], fake.calls)
+        self.assertIn("list-windows", fake.liveness[0],
+                      "a frame in the operator's tmux is a WINDOW; `list-sessions` "
+                      "there asks about sessions that are all theirs")
+        self.assertEqual(len(fake.respawns), 1, fake.calls)
+        self.assertEqual(fake.respawns[0][:3],
+                         ["tmux", "-S", "/private/tmp/tmux-502/default"])
+
+    def test_a_frame_on_charters_own_server_is_still_reached_by_name(self):
+        """The other direction, so the test above cannot be satisfied by a `-S` for
+        everything: charter's own server is a NAME and `list-sessions` is the right
+        question there."""
+        fake = _RespawnTmux()
+        _respawn(fake, on_argv=True)
+        self.assertEqual(fake.liveness[0][:3], ["tmux", "-L", commands_frame.SOCKET])
+        self.assertIn("list-sessions", fake.liveness[0])
+        self.assertEqual(fake.respawns[0][:3], ["tmux", "-L", commands_frame.SOCKET])
+
+    def test_an_operators_server_that_does_not_answer_is_not_respawned_into(self):
+        """`_live_windows` answers `None` when the server did not answer at all, which
+        is a different fact from "it answered, and this frame is not on it" — `$TMUX`
+        outlives a killed server often enough that `_launch_in_operator_tmux` branches on
+        it. A respawn is the operation with a cost here, so no answer means no respawn.
+
+        Without this the empty stdout of a FAILED `list-windows` would read as "no
+        windows", which is the same shape as a torn-down frame and would look like it
+        passed for the wrong reason — hence `list_rc`, not an empty live list."""
+        state.record_server("f-1", "/private/tmp/tmux-502/default")
+        fake = _RespawnTmux(live=("f-1",), list_rc=1)
+        rc = _respawn(fake, on_argv=True)
         self.assertEqual(rc, 0)
         self.assertEqual(fake.respawns, [])
 
@@ -3395,11 +3551,97 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         """`$TMUX`/`$TMUX_PANE` describe the pane charter was TYPED in, and tmux sets
         both itself for the pane it creates. Carrying the launcher's own values across
         would tell the harness it is running in a pane it is not — the identity
-        collision `_PANE_ID_VARS` and `WINDOWID` were argued about for."""
+        collision `_PANE_ID_VARS` and `WINDOWID` were argued about for.
+
+        Since #446 nothing unnamed reaches this argv at all, so these two could not
+        arrive whether or not `_frame_env` pops them. Kept as the statement of the
+        property rather than of the mechanism: the day a name is added to
+        `layout.CARRIABLE`, this is what says these two are still not it."""
         fake = _FakeOperatorTmux(exit_code=0)
         _launch_inside(fake)
         self.assertNotIn("TMUX", fake.respawn_env)
         self.assertNotIn("TMUX_PANE", fake.respawn_env)
+
+    def test_the_harness_pane_is_told_charters_path_and_no_other_name(self):
+        """#446. This argv carried `dict(os.environ, …)` whole — measured on one real
+        environment at 129 elements, 7,773 bytes, four live 1Password service-account
+        tokens and an npm auth token, into `/proc/<pid>/cmdline`.
+
+        `$PATH` is the one name beyond the frame's identity, and it is here for a reason
+        the private-server path does not have: `cmd_launch` resolved the harness binary
+        with `shutil.which` against charter's OWN `$PATH`, while the base this `-e`
+        overlays is a server the OPERATOR started, possibly weeks ago. (Measured against
+        tmux 3.7c, a pane's `$PATH` is the invoking client's regardless — so on that tmux
+        this is redundant rather than load-bearing. It is carried because no measurement
+        says an older tmux does the same, and a harness that cannot be executed costs
+        more than one argv pair that is never a credential.)
+
+        The sentinel is what makes this fail if the whole environment comes back: it is
+        a name nothing in `layout.CARRIABLE` matches, under a `CHARTER_` prefix so a glob
+        would carry it."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        with mock.patch.dict(os.environ, {"CHARTER_BRIDGE_TOKEN": "SENTINEL-0xC0FFEE",
+                                          "PATH": "/charters/own/bin"}):
+            _launch_inside(fake)
+        self.assertEqual(fake.respawn_env.get("PATH"), "/charters/own/bin")
+        self.assertNotIn("CHARTER_BRIDGE_TOKEN", fake.respawn_env)
+        self.assertEqual(sorted(fake.respawn_env),
+                         sorted([*commands_frame._FRAME_IDENTITY, "PATH"]),
+                         "the harness pane was told a name charter did not choose")
+        # And nowhere else in the launch either — `-e` is the channel this was leaking
+        # through, but the assertion worth making is about the argv, not the channel.
+        # A filtered report: the whole of these calls is exactly what must not be printed.
+        leaked = [c[3] for c in fake.calls if "SENTINEL-0xC0FFEE" in " ".join(c)]
+        self.assertEqual(leaked, [],
+                         f"a decoy value reached the command line of: {leaked}")
+
+    def test_a_charter_with_no_path_states_none_rather_than_an_empty_one(self):
+        """`-e PATH=` would hand the pane an EMPTY `$PATH`, which is strictly worse than
+        letting it inherit the server's: nothing off a path would run at all. Charter
+        with no `$PATH` of its own has nothing to say here."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        env = {k: v for k, v in os.environ.items() if k != "PATH"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            _launch_inside(fake)
+        self.assertNotIn("PATH", fake.respawn_env)
+
+    def test_a_panel_here_is_told_the_frames_identity_and_nothing_more(self):
+        """The other `-e` on this path, and it was the whole environment too. A panel
+        starts no subprocess (`frame/gather.py`, `frame/slots.py`, `frame/panel.py` are
+        file and state reads) and its own interpreter is absolute (#390), so unlike the
+        harness pane it has no use for `$PATH` either — which is why this asserts the
+        five identity names exactly, not the six the harness gets."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        with mock.patch.dict(os.environ, {"CHARTER_BRIDGE_TOKEN": "SENTINEL-0xC0FFEE"}), \
+             mock.patch.dict(config.FRAME, {"slots": ["top"]}):
+            _launch_inside(fake)
+        splits = [c for c in fake.calls if "split-window" in c]
+        self.assertTrue(splits, fake.calls)
+        for cmd in splits:
+            carried = {cmd[i + 1].split("=", 1)[0]
+                       for i, a in enumerate(cmd) if a == "-e"}
+            self.assertEqual(sorted(carried), sorted(commands_frame._FRAME_IDENTITY),
+                             "a panel pane was told a name charter did not choose")
+
+    def test_a_panel_here_is_armed_to_come_back_if_it_dies(self):
+        """#408 — a panel that died inside the operator's own tmux stayed dead for the
+        life of the frame: `_arm_panel_respawn` refused there, because both ends of the
+        respawn mechanism spelled `-L charter` by hand.
+
+        Asserts the argv SHAPE, not merely that something was armed: a `set-hook` sent to
+        `-L /private/tmp/…` is still a `set-hook` and is the entire defect."""
+        fake = _FakeOperatorTmux(exit_code=0, panel_pane_ids={"top": "%9"})
+        with mock.patch.dict(config.FRAME, {"slots": ["top"]}):
+            _launch_inside(fake)
+        armed = [c for c in fake.calls
+                 if "set-hook" in c and any("frame-respawn" in a for a in c)]
+        # A filtered projection, never `fake.calls`: this path's argv now carries
+        # `$PATH`, and a failure message is not a place to print an environment.
+        self.assertEqual(len(armed), 1,
+                         [c[3] for c in fake.calls if len(c) > 3])
+        self.assertEqual(armed[0][:3], ["tmux", "-S", OPERATOR_SOCKET])
+        self.assertEqual(armed[0][armed[0].index("-t") + 1], "%9")
+        self.assertIn(f"--frame {_frame_id()}", armed[0][-1])
 
     def test_the_frames_state_is_reaped_against_the_operators_server(self):
         """A frame here is a window on their socket and appears in no `tmux -L charter
@@ -3545,13 +3787,17 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
                              "every split targets the harness pane's id — tmux "
                              "renumbers indices on each one")
 
-    def test_the_panels_get_charters_own_environment_too(self):
+    def test_the_panels_get_charters_own_identity_too(self):
         """Not only the harness. A panel resolves the plane it draws — `config.STATE_DIR`
         among it — from its own environment, and a pane on the operator's server inherits
         THEIR tmux server's, which may predate this plane entirely. Left unfixed, a panel
         inside their tmux drew a different plane's numbers from the harness beside it,
         and (measured by hand) `frame/slots.py` could not find this frame's own server
-        marker, so the bottom row went on advertising a hotkey charter had not bound."""
+        marker, so the bottom row went on advertising a hotkey charter had not bound.
+
+        "charter's own ENVIRONMENT" is what this said until #446, and it was the defect
+        rather than the fix: the whole of it travelled. Which names travel is asserted
+        next door; this is the one that says the values are the FRAME's."""
         fake = _FakeOperatorTmux(exit_code=0, panel_pane_ids={"top": "%8"})
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "stale-sentinel"}):
             _launch_inside(fake)
