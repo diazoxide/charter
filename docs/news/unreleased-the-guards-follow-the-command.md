@@ -30,11 +30,39 @@ repository without naming a directory to stand in. All of them were already in t
 table of git options — where they were skipped as option *values* so they could not be
 misread as a subcommand, and then never looked at again. The guard now asks which
 repository an invocation names rather than "the cwd unless `-C` says otherwise", and answers
-with every subject the command has: a `--git-dir` with no `--work-tree` beside it moves the
-named repository's refs while its files land in the cwd, so both count. Attached and
-separated forms, composed with `-C` (git applies `-C` first, and a relative `--git-dir` is
-read against where it landed), and the environment spellings — all of them are now rows in
-the guard's corpus, crossed with the commands rather than listed beside them.
+with a LIST of subjects rather than one path: the cwd, always; the work tree if one is
+named; and the git dir with the directory it belongs to. A `--git-dir` with no `--work-tree`
+beside it moves the named repository's refs while its files land in the cwd, so both count.
+The cwd stays on that list even when a `--work-tree` names somewhere else, and that is not
+belt-and-braces: with no `--git-dir`, git *discovers* the repository from the cwd, so
+`git --work-tree=<elsewhere> reset --hard origin/main` typed in the plane root destroys the
+root's unpushed commits. An earlier cut of this change dropped the cwd there and reopened
+exactly that. The list only ever grows now — a guard whose subjects SHRINK as the command
+line gets longer has a flag-shaped bypass in it by construction — and the invariant is
+asserted over the option cross-product, not over the spellings anyone happened to try.
+
+Which directory a git dir belongs to is asked of the **filesystem**, not of the string.
+`Path.parent` is lexical, so `<plane>/.git` resolved to the plane root and
+`<plane>/.git/refs/..` — the same directory, one segment away, same inode — resolved to
+`<plane>/.git/refs`, and `git --git-dir=<plane>/.git/hooks/.. reset --hard origin/main`
+destroyed both unpushed commits in the plane root with the guard silent. Attached and
+separated forms, dot segments in either direction, composed with `-C` (git applies `-C`
+first, and a relative `--git-dir` is read against where it landed), and the environment
+spellings — all of them are now rows in the guard's corpus, crossed with the commands rather
+than listed beside them.
+
+What this still does not place, said plainly rather than left to be found. A `--git-dir`
+pointing at a **linked worktree's** git dir (`<plane>/.git/worktrees/<name>`), whose HEAD
+belongs to that worktree and not to the root — a denial the guard does not make, never one
+it makes wrongly. And git's THIRD spelling of the work tree, the `core.worktree` key in a
+repository's own config: a clone carrying it has the plane root as its working tree for
+every command, with nothing on the command line to say so, and `git checkout <branch>` typed
+inside that clone overwrites the root's tree unrefused. Filed as
+[#504](https://github.com/diazoxide/charter/issues/504) with the reproduction rather than
+chased here, because following it means reading the cwd repository's config on every Bash
+tool call — a real cost on a path whose common case currently exits on a string comparison.
+The `-c core.worktree=…` form, which is the one an agent would type, was checked and does
+*not* reach the plane root on git 2.50.1; only the key written in the config does.
 
 **A `git reset --hard` hiding behind an alias destroyed unpushed commits in the plane
 root** ([#467](https://github.com/diazoxide/charter/issues/467)). The branch guard has
@@ -80,9 +108,14 @@ the guard's corpus, named after the issue, so closing it turns the row red.
 directories, and that list is shorter than the list of programs that walk: `find . -type f
 -exec cat {} +` and `tar cf - .` read the same files and are allowed, exactly as
 `base64 .charter/vaults/db.json` always has been. An interpreter's argument is still text
-charter does not re-parse, and `_leak_reason` still does not follow a `cd` earlier in the
-same command. Each is pinned as behaviour in `tests/test_vault_path_spellings.py`, so a
-later doc that claims otherwise fails the suite.
+charter does not re-parse. A `cd` earlier in the same command used to be on this list and is
+not any more: `_leak_reason` got the same segment walk the git guards have, and the walk
+predicate resolves its operand against the composed directory rather than the raw cwd — so
+`cd <plane> && grep -rn TOKEN .` from outside is refused, and `cd sub && grep -r x .` in the
+plane root is answered against `sub` rather than against the root. That row is still in
+`tests/test_vault_path_spellings.py` with its verdict flipped rather than deleted, which is
+how a closed limit should read. The rest are pinned there as behaviour, so a later doc that
+claims otherwise fails the suite.
 
 **And one issue closed by deciding rather than by coding.**
 [#476](https://github.com/diazoxide/charter/issues/476) asked whether the vault guards

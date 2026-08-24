@@ -35,8 +35,11 @@ that reaches no vault, and the exclusion the denial recommends, both still run.
 
 **What is deliberately NOT closed, pinned as behaviour rather than left to be rediscovered.**
 `TestWhatStillWalksPastBothGuards` — a program charter does not know walks directories
-(`find … -exec cat`, `tar`), an interpreter's argument, and a `cd` earlier in the same
-command. `TestSeparatorMeansTheForwardSlash` — a Windows-style backslash spelling (#476),
+(`find … -exec cat`, `tar`) and an interpreter's argument. A `cd` earlier in the same command
+used to be a third: it is followed now, because #499 gave `_leak_reason` the segment walk the
+git guards already had and the walk predicate resolves against the composed directory rather
+than the raw cwd. Its row is still in that class, with the verdict flipped.
+`TestSeparatorMeansTheForwardSlash` — a Windows-style backslash spelling (#476),
 which stays unfolded because charter's harness targets POSIX and is not supported on
 Windows. All are stated as limits in `SECURITY.md`, `docs/secrets.md` and
 `skills/secrets/SKILL.md`, and if any ever starts being denied these tests fail next to the
@@ -606,10 +609,14 @@ class TestTheWalkGuardDoesNotOverreach(WalkCase):
 class TestWhatStillWalksPastBothGuards(WalkCase):
     """The limits round five did NOT close, pinned so the docs cannot quietly outgrow them.
 
-    Closing #474 moved the boundary; it did not remove it. Each of these really does read a
-    vault file, and each is allowed. They are the `_READERS` ceiling and the shell residual
-    in a new shape, and both are stated in `SECURITY.md` and `docs/secrets.md` — if one ever
-    starts being denied, this test fails next to the paragraph that has to change with it.
+    Closing #474 moved the boundary; it did not remove it. The first two here really do read
+    a vault file and are allowed: they are the `_READERS` ceiling and the shell residual in a
+    new shape, both stated in `SECURITY.md` and `docs/secrets.md` — if one ever starts being
+    denied, this test fails next to the paragraph that has to change with it.
+
+    The third was a limit and is a DENIAL now, kept in this class with its verdict flipped
+    rather than moved or deleted, because a limit that closes should be readable as a row
+    that changed and not as a row that disappeared.
     """
 
     def test_a_reader_charter_does_not_know_walks_unguarded(self):
@@ -624,12 +631,36 @@ class TestWhatStillWalksPastBothGuards(WalkCase):
     def test_an_interpreters_argument_is_text_and_is_not_re_parsed(self):
         self.assertIsNone(self.bash("sh -c 'grep -rn TOKEN .'"))
 
-    def test_a_cd_earlier_in_the_command_is_not_followed_by_this_guard(self):
-        """`_plane_root_git` follows a `cd`; `_leak_reason` does not, and that difference is
-        older than this change. Recorded here rather than half-fixed on the hot path."""
+    def test_a_cd_earlier_in_the_command_IS_followed_now(self):
+        """**This row was a LIMIT and is now a denial** — flipped deliberately and visibly.
+
+        Round five recorded that `_plane_root_git` followed a `cd` and `_leak_reason` did
+        not. #499 gave `_leak_reason` the same segment walk, and the walk predicate is
+        handed the composed directory rather than the raw `cwd`, so `cd <plane> && grep -rn
+        TOKEN .` from outside is refused. The row stays in this class rather than being
+        deleted: what changed is readable from a row that changed verdict, and invisible
+        from a row that vanished.
+
+        It is more accurate in BOTH directions, which is the point of composing rather than
+        of adding a `cd` case: `cd sub && grep -r x .` in the plane root now resolves `.`
+        against `sub`, so a search that cannot reach the vault directory is no longer
+        answered as if it were rooted at the plane root.
+        """
         outside = self.tmp / "elsewhere"
         outside.mkdir()
-        self.assertIsNone(self.bash(f"cd {self.root} && grep -rn TOKEN .", cwd=outside))
+        hit = self.bash(f"cd {self.root} && grep -rn TOKEN .", cwd=outside)
+        self.assertIsNotNone(hit, "a `cd` into the plane root is followed now")
+        self.assertIn("vaults", hit)
+
+    def test_a_cd_AWAY_from_the_vault_directory_is_followed_too(self):
+        """The other direction of the same composition, and the reason it is not just a
+        second denial: a walk that a `cd` moves OUT of range is allowed. Without this the
+        test above would pass for a guard that had simply started ignoring `cd` in the
+        fail-closed direction."""
+        sub = self.root / "notes"
+        sub.mkdir(exist_ok=True)
+        (sub / "a.md").write_text("hi\n")
+        self.assertIsNone(self.bash("cd notes && grep -rn TOKEN .", cwd=self.root))
 
 
 class TestSeparatorMeansTheForwardSlash(unittest.TestCase):

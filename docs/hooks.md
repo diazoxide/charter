@@ -100,13 +100,22 @@ rule while one who reads a bare refusal files an issue.
   feature` the same branch move — including chains, aliases carrying their own options,
   `!git checkout`, and `git -c alias.co=checkout co …`. A `!`-alias that is not a plain
   `git …` is not read (refusing every shell alias here would refuse `s = !git status`), and
-  neither is `--config-env`. The **route** does not change the verdict either: the cwd, a
-  `cd` earlier in the same command, `git -C <path>` — absolute or relative, and relative
-  means *relative to the shell*, which is the fix for `git -C ../../.. checkout <branch>`
-  reaching the root from a clone — and the three options that name a repository without
-  naming a directory to stand in: `--git-dir`, `--work-tree` and their `GIT_DIR` /
-  `GIT_WORK_TREE` environment spellings, attached or separated, composing with `-C`
-  ([#477](https://github.com/diazoxide/charter/issues/477)). A `-C` counts as git's
+  neither is `--config-env`. **These routes all reach the same verdict** — the list is what
+  is covered, not a claim that every route is: the cwd, a `cd` earlier in the same command,
+  `git -C <path>` — absolute or relative, and relative means *relative to the shell*, which
+  is the fix for `git -C ../../.. checkout <branch>` reaching the root from a clone — and
+  the three options that name a repository without naming a directory to stand in:
+  `--git-dir`, `--work-tree` and their `GIT_DIR` / `GIT_WORK_TREE` environment spellings,
+  attached or separated, composing with `-C`
+  ([#477](https://github.com/diazoxide/charter/issues/477)). The cwd is a subject of every
+  git command, including one that names a `--work-tree` elsewhere: with no `--git-dir`, git
+  discovers the repository from the cwd, so the refs that move are the cwd's. And *which
+  repository a `--git-dir` belongs to* is asked of the filesystem rather than of the string,
+  so `<plane>/.git`, `<plane>/.git/./` and `<plane>/.git/refs/..` are one question — a
+  lexical parent made the last of those a live bypass for a round. What it still does not
+  place is a `--git-dir` pointing at a **linked worktree's** git dir, whose HEAD is that
+  worktree's and not the root's; that one is a missed denial, never a wrong one. A `-C`
+  counts as git's
   change-directory global only **before the subcommand**, which is the only position git
   reads one in — so `git switch -C <branch>`, where `-C` is `switch`'s own `--force-create`,
   is the branch creation it is rather than a directory called `<branch>`

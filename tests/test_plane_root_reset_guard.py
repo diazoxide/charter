@@ -21,6 +21,7 @@ being true and the command refused, or that fact being false and the same comman
 
 from __future__ import annotations
 
+import itertools
 import os
 import subprocess
 import unittest
@@ -285,6 +286,92 @@ class TestEveryRouteToTheRootReachesThisGuardToo(PlaneRootAheadCase):
     def test_a_git_dir_relative_to_a_dash_C(self):
         up = os.path.relpath(self.root, self.clone)
         self._denied(f"git -C {up} --git-dir=.git reset --hard origin/main")
+
+    # --- #477, round two: the same route through a DOT SEGMENT ---------------------------
+    # `_git_target` offered `gd.parent` for the ordinary `<repo>/.git` layout, and
+    # `Path.parent` is LEXICAL — it takes the last component off the string without asking
+    # what it means. `<plane>/.git` gave `<plane>` and the guard fired; `<plane>/.git/refs/..`
+    # is the SAME DIRECTORY, one segment away, same inode, and gave `<plane>/.git/refs`,
+    # which is not the plane root. Verified against git 2.50.1 from a clone: the first of
+    # these destroyed both unpushed commits in the plane root with the guard silent.
+    #
+    # The property, named: *the directory a git dir belongs to* is a question for the
+    # filesystem, not for a string. `gd / ".."` hands the collapsing to the caller's
+    # `resolve()`, so these are not four more entries on a list of spellings — they are the
+    # plain spelling asked properly. **The next spelling** is one `resolve()` cannot answer
+    # from the path alone: a `--git-dir` pointing at a LINKED WORKTREE's git dir
+    # (`<plane>/.git/worktrees/<name>`), whose `..`-parent is `<plane>/.git` and whose HEAD
+    # belongs to that worktree rather than to the root. That one is stated in
+    # `_git_target`'s docstring as not followed, and it fails OPEN — it is a missed denial,
+    # never a wrong one.
+
+    def test_a_git_dir_reached_through_a_dot_dot_segment(self):
+        self._denied(f"git --git-dir={self.root}/.git/refs/.. reset --hard origin/main")
+
+    def test_the_separated_form_of_the_same(self):
+        self._denied(f"git --git-dir {self.root}/.git/hooks/.. reset --hard origin/main")
+
+    def test_two_hops_back_out(self):
+        self._denied(f"git --git-dir={self.root}/.git/refs/../objects/.. "
+                     f"reset --hard origin/main")
+
+    def test_the_environment_spelling_of_the_dot_dot_route(self):
+        self._denied(f"GIT_DIR={self.root}/.git/objects/.. git reset --hard origin/main")
+
+    def test_a_single_dot_segment_too(self):
+        """`.` and a trailing slash, which pathlib DID collapse. Pinned beside the `..`
+        rows so the pair reads as one rule rather than as one fix and one coincidence."""
+        self._denied(f"git --git-dir={self.root}/.git/./ reset --hard origin/main")
+
+    # --- the (B) regression: a --work-tree with NO --git-dir -----------------------------
+
+    def test_a_work_tree_elsewhere_does_not_move_the_refs_elsewhere(self):
+        """Typed IN the plane root. With no `--git-dir`, git DISCOVERS the repository from
+        the cwd — asked of git 2.50.1, `git --work-tree=<elsewhere> rev-parse --git-dir`
+        from a repo answers that repo's own `.git` — so the refs that move are the plane
+        root's and the commits die there. `_git_target` dropped the cwd from its answer the
+        moment a work tree was named, which allowed this while `origin/main` refused it.
+
+        Run from the ROOT, which is the direction the other class in this file never takes.
+        """
+        r = self.run_cmd(f"git --work-tree={self.clone} reset --hard origin/main",
+                         cwd=self.root)
+        self.assertEqual(_decision(r), "deny")
+        self.assertIn("2 commits", _reason(r))
+
+    def test_the_environment_spelling_of_a_work_tree_elsewhere(self):
+        r = self.run_cmd(f"GIT_WORK_TREE={self.clone} git reset --hard origin/main",
+                         cwd=self.root)
+        self.assertEqual(_decision(r), "deny")
+
+    def test_a_relative_work_tree_elsewhere(self):
+        r = self.run_cmd("git --work-tree=.. reset --hard origin/main", cwd=self.root)
+        self.assertEqual(_decision(r), "deny")
+
+    def test_the_subject_list_only_ever_grows(self):
+        """The invariant behind all four rows above, stated over the option cross-product
+        instead of over the four spellings that happened to be tried.
+
+        `_git_target` may add subjects for the options an invocation carries; it may never
+        answer with LESS than the cwd. A list that gets SMALLER as the command line gets
+        longer is a flag-shaped bypass by construction — which is exactly what dropping the
+        cwd for a `--work-tree` was — and this fails for any option combination that
+        reintroduces one, including combinations nobody wrote a row for.
+        """
+        here = str(self.clone)
+        base = {p.resolve() for p in hooks._git_target(here, [])}
+        self.assertEqual(base, {self.clone.resolve()})
+        opts = ("--git-dir=" + str(self.root) + "/.git", "--work-tree=" + str(self.root),
+                "--namespace=n", "-c", "x=y")
+        for n in range(1, len(opts) + 1):
+            for combo in itertools.combinations(opts, n):
+                for env in ([], ["GIT_DIR=" + str(self.root) + "/.git"],
+                            ["GIT_WORK_TREE=" + str(self.root)]):
+                    with self.subTest(pre=combo, env=env):
+                        got = {p.resolve()
+                               for p in hooks._git_target(here, list(combo), env)}
+                        self.assertLessEqual(base, got,
+                                             "adding a global option REMOVED a subject")
 
     def test_the_clones_own_git_dir_is_not_the_root(self):
         """The reach is the repository the option NAMES, not "any command with a --git-dir

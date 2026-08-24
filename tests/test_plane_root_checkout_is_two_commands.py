@@ -707,8 +707,24 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
         yield "--git-dir=, attached", self.clone, f"git --git-dir={self.root}/.git {tail}"
         yield ("--work-tree and --git-dir", self.clone,
                f"git --work-tree={self.root} --git-dir={self.root}/.git {tail}")
-        yield ("--work-tree alone", self.clone,
+        yield ("--work-tree and --git-dir, separated", self.clone,
                f"git --work-tree {self.root} --git-dir {self.root}/.git {tail}")
+        # This label used to sit on the line above, which passes BOTH options — so "work
+        # tree alone" was never actually a route, and the pinned note beside it asserted
+        # that git refuses the form. git 2.50.1 does not: with no `--git-dir` it DISCOVERS
+        # the repository from the cwd and writes into the named tree. Both real directions
+        # are routes now.
+        yield "--work-tree alone", self.clone, f"git --work-tree {self.root} {tail}"
+        yield ("--work-tree elsewhere, from the ROOT", self.root,
+               f"git --work-tree {self.clone} {tail}")
+        yield ("GIT_WORK_TREE elsewhere, from the ROOT", self.root,
+               f"GIT_WORK_TREE={self.clone} git {tail}")
+        # A git dir reached through a dot segment. `Path.parent` is lexical, so this is the
+        # same directory as `{root}/.git` and used to answer `{root}/.git/refs`.
+        yield ("--git-dir through a .. segment", self.clone,
+               f"git --git-dir={self.root}/.git/refs/.. {tail}")
+        yield ("GIT_DIR through a .. segment", self.clone,
+               f"GIT_DIR={self.root}/.git/hooks/.. git {tail}")
         # A relative `--git-dir` is interpreted against the directory the `-C`s ended at,
         # which is git's own documented rule for it — so the two compose.
         yield ("--git-dir relative to a -C", self.clone,
@@ -738,10 +754,16 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
         # would leave every remaining assertion green while covering less than it did.
         self.assertGreaterEqual(len(movers), 8, movers)
         labels = {label for label, _cwd, _cmd in self.routes("checkout", "feature")}
-        self.assertGreaterEqual(len(labels), 15, sorted(labels))
+        self.assertGreaterEqual(len(labels), 20, sorted(labels))
         for must in ("--git-dir, separated", "--git-dir=, attached",
                      "--work-tree and --git-dir", "--git-dir relative to a -C",
-                     "GIT_DIR in the environment", "GIT_WORK_TREE in the environment"):
+                     "GIT_DIR in the environment", "GIT_WORK_TREE in the environment",
+                     # Round two's two families. Named individually because the count above
+                     # cannot tell "a route was dropped" from "a route was renamed", and
+                     # both of these were live bypasses that a generous floor would hide.
+                     "--work-tree alone", "--work-tree elsewhere, from the ROOT",
+                     "GIT_WORK_TREE elsewhere, from the ROOT",
+                     "--git-dir through a .. segment", "GIT_DIR through a .. segment"):
             self.assertIn(must, labels)
 
     def test_a_restore_is_allowed_by_every_route(self):
@@ -754,6 +776,35 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
             for label, cwd, cmd in self.routes(sub, rest):
                 with self.subTest(route=label, cmd=cmd):
                     self.assertIsNone(_decision(self.run_cmd(cmd, cwd=cwd)), f"{label}: {cmd}")
+
+    def test_core_worktree_in_a_repos_config_is_a_route_this_guard_does_not_follow(self):
+        """**A LIMIT, pinned with its issue (#504).**
+
+        `core.worktree` is git's THIRD spelling of the work tree, after `--work-tree` and
+        `GIT_WORK_TREE`, and the only one that is a property of a repository on disk rather
+        than a token on the command line. A clone carrying it has the plane root as its
+        working tree for every command it runs, and `_git_target` — which reads argv and
+        environment — sees a plain `git checkout <branch>` in a clone.
+
+        Asserted the way a limit has to be: git is asked whether the route really reaches
+        the root, so the row cannot pass because the fixture stopped working. If it ever
+        starts being denied this fails, and #504 is where the decision is written down.
+
+        Not the same as `-c core.worktree=<plane>` on the command line: git 2.50.1 does not
+        honour that one — verified, `--show-toplevel` still answers the clone — so the
+        spelling an agent would actually type is already harmless.
+        """
+        clone = config.WORKSPACES_DIR / "ws" / "cfg"
+        clone.mkdir(parents=True, exist_ok=True)
+        self._git("init", "-q", "-b", "main", str(clone))
+        self._in(clone, "config", "core.worktree", str(self.root))
+        top = subprocess.run(["git", "-C", str(clone), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True).stdout.strip()
+        self.assertEqual(Path(top).resolve(), self.root.resolve(),
+                         "the fixture stopped reaching the root, so the row below proves "
+                         "nothing about the guard")
+        self.assertIsNone(_decision(self.run_cmd("git checkout feature", cwd=clone)),
+                          "LIMIT #504 closed — say so in the news entry and flip this row")
 
     def test_a_route_that_does_not_reach_the_root_is_still_not_the_root(self):
         """The reach is not "anything with a `-C` in it". A relative `-C` that lands in the
@@ -926,9 +977,50 @@ PINNED: tuple[tuple[str, str, str, str], ...] = (
      "#477 with a RELATIVE git dir, resolved against the shell like a `-C`"),
     ("DENY", "clone", "GIT_DIR={root}/.git git -c alias.zz=switch zz -d main",
      "#477's route carrying #467's alias"),
+    # `--work-tree` WITHOUT a `--git-dir` — its own family, because round one's note here
+    # said "git itself refuses --work-tree without a git dir" and that is simply false.
+    # Asked of git 2.50.1 from the clone: `git --work-tree=<plane> rev-parse --git-dir`
+    # answers `.git` (the CLONE's, DISCOVERED from the cwd) and `--show-toplevel` answers
+    # `<plane>`. It runs, and it writes the clone's branch content into the plane root's
+    # working tree. That false belief is not an inert wrong note: it is exactly the reading
+    # that made `_git_target` DROP the cwd whenever a work tree was named, which reopened
+    # `git --work-tree=<elsewhere> reset --hard origin/main` in the plane root — 2 unpushed
+    # commits destroyed, verified, on a spelling `origin/main` refuses. Both directions are
+    # pinned below: the named tree is a subject, and so is the cwd.
     ("DENY", "clone", "git --work-tree {root} checkout feature",
-     "git itself refuses --work-tree without a git dir; charter refuses AHEAD of git, "
-     "deliberately, rather than depending on git continuing to"),
+     "--work-tree alone: git DISCOVERS the git dir from the cwd and writes into the named "
+     "tree, so the plane root is the tree that gets overwritten"),
+    ("DENY", "clone", "git --work-tree={root} switch -c neu", "the attached form, creating"),
+    ("DENY", "root", "git --work-tree={clone} checkout feature",
+     "the OTHER direction, and the (B) regression this closes: the tree is elsewhere, but "
+     "with no --git-dir git discovers the repo from the cwd, so the refs that move are the "
+     "PLANE ROOT's. Verified: this destroyed two unpushed commits with the guard silent"),
+    ("DENY", "root", "GIT_WORK_TREE={clone} git switch -c neu", "and by environment"),
+    ("DENY", "root", "GIT_WORK_TREE={clone} git checkout --detach main", "…and detaching"),
+    ("DENY", "root", "git --work-tree={clone} --git-dir={clone}/.git checkout feature",
+     "both named and neither is the root — kept a DENY on purpose. `_git_target` never "
+     "answers with less than the cwd, because a subject list that SHRINKS as the command "
+     "line grows is a flag-shaped bypass; the cost is this false positive"),
+    # `--git-dir` reached through a dot segment. `Path.parent` is lexical, so `.git/refs/..`
+    # — the same directory as `.git`, one segment away, same inode — had a parent of
+    # `.git/refs`, which is not the plane root, and #477 went on reproducing after round one
+    # closed the plain spelling. Verified against git 2.50.1: the reset form destroyed two
+    # unpushed commits in the plane root. Now `gd / ".."` and the caller's `resolve()` asks
+    # the filesystem, so these are not four more spellings on a list — they are the same
+    # question the plain form asks.
+    ("DENY", "clone", "git --git-dir={root}/.git/refs/.. checkout feature",
+     "#477 round two: a dot segment used to defeat the lexical parent"),
+    ("DENY", "clone", "git --git-dir {root}/.git/hooks/.. checkout feature",
+     "#477 round two, separated — the `reset --hard` spelling of this route is what really "
+     "destroyed commits, and it is pinned in tests/test_plane_root_reset_guard.py where the "
+     "fixture has an upstream for the reset guard to measure against"),
+    ("DENY", "clone", "git --git-dir={root}/.git/objects/.. switch -c neu", "#477 round two"),
+    ("DENY", "clone", "git --git-dir={root}/.git/refs/../objects/.. checkout feature",
+     "two hops back out: collapsing is the filesystem's job, not a pattern's"),
+    ("DENY", "clone", "GIT_DIR={root}/.git/refs/.. git checkout feature",
+     "#477 round two by environment"),
+    ("DENY", "clone", "git --git-dir={root}/.git/./ checkout feature",
+     "the `.` segment, which pathlib DID collapse — pinned so the pair reads as one rule"),
     ("DENY", "above", "cd {name} && git checkout feature", "a `cd` earlier in the SAME command"),
     ("DENY", "above", "cd {name} && git switch feature", ""),
     ("DENY", "root", "cd .. && git -C {name} checkout feature", "out and back in again"),

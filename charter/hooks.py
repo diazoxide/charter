@@ -538,8 +538,12 @@ def _guarded_state_entries() -> list[Path]:
     """
     from . import config as _cfg
     out: list[Path] = []
+    # Both scans are closed explicitly. This runs on the Bash hot path, so a leaked
+    # `ScandirIterator` per invocation is a leaked file descriptor per invocation — the
+    # suite printed one `ResourceWarning` per call before the `with`.
     try:
-        entries = list(os.scandir(Path(_cfg.STATE_DIR)))
+        with os.scandir(Path(_cfg.STATE_DIR)) as it:
+            entries = list(it)
     except OSError:
         return out
     for entry in entries:
@@ -547,8 +551,10 @@ def _guarded_state_entries() -> list[Path]:
                 not entry.name.startswith(_GUARDED_STATE_PREFIXES):
             continue
         try:
-            if entry.is_dir() and next(os.scandir(entry.path), None) is None:
-                continue                    # an empty directory has nothing to leak
+            if entry.is_dir():
+                with os.scandir(entry.path) as inner:
+                    if next(inner, None) is None:
+                        continue            # an empty directory has nothing to leak
         except OSError:
             continue
         out.append(Path(entry.path))
@@ -2148,6 +2154,17 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     repository's branch — and the benefit is that no single-path answer has to choose which
     of two real subjects to report.
 
+    **It is a SUPERSET of the cwd, not an enumeration of everything git will touch.** The
+    list is exactly: the cwd, always; the `--work-tree`/`GIT_WORK_TREE` if one is named; and
+    the `--git-dir`/`GIT_DIR` with its parent if one is named. That is the guarantee — every
+    directory it names is a place this invocation can act on, and it never answers with less
+    than the cwd — and it is deliberately NOT a claim that everything git touches appears
+    here. A submodule's own git dir, a `--namespace`, an `includeIf` that redirects a
+    worktree, and a `--git-dir` pointing at a LINKED worktree's git dir (whose HEAD is that
+    worktree's, not the root's) are all subjects this returns nothing for. Round one's
+    docstring said it "returns every subject an invocation names", which is a larger sentence
+    than the code keeps.
+
     **Relative paths resolve against the SHELL's directory**, which is what *cwd* carries.
     A `-C` used to be `Path(args[i + 1])`, so a relative one resolved against whatever
     directory the hook process happened to be started in — a directory the command being
@@ -2210,19 +2227,45 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     def _at(p: str) -> Path:
         return Path(p) if os.path.isabs(p) else here / p
 
-    out: list[Path] = []
-    if work_tree is None:
-        # No work tree named: the cwd is where the files land, and it is a subject whether
-        # or not a `--git-dir` moved the refs somewhere else.
-        out.append(here)
-    else:
+    # **The cwd is UNCONDITIONALLY a subject, and that is the invariant this list has.** It
+    # used to be dropped when a `--work-tree` was named, on the reading that the files land
+    # in the named tree so the cwd is out of it. That reading is wrong twice over:
+    #
+    #  * With a `--work-tree` and NO `--git-dir`, git still DISCOVERS the repository from
+    #    the cwd, so the refs that move are the CWD's. `git --work-tree=<elsewhere> reset
+    #    --hard origin/main`, typed in the plane root, destroyed two unpushed commits there
+    #    against git 2.50.1 with no refusal — a hole this function opened, since the guard
+    #    scoped to the cwd alone refused it.
+    #  * With both named the cwd really is untouched, and it is kept anyway. Dropping it is
+    #    the only way this list could answer with LESS than the cwd every earlier version of
+    #    the guard returned, and a subject list that gets SMALLER as the command line gets
+    #    longer is a flag-shaped bypass by construction. The invariant is the property worth
+    #    having; the cost is refusing a `--git-dir=<elsewhere>/.git --work-tree=<elsewhere>`
+    #    pair that happens to be typed while standing in the plane root, which is the same
+    #    fail-closed trade the paragraph above records.
+    #
+    # So: `_git_target` only ever ADDS subjects. `test_the_subject_list_only_ever_grows`
+    # states it over the whole option cross-product rather than over these two branches.
+    out: list[Path] = [here]
+    if work_tree is not None:
         out.append(_at(work_tree))
     if git_dir is not None:
         # The repository a git dir belongs to is its PARENT for the ordinary `<repo>/.git`
         # layout, and the git dir itself when it is bare. Both are offered rather than
         # guessed at: the caller only asks whether one of them is the plane root.
+        #
+        # `gd / ".."` and not `gd.parent`: `Path.parent` is LEXICAL, so it takes the last
+        # component off the string without looking at what it means. For `<plane>/.git` that
+        # is `<plane>` and the guard fired; for `<plane>/.git/refs/..` — the same directory,
+        # one dot-segment away — it is `<plane>/.git/refs`, which is not the plane root, and
+        # `git --git-dir=<plane>/.git/refs/.. reset --hard origin/main` destroyed two
+        # unpushed commits in the plane root against git 2.50.1 with the guard silent
+        # (#477, still open after round one closed the plain spelling). Appending the `..`
+        # instead hands the collapsing to the caller's `resolve()`, which asks the
+        # filesystem — so `.git`, `.git/./`, `.git/refs/..` and a symlinked route are one
+        # question rather than a list of spellings.
         gd = _at(git_dir)
-        out.extend((gd, gd.parent))
+        out.extend((gd, gd / ".."))
     return out
 
 
