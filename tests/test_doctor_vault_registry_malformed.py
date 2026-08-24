@@ -143,6 +143,9 @@ class TestTheTwoVaultLinesNoLongerContradict(MalformedEntryCase):
         prov = mock.Mock()
         prov.env_overlay.return_value = None
         prov.health.return_value = (True, 1)
+        # `check_vaults` iterates this (#471). A bare Mock returns a Mock, which is not
+        # iterable — and a vault stubbed as reachable has no loose directory to report.
+        prov.loose_dirs.return_value = []
         return mock.patch.object(registry, "provider_for", return_value=prov)
 
     def test_ignored_and_counted_agree(self):

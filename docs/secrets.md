@@ -15,14 +15,21 @@ you, can read the file directly. `charter` does not pretend otherwise: the vault
 registry and every vault file live under `.charter/` (gitignored — never committed, never
 synced anywhere by `charter` itself).
 
-Every directory **the vault writers create** on the way to a vault file is 0700, each
-level of it and not just the last, so the directory listing your vault *names* is not
-readable by other accounts either. A directory that **already existed** keeps the mode it
-has — a `.charter/vaults/` made by hand or by an older charter is 0755 before `secret set`
-and 0755 after. charter will not chmod a directory it did not create (a vault's `--file`
-can name any path on this machine, and silently tightening someone's home or a shared team
-directory is worse than the thing it fixes), so it reports it instead, on the vault's
-health line — which is the `STATUS` column of `charter vault list`:
+Every directory **charter creates** on the way to a vault file is 0700, each level of it
+and not just the last, so the directory listing your vault *names* is not readable by
+other accounts either. That now includes `.charter/` itself, whichever command makes it:
+on the default flow it is not a vault writer at all — `charter vault add` writes the local
+registry first, a fresh clone's first hook writes a session pointer — and every one of
+those goes through the same walk, so the umask no longer decides the mode of your state
+directory ([#470](https://github.com/diazoxide/charter/issues/470)).
+
+**The limit, measured rather than assumed.** A directory that **already existed** keeps the
+mode it has — a `.charter/` or `.charter/vaults/` made by hand, or by a charter older than
+0.52.1, is 0755 before `secret set` and 0755 after. charter will not chmod a directory it
+did not create (a vault's `--file` can name any path on this machine, and silently
+tightening someone's home or a shared team directory is worse than the thing it fixes), so
+it reports it instead, on the vault's health line — which is the `STATUS` column of
+`charter vault list`:
 
 ```
 devops: 3 secret(s), listed by other accounts: .charter/vaults 755 (want 700 — chmod 700)
@@ -30,20 +37,11 @@ devops: 3 secret(s), listed by other accounts: .charter/vaults 755 (want 700 —
 
 One `chmod 700 .charter/vaults` clears it.
 
-**Two limits on that sentence, both measured rather than assumed.**
-
-`.charter/` itself is usually *not* one of the directories the vault writers create. On
-the default flow, `charter vault add` writes the local registry before any vault file
-exists, and that write creates `.charter/` with no mode of its own — so under `umask 022`
-the state directory comes out 0755 and stays there, and under `umask 077` it comes out
-0700. The umask decides that one level; charter decides every level below it. The report
-above still names it (`listed by other accounts: .charter 755`) and one `chmod 700
-.charter` clears it — but the paragraph above is a claim about the vault writers, and the
-state directory is not theirs to create — [#470](https://github.com/diazoxide/charter/issues/470).
-
-And the report reaches `charter vault list` only. `charter doctor` asks each vault
-whether it is *reachable* and discards the rest of the health line, so a loose directory
-shows up in neither `doctor` nor `doctor --json` — [#471](https://github.com/diazoxide/charter/issues/471).
+The same note is on `charter doctor`'s vaults line, and in `charter doctor --json`
+([#471](https://github.com/diazoxide/charter/issues/471)) — one line naming each loose
+directory and the `chmod` to run. It stays a **green** line rather than a warning: charter
+will not fix this one for you, so saying it is the remedy, and a warning at every session
+start about a directory you have decided to leave alone is a check nobody reads twice.
 
 If you want encryption at rest, use your **OS keychain** (macOS Keychain, a real
 password manager, or a proper secrets backend) to hold the credential, and treat

@@ -237,7 +237,7 @@ def approve(persona_name: str, fingerprints) -> None:
     doc = _read()
     doc[persona_name] = sorted({f for f in fingerprints if f})
     p = path()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    config.private_mkdir(p.parent)
     p.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
 
 

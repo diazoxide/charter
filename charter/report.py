@@ -297,7 +297,7 @@ def all_reports() -> list[dict]:
 
 
 def _write(rec: dict) -> str:
-    config.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    config.private_mkdir(config.REPORTS_DIR)
     _path(rec["id"]).write_text(json.dumps(rec, indent=2))
     return rec["id"]
 

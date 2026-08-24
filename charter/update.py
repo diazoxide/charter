@@ -266,7 +266,7 @@ def fetch_and_store() -> str | None:
         record["ts"] = time.time()
     try:
         p = _cache_file()
-        p.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(p.parent)
         p.write_text(json.dumps(record))
     except OSError:
         return None
@@ -290,7 +290,7 @@ def maybe_spawn() -> None:
     except Exception:
         return
     try:
-        lock.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(lock.parent)
         lock.touch()          # touch FIRST: a spawn storm is worse than a missed check
         # -P (util.self_relaunch_argv, #390): this ALSO runs on the status line's own
         # render path (see the module docstring's mirror of glstate) — without it, a

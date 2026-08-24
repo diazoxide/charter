@@ -148,8 +148,10 @@ def start(agent: str) -> str | None:
     if not agent:
         return None
     try:
+        from . import config
+
         d = _dir()
-        d.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(d)
         # mkstemp, not a timestamped name: two dispatches starting in the same
         # millisecond would collide and the second would overwrite the first —
         # losing exactly the overlap this exists to observe. The agent name stays

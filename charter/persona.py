@@ -835,11 +835,11 @@ def set_active(name: str) -> str:
     a bare shell with nothing to key on. That is the one case where it is still the right
     answer, and it is why the file is kept rather than removed.
     """
-    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    config.private_mkdir(config.STATE_DIR)
     sf, tf = _pointer_files()
     for f in (sf, tf):
         if f is not None:
-            f.parent.mkdir(parents=True, exist_ok=True)
+            config.private_mkdir(f.parent)
             f.write_text((name or "") + "\n")
     if sf is None and tf is None:
         config.ACTIVE_PERSONA_FILE.write_text((name or "") + "\n")

@@ -113,7 +113,7 @@ def read_baseline() -> str | None:
 def _stamp_baseline(version: str) -> None:
     try:
         p = _baseline_file()
-        p.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(p.parent)
         p.write_text(version)
     except OSError:
         pass          # a missing baseline degrades the news RANGE, never the update

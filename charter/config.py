@@ -192,6 +192,99 @@ def _repoint_vault_registry(legacy_dir: Path, new_dir: Path) -> None:
               file=sys.stderr)
 
 
+def private_mkdir(p, parents: bool = True) -> None:
+    """Create directory *p*, and **every level of it charter has to create**, at 0700.
+
+    The one way charter makes a directory under its own state directory, and it lives
+    here — in `config`, which every state writer already imports — because the writers
+    that create ``.charter/`` are spread across the registry, the persona and workspace
+    pointers, the caches, the session markers and the frame (#470). A helper any of them
+    has to reach into `charter.secrets` for is a helper most of them will not call.
+
+    **The umask must not decide the mode of the plane's state directory.** It did:
+    ``mkdir(parents=True, exist_ok=True)`` creates at ``0o777 & ~umask``, so on the
+    default ``umask 022`` every level came out 0755 and any account on the machine could
+    list ``.charter/`` — the vault registry's own directory, and the one holding
+    ``fingerprint.key``. Whichever command got there first decided it, so the mode
+    depended on the order somebody happened to run things in.
+
+    ``Path.mkdir(parents=True, mode=0o700)`` is **not** this, which is what the first cut
+    of #437 assumed: CPython's ``pathlib`` applies *mode* to the leaf only and creates the
+    missing parents with a bare recursive ``mkdir``, i.e. at the umask default again. Each
+    missing level is therefore created individually here and chmod-ed explicitly — mkdir's
+    *mode* argument is itself masked by the umask, so a process under a permissive umask is
+    not guaranteed the bits it asked for. The chmod names 0700 outright and so cannot widen
+    anything: there is no window in which the directory is looser than it ends up.
+
+    **A directory that already exists is left exactly as it is.** Not an oversight: charter
+    tightens what it creates and *reports* what it did not. A ``.charter/`` that predates
+    this, or one made by ``mkdir -p`` under ``umask 022``, keeps its 0755 — tightening a
+    directory charter did not create is how it would come to chmod a home directory or a
+    shared team directory unprompted (#331), and ``$CHARTER_HOME`` can point the state
+    directory anywhere on the machine. `charter vault list` and `charter doctor` both name
+    a loose one and print the ``chmod`` to run (#471).
+
+    **The leaf is attempted FIRST, and the parents only after it answers "no such file or
+    directory".** That is `pathlib`'s own order, and copying it is not cosmetic: a leaf
+    that cannot exist for a reason of its own — a name longer than ``NAME_MAX``, which is
+    exactly what a frame id built out of a hostile workspace name can be — fails with
+    ``ENAMETOOLONG``, and a walk that created the parents on the way down would leave the
+    frame root standing where the caller had just checked it was gone. `frame.state` pins
+    that as "does not raise **or create**", and it is the shape of a directory being
+    resurrected under somebody who had reaped it.
+
+    *parents* is the same argument `Path.mkdir` takes, for the same reason: a caller that
+    must not create the levels above the leaf — counting a respawn against a frame
+    directory `reap` may already have deleted — passes ``parents=False`` and gets the
+    ``FileNotFoundError`` as its answer.
+
+    :func:`charter.secrets.base.make_private_dir` is this function under the name the vault
+    writers already call it by; one implementation, so a fix to the walk cannot land on
+    only one of the two.
+    """
+    p = Path(p)
+    try:
+        _mkdir_0700(p)
+        return
+    except FileNotFoundError:
+        if not parents:
+            raise
+    missing = []
+    cur = p.parent
+    while not cur.exists():
+        missing.append(cur)
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    for d in [*reversed(missing), p]:
+        _mkdir_0700(d)
+
+
+def _mkdir_0700(d: "Path") -> None:
+    """One level, created at 0700 and chmod-ed to it; an existing directory is untouched.
+
+    The chmod is not redundant with ``os.mkdir``'s *mode*: mkdir's argument is masked by
+    the umask, so a process under a permissive-in-the-wrong-direction umask is not
+    guaranteed the bits it asked for. It names 0700 outright, so it cannot widen anything
+    and there is no window in which the directory is looser than it ends up.
+
+    ``FileExistsError`` on a **directory** is the concurrent case — someone else got there
+    between the walk and here, so it is now a directory charter did not create and keeps
+    its mode. On a non-directory it is re-raised, which is what ``mkdir(exist_ok=True)``
+    does and what callers that write into the path afterwards depend on.
+    """
+    try:
+        d.mkdir(mode=0o700)
+    except FileExistsError:
+        if not d.is_dir():
+            raise
+        return
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+
+
 def derive(root: Path, start: Path | None = None) -> dict:
     """Every setting that follows from *root*, as ``{NAME: value}``.
 

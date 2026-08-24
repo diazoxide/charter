@@ -13,22 +13,8 @@ import os
 import stat
 from pathlib import Path
 
-from .base import SecretNotFound, VaultError, VaultProvider, loose_dirs, make_private_dir
-
-
-def _short(p: Path) -> str:
-    """A path as it should be SHOWN — relative to the plane when it lives inside it.
-
-    `charter vault list` printed the absolute path in its STATUS column, which is noise
-    and leaks one developer's local layout into terminal output other people see (issue
-    #21's aside). Inside the plane the relative form is both shorter and the same string
-    everyone else would see.
-    """
-    from .. import config as _config
-    try:
-        return str(Path(p).resolve().relative_to(Path(_config.ROOT).resolve()))
-    except (ValueError, OSError):
-        return str(p)
+from .base import (SecretNotFound, VaultError, VaultProvider, loose_dir_note,
+                   loose_dirs as _dirs_up_to, make_private_dir, short_path as _short)
 
 
 class PlainFileProvider(VaultProvider):
@@ -213,58 +199,55 @@ class PlainFileProvider(VaultProvider):
         if not self.config.get("file"):
             return False, "no 'file' configured"
         pp = self.file_path
+        note = loose_dir_note(self.loose_dirs())
         if not pp.exists():
-            return True, f"not created yet ({_short(pp)})"
+            # The note belongs here too: what another account can list is the DIRECTORY,
+            # and it is just as listable before this vault's file exists as after. Leaving
+            # it off this branch would also make `vault list` and `doctor` disagree about
+            # a vault that has been added and not yet written to.
+            return True, f"not created yet ({_short(pp)})" + (f", {note}" if note else "")
         try:
             count = len(self._load())
         except VaultError as e:
             return False, str(e)
         mode = stat.S_IMODE(pp.stat().st_mode)
         perms = "" if mode == 0o600 else f", perms {oct(mode)[-3:]} (want 600)"
-        return True, f"{count} secret(s){perms}{self._loose_dir_note(pp)}"
+        return True, f"{count} secret(s){perms}" + (f", {note}" if note else "")
 
-    @staticmethod
-    def _loose_dir_note(pp: Path) -> str:
+    def loose_dirs(self) -> list:
         """The other-readable directories holding this vault, named — never chmod-ed.
 
-        A directory *this writer* creates is 0700 (:func:`base.make_private_dir`) — a
-        narrower statement than "a directory charter creates", and the narrowing is the
-        point: `.charter/` itself is normally made by the registry write inside `charter
-        vault add`, at the umask default, and so lands here as a directory to report
-        rather than one already fixed (#470).
+        Every directory charter creates on the way here is 0700: the vault writers walk
+        each level (:func:`base.make_private_dir`), and since #470 so does whatever creates
+        ``.charter/`` first, which on the ``charter vault add`` flow is the registry write
+        rather than any vault writer.
 
         A directory that was already there when charter arrived keeps whatever mode it
-        has, and the common case is exactly the one that matters: a ``.charter/vaults/``
-        created before 0.51.x, or by ``mkdir -p`` at the umask default, sits at 0755 and
-        lists every vault name on the plane to every account on the machine. `set` does
-        not fix it, because a vault's ``file`` can name any path on this machine and
-        charter chmod-ing a directory it did not create — a home directory, a shared team
-        directory — is the #331 defect over again.
+        has, and that is the case this exists for: a ``.charter/vaults/`` created before
+        0.51.x, or by ``mkdir -p`` at the umask default, sits at 0755 and lists every vault
+        name on the plane to every account on the machine. `set` does not fix it, because a
+        vault's ``file`` can name any path on this machine and charter chmod-ing a
+        directory it did not create — a home directory, a shared team directory — is the
+        #331 defect over again.
 
-        So it is REPORTED — on the string `health` returns, which `charter vault list`
-        prints as its STATUS column. `charter doctor` keeps only the boolean from
-        `health()` and drops this string, so the note does not reach it (#471).
+        So it is REPORTED, and reported as a *list* rather than as prose inside `health`'s
+        string: `charter vault list` renders it into its STATUS column and `charter doctor`
+        puts it on the vaults line, both through :func:`base.loose_dir_note` (#471).
 
-        This is the same posture the file mode above already takes on the read-only
-        paths: `health`, `keys` and `ages` name a loose mode rather than
-        silently fixing it, because a health check that writes is the defect regardless of
-        what it writes.
+        This is the same posture the file mode already takes on the read-only paths:
+        `health`, `keys` and `ages` name a loose mode rather than silently fixing it,
+        because a health check that writes is the defect regardless of what it writes.
 
-        Never raises: a health line that can throw is a `doctor` that cannot run. The
-        catch is `Exception`, not `BaseException`, deliberately — `tests/_planeguard.py`
-        signals a test reaching the real ``.charter/`` with a `BaseException` precisely so
-        that fallbacks like this one cannot turn it into a quiet empty string.
+        Never raises: a health line that can throw is a `doctor` that cannot run. The catch
+        is `Exception`, not `BaseException`, deliberately — `tests/_planeguard.py` signals
+        a test reaching the real ``.charter/`` with a `BaseException` precisely so that
+        fallbacks like this one cannot turn it into a quiet empty answer.
         """
         from .. import config
 
         try:
-            loose = loose_dirs(pp.parent, config.STATE_DIR)
+            if not self.config.get("file"):
+                return []
+            return _dirs_up_to(self.file_path.parent, config.STATE_DIR)
         except Exception:
-            return ""
-        if not loose:
-            return ""
-        # Terse on purpose: this lands in a `charter vault list` table row, and the reason
-        # charter does not fix it itself is a paragraph, which belongs in `docs/secrets.md`
-        # and not in a column. The row carries what is wrong and what to type.
-        named = ", ".join(f"{_short(d)} {oct(m)[-3:]}" for d, m in loose)
-        return f", listed by other accounts: {named} (want 700 — chmod 700)"
+            return []

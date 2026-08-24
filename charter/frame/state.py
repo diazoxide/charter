@@ -96,7 +96,7 @@ def frame_dir(fid: str, *, create: bool = False) -> Path | None:
         return None
     if create:
         try:
-            d.mkdir(parents=True, exist_ok=True)
+            config.private_mkdir(d)
         except OSError:
             # Shaped correctly (no traversal, no separators) but unusable anyway —
             # ENAMETOOLONG is the case this exists for, but any mkdir failure here
@@ -572,7 +572,9 @@ def respawn_attempt(fid: str, slot: str) -> int | None:
         return None
     root = d / _RESPAWN_DIR
     try:
-        root.mkdir(exist_ok=True)
+        # `parents=False`: counting an attempt must not recreate a frame directory
+        # `reap` has already deleted — the hazard this whole function is careful about.
+        config.private_mkdir(root, parents=False)
     except OSError:
         return None
     # One file per slot under a directory of their own, rather than a `respawn-<slot>`

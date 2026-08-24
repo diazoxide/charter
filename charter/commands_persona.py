@@ -148,18 +148,41 @@ def cmd_persona_list(args) -> int:
     if not names:
         util.info('No personas yet. Create one: charter persona create <name> --role "<Role>"')
         return 0
-    print(f"Active persona: {active or '—'}  (via {persona.source()})\n")
-    roles = {n: ((persona.load(n) or {"meta": {}})["meta"].get("role") or "") for n in names}
-    vaults = {n: (persona.vault_of(n) or "—") for n in names}
+    # Every committed value in this table is rendered through `contain.one_line`, and the
+    # rendering happens BEFORE the widths are measured. A persona is a DIRECTORY under
+    # `personas/`, so its name is a committed value charter did not mint —
+    # `list_personas()` asks only for a leading underscore and a `persona.md`, and a
+    # filesystem forbids `/` and NUL and nothing else. A separator in one therefore wrote a
+    # second physical row wearing this table's own column layout (#472), which is #453's
+    # mechanism one surface over. `role` comes out of the same committed file, and the
+    # active pointer can come from committed `charter.toml`/`personas/.default`.
+    #
+    # Before the widths, not at the `print`: `one_line` GROWS a name (a separator becomes a
+    # four-character escape), so measuring the raw name and printing the rendered one
+    # leaves every column after PERSONA misaligned for every row in the table.
+    shown = {n: contain.one_line(n) for n in names}
+    print(f"Active persona: {contain.one_line(active) if active else '—'}  "
+          f"(via {contain.one_line(persona.source())})\n")
+    roles = {n: contain.one_line((persona.load(n) or {"meta": {}})["meta"].get("role") or "")
+             for n in names}
+    # The raw vault name stays the key `_vault_status` is asked about — a bound is a
+    # display transform, never a lookup key.
+    named = {n: (persona.vault_of(n) or "—") for n in names}
+    vaults = {n: contain.one_line(v) for n, v in named.items()}
     # dynamic column widths so long persona/role/vault names don't collide
-    nw = max([len("PERSONA")] + [len(n) for n in names]) + 2
+    nw = max([len("PERSONA")] + [len(s) for s in shown.values()]) + 2
     rw = min(38, max([len("ROLE")] + [len(r) for r in roles.values()])) + 2
     vw = max([len("VAULT")] + [len(v) for v in vaults.values()]) + 2
     fmt = f"{{}}{{:<{nw}}}{{:<{rw}}}{{:<{vw}}}{{}}"
     print(fmt.format("  ", "PERSONA", "ROLE", "VAULT", "VAULT STATUS"))
     for n in names:
+        # Identity, not display: `one_line` maps `evil\n` and a literal `evil\x0a` onto the same
+        # rendered string, so deciding the marker from the rendered form would mark every
+        # such twin active as soon as one of them is. The raw names are what charter
+        # resolves a dispatch against, so they are what this compares.
         mark = "* " if n == active else "  "
-        print(fmt.format(mark, n, roles[n][:rw - 2], vaults[n], _vault_status(vaults[n])))
+        print(fmt.format(mark, shown[n], roles[n][:rw - 2], vaults[n],
+                         contain.one_line(_vault_status(named[n]))))
     return 0
 
 
@@ -1169,7 +1192,11 @@ def cmd_persona_stats(args) -> int:
         elif not shared_row and n_disp == 0 and disp:
             status = "never dispatched"
             unused += 1
-        print(f"{r['persona']:<28}{r['count']:>5}{rec:>8}{v:>8}{d:>6}"
+        # Bounded where it is PRINTED, raw everywhere it is a key: `disp`, `is_draft` and
+        # `skilluse.drift` below all ask the filesystem and the committed dispatch log
+        # about this persona, and the answer for a name holding a separator is not the answer for its
+        # rendered spelling. See `cmd_persona_list` for why the name needs bounding at all.
+        print(f"{contain.one_line(r['persona']):<28}{r['count']:>5}{rec:>8}{v:>8}{d:>6}"
               f"{(n_disp if not shared_row else '—'):>6}  "
               f"{glyph.get(status, '⚑' if status == 'never dispatched' else '·')} {status}")
         dormant += r["status"] == "dormant"
@@ -1191,13 +1218,18 @@ def cmd_persona_stats(args) -> int:
     if drifted:
         print("SKILLS — declared vs actually invoked")
         for name, d in drifted:
+            # Same rule as the table: the persona name and the skill names are committed
+            # values landing in a report of one-line rows.
+            shown = contain.one_line(name)
             if d["unused"]:
                 # Not untidy: `skills:` preloads full text on EVERY dispatch, so an unused
                 # declaration is a standing context cost bought for nothing.
-                print(f"  {name:<26} unused: {', '.join(d['unused'])}"
+                print(f"  {shown:<26} unused: "
+                      f"{', '.join(contain.one_line(s) for s in d['unused'])}"
                       f"   (preloaded every dispatch)")
             if d["undeclared"]:
-                print(f"  {name:<26} used but not declared: {', '.join(d['undeclared'])}")
+                print(f"  {shown:<26} used but not declared: "
+                      f"{', '.join(contain.one_line(s) for s in d['undeclared'])}")
         print()
     util.info(f"RECENT = memories in the last {getattr(args, 'recent_days', 14)} days · "
               f"VERIFY = share carrying a verification marker (quality proxy) · DUP = share "

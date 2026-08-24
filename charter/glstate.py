@@ -85,7 +85,7 @@ def _write_lock(pid: int | None) -> None:
     either way. Never raises — every caller is on a path that must not fail."""
     try:
         lock = _lock_file()
-        lock.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(lock.parent)
         lock.write_text(str(pid) if pid else "")
     except Exception:
         pass
@@ -147,7 +147,7 @@ def load() -> dict:
 def _save(cache: dict) -> None:
     f = _cache_file()
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         f.write_text(json.dumps(cache))
     except Exception:
         pass

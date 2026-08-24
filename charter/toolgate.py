@@ -790,8 +790,10 @@ def snapshot(session_id: str | None = None) -> dict:
     except Exception:
         return {}
     try:
+        from . import config
+
         f = _ceiling_file(sid)
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         _marker_file(sid).touch()   # before the ceiling: see `_marker_file`
         tmp = f.with_name(f.name + ".tmp")
         tmp.write_text(json.dumps(data, sort_keys=True))
