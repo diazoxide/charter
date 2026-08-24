@@ -319,6 +319,18 @@ class TerseSaysLess(PersonaIso, unittest.TestCase):
         self.assertNotIn(__version__, terse)
         self.assertIn("⬢", terse, "the workspace mark is the answer top exists to give")
 
+    def test_top_drops_the_dev_chip_too_when_it_drops_the_version(self):
+        """#457: the dev-channel chip follows the version rather than getting a rule of
+        its own — it is a fact ABOUT the version (`_dev_chip`'s own docstring), so a
+        density that already decided the version does not earn its columns must not
+        keep half of it around. On a plane declaring `[update] channel = "dev"`, `normal`
+        carries both the version and the word `dev`; `minimal` carries neither."""
+        with mock.patch.object(config, "UPDATE", {"channel": "dev"}):
+            normal = self._render("top", "normal")
+            terse = self._render("top", "minimal")
+        self.assertIn("dev", normal)
+        self.assertNotIn("dev", terse)
+
     def test_bottom_keeps_exactly_one_field(self):
         with mock.patch("charter.statusline._todo_count", return_value=3), \
              mock.patch("charter.statusline._alerts",

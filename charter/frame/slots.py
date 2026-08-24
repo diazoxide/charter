@@ -146,6 +146,16 @@ def _top(fid: str) -> str:
     that reads the same on every frame on this machine all day — it is a fact about the
     install, not about where you are standing. The workspace and the persona ARE the
     answer, so a density that dropped either would leave a row not earning its line.
+
+    **The version carries the dev-channel chip, `statusline._dev_chip()` (#457).** #386
+    made a frame suppress the status line entirely, and `_brand` is the only OTHER place
+    the `dev` word was ever drawn — so a framed session on the dev channel had the word
+    nowhere on screen: the surface that knew was blanked, and this one, which replaced
+    it, never imported `channel` at all. The chip follows the version rather than getting
+    a branch of its own, for the same reason `_brand`'s docstring gives: it is a fact
+    about the version, not a fourth thing on this row, so it goes exactly where the
+    version goes — including out, at `terse`, since a density that meant to buy back a
+    whole line does not mean to keep half of it.
     """
     from .. import __version__, statusline, workspace
     ws = workspace.resolve()
@@ -153,7 +163,8 @@ def _top(fid: str) -> str:
     pin = "*" if src == "$CHARTER_WORKSPACE" else ""
     persona = statusline._persona_line() or ""
     left = f" ⬢ {ws}{pin}"
-    right = persona if verbosity(fid) == "terse" else f"{persona}  charter {__version__} "
+    right = (persona if verbosity(fid) == "terse"
+             else f"{persona}  charter {__version__}{statusline._dev_chip()} ")
     return tui.truncate(f"{left}  {right}", _width())
 
 
