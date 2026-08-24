@@ -84,6 +84,10 @@ class GuardForwarding(unittest.TestCase):
             with self.subTest(tool=oc_id):
                 self.assertIn(f'"{oc_id}"', self.src)
                 self.assertIn(f'"{charter_name}"', self.src)
+        # …and the table is READ, at both call sites. The same gap as #433 one field over:
+        # a correct map that nothing indexes leaves `tool_name` as opencode's own id, and
+        # every guard that matches on the Claude Code name silently stops matching.
+        self.assertEqual(self.src.count("TOOL_NAMES[input?.tool] ?? input?.tool"), 2)
 
     def test_it_sends_the_payload_charter_reads_and_throws_on_deny(self):
         for token in ("hook_event_name", "PreToolUse", "session_id", "tool_name",
@@ -106,6 +110,21 @@ class GuardForwarding(unittest.TestCase):
         for tool, handler in opencode.PRE_HOOKS.items():
             with self.subTest(tool=tool):
                 self.assertIn(f'"{tool}": "{handler}"', self.src)
+
+    def test_the_call_site_reads_the_table_and_not_a_handler_it_spells_itself(self):
+        """The table being right is not the fix. Every assertion above is satisfied by a
+        shim whose call site says ``charter hook pretooluse`` with the table sitting three
+        lines up, unread — which is the state that shipped for four releases, and which
+        round one's fix was still mutable back into with the whole suite green.
+
+        So pin the CALL SITE. `tests/test_opencode_shim_dispatches_at_runtime.py` pins the
+        same thing by running it; this one holds when no JS runtime is installed."""
+        self.assertEqual(self.src.count("charter hook ${hook}"), 2)
+        self.assertIn("const hook = PRE_HOOKS[input?.tool] ?? DEFAULT_PRE_HOOK", self.src)
+        for handler in {*opencode.PRE_HOOKS.values(), *opencode.POST_HOOKS.values(),
+                        opencode.DEFAULT_PRE_HOOK}:
+            with self.subTest(handler=handler):
+                self.assertNotIn(f"charter hook {handler} ", self.src)
 
 
 class MidSessionNudges(unittest.TestCase):
@@ -130,6 +149,7 @@ class MidSessionNudges(unittest.TestCase):
         five the manifest dispatches — never ran here."""
         self.assertIn('"tool.execute.after"', self.src)
         self.assertIn("charter hook ${hook}", self.src)
+        self.assertIn("const hook = POST_HOOKS[input?.tool]", self.src)
         for tool, handler in opencode.POST_HOOKS.items():
             with self.subTest(tool=tool):
                 self.assertIn(f'"{tool}": "{handler}"', self.src)

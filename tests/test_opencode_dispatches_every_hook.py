@@ -12,9 +12,17 @@ not print it either, because `deficits` never claimed it.
 
 `tests/test_vault_read_guard.py::TestItIsActuallyWired` is the test that should have caught
 it and could not: it reads `hooks/hooks.json`, which is one harness's answer. This one reads
-the OTHER harness's wiring — the generated shim text — and diffs the two, so a handler added
-to `hooks/hooks.json` tomorrow fails here until opencode routes it or a reason is written
-down for why it cannot.
+the OTHER harness's wiring — the generated shim — and diffs the two, so a handler added to
+`hooks/hooks.json` tomorrow fails here until opencode routes it or a reason is written down
+for why it cannot.
+
+Reads it from the CALL SITES, not from handler-shaped strings anywhere in the file. The
+first version of `_shim_routes` did the latter and an adversarial review broke it in one
+line: spell `charter hook pretooluse` at the call site, leave `PRE_HOOKS` untouched three
+lines above, and the suite stayed green while the shim was back to #433 exactly. A table
+nothing dispatches through is a table that does not run, so it does not count here.
+`tests/test_opencode_shim_dispatches_at_runtime.py` asks the same question by executing the
+shim, which is the only way to ask it that does not involve reading JavaScript with regexes.
 
 The opencode tool schemas quoted below were read off opencode 1.18.21 itself — the running
 server's `GET /experimental/tool` — rather than off its docs, because the argument NAMES are
@@ -78,17 +86,69 @@ def _manifest_routes() -> set[str]:
     return out
 
 
-def _shim_routes() -> set[str]:
-    """Every handler the GENERATED shim can call, read out of the shim's own text.
+#: The two blocks in the shim from which a handler can actually be spawned, in the order
+#: they appear. A `charter hook` outside both is not reachable from a tool call.
+_DISPATCH_BLOCKS = ('"tool.execute.before"', '"tool.execute.after"')
 
-    The text, not the Python tables it is rendered from: a table nothing interpolates into
-    the file is a table that does not run, and that failure would be invisible to a test
-    that asked `opencode.PRE_HOOKS` directly.
+
+def _shim_const(name: str) -> object | None:
+    """The value of a top-level ``const NAME = …`` in the shim, or ``None``.
+
+    Everything the template interpolates is rendered by `json.dumps`, so the text that
+    follows the ``=`` is JSON and `raw_decode` reads exactly it.
+    """
+    m = re.search(rf"^const {re.escape(name)} = ", opencode.SHIM, re.M)
+    if m is None:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(opencode.SHIM, m.end())
+    except ValueError:
+        return None
+    return value
+
+
+def _handler_names(value: object) -> set[str]:
+    if isinstance(value, str):
+        return {value}
+    if isinstance(value, dict):
+        return {v for v in value.values() if isinstance(v, str)}
+    if isinstance(value, list):
+        return {v for v in value if isinstance(v, str)}
+    return set()
+
+
+def _shim_routes() -> set[str]:
+    """Every handler the GENERATED shim can actually spawn, derived from its CALL SITES.
+
+    The first version of this read handler-shaped strings out of the whole file, and that
+    is the bug one level up: #433 shipped for four releases with the routing right there
+    and no call site reading it, and round one's fix was still mutable back to a literal
+    ``charter hook pretooluse`` at either call site with the entire suite green. A table
+    nothing dispatches through is a table that does not run.
+
+    So: find each ``charter hook`` inside `tool.execute.before` / `tool.execute.after`,
+    take the expression it interpolates, and resolve it through the constants that
+    expression NAMES. A dead table resolves to nothing and stops satisfying anything; a
+    literal call site contributes that one literal and nothing else.
     """
     src = opencode.SHIM
-    named = set(re.findall(r'"((?:pre|post)tooluse[a-z-]*)"', src))
-    # The catch-all is spelled as a constant rather than a table value.
-    named |= set(re.findall(r'DEFAULT_PRE_HOOK = "([a-z-]+)"', src))
+    bounds = [src.index(b) for b in _DISPATCH_BLOCKS] + [len(src)]
+    named: set[str] = set()
+    for start, end in zip(bounds, bounds[1:]):
+        block = src[start:end]
+        for m in re.finditer(r"charter hook (\$\{(\w+)\}|[a-z][\w-]*)", block):
+            if m.group(2) is None:  # spelled out at the call site
+                named.add(m.group(1))
+                continue
+            # An interpolated variable: whatever that name is bound to IN THIS BLOCK.
+            bind = re.search(rf"\b(?:const|let|var) {m.group(2)} = (.+)", block)
+            if bind is None:
+                continue
+            expr = bind.group(1)
+            if expr.startswith('"'):  # bound to a literal, not to a table
+                named |= _handler_names(json.JSONDecoder().raw_decode(expr)[0])
+            for ident in re.findall(r"\b[A-Z][A-Z0-9_]*\b", expr):
+                named |= _handler_names(_shim_const(ident))
     return named
 
 

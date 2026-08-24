@@ -42,9 +42,17 @@ rather than leaving you to find it. (`charter guard ask` is unaffected: those ru
 `opencode.json` and opencode prompts for them itself.)
 
 The test that should have caught this read `hooks/hooks.json` — one harness's answer — and
-concluded the guard was "actually wired". There is now one that reads the *generated shim
-text* and diffs it against the manifest, so a handler added tomorrow fails the suite until
-opencode routes it or somebody writes down why it cannot.
+concluded the guard was "actually wired". A test that reads the *generated shim text* and
+diffs it against the manifest is not enough either, and an adversarial review of the first
+version of this fix is what showed it: put the literal `charter hook pretooluse` back at the
+call site and leave the routing table sitting three lines above it, unread, and every
+assertion still passed. A table present but ignored is precisely the state that shipped for
+four releases. So the suite now pins the **call site**: the reachability check resolves each
+`charter hook` through the constants that call site actually names, and — wherever Bun or
+Node is installed — the shim is *executed*, against a stand-in for Bun's `$` that records
+the command line it builds, and asked which handler each tool really reached. A handler
+added tomorrow fails the suite until opencode routes it or somebody writes down why it
+cannot; a handler unwired tomorrow fails it the same day.
 
 **To adopt it: update charter.** The plugin is stamped with the version that wrote it, so
 `charter init` / `charter update` replaces it. A plugin you edited yourself is left alone
