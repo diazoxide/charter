@@ -21,13 +21,24 @@ plane where charter created every level itself, vault at ``.charter/vaults/team/
 **The property is not "the leaf is 0700".** That is a spelling, and this file exists
 because the leaf *was* 0700 while the claim was false. The property is:
 
-    every directory charter itself creates on the way to a vault file satisfies
+    every directory **the vault writers** create on the way to a vault file satisfies
     ``mode & 0o077 == 0``
 
 — asserted over the whole chain, at whatever depth the vault is configured, so a fix that
 covers two levels and not three goes RED. Modes are tested through that mask and never
 against a list of known-bad values: 0755 is the one everybody pictures, while 0705, 0711,
 0730 and 0701 list or traverse just as well and appear on no such list.
+
+**"The vault writers", not "charter", and the qualifier is load-bearing.** The 0700 walk
+lives in :func:`base.make_private_dir`, which only the three secrets writers call. On the
+default CLI flow they are not what creates ``.charter/``: ``charter vault add`` writes the
+local registry first, through a bare ``path.parent.mkdir(parents=True, exist_ok=True)``,
+so the state directory is already there — at the umask default — before any vault file is
+written. Every class below except :class:`TheOrderTheCliActuallyUses` gives the vault
+writer the first move, which is the order a direct ``PlainFileProvider(...).set()``
+produces and not the order the CLI produces, and under that fixture the writer creates
+``.charter/`` too. That class exists so the difference is pinned rather than hidden: it
+reproduces the registry-first ordering and asserts what is true under it (#470).
 
 The second property is the honest half, and it is asserted rather than merely documented:
 
@@ -195,12 +206,19 @@ class NoInstantAtWhichItIsWider(PersonaIso):
 
 
 class UmaskCannotDecideThis(PersonaIso):
-    """The mode charter asks for is the mode it gets, whatever the umask is.
+    """The mode the vault writer asks for is the mode it gets, whatever the umask is.
 
     ``os.mkdir``'s *mode* argument is masked by the umask, which makes the result a
     property of the ambient environment rather than of charter. Both directions matter: a
     permissive umask must not widen the directory, and a restrictive one must not leave
     charter a directory it cannot then use.
+
+    Scoped to the levels :func:`make_private_dir` creates, and the scope is not a detail:
+    the chain below starts at a per-umask subdirectory *underneath* ``.charter/`` for
+    exactly that reason. On the real CLI flow the umask does decide ``.charter/`` itself,
+    because the registry write creates it first (#470) — asserted in
+    :class:`TheOrderTheCliActuallyUses`, which is where the honest version of this class
+    name lives.
     """
 
     def test_every_umask_yields_exactly_0700(self) -> None:
@@ -451,6 +469,182 @@ class MakePrivateDirItself(PersonaIso):
         self.assertEqual(stat.S_IMODE(pre.stat().st_mode), 0o755, "not charter's to fix")
         for d in (pre / "a", pre / "a" / "b"):
             self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o700, f"{d} is charter's")
+
+
+class TheOrderTheCliActuallyUses(PersonaIso):
+    """The registry write goes first, so ``.charter/`` is not the vault writer's to choose.
+
+    Every other class here calls a provider's ``set()`` against a plane where
+    ``.charter/`` does not exist yet, so :func:`make_private_dir` wins the race to create
+    it and the state directory comes out 0700. That is the fixture manufacturing the
+    condition it claims to observe, in the favourable direction: on the flow ``charter
+    vault add`` prints as its own first step, the local registry is written *before* any
+    secret is set, and ``registry._write`` does ``path.parent.mkdir(parents=True,
+    exist_ok=True)`` with no mode. Under ``umask 022`` that leaves ``.charter`` at 0755,
+    and no later ``secret set`` touches it — charter does not chmod a directory it did not
+    create, which is the same rule that protects a home directory (#331).
+
+    So this class drives ``registry.add_vault`` first, which is the real call, and pins
+    all three halves of what the documents now say:
+
+    * the levels the vault writers create are 0700 whatever the umask is — unchanged, and
+      that is the fix;
+    * ``.charter/`` itself is whatever the umask left it — the residual, open as #470;
+    * it is *reported* rather than silently fine, on the health line ``charter vault list``
+      prints.
+
+    The middle one is a defect pinned on purpose. If it goes RED because #470 landed, that
+    is good news and the thing to fix is `docs/secrets.md` and the news entry, which
+    currently tell the reader it is open.
+    """
+
+    def _fresh_plane(self, tag: str, um: int):
+        """Enter a brand-new plane root, with *um* in force for everything created in it.
+
+        Both have to be per-case: a umask set after ``.charter/`` exists changes nothing,
+        which would make a loop over umasks assert the first iteration four times.
+        """
+        root = self.tmp / f"plane-{tag}"
+        root.mkdir()
+        prev = config.use(root)
+        self.addCleanup(config.restore, prev)
+        old = os.umask(um)
+        self.addCleanup(os.umask, old)
+        return root
+
+    @staticmethod
+    def _add_vault(name: str, rel: str) -> Path:
+        """Register a vault through the call ``charter vault add`` makes.
+
+        Not a hand-rolled ``mkdir``: the point of this class is that the *registry* is
+        what creates ``.charter/``, so it has to be the registry doing it. If that ever
+        stops being true, these cases stop reproducing the CLI and say so rather than
+        quietly asserting something else.
+        """
+        from charter.secrets import registry
+
+        vf = Path(config.STATE_DIR) / rel
+        registry.add_vault(name, "plain-file", {"file": str(vf)})
+        return vf
+
+    def test_the_vault_directories_are_private_even_when_the_registry_went_first(self):
+        """The fix, in the ordering the CLI produces rather than the one the fixture did."""
+        for um in (0o000, 0o022, 0o077):
+            with self.subTest(umask=oct(um)):
+                self._fresh_plane(f"v{um:03o}", um)
+                sd = Path(config.STATE_DIR)
+                self.assertFalse(sd.exists(), "precondition: nothing has made it yet")
+                vf = self._add_vault("devops", "vaults/team/prod.json")
+                self.assertTrue(
+                    sd.is_dir(),
+                    "the registry write did not create STATE_DIR, so this case no longer "
+                    "reproduces the CLI ordering and everything below it is vacuous")
+                self.assertFalse(
+                    vf.parent.exists(),
+                    "the vault directory already exists, so make_private_dir will not be "
+                    "the thing that creates it and the assertion below proves nothing")
+
+                PlainFileProvider("devops", {"file": str(vf)}).set("K", "value-one")
+
+                chain = modes_up_to(vf.parent, sd / "vaults")
+                self.assertGreaterEqual(len(chain), 2, "a one-element chain is vacuous")
+                for p, mode in chain.items():
+                    self.assertEqual(
+                        mode, 0o700,
+                        f"under umask {oct(um)}, {p} came out {oct(mode)[-3:]} — the "
+                        f"registry going first must not cost the levels below it")
+                self.assertEqual(stat.S_IMODE(vf.stat().st_mode), 0o600, "and the file")
+
+    def test_the_state_directory_itself_is_decided_by_the_umask(self):
+        """The residual, executed. `.charter/` is the registry's to create, not the walk's.
+
+        Asserted as *the umask decides it* — two umasks, two different modes — and not
+        merely as "0755 under 022". A regression that hardcoded 0755 would satisfy the
+        second and not the first, and the property is the dependence, not the value.
+        """
+        seen = {}
+        for um in (0o022, 0o077):
+            self._fresh_plane(f"s{um:03o}", um)
+            self._add_vault("devops", "vaults/team/prod.json")
+            seen[um] = stat.S_IMODE(Path(config.STATE_DIR).stat().st_mode)
+
+        self.assertNotEqual(
+            seen[0o022], seen[0o077],
+            f"`.charter/` came out {oct(seen[0o022])[-3:]} under both umasks. If charter "
+            f"now chooses this mode itself, #470 is fixed — good news, and docs/secrets.md "
+            f"and docs/news/unreleased-a-vault-charter-cannot-make-private.md both still "
+            f"tell the reader it is open. Update them and delete this case.")
+        self.assertEqual(seen[0o077], 0o700, "umask 077 masks the group and other bits")
+        self.assertEqual(
+            seen[0o022] & 0o077, 0o055,
+            f"the measurement in #470: umask 022 leaves `.charter` at "
+            f"{oct(seen[0o022])[-3:]}, other-readable and other-traversable")
+
+    def test_the_loose_state_directory_is_named_where_the_docs_say_it_is(self):
+        """Reported, not silently accepted — and reported in `charter vault list`.
+
+        The two claims travel together: charter declines to chmod a directory it did not
+        create *because* it names it instead. A residual nothing reports is just a hole.
+        """
+        import argparse
+        import io
+        from contextlib import redirect_stdout
+
+        from charter.commands_secrets import cmd_vault_list
+        from charter.secrets import registry
+
+        self._fresh_plane("report", 0o022)
+        vf = self._add_vault("devops", "vaults/team/prod.json")
+        PlainFileProvider("devops", {"file": str(vf)}).set("K", "value-one")
+
+        sd = Path(config.STATE_DIR)
+        self.assertEqual(stat.S_IMODE(sd.stat().st_mode) & 0o077, 0o055,
+                         "precondition: there is something to report")
+
+        _, detail = registry.provider_for("devops").health()
+        self.assertIn("listed by other accounts", detail)
+        self.assertIn(".charter 755", detail,
+                      f"the health line must name the level that is loose, not merely "
+                      f"that one is: {detail!r}")
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_vault_list(argparse.Namespace())
+        out = buf.getvalue()
+        self.assertIn("listed by other accounts: .charter 755", out,
+                      "`charter vault list`'s STATUS column is where docs/secrets.md now "
+                      "says this appears, so that is where it has to appear")
+
+    def test_doctor_is_not_where_it_appears(self):
+        """The other narrowed sentence, pinned as the limit it is (#471).
+
+        `check_vaults` does ``healthy, _ = prov.health()`` and drops the detail, and
+        `_loose_dir_note` never sets ``healthy`` False — deliberately, since this check
+        runs from the SessionStart hook. So no path carries the note into `doctor`, and
+        the docs no longer say one does.
+        """
+        from charter import doctor
+        from charter.secrets import registry
+
+        self._fresh_plane("doctor", 0o022)
+        vf = self._add_vault("devops", "vaults/team/prod.json")
+        PlainFileProvider("devops", {"file": str(vf)}).set("K", "value-one")
+
+        self.assertIn("listed by other accounts",
+                      registry.provider_for("devops").health()[1],
+                      "precondition: the health line carries the note, so doctor had "
+                      "something to drop")
+
+        res = doctor.check_vaults()
+        rendered = res.render()
+        self.assertNotIn(
+            "listed by other accounts", rendered,
+            f"doctor now carries the loose-directory note. #471 is fixed — good news, and "
+            f"docs/secrets.md and the news entry both still say it does not. Update them "
+            f"and delete this case. Got: {rendered!r}")
+        self.assertEqual(res.status, doctor.OK,
+                         "and it stays a green line: a loose directory is an operator's "
+                         "decision, not an unreachable vault")
 
 
 if __name__ == "__main__":       # pragma: no cover

@@ -57,6 +57,14 @@ CLAIM_DOCS = (
     "docs/news/unreleased-a-fingerprint-you-cannot-check-a-guess-against.md",
 )
 
+#: Where the directory-mode claims are made — "every level is 0700" and "and charter
+#: reports the ones it did not create". Both overreached in round two: the first swallowed
+#: `.charter/` itself (#470), the second put the report in `doctor` (#471).
+DIR_CLAIM_DOCS = (
+    "docs/secrets.md",
+    "docs/news/unreleased-a-vault-charter-cannot-make-private.md",
+)
+
 #: The claim: some form of "this line cannot be checked against a guessed value".
 _CLAIM = re.compile(r"against a guess|checkable|not computable|not reproducible", re.I)
 
@@ -116,6 +124,62 @@ class EveryAssuranceCarriesItsResidual(unittest.TestCase):
         self.assertIn(
             "listed by other accounts", text,
             "and must name the report that replaces the fix it cannot make")
+
+    def test_the_directory_claim_does_not_swallow_the_state_directory(self) -> None:
+        """"Every directory charter creates" is false one level up, and was shipped anyway.
+
+        `make_private_dir` is reached from the three secrets writers and from nowhere
+        else. On the default flow `charter vault add` writes the local registry first,
+        which creates `.charter/` through a bare `mkdir(parents=True, exist_ok=True)`, so
+        the state directory is the umask's to decide and not charter's (#470). Both
+        documents said "every directory charter creates", and `.charter` is one of the
+        three levels the news entry's own before-measurement lists as broken.
+
+        The behaviour is pinned in `test_vault_dir_mode.TheOrderTheCliActuallyUses`, which
+        drives `registry.add_vault` and measures the result under two umasks. This case
+        only stops the sentence from drifting back off it.
+        """
+        for rel in DIR_CLAIM_DOCS:
+            with self.subTest(doc=rel):
+                text = flat(rel)
+                # `assertNotRegex` renders the whole flattened document into the failure
+                # message, which buries the sentence at fault under twelve screens of the
+                # ones that are fine. These files are long enough that the search has to
+                # be run by hand and only the match reported.
+                hit = re.search(r"[Ee]very directory charter \*{0,2}creates", text)
+                self.assertIsNone(
+                    hit,
+                    f"{rel} says {hit.group(0)!r}: every directory charter creates on the "
+                    f"way to a vault file is 0700. `.charter/` is not one of them on the "
+                    f"default flow — scope the sentence to the vault writers (#470)"
+                    if hit else "")
+                self.assertIsNotNone(
+                    re.search(r"issues/470", text),
+                    f"{rel} must name the level the walk does not cover, and where it is "
+                    f"tracked, rather than leaving the reader to measure it")
+
+    def test_no_document_claims_the_loose_directory_note_reaches_doctor(self) -> None:
+        """`check_vaults` does ``healthy, _ = prov.health()``. The detail is dropped.
+
+        `_loose_dir_note` also never sets ``healthy`` False — on purpose, since the check
+        runs from the SessionStart hook — so there is no path at all by which the note
+        reaches `doctor` or `doctor --json`, and two documents said there was (#471).
+        Pinned behaviourally by `test_vault_dir_mode.TheOrderTheCliActuallyUses.
+        test_doctor_is_not_where_it_appears`.
+        """
+        for rel in DIR_CLAIM_DOCS:
+            with self.subTest(doc=rel):
+                text = flat(rel)
+                hit = re.search(r"and (?:so |therefore )?in `?(?:charter )?doctor`?", text)
+                self.assertIsNone(
+                    hit,
+                    f"{rel} says {hit.group(0)!r} — the loose-directory note does not "
+                    f"appear in `doctor`: `check_vaults` keeps only the healthy flag "
+                    f"and drops the detail (#471)" if hit else "")
+                self.assertIsNotNone(
+                    re.search(r"issues/471", text),
+                    f"{rel} must say where the note actually appears and where the gap "
+                    f"is tracked")
 
 
 class TheResidualIsRealAndStillOpen(PersonaIso):

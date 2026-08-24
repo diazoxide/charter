@@ -227,17 +227,26 @@ class PlainFileProvider(VaultProvider):
     def _loose_dir_note(pp: Path) -> str:
         """The other-readable directories holding this vault, named — never chmod-ed.
 
-        A directory charter creates is 0700 (:func:`base.make_private_dir`). One that was
-        already there when charter arrived keeps whatever mode it has, and the common case
-        is exactly the one that matters: a ``.charter/vaults/`` created before 0.51.x, or
-        by ``mkdir -p`` at the umask default, sits at 0755 and lists every vault name on
-        the plane to every account on the machine. `set` does not fix it, because a
-        vault's ``file`` can name any path on this machine and charter chmod-ing a
-        directory it did not create — a home directory, a shared team directory — is the
-        #331 defect over again.
+        A directory *this writer* creates is 0700 (:func:`base.make_private_dir`) — a
+        narrower statement than "a directory charter creates", and the narrowing is the
+        point: `.charter/` itself is normally made by the registry write inside `charter
+        vault add`, at the umask default, and so lands here as a directory to report
+        rather than one already fixed (#470).
 
-        So it is REPORTED. This is the same posture the file mode above already takes on
-        the read-only paths: `health`, `keys` and `ages` name a loose mode rather than
+        A directory that was already there when charter arrived keeps whatever mode it
+        has, and the common case is exactly the one that matters: a ``.charter/vaults/``
+        created before 0.51.x, or by ``mkdir -p`` at the umask default, sits at 0755 and
+        lists every vault name on the plane to every account on the machine. `set` does
+        not fix it, because a vault's ``file`` can name any path on this machine and
+        charter chmod-ing a directory it did not create — a home directory, a shared team
+        directory — is the #331 defect over again.
+
+        So it is REPORTED — on the string `health` returns, which `charter vault list`
+        prints as its STATUS column. `charter doctor` keeps only the boolean from
+        `health()` and drops this string, so the note does not reach it (#471).
+
+        This is the same posture the file mode above already takes on the read-only
+        paths: `health`, `keys` and `ages` name a loose mode rather than
         silently fixing it, because a health check that writes is the defect regardless of
         what it writes.
 

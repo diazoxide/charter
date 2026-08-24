@@ -241,8 +241,8 @@ class AVaultCharterCreatesItself(_WriteObservingCase):
         self.assertEqual(watch.loose_modes(), [])
         self.assertEqual(stat.S_IMODE(self.vault.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.vault.parent.stat().st_mode), 0o700,
-                         "a directory charter creates to hold plaintext vaults lists "
-                         "every vault name to every account on the machine")
+                         "a directory the vault writer creates to hold plaintext vaults "
+                         "lists every vault name to every account on the machine")
 
     def test_the_rotation_sidecar_is_0600_too(self):
         prov = self.provider()
