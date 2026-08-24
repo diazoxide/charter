@@ -22,8 +22,8 @@ and `_top` share: the bare name `__version__`, interpolated with the literal wor
 `__version__` appears" — this package interpolates it in a dozen other places
 (`report.py`'s JSON export, `hooks.py`'s and `doctor.py`'s pin/plugin-drift warnings,
 `statusline._alerts`'s pinned-version alert) that are answering "does what's running
-match what's declared", not "which channel is this plane on" — a different question `_brand`'s docstring is not
-making a claim about. A scanner broad enough to flag all of those too would have to
+match what's declared", not "which channel is this plane on" — a different question
+`_brand`'s docstring is not making a claim about. A scanner broad enough to flag all of those too would have to
 judge INTENT, which no syntax-level check can do honestly; a scanner narrowed by a
 hand-picked exclusion list for each of them would just be today's two-item allowlist
 wearing a longer coat. The "charter {version}" idiom is not a guess at that boundary —
@@ -47,13 +47,15 @@ somewhere that DOES check liveness inherits a safe fixture rather than an unfail
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import os
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import charter
-from charter import config, statusline
+from charter import commands_report, config, statusline, util
 from charter.frame import slots
 
 from tests._isolation import PersonaIso
@@ -85,6 +87,61 @@ class DevChipUnit(unittest.TestCase):
         exactly the duplication this helper exists to remove."""
         with mock.patch("charter.channel.is_dev", side_effect=RuntimeError("boom")):
             self.assertEqual(statusline._dev_chip(), "")
+
+    def test_the_default_is_ansi_because_both_surfaces_here_are(self):
+        with mock.patch.object(config, "UPDATE", {"channel": "dev"}):
+            self.assertEqual(statusline._dev_chip(), " \x1b[2mdev\x1b[0m")
+
+    def test_color_false_says_the_same_thing_without_the_escapes(self):
+        """For a caller printing somewhere that strips colour. Still the same WORD — the
+        chip's job is to disambiguate `is out`, and a plane on dev that renders nothing
+        because the log is not a terminal has lost the fact, not the formatting."""
+        with mock.patch.object(config, "UPDATE", {"channel": "dev"}):
+            self.assertEqual(statusline._dev_chip(color=False), " dev")
+
+    def test_color_false_on_stable_is_still_nothing(self):
+        with mock.patch.object(config, "UPDATE", {"channel": "stable"}):
+            self.assertEqual(statusline._dev_chip(color=False), "")
+
+
+class TheStalenessNudgeHonoursTheTerminal(unittest.TestCase):
+    """#458's site is the first non-ANSI consumer of the chip, and it got this wrong.
+
+    `util.warn` gates its own glyph on `stderr.isatty()`; `_dev_chip` does not gate at all,
+    because its other two callers paint terminal surfaces. Interpolating one into the other
+    put a raw ``\x1b[2mdev\x1b[0m`` into a redirected log beside a correctly plain ``!`` —
+    half a line honouring the terminal and half not, and the only place in `charter/` where
+    a `util` message body carried escape codes.
+    """
+
+    def _nudge(self, *, color: bool) -> str:
+        buf = io.StringIO()
+        with mock.patch.object(config, "UPDATE", {"channel": "dev"}), \
+             mock.patch.object(util, "_USE_COLOR", color), \
+             mock.patch("charter.update.newer_than", lambda v: "9.9.9"), \
+             contextlib.redirect_stderr(buf):
+            commands_report._warn_if_stale()
+        return buf.getvalue()
+
+    def test_a_redirected_stderr_gets_no_escape_codes_at_all(self):
+        out = self._nudge(color=False)
+        self.assertIn("dev", out, "the channel must still be named, just not painted")
+        self.assertNotIn("\x1b", out,
+                         "the nudge is putting raw ANSI into a non-terminal stream")
+
+    def test_a_terminal_still_gets_the_dimmed_chip(self):
+        self.assertIn("\x1b[2mdev\x1b[0m", self._nudge(color=True))
+
+    def test_the_glyph_and_the_body_agree(self):
+        """The defect was disagreement, not colour as such: `util.warn` gated the glyph and
+        the interpolated chip gated nothing, so one line answered "is this a terminal" twice
+        and differently. Asserts the two halves match each other rather than that either
+        matches the flag — that is the property, and it holds in both directions."""
+        for color in (True, False):
+            with self.subTest(color=color):
+                glyph, _, body = self._nudge(color=color).partition("you are on")
+                self.assertEqual("\x1b" in glyph, "\x1b" in body,
+                                 "the `!` glyph and the chip disagreed about the terminal")
 
 
 class BrandCallsTheSharedChipRatherThanReassemblingIt(unittest.TestCase):

@@ -21,8 +21,8 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests._isolation import PersonaIso
 from charter import commands, config, hooks, instance
+from tests._isolation import PersonaIso
 
 
 class LockFile(unittest.TestCase):

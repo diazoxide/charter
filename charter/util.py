@@ -19,6 +19,24 @@ def _c(code: str, text: str) -> str:
     return f"\033[{code}m{text}\033[0m" if _USE_COLOR else text
 
 
+def color_enabled() -> bool:
+    """Whether the loggers below will colour anything — i.e. stderr is a terminal.
+
+    Exported because a message BODY sometimes has to make the same choice the glyph
+    already makes. `_c` colours the glyph and nothing else, so a caller that interpolates
+    a pre-coloured fragment into `warn(...)` emits raw escape codes down a pipe while the
+    `!` beside them is correctly plain — half a line honouring the terminal and half not.
+    `commands_report._warn_if_stale` is the case: it renders `statusline._dev_chip()`,
+    which is unconditionally ANSI because both of its other callers paint a terminal
+    surface directly.
+
+    Reads the module flag rather than calling `isatty` again, so the two halves of one
+    line cannot disagree — the flag is sampled once at import, and a test that patches it
+    must move the glyph and the body together.
+    """
+    return _USE_COLOR
+
+
 def info(msg: str) -> None:
     print(_c("36", "•") + " " + msg, file=sys.stderr)
 

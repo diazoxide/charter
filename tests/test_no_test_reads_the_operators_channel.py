@@ -20,6 +20,7 @@ each way OUT of the refusal actually works, so "green" cannot mean "the tripwire
 
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -38,6 +39,22 @@ class WhatIsGuarded(unittest.TestCase):
         for name in _planeguard._GUARDED_SETTINGS:
             with self.subTest(setting=name):
                 self.assertIn(name, config.DERIVED)
+
+    def test_every_guarded_name_actually_derives_to_a_dict(self):
+        """The name existing is not enough. Both arming sites skip a value that is not a
+        `dict` — the refusal works by substituting an object that will not answer, and a
+        `str` or a `Path` cannot be made to refuse without breaking every message that
+        legitimately quotes it. So a future entry deriving to one of those would guard
+        nothing while the check above stayed green: the silent hole its own docstring
+        warns about, one level in."""
+        with TemporaryDirectory() as tmp:
+            derived = config.derive(Path(tmp))       # a tmp root, so nothing is armed
+            for name in _planeguard._GUARDED_SETTINGS:
+                with self.subTest(setting=name):
+                    self.assertIsInstance(
+                        derived[name], dict,
+                        f"config.{name} does not derive to a dict, so _RefusesToBeRead "
+                        f"cannot stand in for it and the guard silently skips it")
 
     def test_derive_is_wrapped_at_package_import(self):
         """Arming happens per derivation, not once at import: a `config.use(config.ROOT)`
@@ -71,24 +88,64 @@ class TheGuardIsNotBlind(unittest.TestCase):
         self.assertIn("PersonaIso", str(caught.exception))
 
     def test_every_way_in_is_closed_not_just_the_one_channel_uses(self):
-        """`channel.channel` reads it with `.get`, but a future reader may not. The C-level
-        fast paths are the interesting ones: `dict(x)` and `{**x}` bypass an overridden
-        `keys()` unless `__iter__` is overridden too."""
+        """`channel.channel` reads it with `.get`, but a future reader may not.
+
+        Two groups are worth naming. The C-level fast paths — `dict(x)`, `{**x}`, `|` —
+        bypass an overridden `keys()` unless `__iter__` is overridden too. And the
+        mutating accessors `pop`/`popitem`/`setdefault`, plus `__reversed__`, which each
+        handed back the operator's real value until they were probed for: no reader in
+        `charter/` uses any of them, which is exactly why they would have stayed open
+        until one did. This list came from probing every entry point, not from reasoning
+        about which ones matter.
+        """
         guarded = config.UPDATE
         for label, read in (("get", lambda: guarded.get("channel")),
+                            ("get w/ default", lambda: guarded.get("channel", "stable")),
                             ("[]", lambda: guarded["channel"]),
                             ("in", lambda: "channel" in guarded),
                             ("iter", lambda: list(guarded)),
+                            ("reversed", lambda: list(reversed(guarded))),
                             ("keys", lambda: list(guarded.keys())),
                             ("items", lambda: list(guarded.items())),
                             ("values", lambda: list(guarded.values())),
                             ("copy", lambda: guarded.copy()),
+                            ("pop", lambda: guarded.pop("channel")),
+                            ("pop w/ default", lambda: guarded.pop("channel", None)),
+                            ("popitem", lambda: guarded.popitem()),
+                            ("setdefault", lambda: guarded.setdefault("channel", "x")),
                             ("dict()", lambda: dict(guarded)),
                             ("**", lambda: {**guarded}),
+                            ("|", lambda: guarded | {"x": 1}),
+                            ("r|", lambda: {"x": 1} | guarded),
+                            ("json.dumps", lambda: json.dumps(guarded)),
+                            ("format_map", lambda: "{channel}".format_map(guarded)),
                             ("==", lambda: guarded == {"channel": "stable"})):
             with self.subTest(read=label):
                 with self.assertRaises(_planeguard.RealPlaneRead):
                     read()
+
+    def test_a_refused_mutator_did_not_mutate_on_the_way_out(self):
+        """`pop`/`popitem`/`setdefault` are refused BEFORE they touch anything, the way the
+        write guard refuses `rmtree` at its front door. A tripwire that raised after the
+        mutation would leave the next test reading a value this one silently edited."""
+        before = dict.__len__(config.UPDATE)
+        for attempt in (lambda: config.UPDATE.pop("channel"),
+                        lambda: config.UPDATE.popitem(),
+                        lambda: config.UPDATE.setdefault("channel", "tampered")):
+            with self.assertRaises(_planeguard.RealPlaneRead):
+                attempt()
+        self.assertEqual(dict.__len__(config.UPDATE), before)
+        self.assertEqual(dict.__repr__(config.UPDATE), repr(config.UPDATE))
+
+    def test_what_is_deliberately_left_open_is_left_open(self):
+        """`repr` and `len` (so `bool`) still answer, and that is the choice, not an
+        oversight: `unittest`'s own error formatting, a traceback and a debugger all print
+        this object, and a guard that raises while a test is already failing hides the
+        failure it exists to explain. Neither one answers "which channel", which is the
+        fact being protected. Pinned so a later tightening has to be deliberate."""
+        self.assertEqual(len(config.UPDATE), 1)
+        self.assertIn("channel", repr(config.UPDATE))
+        self.assertTrue(bool(config.UPDATE))
 
 
 class EveryWayOutOfTheRefusalWorks(unittest.TestCase):
@@ -139,9 +196,11 @@ class TheGuardIsRestoredAfterIsolation(unittest.TestCase):
     isolates leaves the guard disarmed for everything that runs after it.
 
     Not hypothetical. `test_secret_exec.SecretExecMode` shadowed `PersonaIso`'s cleanup
-    with a method of its own name, so `config.ROOT` stayed on a deleted tmp directory for
-    every module from `test_secret_*` onward — 1193 tests running against a dead plane,
-    which is also why #459's own six failures did not reproduce in a full-suite run.
+    with a method of its own name, so neither the config restore nor the `rmtree` ran:
+    `config.ROOT` was left on a tmp directory that still exists and holds no
+    `charter.toml`, which makes every setting answer its default rather than raise. The
+    1186 tests that ran after it read that non-plane, which is also why #459's own six
+    failures did not reproduce in a full-suite run — `stable` is the default they assumed.
     `PersonaIso`'s cleanup is name-mangled now, and this is what notices if that regresses.
     """
 

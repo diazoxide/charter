@@ -1746,9 +1746,18 @@ def _session_strip(payload: dict, sid: str | None) -> str:
     return f"{_DIM} · {_R}".join(parts) if parts else ""
 
 
-def _dev_chip() -> str:
+def _dev_chip(color: bool = True) -> str:
     """`` dev``, dimmed, glued right after a version — when THIS plane is on the dev
     channel. Empty string otherwise, so a caller can interpolate it unconditionally.
+
+    *color* is for a caller that is not painting a terminal surface. The default is ANSI
+    because the two callers here are — a status line and a frame slot both write escape
+    codes on every line, and `sys.stdout.isatty()` is False for both anyway (the harness
+    reads the status line through a pipe), so gating this internally would blank the chip
+    exactly where it belongs. `commands_report._warn_if_stale` is the other shape: it
+    hands the chip to `util.warn`, which gates its own glyph on `stderr.isatty()`, and an
+    ungated chip put raw ``\x1b[2mdev\x1b[0m`` in a redirected log beside a correctly
+    plain ``!``. It passes `util.color_enabled()` so both halves decide together.
 
     Split out of `_brand` (#457) so a second surface that glues the literal word
     `charter` onto `__version__` — `frame.slots._top`, and whatever grows the idiom
@@ -1764,7 +1773,9 @@ def _dev_chip() -> str:
         dev = channel.is_dev()
     except Exception:
         dev = False
-    return f" {_DIM}dev{_R}" if dev else ""
+    if not dev:
+        return ""
+    return f" {_DIM}dev{_R}" if color else " dev"
 
 
 def _brand() -> str:

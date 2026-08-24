@@ -32,12 +32,14 @@ protects only the first half of a suite run.
 **And the reason the six failures were hard to believe.** They did not reproduce in a full
 suite run — only when the two modules were run alone. `test_secret_exec.SecretExecMode`
 defined a `_restore` method of its own, which replaced the identically-named cleanup it
-inherited: the harness's config restore never ran, and `config.ROOT` stayed pointed at a
-deleted temp directory for all 1193 tests that ran after it, alphabetically. Everything
-downstream was reading a plane that did not exist, which happens to look exactly like the
-stable channel. That cleanup is name-mangled now, so a subclass cannot shadow it by
-accident — one other fixture had avoided the collision by hand, with a comment warning the
-next person.
+inherited. Neither half of the harness's cleanup ran: config was never restored and the
+temp tree was never removed, so `config.ROOT` was left pointing at a directory that still
+exists and simply is not a plane — no `charter.toml`, so every setting answers its default
+rather than failing. The 1186 tests that ran after it alphabetically — a quarter of the
+suite — read that, and a plane with no `charter.toml` reports the `stable` channel, which
+is exactly what the two classes assumed. That cleanup is name-mangled now, so a subclass
+cannot shadow it by accident — one other fixture had avoided the collision by hand, with a
+comment warning the next person.
 
 **Separately, the staleness nudge grew a channel chip.** `charter report send` warns you
 when a newer charter is out; on the dev channel the number it names is `main`'s head

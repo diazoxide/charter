@@ -5,6 +5,14 @@ state (the real repo's ROOT/HAS_CONTROL_PLANE/etc.) through an un-patched attrib
 Not exercised via PersonaIso subclassing — this drives `PersonaIso.setUp`/cleanup
 directly, so it can control the "ambient" value that must NOT leak through, and (for the
 second case) the exact temp directory the harness installs.
+
+**The teardowns below call `doCleanups()`, not one cleanup by name, and that is load-bearing
+rather than tidiness.** They used to call `case._restore()` directly, which ran the config
+restore and skipped everything else `setUp` had registered — including the
+`enterContext(redirect_stdout(io.StringIO()))` pair, whose exits are cleanups too. So
+`sys.stdout` and `sys.stderr` stayed bound to a throwaway buffer for the rest of the
+process, and every later test's output went into it. `doCleanups()` unwinds the whole stack
+in LIFO order, which is what a real run does; there is nothing to "simplify" back.
 """
 from __future__ import annotations
 
@@ -145,15 +153,19 @@ class ASubclassCannotShadowTheHarnessCleanup(unittest.TestCase):
     `addCleanup(self._restore)` binds by attribute lookup on the INSTANCE, so a subclass
     defining a `_restore` of its own — the obvious name for "put my stubs back" — replaced
     the base class's method entirely: `super().setUp()` registered the SUBCLASS's cleanup,
-    config was never restored, and `config.ROOT` stayed pointed at a tmp directory that had
-    just been deleted for every test that ran afterwards.
+    so neither half of the harness's ran. Config was never restored AND the tmp tree was
+    never removed, which is the detail worth being exact about: `config.ROOT` was left
+    pointing at a directory that still exists and is simply not a plane — no `charter.toml`
+    was ever written there, so `HAS_CONTROL_PLANE` is False and every setting falls back to
+    its default. Nothing raises; everything quietly answers the default.
 
     `test_secret_exec.SecretExecMode` did exactly this. Because discovery runs
-    alphabetically, everything from `test_secret_*` onward then ran against a dead plane —
-    1193 tests, and the reason `test_statusline_brand`'s and `test_version_lock`'s missing
-    channel isolation (#459) showed up when those modules were run alone and vanished in a
-    full-suite run. `test_secret_cp_destination` had avoided the same collision by hand,
-    with a comment warning the next person; the collision is impossible now instead.
+    alphabetically, the 1186 tests that ran after it — 24.3% of a 4890-test suite — read
+    that non-plane, and that is why `test_statusline_brand`'s and `test_version_lock`'s
+    missing channel isolation (#459) showed up when those modules were run alone and
+    vanished in a full-suite run: `UPDATE` defaulting to `stable` is exactly what they
+    assumed. `test_secret_cp_destination` had avoided the same collision by hand, with a
+    comment warning the next person; the collision is impossible now instead.
     """
 
     class _ShadowsRestore(PersonaIso):
@@ -166,8 +178,15 @@ class ASubclassCannotShadowTheHarnessCleanup(unittest.TestCase):
             self.subclass_restore_ran = True
 
         def runProbe(self) -> None:
-            """Deliberately not named ``test_*``: discovery collects this class, and this
-            method exists to be driven by the case below, not to run on its own."""
+            """Not named ``test_*``, belt to the braces of being nested.
+
+            `loadTestsFromModule` iterates module-level names only, so a class defined
+            inside a `TestCase` is already invisible to discovery — unlike
+            `test_the_suite_writes_no_trace_into_the_operators_plane`'s module-level
+            positive control, which IS collected (a leading underscore does not hide a
+            class from the loader) and relies on this naming rule alone. Hoist this class
+            to module level and the rule is what stops the leak running for real.
+            """
             self.assertNotEqual(config.ROOT, self.outer_root)
 
     def test_config_is_restored_even_when_the_subclass_defines_restore(self):
@@ -181,7 +200,7 @@ class ASubclassCannotShadowTheHarnessCleanup(unittest.TestCase):
                         "the subclass's own cleanup must still run — the fix is that it no "
                         "longer runs INSTEAD of the harness's")
         self.assertEqual(config.ROOT, outer_root, "PersonaIso's cleanup was shadowed: "
-                                                  "config.ROOT is still the deleted tmp")
+                                                  "config.ROOT is still the fixture tmp")
         self.assertIs(config.UPDATE, outer_update)
         self.assertFalse(case.tmp.exists(), "the tmp tree was never removed either")
 

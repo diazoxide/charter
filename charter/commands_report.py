@@ -284,7 +284,13 @@ def _warn_if_stale() -> None:
         from . import statusline, update
         latest = update.newer_than(__version__)
         if latest:
-            util.warn(f"you are on charter {__version__}{statusline._dev_chip()}; {latest} "
-                      "is out — this may already be fixed. Reporting anyway is fine.")
+            # `util.color_enabled()`, not the chip's ANSI default: this is the one caller
+            # that is not a terminal surface, and `util.warn` gates its own glyph the same
+            # way. The call stays INSIDE the f-string on purpose — `test_version_shows_
+            # channel`'s AST property looks for it in the same `JoinedStr` as the version.
+            color = util.color_enabled()
+            util.warn(f"you are on charter {__version__}{statusline._dev_chip(color)}; "
+                      f"{latest} is out — this may already be fixed. Reporting anyway is "
+                      "fine.")
     except Exception:  # noqa: BLE001 - a staleness check must never block a report
         pass

@@ -214,13 +214,19 @@ class _RefusesToBeRead(dict):
     is the behaviour this guard exists to end. Subclassing means the refusal happens where
     the value is actually used, one line later.
 
-    Every way in is overridden, including the ones CPython would otherwise service from C
-    without consulting this class: ``dict(x)`` and ``{**x}`` take the fast path only while
-    ``tp_iter`` is dict's own, so overriding ``__iter__`` is what routes them through
-    ``keys()`` and into the refusal. ``__repr__`` and ``__len__`` are deliberately NOT
-    overridden — a debugger, a traceback, or `unittest`'s own error formatting may print
-    this object, and a guard that explodes while a test is already failing hides the
-    failure it was supposed to explain.
+    **Every accessor that yields a KEY or a VALUE is overridden**, including the ones
+    CPython would otherwise service from C without consulting this class: ``dict(x)`` and
+    ``{**x}`` take the fast path only while ``tp_iter`` is dict's own, so overriding
+    ``__iter__`` is what routes them through ``keys()`` and into the refusal. The list was
+    audited by probing every entry point rather than reasoned about — `pop`, `popitem`,
+    `setdefault` and `__reversed__` each handed back the operator's real value on the first
+    pass, and no reader in `charter/` uses any of them, which is exactly why they would
+    have stayed open until one did.
+
+    ``__repr__`` and ``__len__`` (and so ``bool()``) are deliberately NOT overridden. A
+    debugger, a traceback, or `unittest`'s own error formatting may print this object, and
+    a guard that explodes while a test is already failing hides the failure it was supposed
+    to explain. Neither answers "which channel", which is the fact being protected.
     """
 
     __slots__ = ("_setting",)
@@ -236,10 +242,14 @@ class _RefusesToBeRead(dict):
     __getitem__ = _refuse
     __contains__ = _refuse
     __iter__ = _refuse
+    __reversed__ = _refuse
     keys = _refuse
     values = _refuse
     items = _refuse
     copy = _refuse
+    pop = _refuse
+    popitem = _refuse
+    setdefault = _refuse
     __eq__ = _refuse
     __ne__ = _refuse
     __hash__ = None
