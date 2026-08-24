@@ -77,7 +77,13 @@ shell history**, while still letting an agent *use* the credential:
   It also covers the ways of spelling the same thing: `.charter//vaults/`, `.charter/./vaults/`
   and `.CHARTER/vaults/` are the same file to the filesystem and are the same file to the
   guard; a wrapper in front of the reader (`env cat …`, `sudo cat …`, `{ cat …; }`,
-  `if true; then cat …; fi`) does not change what the program is; and a file
+  `if true; then cat …; fi`) does not change what the program is, and a wrapper that opens
+  a file itself (`xargs -a …`) is a read of that file; a redirection is not the program and
+  not an operand, so `< <vault> cat` and `tee < <vault>` are both reads of the vault; a
+  command boundary is an operator the shell would *interpret*, so a quoted or escaped one
+  (`cat \) …`, `cat '(' …`, `cat '&&' …`) is an argument to the reader rather than a
+  boundary and the `&` in a `2>&1` belongs to the redirection, while an interpreted newline
+  is a boundary like `;` and `#` opens a comment only at a word start; and a file
   `charter secret cp` materialized is covered wherever it was put. Each of those was a
   verified bypass, and each is now a test.
 

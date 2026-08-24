@@ -3,7 +3,7 @@ version: unreleased
 headline: The vault guard now reads the whole command, every spelling of a path, and the file `secret cp` wrote
 ---
 
-Seven ways past the secret-leak guard, all found by the same question: not *can the rule be
+Fourteen ways past the secret-leak guard, all found by the same question: not *can the rule be
 outsmarted*, but *what does it actually match on, and what is the equivalent action it
 misses*. Each one below was run against the shipped hook with a fabricated vault, and each
 printed the value.
@@ -83,6 +83,51 @@ Materializing a credential for a tool that insists on a file is still supported 
 the right move; reading it back into the transcript is not. The denial text no longer names
 `cp` as an alternative to anything.
 
+**A segment boundary is an operator the shell *interprets*, and the tokenizer had thrown
+that away.** The group forms above put `(`, `)`, `{` and `}` on the operator list, which is
+a list of *strings* — and posix `shlex` hands back the identical one-character token `)` for
+a literal `\)`, a quoted `')'` and a real subshell close. So `cat \) .charter/vaults/x.json`
+segmented into `cat` and `.charter/vaults/x.json`: the reader lost its operand, the operand
+lost its reader, and the hook allowed a command that prints a vault. `cat '(' …`,
+`cat "{" …`, `cd .charter/vaults && cat \) x.json` and `charter secret get v k \) --reveal`
+were the same one word. This is the wrapper bug one layer down — matching an operator's
+*text* the way the old code matched a program by *name* — so the fix is the same shape:
+`_ShellLexer` keeps the one thing the tokenizer knows and used to discard, which token was
+quoted, and only an unquoted token can be a boundary. The multi-character operators needed
+the same answer a second time: the routine that breaks a glued run like `);` back into
+separate tokens was splitting quoted runs too, so `cat '&&' <vault>` and `cat '();' <vault>`
+walked past a first draft of this very fix. Only an uninterpreted run is broken up now.
+
+Asking what else the tokenizer disagreed with a shell about found two more, both live on
+`main` as well. **A newline is a command separator** and `shlex` counts it as whitespace, so
+a multi-line Bash call — most of them — collapsed into one segment and every command after
+the first line was invisible to every guard here; the operator list had always *contained*
+`"\n"` and never received the token. And **`#` begins a comment only where a word begins**,
+while `shlex` honoured it mid-word and discarded the rest of the line, so `echo hi#; cat
+<vault>` — which runs the `cat` in bash — arrived as a lone `echo hi`. Both are fixed at the
+lexer, and `bash <<'EOF'` bodies are now read as the scripts they are.
+
+**A wrapper usually does not change what the program is — `xargs -a` does.** `xargs` was
+added to the wrapper list so `xargs cat <vault>` would be seen, and the entry for its own
+flags listed `-a`/`--arg-file` among the values to skip. But that value is a file `xargs`
+itself opens: `xargs -a .charter/vaults/x.json echo` prints the vault, and the only program
+named on the line is `echo`. The same table listed `-e`/`--eof`, whose value in GNU `xargs`
+is *attached* and optional, so `xargs -e cat <vault>` handed `cat` to the flag and made the
+vault path the program. A wrapper's own file-reading flag is now checked as a read whatever
+the wrapper wraps, and `-e` no longer eats the program.
+
+**A redirection is the shell's own file plumbing — not the program, not an operand, and not
+a command boundary.** Two more went through there. The `&` in `>&` was being read as the
+control operator `&`, because a glued punctuation run was cut into operator *characters*
+rather than into the tokens a shell would read, so `cat 2>&1 .charter/vaults/x.json` split
+at that `&` and the vault path landed in a segment of its own — a command `main` denies and
+this branch briefly allowed. And a redirection may sit in *front* of the command: `<
+.charter/vaults/x.json cat` prints the vault while token 0 is `<`, so nothing was named as
+the program and the path was nobody's operand. The target of an input redirection is now a
+read wherever it appears and whatever follows it — the shell performs that open before the
+program is execed, which is why `tee < <vault>`, whose program is in no reader list, leaked
+too. Both of these are live on `main`.
+
 **And the read guard swallowed its own refusal.** `pretooluse_read` wrapped its whole body
 in `except Exception: return 0`, including the `_deny` call — so a `BrokenPipeError` out of
 the denial's own `print` returned an allow. Its Bash sibling has no such wrapper, which left
@@ -93,5 +138,6 @@ Nothing to adopt: upgrading is the whole of it. If you have used `secret cp`, th
 `cp` after upgrading starts the ledger — files materialized before then are not in it, and
 re-running the `cp` records them.
 
-Found in the 2026-08-24 security audit (#429, #430, #431, #423, #438), and the last
-two in the adversarial review of the fix for them.
+Found in the 2026-08-24 security audit (#429, #430, #431, #423, #438); the rest in three
+rounds of adversarial review of the fix for them, each round finding the previous round's
+answer written one spelling wider.

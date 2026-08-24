@@ -400,7 +400,7 @@ class TestARelocationIsFollowedHoweverItIsSpelled(GuardCase):
         cost the thing the skip bought."""
         self.assertEqual(hooks._split_env_chdir(
             "env -C .charter/vaults cat x.json".split()),
-            ("cat", [], ["cat", "x.json"], ".charter/vaults"))
+            ("cat", [], ["cat", "x.json"], ".charter/vaults", []))
         self.assertEqual(hooks._split_env_chdir("stdbuf -o0 cat x".split())[0], "cat")
 
 

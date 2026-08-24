@@ -37,10 +37,20 @@ rule while one who reads a bare refusal files an issue.
 - **Secret leak.** A command whose argv would put a vault's contents into the transcript.
   Needs argv *and* the plane's vault paths, so it cannot be expressed as a static rule.
   "Argv" means the real one: a wrapper (`env`, `sudo`, `command`, `xargs`, a `{ … }` group,
-  a `then` branch) does not change what the program is, an unparseable quote does not hide
-  the commands after it, a `$( … )` substitution is read both as the command it runs and as
-  the word it becomes, a relocation counts however it is spelled (`cd`, `pushd`, `env -C`,
-  `sudo --chdir`), and `//`, `/./` and a different case are the same path.
+  a `then` branch) does not change what the program is — and where a wrapper opens a file
+  *itself* (`xargs -a <file>`) that file counts as read, even though the program named on
+  the line is something else. A **redirection** is neither the program nor an operand: it
+  may sit in front of the command (`< <vault> cat`), and the target of an input redirection
+  is a file the shell opens whatever the program does with it (`tee < <vault>`). A **command
+  boundary is an operator the shell would interpret**, so a quoted or escaped one is an
+  argument and not a boundary (`cat \) <vault>` reads the vault), and the `&` inside the
+  redirection `>&` is not the control operator `&` (`cat 2>&1 <vault>` is one command);
+  while a newline *is* a boundary exactly as `;` is — every line of a multi-line command is
+  its own command, `bash <<'EOF'` bodies included — and `#` starts a comment only where a
+  word starts. Beyond that: an unparseable quote does
+  not hide the commands after it, a `$( … )` substitution is read both as the command it
+  runs and as the word it becomes, a relocation counts however it is spelled (`cd`, `pushd`,
+  `env -C`, `sudo --chdir`), and `//`, `/./` and a different case are the same path.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all. Both sides share one predicate, so they cannot come to disagree about
   what counts as a vault — and both cover a file `charter secret cp` materialized, wherever
