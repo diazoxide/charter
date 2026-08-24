@@ -23,17 +23,31 @@ these assert on the number and not merely on "non-zero".
 Property under test, stated so the tests can be checked against it: **whenever a guard
 decides to deny and the JSON channel is unusable, the hook process refuses.** Not "the
 vault guard does not crash".
+
+**Round two.** The first fix satisfied every assertion in this file and left the real
+condition untouched: `print` block-buffers into a PIPE, so the write into a broken one
+succeeds, `_deny` returned 0, and the `BrokenPipeError` arrived at interpreter shutdown —
+worth 120, which is non-blocking. The tests passed because they stubbed `builtins.print`,
+and a stub raises where an unbuffered stdout raises, i.e. at a terminal. They manufactured
+the one condition under which the code worked. What closes it is a `sys.stdout.flush()`
+inside `_deny`'s `try` — "the harness has it" is a question that has to be asked while the
+guard can still act on the answer — and what proves it is `TestARealBrokenPipeRefuses`: a
+child process, a real `os.pipe()`, the read end closed, nothing patched.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest import mock
 
+import charter
 from charter import config, hooks
 from tests._isolation import PersonaIso
 
@@ -55,6 +69,142 @@ DENIALS = {
 }
 
 
+class RealPipeCase(PersonaIso):
+    """The property against a REAL broken pipe: a hook process whose stdout is a pipe with
+    no reader.
+
+    This class exists because the first fix for #438 passed every test in this file and
+    **did nothing at all** to the condition it was written for. `print` BLOCK-BUFFERS when
+    stdout is a pipe, which is what a hook's stdout is: the JSON went into an 8KiB userspace
+    buffer, `print` returned cleanly, `_deny`'s `except` never ran, the handler returned 0,
+    and the `BrokenPipeError` surfaced only when the interpreter flushed on the way out —
+    where it is worth 120, a NON-BLOCKING status, and the tool call proceeds. Measured on
+    the branch and on `origin/main`: both exited 120 with an empty stderr, byte for byte
+    identical.
+
+    The tests below it reached `DENY_EXIT` only because stubbing `builtins.print` makes the
+    write raise *at the call*, which is what an UNBUFFERED stdout does — a terminal, not a
+    pipe. **The test manufactured the one condition under which the code worked.** So the
+    channel here is a real `os.pipe()` with the read end closed, in a real child process,
+    and nothing is patched.
+    """
+
+    #: `config.use` rather than an env var, because the child must not touch the developer's
+    #: real `.charter/` and this is the same seam `PersonaIso` uses in-process.
+    CHILD = ("import sys;"
+             "from pathlib import Path;"
+             "from charter import config, hooks;"
+             "config.use(Path(sys.argv[1]));"
+             "setattr(config, 'HAS_CONTROL_PLANE', True);"
+             "sys.exit(hooks.dispatch(sys.argv[2], None))")
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.tmp / "charter.toml").write_text("schema = 1\n")
+        self.env = {**os.environ,
+                    "PYTHONPATH": str(Path(charter.__file__).resolve().parent.parent)}
+        # Buffering is the subject, so it is not left to the ambient environment: with this
+        # set the child's stdout is unbuffered and the bug is invisible again.
+        self.env.pop("PYTHONUNBUFFERED", None)
+
+    def run_hook_process(self, name: str, payload: dict, *,
+                         break_stdout: bool = False, break_stderr: bool = False):
+        """Run `charter hook <name>` as its own process; return (rc, stdout, stderr).
+
+        A broken channel is spelled the way the world spells it: `os.pipe()`, close the read
+        end, hand the write end to the child. Every write then gets `EPIPE` — no mock, no
+        stub, and nothing in the child knows it is under test.
+        """
+        payload = dict(payload)
+        ti = dict(payload.get("tool_input") or {})
+        if str(ti.get("file_path", "")).startswith("STATE_DIR/"):
+            ti["file_path"] = str(config.STATE_DIR / ti["file_path"].split("/", 1)[1])
+            payload["tool_input"] = ti
+        dead = []
+
+        def channel():
+            r, w = os.pipe()
+            os.close(r)                       # no reader: the next write is EPIPE
+            dead.append(w)
+            return w
+
+        out = channel() if break_stdout else subprocess.PIPE
+        err = channel() if break_stderr else subprocess.PIPE
+        try:
+            p = subprocess.run([sys.executable, "-c", self.CHILD, str(self.tmp), name],
+                               input=json.dumps(payload), text=True, stdout=out,
+                               stderr=err, env=self.env, timeout=60)
+        finally:
+            for fd in dead:
+                os.close(fd)
+        return p.returncode, p.stdout or "", p.stderr or ""
+
+
+class TestARealBrokenPipeRefuses(RealPipeCase):
+    def test_the_childs_stdout_is_block_buffered_which_is_why_the_stub_saw_nothing(self):
+        """The premise, pinned first, because every assertion below depends on it and it is
+        the thing the round-one test got wrong. A pipe is block-buffered: no line buffering,
+        no write-through, not a tty. A `print` into it SUCCEEDS with the pipe already
+        broken."""
+        probe = ("import sys;"
+                 "print(sys.stdout.line_buffering, sys.stdout.write_through,"
+                 " sys.stdout.isatty(), file=sys.stderr)")
+        r = subprocess.run([sys.executable, "-c", probe], text=True, env=self.env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        self.assertEqual(r.stderr.split(), ["False", "False", "False"])
+
+    def test_a_denial_into_a_dead_pipe_exits_blocking(self):
+        """The load-bearing one, and the exact command from the round-two report: a real
+        pipe, its reader gone. Before the flush went inside `_deny`'s `try` this was 120."""
+        for name, payload in DENIALS.items():
+            with self.subTest(hook=name):
+                rc, _, err = self.run_hook_process(name, payload, break_stdout=True)
+                self.assertEqual(rc, hooks.DENY_EXIT, err[-400:])
+
+    def test_it_is_none_of_the_three_statuses_that_mean_the_tool_proceeds(self):
+        """Said as itself rather than folded into the line above: 120 (a failed shutdown
+        flush) and 141 (`cli.main`'s SIGPIPE) are what this actually returned, and both let
+        the call through. An assertion of "non-zero" would have passed on either."""
+        rc, _, _ = self.run_hook_process("pretooluse-read", DENIALS["pretooluse-read"],
+                                         break_stdout=True)
+        self.assertNotIn(rc, (0, 120, 141))
+
+    def test_the_reason_reaches_the_model_on_stderr(self):
+        """Exit 2 hands stderr to the model, so this is the whole content of the refusal.
+        Measured empty on both the branch and `origin/main` before the fix."""
+        _, _, err = self.run_hook_process("pretooluse-read", DENIALS["pretooluse-read"],
+                                          break_stdout=True)
+        self.assertIn("secret exec", err)
+
+    def test_both_channels_dead_still_exits_blocking(self):
+        """Nothing left but the exit status — and it has to survive interpreter shutdown,
+        which is where a second failed flush would replace it with 120. This is what
+        `_mute` is for, and it covers stderr because a harness that closed one pipe usually
+        closed both."""
+        rc, _, _ = self.run_hook_process("pretooluse-read", DENIALS["pretooluse-read"],
+                                         break_stdout=True, break_stderr=True)
+        self.assertEqual(rc, hooks.DENY_EXIT)
+
+    def test_an_intact_pipe_still_denies_as_json_at_exit_zero(self):
+        """The control, and it is not decoration: it runs down the same block-buffered pipe
+        as the case above, so together they say the difference is the broken reader and not
+        the flush. A fix that exited 2 on every denial would pass every other test here."""
+        rc, out, _ = self.run_hook_process("pretooluse-read", DENIALS["pretooluse-read"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_an_allowed_call_down_a_dead_pipe_is_still_allowed(self):
+        """The other direction, in a real process: a hook with nothing to say must not start
+        refusing because a write it never made would have failed."""
+        rc, _, _ = self.run_hook_process(
+            "pretooluse-read",
+            {"tool_name": "Read", "tool_input": {"file_path": "README.md"},
+             "session_id": "s"},
+            break_stdout=True)
+        self.assertEqual(rc, 0)
+
+
 class BrokenChannelCase(PersonaIso):
     """Every case here drives `hooks.dispatch`, the real process entrypoint, because the
     exit status is the thing under test and a handler's return value only becomes an exit
@@ -72,13 +222,19 @@ class BrokenChannelCase(PersonaIso):
     def dispatch(self, name: str, payload: dict, broken: bool = False):
         """Run one hook the way `charter hook <name>` does; return (rc, stdout, stderr).
 
-        *broken* replaces `builtins.print` — the lowest layer every emission in this module
-        reaches, `_emit`'s own call — rather than `_emit` or `_deny`, so a future emitter
-        that spells the write differently is still covered, and so the test cannot pass by
-        stubbing out the code it is meant to exercise. Only **stdout** is broken, which is
-        the real condition: a reader that went away closes the one pipe, and stderr is a
-        different file descriptor that keeps working. A blunter stub that broke both would
-        make the stderr assertion below unfalsifiable.
+        *broken* replaces `builtins.print` so the write raises **at the call**.
+
+        Read that sentence as the limitation it is: an in-process stub is an UNBUFFERED
+        stdout, and a hook's stdout is a pipe, which block-buffers. These cases therefore
+        pin that each handler propagates `_deny`'s status once the write has failed — they
+        cannot and do not show that a real pipe's write fails at all, and round one shipped
+        believing they did. `TestARealBrokenPipeRefuses` above is where the property is
+        tested; this class is the per-handler table underneath it, kept because it covers
+        every handler cheaply and because `_undelivered_deny`'s backstop has no other seam.
+
+        Only **stdout** is broken here: a reader that went away closes the one pipe, and
+        stderr is a different file descriptor that keeps working. A blunter stub that broke
+        both would make the stderr assertion below unfalsifiable.
         """
         payload = dict(payload)
         ti = dict(payload.get("tool_input") or {})

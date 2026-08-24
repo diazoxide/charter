@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -132,26 +133,55 @@ def _deny(event: str, reason: str) -> int:
             "permissionDecision": "deny",
             "permissionDecisionReason": text,
         }})
+        # A WRITE IS NOT A DELIVERY, and this line is the whole of #438's second half.
+        # `print` to a PIPE block-buffers: the JSON lands in an 8KiB userspace buffer, the
+        # call returns cleanly, and the `except` below never runs — so the first version of
+        # this fix returned 0 on a real broken pipe and the tool call proceeded, byte for
+        # byte what it replaced. The failure surfaced only when the interpreter flushed at
+        # shutdown, too late for any handler to answer and worth exactly 120: a NON-blocking
+        # status. Only an unbuffered stdout — a terminal, or a test that stubs `print` —
+        # raised where the code expected it, which made the buffered pipe (the real hook's
+        # real stdout, one end of a harness pipe) the one shape nothing covered.
+        #
+        # Flushing here moves the answer to "did the harness get this?" back inside the
+        # `try`, where the guard can still act on it.
+        sys.stdout.flush()
     except Exception:  # noqa: BLE001 - the channel, not the verdict
         _undelivered_deny.append(text)
-        # stderr is what exit 2 hands to the model, so the reason still arrives.
+        # stderr is what exit 2 hands to the model, so the reason still arrives — and it is
+        # flushed for the reason above: buffered is not delivered, and a reason discovered
+        # to be undeliverable at shutdown is a refusal with no reason.
         try:
             print(text, file=sys.stderr)
+            sys.stderr.flush()
         except Exception:  # noqa: BLE001 - best effort; the exit status is the guard
-            pass
+            _mute(sys.stderr)
         # And stop the interpreter trying to flush the dead stream on the way out: a failed
         # shutdown flush REPLACES the exit status with 120, which is in the "tool call
         # proceeds" bucket — the same fd-level move, and the same guard, as `cli.main`.
-        try:
-            fd = os.open(os.devnull, os.O_WRONLY)
-            try:
-                os.dup2(fd, sys.stdout.fileno())
-            finally:
-                os.close(fd)
-        except Exception:  # noqa: BLE001 - no real pipe under test; nothing to suppress
-            pass
+        _mute(sys.stdout)
         return DENY_EXIT
     return 0
+
+
+def _mute(stream) -> None:
+    """Point *stream*'s file descriptor at ``/dev/null`` so a later flush cannot fail.
+
+    A `BrokenPipeError` raised while the interpreter flushes on the way out REPLACES the
+    process's exit status with 120 — a non-blocking hook error, i.e. an allow. So the last
+    thing :func:`_deny` does with a dead channel is make sure nothing tries to use it again:
+    the exit status is the only thing left carrying the refusal, and it has to survive
+    shutdown. Best effort by construction — under a test's `StringIO` there is no fd to
+    replace and nothing to suppress.
+    """
+    try:
+        fd = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(fd, stream.fileno())
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001 - no real pipe here; nothing to suppress
+        pass
 
 
 #: The one host permission mode that means NOBODY IS WATCHING. Deliberately not a set that
@@ -808,15 +838,96 @@ def _ssh_prefix_hosts(forges: dict[str, object]) -> dict[str, str]:
 #: were destroyed" are two findings and only one sentence can be the denial.
 _BRANCH_MOVERS = ("checkout", "switch")
 
-#: Flags that make one of the above CREATE a branch rather than move to an existing one.
-_BRANCH_CREATORS = ("-b", "-B", "-c", "-C")
+#: Options that make one of the above CREATE a branch rather than move to an existing one.
+#: The operand of one of these is a NAME TO CREATE — never a path to restore, however much
+#: it looks like one.
+#:
+#: `--orphan` was the round-one bypass and is the reason the rest of this section exists:
+#: `git checkout --orphan README` in the plane root answers *"Switched to a new branch
+#: 'README'"* and HEAD moves, but `--orphan` matched neither the creator list nor
+#: `--detach`, so the operand was handed to :func:`_checkout_operand_kind`, came back
+#: `"path"`, and the restore carve-out let a branch creation through. Its long-form
+#: siblings `--create`/`--force-create` (`git switch -c`/`-C`) are here for the same
+#: reason: a list of SPELLINGS is only ever as long as the last audit.
+_BRANCH_CREATOR_OPTS = frozenset({"-b", "-B", "-c", "-C",
+                                  "--orphan", "--create", "--force-create"})
 
 #: `--detach` takes the root OFF its branch with no operand at all — `git checkout --detach`
 #: and `git switch --detach` both answer "HEAD is now at …", verified. The guard used to
 #: require an operand, so the one spelling of a HEAD move that needs no argument was the one
 #: it could not see. It is a ref move, never a restore, and it suppresses the file-restore
-#: carve-out below for exactly that reason.
-_DETACH = "--detach"
+#: carve-out below for exactly that reason. `-d` is git's own short form of it and detaches
+#: identically — verified: `git checkout -d feature` and `git switch -d feature` both answer
+#: "HEAD is now at <sha>".
+_DETACH_OPTS = frozenset({"--detach", "-d"})
+
+#: Options a **restore** accepts — from `git checkout -h` and `git restore -h` (git 2.50),
+#: keeping only the ones that cannot move HEAD.
+#:
+#: This is an ALLOWLIST, and that direction is the whole point. The guard used to ask "is
+#: this option one of the four I know move HEAD?", which answers "no" for every option git
+#: gains after the question was written, and answered "no" for `--orphan`, `--track` and
+#: `--guess` the day it was written. It now asks "is every option here one I can show a
+#: restore accepts?", so an option charter has never heard of keeps the guard shut rather
+#: than opening it. The cost is a false denial on a new restore-only flag; the remedy is in
+#: the message and needs no options at all (`git restore <path>`, `git checkout -- <path>`),
+#: and both stay allowed in the plane root.
+_RESTORE_OPTS = frozenset({
+    "--ours", "--theirs", "--force", "--merge", "--patch", "--quiet", "--progress",
+    "--conflict", "--overlay", "--ignore-skip-worktree-bits", "--pathspec-from-file",
+    "--pathspec-file-nul", "--recurse-submodules", "--overwrite-ignore",
+    "--ignore-other-worktrees", "--source", "--staged", "--worktree", "--ignore-unmerged",
+})
+
+#: The same list in git's short spelling, as LETTERS — because `-fq` is one token and
+#: `-bREADME` is one token, and reading either as "an option I do not recognise, so
+#: harmless" is how `git checkout -bREADME` walked past this guard: `-bREADME` is not `-b`,
+#: `wants` came out empty, and "no operand means nothing moves" allowed a branch creation.
+#: `-2`/`-3` are `--ours`/`--theirs`; the letters absent from here (`b`, `d`, `t`, `l` …)
+#: are absent on purpose.
+_RESTORE_SHORTS = frozenset("fmpq23")
+
+
+def _checkout_opt_kind(tok: str) -> str:
+    """Classify one option of a `git checkout`/`git switch`: ``"create"``, ``"detach"``,
+    ``"restore"`` or ``"unknown"``.
+
+    Value forms are the subject. git's parser takes an option's value ATTACHED as readily as
+    separated — `-bREADME` is `-b README`, `--orphan=README` is `--orphan README`, and
+    `-fq` is two options in one token — all verified against git 2.50, all of which move
+    HEAD or make a restore what it is. A guard that compares whole tokens to `"-b"` sees
+    none of them, which is the bypass this function exists to close: it normalises to the
+    option NAME first, then answers.
+
+    ``"unknown"`` is not ``"restore"``. Anything this cannot place is treated as capable of
+    moving HEAD, so the fail-closed default belongs to the option charter has never seen —
+    `--track`, `--guess`, and whatever git adds next — rather than to a fixed list of bad
+    ones going stale.
+    """
+    if tok.startswith("--"):
+        name = tok.split("=", 1)[0]
+        # `--no-x` is git's negation of `--x`. Normalised rather than listed, and it stays
+        # on the same side of the fence as `--x`: `--no-orphan` is refused with `--orphan`,
+        # which costs nothing real and cannot be a way in.
+        if name.startswith("--no-"):
+            name = "--" + name[len("--no-"):]
+        if name in _BRANCH_CREATOR_OPTS:
+            return "create"
+        if name in _DETACH_OPTS:
+            return "detach"
+        return "restore" if name in _RESTORE_OPTS else "unknown"
+    # A short cluster is read left to right, exactly as git's parser reads it, and stops at
+    # the first letter that decides: `-b` swallows the rest of the token as the new branch's
+    # name, so `-qbREADME` is `-q -b README` and not three unrecognised letters.
+    for ch in tok[1:]:
+        if f"-{ch}" in _BRANCH_CREATOR_OPTS:
+            return "create"
+        if f"-{ch}" in _DETACH_OPTS:
+            return "detach"
+        if ch not in _RESTORE_SHORTS:
+            return "unknown"
+    return "restore"
+
 
 #: How many trailing operands of a `git checkout <tree-ish> <paths…>` the guard will resolve
 #: before it stops and keeps refusing. One local `ls-files` each, on the `PreToolUse` path,
@@ -886,7 +997,11 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
     spot is invisible — it looks exactly like the guard being present and never firing — so
     the two of them share one pair of eyes.
 
-    The subcommand is yielded raw; deciding which ones matter is each guard's own business.
+    Yields ``(subcommand, args-after-it, git's-own-options-before-it)``. The subcommand is
+    yielded raw; deciding which ones matter is each guard's own business. The leading
+    options come along because one of them can DEFINE the subcommand — `git -c
+    alias.co=checkout co feature` switches branches, verified — and only a guard that
+    resolves aliases needs them.
     """
     here = cwd
     for _toks in _segment_argv(cmd):
@@ -914,7 +1029,7 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
                 continue
         except OSError:
             continue
-        yield rest[i], rest[i + 1:]
+        yield rest[i], rest[i + 1:], rest[:i]
 
 
 def _checkout_operand_kind(root: Path, op: str) -> str:
@@ -978,6 +1093,134 @@ def _checkout_operand_kind(root: Path, op: str) -> str:
     return "path" if path else "neither"
 
 
+#: Subcommands charter takes to be git's own, so it does not have to ask whether they are
+#: aliases. **A cost list, never a safety list**: a name missing from it costs one
+#: `git config --get`, and a name wrongly in it can only be wrong about a person who
+#: shadowed a git builtin with an alias of the same name — which git itself ignores
+#: ("alias.status is a builtin, skipping"). Everything that MOVES HEAD is deliberately
+#: absent, so the resolution below still runs for `checkout` and `switch`.
+_GIT_KNOWN_SUBCOMMANDS = frozenset({
+    "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle",
+    "cat-file", "check-ignore", "cherry", "cherry-pick", "clean", "clone", "commit",
+    "config", "describe", "diff", "difftool", "fetch", "for-each-ref", "format-patch",
+    "fsck", "gc", "grep", "help", "init", "log", "ls-files", "ls-remote", "ls-tree",
+    "merge", "merge-base", "mergetool", "mv", "notes", "pull", "push", "range-diff",
+    "rebase", "reflog", "remote", "repack", "replace", "rerere", "reset", "restore",
+    "rev-list", "rev-parse", "revert", "rm", "shortlog", "show", "show-ref", "sparse-checkout",
+    "stash", "status", "submodule", "symbolic-ref", "tag", "update-index", "update-ref",
+    "verify-commit", "version", "whatchanged", "worktree",
+})
+
+#: How many alias hops the guard follows. git resolves an alias to an alias (verified:
+#: `ck = co`, `co = checkout` switches branches), so one hop is not enough and unbounded
+#: is a loop.
+_MAX_ALIAS_HOPS = 4
+
+
+def _inline_aliases(pre: list[str]) -> dict[str, str]:
+    """Aliases defined ON THE COMMAND LINE: ``git -c alias.co=checkout co feature``.
+
+    No repo config knows about these, so a guard that only asked `git config` would miss the
+    one spelling of an alias that needs no setup at all — verified against git 2.50, which
+    answers "Switched to branch 'feature'". git rejects the attached form
+    (`-calias.co=checkout` → "unknown option"), so only `-c <name>=<value>` is read here.
+    """
+    out: dict[str, str] = {}
+    for j, tok in enumerate(pre[:-1]):
+        if tok != "-c":
+            continue
+        name, sep, body = pre[j + 1].partition("=")
+        if sep and name.lower().startswith("alias."):
+            out[name[len("alias."):]] = body
+    return out
+
+
+def _resolve_git_alias(root: Path, sub: str, post: list[str], pre: list[str]):
+    """Follow git ALIASES to the subcommand that will really run: ``("checkout", [...])``.
+
+    `git checkout` is not the only way to spell `git checkout`. With `co = checkout` in any
+    config git reads — and that alias is on a large share of developer machines — `git co
+    feature` in the plane root answers "Switched to branch 'feature'" and this guard never
+    saw a `checkout` at all. Measured, along with `ck = co` (git follows the chain),
+    `sw = switch -c` (an alias carrying options, which the operand rule then has to read
+    together with the caller's own), and the command-line form above.
+
+    That is the same defect as `--orphan`, one layer out: the guard was matching the
+    SPELLING of a branch move rather than asking what the command does. So it asks — of git,
+    for this repo, and only for a subcommand it does not already take to be git's own, which
+    keeps `git status`/`git commit`/`git log` on a set lookup instead of a subprocess.
+
+    **What this does not reach**, stated because a guard's limits belong next to it rather
+    than in a claim somewhere that it has none:
+
+    * `!`-aliases that are not a plain `git …` — `co = !sh -c '…'` runs a shell charter does
+      not read, and it stands aside rather than refusing every shell alias in the plane root
+      (`s = !git status` style aliases are common and harmless). `co = !git checkout` IS
+      followed: the body is read as the git command it is.
+    * `--config-env=alias.co=VAR`, where the body is in the environment.
+    * A git that will not answer. As everywhere else in this guard, unreadable is not a
+      licence to skip — but here there is nothing yet to refuse: charter has no reason to
+      believe the command is a branch move, so it is out of scope rather than allowed.
+    """
+    from . import util as _util
+    from .doctor import _git_in
+    inline = _inline_aliases(pre)
+    seen: set[str] = set()
+    for _ in range(_MAX_ALIAS_HOPS):
+        if sub in _BRANCH_MOVERS or sub in _GIT_KNOWN_SUBCOMMANDS or sub in seen:
+            return sub, post
+        seen.add(sub)
+        body = inline.get(sub)
+        if body is None:
+            try:
+                r = _git_in(root, "config", "--get", f"alias.{sub}")
+            except (_util.ProcTimeout, OSError, ValueError):
+                return sub, post
+            body = r.stdout.strip() if r.returncode == 0 else ""
+        if not body:
+            return sub, post
+        shell = body.startswith("!")
+        try:
+            toks = shlex.split(body[1:] if shell else body)
+        except ValueError:
+            return sub, post
+        if shell:
+            # `!git checkout` is a git command wearing a shell alias's clothes; anything
+            # else is a shell charter does not read.
+            if not toks or os.path.basename(toks[0]) != "git":
+                return sub, post
+            toks = toks[1:]
+        if not toks:
+            return sub, post
+        # The caller's own arguments are appended to the expansion, exactly as git appends
+        # them — which is why `sw = switch -c` plus `git sw neu` has to be judged as
+        # `switch -c neu` and not as two unrelated halves.
+        sub, post = toks[0], toks[1:] + post
+    return sub, post
+
+
+def _created_branch(opts: list[str], classes: list[str], wants: list[str]) -> str | None:
+    """The name a branch-creating `checkout`/`switch` would create, for the DENIAL TEXT.
+
+    Named rather than guessed at, because the name can be inside the option token: git takes
+    a short option's value attached (`-bREADME`) and a long option's after `=`
+    (`--orphan=README`), and in both the operand list is empty. A message that fell back to
+    "switch branches" there would be describing a different command from the one it is
+    refusing.
+    """
+    first = next((o for o, c in zip(opts, classes) if c == "create"), None)
+    if first is None:
+        return wants[0] if wants else None
+    if first.startswith("--"):
+        if "=" in first:
+            return first.split("=", 1)[1] or None
+    else:
+        for i, ch in enumerate(first[1:], start=1):
+            if f"-{ch}" in _BRANCH_CREATOR_OPTS:
+                return first[i + 1:] or (wants[0] if wants else None)
+    return wants[0] if wants else None
+
+
 def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     """Deny a git command that would move the PLANE ROOT between branches (#157).
 
@@ -1006,6 +1249,13 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
       path and not a revision" opens the gate. The ambiguous case — a file and a branch
       sharing a name — stays DENIED and the message says so.
 
+      **The operand is only half the command.** What an operand MEANS depends on the
+      options beside it: `README` is a path after `--ours` and a branch to create after
+      `--orphan`, and `git checkout --orphan README` answers "Switched to a new branch
+      'README'". So the carve-out also requires every option present to be one
+      :func:`_checkout_opt_kind` can place as restore-only — an allowlist, so an option
+      charter has never heard of keeps the guard shut instead of opening it.
+
     Costs one `git symbolic-ref` only once a candidate is found, plus two read-only git
     questions per operand of a `checkout` that is not the remedy, bounded by
     :data:`_MAX_CHECKOUT_OPERANDS` — this runs on every Bash call, and the common case still
@@ -1017,9 +1267,28 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     except OSError:
         return None
 
-    for sub, post in _plane_root_git(cmd, cwd, root):
+    for sub, post, pre in _plane_root_git(cmd, cwd, root):
         if sub not in _BRANCH_MOVERS:
-            continue
+            # …yet. `co = checkout` is on half the developer machines in the world, and
+            # `git co feature` moves the plane root's HEAD exactly as far (#461, round two).
+            sub, post = _resolve_git_alias(root, sub, post, pre)
+            if sub not in _BRANCH_MOVERS:
+                continue
+        # Every option, classified before anything else looks at the operands: what an
+        # operand MEANS depends on the options beside it (`README` is a path after `--ours`
+        # and a branch to create after `--orphan`), so a rule that reads the operand first
+        # is reading it without the half of the command that decides.
+        opts = [a for a in post if a.startswith("-") and a not in ("-", "--")]
+        classes = [_checkout_opt_kind(o) for o in opts]
+        creating = "create" in classes
+        detaching = "detach" in classes
+        # The carve-out below opens only on a command charter can show is a restore, OPTIONS
+        # INCLUDED. `all()` of an empty list is True, so the bare spellings — `git checkout
+        # README`, `git checkout -- <paths>` — are unaffected; one option nobody has placed
+        # is enough to keep the guard speaking.
+        restore_shaped = all(c == "restore" for c in classes)
+        unplaced = next((o for o, c in zip(opts, classes) if c == "unknown"), None)
+
         # `--` separates refs from PATHS, and only what follows it is a path. Treating the
         # token itself as proof of a file restore let two real branch moves through:
         # `git checkout <branch> --` and `git checkout -b <new> --` both switch — verified
@@ -1030,18 +1299,23 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
         # something after it means paths, and `git checkout <tree-ish> -- <paths>` leaves
         # HEAD where it was. Nothing after it means the separator is decoration on a branch
         # move, and the operands before it still count.
+        #
+        # `restore_shaped` gates even this: `git checkout -b neu -- README` is refused by
+        # git today ("fatal: 'README' is not a commit and a branch 'neu' cannot be created
+        # from it"), and a carve-out that depends on git continuing to refuse something is a
+        # bypass waiting for a release note.
         if "--" in post:
             cut = post.index("--")
             if post[cut + 1:]:
-                continue                    # paths follow: a restore, HEAD does not move
-            post = post[:cut]               # a trailing bare `--` still switches
-        creating = any(a in _BRANCH_CREATORS for a in post)
-        detaching = _DETACH in post
+                if restore_shaped:
+                    continue                # paths follow: a restore, HEAD does not move
+            else:
+                post = post[:cut]           # a trailing bare `--` still switches
         # A bare `-` is a REF (the previous branch), not a flag — and `git checkout -` is
         # what makes a six-switch session cheap to repeat, so reading it as a flag would
         # leave the guard blind to the cheapest form of the thing it exists to stop.
         wants = [a for a in post if a == "-" or not a.startswith("-")]
-        if not wants and not (creating or detaching):
+        if not wants and not (creating or detaching) and restore_shaped:
             continue  # bare `git checkout` moves nothing
 
         if not creating and wants:
@@ -1059,10 +1333,12 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
 
         # Is this `checkout` the RESTORE half of the overload (#461)? Only `checkout` is
         # asked: `git switch` takes branches and nothing else, which is why it exists.
-        # `--detach` and `-b`/`-B` are ref moves whatever the operand looks like, so
-        # neither reaches this.
+        # `restore_shaped` is what keeps a ref move out of here whatever the operand looks
+        # like — `--detach`, `-b`/`-B`, `--orphan`, `-bREADME` and every option nobody has
+        # placed all fail it, and `git checkout --orphan README` was exactly a ref move
+        # whose operand reads as a path.
         kind = "rev"
-        if sub == "checkout" and wants and not creating and not detaching:
+        if sub == "checkout" and wants and restore_shaped:
             kind = _checkout_operand_kind(root, wants[0])
             if len(wants) == 1:
                 restore = kind == "path"
@@ -1109,8 +1385,24 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
                 f"would move HEAD in the PLANE ROOT — charter could not ask git whether "
                 f"'{wants[0]}' is a path or a revision here, and a guard that opened "
                 f"because it failed to ask is no guard. ")
+        elif unplaced is not None and not creating and not detaching:
+            # Say the true thing, which is narrower than "this switches branches": charter
+            # does not know what `{unplaced}` does, and an option it cannot place is an
+            # option that might move HEAD (`--orphan` did). Asserting a switch here would
+            # repeat #461's other half — a denial that is right to refuse and wrong about
+            # why still sends the operator to the wrong remedy.
+            opening = (
+                f"cannot read this `git {sub}` as a file restore in the PLANE ROOT: it does "
+                f"not recognise the option '{unplaced}', and an option charter cannot place "
+                f"is one that may move HEAD — `git checkout --orphan <file>` reads exactly "
+                f"like a restore and creates a branch. Only a form charter can show is a "
+                f"restore opens that gate. "
+                + (f"(A restore needs no options here: `git restore {wants[0]}` and "
+                   f"`git checkout -- {wants[0]}` are both allowed.) " if wants else ""))
         else:
-            moving = (f"create '{wants[0]}'" if creating and wants
+            created = _created_branch(opts, classes, wants) if creating else None
+            moving = (f"create '{created}'" if created
+                      else "create a branch" if creating
                       else "detach HEAD" if detaching and not wants
                       else f"switch to '{wants[0]}'" if wants else "switch branches")
             opening = f"would {moving} in the PLANE ROOT. "
@@ -1216,7 +1508,7 @@ def _plane_root_reset_reason(cmd: str, cwd: str) -> str | None:
     except OSError:
         return None
 
-    for sub, post in _plane_root_git(cmd, cwd, root):
+    for sub, post, _pre in _plane_root_git(cmd, cwd, root):
         if sub != "reset":
             continue
         if not any(a in _RESET_TREE_MODES for a in post):

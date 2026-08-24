@@ -35,14 +35,41 @@ restore. Everything else is still refused — including a branch that exists onl
 (git's DWIM checks it out here as a new local branch), a name git has never heard of, and
 anything charter could not resolve, such as `git checkout "$BR"`.
 
+**The operand is only half the command, and the first cut of this read only that half.**
+What an operand means depends on the options beside it: `README` is a path after `--ours`
+and a *branch to create* after `--orphan` — `git checkout --orphan README` answers
+"Switched to a new branch 'README'". So the same rule now applies to the options, in the
+same direction: the gate opens only when every option present is one charter can place as
+restore-only, and an option it cannot place keeps the guard shut. That covers the value
+forms git accepts, where the branch name hides inside the option token (`-bREADME`,
+`--orphan=README`), and it covers the option git adds next, which no list of bad flags
+could. A restore-only flag charter has not heard of yet is refused here until someone adds
+it — and the two spellings that need no flags at all, `git restore <path>` and
+`git checkout -- <path>`, are always allowed.
+
 **The genuinely ambiguous case stays denied, and now says so.** Where a branch and a tracked
 file share a name, git breaks the tie in favour of the ref — it really does switch. That is
 the one case where refusing is right, so the denial no longer asserts a branch; it says the
 command is ambiguous and names the two spellings that are not:
 `git restore <name>` and `git checkout -- <name>`, both allowed.
 
+**And `git checkout` is not the only way to spell `git checkout`.** With `co = checkout` in
+your config — an alias on a large share of developer machines — `git co feature` moved the
+plane root's HEAD and this guard never saw a `checkout` at all. It now asks git what the
+subcommand really is before standing aside: config aliases, aliases to aliases, aliases
+carrying their own options (`sw = switch -c`), `!git checkout`, and the setup-free
+`git -c alias.zz=checkout zz feature` all reach the same rule now, and `git co <file>` is
+still a restore. Two things it deliberately does not reach, so you know where the edge is: a
+`!`-alias that is not a plain `git …` (refusing every shell alias in the plane root would
+refuse `s = !git status` too), and `--config-env`, where the body is in an environment
+variable. Ordinary commands cost nothing — charter only asks about a subcommand it does not
+already take to be git's own, so `git status` and `git commit` are still a set lookup.
+
 **The same misreading was making the guard too narrow, too.** It required an operand, so
-`git checkout --detach` and `git switch --detach` — which take the root off its branch with
-no operand at all — walked past it. They are refused now.
+`git checkout --detach`, `git switch --detach` and their short form `-d` — which take the
+root off its branch with no operand at all — walked past it. So did `git checkout -bREADME`,
+where the branch name is inside the option token and the operand list is empty. All refused
+now, and the denial names the branch it would create rather than falling back to "switch
+branches".
 
 Nothing to adopt: upgrading is the whole of it.
