@@ -665,7 +665,16 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
             # serialiser for the quoting rather than trusting that bound to be the only
             # thing between a commit and a vault. A quoted key is the same YAML mapping a
             # bare one was; there is no reading of `{"reddit": {…}}` that differs.
-            fm.append("  - " + json.dumps({server_name: entry}, ensure_ascii=False))
+            #
+            # `contain.json_line`, not `json.dumps`, and the difference is the whole of
+            # this layer's independence. The first round of this fix wrote
+            # `ensure_ascii=False` here, which leaves U+2028, U+2029 and U+0085 RAW: three
+            # more spellings of "end this line" that JSON's own string rules say nothing
+            # about. A committed `args` entry holding one of them added a physical line to
+            # this block with no boundary bypass at all — the boundary bounds a NAME, and
+            # nothing bounds a value. The claim that this layer holds whatever reaches it
+            # was true for `\n` only, and is true as written now.
+            fm.append("  - " + contain.json_line({server_name: entry}))
     for k in _AGENT_PASSTHROUGH_KEYS:  # pass through when the charter sets them
         if meta.get(k):
             fm.append(f"{k}: {meta[k]}")
@@ -694,8 +703,16 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
     scripts = persona.bin_scripts(name)
     bin_note = ""
     if scripts:
+        # `contain.one_line`, because these are FILENAMES read off the disk, not names
+        # charter minted: `personas/<name>/bin/` is committed and a filesystem forbids only
+        # `/` and NUL. A script named with a U+2028 wrote a second bullet into the brief
+        # the sub-agent is given, formatted exactly like charter's own — #453's mechanism
+        # aimed at the model rather than at the YAML parser. Reproduced before it was
+        # bounded. A path is shown escaped rather than dropped: the agent still has to be
+        # able to run the ones that are fine.
         listed = "\n".join(
-            f"  - `{_rel(path)}`" for _n, path in sorted(scripts.items()))
+            f"  - `{contain.one_line(_rel(path), contain.PATH_DISPLAY_LIMIT)}`"
+            for _n, path in sorted(scripts.items()))
         bin_note = (
             f"\n- **You carry your own executables.** Run them by path, not by name:\n"
             f"{listed}\n"

@@ -38,8 +38,13 @@ a newline in it declared a whole second server that no fingerprint covered and n
 mentioned (#453): the carrier entry needed no ``secrets`` at all, so `fingerprint` returned
 ``None``, nothing was withheld, and the run printed one green tick. It is true now only
 because `persona._MCP_NAME_RE` makes it true — a name is bounded at the boundary that reads
-the committed file, and the emission serialises the key rather than pasting it — and it
-stops being true the moment either of those is loosened without the other.
+the committed file, and the emission serialises the key through `contain.json_line` rather
+than pasting it — and it stops being true the moment either of those is loosened without
+the other.
+
+The older wording is kept here as a quotation, corrected, rather than deleted: a branch in
+flight that restores it is a regression and not a merge conflict to take either side of, and
+a reviewer can only see that if the sentence it costs is written down next to the reason.
 
 **Nothing here raises.** A missing or corrupt marker reads as *nothing approved*, so the
 failure direction is "the credential was withheld", never "sync-agents crashed" and never
@@ -74,6 +79,13 @@ def fingerprint(vault: str | None, entry: dict) -> str | None:
     binary. The vault (whose secrets), the command and args (who receives them), and the
     full ``secrets`` / ``secret_files`` mappings (which keys, under which environment
     variable names — both halves are chosen by the committed file) all change the digest.
+
+    **`ensure_ascii=False` below is load-bearing and must stay.** It is not the line-safety
+    question `contain.json_line` answers — this string is hashed, never written to a line —
+    and both encodings are equally faithful. What changing it would do is change every
+    digest, which silently un-approves every credentialed server every operator has already
+    approved: the next `sync-agents` withholds working credentials and asks again. A
+    consistency edit here costs a plane its consent state.
     """
     secrets = entry.get("secrets") or {}
     files = entry.get("secret_files") or {}

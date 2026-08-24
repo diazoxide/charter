@@ -47,6 +47,31 @@ different jobs — and the tests force a hostile name past the boundary specific
 the second one holds on its own, because a guard that passes only because a different guard
 fired is a guard nobody knows is broken.
 
+**That sentence was not true the first time it was written, and the reason is worth more than
+the fix.** The emission serialised with `ensure_ascii=False`, which escapes the line breaks
+JSON's own string rules call control characters — `\n` among them — and leaves **U+2028 LINE
+SEPARATOR, U+2029 PARAGRAPH SEPARATOR and U+0085 NEL** exactly as they were found. All three
+end a line for `str.splitlines`, for a YAML 1.1 reader, and for a JavaScript parser before
+ES2019. So the second layer held for one spelling of "newline" and not for three others, the
+first layer was the only thing refusing them, and this entry claimed otherwise. Worse, no
+bypass of the name boundary was needed to see it: a committed **value** — an ordinary `args`
+entry, which no alphabet bounds — put a second physical line into a generated agent's
+frontmatter on the plain path.
+
+Charter now serialises through one function, `contain.json_line`, whose whole job is the
+sentence above: JSON on exactly one physical line, whatever it holds, by escaping every
+non-ASCII codepoint rather than by knowing which ones are line breaks. Every value it is
+given comes back out of the file byte for byte — escaped, never dropped — including a lone
+surrogate, which the old spelling could not even encode to write. The tests ask the whole
+Unicode codespace instead of a list of separators, because the list is what failed.
+
+Same defect, one surface further in: `charter`'s session trace is one JSON object per line
+and is read back by splitting on lines, so a separator in a recorded field — `charter persona
+note` traces the operator's own message — used to write a record that read back as two
+unparseable halves and was silently dropped on the way out. A trace that quietly loses the
+event it was asked to record is worse than no trace, because it still looks present. It goes
+through the same one-line serialisation now.
+
 One more surface, the same class: `sync-agents`'s withheld list and its approval lines are
 rows of the form `persona/server → command`, built out of the same committed file. A newline
 in an `args` entry wrote a row indistinguishable from charter's own — so a report could name
@@ -54,6 +79,25 @@ a server that was never withheld, under a count that agreed with it, and the ope
 would then cover something they had not read. Every committed value charter prints back now
 goes through one bound that escapes anything without a glyph. It is a display bound, not a
 promise: it stops a value forging a *line*, and it will not tell you that `l` is not `I`.
+
+**"Every committed value" had to be made literally true, and three of them were not.** A
+value that never reaches a serialiser is the remaining way to put a line where charter did
+not intend one, and the ones charter reads off the **disk** are not bounded by any
+frontmatter alphabet — a filesystem forbids `/` and NUL and nothing else. So: a directory
+under `personas/` whose name charter did not mint made `persona lint` print two rows for one
+refused persona, the second wearing charter's own formatting; a file in
+`personas/<name>/bin/` put an extra bullet into the *brief the sub-agent reads*, which is the
+same trick aimed at the model rather than at the YAML parser; and the refusal sentences
+themselves — the report this whole class of defect is announced ON — interpolated a path
+without bounding it. All three now go through the same display bound, the last of them at one
+choke point rather than at twelve `.format` calls.
+
+The frontmatter values are safe for a reason worth writing down, because it is an accident of
+the reading side rather than a bound on the writing side: `persona.parse` splits with
+`str.splitlines()`, which splits on all three separators, so a committed `persona.md` cannot
+carry one into a value at all. That is what lets `tools:`, `disallowedTools:`, `model:` and
+`skills:` still be built with an f-string — and a test pins it, so a later change to
+`split("\n")` fails loudly instead of quietly reopening four lines.
 
 *Bounded values do not travel.* A plane whose `mcp.json` uses a name outside the alphabet
 loses that server the next time it syncs, and is told which one and why. Rename it and re-run.

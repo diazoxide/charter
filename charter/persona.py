@@ -1212,8 +1212,13 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
         # there sends the reader looking for a missing file; the refusal names the path
         # charter actually resolved to, which is the whole defect (#336).
         refused = definition_refusal(name)
+        # `contain.one_line`, because *name* here is a DIRECTORY name and a directory name
+        # is not a name charter minted: `personas/` is committed, and a filesystem forbids
+        # only `/` and NUL. A U+2028 in one made this single lint row two rows, the second
+        # of them indistinguishable from charter's own — the #453 mechanism on the surface
+        # that exists to REPORT #453. Reproduced before it was bounded.
         return [("error", f"persona.md: {refused}" if refused
-                 else f"persona '{name}' does not load")]
+                 else f"persona '{contain.one_line(name)}' does not load")]
     meta = d["meta"]
     issues: list[tuple[str, str]] = []
     if deep:
