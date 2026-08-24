@@ -49,7 +49,12 @@ shell history**, while still letting an agent *use* the credential:
   its own stdin, stdout and stderr, so a hardlink, a `readlink`'d log path and
   `/dev/fd/1` are all the same one object and get the same answer. `--force` does not
   reach that check. An **existing** file is refused too — overwriting one destroys its
-  contents and sets it to 0600, so it takes `--force` and says so afterwards.
+  contents and sets it to 0600, so it takes `--force` and says so afterwards. Every
+  destination it does write is **recorded** (`.charter/materialized.json`, paths and key
+  names only — never values), and the guard below refuses to read those files back.
+  Materializing a credential for a tool that insists on a file is supported; `cat`ting it
+  afterwards is the leak the rest of this page exists to prevent, and it used to be the
+  one route around every guard.
 - **`charter secret get`** is masked by default — it prints a byte count and a SHA-256
   fingerprint, never the value.
 - **`charter secret get --reveal`** is the one path that *can* print plaintext, and it
@@ -68,6 +73,13 @@ shell history**, while still letting an agent *use* the credential:
   harness's own file-reading tools (`Read`, `Grep`). It used to mean only the shell, which
   made this bullet false in the way that mattered: the shell denial names the path it
   refused, so reading that path with `Read` was the obvious next move and it worked (#90).
+
+  It also covers the ways of spelling the same thing: `.charter//vaults/`, `.charter/./vaults/`
+  and `.CHARTER/vaults/` are the same file to the filesystem and are the same file to the
+  guard; a wrapper in front of the reader (`env cat …`, `sudo cat …`, `{ cat …; }`,
+  `if true; then cat …; fi`) does not change what the program is; and a file
+  `charter secret cp` materialized is covered wherever it was put. Each of those was a
+  verified bypass, and each is now a test.
 
   `Glob` is not denied — it returns file *names*, and that a vault exists is not the secret.
   Neither is a search rooted far above `.charter/`, which reads vault files as collateral;

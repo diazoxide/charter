@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import config, util
+from . import config, materialized, util
 from .secrets import base, registry
 
 
@@ -630,6 +630,12 @@ def cmd_secret_cp(args) -> int:
     The destination is checked BEFORE the value is resolved: a refused path never causes
     a vault read, so the plaintext is never in this process at all for the case that was
     about to print it.
+
+    The destination is then recorded in :mod:`charter.materialized` so the vault read
+    guards cover it. Without that, this command was the documented way around them: the
+    value it writes is plaintext at a path `_VAULT_PATH_RE` never matched, and the
+    `--reveal` denial itself said "use `secret cp`". Materialising a secret is legitimate;
+    reading the file back into the transcript is the thing every other guard here refuses.
     """
     dest = Path(args.dest).expanduser()
     force = bool(getattr(args, "force", False))
@@ -736,9 +742,13 @@ def cmd_secret_cp(args) -> int:
         # the tail of the old contents behind the new value.
         os.ftruncate(f.fileno(), 0)
         f.write(value)
+    # Before the success line: an operator who sees "Wrote …" must be able to rely on the
+    # guard covering it, and a failure between the two would be a file nothing knows about.
+    materialized.record(dest, vault=args.vault, key=args.key)
     if force and not created:
         util.warn(f"Overwrote {dest} and set it to 0600.")
-    util.ok(f"Wrote '{args.vault}/{args.key}' to {dest} (0600). Value not shown.")
+    util.ok(f"Wrote '{args.vault}/{args.key}' to {dest} (0600). Value not shown. "
+            f"Reading it back with `cat`/`Read` is denied — hand the PATH to the tool.")
     return 0
 
 

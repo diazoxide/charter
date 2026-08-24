@@ -36,8 +36,13 @@ rule while one who reads a bare refusal files an issue.
 
 - **Secret leak.** A command whose argv would put a vault's contents into the transcript.
   Needs argv *and* the plane's vault paths, so it cannot be expressed as a static rule.
+  "Argv" means the real one: a wrapper (`env`, `sudo`, `command`, `xargs`, a `{ … }` group,
+  a `then` branch) does not change what the program is, an unparseable quote does not hide
+  the commands after it, and `//`, `/./` and a different case are the same path.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
-  matcher at all.
+  matcher at all. Both sides share one predicate, so they cannot come to disagree about
+  what counts as a vault — and both cover a file `charter secret cp` materialized, wherever
+  it was put.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone.
 - **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root

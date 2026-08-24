@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import sys
 import time
@@ -298,7 +299,61 @@ _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg 
 #: The vault FILES — note the trailing slash. `.charter/vaults.json` is the registry and
 #: holds provider config and paths, never values, so `grep -rn vaults .charter/vaults.json`
 #: is an ordinary read and was being hard-denied.
-_VAULT_PATH_RE = re.compile(r"\.charter/(?:vaults/|browser|active-)")
+#:
+#: Case-insensitive because the filesystems this runs on mostly are: APFS and NTFS open
+#: `.CHARTER/vaults/x.json` and `.charter/vaults/x.json` as the same inode, so a
+#: case-sensitive guard is one Shift key away from absent. On a case-sensitive filesystem
+#: the extra spellings simply do not resolve, and refusing to read a file that cannot
+#: exist costs nothing. Never `.search` this directly — call :func:`_vault_path_hit`,
+#: which folds the other spellings of the same path too.
+_VAULT_PATH_RE = re.compile(r"(?i)\.charter/(?:vaults/|browser|active-)")
+
+
+def _norm_path_text(text: str) -> str:
+    """*text* with the path spellings a filesystem treats as identical folded together.
+
+    `.charter//vaults/x`, `.charter/./vaults/x` and `.charter/vaults/x` are one file to
+    `open()`, and only the last matched. charter already knows this idiom — `pretooluse_edit`
+    applies it — and the two vault guards, which this module argues must never disagree,
+    both skipped it.
+
+    Backslashes fold to `/` first so a Windows-style spelling cannot smuggle a separator
+    past the collapse.
+    """
+    t = text.replace("\\", "/")
+    while "/./" in t:
+        t = t.replace("/./", "/")
+    while "//" in t:
+        t = t.replace("//", "/")
+    return t
+
+
+def _vault_path_hit(text: str) -> bool:
+    """Whether *text* names a vault/secret file, in any spelling of that path.
+
+    ONE predicate behind the Bash guard (:func:`_leak_reason`) and the Read/Grep guard
+    (:func:`pretooluse_read`). Both used to call `.search` themselves, and a guard that is
+    open-coded twice is a guard that disagrees with itself exactly where nobody looks.
+
+    Three spellings beyond the literal one:
+
+    * duplicated and dot separators, via :func:`_norm_path_text`;
+    * `..` traversal — resolved with `normpath` only when a `..` is actually present, so
+      an ordinary relative path is never rewritten;
+    * the vault DIRECTORY itself. `_VAULT_PATH_RE` requires `vaults/`, the trailing slash
+      being the carve-out that keeps the `.charter/vaults.json` REGISTRY readable, so a
+      `Grep`/`grep -r` rooted at `.charter/vaults` would otherwise walk past a guard that
+      refuses every file inside it. Appending a slash cannot create a false positive:
+      `.charter/vaults.json/` still contains no `vaults/`.
+    """
+    t = _norm_path_text(text)
+    if _VAULT_PATH_RE.search(t) or _VAULT_PATH_RE.search(t.rstrip("/") + "/"):
+        return True
+    if ".." in t:
+        resolved = posixpath.normpath(t)
+        return bool(_VAULT_PATH_RE.search(resolved)
+                    or _VAULT_PATH_RE.search(resolved.rstrip("/") + "/"))
+    return False
 
 
 #: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost
@@ -309,13 +364,18 @@ _CHARTER_PROGS = ("charter", "edm")
 
 
 def _is_charter(prog: str, args: list[str]) -> bool:
-    """True when this invocation is charter itself, including `python3 -m charter`."""
-    base = os.path.basename(prog)
+    """True when this invocation is charter itself, including `python3 -m charter`.
+
+    Case-folded for the same reason :data:`_VAULT_PATH_RE` is: on a case-insensitive
+    filesystem `CHARTER secret get … --reveal` runs the same binary, and a guard that
+    matches one casing of a name is a guard with a Shift key for a bypass.
+    """
+    base = os.path.basename(prog).lower()
     if base in _CHARTER_PROGS:
         return True
     if base.startswith("python") and "-m" in args:
         i = args.index("-m")
-        return i + 1 < len(args) and args[i + 1] in _CHARTER_PROGS
+        return i + 1 < len(args) and args[i + 1].lower() in _CHARTER_PROGS
     return False
 
 
@@ -324,12 +384,15 @@ _HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 def _reader_of(line: str) -> bool:
-    """Whether *line* starts by invoking a program in :data:`_READERS`."""
-    toks = line.strip().split()
-    i = 0
-    while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
-        i += 1  # leading VAR=value assignments
-    return i < len(toks) and os.path.basename(toks[i]).lower() in _READERS
+    """Whether *line* starts by invoking a program in :data:`_READERS`.
+
+    Goes through :func:`_split_env`, so the leading `VAR=value` assignments AND the
+    wrapper prefixes (`env`, `sudo`, `command`, …) are stripped by the same code the
+    guards use to find a program. Answering "which program is this" two different ways in
+    one module is how `env cat` ended up invisible to one of them.
+    """
+    prog, _env, _argv = _split_env(line.strip().split())
+    return os.path.basename(prog).lower() in _READERS
 
 
 def _strip_reader_heredocs(cmd: str) -> str:
@@ -428,7 +491,47 @@ def _file_operands(prog: str, args: list[str]) -> list[str]:
     return out
 
 
-def _leak_reason(cmd: str) -> str | None:
+#: `--reveal` as a real flag, for the raw-string scan on the unparseable path only. Anywhere
+#: a tokenizer succeeded, argv is used instead — a commit message may legitimately mention
+#: the flag, which is the false positive this guard was rewritten to stop having.
+_REVEAL_RE = re.compile(r"(?:^|\s)--reveal(?:=|\s|$)")
+
+#: The two denials, as constants: they are returned from three places now (argv, the raw
+#: scan, and the Read/Grep guard) and a guard whose wording drifts per path is a guard
+#: whose reader cannot tell which rule fired.
+#:
+#: Neither one says "use `secret cp`" any more. `cp` materialises the value into a FILE,
+#: and the agent's next move after reading a denial is whatever the denial names — so this
+#: text was the documented route around itself: `secret cp v k /tmp/x && cat /tmp/x`
+#: printed the credential with both guards satisfied. `secret exec` is the only remedy
+#: that keeps the value out of the transcript, so it is the only one named.
+_REVEAL_REASON = ("would reveal a secret value into the conversation (--reveal). "
+                  "Use `charter … secret exec -- <cmd>`, which puts the value in the "
+                  "child's environment and never in the transcript — never --reveal for "
+                  "an agent")
+_READ_REASON = ("reads a vault/secret file directly (would print plaintext). "
+                "Use `charter … secret exec` instead of catting `.charter/`")
+
+
+def _materialized_hit(operand: str, cwd: str = "", here: str = "") -> bool:
+    """Whether *operand* names a file `charter secret cp` wrote a secret into.
+
+    `secret cp` puts plaintext at a caller-chosen path, and `_VAULT_PATH_RE` only ever
+    matched `.charter/`, so `secret cp v k /tmp/x && cat /tmp/x` was a two-command,
+    fully-in-policy read of any vault value — through the door the `--reveal` denial itself
+    recommended.
+
+    Best-effort and cheap: the common case is that no plane has ever run `secret cp`, and
+    :func:`charter.materialized.paths` answers that with a single `os.stat`.
+    """
+    try:
+        from . import materialized
+        return materialized.covers(operand, cwd=cwd, here=here)
+    except Exception:
+        return False
+
+
+def _leak_reason(cmd: str, cwd: str = "") -> str | None:
     """Deny a command that would print a secret into the transcript.
 
     Inspects real INVOCATIONS, not the raw string. Both patterns used to be substring
@@ -447,20 +550,52 @@ def _leak_reason(cmd: str) -> str | None:
     Deliberately not consulting the vault registry for paths outside `.charter/`: this
     runs on every Bash tool call, and a registry read per invocation is a real cost. A
     vault registered elsewhere is therefore still unguarded here — a separate finding,
-    not something to half-fix on the hot path.
+    not something to half-fix on the hot path. The one exception is a path `secret cp`
+    itself materialised (:mod:`charter.materialized`), which is one `os.stat` in the
+    common case and covers the hole the `--reveal` denial used to POINT AT.
+
+    A `cd` in an earlier segment moves where the later ones run, so it is followed here —
+    `cd .charter/vaults && cat x.json` names no guarded path in the `cat`. The plane-root
+    guard has followed `cd` since #183; this one did not, and the same file arguing both
+    positions is how a bypass survives review.
+
+    **On an unparseable command** the argv is best-effort, so this adds a raw scan of the
+    whole string for `--reveal` and for a vault path. That is what this function's
+    docstring has always claimed to do; it was not true, and the collapse to one segment
+    meant a command could hide behind a broken quote.
     """
-    for _toks in _segment_argv(_strip_reader_heredocs(cmd)):
+    cmd = _strip_reader_heredocs(cmd)
+    segments, parsed = _segment_argv_parsed(cmd)
+    if not parsed:
+        # No tokenizer got through, so argv is a guess. Match the string itself — a false
+        # deny on an already-malformed command is survivable; printing a credential is not.
+        if _REVEAL_RE.search(cmd):
+            return _REVEAL_REASON
+        if _vault_path_hit(cmd):
+            return _READ_REASON
+    here = ""
+    for _toks in segments:
         prog, _env, args = _split_env(_toks)
         if not prog:
             continue
+        base = os.path.basename(prog).lower()
+        if base == "cd":
+            dest = next((a for a in args[1:] if not a.startswith("-")), None)
+            if dest:
+                here = dest if os.path.isabs(dest) else posixpath.join(here, dest)
+            continue
         if _is_charter(prog, args) and any(
                 a == "--reveal" or a.startswith("--reveal=") for a in args):
-            return ("would reveal a secret value into the conversation (--reveal). "
-                    "Use `charter … secret exec`/`cp` — never --reveal for an agent")
-        if os.path.basename(prog).lower() in _READERS and any(
-                _VAULT_PATH_RE.search(a) for a in _file_operands(prog, args)):
-            return ("reads a vault/secret file directly (would print plaintext). "
-                    "Use `charter … secret exec`/`cp` instead of catting `.charter/`")
+            return _REVEAL_REASON
+        if base in _READERS:
+            operands = _file_operands(prog, args)
+            if any(_vault_path_hit(a) or (here and _vault_path_hit(posixpath.join(here, a)))
+                   for a in operands):
+                return _READ_REASON
+            if any(_materialized_hit(a, cwd, here) for a in operands):
+                return ("reads a file `charter secret cp` materialised a secret into "
+                        "(would print plaintext). Consume it with `charter … secret exec`, "
+                        "or hand the PATH to the tool that needs it — never `cat` it")
     return None
 
 
@@ -599,11 +734,53 @@ def _is_sshcommand_config_write(args: list[str]) -> bool:
 
 
 #: Shell operators that end one separately-executed command and begin the next.
-_OPERATORS = (";", "&&", "||", "|", "&", "\n")
+#:
+#: The grouping tokens are here because a group is a boundary too: `{ cat <vault>; }` and
+#: `( cat <vault> )` and `echo $(cat <vault>)` all put the real program at token 1, where
+#: every guard in this module reads token 0 — verified as ALLOW before they were added.
+#: shlex's ``punctuation_chars`` already emits `(`/`)` as their own tokens; `{`/`}` arrive
+#: as tokens because a shell requires whitespace around them.
+_OPERATORS = (";", ";;", "&&", "||", "|", "|&", "&", "\n", "(", ")", "{", "}")
+
+#: The same operators for a string that never reached the tokenizer — see
+#: :func:`_segment_argv`'s unparseable path. Longest-first so `&&` is not read as two `&`.
+_OPERATOR_SPLIT_RE = re.compile(r"(\|\||&&|;;|;|\|&|\||&|\n|[(){}])")
+
+
+def _resegment(toks: list[str]) -> list[list[str]]:
+    """Split an already-whitespace-split token list on shell operators.
+
+    For the unparseable path only, where there is no tokenizer to lean on. Operators are
+    split out of the MIDDLE of a token as well (`a;b` is two commands to a shell, and one
+    token to `str.split`), because a fallback that only noticed free-standing operators
+    would be a rule an attacker satisfies by deleting a space.
+    """
+    out: list[list[str]] = []
+    cur: list[str] = []
+    for tok in toks:
+        for piece in _OPERATOR_SPLIT_RE.split(tok):
+            if not piece:
+                continue
+            if _OPERATOR_SPLIT_RE.fullmatch(piece):
+                out.append(cur)
+                cur = []
+            else:
+                cur.append(piece)
+    out.append(cur)
+    return [c for c in out if c]
 
 
 def _segment_argv(cmd: str) -> list[list[str]]:
-    """A shell command as **argv per separately-executed segment**, quoting respected.
+    """A shell command as **argv per separately-executed segment**, quoting respected."""
+    return _segment_argv_parsed(cmd)[0]
+
+
+def _segment_argv_parsed(cmd: str) -> tuple[list[list[str]], bool]:
+    """:func:`_segment_argv`, plus whether the command actually PARSED.
+
+    A caller that must fail closed needs to know that the answer it just got is
+    best-effort. The leak guard is the one caller that does — see :func:`_leak_reason`,
+    which adds a raw scan of the whole string when this returns ``False``.
 
     This replaced a regex split on shell operators, which ran BEFORE any tokenizer and
     therefore split on operators living inside a quoted argument. The result was that
@@ -619,15 +796,25 @@ def _segment_argv(cmd: str) -> list[list[str]]:
     as distinct tokens while honouring quotes natively, so prose stays prose. No dependency,
     which the zero-dependency promise requires.
 
-    **On a command that cannot be parsed at all** (genuinely unbalanced quotes) this returns
-    the whole string as ONE segment, and that single behaviour gives every caller the
-    failure direction it needs without a per-caller flag:
+    **On a command that cannot be parsed at all** (genuinely unbalanced quotes) this falls
+    back to a whitespace split, still segmented on the operators.
 
-    * the leak guard scans the entire text and stays **fail-closed** — not printing a secret
-      is a safety invariant, and swallowing an unparseable command would be the one failure
-      it may not have;
-    * the plane-root guard sees a program that is not ``git`` and does not fire —
-      **fail-open**, which is right for a guard whose failure mode is annoyance.
+    It used to return the whole string as ONE segment, and the docstring here claimed that
+    kept the leak guard fail-closed. It did the opposite. Every guard reads token 0 as the
+    program, so one segment means one program, and every invocation AFTER the first became
+    invisible: `echo $'it\\'s fine' ; cat .charter/vaults/x.json` is valid bash, trips
+    shlex, and printed a vault through the shipped hook. The same prefix flipped the SSH
+    guard, the signing guard and the release floor from deny to allow. A fallback that
+    drops guards is worse than no fallback, because the guard still looks present.
+
+    Re-segmenting keeps the direction each caller needs, from one behaviour:
+
+    * the leak guard sees every invocation, and :func:`_leak_reason` additionally scans the
+      raw string when parsing failed — not printing a secret is a safety invariant, and
+      swallowing an unparseable command is the one failure it may not have;
+    * the plane-root guard sees programs that are mostly not ``git`` and usually does not
+      fire — **fail-open**, which is right for a guard whose failure mode is annoyance, and
+      a genuine `git checkout` in an unparseable command being caught is not a regression.
     """
     import shlex
     try:
@@ -635,11 +822,13 @@ def _segment_argv(cmd: str) -> list[list[str]]:
         lex.whitespace_split = True
         toks = list(lex)
     except ValueError:
-        # ONE segment, but still tokenized: the leak guard has to be able to see
-        # `--reveal` among the arguments, and a single opaque blob would hide it. Naive
-        # whitespace split is exactly the old `_invocation` fallback — kept for the guard
-        # that must fail CLOSED, minus the operator splitting that created phantom commands.
-        return [(cmd or "").split()]
+        # Tokenized, and segmented: the leak guard has to see `--reveal` among the
+        # arguments AND has to see the second command at all. Quotes are not honoured on
+        # this path — they are what failed to parse — so a quoted operator can create a
+        # phantom segment. That is the trade #183 made in the other direction; the cost
+        # here is a false DENY on an already-malformed command, which is the survivable
+        # side for a guard whose other failure is printing a credential.
+        return _resegment((cmd or "").split()), False
     out: list[list[str]] = []
     cur: list[str] = []
     for t in toks:
@@ -649,15 +838,111 @@ def _segment_argv(cmd: str) -> list[list[str]]:
         else:
             cur.append(t)
     out.append(cur)
-    return [c for c in out if c]
+    return [c for c in out if c], True
+
+
+#: Programs that RUN another program: their own argv[1..] is the real invocation. Every
+#: guard in this module takes `prog` from token 0, so without stripping these the answer to
+#: "what is this command" is `env`, and `env cat .charter/vaults/x.json` — verified live —
+#: printed a vault. `xargs` is here for the same reason: `xargs cat` is a `cat`.
+_WRAPPERS = frozenset(
+    "env command builtin exec time nice ionice chrt nohup setsid stdbuf timeout unbuffer "
+    "sudo doas su-exec xargs".split())
+
+#: Shell KEYWORDS that can stand where a program stands once a command has been segmented.
+#: `if true; then cat <vault>; fi` segments into `then cat <vault>`, whose token 0 is
+#: `then`. Grouping tokens are in :data:`_OPERATORS` as well — they end a segment — but a
+#: shell also accepts them without surrounding whitespace, so they are stripped here too.
+_SHELL_KEYWORDS = frozenset(
+    "if then elif else fi while until do done for in case esac select function ! { } ( ) "
+    "$".split())
+
+#: Wrapper flags whose VALUE is a SEPARATE token, per wrapper. Skipping the value matters:
+#: without it `sudo -u root cat <vault>` stops at `root` and the `cat` is never seen.
+#:
+#: Per wrapper rather than one flat set, because the same spelling differs — `env -i`
+#: ignores the environment and takes nothing, while `xargs -i` and `stdbuf -i` do take a
+#: value — and a flat set would consume the program itself for `env -i cat <vault>`,
+#: which is a fail-OPEN on the exact input this table exists to catch. Same reasoning as
+#: :data:`_TAKES_VALUE` a few hundred lines up, and the same failure it was written for.
+_WRAPPER_VALUE_FLAGS = {
+    "env": ("-u", "--unset", "-C", "--chdir"),
+    "sudo": ("-u", "--user", "-g", "--group", "-p", "--prompt", "-C", "--close-from",
+             "-r", "--role", "-t", "--type", "-h", "--host", "-D", "--chdir",
+             "-R", "--chroot", "-U", "--other-user"),
+    "doas": ("-u", "-C"),
+    "nice": ("-n", "--adjustment"),
+    "ionice": ("-c", "--class", "-n", "--classdata", "-p", "--pid"),
+    "chrt": ("-p", "--pid"),
+    "timeout": ("-s", "--signal", "-k", "--kill-after"),
+    "stdbuf": ("-i", "--input", "-o", "--output", "-e", "--error"),
+    "exec": ("-a",),
+    "time": ("-f", "--format", "-o", "--output"),
+    "xargs": ("-I", "--replace", "-n", "--max-args", "-L", "--max-lines", "-P",
+              "--max-procs", "-d", "--delimiter", "-s", "--max-chars", "-a",
+              "--arg-file", "-E", "-e", "--eof"),
+}
+
+#: `env -S 'cat <vault>'` / `env --split-string=…` packs the whole command into ONE token.
+#: Treated as tokens rather than as a value to skip, because skipping it would leave an
+#: empty argv and the guard would see no program at all — fail-open on the exact input the
+#: rest of this table exists to catch.
+_SPLIT_STRING_FLAGS = ("-S", "--split-string")
+
+#: `timeout 5 cat <vault>` — the duration is a bare positional, not a flag.
+_DURATION_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 
 
 def _split_env(toks: list[str]) -> tuple[str, list[str], list[str]]:
-    """``(program, env-assignment prefixes, argv)`` for one already-tokenized segment."""
-    env = []
+    """``(program, env-assignment prefixes, argv)`` for one already-tokenized segment.
+
+    Strips two things off the front before naming the program: `VAR=value` assignments, and
+    the wrapper/keyword run described at :data:`_WRAPPERS` and :data:`_SHELL_KEYWORDS`. The
+    two interleave (`sudo FOO=bar env BAZ=qux cat …`), so this is one loop rather than two.
+
+    Env assignments keep flowing into *env* across a wrapper, which is what lets the
+    one-credential guard see `env GIT_SSH_COMMAND=/tmp/k git push` — the form that walked
+    past it while the unwrapped one was denied, with nothing downstream to catch it.
+
+    Deliberately NOT re-parsing `sh -c '<string>'`: that is a documented limit of this
+    guard (`tests/test_leak_guard_readers_that_write.py`), and widening it here would be a
+    different change. A wrapper is a program that runs its own argv; `sh -c` runs a string.
+    """
+    env: list[str] = []
     toks = list(toks)
-    while toks and _ENV_ASSIGN_RE.match(toks[0]):
-        env.append(toks.pop(0))
+    while toks:
+        if _ENV_ASSIGN_RE.match(toks[0]):
+            env.append(toks.pop(0))
+            continue
+        tok = toks[0]
+        base = os.path.basename(tok).lower()
+        if tok not in _SHELL_KEYWORDS and base not in _WRAPPERS:
+            break
+        toks.pop(0)
+        # the wrapper's OWN options, and the operands that are not the program
+        while toks:
+            nxt = toks[0]
+            if base == "env" and nxt.startswith(_SPLIT_STRING_FLAGS):
+                toks.pop(0)
+                rest = nxt.split("=", 1)[1] if "=" in nxt else (
+                    nxt[2:] if nxt.startswith("-S") and len(nxt) > 2 else "")
+                if not rest and toks:
+                    rest = toks.pop(0)
+                try:
+                    import shlex
+                    toks = shlex.split(rest) + toks
+                except ValueError:
+                    toks = rest.split() + toks
+                continue
+            if nxt.startswith("-") and len(nxt) > 1:
+                toks.pop(0)
+                if "=" not in nxt and nxt in _WRAPPER_VALUE_FLAGS.get(base, ()) and toks:
+                    toks.pop(0)
+                continue
+            if base == "timeout" and _DURATION_RE.match(nxt):
+                toks.pop(0)     # the duration, not the program
+                continue
+            break
     return (toks[0] if toks else ""), env, toks
 
 
@@ -803,9 +1088,18 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
     the two of them share one pair of eyes.
 
     The subcommand is yielded raw; deciding which ones matter is each guard's own business.
+
+    **Fails OPEN on a command that would not tokenize**, explicitly and in one place. Since
+    `_segment_argv` learned to re-segment an unparseable command, its argv is a guess made
+    without quoting — and these are the guards whose failure mode is annoyance, not a leaked
+    credential. A phantom `git checkout` conjured out of a broken quote must not stop a
+    turn. The leak and one-credential guards, which may not miss, keep scanning it.
     """
+    segments, parsed = _segment_argv_parsed(cmd)
+    if not parsed:
+        return
     here = cwd
-    for _toks in _segment_argv(cmd):
+    for _toks in segments:
         prog, _env, args = _split_env(_toks)
         base = os.path.basename(prog or "")
         # A `cd` earlier in the SAME command moves where the later segments run. Without
@@ -1342,15 +1636,27 @@ def pretooluse_read() -> int:
     registered matcher, so it reached none of that — while the Bash denial helpfully *named
     the path it refused*, making `Read` on that path the agent's obvious next move.
 
-    Same regex as the Bash guard on purpose (:data:`_VAULT_PATH_RE`), including its
+    Same PREDICATE as the Bash guard on purpose (:func:`_vault_path_hit`), including its
     carve-out: ``.charter/vaults.json`` is the registry — provider config and paths, never
     values — and only ``.charter/vaults/`` holds secrets. Two guards that disagreed about
     what counts as a vault would be worse than one, because the gap would sit exactly where
-    nobody looks.
+    nobody looks. They *did* disagree while each open-coded the regex: the harness normalises
+    ``file_path`` before this hook sees it, so `//` and `/./` were denied here and allowed
+    through Bash — and case variance survived normalisation on APFS, so ``.Charter/vaults/``
+    was allowed by BOTH. One function now answers for both.
+
+    Also covers a path ``charter secret cp`` materialised (:mod:`charter.materialized`) —
+    same reasoning: the Bash guard covers it, so this must, or the denial on one side is
+    just directions to the other side.
 
     Known limit, shared with the Bash guard and stated rather than papered over: a `Grep`
     rooted at the repo top searches vault files as collateral. Denying every broad search is
     untenable, so this checks the path the caller actually named.
+
+    **The deny is outside the ``try``.** It used to be inside, so a ``BrokenPipeError`` from
+    its own ``print`` — an ``Exception`` — turned a deny into an allow. The Bash sibling has
+    no such wrapper, which meant the two vault guards failed in opposite directions. The
+    parsing may fail open; the DENIAL may not.
     """
     data = _read_stdin()
     _touch_piece(data)
@@ -1359,21 +1665,23 @@ def pretooluse_read() -> int:
             return 0
         ti = data.get("tool_input") or {}
         targets = [str(ti[k]) for k in _PATH_KEYS if ti.get(k)]
-        # Each target is tested with a trailing slash appended as well. `_VAULT_PATH_RE`
-        # requires `vaults/` — the slash is what keeps `.charter/vaults.json`, the registry,
-        # out of it — so a Grep rooted at the DIRECTORY `.charter/vaults` would otherwise
-        # walk past a guard that stops every file inside it. Appending cannot create a false
-        # positive: `.charter/vaults.json/` still has no `vaults/` in it.
-        if not any(_VAULT_PATH_RE.search(t) or _VAULT_PATH_RE.search(t + "/")
-                   for t in targets):
-            return 0
-        reason = ("reads a vault/secret file directly (would print plaintext). "
-                  "Use `charter … secret exec`/`cp` instead of reading `.charter/`")
-        _deny("PreToolUse", reason)
+        cwd = str(data.get("cwd") or "")
+        hit = any(_vault_path_hit(t) for t in targets)
+        materialised = not hit and any(_materialized_hit(t, cwd) for t in targets)
+    except Exception:
+        return 0
+    if not (hit or materialised):
+        return 0
+    reason = (_READ_REASON.replace("catting", "reading") if hit else
+              "reads a file `charter secret cp` materialised a secret into (would print "
+              "plaintext). Consume it with `charter … secret exec`, or hand the PATH to "
+              "the tool that needs it")
+    _deny("PreToolUse", reason)
+    try:
         _trace("deny", data.get("session_id"), reason=reason[:70],
                cmd=(data.get("tool_name") or "")[:40])
     except Exception:
-        return 0
+        pass
     return 0
 
 
@@ -1465,7 +1773,7 @@ def pretooluse() -> int:
     if _MEM_RECORD_RE.search(cmd):
         _memnudge_reset(sid)
     # A: a secret would leak into the conversation → hard DENY (a real safety invariant).
-    leak = _leak_reason(cmd)
+    leak = _leak_reason(cmd, cwd)
     if leak:
         _deny("PreToolUse", leak)
         _trace("deny", sid, reason=leak[:70], cmd=head)

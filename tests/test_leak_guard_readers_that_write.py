@@ -48,10 +48,18 @@ class TestItStillDeniesRealReads(LeakCase):
     def test_grep_recursive_into_the_vault_directory(self):
         """With the trailing slash — `_VAULT_PATH_RE` requires it deliberately, so that
         `.charter/vaults.json` (the registry: provider config and paths, never values) stays
-        an ordinary read. A bare `.charter/vaults` is not matched today; that is a coverage
-        gap of its own, not this bug, and widening the pattern here would be a different
-        change smuggled into a false-positive fix."""
+        an ordinary read."""
         self.assertTrue(self.denied("grep -r . .charter/vaults/"))
+
+    def test_grep_into_the_vault_directory_without_the_trailing_slash(self):
+        """The gap this file used to record and leave open: a bare `.charter/vaults` is the
+        same directory, and `grep -r` into it prints every value in it. The Read/Grep guard
+        appended a slash before matching and this one did not — the two disagreeing about
+        what counts as a vault, which is the failure `pretooluse_read` was written to end.
+        Both go through `_vault_path_hit` now. Appending cannot make the registry a vault:
+        `.charter/vaults.json/` still contains no `vaults/`."""
+        self.assertTrue(self.denied("grep -r . .charter/vaults"))
+        self.assertFalse(self.denied("grep -rn vaults .charter/vaults.json"))
 
     def test_sed_printing_a_guarded_file(self):
         self.assertTrue(self.denied("sed -n 1p .charter/active-persona"))
