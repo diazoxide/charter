@@ -491,6 +491,27 @@ def _file_operands(prog: str, args: list[str]) -> list[str]:
     return out
 
 
+def _spliced_operands(operands: list[str]) -> list[str]:
+    """*operands*, plus each ADJACENT PAIR joined — the word a substitution splices back.
+
+    A substitution's output is glued to whatever follows the `)` with no space, and the
+    tokenizer has already thrown that adjacency away:
+
+        cat $(echo .charter)/vaults/x.json
+
+    reaches the guard as the operands `.charter` and `/vaults/x.json`. Neither names a
+    vault; concatenated they name exactly one, and that is the file `cat` opens. Pairs
+    rather than the whole join, so the extra candidates stay proportional and a denial can
+    always be traced to two neighbouring words.
+
+    The cost is a command that passes two genuinely separate operands which happen to
+    concatenate into a vault path — `cat .charter /vaults/x.json`, a read of a directory
+    and of a path off the filesystem root. That is a false DENY on a command that does not
+    do anything useful, against a false ALLOW on a working exfiltration.
+    """
+    return operands + ["".join(operands[i:i + 2]) for i in range(len(operands) - 1)]
+
+
 #: `--reveal` as a real flag, for the raw-string scan on the unparseable path only. Anywhere
 #: a tokenizer succeeded, argv is used instead — a commit message may legitimately mention
 #: the flag, which is the false positive this guard was rewritten to stop having.
@@ -557,7 +578,10 @@ def _leak_reason(cmd: str, cwd: str = "") -> str | None:
     A `cd` in an earlier segment moves where the later ones run, so it is followed here —
     `cd .charter/vaults && cat x.json` names no guarded path in the `cat`. The plane-root
     guard has followed `cd` since #183; this one did not, and the same file arguing both
-    positions is how a bypass survives review.
+    positions is how a bypass survives review. `pushd` is the same relocation and is
+    followed the same way, and so is a WRAPPER's own chdir flag (`env -C <dir> cat x.json`,
+    `sudo --chdir=<dir> …`): that value used to be read only to be thrown away, which let a
+    flag do exactly what the `cd` branch had just been written to stop.
 
     **On an unparseable command** the argv is best-effort, so this adds a raw scan of the
     whole string for `--reveal` and for a vault path. That is what this function's
@@ -575,24 +599,29 @@ def _leak_reason(cmd: str, cwd: str = "") -> str | None:
             return _READ_REASON
     here = ""
     for _toks in segments:
-        prog, _env, args = _split_env(_toks)
+        prog, _env, args, chdir = _split_env_chdir(_toks)
         if not prog:
             continue
         base = os.path.basename(prog).lower()
-        if base == "cd":
+        if base in _CHDIR_BUILTINS:
             dest = next((a for a in args[1:] if not a.startswith("-")), None)
             if dest:
                 here = dest if os.path.isabs(dest) else posixpath.join(here, dest)
             continue
+        # A wrapper's chdir moves THIS program only — `env -C d cat x` leaves the shell
+        # where it was — so it layers onto `here` for this segment and does not outlive it.
+        where = here
+        if chdir:
+            where = chdir if os.path.isabs(chdir) else posixpath.join(here, chdir)
         if _is_charter(prog, args) and any(
                 a == "--reveal" or a.startswith("--reveal=") for a in args):
             return _REVEAL_REASON
         if base in _READERS:
-            operands = _file_operands(prog, args)
-            if any(_vault_path_hit(a) or (here and _vault_path_hit(posixpath.join(here, a)))
+            operands = _spliced_operands(_file_operands(prog, args))
+            if any(_vault_path_hit(a) or (where and _vault_path_hit(posixpath.join(where, a)))
                    for a in operands):
                 return _READ_REASON
-            if any(_materialized_hit(a, cwd, here) for a in operands):
+            if any(_materialized_hit(a, cwd, where) for a in operands):
                 return ("reads a file `charter secret cp` materialised a secret into "
                         "(would print plaintext). Consume it with `charter … secret exec`, "
                         "or hand the PATH to the tool that needs it — never `cat` it")
@@ -736,15 +765,137 @@ def _is_sshcommand_config_write(args: list[str]) -> bool:
 #: Shell operators that end one separately-executed command and begin the next.
 #:
 #: The grouping tokens are here because a group is a boundary too: `{ cat <vault>; }` and
-#: `( cat <vault> )` and `echo $(cat <vault>)` all put the real program at token 1, where
-#: every guard in this module reads token 0 — verified as ALLOW before they were added.
-#: shlex's ``punctuation_chars`` already emits `(`/`)` as their own tokens; `{`/`}` arrive
-#: as tokens because a shell requires whitespace around them.
+#: `( cat <vault> )` put the real program at token 1, where every guard in this module
+#: reads token 0 — verified as ALLOW before they were added. `{`/`}` arrive as tokens
+#: because a shell requires whitespace around them.
+#:
+#: `(` and `)` are NOT plain boundaries, though — see :func:`_segment_tokens`. A `$( … )`
+#: substitution is a WORD of the command it sits in, so treating its parenthesis as a
+#: boundary strands the operand: `cat $(echo <vault>)` became `cat $` + `echo <vault>`, and
+#: neither half named a read of the vault.
 _OPERATORS = (";", ";;", "&&", "||", "|", "|&", "&", "\n", "(", ")", "{", "}")
 
 #: The same operators for a string that never reached the tokenizer — see
 #: :func:`_segment_argv`'s unparseable path. Longest-first so `&&` is not read as two `&`.
 _OPERATOR_SPLIT_RE = re.compile(r"(\|\||&&|;;|;|\|&|\||&|\n|[(){}])")
+
+#: Tokens that turn the `(` after them into a SUBSTITUTION rather than a subshell:
+#: `$(` command substitution, `<(`/`>(` process substitution. `$` is matched as a SUFFIX
+#: because `x$(…)` tokenizes as `x$` — a prefix glued to the substitution.
+_PROCSUB_LEAD = ("<", ">")
+
+#: The characters shlex treats as punctuation when ``punctuation_chars=True``. It emits a
+#: RUN of them as ONE token — `<(`, `);`, `)&&`, `|(` — and a run matches nothing in
+#: :data:`_OPERATORS`, so `( true );cat <vault>` kept `);` as an ordinary word and the `cat`
+#: never started a segment. :func:`_split_punctuation` breaks the runs back apart.
+_PUNCTUATION_CHARS = "();<>|&"
+
+#: Backtick substitution is `$( … )` spelled the old way, and the tokenizer has no idea:
+#: `` cat `echo <vault>` `` kept the backticks glued to the words. Rewriting them to the
+#: modern form before tokenizing means ONE substitution rule covers both spellings instead
+#: of one covering whichever spelling the fix happened to be written against.
+_BACKTICK_RE = re.compile(r"(?<!\\)`")
+
+
+def _unbacktick(cmd: str) -> str:
+    """*cmd* with backtick substitutions rewritten as `$( … )` — the same construct.
+
+    Alternating: the first unescaped backtick opens, the next closes. An odd count leaves
+    the last one open, which :func:`_segment_tokens` closes at end of input — the same place
+    a shell would report the error, and the segment is still SEEN.
+
+    A backtick inside single quotes is literal to a shell and is rewritten here anyway. The
+    cost is a token whose text reads `$(x)` instead of `` `x` `` inside an argument that is
+    never split (shlex keeps a quoted argument whole), which is why this is safe to do
+    before quoting is known.
+    """
+    parts = _BACKTICK_RE.split(cmd or "")
+    if len(parts) == 1:
+        return cmd or ""
+    out = [parts[0]]
+    for i, part in enumerate(parts[1:]):
+        out.append("$(" if i % 2 == 0 else ")")
+        out.append(part)
+    return "".join(out)
+
+
+def _split_punctuation(toks: list[str]) -> list[str]:
+    """*toks* with shlex's glued punctuation RUNS broken into individual operator tokens.
+
+    ``shlex(punctuation_chars=True)`` emits `);` and `)&&` and `<(` as single tokens. Every
+    boundary test in this module compares against :data:`_OPERATORS`, which holds the
+    operators one at a time, so a run was read as an ordinary word and the command after it
+    was swallowed into the argv before it: `( true );cat <vault>` was one segment whose
+    program was `true`. Only tokens made ENTIRELY of punctuation characters are touched, so
+    a real argument is never rewritten.
+
+    A quoted `';'` is already indistinguishable from an operator at this layer — shlex hands
+    back the same one-character token either way — so this widens no gap the boundary test
+    did not already have, and errs toward one extra segment, which is a false DENY.
+    """
+    out: list[str] = []
+    for t in toks:
+        if len(t) > 1 and all(c in _PUNCTUATION_CHARS for c in t):
+            out.extend(p for p in _OPERATOR_SPLIT_RE.split(t) if p)
+        else:
+            out.append(t)
+    return out
+
+
+def _segment_tokens(toks: list[str]) -> list[list[str]]:
+    """Tokens as **argv per separately-executed command**, parentheses understood.
+
+    Shared by both of :func:`_segment_argv_parsed`'s paths, so the parsed and the
+    unparseable answers cannot disagree about what a boundary is.
+
+    Three kinds of token end a segment: the control operators (`;`, `&&`, `|`, …), the
+    braces of a group, and the parenthesis of a SUBSHELL. A parenthesis that opens a
+    **substitution** — `$( … )`, `<( … )`, `>( … )` — is not a boundary in the same sense,
+    and treating it as one was a bypass rather than a gap:
+
+        cat $(echo .charter/vaults/x.json)
+
+    segments into `cat $` and `echo .charter/vaults/x.json` under a plain boundary rule.
+    Neither half is a read of the vault — the reader lost its operand and the operand lost
+    its reader — and the leak guard, the one-credential guard, the signing guard and the
+    release floor all went from deny to allow (`git push $(echo git@host:o/r.git)`).
+
+    So a substitution yields an **additional inner segment** while the **enclosing segment
+    keeps accumulating** the same tokens. Both readings are needed and neither is
+    speculative: the inner one is what runs (`echo $(cat <vault>)` — the `cat` is real), and
+    the outer one is where its output lands (`cat $(echo <vault>)` — the path is `cat`'s
+    operand). A QUOTED substitution never reaches here: shlex keeps `"$(cat x)"` as one
+    token, and the vault predicate matches the path inside it as text.
+    """
+    out: list[list[str]] = []
+    open_segs: list[list[str]] = [[]]     # outermost first; a substitution pushes one
+    subst: list[bool] = [False]           # is open_segs[i] a substitution, not the top?
+    for t in _split_punctuation(toks):
+        if t == "(":
+            prev = open_segs[-1][-1] if open_segs[-1] else ""
+            if prev.endswith("$") or prev in _PROCSUB_LEAD:
+                open_segs.append([])
+                subst.append(True)
+            else:                          # a subshell: an ordinary boundary
+                out.append(open_segs[-1])
+                open_segs[-1] = []
+            continue
+        if t == ")":
+            if subst[-1]:
+                out.append(open_segs.pop())
+                subst.pop()
+            else:
+                out.append(open_segs[-1])
+                open_segs[-1] = []
+            continue
+        if t in _OPERATORS:
+            out.append(open_segs[-1])
+            open_segs[-1] = []
+            continue
+        for seg in open_segs:              # every open segment, the outer ones included
+            seg.append(t)
+    out.extend(open_segs)
+    return [c for c in out if c]
 
 
 def _resegment(toks: list[str]) -> list[list[str]]:
@@ -754,20 +905,15 @@ def _resegment(toks: list[str]) -> list[list[str]]:
     split out of the MIDDLE of a token as well (`a;b` is two commands to a shell, and one
     token to `str.split`), because a fallback that only noticed free-standing operators
     would be a rule an attacker satisfies by deleting a space.
+
+    Hands the pieces to :func:`_segment_tokens` rather than segmenting them here, so the
+    substitution rule holds on this path too — `cat $(echo <vault>` is unparseable AND a
+    command substitution.
     """
-    out: list[list[str]] = []
-    cur: list[str] = []
+    pieces: list[str] = []
     for tok in toks:
-        for piece in _OPERATOR_SPLIT_RE.split(tok):
-            if not piece:
-                continue
-            if _OPERATOR_SPLIT_RE.fullmatch(piece):
-                out.append(cur)
-                cur = []
-            else:
-                cur.append(piece)
-    out.append(cur)
-    return [c for c in out if c]
+        pieces.extend(p for p in _OPERATOR_SPLIT_RE.split(tok) if p)
+    return _segment_tokens(pieces)
 
 
 def _segment_argv(cmd: str) -> list[list[str]]:
@@ -817,6 +963,7 @@ def _segment_argv_parsed(cmd: str) -> tuple[list[list[str]], bool]:
       a genuine `git checkout` in an unparseable command being caught is not a regression.
     """
     import shlex
+    cmd = _unbacktick(cmd)
     try:
         lex = shlex.shlex(cmd or "", punctuation_chars=True, posix=True)
         lex.whitespace_split = True
@@ -829,16 +976,7 @@ def _segment_argv_parsed(cmd: str) -> tuple[list[list[str]], bool]:
         # here is a false DENY on an already-malformed command, which is the survivable
         # side for a guard whose other failure is printing a credential.
         return _resegment((cmd or "").split()), False
-    out: list[list[str]] = []
-    cur: list[str] = []
-    for t in toks:
-        if t in _OPERATORS:
-            out.append(cur)
-            cur = []
-        else:
-            cur.append(t)
-    out.append(cur)
-    return [c for c in out if c], True
+    return _segment_tokens(toks), True
 
 
 #: Programs that RUN another program: their own argv[1..] is the real invocation. Every
@@ -883,6 +1021,27 @@ _WRAPPER_VALUE_FLAGS = {
               "--arg-file", "-E", "-e", "--eof"),
 }
 
+#: Wrapper flags that CHANGE DIRECTORY before running the program, per wrapper. A subset of
+#: :data:`_WRAPPER_VALUE_FLAGS` by spelling, and its own table because the same letter means
+#: something else one wrapper over: `sudo -C` is `--close-from` (a file descriptor number)
+#: while `env -C` is the chdir.
+#:
+#: Stripping these was a BYPASS, not a fix. The commit that taught :func:`_leak_reason` to
+#: follow `cd .charter/vaults && cat x.json` also taught :func:`_split_env` to discard the
+#: VALUE of `-C`, so `env -C .charter/vaults cat x.json` named no guarded path anywhere and
+#: was allowed — the same relocation, one flag instead of one builtin. The value now comes
+#: back out and feeds the same `here` the `cd` branch sets.
+_WRAPPER_CHDIR_FLAGS = {
+    "env": ("-C", "--chdir"),
+    "sudo": ("-D", "--chdir"),
+}
+
+#: Builtins that relocate the shell for every LATER segment. `pushd` is `cd` with a stack —
+#: the same relocation, and following only `cd` made `pushd .charter/vaults && cat x.json` a
+#: one-word bypass. `popd` is deliberately absent: it returns somewhere this parser cannot
+#: know, and forgetting `here` there would be the fail-OPEN direction.
+_CHDIR_BUILTINS = ("cd", "pushd")
+
 #: `env -S 'cat <vault>'` / `env --split-string=…` packs the whole command into ONE token.
 #: Treated as tokens rather than as a value to skip, because skipping it would leave an
 #: empty argv and the guard would see no program at all — fail-open on the exact input the
@@ -894,7 +1053,14 @@ _DURATION_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 
 
 def _split_env(toks: list[str]) -> tuple[str, list[str], list[str]]:
-    """``(program, env-assignment prefixes, argv)`` for one already-tokenized segment.
+    """``(program, env-assignment prefixes, argv)`` — :func:`_split_env_chdir` without the
+    directory, for the guards that do not resolve relative operands."""
+    prog, env, argv, _chdir = _split_env_chdir(toks)
+    return prog, env, argv
+
+
+def _split_env_chdir(toks: list[str]) -> tuple[str, list[str], list[str], str]:
+    """``(program, env-assignment prefixes, argv, chdir)`` for one tokenized segment.
 
     Strips two things off the front before naming the program: `VAR=value` assignments, and
     the wrapper/keyword run described at :data:`_WRAPPERS` and :data:`_SHELL_KEYWORDS`. The
@@ -907,8 +1073,16 @@ def _split_env(toks: list[str]) -> tuple[str, list[str], list[str]]:
     Deliberately NOT re-parsing `sh -c '<string>'`: that is a documented limit of this
     guard (`tests/test_leak_guard_readers_that_write.py`), and widening it here would be a
     different change. A wrapper is a program that runs its own argv; `sh -c` runs a string.
+
+    *chdir* is the directory a wrapper's own chdir flag moves the program to
+    (:data:`_WRAPPER_CHDIR_FLAGS`) — `env -C <dir>`, `sudo --chdir=<dir>`. It is RETURNED
+    rather than discarded, because the value is what makes a later relative operand resolve:
+    the flag was being read only in order to skip it, and the side effect was that
+    `env -C .charter/vaults cat x.json` named nothing guarded anywhere. One reading of the
+    flag answers both questions, so the two cannot drift apart.
     """
     env: list[str] = []
+    chdir = ""
     toks = list(toks)
     while toks:
         if _ENV_ASSIGN_RE.match(toks[0]):
@@ -936,14 +1110,28 @@ def _split_env(toks: list[str]) -> tuple[str, list[str], list[str]]:
                 continue
             if nxt.startswith("-") and len(nxt) > 1:
                 toks.pop(0)
-                if "=" not in nxt and nxt in _WRAPPER_VALUE_FLAGS.get(base, ()) and toks:
-                    toks.pop(0)
+                # ONE reading of the flag, giving both its NAME and its VALUE: the name is
+                # what decides whether the next token is the program, the value is where a
+                # chdir flag relocates to. Two readings is how the value came to be lost.
+                takes = _WRAPPER_VALUE_FLAGS.get(base, ())
+                name, value = nxt, ""
+                if "=" in nxt:
+                    name, value = nxt.split("=", 1)
+                else:
+                    glued = next((f for f in takes if not f.startswith("--")
+                                  and nxt.startswith(f) and len(nxt) > len(f)), None)
+                    if glued is not None:           # `env -C<dir>`, `stdbuf -o0`
+                        name, value = glued, nxt[len(glued):]
+                    elif nxt in takes and toks:
+                        value = toks.pop(0)         # the value is the NEXT token
+                if value and name in _WRAPPER_CHDIR_FLAGS.get(base, ()):
+                    chdir = value
                 continue
             if base == "timeout" and _DURATION_RE.match(nxt):
                 toks.pop(0)     # the duration, not the program
                 continue
             break
-    return (toks[0] if toks else ""), env, toks
+    return (toks[0] if toks else ""), env, toks, chdir
 
 
 def _segments(cmd: str) -> list[str]:
@@ -1358,7 +1546,10 @@ def _single_credential_hit(cmd: str) -> tuple[str, str] | None:
     lower_prefixes = tuple(lower_prefix_hosts)
     for _toks in _segment_argv(cmd):
         prog, env, argv = _split_env(_toks)
-        base = prog.rsplit("/", 1)[-1]
+        # Case-folded for the reason `_is_charter` and `_VAULT_PATH_RE` are: APFS and NTFS
+        # resolve `GIT` and `git` to the same binary, so a case-sensitive compare here is
+        # one Shift key from absent — `GIT push git@host:o/r.git` walked straight past it.
+        base = os.path.basename(prog).lower()
         if base == "git":
             args = argv[1:]
             hit = next((e for e in env if _GIT_SSH_ENV_RE.match(e)), None)
@@ -1496,7 +1687,7 @@ def _release_floor_reason(cmd: str, data: dict) -> str | None:
            "things*. Re-run this step **attended**, or have a person do it. ")
     for _toks in _segment_argv(cmd):
         prog, _env, argv = _split_env(_toks)
-        base = prog.rsplit("/", 1)[-1]
+        base = os.path.basename(prog).lower()   # `GIT tag v1` is a tag — see A2's fold
         args = argv[1:]
         words = [a for a in args if not a.startswith("-")]
         if base == "git":

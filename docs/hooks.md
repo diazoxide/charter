@@ -38,7 +38,9 @@ rule while one who reads a bare refusal files an issue.
   Needs argv *and* the plane's vault paths, so it cannot be expressed as a static rule.
   "Argv" means the real one: a wrapper (`env`, `sudo`, `command`, `xargs`, a `{ … }` group,
   a `then` branch) does not change what the program is, an unparseable quote does not hide
-  the commands after it, and `//`, `/./` and a different case are the same path.
+  the commands after it, a `$( … )` substitution is read both as the command it runs and as
+  the word it becomes, a relocation counts however it is spelled (`cd`, `pushd`, `env -C`,
+  `sudo --chdir`), and `//`, `/./` and a different case are the same path.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all. Both sides share one predicate, so they cannot come to disagree about
   what counts as a vault — and both cover a file `charter secret cp` materialized, wherever

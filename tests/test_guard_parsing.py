@@ -195,8 +195,17 @@ class TestAWrapperDoesNotHideTheProgram(GuardCase):
         "{ cat .charter/vaults/x.json; }",
         "( cat .charter/vaults/x.json )",
         "echo $(cat .charter/vaults/x.json)",
+        # the OTHER direction of the same substitution: the reader is outside, the path is
+        # what the substitution produces. The table only pinned the first one, and adding
+        # `(`/`)` to `_OPERATORS` broke this one while the suite stayed green.
+        "cat $(echo .charter/vaults/x.json)",
+        "head $(ls .charter/vaults/*.json)",
+        "tail -n 5 $(echo .charter/vaults/x.json)",
+        "grep -q secret $(echo .charter/vaults/x.json)",
         "if true; then cat .charter/vaults/x.json; fi",
         "cd .charter/vaults && cat x.json",
+        "pushd .charter/vaults && cat x.json",
+        "env -C .charter/vaults cat x.json",
     )
 
     def test_a_wrapper_prefix_does_not_hide_the_program(self):
@@ -246,7 +255,15 @@ class TestAWrapperDoesNotHideTheProgram(GuardCase):
         for cmd in ("env GIT_SSH_COMMAND=/tmp/k git push",
                     "/usr/bin/env git push git@github.com:o/r.git",
                     "sudo git push git@github.com:o/r.git",
-                    "{ git clone git@github.com:o/r.git; }"):
+                    "{ git clone git@github.com:o/r.git; }",
+                    # the substitution, which `(`/`)` in `_OPERATORS` stranded: this is the
+                    # sharper arm, because nothing downstream re-checks an SSH transport
+                    "git push $(echo git@github.com:o/r.git)",
+                    # …and the Shift key, which this guard still had while the vault
+                    # predicate and `_is_charter` had already been folded in the same diff
+                    "GIT push git@github.com:o/r.git",
+                    "env GIT_SSH_COMMAND=/tmp/k GIT push",
+                    "/usr/bin/GIT clone git@github.com:o/r.git"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(_decision(self.run_cmd(cmd)), "deny")
 
@@ -266,6 +283,125 @@ class TestAWrapperDoesNotHideTheProgram(GuardCase):
         wrapper runs its own argv, a shell runs a string, and conflating them here would
         smuggle a much larger change into a parsing fix."""
         self.assertIsNone(_decision(self.run_cmd("sh -c 'cat .charter/vaults/x.json'")))
+
+
+class TestASubstitutionIsAWordAndACommand(GuardCase):
+    """`$( … )` is BOTH: a command that runs, and a word of the command around it.
+
+    Reading it as only one of the two is a bypass either way, and the first fix here read
+    it as only one. Making `(`/`)` plain segment boundaries closed `echo $(cat <vault>)`
+    (the substitution is the reader) and opened `cat $(echo <vault>)` (the substitution is
+    the operand) — the reader lost its operand, the operand lost its reader, and neither
+    half named a guarded path. Both directions are pinned here so a future simplification
+    of the segmenter cannot trade one for the other again.
+    """
+
+    def test_the_substitution_is_the_reader(self):
+        self.assertEqual(_decision(
+            self.run_cmd("echo $(cat .charter/vaults/x.json)")), "deny")
+
+    def test_the_substitution_is_the_operand(self):
+        for cmd in ("cat $(echo .charter/vaults/x.json)",
+                    "head $(ls .charter/vaults/*.json)",
+                    "tail -n 5 $(echo .charter/vaults/x.json)",
+                    "grep -q secret $(echo .charter/vaults/x.json)"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_decision(self.run_cmd(cmd)), "deny")
+
+    def test_the_one_credential_guard_sees_through_a_substitution(self):
+        """Golden rule 0 by the same route — and the arm #430 calls the sharper half."""
+        self.assertEqual(_decision(
+            self.run_cmd("git push $(echo git@github.com:o/r.git)")), "deny")
+
+    def test_a_backtick_is_the_same_construct(self):
+        """The next spelling: `` `…` `` is `$( … )` with older punctuation, and the
+        tokenizer has no idea. Normalised before segmenting so ONE rule covers both."""
+        for cmd in ("echo `cat .charter/vaults/x.json`",
+                    "cat `echo .charter/vaults/x.json`",
+                    "cat `echo .charter`/vaults/x.json"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_decision(self.run_cmd(cmd)), "deny")
+
+    def test_a_process_substitution_too(self):
+        for cmd in ("cat <(cat .charter/vaults/x.json)",
+                    "echo <(cat .charter/vaults/x.json)"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_decision(self.run_cmd(cmd)), "deny")
+
+    def test_a_substitution_spliced_into_a_longer_path(self):
+        """The output is GLUED to what follows the `)`, and the tokenizer hands the two
+        halves back as separate operands. Neither names a vault; joined they name one."""
+        self.assertEqual(_decision(
+            self.run_cmd("cat $(echo .charter)/vaults/x.json")), "deny")
+
+    def test_a_subshell_is_still_a_boundary(self):
+        """The other direction: `( … )` with no `$` in front runs its own commands, and
+        the program inside it must still be the program."""
+        self.assertEqual(_decision(
+            self.run_cmd("( cat .charter/vaults/x.json )")), "deny")
+        self.assertEqual(_decision(
+            self.run_cmd("( true );cat .charter/vaults/x.json")), "deny")
+
+    def test_a_substitution_is_not_a_reason_to_deny_by_itself(self):
+        for cmd in ("echo $(date)",
+                    "git commit -m \"release $(cat VERSION)\"",
+                    "cat $(ls docs)"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(_decision(self.run_cmd(cmd)))
+
+
+class TestARelocationIsFollowedHoweverItIsSpelled(GuardCase):
+    """`cd` was followed; the four other ways to say `cd` were not.
+
+    The same commit that taught the leak guard to follow `cd .charter/vaults && cat x.json`
+    added a per-wrapper table of value-taking flags that SKIPS `env -C`/`sudo -D` — so the
+    relocation flag was read, its value thrown away, and the guard saw a `cat x.json` with
+    no directory at all. The flag is now read ONCE, for both answers.
+    """
+
+    def test_a_wrapper_chdir_relocates_the_program(self):
+        for cmd in ("env -C .charter/vaults cat x.json",
+                    "env --chdir=.charter/vaults cat x.json",
+                    "env --chdir .charter/vaults cat x.json",
+                    "env -C.charter/vaults cat x.json",
+                    "sudo -D .charter/vaults cat x.json",
+                    "sudo --chdir=.charter/vaults cat x.json",
+                    "sudo -D .charter/vaults -- cat x.json",
+                    "nohup env --chdir=.charter/vaults cat x.json"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_decision(self.run_cmd(cmd)), "deny")
+
+    def test_pushd_is_cd(self):
+        for cmd in ("pushd .charter/vaults && cat x.json",
+                    "pushd .charter/vaults; cat x.json"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_decision(self.run_cmd(cmd)), "deny")
+
+    def test_the_two_kinds_of_relocation_compose(self):
+        """A `cd` moves the shell, a wrapper chdir moves one program — relative to it."""
+        self.assertEqual(_decision(
+            self.run_cmd("cd .charter && env -C vaults cat x.json")), "deny")
+
+    def test_a_wrapper_chdir_does_not_outlive_its_own_segment(self):
+        """`env -C d cat x` does NOT move the shell, so the next segment is not in `d`.
+        Treating it as sticky would deny ordinary commands after any `env -C`."""
+        self.assertIsNone(_decision(
+            self.run_cmd("env -C .charter/vaults ls && cat x.json")))
+
+    def test_relocation_is_not_a_reason_to_deny_by_itself(self):
+        for cmd in ("env -C /tmp ls",
+                    "sudo --chdir=/var/log tail -n 5 syslog",
+                    "pushd workspaces && ls"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(_decision(self.run_cmd(cmd)))
+
+    def test_the_value_flag_still_does_not_swallow_the_program(self):
+        """The reason the value was being skipped in the first place. Reading it must not
+        cost the thing the skip bought."""
+        self.assertEqual(hooks._split_env_chdir(
+            "env -C .charter/vaults cat x.json".split()),
+            ("cat", [], ["cat", "x.json"], ".charter/vaults"))
+        self.assertEqual(hooks._split_env_chdir("stdbuf -o0 cat x".split())[0], "cat")
 
 
 class TestTheTokenizer(unittest.TestCase):
@@ -299,6 +435,24 @@ class TestTheTokenizer(unittest.TestCase):
     def test_grouping_tokens_end_a_segment(self):
         self.assertEqual(hooks._segment_argv("{ cat v; }"), [["cat", "v"]])
         self.assertEqual(hooks._segment_argv("( cat v )"), [["cat", "v"]])
+
+    def test_a_substitution_yields_an_inner_segment_and_keeps_the_outer_one(self):
+        """The whole regression in one assertion. `(` as a plain boundary produced
+        `[["cat", "$"], ["echo", "v"]]` — an outer command with no operand and an inner one
+        with no reader."""
+        self.assertEqual(hooks._segment_argv("cat $(echo v)"),
+                         [["echo", "v"], ["cat", "$", "echo", "v"]])
+
+    def test_a_glued_punctuation_run_is_still_operators(self):
+        """shlex emits `);` as ONE token, which matched no operator, so the command after
+        it was swallowed into the argv before it."""
+        self.assertEqual(hooks._segment_argv("( true );cat v"), [["true"], ["cat", "v"]])
+        self.assertEqual(hooks._segment_argv("echo $(true)&&cat v")[-1], ["cat", "v"])
+
+    def test_a_backtick_becomes_the_modern_spelling(self):
+        self.assertEqual(hooks._unbacktick("cat `echo v`"), "cat $(echo v)")
+        self.assertEqual(hooks._unbacktick("cat v"), "cat v")
+        self.assertEqual(hooks._segment_argv("cat `echo v`")[0], ["echo", "v"])
 
     def test_empty_is_empty(self):
         self.assertEqual(hooks._segment_argv(""), [])
