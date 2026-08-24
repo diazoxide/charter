@@ -116,17 +116,19 @@ vaults' own lines — never a line from a value you supplied.
   - anything a shell rewrites for you: a glob (`cat .charter/vault?/db.json`), a variable
     (`V=…; cat $V`), a quoted command substitution, or brace expansion — the shell does
     all of that after the guard has already answered, on text the guard never sees;
-  - **a search rooted above the vault directory.** `grep -rn TOKEN .` reads every vault file
-    and is allowed, because the operand you named is `.` and not a vault path. Naming the
-    directory — `grep -rn TOKEN .charter/vaults`, with or without a trailing slash — is
-    denied. The difference is what you typed, not what the command reads.
+  - **a directory walk by a program it does not know.** `find . -type f -exec cat {} +`
+    and `tar cf - .` read every vault file and are allowed. A recursive `grep`/`rg`/`ag`
+    rooted above the vault directory *is* denied now (#474), and the denial names the
+    exclusion — but that covers the walkers charter knows, which is a shorter list than the
+    programs that walk.
 
   Each of those reaches the exact bytes the guard refuses when you spell the path plainly.
   **Never read a vault file, by any name, spelling, program, or recursive walk that happens
   to include it.** A denial is charter noticing a mistake, not charter's permission system —
   do not go looking for a form of the command it does not notice, and do not treat an
-  allowed command as cleared. If you need to search the plane, exclude the vault directory
-  (`grep -rn TOKEN . --exclude-dir=vaults`) rather than relying on the guard to stop you.
+  allowed command as cleared. If you need to search the plane, exclude charter's state
+  directory (`grep -rn TOKEN . --exclude-dir=.charter`) rather than relying on the guard to
+  stop you.
 - Never echo a secret, write it into a tracked file, or pass it as a literal argument.
 - **Never store a value in order to compare its fingerprint against another vault's.**
   That confirms a guess, which is the one thing masking exists to stop, and it is the

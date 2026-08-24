@@ -100,23 +100,42 @@ rule while one who reads a bare refusal files an issue.
   feature` the same branch move — including chains, aliases carrying their own options,
   `!git checkout`, and `git -c alias.co=checkout co …`. A `!`-alias that is not a plain
   `git …` is not read (refusing every shell alias here would refuse `s = !git status`), and
-  neither is `--config-env`. The **route** does not change the verdict either: the cwd, a
-  `cd` earlier in the same command, and `git -C <path>` — absolute or relative, and relative
-  now means *relative to the shell*, which is the fix for `git -C ../../.. checkout <branch>`
-  reaching the root from a clone. `git --git-dir=<plane>/.git` is a route this guard does
-  **not** yet follow ([#477](https://github.com/diazoxide/charter/issues/477)), and
-  `git switch -C <branch>` — where `-C` is `switch`'s own `--force-create` and not git's
-  change-directory global — is read as a directory and missed
-  ([#483](https://github.com/diazoxide/charter/issues/483)); the attached spelling
-  `-C<branch>` is refused. Both are pinned as `ALLOW` rows in the guard's corpus
-  (`tests/test_plane_root_checkout_is_two_commands.py`), so closing either turns a row red
-  rather than passing unnoticed.
+  neither is `--config-env`. **These routes all reach the same verdict** — the list is what
+  is covered, not a claim that every route is: the cwd, a `cd` earlier in the same command,
+  `git -C <path>` — absolute or relative, and relative means *relative to the shell*, which
+  is the fix for `git -C ../../.. checkout <branch>` reaching the root from a clone — and
+  the three options that name a repository without naming a directory to stand in:
+  `--git-dir`, `--work-tree` and their `GIT_DIR` / `GIT_WORK_TREE` environment spellings,
+  attached or separated, composing with `-C`
+  ([#477](https://github.com/diazoxide/charter/issues/477)). The cwd is a subject of every
+  git command, including one that names a `--work-tree` elsewhere: with no `--git-dir`, git
+  discovers the repository from the cwd, so the refs that move are the cwd's. And *which
+  repository a `--git-dir` belongs to* is asked of the filesystem rather than of the string,
+  so `<plane>/.git`, `<plane>/.git/./` and `<plane>/.git/refs/..` are one question — a
+  lexical parent made the last of those a live bypass for a round. What it still does not
+  place is a `--git-dir` pointing at a **linked worktree's** git dir, whose HEAD is that
+  worktree's and not the root's; that one is a missed denial, never a wrong one. A `-C`
+  counts as git's
+  change-directory global only **before the subcommand**, which is the only position git
+  reads one in — so `git switch -C <branch>`, where `-C` is `switch`'s own `--force-create`,
+  is the branch creation it is rather than a directory called `<branch>`
+  ([#483](https://github.com/diazoxide/charter/issues/483)). Every one of those is a row in
+  the guard's corpus (`tests/test_plane_root_checkout_is_two_commands.py`), crossed with the
+  commands rather than listed beside them. What the walk still does not carry across
+  segments is an environment assignment: `export GIT_DIR=<plane>/.git && git checkout
+  <branch>` reaches the root and is allowed
+  ([#496](https://github.com/diazoxide/charter/issues/496)), pinned as an `ALLOW` row so
+  closing it turns the row red rather than passing unnoticed.
 - **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root
   that would take commits off the branch which no remote has a copy of — the command that
   destroyed eleven memory commits in one session. Only that: the unstage
   (`git reset HEAD -- <path>`), `--soft`/`--mixed`, a reset with no ref, and any reset over
   commits that are already pushed all run untouched. It clears itself — `charter save` lands
-  the commits and the same command is allowed.
+  the commits and the same command is allowed. It follows **aliases** exactly as the branch
+  guard does — `wipe = reset --hard` makes `git wipe origin/main` the same command, and so
+  does `git -c alias.z='reset --hard origin/main' z`
+  ([#467](https://github.com/diazoxide/charter/issues/467)) — and shares every route above,
+  so `git --git-dir=<plane>/.git reset --hard <ref>` from a clone is refused too.
 - **One credential.** SSH to a forge, `GIT_SSH_COMMAND`, `-S`/`--gpg-sign`, and the
   `core.sshCommand` family that reaches the same transport by another road (`-c`,
   `--config-env`, `GIT_CONFIG_KEY_n`, and a `git config` write of it). This one *is*

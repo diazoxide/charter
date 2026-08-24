@@ -96,30 +96,46 @@ user, and the shape of that limit is worth knowing rather than guessing at:
 - It matches the **text of the operand as written**, normalised first. Redundant `/`
   separators, `.`/`..` segments and letter case are all collapsed, so
   `.charter//vaults/db.json`, `.charter/./vaults/db.json` and `.CHARTER/vaults/db.json` get
-  the same answer as `.charter/vaults/db.json` — the last of those matters because macOS and
-  Windows fold case in the filesystem, and it is the same file there. The directory itself
-  counts, with or without a trailing slash, because `grep -r TOKEN .charter/vaults` walks
-  every vault file in it. Three things it does **not** know, and they are limits rather than
-  bugs:
-  - An operand that *contains* the vault directory without naming it. `grep -r TOKEN .`
-    from the plane root reads every vault file as collateral and names none of them.
-    Denying every broad search is untenable, so both guards check the path you actually
-    named — the same limit, stated the same way, on both routes. `charter init` gitignores
-    the whole of `/.charter/`, which is what actually keeps a vault out of a commit.
+  the same answer as `.charter/vaults/db.json` — the last of those matters because macOS
+  folds case in the filesystem by default, and it is the same file there. The directory
+  itself counts, with or without a trailing slash, because `grep -r TOKEN .charter/vaults`
+  walks every vault file in it. Two things it does **not** know, and they are limits rather
+  than bugs:
   - A *different* path holding the same bytes: a vault registered outside `.charter/` (which
     is what `charter vault add --file` offers when the default location would be committed),
     a file `charter secret cp` wrote somewhere you named, or a symlink you planted. Resolving
     those would mean a `stat` on every operand of every command.
   - A separator that is not `/`. Normalisation is POSIX; a Windows-style
     `.charter\vaults\db.json` is a different path on POSIX, where a backslash is an
-    ordinary filename character, so folding it here would deny real filenames.
+    ordinary filename character, so folding it here would deny real filenames. **charter's
+    harness targets POSIX** — macOS and Linux, with tmux — and is neither tested nor
+    supported on Windows, which is why the guard is not made to answer differently there.
+    If that changes, this fold has to change with it (#476).
+- A **second predicate** covers the operand that *contains* the vault directory without
+  naming it (#474). `grep -r TOKEN .` from the plane root reads the vault directory as
+  collateral while its operand is the single character `.`, which leaves a guard that reads
+  only operand text with nothing to match on. Both routes now also ask whether the walk
+  would **reach** charter's own state:
+  the operand is resolved against the shell's directory and compared by ancestry, and the
+  entries it is compared against are read off the filesystem, so `.`, `..`, an absolute
+  path and a symlinked parent are one question rather than four spellings. It fires only
+  when those entries exist and hold something, and the denial names the exclusion that
+  fixes it (`--exclude-dir=.charter`, `rg --glob '!.charter'`). What it still does not
+  cover is the same ceiling as above: **a program charter does not know walks directories**
+  — `find … -exec cat`, `tar`, an interpreter — reaches the same files unguarded. And
+  `charter init` gitignores the whole of `/.charter/`, which is what actually keeps a vault
+  out of a commit.
 - **Anything a shell does to that text, it does after the guard has answered.** The hook is
   handed the command line before `sh` runs and never sees what `sh` turns it into, so every
   expansion reaches the file unguarded: a glob (`cat .charter/vault?/db.json`,
   `head .charter/vault*/db.json`, `cat .cha*ter/vaults/db.json`), a variable
-  (`V=.charter/vaults/db.json; cat $V`), a command substitution, brace or tilde expansion,
-  and a changed working directory (`cd .charter/vaults && cat db.json`). Each is `cat` on
-  the same inode as the denied form, one keystroke away from it, and allowed. This is not a
+  (`V=.charter/vaults/db.json; cat $V`), a quoted command substitution, brace or tilde
+  expansion. Each is `cat` on the same inode as the denied form, one keystroke away from it,
+  and allowed. A changed working directory (`cd .charter/vaults && cat db.json`) used to be
+  named here as one of them and is **not** one: the guard walks the segments and carries the
+  relocation, however it is spelled (`cd`, `pushd`, `env -C`, `sudo --chdir`), so those are
+  denied — this page said otherwise while `docs/secrets.md` said the opposite on the same
+  day. This is not a
   list of tricks to close one by one — it is one fact with many spellings, and closing them
   means putting a shell inside the guard, which leaves a hole shaped like whichever
   construct that shell got wrong. The glob case has an exact edge worth knowing: the
