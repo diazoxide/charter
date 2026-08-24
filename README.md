@@ -192,9 +192,10 @@ sequenceDiagram
 ```
 
 Reads are masked by default, `--reveal` refuses a non-interactive stdout, and the plugin's
-guard denies that flag and known reader programs pointed at a vault file. Those close the
-accidental paths; they are not a boundary against a command chosen on purpose — see
-[SECURITY.md](SECURITY.md).
+guard denies that flag and known reader programs whose argument spells out a vault path.
+Those close the accidental paths; they are not a boundary against a command chosen on
+purpose — a glob, a shell variable or an unlisted program walks past, by design and not by
+oversight — see [SECURITY.md](SECURITY.md).
 
 **Vaults are pluggable, and the provider is where the storage guarantee comes from.** Three
 ship today — `plain_file`, `reference` (point at a value that lives elsewhere) and

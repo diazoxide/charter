@@ -55,7 +55,9 @@ a system built for it and resolve it on demand.
 
 **Guard rails, not guarantees.** The Claude Code plugin's `PreToolUse` guard denies
 `--reveal` on a charter invocation it can recognise, and denies a known file-reading
-program — `cat`, `grep`, `head` and a dozen more — pointed at a path under `.charter/`. It
+program — `cat`, `grep`, `head` and a dozen more — whose argument, *as the model wrote it*,
+spells a path under `.charter/`. That qualifier is the whole of the guard's ceiling and is
+not decoration: it is a text match on a command line, run before any shell touches it. It
 does the same for the harness's own `Read` and `Grep` tools. That closes the easy
 accidental paths. It is a guard against mistakes, not an attacker with shell access as your
 user, and the shape of that limit is worth knowing rather than guessing at:
@@ -65,13 +67,27 @@ user, and the shape of that limit is worth knowing rather than guessing at:
   all run. Widening the list does not fix this — the next name is always the missing one.
 - It reads the **argv it is given**, and does not re-parse a shell string, so
   `sh -c 'cat .charter/vaults/db.json'` is one opaque argument to it.
-- It matches a **path**, canonicalised first — redundant separators and `.`/`..` segments
-  are collapsed, so `.charter//vaults/db.json` gets the same answer as
-  `.charter/vaults/db.json`. What it cannot know is a *different* path holding the same
-  bytes: a vault registered outside `.charter/` (which is what `charter vault add --file`
-  offers when the default location would be committed), a file `charter secret cp` wrote
-  somewhere you named, or a symlink you planted. Resolving those would mean a `stat` on
-  every operand of every command.
+- It matches the **text of the operand as written**, normalised first. Redundant
+  separators, `.`/`..` segments and letter case are all collapsed, so
+  `.charter//vaults/db.json`, `.charter/./vaults/db.json` and `.CHARTER/vaults/db.json` get
+  the same answer as `.charter/vaults/db.json` — the last of those matters because macOS and
+  Windows fold case in the filesystem, and it is the same file there. What it cannot know is
+  a *different* path holding the same bytes: a vault registered outside `.charter/` (which is
+  what `charter vault add --file` offers when the default location would be committed), a
+  file `charter secret cp` wrote somewhere you named, or a symlink you planted. Resolving
+  those would mean a `stat` on every operand of every command.
+- **Anything a shell does to that text, it does after the guard has answered.** The hook is
+  handed the command line before `sh` runs and never sees what `sh` turns it into, so every
+  expansion reaches the file unguarded: a glob (`cat .charter/vault?/db.json`,
+  `head .charter/vault*/db.json`, `cat .cha*ter/vaults/db.json`), a variable
+  (`V=.charter/vaults/db.json; cat $V`), a command substitution, brace or tilde expansion,
+  and a changed working directory (`cd .charter/vaults && cat db.json`). Each is `cat` on
+  the same inode as the denied form, one keystroke away from it, and allowed. This is not a
+  list of tricks to close one by one — it is one fact with many spellings, and closing them
+  means putting a shell inside the guard, which leaves a hole shaped like whichever
+  construct that shell got wrong. The glob case has an exact edge worth knowing: the
+  metacharacter has to fall inside `.charter/vaults/` itself, so
+  `cat .charter/vaults/*.json` is still denied.
 
 None of that is a reason to switch the guard off, and none of it is a bug report: it is why
 the sentence above says *mistakes*. The boundary that does not depend on a name is that

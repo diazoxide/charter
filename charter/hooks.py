@@ -423,8 +423,19 @@ _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg 
 #: cannot spell. `toolgate._resolves_into` asks the filesystem instead — and `_control_roots`
 #: already derives the state directory from `config.STATE_DIR`, so the key file is inside
 #: the tool gate's surface on such a plane without being named there.
+#:
+#: `IGNORECASE` because the answer must not depend on which filesystem the guard happens to
+#: be running on. macOS/APFS and Windows fold case by default, so `.CHARTER/vaults/db.json`
+#: and `.charter/VAULTS/db.json` are the SAME INODE as the denied form there — and this
+#: pattern, being case-sensitive, allowed both. The flag closes every case spelling at once
+#: rather than a list of them; on a case-sensitive filesystem it costs a denial of a
+#: differently-cased directory that is not charter's, which is the fail-closed direction
+#: this guard already takes elsewhere (see `_names_a_vault_path`'s raw arm). The reader-name
+#: check has always `.lower()`ed for the same reason; the path check was the half that did
+#: not.
 _VAULT_PATH_RE = re.compile(
-    r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-|fingerprint)|/?$)")
+    r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-|fingerprint)|/?$)",
+    re.IGNORECASE)
 
 
 def _names_a_vault_path(operand: str) -> bool:
@@ -445,8 +456,24 @@ def _names_a_vault_path(operand: str) -> bool:
     that name the same path — it invents no new class of false positive, since every
     operand whose normalised form matches has an unnormalised form naming the same path.
 
-    This does not become a resolver. `os.path.realpath` would follow symlinks and hit the
-    filesystem on every operand of every Bash call; a symlink someone planted at a path
+    **The property this function can hold, stated exactly, because the surrounding docs are
+    only allowed to claim this much.** It decides on the TEXT OF THE OPERAND AS WRITTEN,
+    modulo separator noise, dot segments and letter case. That is the whole of it, and the
+    boundary is not arbitrary: case and separators are properties of a string this function
+    already holds, so it can be complete over them. Everything else that changes which file
+    a written operand ends up naming is the work of a SHELL — glob expansion
+    (`.charter/vault?/db.json`), parameter expansion (`V=…; cat $V`), command substitution,
+    brace and tilde expansion, and the working directory a preceding `cd` moved. Every one
+    of those happens strictly AFTER this function has already answered, on text this
+    function never sees. Closing any of them means being a shell, and being a shell one
+    construct at a time is how a guard acquires a hole shaped like the construct it did not
+    implement. So they are not closed here; they are written down — `SECURITY.md`,
+    `docs/hooks.md`, `docs/secrets.md` and `skills/secrets/SKILL.md` state the shell-
+    expansion limit in those words, and `tests/test_documented_limits.py` pins each one as
+    current behaviour so a later doc that claims otherwise fails the suite.
+
+    This does not become a resolver either. `os.path.realpath` would follow symlinks and hit
+    the filesystem on every operand of every Bash call; a symlink someone planted at a path
     they chose is the documented limit in `SECURITY.md`, not this function's job.
     """
     norm = os.path.normpath(operand)

@@ -104,6 +104,16 @@ vaults' own lines — never a line from a value you supplied.
   path to the tool. Do not read the file back, pipe it, encode it, or print it: charter's
   guard does not cover a path you chose, so nothing stops you, and the value lands in this
   transcript exactly as if you had run `--reveal`. Delete the file when the tool is done.
+- **"The guard allowed it" is not evidence that a command is safe.** The `PreToolUse` guard
+  is a text match on a known program name and a path as you spelled it, run before any shell
+  touches the line. It therefore allows readers it does not know (`base64`, `jq`, `dd`,
+  `python3 -c`, `git show HEAD:<path>`), and it allows anything a shell rewrites for you: a
+  glob (`cat .charter/vault?/db.json`), a variable (`V=…; cat $V`), a command substitution,
+  brace expansion, or a `cd` into the vault directory followed by a bare filename. Each of
+  those reads the exact file the guard refuses when you spell it plainly. **Never read a
+  vault file, by any name, spelling or program.** A denial is charter noticing a mistake, not
+  charter's permission system — do not go looking for a form of the command it does not
+  notice, and do not treat an allowed command as cleared.
 - Never echo a secret, write it into a tracked file, or pass it as a literal argument.
 - **Never store a value in order to compare its fingerprint against another vault's.**
   That confirms a guess, which is the one thing masking exists to stop, and it is the

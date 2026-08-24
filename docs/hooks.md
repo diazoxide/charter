@@ -35,19 +35,25 @@ mistaken for a defect. Each prints why, because a developer who reads the reason
 rule while one who reads a bare refusal files an issue.
 
 - **Secret leak.** A charter invocation carrying `--reveal`, or a **known** file-reading
-  program pointed at a path under `.charter/`. It is a name-based check on the argv it can
-  see, and that is its ceiling: an interpreter (`python3 -c`, `node -e`), a program not on
-  the list (`base64`, `cp`, `jq`, `cut`, `git show HEAD:<path>`), or a shell string
-  (`sh -c 'cat .charter/vaults/db.json'`, which is one argument here and is not re-parsed)
-  is not covered. Widening the list is not the fix — the missing name is always the next
-  one, and false positives arrive immediately. The **path** is canonicalised before the
-  match, so `.charter//vaults/db.json` and `.charter/./vaults/db.json` answer the same as
-  the plain form; what it cannot know is a *different* path holding the same bytes — a vault
-  registered outside `.charter/`, a file `charter secret cp` wrote to a path you named, or a
-  symlink. See [SECURITY.md](../SECURITY.md) for why that is the honest
-  scope rather than a defect.
+  program whose argument, as written, spells a path under `.charter/`. It is a name-based
+  check on the argv it can see, and that is its ceiling: an interpreter (`python3 -c`,
+  `node -e`), a program not on the list (`base64`, `cp`, `jq`, `cut`,
+  `git show HEAD:<path>`), or a shell string (`sh -c 'cat .charter/vaults/db.json'`, which
+  is one argument here and is not re-parsed) is not covered. Widening the list is not the
+  fix — the missing name is always the next one, and false positives arrive immediately.
+  The **path** is normalised before the match — redundant separators, `.`/`..` segments and
+  letter case — so `.charter//vaults/db.json`, `.charter/./vaults/db.json` and
+  `.CHARTER/vaults/db.json` all answer the same as the plain form. Two things it still
+  cannot know. A *different* path holding the same bytes: a vault registered outside
+  `.charter/`, a file `charter secret cp` wrote to a path you named, or a symlink. And
+  anything a **shell** does to the operand after the hook has answered — a glob
+  (`cat .charter/vault?/db.json`), a variable (`V=…; cat $V`), a substitution, brace or
+  tilde expansion, a preceding `cd`. The hook runs on the command line, never on what `sh`
+  turns it into, so each of those is `cat` on the same inode and allowed. See
+  [SECURITY.md](../SECURITY.md) for why that is the honest scope rather than a defect.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
-  matcher at all — same path pattern, so the same limits.
+  matcher at all — same path pattern, so the same limits. (No shell is involved on this
+  route, so only the path-spelling limits apply.)
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
   with the plane's own default branch as the operand, which is the one spelling that used to

@@ -145,20 +145,41 @@ shell history**, while still letting an agent *use* the credential:
   Neither is a search rooted far above `.charter/`, which reads vault files as collateral;
   denying every broad search is untenable, so the guard checks the path you actually named.
 
-  **What the guard does not catch, stated so you do not have to discover it.** It knows a
-  list of reader program names and one path pattern, and everything outside those two runs:
-  an interpreter (`python3 -c "print(open('.charter/vaults/db.json').read())"`), a program
-  that reads without being called a reader (`base64`, `cp`, `jq`, `cut`, `dd`,
+  **What the guard does not catch, stated so you do not have to discover it.** The whole of
+  it is one sentence: **the guard matches a known program NAME against a path SPELLED IN THE
+  COMMAND LINE, before any shell runs.** Three things fall out of that, and nothing else is
+  hiding behind them.
+
+  *The name.* Everything not on the reader list runs: an interpreter
+  (`python3 -c "print(open('.charter/vaults/db.json').read())"`), a program that reads
+  without being called a reader (`base64`, `cp`, `jq`, `cut`, `dd`,
   `git show HEAD:.charter/vaults/db.json`), and a shell string (`sh -c 'cat …'`), which
   reaches the guard as a single opaque argument and is not re-parsed. Adding names does not
   close this: the missing one is always the next one, and a longer list starts denying
-  ordinary work. The path side is canonicalised first — `.charter//vaults/db.json` and
-  `.charter/./vaults/db.json` answer the same as the plain form — so what is left there is a
-  *different* path holding the same bytes: a vault registered outside `.charter/` (see
-  below), a file `charter secret cp` materialised at a path you chose, or a symlink. Each is
-  an ordinary file to every guard charter has. Treat all of it the way
-  [SECURITY.md](../SECURITY.md) frames it: the guard is against mistakes, and the property
-  that does not depend on a name is that *charter* never prints the value.
+  ordinary work.
+
+  *The path spelling.* Separators, `.`/`..` segments and letter case are normalised, so
+  `.charter//vaults/db.json`, `.charter/./vaults/db.json` and `.CHARTER/vaults/db.json`
+  answer the same as the plain form. What is left is a *different* path holding the same
+  bytes: a vault registered outside `.charter/` (see below), a file `charter secret cp`
+  materialised at a path you chose, or a symlink. Each is an ordinary file to every guard
+  charter has.
+
+  *Before any shell runs.* This is the one people discover the hard way. The hook is handed
+  the command line and never sees what the shell makes of it, so every expansion is a read
+  the guard did not see: a glob (`cat .charter/vault?/db.json`,
+  `head -c 400 .charter/vault*/db.json`, `cat .cha*ter/vaults/db.json`), a variable
+  (`V=.charter/vaults/db.json; cat $V`), a command substitution, brace or tilde expansion,
+  and a changed working directory (`cd .charter/vaults && cat db.json`). Every one of those
+  is `cat` on the same inode as the denied form. They are not separate holes to close one at
+  a time — they are one fact with as many spellings as the shell has constructs, and a guard
+  that started expanding them would be a shell with a shell's bugs. One edge is worth
+  knowing: a glob only escapes when the metacharacter falls *inside* `.charter/vaults/`, so
+  `cat .charter/vaults/*.json` is still denied.
+
+  Treat all of it the way [SECURITY.md](../SECURITY.md) frames it: the guard is against
+  mistakes, and the property that does not depend on a name is that *charter* never prints
+  the value.
 
 ## Setting one up
 

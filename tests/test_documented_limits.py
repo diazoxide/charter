@@ -1,6 +1,6 @@
 """The vault guards' documented limits, pinned as behaviour so the docs cannot drift (#423).
 
-Four rounds of adversarial review established that these five cannot be closed in code:
+Four rounds of adversarial review established that these six cannot be closed in code:
 every added parser was defeated by a new spelling, and one attempt shipped a regression. So
 they are *documented* — in `SECURITY.md`, `docs/hooks.md` and `docs/secrets.md`, and, for
 the one reader who cannot go and check, in `skills/secrets/SKILL.md`.
@@ -15,7 +15,7 @@ the doc named in the docstring and make it true again".
 Each class carries a positive control, because a test whose every assertion is `is None`
 passes just as well against a guard that was deleted.
 
-The five, and where each is written down:
+The six, and where each is written down:
 
 1. Redaction is `str.replace`, not a boundary — `SECURITY.md`, `docs/secrets.md`,
    `skills/secrets/SKILL.md`.
@@ -25,11 +25,19 @@ The five, and where each is written down:
    `test_leak_guard_readers_that_write` pins the sibling `bash <<EOF` case).
 5. A path the guard's pattern cannot spell — a vault registered outside `.charter/`, and a
    file `charter secret cp` wrote where you asked — is unguarded: `docs/secrets.md`.
+6. Everything a SHELL does to an operand between the guard's decision and the kernel's —
+   glob, `$VAR`, `$(…)`, `~`, brace expansion, and a preceding `cd` — happens on text the
+   guard never sees: all four docs, and `TestAShellExpandsAfterTheGuardHasAnswered` below.
 """
 
 from __future__ import annotations
 
 import base64
+import glob as globmod
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 from charter import hooks
@@ -200,6 +208,145 @@ class TestAPathThePatternCannotSpellIsUnguarded(PersonaIso):
     def test_a_materialised_secret_is_not_covered_by_either_guard(self):
         self.assertIsNone(hooks._leak_reason(f"cat {self.CP_DEST}"))
         self.assertIsNone(_decision(self.read(self.CP_DEST)))
+
+
+class TestAShellExpandsAfterTheGuardHasAnswered(unittest.TestCase):
+    """The sixth limit, and the one the other five kept being mistaken for.
+
+    `_names_a_vault_path` decides on the TEXT OF AN OPERAND AS WRITTEN. A shell rewrites
+    that text — glob expansion, parameter expansion, command substitution, brace and tilde
+    expansion, and the working directory a preceding `cd` moved — strictly *after* the hook
+    has already returned its decision, on bytes the hook was never shown. So `cat
+    .charter/vault?/db.json` and `V=.charter/vaults/db.json; cat $V` reach the identical
+    inode as the denied form, through `cat`, one keystroke apart, and are allowed.
+
+    **The boundary is exact, and writing the test found it.** A metacharacter only escapes
+    the guard when it lands INSIDE the guarded prefix `.charter/vaults/`, because that is the
+    run of text `_VAULT_PATH_RE` has to see literally. `cat .charter/vaults/*.json` keeps the
+    prefix intact and is still denied; `cat .charter/vault?/db.json` breaks it and is not.
+    The first drafts of this class asserted `*.json` was a bypass and the `expand_to` half
+    of `test_a_glob_reaches_the_guarded_file_and_is_allowed` refused it — which is the reason
+    both halves are here. The docs state the limit in this shape, not as "globs are not
+    covered", because the wider sentence would be an *under*-claim and those rot too.
+
+    **What is the next spelling of this that still gets through?** Any construct that keeps
+    the prefix from appearing literally in the operand: `[s]`, `*`, `.cha*ter`, `${V}`,
+    ``P=`printf %s .charter/vaults`; cat $P/db.json``, `{vaults,x}`, `~/plane/.charter/…`,
+    `cd` then a bare name, an `IFS` split, a `$'\\x2e'` byte escape. Each is a different
+    construct of one language, and the guard closes none of them, because closing one means
+    implementing a shell one construct at a time — which leaves a hole shaped like whichever
+    construct came next. `charter/hooks.py::_names_a_vault_path` says so in the docstring
+    that draws the line, and all four documents say it in prose.
+
+    **These tests do not merely assert `allow`.** Each one first PROVES the operand reaches
+    the guarded file — the glob cases by expanding them against a real fixture tree, the
+    `$VAR`, `cd`, substitution and brace cases by running the command in a real shell and
+    reading the fabricated value out of its stdout. An `assertIsNone` on its own would keep
+    passing against a guard that had been deleted, and would keep passing if the spelling
+    were simply wrong — as two of these spellings were.
+    """
+
+    VAULT = ".charter/vaults/db.json"
+
+    #: Generated, not listed: each entry rewrites the canonical path into an operand a shell
+    #: resolves back to it, with the metacharacter INSIDE the guarded prefix. The `glob`
+    #: assertion beside it is what keeps the list from drifting into wishful thinking.
+    GLOBS = (
+        ("single-character wildcard", lambda p: p.replace("vaults", "vault?", 1)),
+        ("bracket class", lambda p: p.replace("vaults", "vault[s]", 1)),
+        ("star in the vault segment", lambda p: p.replace("vaults", "vault*", 1)),
+        ("star in the state segment", lambda p: p.replace(".charter", ".cha*ter", 1)),
+        ("negated bracket class", lambda p: p.replace("vaults", "vault[!x]", 1)),
+        ("both segments", lambda p: p.replace(".charter/vaults", ".charte?/vault*", 1)),
+    )
+
+    #: The other side of the same boundary: the prefix survives, so the guard still sees it.
+    GLOBS_OUTSIDE_THE_PREFIX = (
+        ("star for the filename", lambda p: p.replace("db.json", "*.json", 1)),
+        ("star for the extension", lambda p: p.replace("db.json", "db.*", 1)),
+        ("bracket class in the filename", lambda p: p.replace("db.json", "d[b].json", 1)),
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="charter-glob-limit-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        target = os.path.join(self.tmp, self.VAULT)
+        os.makedirs(os.path.dirname(target))
+        with open(target, "w") as fh:
+            fh.write('{"API_TOKEN": "%s"}\n' % VALUE)
+
+    def _sh(self, cmd: str) -> str:
+        return subprocess.run(["sh", "-c", cmd], cwd=self.tmp, capture_output=True,
+                              text=True, timeout=30).stdout
+
+    def test_the_canonical_spelling_is_denied_and_the_fixture_holds_the_value(self):
+        """Positive control for the whole class, on both halves: the guard still denies the
+        path as written, and the fixture this class globs at really does hold the value —
+        so an `allow` below is a reachable read, not a miss on an empty tree."""
+        self.assertIsNotNone(hooks._leak_reason(f"cat {self.VAULT}"))
+        self.assertIn(VALUE, self._sh(f"cat {self.VAULT}"))
+
+    def test_a_glob_reaches_the_guarded_file_and_is_allowed(self):
+        for name, respell in self.GLOBS:
+            with self.subTest(spelling=name):
+                pattern = respell(self.VAULT)
+                self.assertEqual([self.VAULT], sorted(globmod.glob(pattern, root_dir=self.tmp)),
+                                 f"{name} does not expand to the vault file; fix the test")
+                self.assertIsNone(hooks._leak_reason(f"cat {pattern}"),
+                                  f"{name} is now denied — the docs must stop calling it a limit")
+
+    def test_a_glob_that_leaves_the_guarded_prefix_intact_is_still_denied(self):
+        """The boundary control. Without this the class reads as "globs walk past", which is
+        an under-claim: the guard sees `.charter/vaults/` here and answers on it."""
+        for name, respell in self.GLOBS_OUTSIDE_THE_PREFIX:
+            with self.subTest(spelling=name):
+                pattern = respell(self.VAULT)
+                self.assertEqual([self.VAULT], sorted(globmod.glob(pattern, root_dir=self.tmp)),
+                                 f"{name} does not expand to the vault file; fix the test")
+                reason = hooks._leak_reason(f"cat {pattern}")
+                self.assertIsNotNone(reason, f"{name} now walks past the guard")
+                self.assertIn("reads a vault/secret file directly", reason)
+
+    def test_a_shell_variable_reaches_the_guarded_file_and_is_allowed(self):
+        cmd = f"V={self.VAULT}; cat $V"
+        self.assertIn(VALUE, self._sh(cmd), "precondition: the command really reads it")
+        self.assertIsNone(hooks._leak_reason(cmd))
+
+    def test_a_changed_working_directory_reaches_the_guarded_file_and_is_allowed(self):
+        cmd = "cd .charter/vaults && cat db.json"
+        self.assertIn(VALUE, self._sh(cmd), "precondition: the command really reads it")
+        self.assertIsNone(hooks._leak_reason(cmd))
+
+    def test_a_command_substitution_that_assembles_the_prefix_is_allowed(self):
+        """Spelled so the guarded prefix never appears as one run of text.
+
+        `cat $(printf %s .charter/vaults/db.json)` IS denied, by accident rather than by
+        design: `shlex` hands `.charter/vaults/db.json)` to `cat` as an operand and the
+        pattern matches it. Asserting on that accident would pin a coincidence; this asserts
+        on the construct the accident does not cover, and the sibling below names it."""
+        cmd = "P=$(printf %s .charter/vaults); cat $P/db.json"
+        self.assertIn(VALUE, self._sh(cmd), "precondition: the command really reads it")
+        self.assertIsNone(hooks._leak_reason(cmd))
+
+    def test_a_substitution_leaving_the_prefix_spelled_out_is_denied_by_accident(self):
+        """Pinned as an accident, not as coverage. `shlex` splits `$(printf %s <path>)` into
+        tokens and one of them still carries `.charter/vaults/`, so the guard answers on text
+        it was never designed to reach. If a later change to `_segment_argv` drops this
+        denial, no documented promise breaks — the docs never claimed it — and this test
+        should be updated rather than the parser bent to keep it."""
+        self.assertIsNotNone(hooks._leak_reason("cat $(printf %s .charter/vaults/db.json)"))
+
+    def test_brace_expansion_reaches_the_guarded_file_and_is_allowed(self):
+        """`sh` on this box may be POSIX and not expand braces, so the read is proved with
+        `bash -c` while the guard is asked about the string a shell that does would run."""
+        cmd = "cat .charter/{vaults,elsewhere}/db.json"
+        self.assertIsNone(hooks._leak_reason(cmd))
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("no bash to prove the expansion with")
+        out = subprocess.run([bash, "-c", cmd], cwd=self.tmp, capture_output=True,
+                             text=True, timeout=30).stdout
+        self.assertIn(VALUE, out, "precondition: the command really reads it")
 
 
 class TestTheDenialDoesNotRouteTheAgentAroundItself(unittest.TestCase):
