@@ -1099,6 +1099,12 @@ def cmd_persona_lint(args) -> int:
     only = (getattr(args, "only", None) or "").strip()
     errors = 0
     for n in names:
+        # The ROW PREFIX, not just the message. `n` comes from `list_personas()`, which
+        # globs `personas/*/` and asks only for a leading underscore — so it is a directory
+        # name a commit chose, and a filesystem forbids only `/` and NUL. `persona.lint`
+        # bounds the message it returns; that left the `f"{n}: …"` around it as the
+        # remaining way to write a second physical row wearing charter's own ✗ glyph.
+        shown = contain.one_line(n)
         issues = list(persona.lint(n)) + _agent_sync_issues(n)
         if only:
             issues = [(lvl, msg) for lvl, msg in issues if only in msg]
@@ -1106,14 +1112,14 @@ def cmd_persona_lint(args) -> int:
             # "present but only as a warning" is still the answer "not adopted".
             issues = [("error", msg) for _lvl, msg in issues]
         if not issues:
-            util.ok(f"{n}: ok")
+            util.ok(f"{shown}: ok")
             continue
         for level, msg in issues:
             if level == "error":
                 errors += 1
-                util.err(f"{n}: {msg}")
+                util.err(f"{shown}: {msg}")
             else:
-                util.warn(f"{n}: {msg}")
+                util.warn(f"{shown}: {msg}")
     if errors:
         util.err(f"{errors} error(s) — dangling reuse or unloadable persona.")
         return 1

@@ -76,21 +76,33 @@ One more surface, the same class: `sync-agents`'s withheld list and its approval
 rows of the form `persona/server → command`, built out of the same committed file. A newline
 in an `args` entry wrote a row indistinguishable from charter's own — so a report could name
 a server that was never withheld, under a count that agreed with it, and the operator's `y`
-would then cover something they had not read. Every committed value charter prints back now
-goes through one bound that escapes anything without a glyph. It is a display bound, not a
-promise: it stops a value forging a *line*, and it will not tell you that `l` is not `I`.
+would then cover something they had not read. Those rows now go through one bound that
+escapes anything without a glyph. It is a display bound, not a promise: it stops a value
+forging a *line*, and it will not tell you that `l` is not `I`.
 
-**"Every committed value" had to be made literally true, and three of them were not.** A
-value that never reaches a serialiser is the remaining way to put a line where charter did
-not intend one, and the ones charter reads off the **disk** are not bounded by any
-frontmatter alphabet — a filesystem forbids `/` and NUL and nothing else. So: a directory
-under `personas/` whose name charter did not mint made `persona lint` print two rows for one
-refused persona, the second wearing charter's own formatting; a file in
-`personas/<name>/bin/` put an extra bullet into the *brief the sub-agent reads*, which is the
-same trick aimed at the model rather than at the YAML parser; and the refusal sentences
-themselves — the report this whole class of defect is announced ON — interpolated a path
-without bounding it. All three now go through the same display bound, the last of them at one
-choke point rather than at twelve `.format` calls.
+**Three more values, read off the disk rather than out of a bounded field.** A value that
+never reaches a serialiser is the remaining way to put a line where charter did not intend
+one, and the ones charter reads off the **disk** are not bounded by any frontmatter alphabet
+— a filesystem forbids `/` and NUL and nothing else. So: a directory under `personas/` whose
+name charter did not mint made `persona lint` print two rows for one refused persona, the
+second wearing charter's own ✗ glyph; a file in `personas/<name>/bin/` put an extra bullet
+into the *brief the sub-agent reads*, which is the same trick aimed at the model rather than
+at the YAML parser; and the refusal sentences themselves — the report this whole class of
+defect is announced ON — interpolated a path without bounding it. All three now go through
+the same display bound, the last of them at one choke point rather than at twelve `.format`
+calls. `lint` needed it twice over: `persona.lint` bounds the message, and the row
+`cmd_persona_lint` builds around it — `f"{name}: {message}"` — had to bound the prefix too,
+which is the half a first pass missed because the test asserted on the returned tuples
+instead of on what the command wrote.
+
+**What is still unbounded, and is filed rather than fixed here: #472.** `persona list` and
+`persona stats` paste that same committed directory name into their table rows, so one
+persona there still renders as two rows. It is not the one-line change `lint` was — both
+size their columns from the raw names, so the bound has to move ahead of the width
+arithmetic and be used for the active-marker comparison as well. So the claim this entry
+makes is the narrow one: the values bounded here are the MCP server name at its boundary and
+at its emission, the `sync-agents` rows, the trace record, the refusal sentences, the
+sub-agent brief, and the `persona lint` row — not every committed value charter prints.
 
 The frontmatter values are safe for a reason worth writing down, because it is an accident of
 the reading side rather than a bound on the writing side: `persona.parse` splits with

@@ -1217,6 +1217,11 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
         # only `/` and NUL. A U+2028 in one made this single lint row two rows, the second
         # of them indistinguishable from charter's own — the #453 mechanism on the surface
         # that exists to REPORT #453. Reproduced before it was bounded.
+        #
+        # This bounds the MESSAGE and only the message. `cmd_persona_lint` builds the row
+        # around it out of the same directory name and bounds its own prefix; `persona
+        # list` and `persona stats` still do not, which is #472. A bound here is not a
+        # bound on every report that prints this name.
         return [("error", f"persona.md: {refused}" if refused
                  else f"persona '{contain.one_line(name)}' does not load")]
     meta = d["meta"]

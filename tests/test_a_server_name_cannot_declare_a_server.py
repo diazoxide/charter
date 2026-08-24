@@ -42,13 +42,14 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import string
 import unicodedata
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
 
-from charter import commands_persona, contain, mcpseen, persona, trace
+from charter import commands_persona, config, contain, mcpseen, persona, trace
 from tests._isolation import PersonaIso
 
 #: A working server declared beside every hostile one. Without it a test asserting "the bad
@@ -543,6 +544,11 @@ class TestTheNextSpellingIsANameCharterDidNotMint(NameBase):
     a bounded field: a persona **directory** name and a **script filename**. A filesystem
     forbids `/` and NUL and nothing else, `personas/` is committed, and both were pasted
     into a line charter writes. Both reproduced before they were bounded.
+
+    The directory name is bounded HERE, on `persona lint` — message and row prefix alike.
+    It is **not** bounded on `persona list` or `persona stats`, whose table rows paste the
+    same name and whose column widths are measured from it; that is #472 and is filed, not
+    fixed. Nothing below should be read as covering those two.
     """
 
     def test_a_frontmatter_value_cannot_carry_a_separator_into_meta(self):
@@ -556,16 +562,54 @@ class TestTheNextSpellingIsANameCharterDidNotMint(NameBase):
                 self.assertEqual(meta.get("role"), "x")
                 self.assertNotIn(sep, "".join(meta.values()))
 
+    def _lint_report(self, name: str) -> list[str]:
+        """What `charter persona lint` WRITES for a roster of exactly *name*, as physical
+        lines — the command, not `persona.lint`.
+
+        `persona.lint` returns the message; the command builds the row around it out of
+        the directory name itself, so a test that asserts on the returned tuples passes
+        green while the printed report is two rows. That is the shape this test used to
+        have and the reason the row prefix stayed unbounded for a round.
+
+        The persona is committed the way the reproduction was: `persona.md` present, so
+        `list_personas` returns the directory, and empty, so `load` refuses it — one
+        refused persona, one error row.
+        """
+        for sub in config.PERSONAS_DIR.iterdir():
+            shutil.rmtree(sub) if sub.is_dir() else sub.unlink()
+        d = config.PERSONAS_DIR / name
+        d.mkdir(parents=True)
+        (d / "persona.md").write_text("")
+
+        class Args:
+            name = None
+            only = None
+
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            self.assertEqual(commands_persona.cmd_persona_lint(Args()), 1)
+        return buf.getvalue().splitlines()
+
     def test_a_persona_directory_name_gets_one_lint_row(self):
         """A directory under `personas/` is a committed name charter did not mint, and
-        `lint` prints it back. One refused persona is one row."""
+        `charter persona lint` prints it back — the row prefix as much as the message.
+
+        The property is **a separator in the name adds no physical line to the report**,
+        so it is measured against the report for a name holding none rather than against a
+        row count written into this test. A row count alone would also be satisfied by a
+        report that printed nothing at all, so the row is checked to still name the
+        persona — and to carry it in its bounded spelling, which says *why* the count held
+        rather than leaving a different guard free to have caught it.
+        """
+        benign = self._lint_report("evil  - stolen: yes")
+        self.assertEqual(len(benign), 2, benign)  # one error row + the count line
+        self.assertIn("evil", benign[0])
         for label, sep in SEPARATORS.items():
             with self.subTest(separator=label):
                 name = f"evil{sep}  - stolen: yes"
-                self.make_persona(name, role="V", vault="v")
-                rows = persona.lint(name)
-                self.assertEqual(len(rows), 1, rows)
-                self.assertEqual(len(rows[0][1].splitlines()), 1, rows[0][1])
+                rows = self._lint_report(name)
+                self.assertEqual(len(rows), len(benign), rows)
+                self.assertIn(contain.one_line(name), rows[0])
 
     def test_a_script_filename_cannot_forge_a_line_in_the_brief(self):
         """`bin/` is committed and its filenames go into the brief the sub-agent reads.
