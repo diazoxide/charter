@@ -35,8 +35,15 @@ Two bounds decide the height, and both are worth knowing:
 literal `resize-pane -t %1 -y 1` text, computed once when the frame was laid out. A height
 that depends on the window cannot be a constant, so the hook now calls charter back —
 `charter frame-resize` — and the sizes are recomputed against the window that actually
-exists. That costs a short charter process per resize event, backgrounded, the same shape
-the panel-respawn hook has had since 0.51.
+exists. That costs a short charter process per resize event: median 20ms, backgrounded,
+with tmux's own command queue never waiting on it — the same shape the panel-respawn hook
+has had since 0.51. A drag of thirty size changes is about 0.6 CPU-seconds spread across
+the drag.
+
+One case is left open and worth knowing about: nothing serialises those children, so during
+a fast drag one that measured a taller window can apply *after* the one that measured the
+window you stopped at, leaving `bottom` sized for a window that is already gone until you
+resize again. Filed as **#501** with the measurement and what a fix has to settle.
 
 It also closes a hole nobody had to reach for. The old action interpolated pane ids read
 back off **disk** into a string tmux re-parses as a command line, and the shape check on

@@ -264,7 +264,11 @@ attention row, capped so the harness always keeps at least 12 rows and floored a
 row `bottom` has always been. A workspace with no clones gets exactly that one row. The
 cap is recomputed on every terminal resize, not remembered from the launch — tmux does not
 refuse an over-large pane height, it takes the difference out of the neighbouring pane,
-and the neighbour is your agent session.
+and the neighbour is your agent session. Recomputing means charter runs for a moment on
+each resize (median 20ms, in the background, so nothing waits on it). During a fast drag
+those runs can finish out of order and leave `bottom` sized for a window you have already
+resized past; it corrects itself the next time you resize, and #501 tracks closing it
+properly.
 
 If the frame ends up narrower than the repo table's own columns (95), the table is not
 drawn rather than drawn with its right-hand columns cut off: a row trimmed past the branch

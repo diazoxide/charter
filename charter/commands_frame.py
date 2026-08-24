@@ -841,6 +841,19 @@ def _resize_hook_argv(*, socket: str, harness_pane: str, fid: str) -> list[str] 
     which is charter drawing in the one rectangle ADR 0018 says it never draws in; and a
     blocking `run-shell` in a hook stalls tmux's own command queue.
 
+    **What a charter per resize event costs, measured rather than assumed.** One
+    `charter frame-resize` child: median **20ms** (5 runs, refused before any tmux call, so
+    the interpreter and charter's import graph and nothing else). `window-resized` fires
+    once per size change, so a drag of thirty of them is ~0.6 CPU-seconds spread across the
+    drag, backgrounded, with tmux's own queue never waiting on it — the same order as the
+    `pane-died` respawn hook this construction was copied from. Nothing here is free, and
+    the old literal-text action was; that is the price of a size that has to be recomputed.
+
+    **Known remaining case: #501.** Nothing serialises those children and `-b` gives no
+    completion ordering, so during a drag one that measured a taller window can apply after
+    one that measured the final, shorter one — a pane sized for a window that is already
+    gone, until the next resize corrects it.
+
     **It also removes #475 rather than patching it.** The old action interpolated a pane
     id read back off DISK (`state.panes`, via `_relayout`'s `keep` map, which skipped the
     `_PANE_ID_RE` check for every slot it kept) into text tmux re-parses as a command
