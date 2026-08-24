@@ -36,9 +36,10 @@ that claim does **not** cover, said out loud rather than left to be discovered:
 - **Whoever holds the key holds the oracle.** The offline check comes back intact for
   anyone who can read ``.charter/fingerprint.key``. That is why `hooks._VAULT_PATH_RE`
   denies it to the harness's file-reading tools alongside ``.charter/vaults/`` — it
-  matters most for a 1Password-backed vault, which has no vault file on this machine and
-  where the key would otherwise be the only readable thing between the line and the value.
-  A shell running as you still reads it, as it reads everything else you own.
+  matters most for a 1Password-backed vault: there is no vault file on this machine for
+  that guard to refuse, so the key is what it has to cover. A shell running as you still
+  reads the key, as it reads everything else you own — this is a guard rail, not a
+  boundary.
 - **Within one plane it is still an equality oracle.** Someone who can run
   `charter secret set` here can store a guess and compare fingerprints. They can also run
   `charter secret get --reveal --force` and read the value outright, so this grants them

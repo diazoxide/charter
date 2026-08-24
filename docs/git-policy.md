@@ -47,8 +47,10 @@ your own terminal. If the guard is wrong about you *every time*, that is charter
 policy your organisation does not, and it belongs in an issue rather than a local switch.
 
 The same guard covers the vault: it refuses `--reveal` on a non-interactive stdout and
-refuses file-reading tools pointed at a vault file, so a secret cannot reach the transcript
-by way of `cat`. See [secrets.md](secrets.md).
+refuses file-reading tools pointed at a vault file, so an accidental `cat` cannot put a
+secret in the transcript. Those are the accidental roads, and they are the only ones a
+name-based guard can close — a command you chose to run is not one of them. See
+[secrets.md](secrets.md) and [SECURITY.md](../SECURITY.md).
 
 ## When you are not using charter for git
 

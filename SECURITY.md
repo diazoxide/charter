@@ -41,10 +41,29 @@ boundary. It is `str.replace` over the bytes that came back
 value is not scrubbed and cannot be: `secret exec v --env T=K -- sh -c 'printf %s "$T" |
 base64'` returns the credential in full, and so does `rev`, `fold -w1`, or a `curl -d` that
 never prints it at all. `--exec` and `--stream` capture nothing and therefore redact
-nothing. So the guarantee is precisely this: **charter never prints the value into the
-conversation. Where the value goes after that is a property of the command you asked
-charter to run.** Read `charter secret exec <vault> -- <cmd>` with the same suspicion you
-would read `<cmd>` holding the credential directly, because that is what it is.
+nothing. So the guarantee is precisely this, and it is narrower than one sentence: **on
+the paths that consume a value — `secret exec` with `--env`/`--file`/`--dotenv`, and the
+MCP launcher — charter never prints the value into the conversation, and everywhere else
+charter prints it only into a destination you named yourself.** Where the value goes after
+that is a property of the command you asked charter to run. Read `charter secret exec
+<vault> -- <cmd>` with the same suspicion you would read `<cmd>` holding the credential
+directly, because that is what it is.
+
+**Which destinations charter will take, and the one that still prints.** Two commands put
+a plaintext value somewhere you can read it. `charter secret cp <vault> <key> <dest>`
+writes a **real file it creates**; it used to accept `/dev/stdout` and print the
+credential into this transcript in charter's own process, and that is fixed
+([#449](https://github.com/diazoxide/charter/pull/449)) — a symlink, a device, a FIFO and
+an existing file are each refused for their own reason, and a destination that turns out
+to **be** one of charter's own streams is refused whatever it is called, because the test
+is `(st_dev, st_ino)` from an `fstat` of the descriptor charter opened compared against
+its own stdin, stdout and stderr. `--force` does not reach that check.
+
+`charter secret get --reveal` is the one path left where charter's own process writes a
+value to its own stdout, and it refuses a non-interactive stdout — an agent's pipe —
+unless you pass `--force`. That refusal is the whole of the protection: `--force` is a
+real override, and an agent that has a shell can type it. Do not hand `--reveal --force`,
+or a `cp` destination, to something an agent chose.
 
 **What a vault does not protect against.** The default provider stores values as
 **plaintext JSON at file mode 0600**. There is **no encryption at rest**. Anyone who can
@@ -63,8 +82,10 @@ beside it are ordinary reads, and so is `.charter/vaults.json`, the registry, wh
 provider config and file paths but never a value. That qualifier *as the model wrote it* is
 the whole of the guard's ceiling and is not decoration: it is a text match on a command
 line, run before any shell touches it. It
-does the same for the harness's own `Read` and `Grep` tools. That closes the easy
-accidental paths. It is a guard against mistakes, not an attacker with shell access as your
+does the same for the harness's own `Read` and `Grep` tools, on every harness charter
+supports: Claude Code and Codex dispatch both handlers from the plugin's `hooks/hooks.json`,
+and opencode from the plugin `charter init` generates. That closes the easy accidental
+paths. It is a guard against mistakes, not an attacker with shell access as your
 user, and the shape of that limit is worth knowing rather than guessing at:
 
 - It matches **program names it knows**, so `python3 -c "print(open('.charter/vaults/db.json').read())"`,
@@ -108,6 +129,15 @@ user, and the shape of that limit is worth knowing rather than guessing at:
 None of that is a reason to switch the guard off, and none of it is a bug report: it is why
 the sentence above says *mistakes*. The boundary that does not depend on a name is that
 charter itself never prints the value.
+
+**On opencode the ceiling is lower than that, and it is worth naming.** opencode loads
+every file in its `plugin/` directory into one JavaScript realm with shared globals, so a
+second plugin installed there can redefine what charter's plugin calls and silently disable
+its guards — verified against opencode 1.18.21 with a six-line neighbour that turned a
+`read` of a vault file into an allow. charter cannot prevent that from Python. What it does
+is report it: anything in that directory charter did not write is named on the `charter
+doctor` harness row and in `charter harness list`. Reporting the realm, not containing it.
+
 
 ## The one-credential rule
 

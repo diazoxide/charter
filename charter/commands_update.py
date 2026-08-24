@@ -261,14 +261,27 @@ def _move_harness() -> None:
     elif status == "current":
         util.ok(f"the {h.name} artifact is already on {detail}.")
     elif status == "manual":
-        util.info(f"the {h.name} artifact is the host's to move:")
-        util.info(f"  run: {detail}")
+        # Not "run: <detail>". `manual` means charter is declining to touch a file — the
+        # detail says what is wrong and what would fix it, and prefixing a sentence with
+        # "run:" told operators to paste a paragraph into a shell.
+        util.info(f"the {h.name} artifact is not charter's to move:")
+        util.info(f"  {detail}")
     else:
         util.warn(detail)
     stale = h.stale_wiring()
     if stale:
-        util.warn(f"this plane's {h.name} wiring was written by {stale} — "
-                  f"`charter reinit` adds what is missing.")
+        # NOT "`charter reinit` adds what is missing": nothing is missing in any of these
+        # states — a file is there and charter cannot vouch for it, or something charter
+        # did not write loads beside it. reinit is additive and would have printed
+        # "nothing to do", which is how this line sent operators to a command that
+        # reported success and changed nothing. The remedy comes from the harness, so
+        # doctor, init, reinit and update cannot contradict each other about it.
+        util.warn(f"this plane's {h.name} wiring is {stale}.")
+        remedy = h.wiring_remedy()
+        # `manual` above already printed exactly this; saying it twice in one run is how a
+        # reader learns the second half of the output is boilerplate.
+        if remedy and not (status == "manual" and remedy == detail):
+            util.info(f"  {remedy}")
 
 
 def _refresh_plugin() -> None:

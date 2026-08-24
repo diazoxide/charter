@@ -176,8 +176,8 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     So only `commands_frame._guest_harness_env` travels here. The cost is stated in
     `docs/frame.md` beside the other named costs of being a guest: the harness inherits
     the operator's TMUX SERVER environment rather than their current shell's — exactly
-    what already happens on charter's own shared server, and never worth a credential on a
-    world-readable command line.
+    what already happens on charter's own shared server. Do not put a credential on that
+    command line: it is world-readable, and this function makes no promise about it.
 
     Every `-e` lands before the `--` — they are `respawn-pane`'s own options, and must
     never be grafted onto the harness's own argv.
@@ -270,8 +270,8 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
 
     **Every name must be in :data:`CARRIABLE`.** Raising is the point: the alternative —
     dropping the extras quietly — would let a caller believe it had handed the harness a
-    variable that never arrived, and would make the leak this guard exists to stop
-    invisible rather than impossible. Only NAMES appear in the message; a value that does
+    variable that never arrived. A silent drop makes this guard's own failures invisible;
+    it does not make them rarer. Only NAMES appear in the message; a value that does
     not belong on a command line does not belong in a traceback either.
     """
     unlisted = sorted(set(env or {}) - CARRIABLE)

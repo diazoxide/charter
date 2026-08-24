@@ -774,12 +774,23 @@ def check_harness() -> Result:
     if stale:
         from . import __version__
 
+        # The remedy is whatever the HARNESS says it is — one sentence, from the one
+        # function that composes it (`opencode.unvouched`). This hint used to end
+        # "→ charter reinit" on its own authority, and `charter reinit` answered "Up to
+        # date — nothing to do": an operator who followed this row was told the plane was
+        # fine by the command the row sent them to. `wiring_remedy` and not `upgrade`
+        # because `upgrade` writes on the way to the same sentence, and doctor diagnoses.
+        remedy = live.wiring_remedy()
         return Result(name, WARN,
-                      detail=f"{current} — its plugin was written by {stale}, charter is "
+                      detail=f"{current} — its plugin is {stale}; charter is "
                              f"{__version__}",
-                      hint=("A plugin an older charter wrote is still a file where a "
-                            "working one belongs — 0.40.0's guard never fired. → charter "
-                            "reinit (an edited plugin is reported, never overwritten)"))
+                      hint=("A plugin charter did not write is still a file where a "
+                            "working one belongs — 0.40.0's guard never fired, a current "
+                            "stamp over a changed body is the same silence with a "
+                            "reassuring first line, and a plugin loaded beside charter's "
+                            "shares the globals its guards call through. charter reports "
+                            "these, never overwrites them."
+                            + (f"\n        → {remedy}" if remedy else "")))
     gaps = _harness.deficits(current)
     if not gaps:
         return Result(name, OK, detail=current)
@@ -2113,7 +2124,7 @@ def check_credential_paths() -> Result:
     trace or snapshot is written, well after the command that caused it, and it reads as
     ordinary untracked noise right up until `git add -A` commits it. A trace records network
     requests with their headers and bodies, so tracing a bridged login puts the credential on
-    disk even though it never reached the transcript.
+    disk in a file nothing in the transcript points at.
 
     That is the shape #278 was actually about. The missing `.gitignore` line was the symptom;
     the cost was every plane working the same thing out again, in silence, and this is the

@@ -456,7 +456,11 @@ def cmd_secret_audit(args) -> int:
 
 
 def _value_free(field, values: list[str]):
-    """*field* with every value in *values* replaced by ``***``, at any depth.
+    """*field*, as recorded, with any of *values* it holds rewritten to ``***``.
+
+    This scrubs what charter is about to WRITE into its own trace. It is not the output
+    redaction of :mod:`charter.secrets.base` and makes none of that function's claims —
+    a child's output is not this function's input.
 
     Recurses through dicts, lists and tuples rather than checking a list of field names
     charter happens to record today: the next field added to a record is the one nobody
@@ -708,6 +712,14 @@ def cmd_secret_cp(args) -> int:
     The destination is checked BEFORE the value is resolved: a refused path never causes
     a vault read, so the plaintext is never in this process at all for the case that was
     about to print it.
+
+    What it does NOT do is put the destination under a guard. A ledger of materialised
+    paths, consulted by the vault read guards, was written and then dropped: #423 was
+    closed the other way in 0.52.0, on the argument that such a ledger matches a SPELLING
+    — `/tmp/./x`, a hardlink, a copy, `python3 -c open(...)` all walk past it — at the
+    price of a ledger read on the hook's hot path. The `--reveal` and read denials no
+    longer offer `secret cp` as a way to SEE a value, and they say in the same breath that
+    no guard covers a path you chose. `docs/secrets.md` and `SECURITY.md` state that limit.
     """
     dest = Path(args.dest).expanduser()
     force = bool(getattr(args, "force", False))
@@ -879,8 +891,13 @@ def _child_env(vault: str) -> dict:
 def cmd_secret_exec(args) -> int:
     """Run a command with secrets injected as env vars and/or files, then redact.
 
-    The model constructs the command using env-var *names* and never sees any
-    value; charter resolves the secrets at runtime and scrubs them from the output.
+    The model constructs the command using env-var *names*, and charter resolves the
+    values at runtime inside its own process. What happens to a value after that is a
+    property of the command charter was asked to run: redaction is ``str.replace`` over
+    the bytes charter captured, so a child that *transforms* the value — ``base64``,
+    ``rev``, a JSON re-encode — hands back something redaction cannot recognise. Read
+    ``secret exec <vault> -- <cmd>`` with the same suspicion you would read ``<cmd>``
+    holding the credential directly, because that is what it is (#444).
 
     With ``--exec`` the command *replaces* this process (``os.execvpe``) instead
     of being captured. Capturing buffers stdout until exit, which deadlocks any

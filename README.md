@@ -119,9 +119,11 @@ A **persona** is a small named scope with its own charter, its own committed mem
 vault, and a `delegate-when` line saying what should be handed to it. `charter persona
 sync-agents` turns each one into a real Claude Code sub-agent, so dispatching a role is
 ordinary delegation rather than a prompt trick. A persona whose `mcp.json` hands a vault
-value to a server names the command it would run and waits for `--approve-mcp` — the
-approval covers the command and its arguments, not the server's name, so a teammate
-re-pointing it lapses the approval rather than inheriting it.
+value to a server names the destination it would reach and waits for `--approve-mcp`, which
+asks about each server after showing it. What gets recorded is a digest of the line you
+read — which names every key of the entry and the vault it would spend, not just the
+server's name — so a teammate re-pointing any of it lapses the approval rather than
+inheriting it.
 
 They compose the way people do: `extends:` inherits a parent's charter, `uses:` says this
 role routes work to that one, and `agent-tools` narrows what the generated sub-agent may
@@ -201,16 +203,20 @@ oversight — see [SECURITY.md](SECURITY.md).
 ship today — `plain_file`, `reference` (point at a value that lives elsewhere) and
 **`1password`** — and more are coming. Read [docs/secrets.md](docs/secrets.md) before
 storing anything real: **`plain_file` is plaintext at mode 0600, with no encryption at
-rest.** What every provider buys you is the same and it is the point — ***charter never
-prints the value into the conversation***; what the command you hand it to does with it is
-that command's business. What only a real backend buys you is encryption. The vault is not a
-password manager; 1Password is, and charter will read from it.
+rest.** What every provider buys you is the same and it is the point — on the paths that
+consume it (`secret exec`, `--dotenv`, MCP) ***charter never prints the value into the
+conversation, and everywhere else prints it only where you asked for it yourself***. What
+the command you hand it to does with it is that command's business — and `secret get
+--reveal` prints to your terminal, while `secret cp` writes a real file it creates and
+refuses any destination that turns out to be one of charter's own streams, `/dev/stdout`
+included ([#449](https://github.com/diazoxide/charter/pull/449)). What only a real
+backend buys you is encryption. The vault is not a password manager; 1Password is, and charter will read from it.
 
-**A browser login, with the password never typed into the conversation.** `charter browser
-install` generates *Playwright's own* driving pages into the plane
-(`.claude/skills/playwright-cli/`) — charter vendors none of them, so a Playwright fix
-doesn't wait on a charter release. What charter ships is the two halves Playwright doesn't:
-the **credential bridge** (`charter secret exec --dotenv` resolves vault keys into one 0600
+**A browser login: charter hands Playwright the password by name, so nobody types it into
+the conversation.** `charter browser install` generates *Playwright's own* driving pages
+into the plane (`.claude/skills/playwright-cli/`) — charter vendors none of them, so a
+Playwright fix doesn't wait on a charter release. What charter ships is the two halves
+Playwright doesn't: the **credential bridge** (`charter secret exec --dotenv` resolves vault keys into one 0600
 temp file and points `PLAYWRIGHT_MCP_SECRETS_FILE` at it, so you refer to a password *by
 name* and Playwright substitutes and redacts it), and **per-worker session isolation**
 (`-s=<name>` gives each worker independent cookies, localStorage, IndexedDB and tabs — so
@@ -277,8 +283,10 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
   and it **defaults to `local`**.
 - **Vault** — where a persona's credentials live. The provider decides the storage
   guarantee; the boundary is the same for all of them, and it is that **charter never puts
-  the value in an agent's context or transcript** — the command charter hands it to still
-  can.
+  the value in an agent's context or transcript on the paths that consume it** —
+  `secret exec`, `--dotenv`, MCP — while `secret get --reveal` prints it to your terminal
+  and `secret cp <dest>` writes it to a real file you named. The command charter hands it
+  to still can.
 
 ## Also in the box
 

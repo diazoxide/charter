@@ -58,6 +58,18 @@ class TestUnattendedCannotCutARelease(FloorCase):
         self.assertEqual("deny", self.decide("git tag release-1", UNATTENDED))
         self.assertEqual("deny", self.decide("git tag -a 2026-08 -m x", UNATTENDED))
 
+    def test_the_program_name_is_case_folded(self):
+        """`GIT` and `git` are the same binary on APFS and NTFS. This guard took the
+        program name with `rsplit("/", 1)[-1]` and no fold, so `GIT tag v1` — and the
+        same Shift key on the one-credential guard — walked past both."""
+        self.assertEqual("deny", self.decide("GIT tag v9.9.9", UNATTENDED))
+        self.assertEqual("deny", self.decide("/usr/bin/GIT push --tags", UNATTENDED))
+
+    def test_a_substitution_does_not_stand_the_tag_down(self):
+        """`(`/`)` as plain segment boundaries stranded the operand: the tag NAME ended up
+        in a segment of its own, and `git tag` alone only LISTS."""
+        self.assertEqual("deny", self.decide("git tag $(cat VERSION)", UNATTENDED))
+
     def test_pushing_tags_is_denied(self):
         """Defence in depth — a tag that already exists locally could still be pushed."""
         for cmd in ("git push --tags",

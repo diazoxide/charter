@@ -41,15 +41,32 @@ rule while one who reads a bare refusal files an issue.
   `git show HEAD:<path>`), or a shell string (`sh -c 'cat .charter/vaults/db.json'`, which
   is one argument here and is not re-parsed) is not covered. Widening the list is not the
   fix — the missing name is always the next one, and false positives arrive immediately.
-  The **path** is normalised before the match — redundant separators, `.`/`..` segments and
-  letter case — so `.charter//vaults/db.json`, `.charter/./vaults/db.json` and
-  `.CHARTER/vaults/db.json` all answer the same as the plain form. Two things it still
-  cannot know. A *different* path holding the same bytes: a vault registered outside
-  `.charter/`, a file `charter secret cp` wrote to a path you named, or a symlink. And
-  anything a **shell** does to the operand after the hook has answered — a glob
-  (`cat .charter/vault?/db.json`), a variable (`V=…; cat $V`), a substitution, brace or
-  tilde expansion, a preceding `cd`. The hook runs on the command line, never on what `sh`
-  turns it into, so each of those is `cat` on the same inode and allowed. See
+  "Argv" now means the real one. A wrapper (`env`, `sudo`, `command`, `xargs`, a `{ … }`
+  group, a `then` branch) does not change what the program is — and where a wrapper opens a
+  file *itself* (`xargs -a <file>`) that file counts as read, even though the program named
+  on the line is something else. A **redirection** is neither the program nor an operand: it
+  may sit in front of the command (`< <vault> cat`), and the target of an input redirection
+  is a file the shell opens whatever the program does with it (`tee < <vault>`). A **command
+  boundary is an operator the shell would interpret**, so a quoted or escaped one is an
+  argument and not a boundary (`cat \) <vault>` reads the vault), and the `&` inside the
+  redirection `>&` is not the control operator `&` (`cat 2>&1 <vault>` is one command);
+  while a newline *is* a boundary exactly as `;` is — every line of a multi-line command is
+  its own command, `bash <<'EOF'` bodies included — and `#` starts a comment only where a
+  word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
+  plain arguments anywhere but command position and `cat { <vault>` is one command that
+  reads the vault. Beyond that: an unparseable quote does not hide the commands after it,
+  an **unquoted** `$( … )` substitution is read both as the command it runs and as the word
+  it becomes, and a relocation counts however it is spelled (`cd`, `pushd`, `env -C`,
+  `sudo --chdir`). The **path** is normalised before the match — redundant separators,
+  `.`/`..` segments and letter case — so `.charter//vaults/db.json`,
+  `.charter/./vaults/db.json` and `.CHARTER/vaults/db.json` all answer the same as the
+  plain form. Two things it still cannot know. A *different* path holding the same bytes: a
+  vault registered outside `.charter/`, a file `charter secret cp` wrote to a path you
+  named, or a symlink. And anything a **shell** does to the operand after the hook has
+  answered — a glob (`cat .charter/vault?/db.json`), a variable (`V=…; cat $V`), a quoted
+  substitution, brace or tilde expansion. The hook runs on the command line, never on what
+  `sh` turns it into, so each of those is `cat` on the same inode and allowed. **What it
+  does not catch is written down** — see *Where the secret-leak guard stops*, below, and
   [SECURITY.md](../SECURITY.md) for why that is the honest scope rather than a defect.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all. It calls the **same predicate on the same operand and adds no step of its
@@ -60,7 +77,7 @@ rule while one who reads a bare refusal files an issue.
   `Grep(path=".charter/vaults")` was refused while `grep -rn TOKEN .charter/vaults` printed
   plaintext. The retry is gone and the pattern anchors `vaults` to a path segment instead.
   No shell is involved on this route, so of the limits above only the path ones apply — the
-  shell-expansion family does not arise here.
+  shell-expansion and wrapper families do not arise here.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
   with the plane's own default branch as the operand, which is the one spelling that used to
@@ -228,6 +245,44 @@ all: take the tool off the `tools:` line.
 None of that is a denial being dodged. This path is an *allowance*: the fallback is the
 normal prompt, and every guard above — the Bash leak guard, the state-write guard — applies
 to those commands exactly as before.
+
+## Where the secret-leak guard stops
+
+SECURITY.md gives charter's position and this section is the local, specific version of it:
+**guard rails, not guarantees — a guard against mistakes, not an attacker with shell access
+as your user.** The secret-leak guard is worth having because an agent reaching for a vault
+file by name is a real and frequent event, and the guard catches those spellings reliably.
+It is not a sandbox, and the list above is not a claim of completeness.
+
+**It is defeated by deliberate obfuscation.** One example, so nobody has to guess where the
+line is:
+
+```bash
+echo $(cat .charter/vaults/x.json)      # DENIED
+echo "$(cat .charter/vaults/x.json)"    # ALLOWED — one pair of quotes, and it prints
+```
+
+Four rounds of adversarial review have now been run against this guard, and each round's fix
+was defeated by the next spelling — `$( … )`, `env -C`, a quoted `)`, a bare `{`, a leading
+fd digit. That pattern is the finding. Deciding what a shell will execute, without executing
+it, is not winnable in a Python tokeniser, so the honest move is to say what is open:
+
+- **a quoted command substitution** — the example above, and `` "`cat <vault>`" ``,
+  `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`;
+- **any expansion between the guard and `open()`** — globs (`.charter/vault?/x.json`,
+  `.charter/*/x.json`), brace expansion (`.charter/{vaults,}/x.json`), `$'\x73'` quoting,
+  and a path that arrives in a variable (`V=<vault>; cat $V`). The path check matches text,
+  not resolved files;
+- **a shell that runs a string** — `sh -c '…'`, `eval`;
+- **a vault registered outside `.charter/`**, which the Bash guard does not look up (a
+  registry read on every Bash call is a cost the hot path will not carry);
+- **anything that reads the file without naming a known reader** — an editor, a language
+  runtime, a copy followed by a read of the copy.
+
+There is no second line of defence behind it: nothing scans Bash *output*. What actually
+makes a vault not worth reading is the provider — `1password` and `reference` keep the value
+in a system built for custody and resolve it on demand, so there is no plaintext on disk for
+any of the above to print. That is the control; the hook is the guard rail.
 
 ## When a guard is wrong
 

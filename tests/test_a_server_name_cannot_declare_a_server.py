@@ -657,6 +657,54 @@ class TestTheRefusalIsReported(NameBase):
         self.assertEqual(len(errors), 1, errors)
         self.assertEqual(len(errors[0].splitlines()), 1)
 
+    def test_the_refusal_NAMES_the_name_it_refuses(self):
+        """Both refusal sentences end in *go and rename it*, so both have to say WHICH.
+
+        The report and the lint error each interpolate a name a committed file chose, and
+        each used `contain.one_line`, which answers a different question than this one. It
+        guarantees the value cannot forge a second row — by escaping the categories that
+        carry no glyph, `Cc`, `Cf`, `Cs`, `Zl`, `Zp` — and its own docstring says it does
+        not make a value readable. That is a list of *categories*, which is a list of
+        spellings: U+3164 HANGUL FILLER is `Lo`, U+2800 BRAILLE PATTERN BLANK is `So`,
+        U+115F and U+1160 are `Lo`. All four render as nothing on every terminal, none is
+        whitespace, and all four survive `strip` — so the row read `victim/` and the lint
+        error read ``server name '' is refused``, telling somebody to go rename a server
+        whose name the sentence does not contain. It is the blank consent line of #427 on
+        the one row of the same report that had not been given `mcpseen.label`.
+
+        The table is generated rather than listed: one codepoint per Unicode general
+        category, taken by sweeping the codespace, so a category nobody here has thought
+        about is covered without this test being edited. The assertion is the property —
+        what is printed is printable ASCII, and it is not empty — rather than equality
+        with whichever escape the code currently calls, which would pass for any escape
+        including none.
+        """
+        samples: dict[str, str] = {}
+        for cp in range(0x110000):
+            ch = chr(cp)
+            if " " <= ch <= "~":
+                continue  # printable ASCII is what may reach the line; it is the target
+            samples.setdefault(unicodedata.category(ch), ch)
+        self.assertGreater(len(samples), 20, "the sweep found almost no categories")
+
+        for cat, ch in sorted(samples.items()):
+            with self.subTest(category=cat, cp=f"U+{ord(ch):04X}"):
+                name = ch * 3
+                self._persona({name: GOOD, "ok": GOOD})
+
+                rows = [l for l in self._sync().splitlines() if "victim/" in l]
+                self.assertEqual(len(rows), 1, rows)
+                shown = rows[0].split("victim/", 1)[1].strip()
+                self.assertTrue(shown, "the row refuses a server it does not name")
+                self.assertTrue(all(" " <= c <= "~" for c in shown), repr(shown))
+
+                errors = [m for lvl, m in persona.lint("victim")
+                          if lvl == "error" and m.startswith("mcp: server name")]
+                self.assertEqual(len(errors), 1, errors)
+                named = errors[0].split("'", 2)[1]
+                self.assertTrue(named, "the error refuses a server it does not name")
+                self.assertTrue(all(" " <= c <= "~" for c in named), repr(named))
+
     def test_a_clean_persona_says_nothing_about_names(self):
         """The complaint has to be caused by the file, not by having an `mcp.json`."""
         self._persona({"ok": GOOD})
@@ -676,7 +724,10 @@ class TestTheWithheldReportIsOneRowPerServer(NameBase):
               "secrets": {"TOKEN": "client-id"}}
 
     def test_describe_stays_on_one_line(self):
-        self.assertEqual(len(mcpseen.describe(self.FORGED).splitlines()), 1)
+        # `describe` takes the vault as well now: the consent line names WHOSE credential
+        # is at stake, because `vault:` is a key of a committed `persona.md` and a one-line
+        # commit re-points it. The property under test is unchanged — one row per server.
+        self.assertEqual(len(mcpseen.describe("acme", self.FORGED).splitlines()), 1)
 
     def test_one_row_per_withheld_server(self):
         self._persona({"evil": self.FORGED})

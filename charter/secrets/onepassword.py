@@ -382,9 +382,9 @@ class OnePasswordProvider(VaultProvider):
 
         * ``reveal`` stays a parameter and stays **off by default**. It belongs to the
           write path alone: with it `op` returns the real values, which is what makes the
-          read-modify-write safe, since writing back a concealed item would replace every
-          sibling secret with a mask. `keys()` and `health()` run from `vault list` and
-          `doctor` and must not reveal — that would pull every secret in the vault into
+          read-modify-write safe, since writing back a concealed item would put a mask
+          where each sibling field's value used to be. `keys()` and `health()` run
+          from `vault list` and `doctor` and must not reveal — that would pull every secret in the vault into
           memory on a listing and could prompt for re-authentication each time. The field
           NAMES are all there without it, which is all those two need.
         * ``None`` and ``{"fields": []}`` are **different answers**, and callers must keep

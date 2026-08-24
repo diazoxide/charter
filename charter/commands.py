@@ -1661,6 +1661,11 @@ def _wire_harnesses(root: Path) -> list[tuple[str, str]]:
 
     Nothing here names a harness. Adding Codex is adding a class to
     ``harness.registry.KINDS`` — this loop, and `init`'s report, cover it that day.
+
+    A pair whose status is ``"unvouched"`` carries a SENTENCE, not a path — see
+    :meth:`Harness.wire`. Both callers warn about those instead of listing them, which is
+    the difference between "already present" and "this file is where your guard should be
+    and charter cannot vouch for it".
     """
     from .harness import registry
 
@@ -1971,6 +1976,7 @@ def cmd_init(args) -> int:
     # still worth knowing, but it changes only what init OFFERS (a first clone of the repo
     # you are standing in — see `_first_clone_step`, called last), never what it builds.
     created, present, blocked = [], [], []
+    unvouched: list[str] = []
 
     toml_path = root / _root.MARKER
     if toml_path.exists():
@@ -2010,7 +2016,13 @@ def cmd_init(args) -> int:
     # plane not running the plugin, with `doctor` showing a green tick over it — and a
     # safety feature that ships off by default stays off.
     for status, label in _wire_harnesses(root):
-        (created if status == "created" else present).append(label)
+        # "unvouched" is a SENTENCE, not an item — a harness reporting something in its
+        # wiring that charter did not write. It used to land in `present`, which is how a
+        # shim with every guard cut out of it got listed as "already present" (#433).
+        if status == "unvouched":
+            unvouched.append(label)
+        else:
+            (created if status == "created" else present).append(label)
 
     fd = _ensure_front_door(root, getattr(args, "front_door", None))
     if fd:
@@ -2060,6 +2072,10 @@ def cmd_init(args) -> int:
                 f"nothing to do.")
     if present:
         util.info(f"  already present: {', '.join(present)}")
+    # After the inventory and before "Next:", so it is the last thing said about what is
+    # installed. A harness's wiring charter could not vouch for used to be silent here.
+    for why in unvouched:
+        util.warn(why)
     util.info("Next: `charter doctor` to preflight, then `charter discover` to build the "
               "inventory.")
     # Last, so the most specific thing init can say about THIS directory is the line the
@@ -2134,9 +2150,12 @@ def cmd_reinit(args) -> int:
         util.warn(f"{sl_detail} is not valid JSON — left it completely untouched. Add the "
                   f"status line yourself:\n{_statusline_snippet()}")
 
+    unvouched: list[str] = []
     for status, label in _wire_harnesses(config.ROOT):
         if status == "created":
             created.append(label)
+        elif status == "unvouched":
+            unvouched.append(label)
 
     gh_status, gh_detail = _ensure_guard_hook(config.ROOT)
     if gh_status == "created":
@@ -2158,7 +2177,19 @@ def cmd_reinit(args) -> int:
             util.info(f"  already present: {', '.join(present)}")
         return 1
 
+    # BEFORE the headline, and never swallowed by it. `doctor`'s hint for a plugin charter
+    # cannot vouch for names `charter reinit`, and reinit answered "Up to date — nothing to
+    # do" while the file sat there unreadable — a remedy that reports success and changes
+    # nothing, which ends the investigation. reinit still does not overwrite it (charter
+    # reports, never repairs); it now says so, and says what would.
+    for why in unvouched:
+        util.warn(why)
+
     if not created:
+        if unvouched:
+            util.ok(f"Up to date (schema {_instance.SCHEMA}) — nothing to add. The "
+                    f"warning above is not something `reinit` can fix for you.")
+            return 0
         util.ok(f"Up to date (schema {_instance.SCHEMA}) — nothing to do.")
         return 0
     util.ok(f"Reinitialized control plane → added {', '.join(created)}.")

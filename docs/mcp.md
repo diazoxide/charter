@@ -51,8 +51,13 @@ mcpServers:
 ```
 
 charter resolves each key from the `reddit` vault in its own process, puts the values in the
-child's environment, and hands over. The file names the *keys*; the values never enter a
-context window, a transcript, or a summary.
+child's environment, and hands over. The file names the *keys*, and on this path **charter
+puts no value in a context window, a transcript, or a summary** — what the server does with
+the values it was handed is the server's own business, the same limit `secret exec` has
+everywhere else. Nothing here calls the two commands that put a value where you can read
+it, `secret get --reveal` and `secret cp <dest>`; the first writes to your terminal and refuses a
+non-interactive stdout without `--force`, and the second writes a real file it creates and
+refuses any destination that is one of charter's own streams, `/dev/stdout` included.
 
 Two things that will bite:
 
@@ -139,7 +144,7 @@ may have *these* keys from *that* vault:
 
 ```bash
 charter persona sync-agents               # writes the agents; names anything unapproved
-charter persona sync-agents --approve-mcp # after reading the command it printed
+charter persona sync-agents --approve-mcp # asks about each one, after showing it
 ```
 
 Until then the server is still declared in the generated agent — unchanged, minus the
@@ -147,11 +152,114 @@ vault wrapper — so the persona keeps working and the server fails at authentic
 than silently running with a credential nobody sanctioned. `sync-agents` prints the exact
 command it withheld from, which is the thing worth looking at.
 
-The approval covers the vault, the command, its args and the `secrets`/`secret_files`
-mappings together. **Change any of them and it lapses**, because the approval is of a
-command and not of a server name — a teammate re-pointing an existing server at a new
-binary is the case this exists for. The record is machine-local under `.charter/`: if it
-travelled in git, the same commit that declares a server could declare it approved.
+`--approve-mcp` asks **per server**, and prints the entry before it asks:
+
+```
+  reddit/acme → type "http"  url "https://api.acme.example/mcp"  env "HTTPS_PROXY"="http://p.example:3128"  secrets "ACME_TOKEN"="acme-token"  vault "reddit"
+    approve reddit/acme? [y/N]
+```
+
+Anything but an explicit yes withholds, and declining a server that was approved before
+revokes it. `--dry-run` shows the same lines and records nothing. `--yes` approves every
+credentialed server without asking, and is **required** off a terminal — a flag that means
+yes where nobody can be asked is not consent.
+
+**What is recorded is the line itself.** The fingerprint is the SHA-256 of the text
+printed above the question and nothing else is mixed into it, which makes two properties
+true at once and by construction: two entries that print the same line share one approval,
+and an entry that prints a different line lapses it. There is no second, shorter summary
+that can fall out of step with what you read — three earlier rounds of this feature each
+had one, and every bypass since has been one field that was in the digest and not on the
+line, which meant being re-asked under a line byte-identical to the one already approved.
+
+That puts the weight on the line holding **everything**. It does. The renderer loops over
+the entry's keys rather than over a list of fields charter knows, so:
+
+* `command` and `args` print after `run`, one word per word — quoted when a word is empty
+  or contains a space, so where the words split is never in doubt;
+* `type`, `url`, `env`, `secrets` and `secret_files` print under their own names;
+* **`env` prints its values, not only its keys.** The value is the half that decides:
+  `PATH` chooses which binary `execvpe` finds, `NODE_OPTIONS` chooses what it loads. An
+  `env` value is committed plaintext out of `mcp.json` — not a vault value — so printing it
+  discloses nothing that reading the repo would not;
+* **the vault is named**, because `vault:` is a key of the committed `persona.md` and a
+  one-line commit there re-points which credential is spent;
+* **any key charter has never been taught** — `cwd`, `headers`, whatever comes next —
+  prints under its own quoted name with its JSON value, because `sync-agents` passes every
+  key it does not consume through to the harness.
+
+Charter's own words are printed bare and everything committed is printed between quotes,
+so a committed value cannot dress itself up as part of charter's sentence.
+
+**Which credential, and not only which command.** `secrets` and `secret_files` map an
+environment variable to a *vault key*, and that key decides which of the vault's values the
+command receives — so both are on the line as `"VAR"="key"`, in the shape the `secret exec`
+argv is built from. The credential's **value** is the one thing that is not on the line and
+cannot be: it is not in the entry, and the process that prints this never opens a vault.
+
+**The line is printable ASCII, and everything else is spelled out as `\uXXXX`.** Not
+"unprintable characters are escaped" — every codepoint outside `U+0020..U+007E` is,
+whatever its category. A committed `args` can otherwise carry a `\r` that repaints the
+line, a bidi override that reverses it, a combining mark that repaints the rows around it,
+a U+3164 HANGUL FILLER that is printable and renders as nothing, or a Cyrillic `а` that
+makes `api.\u0430\u0441me.example` indistinguishable from `api.acme.example` on the one line the
+decision rests on. MCP commands, args, urls and env keys are ASCII in practice, so
+anything else here is a reason to *show the escape* rather than the glyph. Escaping is
+also what makes "renders as nothing" answerable: charter decides it on the escaped line,
+where the ASCII space is the only character left that shows nothing.
+
+Read that claim precisely, because it is the kind of sentence this section has already had
+to withdraw twice: *everything on the row that came out of a committed file* is printable
+ASCII. The `•` and the `→` around it are charter's own punctuation, put there by charter
+and not by anyone's `mcp.json`. The test derives that set from a benign run rather than
+listing it, with colour pinned off so the derivation cannot quietly absorb an escape
+sequence the environment happened to add.
+
+The escaping is **reversible**, which is the part that makes reading the line worth
+anything — and, now that the fingerprint is taken over the line, the part that makes the
+approval mean the entry. Astral codepoints use the eight-digit `\UXXXXXXXX` form
+(`\u1f600` is five hex digits and would also spell `U+1F60` followed by `0`); a literal
+backslash is doubled and a literal quote is `\"`, so every `\uXXXX` you see is a codepoint
+that was really there rather than six ASCII characters imitating one, and an unescaped
+quote is always charter's own delimiter. A Windows path therefore shows as `C:\\Users\\x`.
+Nothing is collapsed, stripped or shortened on the way: a run of spaces prints as a run of
+spaces and costs the columns it occupies, because a part that got tidied away is a part you
+did not consent to.
+
+That covers the **whole** line, including the `persona/server` label in front of the
+arrow — the half that had gone to the terminal untouched while the destination beside it
+was hardened three times. A server name is a key of a committed `mcp.json`: an arbitrary
+string, of arbitrary length, in any script. So a server named with three U+3164 fillers no
+longer prints as `reddit/ → uvx`, one carrying an ANSI erase no longer wipes the words
+standing beside it, and one of a hundred thousand characters no longer puts twelve hundred
+rows in front of the destination. Both halves of the label are clipped to a fixed width
+and escaped the same way, and the destination's own budget is what is left of the screen
+once the label has been paid for — a ceiling on the part charter was looking at, rather
+than on the line it prints, is a ceiling the other part is free to walk past.
+
+(A persona name cannot reach that line hostile in the first place: `personas/` entries are
+held to `[a-z0-9][a-z0-9._-]*`. It goes through the same escape anyway — charter joins its
+guards rather than choosing between them — and the clip is not belt-and-braces at all,
+since that alphabet bounds the characters and not the length.)
+
+An entry charter cannot show in full cannot be approved at all and is reported as withheld.
+Two ways to get there: it names no destination (no `command`, no `args`, no `url` — a part
+that renders as nothing does not count as naming something), or its full rendering **would
+not fit on one screen**. That ceiling is a screen and not a byte count on purpose: you
+answer the prompt printed *under* the line, so a line taller than the terminal has already
+scrolled the command it names off the top before the question reaches you. Nothing is ever
+trimmed to fit it — an earlier round clipped each part at two hundred characters and
+announced the cut, which bounded the line but let two different `args` print the same tail.
+Complete, or refused.
+
+**The scope, said plainly.** This is a guard against a *commit* — a file changing under an
+approval you already gave — answered by a person reading one line. It is not a guard
+against someone who can already run code as you: they can edit the approval record, the
+harness, or charter itself. `SECURITY.md` states charter's boundary and nothing on this
+page exceeds it.
+
+The record is machine-local under `.charter/`: if it travelled in git, the same commit that
+declares a server could declare it approved.
 
 There is deliberately no allowlist of permitted commands. An MCP `command` is an arbitrary
 binary followed by arbitrary args, so any list containing the launchers real servers use
@@ -180,8 +288,11 @@ fresh clone.
 
 Scoping governs who may *call* a tool. The vault governs who may *see* a secret, and that
 property survives a mistake — a transcript, a summary fed into a later prompt, a bug report
-pasted into an issue. `charter secret exec` keeps the value out of all of them by never
-putting it in the context to begin with.
+pasted into an issue. On the paths that consume a value — `secret exec` with
+`--env`/`--file`/`--dotenv`, and the MCP launcher — charter resolves it inside its own
+process and hands it to the child, so charter itself puts nothing in the context to begin
+with. Where the value goes after that is a property of the command you asked charter to
+run, and `charter secret get --reveal` prints it wherever you asked for it yourself.
 
 See [secrets.md](secrets.md) for what a vault does and does not protect against — in
 particular that the default provider is plaintext at file mode 0600, with no encryption at

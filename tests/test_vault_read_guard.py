@@ -17,10 +17,14 @@ and out of the transcript — and `docs/secrets.md` claimed the mitigation exist
 from __future__ import annotations
 
 import json
+import stat
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
-from charter import hooks
+from charter import commands_secrets, config, hooks
+from charter.secrets import registry
 from tests._isolation import PersonaIso, run_hook
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,8 +39,8 @@ def _reason(r) -> str:
 
 
 class ReadGuardCase(PersonaIso):
-    def read(self, path: str, tool: str = "Read", **extra):
-        ti = {"file_path": path} if tool == "Read" else {"path": path, **extra}
+    def read(self, path: str, tool: str = "Read", key: str = "file_path", **extra):
+        ti = {key: path} if tool == "Read" else {"path": path, **extra}
         return run_hook(hooks.pretooluse_read,
                         {"tool_name": tool, "tool_input": ti, "session_id": "s", "cwd": "/tmp"})
 
@@ -79,12 +83,122 @@ class TestReadingAVaultIsDenied(ReadGuardCase):
         still falls back to it when a migration cannot complete. One extra alternative
         against a silent gap on a plane that never finished moving."""
         self.assertEqual(_decision(self.read(".edm/vaults/devops.json")), "deny")
+    def test_the_harnesss_own_spelling_of_the_path_key_is_denied_too(self):
+        """`file_path` is Claude Code's name for it. opencode 1.18.21's `read` takes
+        `filePath` — read off the running server's own `/experimental/tool` schema, not
+        guessed — and a guard keyed on one spelling is a guard that is ABSENT on the other
+        harness. That is half of #433: routing opencode's `read` to this handler would
+        still have allowed the read, because the payload's key had a different name.
+
+        The key belongs to the harness, so the guard reads every spelling a harness charter
+        supports uses. `hooks._PATH_KEYS` is the one place that says so."""
+        for key in ("filePath", "notebookPath"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    _decision(self.read(".charter/vaults/devops.json", key=key)), "deny")
 
     def test_the_browser_and_active_paths_are_covered_too(self):
         """`_VAULT_PATH_RE` already covers these for Bash; the two guards must not disagree
         about what counts as a vault."""
         for p in (".charter/browser", ".charter/active-persona"):
             self.assertEqual(_decision(self.read(p)), "deny", p)
+
+
+class TestPathSpellingsAreDenied(ReadGuardCase):
+    """`_VAULT_PATH_RE` was a literal, case-sensitive substring match (#431).
+
+    `.charter//vaults/x.json`, `.charter/./vaults/x.json` and `.charter/vaults/x.json` are
+    one file to `open()`. The Bash side allowed the first two — verified live, they printed
+    a fabricated vault — and BOTH sides allowed `.Charter/vaults/x.json`, because the
+    regex was case-sensitive and APFS is not. The harness normalises separators before this
+    handler sees them, which is why only the case variant reached here; a guard that relies
+    on its caller to normalise is a guard that stops existing the day the caller changes.
+    """
+
+    VARIANTS = (
+        ".charter//vaults/db.json",
+        ".charter/./vaults/db.json",
+        ".charter/vaults/../vaults/db.json",
+        ".CHARTER/vaults/db.json",
+        ".Charter/Vaults/db.json",
+        "/home/me/plane/.charter//vaults/db.json",
+        ".charter//active-persona",
+        ".charter/./browser/state.json",
+    )
+
+    def test_the_read_guard_denies_every_spelling(self):
+        for p in self.VARIANTS:
+            with self.subTest(path=p):
+                self.assertEqual(_decision(self.read(p)), "deny")
+
+    def test_the_bash_guard_denies_every_spelling(self):
+        """The two must agree — this module's own argument. They did not."""
+        for p in self.VARIANTS:
+            with self.subTest(path=p):
+                self.assertIsNotNone(hooks._leak_reason(f"cat {p}"), p)
+
+    def test_the_registry_survives_the_normalisation(self):
+        """The carve-out is load-bearing: `.charter/vaults.json` holds provider config and
+        paths, never values, and folding case must not turn the registry into a vault."""
+        for p in (".charter/vaults.json", ".charter//vaults.json", ".CHARTER/VAULTS.JSON"):
+            with self.subTest(path=p):
+                self.assertIsNone(_decision(self.read(p)))
+                self.assertIsNone(hooks._leak_reason(f"cat {p}"))
+
+    def test_a_traversal_INTO_the_vault_is_resolved(self):
+        """`..` is resolved, not merely noticed. `.charter/x/../vaults/db.json` names no
+        `.charter/vaults/` literally, and opens one."""
+        self.assertEqual(_decision(self.read(".charter/x/../vaults/db.json")), "deny")
+        self.assertIsNotNone(hooks._leak_reason("cat .charter/x/../vaults/db.json"))
+
+    def test_a_traversal_back_OUT_of_the_vault_is_still_refused(self):
+        """Deliberate, and the fail-CLOSED direction: `.charter/vaults/../notes.md` does
+        resolve to an ordinary file, but the literal spelling names the vault directory and
+        the guard refuses it rather than trusting a normalisation to say the path escaped.
+        The cost is refusing a read nobody writes; the alternative is a subtraction rule
+        inside a guard, which is where bypasses live."""
+        self.assertEqual(_decision(self.read(".charter/vaults/../notes.md")), "deny")
+
+
+class TestTheDenialIsNotSwallowed(ReadGuardCase):
+    """`except Exception: return 0` wrapped the `_deny` call itself (#438).
+
+    A `BrokenPipeError` out of `_deny`'s own `print` is an `Exception`, so the handler
+    answered 0 — an allow — on the one path where it had already decided to refuse. The
+    Bash sibling has no such wrapper, so the two vault guards failed in opposite directions
+    in a module that argues they must never disagree.
+    """
+
+    def test_a_broken_pipe_does_not_turn_a_deny_into_an_allow(self):
+        deny = mock.Mock(side_effect=BrokenPipeError("closed"))
+        with mock.patch.object(hooks, "_deny", deny):
+            with self.assertRaises(BrokenPipeError):
+                run_hook(hooks.pretooluse_read, {
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": ".charter/vaults/db.json"},
+                    "session_id": "s"})
+        self.assertEqual(deny.call_count, 1)
+
+    def test_a_failing_trace_still_leaves_the_deny_standing(self):
+        """The trace is bookkeeping, not the verdict: a full disk may not un-deny a read.
+
+        The failure is injected at `trace.record`, the function that actually touches the
+        disk, and NOT at `hooks._trace`. Patching `_trace` itself would have replaced the
+        very handler under test with a raising mock and then asserted that some OTHER
+        handler caught it — a test manufacturing the condition it claims to observe, which
+        would report green if `_trace`'s own `except` were deleted tomorrow.
+        """
+        from charter import trace as trace_mod
+        with mock.patch.object(trace_mod, "record", side_effect=OSError("no space")):
+            self.assertEqual(_decision(self.read(".charter/vaults/db.json")), "deny")
+
+    def test_unparseable_input_still_fails_open_before_the_verdict(self):
+        """The narrowing is not "remove the handler": a malformed payload must still not
+        crash a turn. Only the DENY moved outside it."""
+        r = run_hook(hooks.pretooluse_read,
+                     {"tool_name": "Read", "tool_input": ["not", "a", "dict"],
+                      "session_id": "s"})
+        self.assertIsNone(_decision(r))
 
 
 class TestItDoesNotOverreach(ReadGuardCase):

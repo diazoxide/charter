@@ -885,13 +885,20 @@ PINNED: tuple[tuple[str, str, str, str], ...] = (
     ("ALLOW", "clone", "git --git-dir {root}/.git checkout feature", "LIMIT #477: the separated form"),
     ("ALLOW", "clone", "git --work-tree={root} --git-dir={root}/.git checkout feature",
      "LIMIT #477: --work-tree names the tree directly"),
-    ("ALLOW", "root", "env git checkout feature",
-     "LIMIT #430: prog is taken from token 0, so a wrapper prefix hides the real program"),
-    ("ALLOW", "root", "/usr/bin/env git checkout feature", "LIMIT #430: the same by absolute path"),
-    ("ALLOW", "root", "command git checkout feature", "LIMIT #430"),
-    ("ALLOW", "root", "nohup git checkout feature", "LIMIT #430"),
-    ("ALLOW", "root", "if true; then git checkout feature; fi", "LIMIT #430: a shell keyword in token 0"),
-    ("ALLOW", "root", "( git checkout feature )", "LIMIT #430: _OPERATORS carries no grouping tokens"),
+    # #430 CLOSED. These six rows were recorded as limits — `prog` came from token 0, so a
+    # wrapper word or a shell keyword standing in front of `git` hid it from every guard in
+    # the module. `_split_env_chdir` strips the wrapper run before naming the program and
+    # `_segment_tokens` opens a segment at a grouping token in command position, so all six
+    # now reach the same `git checkout` the bare spelling does. Flipped here rather than
+    # deleted: a row that changes verdict is the record of what changed, and one that
+    # disappears is a row nobody can see used to say something else.
+    ("DENY", "root", "env git checkout feature",
+     "#430: a wrapper prefix no longer hides the program"),
+    ("DENY", "root", "/usr/bin/env git checkout feature", "#430: the same by absolute path"),
+    ("DENY", "root", "command git checkout feature", "#430"),
+    ("DENY", "root", "nohup git checkout feature", "#430"),
+    ("DENY", "root", "if true; then git checkout feature; fi", "#430: a shell keyword in token 0"),
+    ("DENY", "root", "( git checkout feature )", "#430: a grouping token opens a segment"),
     ("ALLOW", "root", "sh -c 'git checkout feature'",
      "LIMIT #430 (named there as out of scope): an interpreter's argument is the command as "
      "TEXT, and charter does not re-parse it — the same deliberate limit pinned in "
@@ -988,8 +995,25 @@ class TestThePinnedCorpusIsTheBaseline(CheckoutCase):
         limits = [r for r in PINNED if _LIMIT in r[3]]
         self.assertGreaterEqual(len(denies), 70, len(denies))
         self.assertGreaterEqual(len(allows) - len(limits), 30, len(allows) - len(limits))
-        self.assertGreaterEqual(len(limits), 12, len(limits))
+        # Was 12. Six of those rows were the #430 wrapper-prefix family, and they are not
+        # gone — they are still in the table, flipped to DENY and annotated with the issue
+        # that closed them. A floor over the count alone cannot tell "closed" from
+        # "deleted", so the closed six are named below and this number is what remains.
+        self.assertGreaterEqual(len(limits), 6, len(limits))
         self.assertEqual(sorted({r[0] for r in PINNED}), ["ALLOW", "DENY"])
+
+    def test_a_closed_limit_stays_in_the_table_as_a_denial(self):
+        """The other half of the count above. Lowering a floor because rows left the table
+        and lowering it because rows changed verdict look identical from the number, so the
+        rows that changed are asserted by name: still present, still `root`, now DENY."""
+        rows = {(w, c): v for v, w, c, _n in PINNED}
+        for cmd in ("env git checkout feature", "/usr/bin/env git checkout feature",
+                    "command git checkout feature", "nohup git checkout feature",
+                    "if true; then git checkout feature; fi", "( git checkout feature )"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(rows.get(("root", cmd)), "DENY",
+                                 "a limit closed by #430 left the table instead of "
+                                 "changing verdict in it")
 
     def test_no_row_is_written_twice(self):
         """Two rows for one `(where, command)` are either a duplicate or a contradiction,

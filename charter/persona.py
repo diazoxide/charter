@@ -511,6 +511,12 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     # `args`, so a list holding the launchers real servers use (`npx`, `uvx`, `docker`) is
     # walked straight past by `args` alone, and a list excluding them refuses every server
     # anyone actually runs. See `mcpseen` for the full argument.
+    #
+    # The digest covers the WHOLE entry, not the fields charter happens to know about.
+    # `out` above keeps every key it does not consume — `env` among them — and hands them
+    # to the harness, which sets them on this process before `secret exec` reaches
+    # `execvpe`; so a fingerprint over an allowlist of five fields let a committed edit
+    # re-point an approved server's PATH or NODE_OPTIONS with the approval intact (#426).
     if mcpseen.fingerprint(vault, entry) not in mcpseen.approved(name):
         return out
     args = ["secret", "exec", vault]
@@ -531,28 +537,41 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     return out
 
 
-def mcp_credentialed(name: str) -> list[tuple[str, dict, str]]:
-    """``(server, entry, fingerprint)`` for every server of *name* that would carry a
-    credential — i.e. declares ``secrets``/``secret_files`` against a real vault.
+def mcp_credentialed(name: str) -> list[tuple[str, dict, str, str]]:
+    """``(server, entry, fingerprint, consent line)`` for every server of *name* that would
+    carry a credential — i.e. declares ``secrets``/``secret_files`` against a real vault.
 
     The list `sync-agents --approve-mcp` records and the list it reports on are both
     derived from this one, so "what you were shown" and "what got approved" cannot drift
     apart — which is the failure mode of a consent prompt that computes its own list.
+
+    **The LINE is returned, not just the entry**, and that is deliberate. `mcpseen`
+    fingerprints the consent line itself, so the line a caller prints and the digest it
+    records have to be the same string; handing back the entry and letting each caller
+    render its own is how they come to differ — the caller that forgot the vault would
+    print a line the digest does not match. There is one rendering per server here, and
+    both callers print that one.
+
+    ``fingerprint`` may be ``None``, and then the line is ``""``: an entry
+    `mcpseen.describe` cannot render is in scope (it declares secrets against a vault) but
+    can never be approved (#427). Membership is decided by `mcpseen.needs_consent` rather
+    than by the digest, so such an entry is still REPORTED as withheld instead of
+    vanishing from both lists at once.
     """
     vault = (resolve(name) or {}).get("meta", {}).get("vault")
     out = []
     for server, entry in sorted(mcp_servers(name).items()):
-        fp = mcpseen.fingerprint(vault, entry)
-        if fp:
-            out.append((server, entry, fp))
+        if mcpseen.needs_consent(vault, entry):
+            out.append((server, entry, mcpseen.fingerprint(vault, entry),
+                        mcpseen.describe(vault, entry)))
     return out
 
 
-def mcp_withheld(name: str) -> list[tuple[str, dict]]:
-    """The credentialed servers this operator has NOT approved — what `mcp_render_entry`
-    is about to render without its vault wrapper."""
+def mcp_withheld(name: str) -> list[tuple[str, str]]:
+    """``(server, consent line)`` for the credentialed servers this operator has NOT
+    approved — what `mcp_render_entry` is about to render without its vault wrapper."""
     ok = mcpseen.approved(name)
-    return [(s, e) for s, e, fp in mcp_credentialed(name) if fp not in ok]
+    return [(s, line) for s, _e, fp, line in mcp_credentialed(name) if fp not in ok]
 
 
 def lineage(name: str) -> list[str]:
@@ -1263,11 +1282,18 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     # A name `mcp_name_ok` refused. An ERROR, and named on its own line rather than folded
     # into the count above: the server is not declared at all — the persona lost a
     # capability — and the value that caused it is a string in a committed file that
-    # somebody has to edit. Rendered through `contain.one_line`, because a refused name is
-    # precisely the one that may hold a newline and forge a second issue line (#453).
+    # somebody has to edit. Rendered through `mcpseen.label`, because a refused name is
+    # precisely the one that may hold a newline and forge a second issue line (#453) — and
+    # also the one that may render as NOTHING. `contain.one_line` answers the first and not
+    # the second: it escapes the categories with no glyph (Cc, Cf, Cs, Zl, Zp), which is a
+    # list of spellings that U+3164 HANGUL FILLER (Lo) and U+2800 BRAILLE PATTERN BLANK
+    # (So) are not on, so `server name '' is refused` named nothing at all. `label` decides
+    # on the complement instead — printable ASCII is what may reach the line and everything
+    # else prints as its escape — so the name this sentence tells somebody to go edit is a
+    # name they can find.
     for bad in refused_names:
         issues.append(("error",
-                       f"mcp: server name '{contain.one_line(bad)}' is refused and the "
+                       f"mcp: server name '{mcpseen.label(bad)}' is refused and the "
                        f"server is not declared — a name is emitted into the generated "
                        f"agent's YAML and into `mcp__<server>__*`, so it may hold only "
                        f"letters, digits, '_', '.' and '-' (64 max). Rename it in "

@@ -136,10 +136,32 @@ shell history**, while still letting an agent *use* the credential:
   into the conversation. **A denial here is that guard working, not a bug** — see the
   README's "one credential" section for the same idea applied to git auth.
 
-  "Directly" covers the shell (`cat`, `grep`, `head`, … on `.charter/vaults/…`) **and** the
-  harness's own file-reading tools (`Read`, `Grep`). It used to mean only the shell, which
-  made this bullet false in the way that mattered: the shell denial names the path it
-  refused, so reading that path with `Read` was the obvious next move and it worked (#90).
+  "Known reader programs" covers the shell (`cat`, `grep`, `head`, … on
+  `.charter/vaults/…`) **and** the harness's own file-reading tools (`Read`, `Grep`). It
+  used to mean only the shell, which made this bullet false in the way that mattered: the
+  shell denial names the path it refused, so reading that path with `Read` was the obvious
+  next move and it worked (#90). It is a check on the names in the argv the hook can see, so
+  a reader that is not on the list, or one reached by a route the hook cannot read, is not
+  covered — the list closes the accidental paths, not a chosen one.
+
+  It also covers the ways of spelling the same thing: `.charter//vaults/`, `.charter/./vaults/`
+  and `.CHARTER/vaults/` are the same file to the filesystem and are the same file to the
+  guard; a wrapper in front of the reader (`env cat …`, `sudo cat …`, `{ cat …; }`,
+  `if true; then cat …; fi`) does not change what the program is, and a wrapper that opens
+  a file itself (`xargs -a …`) is a read of that file; a redirection is not the program and
+  not an operand, so `< <vault> cat` and `tee < <vault>` are both reads of the vault; a
+  command boundary is an operator the shell would *interpret*, so a quoted or escaped one
+  (`cat \) …`, `cat '(' …`, `cat '&&' …`) is an argument to the reader rather than a
+  boundary and the `&` in a `2>&1` belongs to the redirection, while an interpreted newline
+  is a boundary like `;` and `#` opens a comment only at a word start; and a relocation
+  counts however it is spelled, so `cd .charter/vaults && cat db.json`, `pushd`, `env -C`
+  and `sudo --chdir` all land where they point. Each of those was a verified bypass, and
+  each is now a test. What it does **not** cover is written down in
+  [hooks.md](hooks.md#where-the-secret-leak-guard-stops) — a quoted `"$(cat …)"`, a glob or
+  brace spelling of the path, `sh -c`, and a file `charter secret cp` wrote to a path you
+  chose. It is a guard against mistakes, not against someone
+  deliberately spelling around it; for values that warrant real custody the provider, not
+  the hook, is the control.
 
   `Glob` is not denied — it returns file *names*, and that a vault exists is not the secret.
   Neither is a search rooted far above `.charter/`, which reads vault files as collateral;
@@ -480,8 +502,11 @@ charter secret exec qa --env TOKEN=API_TOKEN -- \
   curl -sH "Authorization: Bearer $TOKEN" https://api.example.test/me
 ```
 
-The value never reaches your transcript. That matters more here than it looks, because the
-obvious alternative is the idiom Playwright's own reference documents:
+charter never puts the value in your transcript on this path, and prints it only where you
+asked for it yourself — `secret get --reveal` to your terminal, or `secret cp <dest>` into a
+real file you named. That matters more
+here than it looks, because the obvious alternative is the idiom Playwright's own reference
+documents:
 
 ```bash
 TOKEN=$(playwright-cli --raw cookie-get session_id)   # ← the leak

@@ -34,7 +34,15 @@ class HarnessDeficits(unittest.TestCase):
 
     def test_opencode_names_the_capabilities_it_cannot_carry(self):
         keys = {d.key for d in harness.deficits(harness.OPENCODE)}
-        self.assertEqual(keys, {"status-bar", "prompt-hook"})
+        self.assertEqual(keys, {"status-bar", "prompt-hook", "ask-decisions"})
+
+    def test_the_guards_that_refuse_are_not_a_ceiling(self):
+        """`ask-decisions` is a narrow claim and must stay narrow. A DENY is carried in
+        full here — `tool.execute.before` throwing is what denial IS — so the vault guard,
+        the one-credential rule and the containment rule all refuse on opencode exactly as
+        they do on Claude Code (#433). Only the middle answer has no spelling."""
+        d = next(d for d in harness.deficits(harness.OPENCODE) if d.key == "ask-decisions")
+        self.assertIn("Denials are unaffected", d.detail)
 
     def test_the_session_lock_is_not_a_ceiling(self):
         """Verified against opencode 1.18.18, not its docs: `shell.env` receives
