@@ -39,7 +39,32 @@ rule while one who reads a bare refusal files an issue.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
-  is almost always meant for a clone.
+  is almost always meant for a clone. `--detach` counts — with an operand, without one, and
+  with the plane's own default branch as the operand, which is the one spelling that used to
+  slip past. What is always allowed is putting the root back **on** its default branch
+  (`git checkout main`), which is a different thing from naming that branch:
+  `git checkout --detach main` names it and leaves HEAD attached to nothing.
+  Restoring a file does **not**: `git checkout` is two commands wearing one name, and which
+  one you typed is settled by asking git whether the operand resolves as a revision or names
+  a path it tracks — so `git checkout <path>` and `git checkout <tree-ish> -- <paths>` run
+  here exactly as `git restore <path>` always has. Where a branch and a tracked file share a
+  name the answer is genuinely ambiguous, git breaks the tie in favour of the ref, and the
+  denial says *that* and names the two unambiguous spellings rather than assuming a branch.
+  The options are read the same way round: the restore gate opens only when every option
+  present is one charter can place as restore-only, because an option decides what its
+  operand means — `git checkout --orphan README` creates a branch called `README`. An option
+  charter cannot place is refused rather than assumed harmless, value forms included
+  (`-bREADME`, `--orphan=README`), which costs a false denial on a restore-only flag nobody
+  has added to the list yet; `git restore <path>` needs no flags and is always allowed.
+  Aliases are followed before the guard stands aside — `co = checkout` makes `git co
+  feature` the same branch move — including chains, aliases carrying their own options,
+  `!git checkout`, and `git -c alias.co=checkout co …`. A `!`-alias that is not a plain
+  `git …` is not read (refusing every shell alias here would refuse `s = !git status`), and
+  neither is `--config-env`. The **route** does not change the verdict either: the cwd, a
+  `cd` earlier in the same command, and `git -C <path>` — absolute or relative, and relative
+  now means *relative to the shell*, which is the fix for `git -C ../../.. checkout <branch>`
+  reaching the root from a clone. `git --git-dir=<plane>/.git` is a route this guard does
+  **not** yet follow ([#477](https://github.com/diazoxide/charter/issues/477)).
 - **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root
   that would take commits off the branch which no remote has a copy of — the command that
   destroyed eleven memory commits in one session. Only that: the unstage
@@ -278,6 +303,21 @@ Neither has a secret surface to scan, by construction.
 
 Hooks swallow their exceptions. A tally that breaks a turn is worse than a tally that
 misses a row, and none of this is load-bearing for the work itself.
+
+**A denial is the exception, and it is load-bearing.** A guard refuses by printing one JSON
+object on stdout, so a hook that cannot write has said nothing — and a `PreToolUse` hook
+that says nothing is an *allow*. Deciding is still allowed to fail: a payload charter cannot
+parse is an allow, as it always was. Refusing is not. When the verdict is deny and the write
+fails, the process exits **2** with the reason on stderr, which is the harness's other
+refusal channel — every other non-zero status is a non-blocking error and the tool call goes
+ahead. That is why the number is 2 and not "any failure": `charter … | head` legitimately
+exits 141, and 141 lets the call through (#438).
+
+A write into a buffer is not a delivery, and that distinction is the whole of the fix: a
+hook's stdout is a pipe, `print` to a pipe block-buffers, so a `print` into a *broken* pipe
+returns cleanly and the error only surfaces when the interpreter flushes at exit — where it
+is worth 120, another status that lets the call through. So the verdict is flushed inside
+the guard, while "the harness did not get this" can still become a refusal.
 
 The deliberate exception is version skew, in **both** directions — that is the failure shape
 this project keeps paying for, so it is the one thing a hook says out loud, once, at session
