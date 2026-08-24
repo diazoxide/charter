@@ -54,9 +54,10 @@ charter resolves each key from the `reddit` vault in its own process, puts the v
 child's environment, and hands over. The file names the *keys*, and on this path **charter
 puts no value in a context window, a transcript, or a summary** — what the server does with
 the values it was handed is the server's own business, the same limit `secret exec` has
-everywhere else. Nothing here calls the two commands that do print a value, `secret get
---reveal` and `secret cp <dest>`; those print into the destination you named, and a device
-path is one.
+everywhere else. Nothing here calls the two commands that put a value where you can read
+it, `secret get --reveal` and `secret cp <dest>`; the first writes to your terminal and refuses a
+non-interactive stdout without `--force`, and the second writes a real file it creates and
+refuses any destination that is one of charter's own streams, `/dev/stdout` included.
 
 Two things that will bite:
 
@@ -169,8 +170,11 @@ fresh clone.
 
 Scoping governs who may *call* a tool. The vault governs who may *see* a secret, and that
 property survives a mistake — a transcript, a summary fed into a later prompt, a bug report
-pasted into an issue. `charter secret exec` keeps the value out of all of them by never
-putting it in the context to begin with.
+pasted into an issue. On the paths that consume a value — `secret exec` with
+`--env`/`--file`/`--dotenv`, and the MCP launcher — charter resolves it inside its own
+process and hands it to the child, so charter itself puts nothing in the context to begin
+with. Where the value goes after that is a property of the command you asked charter to
+run, and `charter secret get --reveal` prints it wherever you asked for it yourself.
 
 See [secrets.md](secrets.md) for what a vault does and does not protect against — in
 particular that the default provider is plaintext at file mode 0600, with no encryption at

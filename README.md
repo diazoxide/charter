@@ -202,12 +202,12 @@ ship today — `plain_file`, `reference` (point at a value that lives elsewhere)
 storing anything real: **`plain_file` is plaintext at mode 0600, with no encryption at
 rest.** What every provider buys you is the same and it is the point — on the paths that
 consume it (`secret exec`, `--dotenv`, MCP) ***charter never prints the value into the
-conversation, and everywhere else prints it only into a destination you named***. What the
-command you hand it to does with it is that command's business — and mind what you name:
-`secret cp <vault> <key> /dev/stdout` is a destination charter will take, and it puts the
-credential in this transcript ([#421](https://github.com/diazoxide/charter/issues/421),
-open). What only a real backend buys you is encryption. The vault is not
-a password manager; 1Password is, and charter will read from it.
+conversation, and everywhere else prints it only where you asked for it yourself***. What
+the command you hand it to does with it is that command's business — and `secret get
+--reveal` prints to your terminal, while `secret cp` writes a real file it creates and
+refuses any destination that turns out to be one of charter's own streams, `/dev/stdout`
+included ([#449](https://github.com/diazoxide/charter/pull/449)). What only a real
+backend buys you is encryption. The vault is not a password manager; 1Password is, and charter will read from it.
 
 **A browser login: charter hands Playwright the password by name, so nobody types it into
 the conversation.** `charter browser install` generates *Playwright's own* driving pages
@@ -281,8 +281,8 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
 - **Vault** — where a persona's credentials live. The provider decides the storage
   guarantee; the boundary is the same for all of them, and it is that **charter never puts
   the value in an agent's context or transcript on the paths that consume it** —
-  `secret exec`, `--dotenv`, MCP — while `secret get --reveal` and `secret cp <dest>` print
-  it into the destination you named, `/dev/stdout` included. The command charter hands it
+  `secret exec`, `--dotenv`, MCP — while `secret get --reveal` prints it to your terminal
+  and `secret cp <dest>` writes it to a real file you named. The command charter hands it
   to still can.
 
 ## Also in the box

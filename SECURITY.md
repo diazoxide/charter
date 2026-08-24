@@ -46,16 +46,21 @@ that is a property of the command you asked charter to run. Read `charter secret
 <vault> -- <cmd>` with the same suspicion you would read `<cmd>` holding the credential
 directly, because that is what it is.
 
-**And "a destination you named" is a weaker bound than it sounds, today.** Two commands
-print: `charter secret get --reveal` writes plaintext to your terminal, and `charter
-secret cp <vault> <key> <dest>` writes it to `<dest>`. Neither asks what `<dest>` *is*, so
-`charter secret cp <vault> <key> /dev/stdout` prints the credential onto stdout — into
-this transcript, in charter's own process, with no child command anywhere in it — and then
-reports `Value not shown.` `get --reveal` refuses a non-interactive stdout, but `--force`
-overrides that refusal. Both are open defects ([#421](https://github.com/diazoxide/charter/issues/421),
-[#422](https://github.com/diazoxide/charter/issues/422)); until they are fixed, the
-sentence above holds for the consuming paths and for nothing else. Do not hand either
-command a destination an agent chose.
+**Which destinations charter will take, and the one that still prints.** Two commands put
+a plaintext value somewhere you can read it. `charter secret cp <vault> <key> <dest>`
+writes a **real file it creates**; it used to accept `/dev/stdout` and print the
+credential into this transcript in charter's own process, and that is fixed
+([#449](https://github.com/diazoxide/charter/pull/449)) — a symlink, a device, a FIFO and
+an existing file are each refused for their own reason, and a destination that turns out
+to **be** one of charter's own streams is refused whatever it is called, because the test
+is `(st_dev, st_ino)` from an `fstat` of the descriptor charter opened compared against
+its own stdin, stdout and stderr. `--force` does not reach that check.
+
+`charter secret get --reveal` is the one path left where charter's own process writes a
+value to its own stdout, and it refuses a non-interactive stdout — an agent's pipe —
+unless you pass `--force`. That refusal is the whole of the protection: `--force` is a
+real override, and an agent that has a shell can type it. Do not hand `--reveal --force`,
+or a `cp` destination, to something an agent chose.
 
 **What a vault does not protect against.** The default provider stores values as
 **plaintext JSON at file mode 0600**. There is **no encryption at rest**. Anyone who can

@@ -175,10 +175,15 @@ class VaultProvider(ABC):
 
 
 def redact(text: str, secrets: list[str]) -> str:
-    """Replace every occurrence of each secret value in ``text`` with ``***``.
+    """Mask the values this call resolved, where they appear literally in ``text``.
 
-    A defence-in-depth net: even if a wrapped command echoes a secret, it is
-    scrubbed before the output is handed back to the caller (and the model).
+    A defence-in-depth net, not a boundary, and the two words are the whole point: this
+    sees only the values it was handed and only their exact bytes. A wrapped command that
+    *transforms* one — ``base64``, ``rev``, a JSON re-encode — hands back something this
+    cannot recognise, and ``--exec``/``--stream`` capture nothing, so nothing arrives here
+    to mask (#444). What it does cover is the accidental echo: a ``curl -v`` printing an
+    ``Authorization`` header back into captured output.
+
     Longest values first, so a value that contains a shorter one is masked whole.
     """
     for s in sorted((s for s in secrets if s), key=len, reverse=True):

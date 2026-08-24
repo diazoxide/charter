@@ -29,9 +29,15 @@ prints the value into the conversation, and everywhere else charter prints it on
 destination you named yourself.* Where the value goes after that is a property of the
 command you asked charter to run. Read `charter secret exec <vault> -- <cmd>` with the same
 suspicion you would read `<cmd>` holding the credential directly, because that is what it
-is. That sentence, and the paragraph that bounds it, now stand in `SECURITY.md`, in the
-README, in `docs/secrets.md`, `docs/mcp.md`, `docs/hooks.md` and `docs/git-policy.md`, and
-in both model-facing skills.
+is.
+
+That sentence, and the paragraph that bounds it, stand in the four pages that state the
+guarantee: `SECURITY.md`, the README, `docs/secrets.md` and `docs/mcp.md`. The other four
+pages that touch the vault — `docs/hooks.md`, `docs/git-policy.md` and the two model-facing
+skills — describe a guard or a lane rather than the guarantee, and what they carry is the
+bound relevant to *them*, checked by `TestEveryClaimSurfaceCarriesTheLimit`. An earlier
+draft of this entry said the sentence stood in all eight. It stood in four, which is the
+same defect as the one this whole issue is about, in the release note announcing the fix.
 
 **The first draft of that sentence was itself false, which is the whole point of the
 issue.** It read *"charter never prints the value into the conversation"*, full stop — and a
@@ -44,10 +50,18 @@ FAKE-NOT-A-REAL-SECRET-9931✓ Wrote 'demo/TOKEN' to /dev/stdout (0600). Value n
 
 That is charter's own process writing the credential into the transcript, with no child
 command anywhere in it, and then reporting that it did not. `charter secret get --reveal
---force` is the second route. Both are open ([#421](https://github.com/diazoxide/charter/issues/421),
-[#422](https://github.com/diazoxide/charter/issues/422)) and being fixed separately; the
-sentence is bounded here rather than left to depend on a fix that has not landed. A
-guarantee whose truth is scheduled is not a guarantee.
+--force` is the second route. The `cp` half has since been closed by
+[#449](https://github.com/diazoxide/charter/pull/449) — the destination is now refused by
+**identity** rather than by name, `(st_dev, st_ino)` from an `fstat` of the descriptor
+charter opened against its own three streams, so `/dev/stdout`, `/dev/fd/1`,
+`/proc/self/fd/1`, the transcript's real path and any hardlink to it get one answer, and
+`--force` does not reach the check. `get --reveal` remains the one path where charter's
+own process writes a plaintext value to its own stdout; it refuses a non-interactive
+stdout unless you pass `--force`, and `--force` is a real override.
+
+The sentence is bounded here anyway, and that is the point rather than an accident of
+timing: it was written while both routes were open, so it never depended on a fix that had
+not landed. A guarantee whose truth is scheduled is not a guarantee.
 
 **The model gets two new hard rules**, because it is the reader that acts on this file
 rather than filing an issue about it: never pass a secret to a command whose recipient you
@@ -72,7 +86,59 @@ verb lists grew for the same reason — "the value is **stripped** from every ou
 "the value never **enters** an agent's context" were both synonyms away from the words the
 first draft knew.
 
+**The prose test was handed to two more reviewers, and it fell again.** Six more classes
+got past round two, and each was the same mistake in a new spelling: the rule read
+backwards but not forwards (round one's bypass came back verbatim with the clauses
+swapped); it kept two word lists for the one idea "a place a reader sees text", and one of
+them knew `chat`; it wrote the open class of credential nouns as five words, so *"Your
+kubeconfig never appears in the transcript"* passed while `docs/secrets.md` uses a
+kubeconfig as `secret cp`'s worked example; it knew `at no point` and no other member of
+*under no circumstances / at no time / in no case*; it treated **every** quoted span as
+somebody else's words, so quoting one word of a live promise deleted the trigger from it;
+and
+it policed `*.md`, while the retracted sentence was still standing word-for-word in
+`cmd_secret_exec`'s docstring and in `commands_persona.py`'s. Both of those are fixed
+here, and `charter/**/*.py` docstrings are now in the same scope as the pages.
+
+**Then the same question was asked of that fix, before shipping it, and it fell twice
+more.** Put a zero-width space between two letters of the absolute word and the retracted
+claim renders exactly as it always did while matching nothing the file knows — the same
+trick U+3164 HANGUL FILLER played on a different guard the same night. U+200D, U+00AD and
+U+2060 do the job equally well, and an HTML comment does it in plain markdown with no
+exotic codepoint at all. So the file reads the page as *rendered* now: every character in
+Unicode category `Cf` is dropped, because "renders as nothing" is what that category
+means, and HTML comments, tags and `[link](url)` wrappers go with it. A **homoglyph** —
+one Latin letter swapped for the Cyrillic letter that looks identical — it still cannot
+read, and no confusables table ships in the standard library, so that class is refused
+rather than matched: a word spelled out of two alphabets fails the build. The exact
+spellings live in `tests/test_claims.py`, where a live promise is a fixture rather than a
+sentence on a page.
+
+The second fall was self-inflicted, which is the useful part. Narrowing the window between
+a verb and its object so that it could not reach across a comma — the fix for a false
+positive on the README's containment sentence — made three punctuation marks into bypasses
+on the spot, because a pair of commas, a pair of dashes or a parenthesis dropped into the
+middle of the retracted claim now split it in two. A reader skips an aside, so the rule
+reads each sentence both ways. That is the fifth time in three rounds that a fix for one
+spelling opened another, and it is the argument for writing down the next spelling every
+time rather than waiting for the next reviewer to find it.
+
+**What the prose test does, said no more strongly than it is true.** It is a regular
+expression over prose. It cannot tell whether a sentence is true, and every vocabulary in
+it is an open class that will stay incomplete. What it does is refuse the shapes it knows:
+a sentence in these files or in charter's own docstrings that makes an absolute claim
+about where a value ends up, *in a wording the file recognises*, fails the build unless
+the bound sits in the same sentence. An earlier draft of this paragraph said it "fails the
+build if a future sentence anywhere in these pages makes an absolute claim about where a
+value ends up without a bound beside it" — nine such sentences were appended to the README
+and the suite stayed green. The release note announcing the end of overclaiming was
+overclaiming about its own guard.
+
+Two limits are named in the file rather than left to be found: a homoglyph is refused as a
+mixed-script word rather than read as the word it imitates, and a promise that becomes
+visible only when a borrowed pronoun antecedent *and* a skipped aside are combined is one
+the file does not see — each of those is a guess, and it will not stack two of them.
+
 **Nothing about the vault changed, and nothing needs adopting.** What changed is that the
-promise on the front page is now bounded where the code bounds it — and
-`tests/test_claims.py` fails the build if a future sentence anywhere in these pages makes
-an absolute claim about where a value ends up without a bound beside it.
+promise on the front page is bounded where the code bounds it, and that charter's own
+source says the same thing its documentation does.

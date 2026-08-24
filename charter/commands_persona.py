@@ -2,8 +2,13 @@
 
 Persona *definitions* are committed (``personas/<name>.md``); their *secrets*
 live in a local vault the definition names. ``charter persona secret …`` proxies to
-that vault, so an agent adopting a persona reads/writes only that persona's
-credentials — and, per the secrets contract, never sees the plaintext.
+that vault, so an agent adopting a persona reaches only that persona's credentials
+and no other persona's.
+
+That is a boundary between vaults, not a promise that plaintext stays out of the
+transcript: ``persona secret get --reveal --force`` prints a value, and
+``persona secret cp <dest>`` writes one to the file you name. The bound is in
+``docs/secrets.md`` and it is the same bound as the plain vault's (#444).
 """
 
 from __future__ import annotations

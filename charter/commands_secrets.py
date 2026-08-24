@@ -795,8 +795,13 @@ def _child_env(vault: str) -> dict:
 def cmd_secret_exec(args) -> int:
     """Run a command with secrets injected as env vars and/or files, then redact.
 
-    The model constructs the command using env-var *names* and never sees any
-    value; charter resolves the secrets at runtime and scrubs them from the output.
+    The model constructs the command using env-var *names*, and charter resolves the
+    values at runtime inside its own process. What happens to a value after that is a
+    property of the command charter was asked to run: redaction is ``str.replace`` over
+    the bytes charter captured, so a child that *transforms* the value — ``base64``,
+    ``rev``, a JSON re-encode — hands back something redaction cannot recognise. Read
+    ``secret exec <vault> -- <cmd>`` with the same suspicion you would read ``<cmd>``
+    holding the credential directly, because that is what it is (#444).
 
     With ``--exec`` the command *replaces* this process (``os.execvpe``) instead
     of being captured. Capturing buffers stdout until exit, which deadlocks any

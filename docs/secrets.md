@@ -344,8 +344,9 @@ charter secret exec qa --env TOKEN=API_TOKEN -- \
   curl -sH "Authorization: Bearer $TOKEN" https://api.example.test/me
 ```
 
-charter never puts the value in your transcript on this path, and prints it only into a
-destination you named — `secret get --reveal`, or `secret cp <dest>`. That matters more
+charter never puts the value in your transcript on this path, and prints it only where you
+asked for it yourself — `secret get --reveal` to your terminal, or `secret cp <dest>` into a
+real file you named. That matters more
 here than it looks, because the obvious alternative is the idiom Playwright's own reference
 documents:
 

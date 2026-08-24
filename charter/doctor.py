@@ -2022,7 +2022,7 @@ def check_credential_paths() -> Result:
     trace or snapshot is written, well after the command that caused it, and it reads as
     ordinary untracked noise right up until `git add -A` commits it. A trace records network
     requests with their headers and bodies, so tracing a bridged login puts the credential on
-    disk even though it never reached the transcript.
+    disk in a file nothing in the transcript points at.
 
     That is the shape #278 was actually about. The missing `.gitignore` line was the symptom;
     the cost was every plane working the same thing out again, in silence, and this is the
