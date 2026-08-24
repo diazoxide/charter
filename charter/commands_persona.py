@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 from . import commands_secrets, config, contain, mcpseen, persona, trace, util
 from .secrets import base, registry
@@ -1461,6 +1462,101 @@ def cmd_persona_gc(args) -> int:
     return 0
 
 
+def _confirm(prompt: str) -> bool:
+    """One y/N question. Anything that is not an explicit yes — including EOF — is no.
+
+    Defaulting to no is the whole reason this exists: the old `--approve-mcp` had no
+    answer but yes, so the failure direction has to be "the credential was withheld".
+
+    The question is written to **stderr**, where every other human-facing line charter
+    prints goes, rather than to stdout via ``input(prompt)``. `sync-agents > /dev/null`
+    would otherwise swallow the question and leave the operator watching a hang.
+    """
+    print(prompt, end="", file=sys.stderr, flush=True)
+    try:
+        answer = input()
+    except EOFError:
+        print("", file=sys.stderr)
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
+    """Record approvals for the MCP servers whose consent line the operator has READ.
+
+    `--approve-mcp` used to be a single non-interactive call that approved every
+    credentialed server of every persona and printed what it had approved AFTERWARDS
+    (#428) — a consent prompt with no way to answer no, and, for an `http` server whose
+    line rendered empty (#427), no way to see what the yes was for. Each server is now
+    shown and asked about on its own.
+
+    `--yes` keeps the old shape for scripts, and is REQUIRED off a tty: a flag that
+    silently means yes when nobody is there to be asked is the finding restored. `--dry-run`
+    shows the same lines and records nothing.
+
+    The recorded set is replaced per persona, as `mcpseen.approve` documents, so a server
+    the operator declines here stops being approved even if it was approved before.
+
+    **Both halves of every line printed here come from `mcpseen`.** The destination is the
+    string `persona.mcp_credentialed` already rendered — the one whose SHA-256 is the
+    fingerprint recorded below, so the text on the screen and the text in the record are
+    the same text and cannot drift. The `persona/server` in front of it goes through
+    `mcpseen.label`, because both are committed data and they share a row: a server name
+    built out of blank codepoints, an ANSI erase or a hundred thousand characters is a
+    line the operator cannot read just as surely as a padded `args` is. Interpolating
+    either of them raw is how this file put three hardened `describe` calls behind an
+    unescaped label.
+    """
+    if not (yes or dry_run or sys.stdin.isatty()):
+        util.err("--approve-mcp hands a persona's vault value to a command a COMMITTED "
+                 "file names, so it asks before recording — and there is no terminal to "
+                 "ask on.")
+        # Deliberately does NOT name `--yes` here. The flag exists and `--help` documents
+        # it, but a refusal that prints the flag defeating it is #421's shape: the reader
+        # of this line is as often an agent as an operator, and it would simply add it.
+        util.info("  Re-run in a terminal, or add --dry-run to see what it would ask "
+                  "about without recording anything.")
+        return 1
+    for n in names:
+        declared = persona.mcp_credentialed(n)
+        if not declared:
+            continue
+        keep = []
+        for server, _entry, fp, line in declared:
+            if not fp:
+                # Every entry here needs consent, so `fingerprint` returns None for one
+                # reason only: `mcpseen.describe` cannot render a destination for it, and
+                # recording an approval would be approving a blank line (#427). Said out
+                # loud rather than skipped — the server is declared and does want a
+                # credential, so the operator has to hear that it was refused one.
+                util.warn(f"  cannot approve {mcpseen.label(n, server)} — "
+                          f"{mcpseen.UNRENDERABLE}")
+                continue
+            # Printed BEFORE the question, not after the recording: an approval nobody
+            # can see in the transcript is not consent, it is a flag that was typed.
+            # `line` came back from `mcp_credentialed` with the fingerprint that is its
+            # own SHA-256, so the string printed here and the string recorded below are
+            # the same one. Re-rendering it here is how they would come to differ.
+            util.info(f"  {mcpseen.label(n, server)} → {line}")
+            if dry_run:
+                continue
+            try:
+                if not (yes or _confirm(
+                        f"    approve {mcpseen.label(n, server)}? [y/N] ")):
+                    util.info(f"    skipped {mcpseen.label(n, server)} — "
+                              f"the vault stays withheld")
+                    continue
+            except KeyboardInterrupt:
+                util.err(f"interrupted — nothing recorded for {mcpseen.label(n)}")
+                return 130
+            keep.append(fp)
+        if not dry_run:
+            mcpseen.approve(n, keep)
+    if dry_run:
+        util.info("  --dry-run: nothing approved. Re-run without it to be asked.")
+    return 0
+
+
 def cmd_persona_sync_agents(args) -> int:
     one = getattr(args, "persona", None)
     if one and not persona.load(one):
@@ -1475,15 +1571,10 @@ def cmd_persona_sync_agents(args) -> int:
     # it would write this run's agents without their credentials and only take effect on
     # the next run, which reads as the flag not working.
     if getattr(args, "approve_mcp", False):
-        for n in names:
-            declared = persona.mcp_credentialed(n)
-            if not declared:
-                continue
-            mcpseen.approve(n, [fp for _s, _e, fp in declared])
-            for server, entry, _fp in declared:
-                # Printed, not merely recorded: an approval nobody can see in the
-                # transcript is not consent, it is a flag that was typed.
-                util.info(f"  approved {n}/{server} → {mcpseen.describe(entry)}")
+        rc = _approve_mcp(names, yes=getattr(args, "yes", False),
+                          dry_run=getattr(args, "dry_run", False))
+        if rc:
+            return rc
 
     outcomes = {n: _write_agent(n) for n in names}
     written = [n for n, o in outcomes.items() if o == "written"]
@@ -1518,9 +1609,18 @@ def cmd_persona_sync_agents(args) -> int:
                   f"name is emitted into the generated agent's YAML and into "
                   f"`mcp__<server>__*`, so it may hold only letters, digits, '_', '.' and "
                   f"'-' (64 max). These servers are NOT declared in the agent:")
+        # `mcpseen.label`, the same escape the withheld rows below use, and not
+        # `contain.one_line`: these two lists are printed by ONE command into ONE report,
+        # and the row above may not be readable under a weaker rule than the row below it.
+        # `one_line` bounds line STRUCTURE — it says so itself — by replacing the
+        # categories that cannot carry a glyph (Cc, Cf, Cs, Zl, Zp). That is a list of
+        # spellings: U+3164 HANGUL FILLER is Lo, U+2800 BRAILLE PATTERN BLANK is So, and
+        # both render as nothing, so a refused server name made of them printed
+        # `acme/` with nothing after the slash — the blank-line finding of #427, arriving
+        # on the one row of this report that had not been given `label`.
         for n, names in sorted(refused.items()):
             for bad in names:
-                util.info(f"  {n}/{contain.one_line(bad)}")
+                util.info(f"  {mcpseen.label(n, bad)}")
         util.info(f"  Rename them in the persona's `{persona.MCP_FILE}` and re-run.")
     if withheld:
         # A warning, not an error: the agents were written and the personas still work.
@@ -1531,8 +1631,8 @@ def cmd_persona_sync_agents(args) -> int:
                   f"server(s): the committed `mcp.json` names the command that would "
                   f"receive it, and this one has not been approved on this machine.")
         for n, servers in sorted(withheld.items()):
-            for server, entry in servers:
-                util.info(f"  {n}/{server} → {mcpseen.describe(entry)}")
+            for server, line in servers:
+                util.info(f"  {mcpseen.label(n, server)} → {line or mcpseen.UNRENDERABLE}")
         util.info("  Read the command above. If it is what you expect, approve it with:")
         util.info("    charter persona sync-agents --approve-mcp")
     for n in written:

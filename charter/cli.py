@@ -1081,9 +1081,18 @@ def _add_persona_parser(sub) -> None:
                          help="Generate a Claude Code sub-agent (.claude/agents/<name>.md) per persona.")
     sa.add_argument("--persona", help="Only sync this persona (default: all).")
     sa.add_argument("--approve-mcp", action="store_true",
-                    help="Approve the MCP server commands the personas' mcp.json files "
-                         "name, so they receive the persona's vault value. Re-approve "
-                         "after any change to a server's command, args or secrets.")
+                    help="Ask, per server, whether the MCP command the personas' mcp.json "
+                         "files name may receive the persona's vault value. What is "
+                         "recorded is a digest of the line printed above the question, so "
+                         "ANY change that changes that line — including the persona's "
+                         "vault, an env value, or a key charter does not read — lapses "
+                         "the approval and asks again.")
+    sa.add_argument("--yes", action="store_true",
+                    help="With --approve-mcp: approve every credentialed server without "
+                         "asking. Required off a terminal, where nobody can be asked.")
+    sa.add_argument("--dry-run", action="store_true",
+                    help="With --approve-mcp: print the servers it would ask about and "
+                         "record nothing.")
     sa.set_defaults(func=commands_persona.cmd_persona_sync_agents)
 
     mig = psub.add_parser("migrate",

@@ -405,7 +405,12 @@ class SyncAgentsReportsWhatItWithheld(PersonaIso):
 
         from charter import commands_persona
         buf = io.StringIO()
-        args = SimpleNamespace(persona=None, approve_mcp=approve_mcp)
+        # `yes=True`: `--approve-mcp` now asks per server and REFUSES off a terminal
+        # (#428), so the unattended shape is the one spelled `--yes`. The asking itself is
+        # covered in tests/test_mcp_approval.py; what this class asserts is what the
+        # recorded approval does to the next render, which is unchanged.
+        args = SimpleNamespace(persona=None, approve_mcp=approve_mcp,
+                               yes=approve_mcp, dry_run=False)
         with redirect_stderr(buf):
             rc = commands_persona.cmd_persona_sync_agents(args)
         agent = Path(config.ROOT) / ".claude" / "agents" / "reddit.md"
