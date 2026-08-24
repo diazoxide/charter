@@ -708,6 +708,14 @@ def cmd_secret_cp(args) -> int:
     The destination is checked BEFORE the value is resolved: a refused path never causes
     a vault read, so the plaintext is never in this process at all for the case that was
     about to print it.
+
+    What it does NOT do is put the destination under a guard. A ledger of materialised
+    paths, consulted by the vault read guards, was written and then dropped: #423 was
+    closed the other way in 0.52.0, on the argument that such a ledger matches a SPELLING
+    — `/tmp/./x`, a hardlink, a copy, `python3 -c open(...)` all walk past it — at the
+    price of a ledger read on the hook's hot path. The `--reveal` and read denials no
+    longer offer `secret cp` as a way to SEE a value, and they say in the same breath that
+    no guard covers a path you chose. `docs/secrets.md` and `SECURITY.md` state that limit.
     """
     dest = Path(args.dest).expanduser()
     force = bool(getattr(args, "force", False))

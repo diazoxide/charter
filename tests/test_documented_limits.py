@@ -153,8 +153,21 @@ class TestTheReaderAllowlistHasACeiling(unittest.TestCase):
     def test_git_reads_it_out_of_the_object_store(self):
         self.assertTrue(self.allowed(f"git show HEAD:{self.GUARDED}"))
 
-    def test_a_redirection_reads_it_with_no_reader_named(self):
-        self.assertTrue(self.allowed(f"tr a b < {self.GUARDED}"))
+    def test_a_redirection_is_NO_LONGER_a_way_past_the_allowlist(self):
+        """This one moved, and a limit that closes has to move in the same commit as the
+        code that closed it or the paragraph naming it becomes an under-claim.
+
+        A redirection is not the program and it is not an operand — the SHELL opens the
+        file, whatever the program on the line does with it. `tr a b < <vault>` therefore
+        named no reader at all and was allowed while doing exactly what `cat <vault>` does.
+        `_split_env_chdir` now reports a segment's redirection targets separately from its
+        argv, and the leak guard asks about them BEFORE it asks what the program is (#430).
+        The allowlist ceiling itself is unchanged: `tr` is still not a reader, and `tr a b
+        <ordinary-file>` is still allowed.
+        """
+        self.assertIsNotNone(hooks._leak_reason(f"tr a b < {self.GUARDED}"))
+        self.assertIsNotNone(hooks._leak_reason(f"< {self.GUARDED} tr a b"))
+        self.assertTrue(self.allowed("tr a b < README.md"))
 
 
 class TestAShellStringIsNotReParsed(unittest.TestCase):
@@ -312,10 +325,30 @@ class TestAShellExpandsAfterTheGuardHasAnswered(unittest.TestCase):
         self.assertIn(VALUE, self._sh(cmd), "precondition: the command really reads it")
         self.assertIsNone(hooks._leak_reason(cmd))
 
-    def test_a_changed_working_directory_reaches_the_guarded_file_and_is_allowed(self):
+    def test_a_changed_working_directory_is_NO_LONGER_a_way_past_the_guard(self):
+        """The one member of this class that is not a shell EXPANSION, and it moved out.
+
+        A `cd` does not rewrite the operand — it moves where the operand is resolved, and
+        the hook is handed the whole command line including the `cd`. The plane-root guard
+        has followed `cd` since #183 while this one did not, so the same file argued both
+        positions; #430 gave the leak guard the same reading, for `cd`, `pushd` and a
+        wrapper's own chdir flag (`env -C`, `sudo --chdir`).
+
+        The rest of this class stays exactly as it was: an expansion happens after the hook
+        has answered, on bytes the hook never sees, and no amount of `cd` tracking changes
+        that. The precondition below still runs the command in a real shell, so this pins a
+        denial of something that really does read the vault.
+        """
         cmd = "cd .charter/vaults && cat db.json"
         self.assertIn(VALUE, self._sh(cmd), "precondition: the command really reads it")
-        self.assertIsNone(hooks._leak_reason(cmd))
+        self.assertIsNotNone(hooks._leak_reason(cmd))
+        self.assertIsNotNone(hooks._leak_reason("pushd .charter/vaults && cat db.json"))
+        self.assertIsNotNone(hooks._leak_reason("env -C .charter/vaults cat db.json"))
+        # Boundary control, so this does not read as "any `cd` denies": a relocation
+        # somewhere else leaves the later segments alone. `test_a_shell_variable_reaches_
+        # the_guarded_file_and_is_allowed` above is the other half — an EXPANSION is still
+        # a limit, and following `cd` did not and could not close it.
+        self.assertIsNone(hooks._leak_reason("cd /tmp && cat db.json"))
 
     def test_a_command_substitution_that_assembles_the_prefix_is_allowed(self):
         """Spelled so the guarded prefix never appears as one run of text.

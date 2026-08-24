@@ -56,6 +56,16 @@ class TestItStillDeniesRealReads(LeakCase):
         self.assertTrue(self.denied("grep -r . .charter/vaults"))
         self.assertFalse(self.denied("grep -rn vaults .charter/vaults.json"))
 
+    def test_grep_into_the_vault_directory_without_the_trailing_slash(self):
+        """The gap this file used to record and leave open: a bare `.charter/vaults` is the
+        same directory, and `grep -r` into it prints every value in it. The Read/Grep guard
+        appended a slash before matching and this one did not — the two disagreeing about
+        what counts as a vault, which is the failure `pretooluse_read` was written to end.
+        Both go through `_vault_path_hit` now. Appending cannot make the registry a vault:
+        `.charter/vaults.json/` still contains no `vaults/`."""
+        self.assertTrue(self.denied("grep -r . .charter/vaults"))
+        self.assertFalse(self.denied("grep -rn vaults .charter/vaults.json"))
+
     def test_sed_printing_a_guarded_file(self):
         self.assertTrue(self.denied("sed -n 1p .charter/active-persona"))
 
@@ -109,10 +119,21 @@ class TestAWriterIsNotAReader(LeakCase):
         """Only a READER's heredoc is removed. A body fed to a shell is a script, not data,
         and stripping it would hide commands from the guard.
 
-        The outcome is unchanged either way — `bash` is not in `_READERS`, so this guard
-        never scanned such a body and still does not. Pinned so that the stripping rule is
-        not later "simplified" to apply everywhere, which would make the difference real."""
+        This assertion used to be `assertFalse`, on the reasoning that the outcome was
+        unchanged either way because `bash` is not in `_READERS`. It was not unchanged: the
+        body's own `cat` line is a command that runs, and until newlines became segment
+        boundaries the guard could not see it — the whole heredoc collapsed into one segment
+        whose program was `bash`. Stripping the body would still hide it; now that it is
+        not stripped, the `cat` is read and denied, which is the point the docstring was
+        always making."""
         cmd = "bash <<'EOF'\ncat .charter/vaults/db.json\nEOF"
+        self.assertTrue(self.denied(cmd))
+
+    def test_a_readers_heredoc_body_is_still_data(self):
+        """The other half of the same rule, now that a newline starts a segment: a body fed
+        to a *reader* is stdin data and stays stripped, so prose naming charter's layout is
+        not read as a command."""
+        cmd = "cat > notes.md <<'DOC'\ncat .charter/vaults/db.json\nDOC"
         self.assertFalse(self.denied(cmd))
 
 
