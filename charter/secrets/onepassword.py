@@ -2,8 +2,9 @@
 
 The sibling :mod:`reference` provider points *at* a secret someone else created
 (``op://vault/item/field``). This one owns the whole lifecycle — ``charter secret set``
-creates the item, ``rm`` deletes it — so a credential can be provisioned for a persona
-without opening the 1Password UI.
+creates the item and writes the field, ``rm`` removes the field — so a credential can be
+provisioned for a persona without opening the 1Password UI. The item is the vault, so
+nothing here deletes it; see :meth:`OnePasswordProvider.delete`.
 
 Schema: **one item per vault**, whose custom fields are the secrets.
 

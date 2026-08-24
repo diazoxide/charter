@@ -181,8 +181,15 @@ def cmd_vault_add(args) -> int:
     if not prov.available:
         util.warn(f"  provider '{args.provider}' is not implemented yet — registered for later use.")
     elif args.provider == "1password":
-        util.info(f"  charter creates one 1Password item per secret, tagged "
-                  f"'charter:{args.name}', in vault '{cfg['op-vault']}'.")
+        # Name the ITEM. This is the one moment the operator learns where to look in the
+        # 1Password UI, and the schema is one item per vault whose concealed fields are
+        # the secrets — not one item per secret, which is what this said until #400 and
+        # what sent people hunting for a `charter-<vault>-<KEY>` that charter has not
+        # created for several releases. `prov.op_item` rather than the config, so an
+        # adopted `--op-item` is named as itself and the default resolves in one place.
+        util.info(f"  charter keeps this vault in one 1Password item, "
+                  f"'{prov.op_item}' in vault '{cfg['op-vault']}', tagged "
+                  f"'charter:{args.name}' — each secret a concealed field of it.")
         util.info(f"  add secrets with: charter secret set {args.name} <key> --stdin")
     elif args.provider == "reference":
         util.info(f"  stores op:// or vault:// URIs; values are fetched at read time.")
