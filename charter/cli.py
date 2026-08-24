@@ -1049,9 +1049,11 @@ def _add_persona_parser(sub) -> None:
     sa.add_argument("--persona", help="Only sync this persona (default: all).")
     sa.add_argument("--approve-mcp", action="store_true",
                     help="Ask, per server, whether the MCP command the personas' mcp.json "
-                         "files name may receive the persona's vault value. Re-approve "
-                         "after ANY change to such an entry — command, args, url, env, "
-                         "secrets: the approval covers the whole entry.")
+                         "files name may receive the persona's vault value. What is "
+                         "recorded is a digest of the line printed above the question, so "
+                         "ANY change that changes that line — including the persona's "
+                         "vault, an env value, or a key charter does not read — lapses "
+                         "the approval and asks again.")
     sa.add_argument("--yes", action="store_true",
                     help="With --approve-mcp: approve every credentialed server without "
                          "asking. Required off a terminal, where nobody can be asked.")

@@ -459,32 +459,41 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     return out
 
 
-def mcp_credentialed(name: str) -> list[tuple[str, dict, str]]:
-    """``(server, entry, fingerprint)`` for every server of *name* that would carry a
-    credential — i.e. declares ``secrets``/``secret_files`` against a real vault.
+def mcp_credentialed(name: str) -> list[tuple[str, dict, str, str]]:
+    """``(server, entry, fingerprint, consent line)`` for every server of *name* that would
+    carry a credential — i.e. declares ``secrets``/``secret_files`` against a real vault.
 
     The list `sync-agents --approve-mcp` records and the list it reports on are both
     derived from this one, so "what you were shown" and "what got approved" cannot drift
     apart — which is the failure mode of a consent prompt that computes its own list.
 
-    ``fingerprint`` may be ``None``: an entry `mcpseen.describe` cannot render is in scope
-    (it declares secrets against a vault) but can never be approved (#427). Membership is
-    decided by `mcpseen.needs_consent` rather than by the digest, so such an entry is
-    still REPORTED as withheld instead of vanishing from both lists at once.
+    **The LINE is returned, not just the entry**, and that is deliberate. `mcpseen`
+    fingerprints the consent line itself, so the line a caller prints and the digest it
+    records have to be the same string; handing back the entry and letting each caller
+    render its own is how they come to differ — the caller that forgot the vault would
+    print a line the digest does not match. There is one rendering per server here, and
+    both callers print that one.
+
+    ``fingerprint`` may be ``None``, and then the line is ``""``: an entry
+    `mcpseen.describe` cannot render is in scope (it declares secrets against a vault) but
+    can never be approved (#427). Membership is decided by `mcpseen.needs_consent` rather
+    than by the digest, so such an entry is still REPORTED as withheld instead of
+    vanishing from both lists at once.
     """
     vault = (resolve(name) or {}).get("meta", {}).get("vault")
     out = []
     for server, entry in sorted(mcp_servers(name).items()):
         if mcpseen.needs_consent(vault, entry):
-            out.append((server, entry, mcpseen.fingerprint(vault, entry)))
+            out.append((server, entry, mcpseen.fingerprint(vault, entry),
+                        mcpseen.describe(vault, entry)))
     return out
 
 
-def mcp_withheld(name: str) -> list[tuple[str, dict]]:
-    """The credentialed servers this operator has NOT approved — what `mcp_render_entry`
-    is about to render without its vault wrapper."""
+def mcp_withheld(name: str) -> list[tuple[str, str]]:
+    """``(server, consent line)`` for the credentialed servers this operator has NOT
+    approved — what `mcp_render_entry` is about to render without its vault wrapper."""
     ok = mcpseen.approved(name)
-    return [(s, e) for s, e, fp in mcp_credentialed(name) if fp not in ok]
+    return [(s, line) for s, _e, fp, line in mcp_credentialed(name) if fp not in ok]
 
 
 def lineage(name: str) -> list[str]:

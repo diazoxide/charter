@@ -135,7 +135,7 @@ command it withheld from, which is the thing worth looking at.
 `--approve-mcp` asks **per server**, and prints the entry before it asks:
 
 ```
-  reddit/acme → http https://api.acme.example/mcp  (env: HTTPS_PROXY)  (vault: ACME_TOKEN=acme-token)
+  reddit/acme → type "http"  url "https://api.acme.example/mcp"  env "HTTPS_PROXY"="http://p.example:3128"  secrets "ACME_TOKEN"="acme-token"  vault "reddit"
     approve reddit/acme? [y/N]
 ```
 
@@ -144,27 +144,38 @@ revokes it. `--dry-run` shows the same lines and records nothing. `--yes` approv
 credentialed server without asking, and is **required** off a terminal — a flag that means
 yes where nobody can be asked is not consent.
 
-The approval covers the **whole entry**, against the vault: command, args, `url`, `env`,
-the `secrets`/`secret_files` mappings, and any other key the entry carries. **Change any of
-them and it lapses**, because the approval is of a destination and not of a server name — a
-teammate re-pointing an existing server at a new binary, a new endpoint or a new `PATH` is
-the case this exists for.
+**What is recorded is the line itself.** The fingerprint is the SHA-256 of the text
+printed above the question and nothing else is mixed into it, which makes two properties
+true at once and by construction: two entries that print the same line share one approval,
+and an entry that prints a different line lapses it. There is no second, shorter summary
+that can fall out of step with what you read — three earlier rounds of this feature each
+had one, and every bypass since has been one field that was in the digest and not on the
+line, which meant being re-asked under a line byte-identical to the one already approved.
 
-The printed line names every part of that destination, and **no part can push another one
-off it**. Each part — the command, each arg, the `url`, each `env` key, each vault key —
-gets its own budget and is clipped on its own with the cut announced, so padding `args` in
-a committed file cannot scroll the `env` or the endpoint out of view.
+That puts the weight on the line holding **everything**. It does. The renderer loops over
+the entry's keys rather than over a list of fields charter knows, so:
+
+* `command` and `args` print after `run`, one word per word — quoted when a word is empty
+  or contains a space, so where the words split is never in doubt;
+* `type`, `url`, `env`, `secrets` and `secret_files` print under their own names;
+* **`env` prints its values, not only its keys.** The value is the half that decides:
+  `PATH` chooses which binary `execvpe` finds, `NODE_OPTIONS` chooses what it loads. An
+  `env` value is committed plaintext out of `mcp.json` — not a vault value — so printing it
+  discloses nothing that reading the repo would not;
+* **the vault is named**, because `vault:` is a key of the committed `persona.md` and a
+  one-line commit there re-points which credential is spent;
+* **any key charter has never been taught** — `cwd`, `headers`, whatever comes next —
+  prints under its own quoted name with its JSON value, because `sync-agents` passes every
+  key it does not consume through to the harness.
+
+Charter's own words are printed bare and everything committed is printed between quotes,
+so a committed value cannot dress itself up as part of charter's sentence.
 
 **Which credential, and not only which command.** `secrets` and `secret_files` map an
-environment variable to a *vault key*, and that key decides which of the vault's values
-the command receives — so both are on the line as `VAR=key`, in the shape the `secret exec`
-argv is built from. They are in the digest too, so editing one lapses the approval and you
-are asked again; before they were shown, that second question arrived under a line
-identical to the one you had already approved, which is a second chance to make the same
-mistake rather than a chance to catch it. The rule the suffixes are instances of:
-everything the digest covers that changes what the vault hands over, or where it lands, is
-on the line. (Key *names*, never values — a value lives in the vault and never enters the
-process that prints this.)
+environment variable to a *vault key*, and that key decides which of the vault's values the
+command receives — so both are on the line as `"VAR"="key"`, in the shape the `secret exec`
+argv is built from. The credential's **value** is the one thing that is not on the line and
+cannot be: it is not in the entry, and the process that prints this never opens a vault.
 
 **The line is printable ASCII, and everything else is spelled out as `\uXXXX`.** Not
 "unprintable characters are escaped" — every codepoint outside `U+0020..U+007E` is,
@@ -180,14 +191,20 @@ where the ASCII space is the only character left that shows nothing.
 Read that claim precisely, because it is the kind of sentence this section has already had
 to withdraw twice: *everything on the row that came out of a committed file* is printable
 ASCII. The `•` and the `→` around it are charter's own punctuation, put there by charter
-and not by anyone's `mcp.json` — including the `...` that marks a clip, which is ASCII for
-exactly this reason. The test derives that set from a benign run rather than listing it.
+and not by anyone's `mcp.json`. The test derives that set from a benign run rather than
+listing it, with colour pinned off so the derivation cannot quietly absorb an escape
+sequence the environment happened to add.
 
-The escaping is one-to-one, which is the part that makes reading the line worth anything:
-astral codepoints use the eight-digit `\UXXXXXXXX` form (`\u1f600` is five hex digits and
-would also spell `U+1F60` followed by `0`), and a literal backslash is doubled, so every
-`\uXXXX` you see is a codepoint that was really there rather than six ASCII characters
-imitating one. A Windows path therefore shows as `C:\\Users\\x`.
+The escaping is **reversible**, which is the part that makes reading the line worth
+anything — and, now that the fingerprint is taken over the line, the part that makes the
+approval mean the entry. Astral codepoints use the eight-digit `\UXXXXXXXX` form
+(`\u1f600` is five hex digits and would also spell `U+1F60` followed by `0`); a literal
+backslash is doubled and a literal quote is `\"`, so every `\uXXXX` you see is a codepoint
+that was really there rather than six ASCII characters imitating one, and an unescaped
+quote is always charter's own delimiter. A Windows path therefore shows as `C:\\Users\\x`.
+Nothing is collapsed, stripped or shortened on the way: a run of spaces prints as a run of
+spaces and costs the columns it occupies, because a part that got tidied away is a part you
+did not consent to.
 
 That covers the **whole** line, including the `persona/server` label in front of the
 arrow — the half that had gone to the terminal untouched while the destination beside it
@@ -207,11 +224,19 @@ since that alphabet bounds the characters and not the length.)
 
 An entry charter cannot show in full cannot be approved at all and is reported as withheld.
 Two ways to get there: it names no destination (no `command`, no `args`, no `url` — a part
-that renders as nothing does not count as naming something), or it has so many parts that
-even their clipped forms **would not fit on one screen**. That ceiling is a screen and not
-a byte count on purpose: you answer the prompt printed *under* the line, so a line taller
-than the terminal has already scrolled the command it names off the top before the question
-reaches you.
+that renders as nothing does not count as naming something), or its full rendering **would
+not fit on one screen**. That ceiling is a screen and not a byte count on purpose: you
+answer the prompt printed *under* the line, so a line taller than the terminal has already
+scrolled the command it names off the top before the question reaches you. Nothing is ever
+trimmed to fit it — an earlier round clipped each part at two hundred characters and
+announced the cut, which bounded the line but let two different `args` print the same tail.
+Complete, or refused.
+
+**The scope, said plainly.** This is a guard against a *commit* — a file changing under an
+approval you already gave — answered by a person reading one line. It is not a guard
+against someone who can already run code as you: they can edit the approval record, the
+harness, or charter itself. `SECURITY.md` states charter's boundary and nothing on this
+page exceeds it.
 
 The record is machine-local under `.charter/`: if it travelled in git, the same commit that
 declares a server could declare it approved.

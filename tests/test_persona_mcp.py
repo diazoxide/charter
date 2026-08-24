@@ -50,7 +50,7 @@ class McpBase(PersonaIso):
         # approved (#330). Everything below is about the SHAPE of that wrapper, so the
         # fixture consents and the tests assert what consent produces. The refusing half
         # lives in tests/test_committed_config_and_credentials.py.
-        mcpseen.approve(name, [fp for _s, _e, fp in persona.mcp_credentialed(name)])
+        mcpseen.approve(name, [fp for _s, _e, fp, _l in persona.mcp_credentialed(name)])
         return name
 
 

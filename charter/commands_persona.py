@@ -1409,8 +1409,10 @@ def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
     The recorded set is replaced per persona, as `mcpseen.approve` documents, so a server
     the operator declines here stops being approved even if it was approved before.
 
-    **Both halves of every line printed here come from `mcpseen`.** The destination goes
-    through `mcpseen.describe` and the `persona/server` in front of it through
+    **Both halves of every line printed here come from `mcpseen`.** The destination is the
+    string `persona.mcp_credentialed` already rendered — the one whose SHA-256 is the
+    fingerprint recorded below, so the text on the screen and the text in the record are
+    the same text and cannot drift. The `persona/server` in front of it goes through
     `mcpseen.label`, because both are committed data and they share a row: a server name
     built out of blank codepoints, an ANSI erase or a hundred thousand characters is a
     line the operator cannot read just as surely as a padded `args` is. Interpolating
@@ -1432,7 +1434,7 @@ def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
         if not declared:
             continue
         keep = []
-        for server, entry, fp in declared:
+        for server, _entry, fp, line in declared:
             if not fp:
                 # Every entry here needs consent, so `fingerprint` returns None for one
                 # reason only: `mcpseen.describe` cannot render a destination for it, and
@@ -1444,7 +1446,10 @@ def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
                 continue
             # Printed BEFORE the question, not after the recording: an approval nobody
             # can see in the transcript is not consent, it is a flag that was typed.
-            util.info(f"  {mcpseen.label(n, server)} → {mcpseen.describe(entry)}")
+            # `line` came back from `mcp_credentialed` with the fingerprint that is its
+            # own SHA-256, so the string printed here and the string recorded below are
+            # the same one. Re-rendering it here is how they would come to differ.
+            util.info(f"  {mcpseen.label(n, server)} → {line}")
             if dry_run:
                 continue
             try:
@@ -1514,9 +1519,8 @@ def cmd_persona_sync_agents(args) -> int:
                   f"server(s): the committed `mcp.json` names the command that would "
                   f"receive it, and this one has not been approved on this machine.")
         for n, servers in sorted(withheld.items()):
-            for server, entry in servers:
-                util.info(f"  {mcpseen.label(n, server)} → "
-                          f"{mcpseen.describe(entry) or mcpseen.UNRENDERABLE}")
+            for server, line in servers:
+                util.info(f"  {mcpseen.label(n, server)} → {line or mcpseen.UNRENDERABLE}")
         util.info("  Read the command above. If it is what you expect, approve it with:")
         util.info("    charter persona sync-agents --approve-mcp")
     for n in written:

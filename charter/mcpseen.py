@@ -18,13 +18,26 @@ the launchers real servers use (``npx``, ``uvx``, ``docker``, ``node``) is walke
 and a list excluding them refuses every MCP server anyone actually runs. The axis with an
 answer is not *what* the command is but *whether the operator has seen it*.
 
-**The whole entry, and only what was shown.** Two properties the mechanism is worthless
-without, and it shipped without both. The digest covers every key of the entry rather than
-the handful charter reads, because `persona.mcp_render_entry` passes the rest through to
-the harness — ``env`` did exactly that, so a committed edit could re-point an approved
-server's ``PATH`` with the approval intact (#426). And an entry :func:`describe` cannot
-render is not approvable at all, because the consent line IS the consent: an ``http``
-server used to print a blank one under the words "read the command above" (#427).
+**The record IS the line.** :func:`fingerprint` is the SHA-256 of what :func:`describe`
+printed and nothing else is mixed into it, so *two entries that render the same consent
+line have the same fingerprint*. That is one line of code and it is the whole of round
+four. Three earlier rounds kept two representations — a digest over the entry, a line over
+a list of fields — and every bypass since was one field that lived in the first and not the
+second: the vault name, ``env`` VALUES, ``cwd``, a clipped tail. Each time the operator was
+correctly re-asked and shown a line byte-identical to the one they had already approved,
+which is not consent but a second chance to make the same mistake. With one representation
+there is nothing left to fall out of step.
+
+The whole weight then rests on :func:`describe` being TOTAL — it loops over the entry's
+keys rather than over a list, because `persona.mcp_render_entry` hands every key it does
+not consume to the harness — and on an entry it cannot render not being approvable at all,
+because the consent line IS the consent: an ``http`` server used to print a blank one under
+the words "read the command above" (#427).
+
+**What this is, and is not.** A guard against a COMMIT — a committed file changing under an
+approval already given — answered by a person reading one line. ``SECURITY.md`` states the
+boundary and nothing here exceeds it: an attacker who already runs code as this user can
+edit the record under ``STATE_DIR``, the harness, or charter itself.
 
 **Machine-local and gitignored, deliberately.** Under ``STATE_DIR``, the same as
 :mod:`charter.guardseen` and for a sharper reason: if the approval travelled in git, the
@@ -59,15 +72,6 @@ FILE_NAME = "mcp-approved.json"
 #: Covers both reasons: no destination at all, and a destination too big to show in full.
 UNRENDERABLE = "(charter cannot show this entry in full — nothing to approve)"
 
-#: Longest single part — command, one arg, ``type``, ``url``, one ``env`` key — shown on a
-#: consent line. A part longer than this is CLIPPED with the cut announced; it is never
-#: dropped, so no part can push another part off the line. See :func:`describe`.
-#:
-#: :data:`MAX_LINE` still bounds how many such parts fit — and an entry that overflows it
-#: is refused whole rather than having a part dropped, so "no part pushes another off"
-#: holds in both directions.
-MAX_PART = 200
-
 #: The narrowest terminal charter assumes, and the most rows one PRINTED consent line may
 #: take on it. Their product is the hard ceiling on that line — label, decoration and
 #: destination together, because all three are on the same screen.
@@ -86,16 +90,19 @@ MAX_LABEL = MAX_NAME * 2 + 1
 #: care who put the columns on it.
 _DECORATION = len("• ") + len("  ") + len(" → ")
 
-#: Ceiling on the DESTINATION half — what :func:`describe` may return. An entry with so
-#: many parts that even their clipped forms do not fit is one the operator cannot be shown
-#: in full, so it is not renderable and (via :func:`fingerprint`) not approvable.
+#: Ceiling on the DESTINATION half — what :func:`describe` may return. Nothing is ever
+#: shortened to fit it: an entry whose full rendering is longer than this is one the
+#: operator cannot be shown in full, so it is not renderable and (via :func:`fingerprint`)
+#: not approvable. That is what :data:`UNRENDERABLE` has always said out loud, and round
+#: three's per-part clipping quietly contradicted it — a clipped part is a part of the
+#: entry the operator did not see, and :func:`fingerprint` now digests only what they did.
 #:
 #: This is a SCREEN, not a byte count, and that is the whole reason it exists. The
 #: operator answers the prompt printed *under* this line, so a line taller than the
 #: terminal has already scrolled the command it names off the top by the time the
 #: question is asked. Round two set it to 2000 — twenty-five rows of an 80-column tty —
 #: and nine args of 200 padding columns each fit inside it with the destination out of
-#: view. Escaping (see :func:`_safe`) makes such padding visible; it does not make it
+#: view. Escaping (see :func:`_esc`) makes such padding visible; it does not make it
 #: short, so the ceiling has to be the screen itself.
 #:
 #: The label and the decoration are SUBTRACTED rather than ignored, which is the round
@@ -131,30 +138,8 @@ def needs_consent(vault: str | None, entry: dict) -> bool:
                 or (isinstance(files, dict) and files))
 
 
-def _canon(value):
-    """Untrusted JSON as something :func:`json.dumps` renders deterministically.
-
-    Recursive and total, rather than a list of fields: the WHOLE entry is digested, so a
-    key charter does not know about yet cannot fall outside the fingerprint. ``env`` was
-    exactly that key (#426) — copied verbatim into the generated agent file by
-    `persona.mcp_render_entry`, handed to ``execvpe``, and invisible to the digest, so a
-    committed edit could add ``NODE_OPTIONS`` or re-point ``PATH`` on an already-approved
-    server without lapsing the approval.
-
-    A value JSON cannot carry is tagged rather than stringified, so an exotic object
-    cannot digest as the plain string that happens to be its ``repr``.
-    """
-    if isinstance(value, dict):
-        return {str(k): _canon(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_canon(v) for v in value]
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    return ["<not-json>", repr(value)]
-
-
 def fingerprint(vault: str | None, entry: dict) -> str | None:
-    """What the operator is being asked to approve, as one digest.
+    """What the operator is being asked to approve, as one digest — **of the line itself**.
 
     ``None`` when no approval can exist for this entry, which is two cases and both mean
     "render it without the vault wrapper":
@@ -162,26 +147,49 @@ def fingerprint(vault: str | None, entry: dict) -> str | None:
     * **Nothing to consent to** — no ``secrets`` and no ``secret_files``, or no vault. The
       entry is passed through untouched by `persona.mcp_render_entry`, so no credential is
       at stake and requiring approval would be a prompt about nothing.
-    * **Nothing to show** — :func:`describe` cannot render a destination for it, so the
-      operator would be approving a blank line (#427). An entry nobody can be shown is not
-      an entry anybody can approve. "Cannot be shown" is two properties and both are
-      decided on the ESCAPED line, not on the raw one: it renders as nothing (only ASCII
-      spaces survive :func:`_safe`), or it does not fit on the screen the question is
-      asked on (:data:`MAX_LINE`). Round two decided the first on ``str.isprintable``,
-      which is true of U+3164 HANGUL FILLER — so a line blank on every terminal got a
-      real digest and was approvable.
+    * **Nothing to show** — :func:`describe` cannot render this entry, so the operator
+      would be approving a blank line (#427). An entry nobody can be shown is not an entry
+      anybody can approve. "Cannot be shown" is two properties: it names no destination at
+      all (only ASCII spaces survive :func:`_safe`, so "renders as nothing" is decidable
+      rather than enumerable), or it does not fit on the screen the question is asked on
+      (:data:`MAX_LINE`). Round two decided the first on ``str.isprintable``, which is
+      true of U+3164 HANGUL FILLER — so a line blank on every terminal got a real digest
+      and was approvable.
 
-    **Every field of the entry is in here**, which is the point: approving a server by
-    name — or by five of its fields — lets a later commit re-point the same name at a
-    different binary, a different endpoint, or a different environment while the approval
-    stays valid. The vault (whose secrets) and the entry in full (where they go) both
-    change the digest.
+    **The digest is the SHA-256 of the consent line, and nothing else is mixed in.** That
+    is the whole of round four, and it is one line of code because the property is
+    structural rather than enumerated:
+
+        *two entries that render the same consent line have the same fingerprint.*
+
+    Rounds one to three digested a parallel representation of the entry — a list of
+    fields, then the whole entry through a canonicaliser — while :func:`describe` rendered
+    a different, shorter list. Every bypass since has been one instance of that one gap,
+    and each round closed the instance it was shown: the vault name was digested and never
+    printed; ``env`` VALUES were digested and only their KEYS printed; ``cwd`` — and
+    whatever the next committed key is — was digested and never printed; and the per-part
+    clip made two different ``args`` print the same tail. In each, the operator was asked
+    a second time under a line byte-identical to the one they had already approved, which
+    is not consent but a second chance to make the same mistake.
+
+    Hashing the line closes the gap in the only direction that cannot grow a new instance:
+    there is no second representation to fall out of step with. It moves the whole weight
+    onto :func:`describe` being TOTAL — a key it fails to print is a key a commit may
+    change with the approval intact — so `describe` renders every key of the entry by
+    construction rather than by enumeration, and `tests/test_mcp_approval.py` asserts that
+    directly.
+
+    What this is NOT: a guarantee that the operator understands the line, or that a
+    different mechanism cannot re-point the same command. `SECURITY.md` states charter's
+    actual scope — a guard against mistakes, not against an attacker who already runs code
+    as this user — and nothing here exceeds it.
     """
-    if not needs_consent(vault, entry) or not describe(entry):
+    if not needs_consent(vault, entry):
         return None
-    material = json.dumps({"vault": str(vault), "entry": _canon(entry)},
-                          sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+    line = describe(vault, entry)
+    if not line:
+        return None
+    return hashlib.sha256(line.encode("utf-8")).hexdigest()
 
 
 def _read() -> dict:
@@ -265,41 +273,126 @@ def _safe(text: str) -> str:
     reads exactly like one holding U+3164 — one more pair of different commands the
     operator cannot tell apart by reading the line. A Windows path shows as
     ``C:\\\\Users\\\\x``; that is the cost, and it is unambiguous.
+
+    **What this is for, and what it is not for.** Collapsing space runs and stripping the
+    ends is what makes "renders as nothing" decidable — and it is exactly why this is NOT
+    the function that renders a destination. It is lossy: ``a  b`` and ``a b`` come back
+    the same, and so do ``  /bin/sh`` and ``/bin/sh``. That was harmless while the digest
+    was computed from the entry; now that the digest IS the line (:func:`fingerprint`), a
+    lossy rendering would be an approval covering an entry the operator never saw. So this
+    is used for two things only — the ``persona/server`` label, where a name is an
+    identifier rather than a destination and is clipped anyway, and the "does this entry
+    name anything at all" test in :func:`describe`. The destination goes through
+    :func:`_esc`, which loses nothing.
     """
     out = "".join("\\\\" if c == "\\" else c if " " <= c <= "~" else _escape(c)
                   for c in text)
     return _SPACE_RUN.sub(" ", out).strip()
 
 
-def _clip(text: str, budget: int) -> str:
-    """*text* cut to *budget* characters with the cut ANNOUNCED, never silently.
+def _esc(text: str) -> str:
+    """*text* as printable ASCII, **reversibly** — the rendering the digest is taken over.
 
-    Used per part rather than on the finished line. Truncating the finished line is what
-    let a committed ``args`` of 600 characters produce a consent line naming neither the
-    ``env`` it sets nor the ``url`` it points at, because both are appended after ``args``
-    — so the important half of the line was the half that got cut.
+    The same complement argument as :func:`_safe`: printable ASCII is what a consent line
+    may hold and everything else is shown as its fixed-width escape. Two differences, both
+    forced by :func:`fingerprint` hashing the line rather than the entry:
 
-    The marker is ASCII, like everything else :func:`_safe` lets through, so that "a
-    consent line is printable ASCII" needs no footnote reading "except charter's own
-    ellipsis". A claim with an exception is a claim its test has to carve a hole in, and
-    the hole is where the next spelling goes.
+    * **nothing is lost.** No collapsing, no stripping, no clipping. Every codepoint of
+      *text* is recoverable from the output — ``\\\\`` for a real backslash, ``\\"`` for a
+      real quote, ``\\uXXXX``/``\\UXXXXXXXX`` for everything outside printable ASCII, and
+      itself for the rest — so the characters printed for a committed value determine that
+      value. `tests/test_mcp_approval.py` decodes the output and checks it round-trips,
+      which is what makes "reversible" a checked property rather than a claim.
+    * **the ASCII quote is escaped**, which is what lets an unescaped ``"`` be a delimiter
+      no committed byte can spell. :func:`describe` leans on that: charter's own words are
+      printed bare, committed strings are printed between quotes, and the two cannot be
+      confused for each other.
+
+    A run of spaces survives as a run of spaces. It is visible between the quotes that
+    :func:`_tok` and :func:`_val` put around it, and — being neither collapsed nor cut — it
+    counts its full width against :data:`MAX_LINE`, so padding is refused rather than
+    silently tidied away into a line that no longer says what would run.
     """
-    return text if len(text) <= budget else (
-        text[:budget] + f"... (+{len(text) - budget} more chars)")
+    return "".join("\\\\" if c == "\\" else '\\"' if c == '"'
+                   else c if " " <= c <= "~" else _escape(c) for c in text)
+
+
+def _tok(text: str) -> str:
+    """One argv word of the ``run`` segment: bare when it is one word, quoted when not.
+
+    ``run uvx some-reddit-mcp --read-only`` is the common case and it should read like the
+    command it is. A word that is empty, or that holds a space, is quoted instead, so the
+    single space between words stays a boundary the reader and the digest agree on:
+    ``run npx "-y" "my server"`` cannot be confused with three separate words. :func:`_esc`
+    escapes the quote itself, so a bare word can never begin with one and the two forms
+    stay tellable apart.
+    """
+    shown = _esc(text)
+    return shown if shown and " " not in shown else f'"{shown}"'
+
+
+def _val(value) -> str:
+    """Any JSON value as one self-delimiting piece of a consent line.
+
+    Strings are quoted, so charter's own bare words (``url``, ``env``, ``vault`` …) are
+    never confused with committed text that happens to spell them. ``true``/``false``/
+    ``null``/numbers keep their JSON spelling, so the string ``"true"`` and the boolean
+    ``true`` do not read the same. Lists and objects nest with their JSON punctuation, and
+    object keys are sorted, because JSON object order is not meaning — a prompt that fires
+    on a re-serialised file is a prompt the operator learns to answer without reading.
+
+    A value JSON cannot carry is tagged rather than stringified, so an exotic object
+    cannot read as the plain string that happens to be its ``repr``.
+    """
+    if isinstance(value, str):
+        return f'"{_esc(value)}"'
+    if value is None:
+        return "null"
+    if isinstance(value, bool):            # before int: bool IS an int
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return _esc(json.dumps(value))
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_val(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_val(str(k))}: {_val(v)}" for k, v in _sorted(value)) + "}"
+    return f"<not-json {_val(repr(value))}>"
+
+
+def _sorted(mapping: dict):
+    """*mapping*'s items in an order that depends on the items and not on the file."""
+    return sorted(mapping.items(), key=lambda kv: (str(kv[0]), _val(kv[1])))
+
+
+def _pairs(mapping: dict) -> str:
+    """A ``{VAR: value}`` map as ``"VAR"="value"``, the shape it reaches the process in.
+
+    Used for ``env``, ``secrets`` and ``secret_files`` so the line reads like the
+    ``secret exec --env VAR=key`` argv the answer authorises rather than like a summary of
+    it. Both halves go through :func:`_val`, so the ``=`` and the ``, `` between pairs stay
+    charter's punctuation: ``{"A": "b, C=d"}`` and ``{"A": "b", "C": "d"}`` are two
+    different environments and they print as two different lines.
+    """
+    return ", ".join(f"{_val(str(k))}={_val(v)}" for k, v in _sorted(mapping))
 
 
 def _name(part) -> str:
     """One half of a :func:`label`: printable ASCII, never wider than :data:`MAX_NAME`.
 
-    Clipped with a FIXED marker rather than with :func:`_clip`'s counted one. The count is
-    what the operator needs for a destination — how much of the command is off the line —
-    and it is exactly wrong here, because its own width grows with the input it describes.
-    A budget that a longer input makes longer is not a bound, and a bound is the only
-    thing standing between a committed name and the rows it costs.
+    Clipped with a FIXED marker, and a bound is the only thing standing between a
+    committed name and the rows it costs. A marker that counted what it cut would not be
+    one: its own width grows with the input it describes, and a budget a longer input
+    makes longer is not a budget.
 
-    A half that renders as nothing shows as ``""`` rather than as an invisible gap, the
-    same convention :func:`describe` uses for an ``env`` key, so ``reddit/""`` reads as a
-    server whose name is blank instead of as a missing word.
+    Clipped at all, unlike the destination, because a label is an IDENTIFIER — it says
+    where the entry was declared, not what would run — and it is not in the digest. The
+    destination is never shortened: see :data:`MAX_LINE`.
+
+    A half that renders as nothing shows as ``""`` rather than as an invisible gap, so
+    ``reddit/""`` reads as a server whose name is blank instead of as a missing word. On
+    the destination side :func:`_val` and :func:`_tok` reach the same place by quoting
+    everything committed, which is stronger: there, the empty string is one more value
+    that reads as itself.
     """
     shown = _safe(str(part))
     if len(shown) > MAX_NAME:
@@ -338,103 +431,138 @@ def label(*parts) -> str:
     return "/".join(_name(p) for p in parts)
 
 
-def describe(entry: dict) -> str:
-    """Where the credential would go, as the line that asks the operator to look at it.
+#: The keys :func:`describe` has a READABLE form for. It chooses how a key is shown and
+#: never whether it is shown: every other key of the entry is rendered too, generically,
+#: under its own quoted name. Adding a key here changes a line's wording, never its
+#: coverage — which is the difference between this and the enumerations of rounds one to
+#: three, each of which was walked past by the field it did not list.
+_READABLE = ("command", "args", "type", "url", "env", "secrets", "secret_files")
 
-    Names and keys only — a ``secrets`` map holds vault KEY names, never values, so this
-    is safe to print; and it IS printed, because the question the operator is answering is
-    "which credential goes where", and the line used to answer only the second half.
+#: Charter's own words on a consent line, each introducing one segment. They are printed
+#: BARE; every committed string is printed between quotes (:func:`_esc` escapes the quote
+#: itself), so no committed key can spell one of these and no segment can be mistaken for
+#: another. This tuple is documentation and a test's checklist, not a guard.
+_WORDS = ("run", "command", "args", "type", "url", "env", "secrets", "secret_files",
+          "vault")
 
-    **Which credential, not just which command.** ``secrets`` and ``secret_files`` are what
-    `persona.mcp_render_entry` turns into ``--env VAR=<vault key>`` and
-    ``--file VAR=<vault key>``, so the vault key named there decides *what value* the
-    command receives. They were in the digest and not on the line, which is finding three
-    of round three — a homoglyph re-point that lapses the approval and re-asks under a line
-    that reads the same — moved to the field that chooses the credential rather than the
-    destination: editing ``{"REDDIT_CLIENT_ID": "client-id"}`` to
-    ``{"REDDIT_CLIENT_ID": "aws-root-key"}`` in a committed ``mcp.json`` produced a
-    byte-identical consent line and a different fingerprint, so the operator was correctly
-    re-asked and correctly could not tell why. Being re-asked under an unchanged line is
-    not consent, it is a second chance to make the same mistake.
 
-    ``""`` when the entry has no destination to show, which :func:`fingerprint` turns into
-    "not approvable" — so a line the operator cannot read is a line nobody can consent to.
-    Two ways to get there:
+def _names_something(entry: dict) -> bool:
+    """Does this entry name a destination at all — a command, an argument, or a url?
 
-    * **Nothing named.** No ``command``, no ``args``, no ``url``. An ``http``/``sse``
-      server has no command, and building the line from ``command`` + ``args`` alone
-      rendered it as an EMPTY string under the words *"Read the command above"* (#427).
-      Falling back to ``url`` fixes the common case; ``""`` for the rest is the general
-      one. **A part that renders as nothing does not count as naming something** — and
-      after :func:`_safe` that is decidable rather than enumerable: every part comes back
-      as printable ASCII with all else escaped, so it is blank exactly when it held
-      nothing but ASCII spaces. Round one tested ``""`` and missed ``"   "``; round two
-      tested ``"   "`` and missed U+3164 HANGUL FILLER, which is printable, is not
-      whitespace, survives ``strip``, and shows as nothing. Neither is a special case
-      now — they are the same case, asked of the escaped form.
-    * **Too much named.** So many parts that even their clipped forms exceed
-      :data:`MAX_LINE` — :data:`MAX_ROWS` rows of an :data:`MAX_COLS`-column terminal.
-      Charter will not print a page of destination and call it a line the operator read,
-      and it will not print half of one either. Fail closed: withheld. The ceiling is a
-      screen because the operator answers the prompt printed UNDER this line: round two
-      set it to 2000 characters, twenty-five rows, and nine args of 200 padding columns
-      fit inside it with ``uvx evil-server`` scrolled off the top. Escaping makes padding
-      visible, which is necessary and not sufficient — visible padding scrolls a line just
-      as far as invisible padding does, so the length that is refused has to be the length
-      that does not fit.
-
-    **Every part is named; only its contents can be shortened.** Round one clipped the
-    FINISHED line at 600 characters, and both the ``[type url]`` and the ``(env: …)``
-    suffixes are appended after ``args`` — so ~600 characters of plausible ``args`` in a
-    committed file produced a consent line naming neither the ``env`` it set nor the
-    ``url`` it pointed at, while the approved render still carried both to ``execvpe``.
-    The comment that stood here claimed this was impossible because "the destination is at
-    the FRONT of the line"; that was true only of ``command``, and false of every field
-    that decides where a url-transport entry connects or which binary ``PATH`` resolves.
-    Each part now gets its own :data:`MAX_PART` budget and the suffixes are built from
-    already-clipped parts, so nothing appended to this line can be pushed out of it.
-
-    ``env`` keys are shown because they choose the destination as surely as ``command``
-    does: ``PATH`` decides which binary ``execvpe`` finds, ``NODE_OPTIONS`` decides what
-    it loads (#426).
-
-    The rule the three suffixes are instances of, said once so a fourth field does not
-    have to be found the way these were: **everything the digest covers that changes what
-    the vault hands over, or where it lands, is on the line.** ``env`` chooses the binary,
-    ``url`` chooses the endpoint, ``secrets`` and ``secret_files`` choose the credential.
-    A field that lapses an approval without changing the line spends the operator's second
-    look on a line they have already read.
+    Decided on the :func:`_safe` form, which is what makes it a decidable question rather
+    than a growing list: after escaping, a part is printable ASCII, and the ASCII space is
+    the only member of that range that renders as nothing. So a part is blank exactly when
+    it held nothing but ASCII spaces. Round one tested ``""`` and missed ``"   "``; round
+    two tested ``"   "`` and missed U+3164 HANGUL FILLER, which is printable, is not
+    whitespace, survives ``strip`` and shows as nothing. Neither is a special case here.
     """
-    def _shown(x) -> str:
-        # `or '""'`: a name that renders blank is still a name the harness would use, so
-        # it is printed as an empty string rather than left as an invisible gap in a list.
-        # Applied only to what actually reaches the line — an `env` VALUE never does, and
-        # escaping a megabyte nobody will read is work done on an attacker's behalf.
-        return _clip(_safe(str(x)), MAX_PART) or '""'
-
-    if not isinstance(entry, dict):
-        return ""
     raw = entry.get("args")
     argv = list(raw) if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
-    parts = [str(entry.get("command") or "")] + [str(a) for a in argv]
-    dest = " ".join(p for p in (_clip(_safe(p), MAX_PART) for p in parts) if p)
-    url = _clip(_safe(str(entry.get("url") or "")), MAX_PART)
-    if url:
-        shown = f"{_clip(_safe(str(entry.get('type') or 'http')), MAX_PART)} {url}"
-        dest = f"{dest}  [{shown}]" if dest else shown
-    if not dest:
+    parts = [entry.get("command") or ""] + argv + [entry.get("url") or ""]
+    return any(_safe(str(p)) for p in parts)
+
+
+def describe(vault: str | None, entry: dict) -> str:
+    """The whole of what would be approved, as the line the operator is asked to read.
+
+    **This function IS the consent, and :func:`fingerprint` is its SHA-256.** That is the
+    invariant round four exists for, and it is the reason this returns a rendering of the
+    *entire* input rather than of the fields charter happens to know about:
+
+        *two entries that render the same consent line have the same fingerprint, and an
+        entry that renders a different line lapses the approval.*
+
+    Both halves of that only hold if nothing reaches the harness without reaching the
+    line, so the loop below is over ``entry`` — every key of it — instead of over a list
+    of fields. A key charter has never been taught prints under its own quoted name and
+    its JSON value: ``"cwd" "/tmp/attacker"``. `persona.mcp_render_entry` hands exactly
+    those unconsumed keys to the harness, and the harness sets them on the process that
+    ``execvpe``s the server, so a key it passes through and this line skipped would be a
+    committed edit with the approval intact. That was ``env`` in #426, ``cwd`` and the
+    vault after it, and it will be some other key next — which is why this is a loop.
+
+    **What the line says, in order.** ``run`` and the argv; then whichever of ``args``,
+    ``type``, ``url``, ``env``, ``secrets`` and ``secret_files`` are present and were not
+    already spent on ``run``; then every remaining key, sorted, under its quoted name;
+    then ``vault``. Charter's own words are bare and committed text is quoted, so the two
+    are never confused.
+
+    * **``env`` prints its VALUES, not only its keys.** The key was the half being shown
+      and the value is the half that decides: ``PATH`` chooses which binary ``execvpe``
+      finds, ``NODE_OPTIONS`` chooses what it loads. An ``env`` value is committed
+      plaintext out of ``mcp.json`` — it is not a vault value and never was, and this
+      module never opens a vault — so printing it discloses nothing that reading the repo
+      would not.
+    * **``vault`` is named.** ``vault:`` is a key of the committed ``persona.md``, so a
+      one-line commit re-points which credential is spent. The digest covered it from the
+      start and the line never did, so even a FIRST prompt could not say whose credential
+      was at stake — while printing charter's own word ``(vault: …)`` in front of the
+      variable name, where a reader has every reason to expect the vault to be.
+    * **``secrets``/``secret_files`` name the vault KEY.** They are what
+      `mcp_render_entry` turns into ``--env VAR=<vault key>`` and ``--file VAR=<vault
+      key>``, so the key named there decides *what value* the command receives. A vault
+      KEY name is not a credential; the value is, it is not in the entry, and it cannot
+      reach this line because it never reaches this process.
+
+    **Nothing is shortened.** Round three clipped each part to two hundred characters and
+    announced the cut, which bounded the line but was not one-to-one: two ``args`` that
+    agree on their first two hundred escaped characters and are the same length print the
+    same tail and, once the digest is the line, would share one approval. A part the
+    operator did not see is a part they did not consent to, so an entry whose full
+    rendering exceeds :data:`MAX_LINE` is refused instead — the same fail-closed answer
+    the ceiling has always given, applied to one more way of not being readable.
+
+    ``""`` when there is no line, which :func:`fingerprint` turns into "not approvable":
+
+    * **Nothing named** — no ``command``, no ``args``, no ``url``, or nothing among them
+      that renders as more than ASCII spaces. An ``http`` server has no command, and
+      building the line from ``command`` + ``args`` alone rendered it as an EMPTY string
+      under the words *"Read the command above"* (#427). See :func:`_names_something`.
+    * **Too much named** — the rendering does not fit on the screen the question is asked
+      on (:data:`MAX_LINE`: :data:`MAX_ROWS` rows of an :data:`MAX_COLS`-column terminal,
+      less the label and decoration beside it). Charter will not print a page of
+      destination and call it a line the operator read, and it will not print half of one
+      either. The ceiling is a screen because the operator answers the prompt printed
+      UNDER this line: round two set it to 2000 characters, twenty-five rows, and nine
+      args of 200 padding columns fit inside it with ``uvx evil-server`` scrolled off the
+      top.
+
+    **One equivalence is deliberate, and it is the only one.** An absent ``args`` and an
+    empty ``args`` both print as bare ``run <command>``, because both hand ``execvpe`` the
+    same argv — `mcp_render_entry` reads them through the same ``or []``. They share one
+    approval on purpose. Dict key ORDER is the same kind of non-difference and is sorted
+    away for the same reason. Everything else about the entry is on the line.
+    """
+    if not isinstance(entry, dict) or not _names_something(entry):
         return ""
-    env = entry.get("env")
-    if isinstance(env, dict) and env:
-        dest += "  (env: " + ", ".join(sorted(_shown(k) for k in env)) + ")"
-    for field, shown_as in (("secrets", "vault"), ("secret_files", "vault file")):
-        m = entry.get(field)
-        if isinstance(m, dict) and m:
-            # `VAR=key`, the shape `mcp_render_entry` builds — so the line reads like the
-            # `secret exec` argv the answer authorises rather than like a summary of it.
-            pairs = sorted(f"{_shown(var)}={_shown(key)}" for var, key in m.items())
-            dest += f"  ({shown_as}: " + ", ".join(pairs) + ")"
-    # Not truncated: refused. A line this long does not fit on the screen the question is
-    # asked on, and cutting it would put us back where round one was — deciding which half
-    # of the destination the operator gets to see. The digest covers every byte either way.
-    return "" if len(dest) > MAX_LINE else dest
+    spent, shown = set(), []
+
+    # `run`, the headline: the command and, when they are plain strings, its arguments.
+    # An argv that is not a list of strings is not an argv, so it prints under `args`
+    # instead of being flattened into words that would read like several of them.
+    command, argv = entry.get("command"), entry.get("args")
+    if isinstance(command, str):
+        spent.add("command")
+        words = [_tok(command)]
+        if isinstance(argv, (list, tuple)) and all(isinstance(a, str) for a in argv):
+            spent.add("args")
+            words += [_tok(a) for a in argv]
+        shown.append("run " + " ".join(words))
+
+    for key in _READABLE:
+        if key not in entry or key in spent:
+            continue
+        spent.add(key)
+        value = entry[key]
+        body = (_pairs(value) if key in ("env", "secrets", "secret_files")
+                and isinstance(value, dict) and value else _val(value))
+        shown.append(f"{key} {body}")
+
+    # Everything charter has not been taught. NOT a fallback for a case somebody thought
+    # of — this is the case, and the named ones above are its readable spellings.
+    for key in sorted((k for k in entry if k not in spent), key=str):
+        shown.append(f"{_val(str(key))} {_val(entry[key])}")
+
+    shown.append(f"vault {_val(str(vault))}")
+    line = "  ".join(shown)
+    return "" if len(line) > MAX_LINE else line

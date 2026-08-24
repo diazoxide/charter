@@ -1,14 +1,26 @@
 ---
 version: unreleased
-headline: An MCP approval covers the whole entry, and is now asked rather than assumed
+headline: An MCP approval is a digest of the line you read, and is now asked rather than assumed
 adopt: persona sync-agents --approve-mcp
 ---
 
 `charter persona sync-agents --approve-mcp` is the consent that lets a committed `mcp.json`
 hand a persona's vault value to the command it names. Three findings from the 2026-08-24
-audit each hollowed it out from a different side, and two rounds of review then found the
-same class of hole in the fixes themselves. All of it is fixed, and **every existing
+audit each hollowed it out from a different side, and four rounds of review then found the
+same class of hole in the fixes themselves — every round closed the instance it was shown,
+and every round an attacker found the next one. All of it is fixed, and **every existing
 approval lapses** — see the last section.
+
+**The record is now the line you read, and nothing else.** Rounds one to three kept two
+representations of the entry: a digest over all of it, and a printed line built from a list
+of seven fields. Every bypass since was one field that lived in the first and not the
+second — the persona's vault, `env` VALUES, `cwd`, a clipped tail — so the approval
+correctly lapsed, you were correctly asked again, and the line you were asked under was
+byte-identical to the one you had already approved. That is not consent; it is a second
+chance to make the same mistake. The fingerprint is now the SHA-256 of the printed line, so
+*two entries that print the same line share one approval* holds by construction, and the
+whole question becomes whether the line holds everything — which is now decided by a loop
+over the entry's keys instead of by a list of fields.
 
 **The digest covered five fields, so `env` was outside consent.** `fingerprint` hashed
 `vault`, `command`, `args`, `secrets` and `secret_files`, and its docstring claimed *"every
@@ -23,15 +35,16 @@ add this to an **already-approved** server and change nothing about the digest:
 `PATH` decides which binary `execvpe` finds; `NODE_OPTIONS` decides what it loads. The
 approval stayed valid and `charter persona lint` still said `✓ ok`. The fix is not "add
 `env`" — that is the same bug one field further out, which is exactly how this arrived one
-field past #330. The digest now covers the **entire entry**, recursively, so a key charter
-has not been taught about yet cannot fall outside it. Key order still does not matter; a
-re-serialised file will not nag you.
+field past #330. Consent now covers the **entire entry**: every key of it is printed on the
+line, and the line is what is hashed, so a key charter has not been taught about yet cannot
+fall outside either. Key order still does not matter; a re-serialised file will not nag
+you.
 
 **An `http` server's consent line was blank.** The line was built from `command` + `args`,
 and an `http`/`sse` entry has neither — so `sync-agents` printed an empty string under the
 words *"Read the command above."* The `url` was not in the digest either, which means two
-different endpoints shared one approval. Both are now covered: the line falls back to the
-URL, shows the `env` keys, and escapes anything outside printable ASCII (see below),
+different endpoints shared one approval. Both are now covered: the line names the `url` and
+the `type`, and escapes anything outside printable ASCII (see below),
 because a `\r` or a bidi override in a committed `args` can otherwise repaint the one line
 the whole decision rests on. An entry charter cannot render cannot be **approved** either —
 it is reported as withheld instead of silently approved blank.
@@ -42,14 +55,15 @@ front. That was true only of `command`. Both the `[type url]` and the `(env: …
 appended *after* `args`, so roughly 600 characters of plausible-looking `args` in a
 committed file produced a consent line naming neither the `PATH` it re-pointed nor the
 endpoint it connected to — while the entry the operator approved carried both through to
-`execvpe`. Every part now has its own budget and is clipped on its own, with the cut
-announced. `args` can be a megabyte long and the line still *ends* with the endpoint and
-the `env` keys it used to push off — here is the tail of one whose `--config` value is 643
-characters:
+`execvpe`. The second cut gave each part its own 200-character budget and announced the
+cut, which bounded the line but was not one-to-one: two `--config` payloads agreeing on
+their first 200 characters and equal in length printed the same text and the same
+`(+N more chars)` count.
 
-```
-  ... (+443 more chars)  [stdio https://evil.example/mcp]  (env: NODE_OPTIONS, PATH)
-```
+So nothing is shortened at all any more. The line is **complete or there is no line** — an
+entry whose full rendering does not fit on the screen the question is asked on is refused
+and reported as withheld, exactly as an unrenderable one always was. A padded part cannot
+shorten another part, because no part is ever shortened.
 
 **The consent line is printable ASCII, and everything else is spelled out.** The first two
 attempts at this guard matched something narrower and were walked past by the same attack
@@ -63,14 +77,16 @@ There is no list of codepoints that ends, so the rule is now the complement — 
 and any plane, is shown as `\uXXXX`:
 
 ```
-  reddit/reddit → \u3164\u3164\u3164
-  reddit/acme   → http https://api.\u0430\u0441me.example/mcp
+  reddit/reddit → run \u3164\u3164\u3164  type "stdio"  secrets "ACME_TOKEN"="acme-token"  vault "reddit"
+  reddit/acme   → type "http"  url "https://api.\u0430\u0441me.example/mcp"  …
 ```
 
 Precisely: *everything on that row which came out of a committed file* is printable
-ASCII. The `•` and the `→` around it are charter's own punctuation — as is the `...` that
-marks a clip, which is ASCII rather than `…` for exactly this reason, so the claim needs
-no footnote and its test needs no hole cut in it.
+ASCII. The `•` and the `→` around it are charter's own punctuation. (The test that pins
+this derives charter's own glyphs from a benign run — with colour pinned off, because
+`util` decides colour at import time from `stderr.isatty()`, and running the suite from a
+terminal used to fold charter's own escape sequences into the derived set and make the
+assertion unfailable for exactly the class it exists to catch.)
 
 That closes three shapes at once. Blankness becomes decidable rather than enumerable,
 because on the escaped line the ASCII space is the only character left that shows nothing.
@@ -79,11 +95,14 @@ becomes *readable*: `api.асme.example` already lapsed the approval and re-aske
 url is in the digest — but the old line was pixel-identical to `api.acme.example`, so
 being asked again told you nothing.
 
-The escape is one-to-one, or it would just move the problem: astral codepoints use the
+The escape is **reversible**, or it would just move the problem: astral codepoints use the
 eight-digit `\UXXXXXXXX` form, since `\u1f600` is five hex digits and would equally spell
-`U+1F60` followed by `0`, and a literal backslash is doubled, so a committed `command`
-holding the six ASCII characters `\u3164` cannot imitate one holding U+3164. Windows paths
-show as `C:\\Users\\x`.
+`U+1F60` followed by `0`; a literal backslash is doubled and a literal quote becomes `\"`,
+so a committed `command` holding the six ASCII characters `\u3164` cannot imitate one
+holding U+3164, and an unescaped quote is always charter's own delimiter. Windows paths
+show as `C:\\Users\\x`. Nothing is collapsed or stripped either: an earlier round tidied
+runs of ASCII spaces out of every part, so `"   --evil"` printed as `--evil` — a line that
+no longer said what would run.
 
 And it covers the whole line, not the destination half of it. The `persona/server` label
 printed in front of the arrow had gone to the terminal untouched while the destination
@@ -108,9 +127,28 @@ which of the vault's values the command receives. They were in the digest and no
 line, so editing `{"REDDIT_CLIENT_ID": "client-id"}` to `{"REDDIT_CLIENT_ID": "aws-root-key"}`
 lapsed the approval, asked you again, and asked under a line byte-for-byte identical to the
 one you had already approved — the same shape as the homoglyph above, in the field that
-chooses the credential rather than the destination. Both now print as `VAR=key`, the shape
-the `secret exec` argv is built from. Key names only; a value lives in the vault and never
-enters the process that prints this line.
+chooses the credential rather than the destination. Both now print as `"VAR"="key"`, the
+shape the `secret exec` argv is built from. The credential's **value** is the one thing not
+on the line and it cannot be: it is not in the entry, and the process that prints this
+never opens a vault.
+
+**And which vault, whose env, and every key charter has never been taught.** Three more of
+the same shape, closed together rather than one at a time. `vault:` is a key of the
+committed `persona.md`, so a one-line commit re-points which credential is spent — it was
+digested from the first commit and printed by none, so even the *first* prompt could not
+say whose credential was at stake, while the line printed charter's own word `(vault: …)`
+in front of the variable name. `env` printed its KEYS while the VALUE is the half that
+decides — `PATH` chooses which binary `execvpe` finds. And a key charter does not read at
+all (`cwd`, `headers`, whatever comes next) was passed through to the harness and never
+shown. All three are on the line now, and the last of them because the renderer loops over
+the entry's keys rather than over a list of fields:
+
+```
+  reddit/reddit → run uvx some-reddit-mcp  type "stdio"  env "PATH"="/usr/bin"  secrets "REDDIT_CLIENT_ID"="client-id"  "cwd" "/home/me/proj"  vault "reddit"
+```
+
+Charter's own words print bare and everything committed prints between quotes, so a
+committed value cannot dress itself up as part of charter's sentence.
 
 **And the line has to fit on a screen.** The ceiling on the whole line used to be 2000
 characters — twenty-five rows of an 80-column terminal. Nine args of 200 invisible columns
@@ -128,7 +166,7 @@ server of every persona and printed what it had approved *afterwards*. It now pr
 server and asks about it, one at a time, before recording anything:
 
 ```
-  reddit/acme → http https://api.acme.example/mcp  (env: HTTPS_PROXY)  (vault: ACME_TOKEN=acme-token)
+  reddit/acme → type "http"  url "https://api.acme.example/mcp"  env "HTTPS_PROXY"="http://p.example:3128"  secrets "ACME_TOKEN"="acme-token"  vault "reddit"
     approve reddit/acme? [y/N]
 ```
 
@@ -146,4 +184,10 @@ Nothing breaks loudly — that is the withholding design, and it is the failure 
 want — but a server will fail to authenticate rather than start, and `sync-agents` will name
 each one it withheld from. Run `charter persona sync-agents --approve-mcp`, read the lines,
 and answer. You are re-reading commands you already read once; the difference is that this
-time the answer covers where the credential goes, not five fields of it.
+time what gets recorded is a digest of the line in front of you.
+
+**And the scope, said plainly**, because a local page promising more than `SECURITY.md`
+does is itself a defect. This is a guard against a *commit* — a committed file changing
+under an approval you already gave — answered by a person reading one line. It is not a
+guard against someone who can already run code as you: they can edit the approval record,
+the harness, or charter itself.

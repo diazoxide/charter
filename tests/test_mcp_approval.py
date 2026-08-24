@@ -18,24 +18,33 @@ side, and this module is the boundary for all three:
 Every test here asserts the withholding direction: the interesting outcome is always
 "the vault did NOT reach that command", never "sync-agents crashed".
 
-**Three rounds of review then found the same class of hole in the fixes themselves, and
-it was the same mistake every time: the guard was put on the FIELD that had just been
-attacked rather than on the SURFACE it is printed on.** Round one matched a NAME (``""``
-was blank, ``"   "`` was not). Round two matched a CHARACTER and a LIST (``str.isprintable``
-plus a regex over the ASCII space; a tuple of four blank strings) and U+3164 walked past
-both. Round three matched the right class — every codepoint outside printable ASCII — but
-matched it inside `describe`, while the ``persona/server`` label sharing that row went to
-the terminal untouched, and while `secrets` stayed in the digest and off the line.
+**Four rounds of review then found the same class of hole in the fixes themselves, and it
+was the same mistake every time: the guard was put on the FIELD that had just been attacked
+rather than on the SURFACE it is printed on.** Round one matched a NAME (``""`` was blank,
+``"   "`` was not). Round two matched a CHARACTER and a LIST (``str.isprintable`` plus a
+regex over the ASCII space; a tuple of four blank strings) and U+3164 walked past both.
+Round three matched the right class — every codepoint outside printable ASCII — but matched
+it inside `describe`, while the ``persona/server`` label sharing that row went to the
+terminal untouched, and while `secrets` stayed in the digest and off the line. Round three
+then shipped a LONGER LIST — seven fields on the line against a digest over the whole entry
+— and the vault, ``env`` VALUES, ``cwd`` and a clipped tail each walked past it in turn.
 
-So the tests that hold the line here are of two shapes and neither of them is a list of
-bad inputs: a SWEEP over all 1,114,112 codepoints for what `_safe` must catch, and a
-SURFACE assertion over the whole printed transcript of a real `sync-agents` run for where
-committed text is allowed to appear. A field added to the consent line later is covered by
-the second without anybody remembering to add it to the first.
+Round four stops adding fields. `fingerprint` is the SHA-256 of `describe`'s output, so
+*two entries that render the same consent line have the same fingerprint* is true by
+construction, and `describe` loops over the entry's keys rather than over a list. See
+`TheDigestIsTheLine`, which is where that property and its converse are asserted.
+
+So the tests that hold the line here are of three shapes and none of them is a list of bad
+inputs: a SWEEP over all 1,114,112 codepoints for what the escapes must catch (and, for
+`_esc`, that they are reversible); a SURFACE assertion over the whole printed transcript of
+a real `sync-agents` run for where committed text is allowed to appear; and a PROPERTY over
+the relation between the line and the digest. A field added to the consent line later is
+covered by all three without anybody remembering to add it to any of them.
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -93,7 +102,34 @@ class ApprovalBase(PersonaIso):
         return persona.mcp_render_entry(name, VAULT, self._entry(name, server))
 
     def _approve(self, name="reddit"):
-        mcpseen.approve(name, [fp for _s, _e, fp in persona.mcp_credentialed(name) if fp])
+        mcpseen.approve(name, [fp for _s, _e, fp, _l in persona.mcp_credentialed(name) if fp])
+
+    def _sync(self, stdin, answers=None, **flags):
+        """A real `sync-agents --approve-mcp` run: its transcript and what it recorded.
+
+        On the base class rather than beside the tests that answer prompts, because the
+        end-to-end run is the only place that shows the LINE THE OPERATOR READS — and
+        three rounds of this fix were shipped on `describe` looking well-behaved in
+        isolation while the printed row said something else."""
+        from contextlib import redirect_stderr, redirect_stdout
+        buf, out = io.StringIO(), io.StringIO()
+        args = SimpleNamespace(persona=None, approve_mcp=True,
+                               yes=flags.get("yes", False),
+                               dry_run=flags.get("dry_run", False))
+        replies = list(answers or [])
+        self.asked = 0   # the question itself lands on stderr, with everything else
+
+        def fake_input(prompt=""):
+            self.asked += 1
+            if not replies:
+                raise EOFError
+            return replies.pop(0)
+
+        with mock.patch("sys.stdin", stdin), \
+                mock.patch("builtins.input", fake_input), \
+                redirect_stdout(out), redirect_stderr(buf):
+            rc = commands_persona.cmd_persona_sync_agents(args)
+        return rc, buf.getvalue()
 
     def assertWrapped(self, out, msg=""):
         self.assertEqual(out.get("command"), "charter", msg or "expected the vault wrapper")
@@ -185,12 +221,246 @@ class TheDigestCoversTheWholeEntry(ApprovalBase):
         self.assertIsNotNone(mcpseen.fingerprint(VAULT, dict(STDIO, weird=object())))
 
 
+def _unescape(shown: str) -> str:
+    """`mcpseen._esc` read backwards. A left inverse is what "reversible" MEANS, so the
+    property is checked by decoding rather than by asserting a shape."""
+    out, i = [], 0
+    while i < len(shown):
+        c = shown[i]
+        if c != "\\":
+            out.append(c)
+            i += 1
+        elif shown[i + 1] == "\\":
+            out.append("\\")
+            i += 2
+        elif shown[i + 1] == '"':
+            out.append('"')
+            i += 2
+        elif shown[i + 1] == "u":
+            out.append(chr(int(shown[i + 2:i + 6], 16)))
+            i += 6
+        elif shown[i + 1] == "U":
+            out.append(chr(int(shown[i + 2:i + 10], 16)))
+            i += 10
+        else:
+            raise AssertionError(f"undecodable escape at {shown[i:i + 8]!r}")
+    return "".join(out)
+
+
+class TheDigestIsTheLine(ApprovalBase):
+    """Round four, and the one property the three rounds before it each restated and each
+    left unimplemented.
+
+    Rounds one to three digested one representation of the entry and printed a different,
+    shorter one — a total digest against a line enumerating seven fields. Every bypass
+    since has been one instance of that single gap, and each round closed the instance it
+    was handed: the vault name, digested from the first commit and never printed; `env`
+    VALUES, digested while only their KEYS were shown; `cwd`, and whatever the next
+    committed key turns out to be; and a clipped tail that made two different `args` read
+    the same. In each, the operator was re-asked under a line byte-identical to the one
+    they had already approved — which is not consent, it is a second chance to make the
+    same mistake.
+
+    So there is no second representation any more. `fingerprint` is the SHA-256 of
+    `describe`'s output and nothing else is mixed in, which makes the first test below
+    true by construction rather than by inspection:
+
+        *two entries that render the same consent line have the same fingerprint.*
+
+    That moves the whole weight onto `describe` being TOTAL — a key it fails to print is a
+    key a commit may change with the approval intact — which is the second test, and it is
+    written over `entry.keys()` rather than over a list, so the key nobody has thought of
+    yet is covered without being found by hand.
+
+    What is NOT claimed here, because `SECURITY.md` does not claim it: that reading the
+    line makes the operator understand it, or that anything stops somebody who already
+    runs code as this user. This is a guard against a commit, answered by a person.
+    """
+
+    #: A rich entry: charter's readable fields, plus keys it has never been taught, plus a
+    #: nested one. Used by the totality test, so a field added to `describe` later does not
+    #: need to be added here to be covered — the loop is over the keys of this dict.
+    RICH = {
+        "type": "stdio", "command": "uvx", "args": ["some-reddit-mcp", "--read-only"],
+        "url": "https://api.acme.example/mcp",
+        "env": {"PATH": "/usr/bin", "NODE_OPTIONS": "--max-old-space-size=4096"},
+        "secrets": {"REDDIT_CLIENT_ID": "client-id"},
+        "secret_files": {"GOOGLE_APPLICATION_CREDENTIALS": "prod-sa-json"},
+        "cwd": "/home/me/proj",
+        "headers": {"Authorization": "Bearer whatever"},
+        "meta": {"transport": {"proxy": "http://ok.example"}},
+        "keepAlive": True, "timeout": 30, "note": None,
+    }
+
+    #: Pairs that MUST read differently, one axis each. Every one of them printed a single
+    #: identical line before this commit except where noted, and each was reproduced end to
+    #: end through `sync-agents --approve-mcp` on the branch this replaces.
+    DIFFERENT = [
+        ("the vault", ("reddit-low", dict(STDIO)), ("prod-aws", dict(STDIO))),
+        ("an env value", ("v", dict(STDIO, env={"PATH": "/usr/bin"})),
+                         ("v", dict(STDIO, env={"PATH": "/tmp/attacker-bin:/usr/bin"}))),
+        ("an env pair boundary", ("v", dict(STDIO, env={"A": "b, C=d"})),
+                                 ("v", dict(STDIO, env={"A": "b", "C": "d"}))),
+        ("an untaught key", ("v", dict(STDIO, cwd="/home/me/proj")),
+                            ("v", dict(STDIO, cwd="/tmp/attacker"))),
+        ("a clipped tail", ("v", dict(STDIO, args=["-c{" + "b" * 195 + '"allow": false}'])),
+                           ("v", dict(STDIO, args=["-c{" + "b" * 195 + '"allow": true }']))),
+        ("a run of spaces", ("v", dict(STDIO, args=["--x", "a b"])),
+                            ("v", dict(STDIO, args=["--x", "a  b"]))),
+        ("a leading space", ("v", dict(STDIO, command="/bin/sh")),
+                            ("v", dict(STDIO, command="  /bin/sh"))),
+        ("where the words split", ("v", dict(STDIO, command="a b", args=[])),
+                                  ("v", dict(STDIO, command="a", args=["b"]))),
+        ("an empty word", ("v", dict(STDIO, args=["x"])),
+                          ("v", dict(STDIO, args=["x", ""]))),
+        ("arg order", ("v", dict(STDIO, args=["mcp", "--allow", "x"])),
+                      ("v", dict(STDIO, args=["--allow", "x", "mcp"]))),
+        ("a homoglyph url", ("v", dict(HTTP, url="https://api.acme.example/mcp")),
+                            ("v", dict(HTTP, url="https://api.асme.example/mcp"))),
+        ("a forged escape", ("v", dict(STDIO, args=["\\u3164"])),
+                            ("v", dict(STDIO, args=["ㅤ"]))),
+        ("the vault key", ("v", dict(STDIO, secrets={"R": "client-id"})),
+                          ("v", dict(STDIO, secrets={"R": "aws-root-key"}))),
+        ("a nested value", ("v", dict(STDIO, meta={"t": {"proxy": "http://ok.example"}})),
+                           ("v", dict(STDIO, meta={"t": {"proxy": "http://evil.example"}}))),
+        ("a bool and its spelling", ("v", dict(STDIO, verify=True)),
+                                    ("v", dict(STDIO, verify="true"))),
+        ("an int and its spelling", ("v", dict(STDIO, port=1)),
+                                    ("v", dict(STDIO, port="1"))),
+        ("null and its spelling", ("v", dict(STDIO, note=None)),
+                                  ("v", dict(STDIO, note="null"))),
+        ("a committed key spelling charter's word",
+         ("v", dict(STDIO)), ("v", dict(STDIO, vault="prod-aws"))),
+        ("a committed value spelling a segment",
+         ("v", dict(STDIO, args=['x  vault "v"'])), ("v", dict(STDIO, args=["x"]))),
+    ]
+
+    #: Pairs that MUST read the same, and therefore share one approval. Both are
+    #: deliberate: neither can change the argv `execvpe` receives, and a prompt that fires
+    #: on a re-serialised file is a prompt the operator learns to answer without reading.
+    SAME = [
+        ("key order", ("v", {"command": "uvx", "args": ["m"], "secrets": {"A": "k"},
+                             "env": {"A": "1", "B": "2"}}),
+                      ("v", {"env": {"B": "2", "A": "1"}, "secrets": {"A": "k"},
+                             "args": ["m"], "command": "uvx"})),
+        ("an empty argv and none at all",
+         ("v", {"command": "uvx", "args": [], "secrets": {"A": "k"}}),
+         ("v", {"command": "uvx", "secrets": {"A": "k"}})),
+    ]
+
+    def test_two_entries_that_render_the_same_consent_line_have_the_same_fingerprint(self):
+        """The invariant, stated as the attacker stated it. It reddens on env values, on
+        `cwd`, on a clipped tail, on the vault and on every future key at once, which is
+        what makes it a property rather than a nineteenth instance.
+
+        Both directions are asserted over the same table, because a rule that only ever
+        fires one way is a rule nothing holds to the other: an entry that reads the same
+        must not lapse the approval, and an entry that reads differently must."""
+        cases = ([(f"{why} — same", a, b, True) for why, a, b in self.SAME]
+                 + [(f"{why} — different", a, b, False) for why, a, b in self.DIFFERENT])
+        for why, (v1, e1), (v2, e2), same in cases:
+            with self.subTest(why=why):
+                l1, l2 = mcpseen.describe(v1, e1), mcpseen.describe(v2, e2)
+                f1, f2 = mcpseen.fingerprint(v1, e1), mcpseen.fingerprint(v2, e2)
+                self.assertTrue(l1 and l2, "precondition: both are renderable")
+                self.assertEqual(l1 == l2, same, f"{l1!r}\n{l2!r}")
+                # The invariant itself, asserted on every pair rather than on the ones
+                # expected to collide: equal lines may never carry different digests.
+                self.assertEqual(f1 == f2, l1 == l2,
+                                 "the digest and the line must agree, always")
+
+    def test_every_key_of_the_entry_reaches_the_line(self):
+        """Totality — the half the invariant moves all the weight onto.
+
+        Hashing the line is only safe if the line holds everything the harness receives:
+        a key `describe` skips is a key a commit may change with the approval intact,
+        which is the bug with the arrow pointing the other way. `mcp_render_entry` passes
+        every key it does not consume straight through, so the test is over the KEYS of
+        the entry — including two nobody has ever named — and not over a list."""
+        keys = list(self.RICH) + ["a-key-charter-has-never-heard-of", "x-next-round"]
+        base = mcpseen.describe(VAULT, self.RICH)
+        self.assertTrue(base, "precondition: the rich entry renders")
+        for key in keys:
+            with self.subTest(key=key):
+                changed = dict(self.RICH)
+                changed[key] = ["a value nothing in charter reads", key]
+                self.assertNotEqual(mcpseen.describe(VAULT, changed), base,
+                                    f"`{key}` can be re-pointed under an unchanged line")
+                dropped = {k: v for k, v in self.RICH.items() if k != key}
+                if key in self.RICH:
+                    self.assertNotEqual(mcpseen.describe(VAULT, dropped), base,
+                                        f"`{key}` can be removed under an unchanged line")
+
+    def test_the_escape_is_reversible(self):
+        """What `_esc` has to be, now that the digest is taken over its output: a left
+        inverse exists, so the characters printed for a committed value determine that
+        value. Round three's escape was not — it collapsed runs of ASCII spaces and
+        stripped the ends, which is fine for deciding "does this render as nothing" and
+        wrong for deciding "is this the command I approved"."""
+        for cp in range(0x110000):
+            raw = "x" + chr(cp) + "\\\"" + chr(cp) * 2
+            shown = mcpseen._esc(raw)
+            if not all(" " <= c <= "~" for c in shown):
+                self.fail(f"U+{cp:04X} reached the consent line unescaped: {shown!r}")
+            if _unescape(shown) != raw:
+                self.fail(f"U+{cp:04X} does not survive the round trip: {shown!r}")
+        for raw in ("", " ", "   ", "  x  ", "a  b", '"', "\\", "\\u3164", "\\\\u3164",
+                    "\U0001f600", chr(0x1F60) + "0"):
+            self.assertEqual(_unescape(mcpseen._esc(raw)), raw, repr(raw))
+        # And the delimiter property the line's shape rests on: an UNESCAPED quote is
+        # charter's, so a committed value cannot close its own quotes and impersonate a
+        # whole segment. Escapes are removed first, since `\\"` is not a delimiter.
+        escapes = re.compile(r'\\\\|\\"|\\u[0-9a-f]{4}|\\U[0-9a-f]{8}')
+        for raw in ('a"b', "a\\", '"', '\\"', 'x"  vault "v', "\\" * 5 + '"'):
+            bare = escapes.sub("", mcpseen._esc(raw))
+            self.assertNotIn('"', bare, f"{raw!r} spells a delimiter")
+            self.assertNotIn("\\", bare, f"{raw!r} leaves a backslash no escape claims")
+
+    def test_the_line_printed_is_the_line_recorded(self):
+        """End to end, and the reason `mcp_credentialed` hands back the line rather than
+        the entry. Two renderings of the same entry — one for the prompt, one for the
+        digest — is exactly the drift this whole fix removes, so there is one."""
+        name = self._persona(dict(STDIO, env={"PATH": "/tmp/attacker-bin"}))
+        rc, err = self._sync(_Tty(), answers=["y"])
+        self.assertEqual(rc, 0)
+        shown = [ln for ln in err.splitlines() if "reddit/reddit →" in ln]
+        self.assertEqual(len(shown), 1, err)
+        line = shown[0].split("→", 1)[1].strip()
+        self.assertIn('"PATH"="/tmp/attacker-bin"', line, "the value, not only the key")
+        self.assertIn(f'vault "{VAULT}"', line, "whose credential is being spent")
+        self.assertEqual(mcpseen.approved(name),
+                         {hashlib.sha256(line.encode()).hexdigest()},
+                         "what was recorded is the sha256 of what was printed")
+
+    def test_re_pointing_the_vault_is_a_line_the_operator_can_see(self):
+        """Finding one, end to end. `vault:` is a key of the COMMITTED `persona.md`, so a
+        one-line commit re-points which credential is spent. It was digested from the
+        first commit and printed by none, so the operator was re-asked under a
+        byte-identical line — and could not have told which vault was at stake the FIRST
+        time either, while the line printed charter's own word `(vault: …)` in front of
+        the variable name, where a reader has every reason to expect the vault to be."""
+        name = self._persona()
+        self._approve()
+        self.assertWrapped(self._render(), "precondition: approved under vault `reddit`")
+        before = mcpseen.describe(VAULT, self._entry())
+
+        # `_render` is called with the vault the persona would resolve to; re-pointing
+        # `vault:` in persona.md is the same substitution one frame up.
+        after = mcpseen.describe("prod-aws", self._entry())
+        self.assertNotEqual(after, before, "the re-point has to be readable")
+        self.assertIn('vault "prod-aws"', after)
+        self.assertNotEqual(mcpseen.fingerprint("prod-aws", self._entry()),
+                            mcpseen.fingerprint(VAULT, self._entry()))
+        self.assertWithheld(persona.mcp_render_entry(name, "prod-aws", self._entry()),
+                            "and the approval does not travel with the entry")
+
+
 class AnHttpServerHasAConsentLine(ApprovalBase):
     """#427. `describe` fed the line the operator is told to read; for `http`/`sse` it fed
     an empty string."""
 
     def test_an_http_server_has_a_nonempty_consent_line(self):
-        line = mcpseen.describe(HTTP)
+        line = mcpseen.describe(VAULT, HTTP)
         self.assertIn("https://api.acme.example/mcp", line)
         other = dict(HTTP, url="https://evil.example.net/mcp")
         self.assertNotEqual(mcpseen.fingerprint(VAULT, HTTP),
@@ -198,7 +468,7 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
                             "two endpoints must not share one approval")
 
     def test_the_consent_line_names_the_env_keys(self):
-        line = mcpseen.describe(dict(STDIO, env={"PATH": "/tmp/bin", "NODE_OPTIONS": "-r x"}))
+        line = mcpseen.describe(VAULT, dict(STDIO, env={"PATH": "/tmp/bin", "NODE_OPTIONS": "-r x"}))
         self.assertIn("PATH", line)
         self.assertIn("NODE_OPTIONS", line)
 
@@ -219,24 +489,26 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
         module never opens a vault. The last assertion pins that — every token on the line
         came either out of the entry or out of charter's own words."""
         entry = dict(STDIO, secrets={"REDDIT_CLIENT_ID": "client-id"})
-        line = mcpseen.describe(entry)
+        line = mcpseen.describe(VAULT, entry)
         self.assertIn("uvx", line)
-        self.assertIn("REDDIT_CLIENT_ID=client-id", line)
+        self.assertIn('"REDDIT_CLIENT_ID"="client-id"', line)
 
         repointed = dict(STDIO, secrets={"REDDIT_CLIENT_ID": "aws-root-key"})
         self.assertNotEqual(mcpseen.fingerprint(VAULT, entry),
                             mcpseen.fingerprint(VAULT, repointed),
                             "precondition: re-pointing the credential does re-ask")
-        self.assertNotEqual(line, mcpseen.describe(repointed),
+        self.assertNotEqual(line, mcpseen.describe(VAULT, repointed),
                             "and the line it re-asks under has to have changed too")
 
         # `secret_files` is the same decision through a different mechanism (#190): a path
         # to a materialised file rather than a value. Same key, same need to show it.
-        files = mcpseen.describe(dict(STDIO, secret_files={"GOOGLE_APPLICATION_CREDENTIALS":
+        files = mcpseen.describe(VAULT, dict(STDIO, secret_files={"GOOGLE_APPLICATION_CREDENTIALS":
                                                           "prod-sa-json"}))
-        self.assertIn("GOOGLE_APPLICATION_CREDENTIALS=prod-sa-json", files)
+        self.assertIn('"GOOGLE_APPLICATION_CREDENTIALS"="prod-sa-json"', files)
 
-        charters_own = {"vault", "file", "env", "http", "more", "chars"}
+        # Charter's own words, plus the vault NAME — which is on the line as of round four
+        # and comes out of the committed `persona.md`, not out of any vault.
+        charters_own = set(mcpseen._WORDS) | {VAULT, "null", "true", "false"}
         for token in re.findall(r"[A-Za-z0-9_./-]{3,}", line):
             self.assertTrue(token in json.dumps(entry) or token in charters_own,
                             f"{token!r} reached the consent line from outside the entry")
@@ -247,42 +519,61 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
         the operator something other than what would run."""
         for token in ("\rharmless", "\x1b[2Kharmless", "a‮b", "x\ny"):
             with self.subTest(token=token):
-                line = mcpseen.describe(dict(STDIO, args=[token]))
+                line = mcpseen.describe(VAULT, dict(STDIO, args=[token]))
                 self.assertNotIn("\r", line)
                 self.assertNotIn("\n", line)
                 self.assertNotIn("\x1b", line)
                 self.assertNotIn("‮", line)
                 self.assertIn("uvx", line, "the real command still shows")
 
-    def test_a_flood_of_args_cannot_push_the_env_or_the_url_off_the_line(self):
-        """The bypass round one shipped. `[type url]` and `(env: …)` are appended AFTER
-        `args`, and the finished line was cut at 600 characters — so ~600 characters of
-        plausible `args` in a committed file produced a consent line naming neither the
-        `env` it set nor the `url` it pointed at, while the approved render carried both
-        to `execvpe`. Each part now has its own budget, so padding one cannot cut another.
-        """
+    def test_nothing_a_long_part_hides_is_hidden_by_a_shorter_line(self):
+        """Round one cut the FINISHED line at 600 characters and both `[type url]` and
+        `(env: …)` were appended after `args`, so ~600 characters of plausible `args` in a
+        committed file produced a consent line naming neither the `env` it set nor the
+        `url` it pointed at. Round two gave each part its own 200-character budget and
+        announced the cut, which bounded the line but was not one-to-one: see
+        `test_a_clipped_tail_is_not_a_tail_anybody_read` below.
+
+        Round four's answer is neither. A line is complete or there is no line — so a
+        padded part cannot shorten another part, because no part is ever shortened."""
         entry = dict(STDIO, args=["x" * 100000], url="https://evil.example/mcp",
                      env={"PATH": "/tmp/attacker-bin", "NODE_OPTIONS": "-r /tmp/x.js"})
-        line = mcpseen.describe(entry)
-        self.assertTrue(line.startswith("uvx "), "the command stays at the front")
-        self.assertIn("more chars", line, "and the clipping is announced")
-        for named in ("PATH", "NODE_OPTIONS", "evil.example"):
+        self.assertEqual(mcpseen.describe(VAULT, entry), "",
+                         "an entry that cannot be shown in full is not shown at all")
+        self.assertIsNone(mcpseen.fingerprint(VAULT, entry))
+
+        # The same fields, at a size that fits: all of them are named, values included.
+        entry = dict(STDIO, args=["x" * 100], url="https://evil.example/mcp",
+                     env={"PATH": "/tmp/attacker-bin", "NODE_OPTIONS": "-r /tmp/x.js"})
+        line = mcpseen.describe(VAULT, entry)
+        self.assertTrue(line.startswith("run uvx "), "the command stays at the front")
+        self.assertNotIn("more chars", line, "and nothing was cut out of it")
+        for named in ("PATH", "/tmp/attacker-bin", "NODE_OPTIONS", "-r /tmp/x.js",
+                      "evil.example", "x" * 100):
             self.assertIn(named, line, f"{named} chooses the destination and must show")
 
-    def test_one_long_part_cannot_clip_a_later_part_of_its_own_kind(self):
-        """The next spelling: hiding does not need a different field to hide behind, only
-        an earlier one. A per-part budget answers both."""
-        line = mcpseen.describe(dict(STDIO, args=["z" * 100000, "--allow-remote-code"]))
-        self.assertIn("--allow-remote-code", line, "a later arg is still named")
-        line = mcpseen.describe(dict(STDIO, env={"A" * 100000: "1", "PATH": "/tmp/bin"}))
-        self.assertIn("PATH", line, "a later env key is still named")
+    def test_a_clipped_tail_is_not_a_tail_anybody_read(self):
+        """Finding four of round four, and the reason clipping is gone rather than fixed.
+
+        `_clip` cut each part at 200 characters and announced how many it had dropped —
+        which is not one-to-one: two args agreeing on their first 200 escaped characters
+        and equal in length printed the same text AND the same `(+N more chars)` count.
+        Two different `--config` payloads, one identical line. Round three could survive
+        that (the digest was taken over the entry); once the digest IS the line, it would
+        be one approval covering an entry the operator never saw."""
+        head = "--config {" + "b" * 195
+        a, b = head + '"allow_remote_code": false}', head + '"allow_remote_code": true }'
+        self.assertEqual(len(a), len(b), "precondition: same length, same clipped prefix")
+        lines = [mcpseen.describe(VAULT, dict(STDIO, args=[x])) for x in (a, b)]
+        self.assertNotEqual(lines[0], lines[1], "the tail that differs must be readable")
+        self.assertIn("allow_remote_code\\\": false", lines[0])
+        self.assertIn("allow_remote_code\\\": true", lines[1])
 
     def test_a_line_too_long_to_read_is_refused_rather_than_cut(self):
-        """Enough parts that even their clipped forms overflow. Cutting would put charter
-        back to choosing which half of the destination the operator sees, so it fails
-        closed instead: no line, no digest, no approval."""
+        """Cutting would put charter back to choosing which half of the destination the
+        operator sees, so it fails closed instead: no line, no digest, no approval."""
         flood = dict(STDIO, args=["y" * 60] * 200)
-        self.assertEqual(mcpseen.describe(flood), "")
+        self.assertEqual(mcpseen.describe(VAULT, flood), "")
         self.assertIsNone(mcpseen.fingerprint(VAULT, flood))
 
         name = self._persona(flood)
@@ -354,7 +645,7 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
             with self.subTest(blank=repr(blank)):
                 entry = {"type": "stdio", "command": blank, "args": ["  ", ""],
                          "url": "  ", "secrets": {"ACME_TOKEN": "acme-token"}}
-                self.assertEqual(mcpseen.describe(entry), "", "a blank line is no line")
+                self.assertEqual(mcpseen.describe(VAULT, entry), "", "a blank line is no line")
                 self.assertIsNone(mcpseen.fingerprint(VAULT, entry))
 
         for shown in ("\u00a0", "\u3164", "\u2800", "\u115f", "\u1160", "\u0301"):
@@ -362,9 +653,10 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
                 # Not blank: SHOWN. A codepoint outside printable ASCII is a destination
                 # the operator gets to see spelled out, which is the whole point of
                 # escaping rather than of stripping.
-                line = mcpseen.describe({"type": "stdio", "command": shown * 3,
-                                         "secrets": {"ACME_TOKEN": "acme-token"}})
-                self.assertEqual(line.split("  ")[0], f"\\u{ord(shown):04x}" * 3)
+                line = mcpseen.describe(VAULT, {"type": "stdio", "command": shown * 3,
+                                                "secrets": {"ACME_TOKEN": "acme-token"}})
+                self.assertEqual(line.split("  ")[0],
+                                 "run " + f"\\u{ord(shown):04x}" * 3)
 
         name = self._persona({"type": "stdio", "command": "   ",
                               "secrets": {"ACME_TOKEN": "acme-token"}})
@@ -381,7 +673,7 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
         cyrillic = "https://api.\u0430\u0441me.example/mcp"
         self.assertNotEqual(ascii_url, cyrillic, "precondition: different strings")
 
-        lines = [mcpseen.describe(dict(HTTP, url=u)) for u in (ascii_url, cyrillic)]
+        lines = [mcpseen.describe(VAULT, dict(HTTP, url=u)) for u in (ascii_url, cyrillic)]
         self.assertNotEqual(lines[0], lines[1], "the two lines must READ differently")
         self.assertIn("acme.example", lines[0])
         self.assertIn("\\u0430\\u0441me.example", lines[1], "the lookalike is spelled out")
@@ -403,7 +695,7 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
             with self.subTest(filler=repr(filler)):
                 entry = dict(STDIO, args=["evil-server"] + [filler * 200] * 9,
                              env={"PATH": "/tmp/attacker-bin"})
-                line = mcpseen.describe(entry)
+                line = mcpseen.describe(VAULT, entry)
                 # Two acceptable outcomes and no third: the padding collapses to nothing
                 # (only the ASCII space does that) and the line is short, or the line does
                 # not fit the screen and there is no line and no digest. What is refused
@@ -429,27 +721,45 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
         """The other direction of the ceiling: fail-closed is only acceptable if it does
         not close on the servers people actually run. A fat-but-honest docker entry with
         several env keys still fits."""
-        line = mcpseen.describe({
+        line = mcpseen.describe(VAULT, {
             "type": "stdio", "command": "docker",
             "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
                      "-e", "GITHUB_TOOLSETS", "ghcr.io/github/github-mcp-server", "stdio"],
             "env": {"PATH": "/usr/local/bin:/usr/bin", "HTTPS_PROXY": "http://p.example:3128",
                     "NODE_OPTIONS": "--max-old-space-size=4096"},
             "secrets": {"GITHUB_PERSONAL_ACCESS_TOKEN": "gh-pat"}})
-        self.assertTrue(line.startswith("docker run -i --rm"), line[:40])
-        for named in ("ghcr.io/github/github-mcp-server", "PATH", "NODE_OPTIONS"):
+        self.assertTrue(line.startswith("run docker run -i --rm"), line[:40])
+        for named in ("ghcr.io/github/github-mcp-server", "PATH", "/usr/local/bin:/usr/bin",
+                      "NODE_OPTIONS", "--max-old-space-size=4096"):
             self.assertIn(named, line)
         self.assertLessEqual(len(line), mcpseen.MAX_LINE)
 
-    def test_padding_with_spaces_cannot_indent_the_destination_out_of_view(self):
-        line = mcpseen.describe(dict(STDIO, args=[" " * 600 + "--evil"]))
-        self.assertTrue(line.startswith("uvx --evil"), line[:40])
+    def test_padding_with_spaces_is_shown_or_refused_but_never_tidied_away(self):
+        """Round three stripped and collapsed ASCII spaces out of every part, so
+        `"   ...   --evil"` printed as `--evil` — a line that no longer said what would
+        run, and (once the digest is the line) one approval covering both spellings.
+
+        Padding is committed content now, like any other: it is shown between the quotes
+        that mark the word's boundaries, it costs the columns it occupies, and enough of
+        it puts the entry over the screen ceiling and gets it refused."""
+        padded = mcpseen.describe(VAULT, dict(STDIO, args=["  --evil"]))
+        self.assertIn('"  --evil"', padded, "the padding is shown, not stripped")
+        self.assertNotEqual(padded, mcpseen.describe(VAULT, dict(STDIO, args=["--evil"])),
+                            "two different argv must not share one line")
+
+        line = mcpseen.describe(VAULT, dict(STDIO, args=[" " * 600 + "--evil"]))
+        self.assertIn(" " * 600, line, "600 columns of padding cost 600 columns")
+
+        # And past the ceiling there is no line at all, so nothing to answer blind.
+        entry = dict(STDIO, args=[" " * 6000 + "--evil"])
+        self.assertEqual(mcpseen.describe(VAULT, entry), "")
+        self.assertIsNone(mcpseen.fingerprint(VAULT, entry))
 
     def test_an_entry_with_no_destination_cannot_be_approved(self):
         """The general case behind #427: a line `describe` cannot render is not a line
         anyone can consent to, so no digest exists for it and nothing can wrap it."""
         blind = {"type": "http", "secrets": {"ACME_TOKEN": "acme-token"}}
-        self.assertEqual(mcpseen.describe(blind), "")
+        self.assertEqual(mcpseen.describe(VAULT, blind), "")
         self.assertIsNone(mcpseen.fingerprint(VAULT, blind))
 
         name = self._persona(blind)
@@ -467,27 +777,6 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
 class ApproveMcpAsksBeforeItRecords(ApprovalBase):
     """#428. The flag used to be its own answer."""
 
-    def _sync(self, stdin, answers=None, **flags):
-        from contextlib import redirect_stderr, redirect_stdout
-        buf, out = io.StringIO(), io.StringIO()
-        args = SimpleNamespace(persona=None, approve_mcp=True,
-                               yes=flags.get("yes", False),
-                               dry_run=flags.get("dry_run", False))
-        replies = list(answers or [])
-        self.asked = 0   # the question itself lands on stderr, with everything else
-
-        def fake_input(prompt=""):
-            self.asked += 1
-            if not replies:
-                raise EOFError
-            return replies.pop(0)
-
-        with mock.patch("sys.stdin", stdin), \
-                mock.patch("builtins.input", fake_input), \
-                redirect_stdout(out), redirect_stderr(buf):
-            rc = commands_persona.cmd_persona_sync_agents(args)
-        return rc, buf.getvalue()
-
     def _two_servers(self, name="reddit"):
         self.make_persona(name, role="R", vault=VAULT, **{"delegate-when": "things"})
         self._write(name, {"reddit": dict(STDIO), "acme": dict(HTTP)})
@@ -504,7 +793,7 @@ class ApproveMcpAsksBeforeItRecords(ApprovalBase):
                         err.index("approve reddit/reddit?"), "asked in sorted order")
         # `acme` was answered yes, `reddit` no.
         approved = mcpseen.approved(name)
-        by_server = {s: fp for s, _e, fp in persona.mcp_credentialed(name)}
+        by_server = {s: fp for s, _e, fp, _l in persona.mcp_credentialed(name)}
         self.assertIn(by_server["acme"], approved)
         self.assertNotIn(by_server["reddit"], approved)
         self.assertWithheld(self._render(name, "reddit"), "the declined server stays dry")
@@ -522,18 +811,32 @@ class ApproveMcpAsksBeforeItRecords(ApprovalBase):
         the operator reads names neither the `PATH` it re-points nor the endpoint it
         connects to — and the render they approve carries both. The question is not
         whether `describe` is well-behaved in isolation but whether the line PRINTED
-        above the prompt names everything the approval hands over."""
-        name = self._persona({
+        above the prompt names everything the approval hands over.
+
+        Two outcomes and no third, asserted in that order. Padded past the screen the
+        question is asked on: no line, no question, nothing approved. Inside it: every
+        one of `env`'s KEYS **and VALUES** on the line the operator answers under, because
+        the value is the half that decides — `PATH` picks which binary `execvpe` finds."""
+        padded = {
             "type": "stdio", "command": "uvx",
             "args": ["--config", "{" + "a" * 640 + "}"],
             "env": {"PATH": "/tmp/attacker-bin", "NODE_OPTIONS": "--require /tmp/x.js"},
             "secrets": {"REDDIT_CLIENT_ID": "client-id"},
-        })
+        }
+        name = self._persona(padded)
+        rc, err = self._sync(_Tty(), answers=["y"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.asked, 0, "nothing showable, nothing to ask")
+        self.assertIn(mcpseen.UNRENDERABLE, err)
+        self.assertWithheld(self._render(name))
+
+        self._write(name, {"reddit": dict(padded, args=["--config", "{}"])})
         rc, err = self._sync(_Tty(), answers=["y"])
         self.assertEqual(rc, 0)
         shown = [ln for ln in err.splitlines() if "reddit/reddit →" in ln]
         self.assertEqual(len(shown), 1, err)
-        for named in ("PATH", "NODE_OPTIONS"):
+        for named in ("PATH", "/tmp/attacker-bin",
+                      "NODE_OPTIONS", "--require /tmp/x.js"):
             self.assertIn(named, shown[0],
                           f"{named} reaches execvpe, so it must reach the operator")
         rendered = self._render(name)
@@ -594,13 +897,27 @@ class ApproveMcpAsksBeforeItRecords(ApprovalBase):
         DERIVED from a benign run of the same command rather than listed here. A list
         would drift the first time a message gained a glyph, and this file has already
         watched two lists of characters be walked past.
+
+        **Colour is pinned off for the whole test, and that is a fix, not a tidy-up.**
+        `util._USE_COLOR` is `sys.stderr.isatty()` evaluated at IMPORT time — before this
+        test redirects stderr — so running the suite from a terminal put charter's own
+        ANSI codes into the benign transcript, ESC joined `ours`, and `stray` could never
+        contain it again. The derivation absorbed whatever the environment added, and it
+        absorbed precisely the class this test exists to catch: with `label` mutated to
+        raw interpolation and a hostile of `"ESC[2Kharmless"`, this failed under a pipe
+        and reported OK under a pty. Pinned, every ESC in the transcript is committed
+        text, and the assertion below has the same verdict in both.
         """
+        self.enterContext(mock.patch("charter.util._USE_COLOR", False))
         ours: set[str] = set()
         for benign in (dict(STDIO), {"type": "http", "secrets": dict(STDIO["secrets"])}):
             self._persona(benign)
             _rc, out = self._sync(_Tty(), answers=["n"])
             ours |= {c for c in out if not (" " <= c <= "~")}
         self.assertIn("→", ours, "precondition: the arrow is charter's own")
+        self.assertNotIn("\x1b", ours,
+                         "charter's own colour is in the derived set, so a committed "
+                         "escape sequence could never be stray again")
 
         hostiles = {
             "server name": ("\u3164" * 3, "a\x1b[2K\rharmless", "z" * 100000,
@@ -659,7 +976,7 @@ class ApproveMcpAsksBeforeItRecords(ApprovalBase):
         screen on the destination."""
         fat = {"type": "stdio", "command": "uvx", "args": ["a" * 90] * 8,
                "secrets": {"REDDIT_CLIENT_ID": "client-id"}}
-        self.assertEqual(mcpseen.describe(fat), "",
+        self.assertEqual(mcpseen.describe(VAULT, fat), "",
                          "a destination this size does not leave room for the label")
 
         name = "reddit"
@@ -714,15 +1031,15 @@ class ApproveMcpAsksBeforeItRecords(ApprovalBase):
         """
         blank, esc = "\u3164", "\\u3164"
         renders = {
-            "command": lambda s: mcpseen.describe({"command": s}),
-            "arg": lambda s: mcpseen.describe(dict(STDIO, args=[s])),
-            "type": lambda s: mcpseen.describe({"type": s, "url": "https://x.example"}),
-            "url": lambda s: mcpseen.describe({"type": "http", "url": s}),
-            "env key": lambda s: mcpseen.describe(dict(STDIO, env={s: "1"})),
-            "secrets var": lambda s: mcpseen.describe(dict(STDIO, secrets={s: "k"})),
-            "secrets vault key": lambda s: mcpseen.describe(dict(STDIO, secrets={"V": s})),
-            "secret_files var": lambda s: mcpseen.describe(dict(STDIO, secret_files={s: "k"})),
-            "secret_files vault key": lambda s: mcpseen.describe(
+            "command": lambda s: mcpseen.describe(VAULT, {"command": s}),
+            "arg": lambda s: mcpseen.describe(VAULT, dict(STDIO, args=[s])),
+            "type": lambda s: mcpseen.describe(VAULT, {"type": s, "url": "https://x.example"}),
+            "url": lambda s: mcpseen.describe(VAULT, {"type": "http", "url": s}),
+            "env key": lambda s: mcpseen.describe(VAULT, dict(STDIO, env={s: "1"})),
+            "secrets var": lambda s: mcpseen.describe(VAULT, dict(STDIO, secrets={s: "k"})),
+            "secrets vault key": lambda s: mcpseen.describe(VAULT, dict(STDIO, secrets={"V": s})),
+            "secret_files var": lambda s: mcpseen.describe(VAULT, dict(STDIO, secret_files={s: "k"})),
+            "secret_files vault key": lambda s: mcpseen.describe(VAULT, 
                 dict(STDIO, secret_files={"V": s})),
             "persona name": lambda s: mcpseen.label(s, "acme"),
             "server name": lambda s: mcpseen.label("reddit", s),
