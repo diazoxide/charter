@@ -32,6 +32,18 @@ where it is needed, each skipping with a message that names what was missing:
 None of these weakens an assertion: every test that RUNS asserts exactly what it always
 did, and a machine that cannot run one says which capability it lacked.
 
+**A capability can also go missing for ONE DEATH, and that is #487.** On a loaded tmux
+3.4 a pane's fd closes before tmux has the child's status, and for some deaths it never
+gets it: `#{pane_dead}` `1`, `#{pane_dead_status}` empty, the pane's `pane-died` array
+never run, permanently. A trial like that measured NOTHING about charter — it is not a
+result to assert on and not a failure to report — and every death-dependent test here now
+detects it with a constant-action probe hook and spends another pane
+(`_TmuxServerFixture._HOOK_TRIALS`, `_arm_array_probe`, `_the_array_never_ran`). The
+detector asks whether tmux ran the array, never whether the status came back empty: a
+harness genuinely killed by a signal also has an empty status, and classifying on that
+would make the signal-death test unfailable. Nothing is widened; a machine that produces
+`_HOOK_TRIALS` such deaths in a row skips, naming what it could not measure.
+
 Every test gets its own tmux SESSION (hooks are per-pane, so a shared session would let
 one test's hook leak into another's pane) on the ONE socket this module owns, and every
 test kills that socket's server on the way out via `addCleanup` — so a failing test
@@ -319,6 +331,17 @@ def _refusal(fd: int) -> str:
 #: healthy one does.
 _DEADLINE = 20.0
 
+#: What a trial helper answers for a death tmux never had the child's status for: a
+#: trial that measured NOTHING, which is neither a pass nor a failure.
+#:
+#: A distinct object rather than `None`, because `None` already means "nothing was
+#: delivered" to `_hook_reaches_a_shim`'s own callers — including the negative control,
+#: whose whole subject is that nothing was delivered. Collapsing the two would let a void
+#: trial satisfy that control, which is the shape of "a test that cannot fail" this
+#: module has now shipped several ways.
+_VOID = SimpleNamespace(
+    __doc__="a death tmux never ran the pane's `pane-died` array for — see `_HOOK_TRIALS`")
+
 
 def _await_file(path: str, timeout: float = _DEADLINE) -> bool:
     """Wait for a hook-written file to appear, up to *timeout*.
@@ -334,6 +357,34 @@ def _await_file(path: str, timeout: float = _DEADLINE) -> bool:
     while time.monotonic() < deadline and not os.path.exists(path):
         time.sleep(0.1)
     return os.path.exists(path)
+
+
+def _await_text(path: str, timeout: float = _DEADLINE) -> str:
+    """Wait for *path* to hold NON-EMPTY text and return it stripped — `""` if it never
+    does.
+
+    **`_await_file` is not enough wherever the assertion is about CONTENT.** A shell
+    redirection (`echo "$v" > "$path"`, which is exactly what
+    `commands_frame._pane_died_write_hook_argv` builds) CREATES the file and then writes
+    it, so a poll that stops at `os.path.exists` can land in the gap between the two and
+    read a blank where the hook wrote a number. Nothing is widened by waiting for the
+    text: a hook that really writes an empty line — delete the `${v:-N}` fallback and it
+    does — still spends the deadline and still returns `""`, and the caller's assertion
+    on the content fails exactly as it did before, saying the same thing.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            text = Path(path).read_text().strip()
+        except OSError:
+            text = ""
+        if text:
+            return text
+        time.sleep(0.1)
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return ""
 
 
 def _await_client(session: str, exclude: frozenset, pid: int) -> str:
@@ -530,8 +581,115 @@ class _TmuxServerFixture:
         """Open a pane's gate: its program stops waiting and dies the way it was built to."""
         Path(gate).touch()
 
+    # -- Deaths tmux never had the child's status for (#409, #487) -------------------- #
+
+    #: How many deaths one death-dependent test may spend before it gives up on this
+    #: machine — #409, and #487 for every test in the module rather than two of them.
+    #:
+    #: **Not a retry for flakiness: a retry for a trial that measured nothing.** Measured
+    #: on tmux 3.4 in an Ubuntu 24.04 container pinned to one cpu against twelve spin
+    #: loops, running the real `respawn-pane`/`_pane_state` path 118 times: 111 deaths
+    #: reported `#{pane_dead}` `1` with `#{pane_dead_status}` `33` and ran the pane's
+    #: `pane-died` array; the other 7 reported `1` with an EMPTY status and never ran the
+    #: array — and PERMANENTLY, polling a further 8 seconds never filled either in. tmux
+    #: 3.4's `server_destroy_pane` returns without notifying while `PANE_STATUSREADY` is
+    #: unset, and for those deaths it is never set. A longer deadline is therefore not
+    #: the knob: it would re-ship the same flake with a longer wait attached to it.
+    #:
+    #: What a death like that produces is not a wrong answer, it is NO answer — there is
+    #: nothing for the test to be about — so the trial is spent again on a fresh pane and
+    #: the assertions stay exactly as strict as they were.
+    _HOOK_TRIALS = 3
+
+    #: Where this module's constant-action probe hook goes in a pane's `pane-died` array.
+    #:
+    #: `1` everywhere, whether or not charter armed a `[0]`: tmux runs an array in index
+    #: order, so a probe here cannot fire before charter's own hook, and a SPARSE array
+    #: holding only `[1]` still runs (measured on both tmux 3.4 and 3.7c).
+    #:
+    #: **Which is also where `commands_frame._pane_died_teardown_hook_argv` lands**, so a
+    #: probe must never be armed on a pane carrying the production harness PAIR — it
+    #: would replace the teardown hook and the test would be measuring its own probe.
+    #: No caller here does: `_a_death_the_hook_saw` installs the write hook only, and
+    #: `test_the_write_hook_must_be_installed_before_the_teardown_hook`, which installs
+    #: both, asserts on the array itself and needs no probe.
+    _PROBE_INDEX = 1
+
+    def _probe_path(self, pane: str) -> str:
+        """Where `_arm_array_probe`'s marker for *pane* lands. Named separately so a
+        caller can ask about a probe it did not install itself."""
+        return os.path.join(self._gate_dir, f"array-ran-{pane.lstrip('%')}")
+
+    def _arm_array_probe(self, pane: str) -> str:
+        """Install a CONSTANT-action `pane-died` hook on *pane*, and return the path it
+        touches when tmux runs that pane's hook array. **The one observable that tells a
+        result from a trial that measured nothing.**
+
+        **Call this AFTER whatever hook the test is about, never before.** `set-hook -p
+        -t <pane> pane-died <action>` with no index REPLACES the whole array, so a probe
+        installed first is silently wiped by the very hook it exists to watch — and the
+        trial then looks like a void that also, impossibly, has a status. That is not
+        theoretical: it is what the first version of `_a_hook_delivery` did, and
+        `_the_array_never_ran` is what turned it into three loud failures rather than
+        three silent skips.
+
+        The action is `touch <marker>` — no `#{pane_dead_status}`, no `set-environment`
+        value, nothing charter builds — so the only thing its marker can report is "tmux
+        reached this pane's hook array", which on both tmuxes this suite must pass on is
+        the same question as "did tmux have the child's status".
+
+        **Reading the status instead is a SPELLING, and #487 is the bill for it.** An
+        empty `#{pane_dead_status}` on a dead pane is produced by two different
+        realities, and `commands_frame._pane_state` folds both to the same
+        `_UNKNOWN_DEATH_CODE`. Measured on tmux 3.4 and re-measured on 3.7c: a harness
+        genuinely killed by a signal answers `1:` and the array RUNS (40/40 on 3.4, 15/15
+        on 3.7c); a death tmux never got the status of answers `1:` and the array never
+        runs (7/7 of the voids in `_HOOK_TRIALS`'s 118-trial run). A test that classified
+        on the empty status alone would have to treat a real signal death as a void
+        trial — which is how a suite stops being able to fail.
+        """
+        probe = self._probe_path(pane)
+        self.assertEqual(
+            self._srv("set-hook", "-p", "-t", pane, f"pane-died[{self._PROBE_INDEX}]",
+                      f'run-shell "touch {probe}"').returncode, 0)
+        return probe
+
+    def _the_array_never_ran(self, pane: str, what: str) -> None:
+        """Assert *pane* is in the ONE state a missing probe marker is allowed to mean:
+        dead, with tmux holding no status for it at all.
+
+        The void is asserted here rather than assumed, so the only way a trial can be
+        retried instead of failing is by actually being the measured condition. A pane
+        tmux has DESTROYED (nothing armed `remain-on-exit`, or charter stopped arming it)
+        and a pane tmux has a status for but ran no hook for are both real defects, and
+        both say which one they are instead of being spent as another trial.
+        """
+        dead, _, status = self._srv(
+            "display-message", "-p", "-t", pane,
+            commands_frame._DEAD_FORMAT).stdout.strip().partition(":")
+        self.assertEqual(
+            dead, "1",
+            f"{what}, and tmux does not report the pane dead either (`{dead}:{status}`) "
+            "— the pane was destroyed rather than kept, which is a failure of whatever "
+            "was supposed to arm `remain-on-exit` and NOT the tmux 3.4 window "
+            "`_HOOK_TRIALS` describes")
+        self.assertEqual(
+            status.strip(), "",
+            f"{what}, yet tmux is holding a status ({status.strip()!r}) for it. tmux "
+            "runs a pane's `pane-died` array once it has the child's status, so a status "
+            "with no hook run is charter's hook having been lost, not a trial that "
+            "measured nothing")
+
+    def _no_death_was_delivered(self):
+        self.skipTest(
+            f"none of {self._HOOK_TRIALS} deaths on this machine reached a `pane-died` "
+            "hook at all — tmux never had the child's status when the pane's fd closed "
+            "(measured on tmux 3.4 under load; see `_HOOK_TRIALS`). The capability this "
+            "test measures was not present to measure, and nothing here is widened to "
+            "pass without it.")
+
     def _hook_reaches_a_shim(self, *, socket, pane, gate, interpreter_dir,
-                             timeout=_DEADLINE):
+                             timeout=_DEADLINE, probe=False):
         """Arm *pane*'s respawn hook with a shim as charter's interpreter, open the gate,
         and return whatever argv the shim recorded (``None`` if it never ran).
 
@@ -544,6 +702,13 @@ class _TmuxServerFixture:
         a shorter one and earns the right to by establishing separately that the pane is
         GONE: once tmux has destroyed a pane, `pane-died` for it can no longer fire at
         any deadline, so waiting longer proves nothing that the pane's absence does not.
+
+        *probe* asks for `_arm_array_probe`'s constant-action hook to be armed BESIDE
+        charter's own — after it, since an unindexed `set-hook` replaces the array — for
+        a caller that intends to tell a void trial from a real one (`_a_hook_delivery`
+        does the telling). Its marker is waited on FIRST, so a void costs one deadline
+        rather than two, and it is the caller, never this method, that decides what a
+        missing marker means.
         """
         os.makedirs(interpreter_dir, exist_ok=True)
         marker = os.path.join(self._gate_dir, f"argv-{os.path.basename(pane)}")
@@ -556,10 +721,41 @@ class _TmuxServerFixture:
                 socket=socket, panel_pane=pane, slot="top", fid="demo-1")
         self.assertIsNotNone(argv, f"charter refused to arm a hook for {shim!r}")
         self.assertEqual(_run(argv).returncode, 0)
+        armed = self._arm_array_probe(pane) if probe else None
         self._release(gate)
-        if not _await_file(marker, timeout):
+        if armed is not None and not _await_file(armed, timeout):
             return None
-        return Path(marker).read_text().split()
+        # The shim's own `printf … > marker` creates before it writes, so the readiness
+        # condition is TEXT rather than existence — see `_await_text`.
+        recorded = _await_text(marker, timeout)
+        if not recorded:
+            return None
+        return recorded.split()
+
+    def _a_hook_delivery(self, *, socket, pane, gate, interpreter_dir):
+        """One trial of "this pane dies and charter's own `pane-died` hook reaches a
+        shell carrying the argv charter meant".
+
+        Returns the recorded argv, or :data:`_VOID` for a death tmux never ran the pane's
+        hook array for at all — see `_HOOK_TRIALS`.
+
+        **An array that RAN and delivered nothing is a failure, not a void trial**, and
+        that is the half that keeps the callers able to fail: break `_panel_died_hook_argv`
+        so the action reaches no shell and the probe beside it still fires, so this says
+        so rather than spending another pane and skipping.
+        """
+        seen = self._hook_reaches_a_shim(socket=socket, pane=pane, gate=gate,
+                                         interpreter_dir=interpreter_dir, probe=True)
+        if seen is not None:
+            return seen
+        self.assertFalse(
+            os.path.exists(self._probe_path(pane)),
+            "tmux ran this pane's `pane-died` array — a constant-action probe hook "
+            "beside charter's own fired — and charter's own hook delivered no argv at "
+            "all. That is charter, not the runner: "
+            f"{self._srv('show-hooks', '-p', '-t', pane).stdout!r}")
+        self._the_array_never_ran(pane, "tmux never ran this pane's `pane-died` array")
+        return _VOID
 
     def _require_pane_died_fires(self) -> None:
         """Skip unless a pane-scoped `pane-died` hook actually FIRES on this machine.
@@ -578,6 +774,15 @@ class _TmuxServerFixture:
         Probed once per process (`_PANE_DIED_FIRES`) — the answer is a property of this
         tmux and this environment, not of any one test, and each probe costs a pane.
 
+        **`_HOOK_TRIALS` deaths, not one, and #487 is why.** A SINGLE death answering
+        "does not fire" is exactly the void this module measures: on tmux 3.4 under load
+        roughly one death in seventeen never reaches a hook at all, however healthy the
+        machine's tmux is. Cached process-wide off one such death, this probe would skip
+        every hook test in the module for the rest of the run — and a skip reads as
+        green, so the module would be at its most silent precisely on the loaded runners
+        it is meant to be honest about. The answer cached here is "not one of
+        `_HOOK_TRIALS` deaths fired a hook", which no healthy tmux produces.
+
         **The probe sets `remain-on-exit` itself rather than inheriting it from the
         fixture**, which it used to do and which made it a probe of the fixture as much
         as of tmux: on a class with `ARMS_REMAIN_ON_EXIT` off it would answer "does not
@@ -587,15 +792,20 @@ class _TmuxServerFixture:
         skip tests for the wrong reason.
         """
         if not _PANE_DIED_FIRES:
-            _, pane, gate = self._new_pane("exit 7")
             tmp = tempfile.mkdtemp(prefix="charter-integ-probe-")
             self.addCleanup(shutil.rmtree, tmp, True)
-            marker = os.path.join(tmp, "fired")
-            self._srv("set-option", "-w", "-t", pane, "remain-on-exit", "on")
-            self._srv("set-hook", "-p", "-t", pane, "pane-died",
-                      f'run-shell "touch {marker}"')
-            self._release(gate)
-            _PANE_DIED_FIRES.append(_await_file(marker))
+            for attempt in range(self._HOOK_TRIALS):
+                _, pane, gate = self._new_pane("exit 7")
+                marker = os.path.join(tmp, f"fired-{attempt}")
+                self._srv("set-option", "-w", "-t", pane, "remain-on-exit", "on")
+                self._srv("set-hook", "-p", "-t", pane, "pane-died",
+                          f'run-shell "touch {marker}"')
+                self._release(gate)
+                if _await_file(marker):
+                    _PANE_DIED_FIRES.append(True)
+                    break
+            else:
+                _PANE_DIED_FIRES.append(False)
         if not _PANE_DIED_FIRES[0]:
             self.skipTest(
                 "a pane-scoped `pane-died` hook does not fire on this machine, so "
@@ -649,8 +859,7 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                 "of it (`source-file` returned "
                 f"{r.returncode}: {(r.stdout + r.stderr).strip()!r}), so the exploit "
                 "this controls for is not reachable here")
-        time.sleep(0.5)
-        self.assertTrue(os.path.exists(armed),
+        self.assertTrue(_await_file(armed),
                         "`source-file` accepted the hostile hotkey and returned 0, but "
                         "the injected command never ran — the control proves nothing in "
                         "that state, and neither does the test it controls for")
@@ -772,17 +981,24 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
 
         The interpreter is a script that records its own argv, at a path holding a SPACE:
         a bare interpolation would split it into two words and the shim would never run
-        at all."""
+        at all.
+
+        Tried up to `_HOOK_TRIALS` times, for #487's reason and not for flakiness' sake:
+        a death tmux never ran a hook for measured nothing about this argv, and
+        `_a_hook_delivery` fails rather than retries for every other way of delivering
+        nothing."""
         self._require_pane_died_fires()
-        _, pane, gate = self._new_pane("exit 3")
-        seen = self._hook_reaches_a_shim(
-            socket=SOCKET, pane=pane, gate=gate,
-            interpreter_dir=os.path.join(self._gate_dir, "interp dir"))
-        self.assertIsNotNone(
-            seen, "the panel's own pane-died hook never reached a shell — "
-                  f"hooks: {_tmux('show-hooks', '-p', '-t', pane).stdout!r}")
-        self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
-                                "--pane", pane, "--frame", "demo-1"])
+        for _ in range(self._HOOK_TRIALS):
+            _, pane, gate = self._new_pane("exit 3")
+            seen = self._a_hook_delivery(
+                socket=SOCKET, pane=pane, gate=gate,
+                interpreter_dir=os.path.join(self._gate_dir, "interp dir"))
+            if seen is _VOID:
+                continue
+            self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
+                                    "--pane", pane, "--frame", "demo-1"])
+            return
+        self._no_death_was_delivered()
 
     def test_an_awkward_interpreter_path_arrives_byte_for_byte(self):
         """The property `_ACTION_QUOTE_BREAKERS` is derived from, measured rather than
@@ -793,15 +1009,22 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
 
         Without this the guard could be tightened to a paranoid allowlist and nothing
         would notice; with it, a tightening that costs a real path its respawn fails
-        here."""
+        here.
+
+        Tried up to `_HOOK_TRIALS` times — see `_a_hook_delivery`, and #487."""
         self._require_pane_died_fires()
-        _, pane, gate = self._new_pane("exit 3")
         awkward = "a b;c&d(e)f*g-h,i=j+k@l:m[n]o{p}q!r%s^t~u"
-        seen = self._hook_reaches_a_shim(
-            socket=SOCKET, pane=pane, gate=gate,
-            interpreter_dir=os.path.join(self._gate_dir, awkward))
-        self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
-                                "--pane", pane, "--frame", "demo-1"])
+        for _ in range(self._HOOK_TRIALS):
+            _, pane, gate = self._new_pane("exit 3")
+            seen = self._a_hook_delivery(
+                socket=SOCKET, pane=pane, gate=gate,
+                interpreter_dir=os.path.join(self._gate_dir, awkward))
+            if seen is _VOID:
+                continue
+            self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
+                                    "--pane", pane, "--frame", "demo-1"])
+            return
+        self._no_death_was_delivered()
 
     def test_a_hook_action_really_is_format_expanded_before_any_shell_sees_it(self):
         """The POSITIVE CONTROL for `_action_word_is_safe` refusing `#`, and the reason
@@ -816,64 +1039,56 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         A first version of charter's guard looked only for quote characters and let this
         through entirely. Without this control, tightening the guard would look like
         caution rather than like the fix for a measured rewrite — and `#{pane_title}`
-        expands to text the program in that pane sets for itself."""
-        self._require_pane_died_fires()
-        _, pane, gate = self._new_pane("exit 3")
-        out = os.path.join(self._gate_dir, "expanded")
-        self.assertEqual(
-            _tmux("set-hook", "-p", "-t", pane, "pane-died",
-                  f"""run-shell -b 'echo "/opt/py#{{pane_id}}/x" > "{out}"'""").returncode,
-            0)
-        self._release(gate)
-        self.assertTrue(_await_file(out), "the hook never reached a shell")
-        seen = Path(out).read_text().strip()
-        self.assertNotEqual(
-            seen, "/opt/py#{pane_id}/x",
-            "tmux no longer expands formats inside a hook action — if that is really "
-            "true, `_pane_died_write_hook_argv`'s `#{pane_dead_status}` has stopped "
-            "working too, which is a much larger thing than this test")
-        self.assertEqual(seen, f"/opt/py{pane}/x",
-                         "the text was rewritten, but not into the pane id — read what "
-                         "this tmux actually does before trusting the guard's reasoning")
+        expands to text the program in that pane sets for itself.
 
-    #: How many deaths one exit-status test may spend before it gives up on this
-    #: machine — #409.
-    #:
-    #: **Not a retry for flakiness: a retry for a trial that measured nothing.** The
-    #: signal-death test was failing about one CI job in eight on tmux 3.4, and the
-    #: diagnosis in the ticket ("tmux marks the pane dead and THEN runs the hook; the
-    #: read lands in that window") predicts a longer wait would fix it. This module had
-    #: already measured otherwise, in `PanelIntegration`'s own docstring: pinned to one
-    #: cpu against four spin loops, 11 of 120 deaths on tmux 3.4 ended `#{pane_dead}` `1`
-    #: with an EMPTY status and the `pane-died` hook never firing — **permanently**,
-    #: polling a further 8 seconds never filled it in. tmux 3.4's `server_destroy_pane`
-    #: does not have the child's status when the pane's fd closes, and nothing arrives
-    #: later. So the deadline is not the knob for THIS one, and a bounded poll alone
-    #: would have re-shipped the same flake with a longer wait attached to it.
-    #:
-    #: What a death like that produces is not a wrong answer, it is no answer: the pane
-    #: is gone and tmux never ran charter's hook, so there is nothing for the test to be
-    #: about. :meth:`_a_death_the_hook_saw` detects exactly that — with a probe hook
-    #: beside charter's own, not by reading the empty status, which the healthy signal
-    #: death also has — and spends another pane on it.
-    _HOOK_TRIALS = 3
+        Tried up to `_HOOK_TRIALS` times, with the constant-action probe beside the hook
+        under test: `_await_file` timing out here used to be reported as "the hook never
+        reached a shell", which on a loaded tmux 3.4 was true and meant nothing — tmux
+        had run no hook for that pane at all (#487). The probe firing and this file still
+        missing is the case that keeps its failure."""
+        self._require_pane_died_fires()
+        for attempt in range(self._HOOK_TRIALS):
+            _, pane, gate = self._new_pane("exit 3")
+            # A fresh path per trial, so a file left by an earlier trial can never be
+            # what a later one reads back.
+            out = os.path.join(self._gate_dir, f"expanded-{attempt}")
+            self.assertEqual(
+                _tmux("set-hook", "-p", "-t", pane, "pane-died",
+                      f"""run-shell -b 'echo "/opt/py#{{pane_id}}/x" > "{out}"'"""
+                      ).returncode, 0)
+            probe = self._arm_array_probe(pane)
+            self._release(gate)
+            if not _await_file(probe):
+                self._the_array_never_ran(
+                    pane, "tmux never ran this pane's `pane-died` array")
+                continue
+            seen = _await_text(out)
+            wrote = "an empty file" if os.path.exists(out) else "no file at all"
+            self.assertTrue(
+                seen,
+                "tmux ran this pane's `pane-died` array — a constant-action probe hook "
+                "beside the one under test fired — and the hook under test left "
+                f"{wrote}. That is not the runner.")
+            self.assertNotEqual(
+                seen, "/opt/py#{pane_id}/x",
+                "tmux no longer expands formats inside a hook action — if that is really "
+                "true, `_pane_died_write_hook_argv`'s `#{pane_dead_status}` has stopped "
+                "working too, which is a much larger thing than this test")
+            self.assertEqual(seen, f"/opt/py{pane}/x",
+                             "the text was rewritten, but not into the pane id — read "
+                             "what this tmux actually does before trusting the guard's "
+                             "reasoning")
+            return
+        self._no_death_was_delivered()
 
     def _a_death_the_hook_saw(self, dies_by: str, status_path: str):
         """One trial of "a pane dies, charter's write hook records its status".
 
         Returns the status file's CONTENT, or ``None`` when tmux never ran this pane's
         `pane-died` array at all — the tmux 3.4 window :data:`_HOOK_TRIALS` describes,
-        which is a trial that measured nothing rather than a result.
-
-        **The probe hook is what tells those apart, and it is a different question from
-        the one the test asks.** It is installed at `pane-died[1]` with a CONSTANT action
-        — `touch <marker>`, no `#{pane_dead_status}`, no `$CHARTER_FRAME_EXIT`, nothing
-        charter builds — so the only thing its marker can report is "tmux reached this
-        pane's hook array". tmux runs an array in index order, so the marker cannot
-        appear unless charter's own `[0]` was reached first. An INDEXED install beside an
-        existing `[0]` is safe: that is exactly what
-        `test_the_write_hook_must_be_installed_before_the_teardown_hook` measures, and it
-        is the same shape `cmd_launch` itself uses.
+        which is a trial that measured nothing rather than a result. The probe hook that
+        tells those apart is `_arm_array_probe`'s; see it for why the empty status is not
+        the thing to classify on.
 
         **A fired array with no file is a FAILURE, not a void trial**, and that is the
         half that keeps this test able to fail. Delete the `${v:-N}` fallback and the
@@ -886,26 +1101,23 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
             socket=SOCKET, session=session, status_path=status_path)).returncode, 0)
         self.assertEqual(_run(commands_frame._pane_died_write_hook_argv(
             socket=SOCKET, harness_pane=pane)).returncode, 0)
-        fired = os.path.join(self._gate_dir, f"array-ran-{pane.lstrip('%')}")
-        self.assertEqual(_tmux("set-hook", "-p", "-t", pane, "pane-died[1]",
-                               f'run-shell "touch {fired}"').returncode, 0)
+        fired = self._arm_array_probe(pane)
         self._release(gate)
         if not _await_file(fired):
+            self._the_array_never_ran(
+                pane, "tmux never ran this pane's `pane-died` array")
             return None, pane
+        content = _await_text(status_path)
         self.assertTrue(
-            _await_file(status_path),
+            os.path.exists(status_path),
             "tmux ran this pane's `pane-died` array — a constant-action probe hook "
             "beside charter's own fired — and charter's write hook produced no file at "
             "all. That is charter, not the runner.")
-        return Path(status_path).read_text().strip(), pane
-
-    def _no_death_was_delivered(self):
-        self.skipTest(
-            f"none of {self._HOOK_TRIALS} deaths on this machine reached a `pane-died` "
-            "hook at all — tmux never had the child's status when the pane's fd closed "
-            "(measured on tmux 3.4 under load; see `_HOOK_TRIALS`). The capability this "
-            "test measures was not present to measure, and nothing here is widened to "
-            "pass without it.")
+        # `_await_text`, not `_await_file` then read: `echo … > path` creates the file
+        # before it writes it, so existence alone can hand back the blank in between.
+        # An empty line is still returned as `""` here, which is what the caller's
+        # assertion about the sentinel is about.
+        return content, pane
 
     # -- 2. Path delivery and injection ---------------------------------------------- #
 
@@ -1066,17 +1278,16 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
              f"env | grep CHARTER_SESSION_ID > {first_out} 2>&1 || echo NONE > {first_out}")
         _tmux("run-shell", "-t", "sid-two",
              f"env | grep CHARTER_SESSION_ID > {second_out} 2>&1 || echo NONE > {second_out}")
-        time.sleep(0.5)
-
-        with open(first_out) as f:
-            self.assertEqual(f.read().strip(), "CHARTER_SESSION_ID=sid-one",
-                             "the OLDER frame's own hotkey menu must still resolve its "
-                             "own id after a second frame launches, not whichever "
-                             "session tmux would pick as \"current\" by default")
-        with open(second_out) as f:
-            self.assertEqual(f.read().strip(), "CHARTER_SESSION_ID=sid-two",
-                             "the second frame's own hotkey menu must resolve its own "
-                             "id, not fall through to whatever the server started with")
+        # Waited for, not slept through (#487) — and for the CONTENT, because the
+        # redirection creates each file before it writes it and both branches of the
+        # `||` write something, so mere existence is not the readiness condition here.
+        self.assertEqual(_await_text(first_out), "CHARTER_SESSION_ID=sid-one",
+                         "the OLDER frame's own hotkey menu must still resolve its "
+                         "own id after a second frame launches, not whichever "
+                         "session tmux would pick as \"current\" by default")
+        self.assertEqual(_await_text(second_out), "CHARTER_SESSION_ID=sid-two",
+                         "the second frame's own hotkey menu must resolve its own "
+                         "id, not fall through to whatever the server started with")
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
@@ -1203,7 +1414,17 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
     def _wait_for(self, target: str, needle: str, timeout: float = _DEADLINE) -> str:
         """Poll `capture-pane` until *needle* is on the visible screen, returning the
         last capture either way — the same "poll for content, never sleep a guess"
-        shape `_await_file` uses, so a slow runner is slow rather than wrong."""
+        shape `_await_file` uses, so a slow runner is slow rather than wrong.
+
+        **Every test in this class that waits for a panel to come up goes through this,
+        and #487's second half is what happens when one does not.** Three of them opened
+        with a bare `time.sleep(1)` — a guess at how long a real Python interpreter takes
+        to start, import charter and paint one line — and then asserted on the capture.
+        Measured on tmux 3.4 pinned to one cpu against twelve spin loops: they failed
+        every run, on an EMPTY capture, and raising the module's whole deadline to 90
+        seconds changed nothing, because a fixed sleep does not spend a deadline. The
+        same panel, given this poll, paints and passes. A sleep is not a shorter wait; it
+        is a different thing from a wait."""
         deadline = time.monotonic() + timeout
         seen = self._capture(target)
         while time.monotonic() < deadline and needle not in seen:
@@ -1358,8 +1579,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         fid = state.frame_id("panel-integ", os.getpid())
         self._spawn_panel("panel-live", fid)
 
-        time.sleep(1)
-        first = _tmux("capture-pane", "-p", "-t", "panel-live").stdout
+        first = self._wait_for("panel-live", "todo")
         self.assertIn("todo", first, f"the pane never drew its content:\n{first!r}")
         self.assertEqual(_tmux("display-message", "-p", "-t", "panel-live",
                                "#{pane_dead}").stdout.strip(), "0",
@@ -1399,8 +1619,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         fid = state.frame_id("panel-hook-integ", os.getpid())
         self._spawn_panel("panel-hook-live", fid)
 
-        time.sleep(1)
-        first = _tmux("capture-pane", "-p", "-t", "panel-hook-live").stdout
+        first = self._wait_for("panel-hook-live", "todo")
         self.assertIn("todo", first, f"the pane never drew its content:\n{first!r}")
         self.assertEqual(_tmux("display-message", "-p", "-t", "panel-hook-live",
                                "#{pane_dead}").stdout.strip(), "0",
@@ -1442,7 +1661,11 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         fid = state.frame_id("panel-integ-corrupt", os.getpid())
         self._spawn_panel("panel-corrupt", fid)
 
-        time.sleep(1)
+        # Wait for the panel to have PAINTED, not for a second to pass: a corrupt
+        # version file cannot be a test of a running panel until there is one, and a
+        # fixed sleep is a guess at how long an interpreter takes to start (#487).
+        drawn = self._wait_for("panel-corrupt", "todo")
+        self.assertIn("todo", drawn, f"the panel never drew its content:\n{drawn!r}")
         alive = _tmux("display-message", "-p", "-t", "panel-corrupt", "#{pane_dead}")
         self.assertEqual(alive.returncode, 0, "the panel never even started")
         self.assertEqual(alive.stdout.strip(), "0")
@@ -1450,6 +1673,8 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         frame_dir = state.frame_dir(fid, create=True)
         (frame_dir / "version").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
 
+        # A NEGATIVE wait — "it did not die" — so it keeps its own short, deliberate
+        # number rather than the module deadline. See `_DEADLINE`.
         time.sleep(1)
         after = _tmux("display-message", "-p", "-t", "panel-corrupt", "#{pane_dead}")
         self.assertEqual(after.returncode, 0,
@@ -1650,6 +1875,16 @@ class MenuFormatIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
         leaks into the pane as literal text instead of being interpreted as a key at
         all. It passed five runs in a row before this was caught — a single, correct
         sequence is what actually works, not a second one "just in case".
+
+        **The sleep below is a readiness condition ASSUMED, and it is the one case #487
+        left open — tracked as #494, not overlooked.** It stands in for "the menu is now
+        open on this client", and under cpu contention it is not: the next keystroke then
+        lands on the pane instead of the menu, and no later deadline can un-spend it.
+        Unlike every other wait in this module it cannot simply be polled, because a menu
+        is a client OVERLAY rather than pane content — `capture-pane` does not see it, and
+        twelve client/pane formats probed against a real attached client before and after
+        `display-menu` came back byte-identical but for the activity timestamp. Finding an
+        observable is the fix; a larger guess is not.
         """
         bind_cmd = ["tmux", "-L", SOCKET, "bind", "-n", "F2"] + cmd[3:]
         r = subprocess.run(bind_cmd, capture_output=True, text=True, timeout=5)
@@ -1986,6 +2221,9 @@ class MenuClientIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
         menu.record(fid=fid, entries=[
             ("Detach", [sys.executable, "-c", f"open({canary_a!r}, 'w').close()"]),
         ])
+        # Both sleeps stand in for "the menu is open on that client" — assumed rather
+        # than waited on, the one readiness condition #487 could not convert to a poll.
+        # See `_NeedsAttachedClient._attach_pty`'s sibling `_press_hotkey` and #494.
         os.write(fdA, b"\x1bOQ")
         time.sleep(0.8)
         os.write(fdB, b"1")
@@ -2736,24 +2974,50 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         """End to end for the one property the whole module exists for, on the path
         where there is no `attach` to read a code out of: charter opens the window,
         arms the pane, respawns the harness into it, and reads the status back through
-        `_pane_state` — the same function the launcher's wait loop calls."""
+        `_pane_state` — the same function the launcher's wait loop calls.
+
+        **#487 was this test, and the ticket's own reading of it was wrong.** It failed
+        on CI as `('dead', 1) != ('dead', 33)`, which the ticket read as "the spawned
+        command failed before it reached the exit the test is about". It did not: `1`
+        here is `commands_frame._UNKNOWN_DEATH_CODE`, which `_pane_state` reports for a
+        pane tmux calls dead and holds NO status for. Reproduced on tmux 3.4 pinned to
+        one cpu against twelve spin loops, running this exact path 118 times: 111 answered
+        `1:33`, and the 7 that failed all answered `1:` — an empty status, unchanged
+        after a further 8 seconds, with the pane's `pane-died` array never run. Not one
+        trial ever reported a literal status of `1`, so nothing exited 1 and no readiness
+        condition was being assumed.
+
+        So the wait is on the CONSTANT-ACTION PROBE HOOK rather than on `#{pane_dead}`:
+        tmux runs a pane's hook array once it has the child's status, which makes the
+        probe's marker a synchronisation point where the dead flag is not. A trial whose
+        array never ran measured nothing about charter and is spent again on a fresh
+        window (`_HOOK_TRIALS`); every other shape of missing status fails, and
+        `_the_array_never_ran` asserts the void rather than assuming it. The assertion
+        itself is untouched — `(_DEAD, 33)`, the property the module exists for, with a
+        harness that died by signal or with a lost code still landing on `(_DEAD, 1)` and
+        still going red."""
         _, sid, _, _ = self._operator_server()
-        window_id, pane_id = self._open_frame_window(sid)
-        self._require_pane_options(pane_id)
-        gate = os.path.join(self._gate_dir, "harness-gate")
-        r = _run(layout.respawn_argv(socket=OP_SOCKET_PATH, harness_pane=pane_id, env={},
-                                     cwd=self._gate_dir,
-                                     harness_argv=_gate_argv(gate, "exit 33")))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id),
-                         (commands_frame._ALIVE, None))
-        self._release(gate)
-        self.assertTrue(self._wait_until(
-            lambda: commands_frame._pane_state(OP_SOCKET_PATH, pane_id)[0]
-            == commands_frame._DEAD), "the pane never came back dead")
-        self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id),
-                         (commands_frame._DEAD, 33))
-        del window_id
+        for attempt in range(self._HOOK_TRIALS):
+            window_id, pane_id = self._open_frame_window(sid, fid=f"charter-demo-{attempt}")
+            self._require_pane_options(pane_id)
+            gate = os.path.join(self._gate_dir, f"harness-gate-{attempt}")
+            r = _run(layout.respawn_argv(socket=OP_SOCKET_PATH, harness_pane=pane_id,
+                                         env={}, cwd=self._gate_dir,
+                                         harness_argv=_gate_argv(gate, "exit 33")))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id),
+                             (commands_frame._ALIVE, None))
+            probe = self._arm_array_probe(pane_id)
+            self._release(gate)
+            if not _await_file(probe):
+                self._the_array_never_ran(
+                    pane_id, "tmux never ran the harness pane's `pane-died` array")
+                _run(tmuxctl.server_argv(OP_SOCKET_PATH, "kill-window", "-t", window_id))
+                continue
+            self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id),
+                             (commands_frame._DEAD, 33))
+            return
+        self._no_death_was_delivered()
 
     def test_the_placeholder_does_not_exit_on_its_own(self):
         """`layout.PLACEHOLDER`'s only required property, and the one an argv assertion
@@ -2916,25 +3180,29 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         panel-creating path have. What it does NOT cover is a panel that leaves that
         window: the coverage is the window's, so `break-pane`/`join-pane` on a panel would
         silently undo it — charter issues neither today, and that is the next spelling of
-        this defect."""
+        this defect.
+
+        Tried up to `_HOOK_TRIALS` times — see `_a_hook_delivery`, and #487."""
         self._require_pane_died_fires()
         _, sid, _, _ = self._operator_server()
-        _, pane_id = self._open_frame_window(sid)
-        self._require_pane_options(pane_id)
-        self._panel_funnel(pane_id)
-        gate = os.path.join(self._gate_dir, "panel-gate")
-        panel = _run(tmuxctl.server_argv(
-            OP_SOCKET_PATH, "split-window", "-t", pane_id, "-v", "-l", "1",
-            "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, "exit 4"))).stdout.strip()
-        self.assertTrue(panel.startswith("%"), panel)
-        seen = self._hook_reaches_a_shim(
-            socket=OP_SOCKET_PATH, pane=panel, gate=gate,
-            interpreter_dir=os.path.join(self._gate_dir, "op interp"))
-        self.assertIsNotNone(
-            seen, "a panel that died inside the operator's own tmux reached nothing — "
-                  f"hooks: {_run(tmuxctl.server_argv(OP_SOCKET_PATH, 'show-hooks', '-p', '-t', panel)).stdout!r}")
-        self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
-                                "--pane", panel, "--frame", "demo-1"])
+        for attempt in range(self._HOOK_TRIALS):
+            _, pane_id = self._open_frame_window(sid, fid=f"charter-demo-{attempt}")
+            self._require_pane_options(pane_id)
+            self._panel_funnel(pane_id)
+            gate = os.path.join(self._gate_dir, f"panel-gate-{attempt}")
+            panel = _run(tmuxctl.server_argv(
+                OP_SOCKET_PATH, "split-window", "-t", pane_id, "-v", "-l", "1",
+                "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, "exit 4"))).stdout.strip()
+            self.assertTrue(panel.startswith("%"), panel)
+            seen = self._a_hook_delivery(
+                socket=OP_SOCKET_PATH, pane=panel, gate=gate,
+                interpreter_dir=os.path.join(self._gate_dir, "op interp"))
+            if seen is _VOID:
+                continue
+            self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
+                                    "--pane", panel, "--frame", "demo-1"])
+            return
+        self._no_death_was_delivered()
 
     def test_a_panel_dying_here_is_destroyed_unless_charter_arms_the_window(self):
         """The NEGATIVE control for the test above, and the measurement #408's first
