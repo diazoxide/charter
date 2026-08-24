@@ -91,7 +91,7 @@ assertion unfailable for exactly the class it exists to catch.)
 That closes three shapes at once. Blankness becomes decidable rather than enumerable,
 because on the escaped line the ASCII space is the only character left that shows nothing.
 A combining mark can no longer repaint the rows around the line. And a homoglyph re-point
-becomes *readable*: `api.асme.example` already lapsed the approval and re-asked you — the
+becomes *readable*: `api.\u0430\u0441me.example` already lapsed the approval and re-asked you — the
 url is in the digest — but the old line was pixel-identical to `api.acme.example`, so
 being asked again told you nothing.
 

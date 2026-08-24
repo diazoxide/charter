@@ -2926,7 +2926,7 @@ def _piece_announcement(data: dict) -> str | None:
 
 
 def _trace_head(cmd: str) -> str:
-    """The command's first token, with any env-assignment VALUE stripped.
+    """The command's first token, with an env-assignment prefix taken off it.
 
     `cmd.split()[0]` looks like it records a binary name, and for `git push` it does. For
     `VAR=value git push` the first token is the whole assignment — so the trace kept

@@ -261,7 +261,8 @@ def _tokens(argv: str, parser=None) -> list[str] | None:
     They are not the same defect, and :func:`_dispatch` tells them apart before it reports
     one. Shell syntax can never run on any machine in any version; an unregistered first
     token is a command *this* charter does not have. ``None`` is the right answer to both,
-    which is exactly why the reason cannot be read off it.
+    which is exactly why :func:`_dispatch` has to be told which refusal fired rather than
+    deducing it from the return value.
 
     *parser* is optional and is threaded through rather than rebuilt because building one
     is ~6ms and this module runs on the `doctor` and SessionStart paths, once per entry.

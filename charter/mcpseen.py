@@ -57,9 +57,10 @@ deliberately outside it, printed beside the line by :func:`label` as the identif
 The reasoning for leaving it out was that a name merely says where an entry was declared,
 not what would run. That was false for four review rounds. The name was interpolated raw
 into the generated agent's YAML frontmatter as a bare mapping key, so a newline in it
-declared a whole second server that no fingerprint covered and no prompt mentioned (#453):
-the carrier entry needed no ``secrets`` at all, so `fingerprint` returned ``None``, nothing
-was withheld, and the run printed one green tick. It is true now only because
+declared a whole second server, outside the fingerprint and outside the prompt (#453).
+The carrier entry declared no ``secrets``, which put it out of scope for consent
+altogether: `fingerprint` returned ``None``, the withheld report had nothing to say about
+it, and the run printed one green tick. It is true now only because
 `persona._MCP_NAME_RE` makes it true — a name is bounded at the boundary that reads the
 committed file, and the emission serialises the key through `contain.json_line` rather than
 pasting it — and it stops being true the moment either of those is loosened without the

@@ -41,8 +41,7 @@ charter secret exec <vault> --env NAME=<key> -- <command...>
 
 ```bash
 charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl get pods
-charter secret cp <vault> <key> <dest>     # persist at 0600; prints only the path
-                                           # the file is recorded — reading it back is denied
+charter secret cp <vault> <key> <dest>     # persist at 0600; <dest> must be a real file
 ```
 
 `<dest>` must be a **real file that does not exist yet**. A device, a FIFO, a directory
@@ -105,14 +104,18 @@ vaults' own lines — never a line from a value you supplied.
   path to the tool. Do not read the file back, pipe it, encode it, or print it: charter's
   guard does not cover a path you chose, so nothing stops you, and the value lands in this
   transcript exactly as if you had run `--reveal`. Delete the file when the tool is done.
+- **Never `secret cp` to anything but a real file path you named.** `/dev/stdout`,
+  `/dev/stderr` and `/dev/fd/*` put the value straight into this conversation. charter
+  refuses those now — by `fstat`, not by name — but the rule is yours to keep whether or
+  not a check happens to be watching.
 - **"The guard allowed it" is not evidence that a command is safe.** The `PreToolUse` guard
   is a text match on a known program name and a path as you spelled it, run before any shell
   touches the line. It therefore allows:
   - readers it does not know — `base64`, `jq`, `dd`, `cut`, `python3 -c`,
     `git show HEAD:<path>`, `tar -cf … .charter`;
   - anything a shell rewrites for you: a glob (`cat .charter/vault?/db.json`), a variable
-    (`V=…; cat $V`), a command substitution, brace expansion, or a `cd` into the vault
-    directory followed by a bare filename;
+    (`V=…; cat $V`), a quoted command substitution, or brace expansion — the shell does
+    all of that after the guard has already answered, on text the guard never sees;
   - **a search rooted above the vault directory.** `grep -rn TOKEN .` reads every vault file
     and is allowed, because the operand you named is `.` and not a vault path. Naming the
     directory — `grep -rn TOKEN .charter/vaults`, with or without a trailing slash — is
@@ -145,4 +148,5 @@ charter persona secret exec --env TOKEN=<key> -- <command...>
 
 A persona can only reach its own vault. When a task needs a credential another persona
 holds, delegate that step to that persona rather than copying the secret across — it runs
-with its own vault and you never see the value.
+with its own vault, so charter resolves that secret in that persona's session and not in
+yours.
