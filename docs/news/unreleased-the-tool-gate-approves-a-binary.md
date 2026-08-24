@@ -1,12 +1,12 @@
 ---
 version: unreleased
-headline: The tool-gate stopped smoothing four things a `tools:` line never meant to grant
+headline: The tool-gate stopped smoothing five things a `tools:` line never meant to grant
 ---
 
 `tools:` in a persona pre-approves a **binary**, and every argument rides along with it.
 That is the feature — an operator who writes `tools: gh` means `gh` — and it is also where
-four holes lived, each one arriving under a name that made the declaration look narrower
-than it was. All four are now cases where the gate declines to smooth and you get the
+five holes lived, each one arriving under a name that made the declaration look narrower
+than it was. All five are now cases where the gate declines to smooth and you get the
 normal permission prompt. Nothing here denies anything; the gate still cannot block work,
 only fail to remove a prompt.
 
@@ -29,9 +29,9 @@ was the last remaining control. If you want that, it is one prompt away, on purp
 Bash leak guard asks *is this program a reader?* — answerable for `cat`, hopeless for `curl
 --data-binary @…`. This asks the other question, about the argv.
 
-It asks it about the **file**, not about the text. Each argument is split the way the shell
-splits it, `~` and `$VAR` are expanded, and the result is compared by inode with the
-directory `charter` actually keeps its state in. So all of these are one answer:
+It asks it about the **file**, not about the text. Each argument is resolved and compared by
+inode with the directory `charter` actually keeps its state in. So all of these are one
+answer:
 `@".charter"/vaults/x.json`, `.chart\er/vaults/x.json`, `.charte?/vaults/x.json`,
 `--data-binary=@…`, a symlink pointing into the state directory, `.Charter/…` on a
 case-insensitive filesystem, the bare directory `.charter` (which `tar` and `cp -R` are
@@ -42,6 +42,29 @@ plane root archives every vault without naming one. Because the question is put 
 whose `file` the registry points outside the plane — three planes where the first version of
 this check matched nothing at all. Charter's own state and the persona definitions carrying
 `tools:` are in the same rule, for the reason below.
+
+**And it only asks about the file if the argument it examines is the one the program gets.**
+That turned out to be the whole game. `shlex` splits words and removes quotes; the shell
+does brace expansion, tilde expansion, parameter and command substitution, ANSI-C quoting
+and globbing *first*. So `cat .charte{r..r}/vaults/devops.json` arrived at every rule above
+as the literal string `.charte{r..r}/…`, matched nothing, was answered `allow`, and bash
+opened the vault. `$'\x2echarter/…'` did the same. So did `charter secre{t..t} get v
+API_TOKEN --revea{l..l}`, which prints an unredacted credential into the transcript and was
+an affirmative `allow` — worse than where this started.
+
+The rule is now stated the other way round, as the characters the shell hands over
+unchanged: **letters, digits, `_ - . / : , = + @ %`, quotes, a backslash, spaces and tabs,
+and any non-ASCII character.** A command containing anything else is not smoothed. Two
+earlier versions of this were lists of *dangerous* characters, and each was defeated by a
+character that had never been on the list; an allowlist puts the burden on the spelling
+nobody thought of rather than on the reviewer. That `shlex` and bash really do agree over
+that alphabet is asserted against a real bash in the test suite, not asserted here.
+
+The price, plainly: **`ls *`, `cat ~/notes.md`, `git commit -m "fix #12"` and
+`kubectl get -o jsonpath={.items}` now take a normal prompt.** `ls *` in particular was
+explicitly allowed before, on the reasoning that the shell never expands `*` onto a
+dotfile — true, and beside the point: `charter secre*` becomes `charter secret` the moment
+anything creates a file called `secret`, which an agent does with a plain Write.
 
 `git clean` joined the destructive subcommands in the same pass. The state directory is
 gitignored, so `git clean -xfd` deletes the session ceiling below while naming nothing —
@@ -56,12 +79,15 @@ persona mid-session still works: the snapshot holds the whole roster, not just t
 one. Narrowing a `tools:` line still takes effect immediately — both directions fail toward
 fewer approvals.
 
-Deleting or corrupting that record does not lift it. A session whose snapshot is unreadable
-approves **nothing** for the rest of its life — not even what was declared before it began,
-because charter no longer knows what that was — and a new session takes a fresh snapshot in
-the ordinary way. The one place a snapshot is still taken mid-life is a harness with no
-SessionStart hook at all (opencode), on its first gated call and only if no snapshot was
-ever taken for that session.
+Deleting or corrupting that record does not lift it. A snapshot that is present and
+unparseable, or missing while the marker beside it remains, approves **nothing** for the
+rest of that session — not even what was declared before it began, because charter no
+longer knows what that was — and a new session takes a fresh snapshot in the ordinary way.
+Removing the marker as well would put the session back at first use, and that is a command
+reaching into the state directory, which is never smoothed: `rm -rf .charter`,
+`rm -f .charter/sessions/*.tools` and `git clean -xfd` all take a prompt. The one place a
+snapshot is still taken mid-life is a harness with no SessionStart hook at all (opencode),
+on its first gated call and only if no snapshot was ever taken for that session.
 
 The cost lands on the person who edits a `tools:` line by hand and watches it keep
 prompting, so `charter persona use` now names it:
@@ -96,5 +122,7 @@ about the world; it says not to, and says that it is a rule the agent keeps rath
 wall charter holds.
 
 Nothing to adopt: upgrading is the whole of it. If a persona in your plane declares an
-interpreter, `charter`, or a shell, expect prompts where there were none — that is the
-change, and `charter guard allow` is how you take a specific one back on purpose.
+interpreter, `charter`, or a shell, expect prompts where there were none — and expect them
+too wherever a command carries a `*`, a `~`, a `{`, a `$` or a `#`, however harmless it
+looks. That is the change, and `charter guard allow` is how you take a specific one back on
+purpose.

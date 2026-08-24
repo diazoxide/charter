@@ -9,16 +9,26 @@ Two deliberate properties:
 
 - **Never denies.** The worst case is "no auto-approval" → a normal prompt. So a
   bug here can't block work, only fail to smooth it.
-- **Conservative parsing.** It refuses to auto-allow anything with shell
-  composition (pipes, ``;``, ``&&``, ``$()``, redirects) or a wrapper
-  (``sudo``/``bash -c`` become the "binary" and won't match a tool) — so the
-  gate can't be used to smuggle an unapproved command past the prompt.
+- **Conservative parsing.** It smooths only a command whose every character the shell
+  hands to the program unchanged (:data:`_LITERAL`) — so no pipe, no ``;``, no ``&&``, no
+  redirect, and equally no brace expansion, no ``$'…'``, no glob, no ``~``, because each
+  of those is the shell rewriting a word before the program sees it. A wrapper
+  (``sudo``/``bash -c``) becomes the "binary" and won't match a tool. The gate can't be
+  used to smuggle an unapproved command past the prompt.
+
+  The cost of that is real and worth stating: `git commit -m "fix #12"`, `ls *`,
+  `kubectl get -o jsonpath={.items}` and `cat ~/notes` are no longer smoothed. Each is
+  one prompt. Admitting any of those characters back is what each earlier round did, and
+  each time it was the bypass.
 
 The unit of approval is a **binary**, and every argument rides along with it. That
 is the feature (an operator writing ``tools: gh`` means `gh`), and it is also where
-the whole class of holes lives, so four rules bound it — each of them "decline to
+the whole class of holes lives, so five rules bound it — each of them "decline to
 smooth", never "deny":
 
+- :func:`_shell_literal` — a command containing a character the shell would REWRITE is not
+  read at all. Every rule below reads a token, and a token is only the word the program
+  gets if the shell had nothing left to do to it (#450).
 - :data:`_DANGEROUS` — a declared binary's destructive subcommands still prompt,
   ``charter secret``/``charter vault`` among them.
 - :data:`_INTERPRETERS` — a binary whose *argument* is the real command (``bash``,
@@ -28,11 +38,13 @@ smooth", never "deny":
   vault or charter's own state is never smoothed. That is the same rule the Bash leak
   guard applies to `cat`, applied to the argv rather than to a list of programs charter
   happened to think of. "Reaches" is decided against the FILE, not its spelling: each
-  token is split the way the shell splits it, resolved, and compared by
+  token — a token being the word the program is handed, which is what
+  :func:`_shell_literal` plus ``shlex`` together establish — is resolved and compared by
   ``(st_dev, st_ino)`` to what :mod:`charter.config` says the state directory is. Round
   one grepped the raw command string for a hardcoded ``.charter/`` and was defeated by a
   quote character, a backslash, a `?`, the bare directory name, and every plane with
-  ``$CHARTER_HOME`` set (#443).
+  ``$CHARTER_HOME`` set (#443). Round two resolved the token but let the shell rewrite it
+  afterwards, and was defeated by `{r..r}` (#450).
 - :func:`frozen_tools` — the answer is bounded by what ``tools:`` said when the session
   began. ``persona.md`` is a file the model can write; without this, one approved
   edit is unprompted execution for the rest of the session (#432).
@@ -49,10 +61,50 @@ import json
 import os
 import re
 import shlex
+import string
 import sys
 
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_UNSAFE = (";", "|", "&", "`", "\n", ">", "<")
+
+#: The ASCII characters a POSIX shell passes to the program **unchanged**, wherever in the
+#: command they appear. Everything outside this set makes :func:`_tokens` decline.
+#:
+#: An allowlist, and that is the whole point. Every previous version of this rule was a
+#: list of the characters that were known to be dangerous — `_UNSAFE = (";", "|", "&",
+#: "`", "\n", ">", "<")` plus a substring test for `$(` — and each round of review found
+#: one more character that had never been on it. Brace expansion (`.charte{r..r}`), ANSI-C
+#: quoting (`$'\x2echarter'`), and pathname expansion (`charter secre*`, when a file named
+#: `secret` sits in the cwd) each turned one word into a DIFFERENT word before the program
+#: saw it, while every rule downstream read the word that was typed (#450).
+#:
+#: Listing the safe characters instead inverts who has to be exhaustive: a spelling nobody
+#: here thought of is refused by default rather than admitted by default. Three kinds of
+#: character are absent that a reader may expect to find:
+#:
+#: * `~` — tilde expansion is not something ``shlex`` performs, and bash really does hand
+#:   `/Users/you` to the program where `~` was typed. `ls ~` is one prompt.
+#: * `*`, `?`, `[` — pathname expansion rewrites a word using files that exist at run
+#:   time, which is not a property this process can evaluate: `charter secre*` is
+#:   `charter secret` the moment something creates `./secret`, and an agent can create it
+#:   with a plain Write. `ls *` is one prompt.
+#: * `$`, `` ` `` — substitution, in every spelling including `$'…'` and `$( )`.
+#:
+#: Non-ASCII is admitted, but by the same property rather than as an exception — see
+#: :func:`_passes_through`. A path or a message in Cyrillic or Chinese is literal to bash
+#: and to ``shlex`` alike, so refusing it would be a cost with nothing bought.
+_LITERAL = frozenset(string.ascii_letters + string.digits + "_-./:,=+@%")
+
+#: Quoting and separation — the two things ``shlex.split(posix=True)`` DOES model, and
+#: models the same way bash does. Checked by running a corpus drawn from this alphabet
+#: through a real bash and comparing argv, rather than asserted
+#: (`tests/test_toolgate.py::TestTheParseMatchesARealShell`); the corpus is a sample, and
+#: a 16 000-case random differential over the same alphabet found no divergence either.
+#:
+#: `\r` and `\n` are deliberately not here: ``shlex`` treats both as whitespace, while bash
+#: treats `\r` as an ordinary word character and `\n` as a command separator. Both are
+#: divergences, and `kubectl\rget pods` is a command that does not exist.
+_QUOTING = frozenset("'\"" + chr(92))
+_SEPARATORS = frozenset(" \t")
 
 #: Even when a persona declares a tool, these subcommands are too destructive to
 #: auto-approve — they fall back to a normal prompt. A subcommand matches if it
@@ -144,7 +196,8 @@ def _norm(text: str) -> str:
     separator. That did not fold a spelling, it INVENTED one: `.chart\\er/vaults/x.json`
     — which a POSIX shell hands to the program as `.charter/vaults/x.json` — came out of
     here as `.chart/er/vaults/x.json` and matched nothing (#443). Quoting and escaping are
-    now undone by :func:`_tokens`, where the shell's own rules apply, and this function
+    now undone by :func:`_tokens`, which does that with ``shlex`` and refuses any command
+    carrying a character ``shlex`` and the shell would read differently, and this function
     folds only spellings the *filesystem* treats as equal.
 
     Which is why the backslash is not handled here at all any more, rather than handled
@@ -182,7 +235,39 @@ def _control_roots() -> list[str]:
     return out
 
 
-def _registered_vault_files() -> list[str]:
+def _control_names() -> list[str]:
+    """Every absolute spelling of a control root this process can name, folded by `_norm`.
+
+    Both the spelling :mod:`charter.config` holds and the ``realpath`` of it, because on
+    macOS those differ for every plane under `/tmp`: `/var` is a symlink to `/private/var`,
+    so the resolved root is `/private/var/…` while a command naturally spells `/var/…`.
+    A substring test that knew only the resolved spelling matched neither the command an
+    operator writes nor the one an attacker writes.
+
+    Used ONLY by the substring reading in :func:`_touches_control_surface`, which can only
+    add refusals. Identity — `(st_dev, st_ino)` — remains the answer that decides whether
+    two different names are the same file; this list is names, and names are the second
+    answer here, never the first.
+    """
+    from . import config
+    out = []
+    for p in (str(config.STATE_DIR), str(config.VAULTS_DIR),
+              *_registered_vault_files(resolve=False)):
+        for spelling in (p, _real(p)):
+            n = _norm(spelling)
+            if n.strip("/"):
+                out.append(n)
+    return sorted(set(out))
+
+
+def _real(p: str) -> str:
+    try:
+        return os.path.realpath(p)
+    except (OSError, ValueError):
+        return p
+
+
+def _registered_vault_files(resolve: bool = True) -> list[str]:
     """Every vault file the registry names, including the ones stored OUTSIDE the plane.
 
     `vaults.json` can point a vault at any path on the machine, and
@@ -200,6 +285,10 @@ def _registered_vault_files() -> list[str]:
     before anything here runs, so an ordinary Bash call that this gate has no opinion about
     never reaches it. Any failure reads as "no extra roots" — the state directory above is
     unaffected, and this function can only ever ADD refusals.
+
+    *resolve* picks which spelling comes back — the ``realpath`` for the identity checks,
+    the registry's own for :func:`_control_names`, which needs the name a command would
+    plausibly be written with.
     """
     try:
         from .secrets import registry as _registry
@@ -213,7 +302,8 @@ def _registered_vault_files() -> list[str]:
         if not isinstance(f, str) or not f:
             continue
         try:
-            out.append(os.path.realpath(str(vault_file_path(f))))
+            p = str(vault_file_path(f))
+            out.append(os.path.realpath(p) if resolve else p)
         except Exception:
             continue
     return out
@@ -233,16 +323,25 @@ def _ids(path: str):
     return (st.st_dev, st.st_ino)
 
 
-def _glob_match(name: str, pattern: str) -> bool:
-    """`fnmatch`, plus the shell's leading-dot rule: `*` never matches a dotfile.
+def _component_match(root_part: str, cand_part: str) -> bool:
+    """One path component of a control root against one component of a candidate path.
 
-    Without that rule `ls *` would read as naming `.charter` and stop being smoothed,
-    which is a cost with no security in it — the shell does not expand `*` to a dotfile.
-    `.charte?` still matches, because it says the dot itself.
+    Case-insensitively, because `.Charter` and `.charter` are the same directory on the
+    filesystems charter runs on and this branch is reached exactly when the path does not
+    exist, so `os.stat` cannot say so.
+
+    `fnmatch` rather than `==` because *cand_part* may still be a pattern where it came
+    from somewhere other than a command line. It no longer can come from one:
+    :func:`_tokens` refuses `*`, `?` and `[` outright.
+
+    This used to carry the shell's leading-dot rule — `*` never expands onto a dotfile —
+    so that `ls *` would not read as naming `.charter` and would keep being smoothed. That
+    exemption is gone with the character it protected. It was also the wrong trade: `*`
+    does not only rewrite paths, and `charter secre*` is `charter secret` the moment
+    something creates `./secret` (#450). Dropping the rule can only widen what matches
+    here, which means more prompts and never fewer.
     """
-    if name.startswith(".") and not pattern.startswith("."):
-        return False
-    return fnmatch.fnmatchcase(name.lower(), pattern.lower())
+    return fnmatch.fnmatchcase(root_part.lower(), cand_part.lower())
 
 
 def _chain_ids(roots: list[str]) -> set:
@@ -281,11 +380,22 @@ def _resolves_into(cand: str, base: str, roots: list[str],
        answer for `.charter/vaults/x.json`, `./.charter/…`, `~/plane/.charter/…`,
        `.Charter/…` on a case-insensitive filesystem, a symlink pointing into the state
        directory, and the bare directory `.charter` itself.
-    2. **Pattern.** A path that does not exist has no identity — a write target, or a glob
-       like `.charte?/vaults/devops.json` that the shell will expand at run time. So the
-       resolved spelling is matched against each root component by component, with glob
-       metacharacters honoured, which answers those without pretending to know what the
-       expansion will find.
+    2. **Pattern.** A path that does not exist has no identity — a write target, most
+       often. So the resolved spelling is compared to each root component by component,
+       case-insensitively, and `fnmatch` honours a glob metacharacter if one is present.
+
+       A pattern can no longer arrive from the COMMAND: :func:`_tokens` refuses `*`, `?`
+       and `[` outright, because whether `charter secre*` means `charter secret` depends
+       on what files exist when bash runs, which is not a question this process can
+       answer. It used to be answered here, for paths, and that left the same character
+       free to rewrite a subcommand (#450). What can still carry one is a ROOT: the vault
+       registry may name a path this process cannot resolve, and matching it as a pattern
+       costs nothing and can only add refusals.
+
+    ``expanduser``/``expandvars`` are applied to *cand* for the same reason: `~` and `$`
+    are refused by :func:`_tokens`, so on the gate's own path they are no-ops, and they
+    stay because this function is also the honest answer for a caller that has a path from
+    somewhere other than a command line.
     """
     try:
         c = os.path.expanduser(cand)
@@ -308,7 +418,7 @@ def _resolves_into(cand: str, base: str, roots: list[str],
         rparts = root.split(os.sep)
         if len(cparts) < len(rparts):
             continue
-        if all(_glob_match(r, c) for c, r in zip(cparts, rparts)):
+        if all(_component_match(r, c) for c, r in zip(cparts, rparts)):
             return True
     return False
 
@@ -344,8 +454,28 @@ def _touches_control_surface(tokens: list[str], cwd: str | None = None) -> bool:
     Given TOKENS, not the raw command string. Grepping the raw string was the whole
     defect: `--data-binary @".charter"/vaults/devops.json` is the same file with two
     quote characters in it, and a substring search for `.charter/` does not see it
-    (#443). :func:`_tokens` applies the shell's own quoting and escaping rules first, so
-    every spelling that reaches the same file arrives here spelled the same way.
+    (#443). :func:`_tokens` undoes quoting first, and refuses outright any command whose
+    remaining characters the shell would have rewritten, so a token that arrives here is
+    the word the program will be handed.
+
+    Three readings of each token, and a token needs to fail all three to be smoothed:
+
+    1. Each path-shaped reading (:func:`_path_candidates`) against the two NAME patterns.
+    2. Each path-shaped reading resolved and compared by identity (:func:`_resolves_into`).
+    3. The WHOLE token against each root as a substring. Readings 1 and 2 both start from
+       `_path_candidates`, which knows two prefixes — a leading `@` and everything after an
+       `=` — and `curl -d@<abs path to a vault>` wears a third. On the default plane the
+       name patterns still caught it (they are substring searches for `.charter`), but on a
+       `$CHARTER_HOME` plane the state directory is not called that, and the command was
+       smoothed while curl POSTed the vault (measured, #450). This reading asks nothing
+       about where in the token the path starts, so a fourth prefix needs no fourth rule.
+       It can only ever ADD refusals: a token that spells out an absolute control root is
+       reaching for it whatever surrounds it.
+
+    Reading 3 is bounded to ABSOLUTE roots, which is what makes it cheap and exact. A
+    RELATIVE path hidden behind an unknown prefix on a plane whose state directory is
+    named neither `.charter` nor `.edm` is what is left, stated rather than smoothed over:
+    `_path_candidates` would have to grow that prefix for reading 2 to see it.
 
     Scanned over the WHOLE argv including leading `VAR=value` assignments, so a
     `VAULT=.charter/vaults/x.json` prefix cannot carry the path past it.
@@ -355,7 +485,11 @@ def _touches_control_surface(tokens: list[str], cwd: str | None = None) -> bool:
     root_ids = {i for i in (_ids(r) for r in roots) if i is not None}
     chain = _chain_ids(roots)
     base = cwd or os.getcwd()
+    named = _control_names()
     for tok in tokens:
+        low = _norm(tok)
+        if any(r in low for r in named):
+            return True
         for cand in _path_candidates(tok):
             text = _norm(cand)
             if _VAULT_PATH_RE.search(text) or _SELF_PATH_RE.search(text):
@@ -369,19 +503,71 @@ def _is_interpreter(binary: str) -> bool:
     return binary in _INTERPRETERS or bool(_VERSIONED.match(binary))
 
 
+def _passes_through(ch: str) -> bool:
+    """True when the shell hands *ch* to the program unchanged.
+
+    ASCII is answered by :data:`_LITERAL`, :data:`_QUOTING` and :data:`_SEPARATORS`.
+
+    Above ASCII the question is asked of BYTES, not of the character, because that is what
+    bash parses. "Every shell metacharacter is ASCII, so no non-ASCII character can be one"
+    is true in UTF-8 and false in general: in GBK, Big5 and Shift-JIS a multi-byte
+    character's *trail* byte lands in the ASCII range, and `0x7C` there is a `|` to bash
+    however Python spells the character. So the character is encoded the way this process
+    encodes argv, and admitted only if no byte of it could be read as ASCII at all.
+
+    In a UTF-8 locale — every machine charter is known to run on — that admits exactly the
+    same set as the simpler claim, at the cost of one `encode` per non-ASCII character.
+    Anywhere else it declines, which is a prompt.
+    """
+    if ch in _LITERAL or ch in _QUOTING or ch in _SEPARATORS:
+        return True
+    if ord(ch) < 128:
+        return False
+    try:
+        return all(b >= 0x80 for b in os.fsencode(ch))
+    except (UnicodeError, ValueError):
+        return False
+
+
+def _shell_literal(command: str) -> bool:
+    """True when every character of *command* is one the shell hands over unchanged.
+
+    See :data:`_LITERAL`. The test is positional-blind on purpose: a `{` inside single
+    quotes really is harmless, but exempting it would mean deciding here which regions are
+    quoted — a SECOND model of the shell, in a module whose entire defect history is
+    models of the shell that were subtly wrong. So `git commit -m "fix #12"` is not
+    smoothed either. That costs one prompt and removes a whole class of disagreement.
+    """
+    return all(_passes_through(ch) for ch in command)
+
+
 def _tokens(command: str) -> list[str] | None:
     """The argv the shell would build, or ``None`` when this is not a simple command.
 
-    ``shlex.split(posix=True)`` — the same splitter `hooks._segment_argv` uses — so
-    quoting and backslash escapes are undone HERE, once, before any rule looks at a
-    token. Every rule below (the dangerous-subcommand scan, the control-surface check,
-    the provenance check) then reads what the program will actually receive rather than
-    what was typed.
+    ``shlex.split(posix=True)`` — the same splitter `hooks._segment_argv` uses — models
+    exactly two of the shell's steps: quote removal and word splitting. It does NOT
+    perform brace expansion, tilde expansion, parameter or command substitution, ANSI-C
+    quoting, or pathname expansion, all of which the shell performs FIRST and any of which
+    can replace a word with a different word. So the returned list is the argv the program
+    receives only when the command contains none of the characters that trigger them —
+    which is what :func:`_shell_literal` establishes, before ``shlex`` is called at all.
 
-    Unbalanced quotes raise, and the answer to a command this function cannot parse is
-    the same as for every other doubt on this path: decline to smooth it, take the prompt.
+    That order matters. Round two called `shlex.split` and described the result as "what
+    the program will actually receive"; `cat .charte{r..r}/vaults/devops.json` was handed
+    to every rule below as the string `.charte{r..r}/…`, matched nothing, and was
+    auto-approved while bash opened the vault (#450). ``shlex`` was not wrong; the sentence
+    about it was.
+
+    What the two together do guarantee, and it is now a checkable claim rather than a
+    promise: over the alphabet :data:`_LITERAL` admits, ``shlex.split`` returns the same
+    argv bash does. `TestTheParseMatchesARealShell` asserts that against a real bash rather
+    than against this module's opinion of one.
+
+    Unbalanced quotes and a trailing backslash raise, and the answer to a command this
+    function cannot parse is the same as for every other doubt on this path: decline to
+    smooth it, take the prompt.
     """
-    if not command or "$(" in command or any(ch in command for ch in _UNSAFE):
+    if not command or not _shell_literal(command):
         return None
     try:
         toks = shlex.split(command, posix=True)
