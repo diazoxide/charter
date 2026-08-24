@@ -19,6 +19,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from charter import config, statusline, update
+from tests._isolation import pin_update_channel
 
 
 def _plain(lines):
@@ -95,6 +96,10 @@ class NeverBreaksTheStatusLine(unittest.TestCase):
         config.STATE_DIR = _tmp / ".charter"
         self.addCleanup(lambda: (setattr(config, "STATE_DIR", _state),
                                  _sh.rmtree(_tmp, ignore_errors=True)))
+        # And the channel, for the same reason and by the same argument: `render` brands
+        # the last line, `_brand` renders the `dev` chip, and nothing here is about which
+        # channel the machine running the suite happens to declare (#459).
+        pin_update_channel(self)
 
     def test_a_broken_control_plane_yields_no_lines(self):
         orig = config.ROOT

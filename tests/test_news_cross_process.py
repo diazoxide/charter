@@ -42,6 +42,7 @@ from unittest import mock
 import charter
 from charter import (commands, commands_persona, commands_update, doctor, harness,
                      instance, news)
+from tests._isolation import pin_update_channel
 
 #: The `check:` every test here plants, and the handler it stands on. A `check:` may
 #: only name a command `news._PROBEABLE` lists (#317), so the stand-in has to be one
@@ -383,6 +384,13 @@ class TheHandoffBound(unittest.TestCase):
     site with nothing naming it — which is how it survived as an accident. It is a second
     line now, not the first: the marker bounds the child whatever the range says.
     """
+
+    def setUp(self) -> None:
+        # `cmd_update` forks on `channel.is_dev()` long before it reaches `_handoff`, and
+        # the dev branch is `_update_dev_on_a_checkout` — a different command with no
+        # baseline in it at all. The stable path is the one this case is about, so it is
+        # pinned rather than inherited from whoever runs the suite (#459).
+        pin_update_channel(self)
 
     def test_the_handoff_baseline_is_the_version_that_was_installed_before(self):
         seen = {}

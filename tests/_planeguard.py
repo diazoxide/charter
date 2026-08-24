@@ -1,4 +1,5 @@
-"""Suite-wide tripwire: no test may WRITE into the developer's real ``.charter/``.
+"""Suite-wide tripwires: no test may WRITE into the developer's real ``.charter/``, and
+none may READ a setting off the developer's real ``charter.toml``.
 
 `PersonaIso` isolates a test that remembers to derive from it. Nothing made the
 *forgetting* visible, so the same defect kept arriving in a new file: the suite wrote
@@ -14,15 +15,39 @@ the `tests` package — before any test module is collected, so no test can opt 
 forgetting a base class. A test that reaches the real plane now fails, by name, on the
 line that reached it, having changed nothing.
 
-**Only writes.** Reads are untouched: a test may legitimately look at the real plane (that
-`render()` survives a real environment, say), and `_isolation.isolate_state_dir` exists for
-exactly that shape. Writing is the part no test in this suite has any business doing.
+**Only the state directory, for writes.** ``.charter/`` is per-developer, gitignored, and
+holds live session state — frame directories, the vault registry, session pointers. The
+rest of the plane (``personas/``, ``docs/``, ``workspaces/``) is committed content some
+tests do legitimately generate into a tmp root, and guarding the real copies of those
+would trade this defect for a stream of false alarms.
 
-**Only the state directory.** ``.charter/`` is per-developer, gitignored, and holds live
-session state — frame directories, the vault registry, session pointers. The rest of the
-plane (``personas/``, ``docs/``, ``workspaces/``) is committed content some tests do
-legitimately generate into a tmp root, and guarding the real copies of those would trade
-this defect for a stream of false alarms.
+**Reads of the state directory stay untouched**, for the same reason: a test may
+legitimately look at the real plane (that `render()` survives a real environment, say),
+and `_isolation.isolate_state_dir` exists for exactly that shape.
+
+**One class of read IS refused: a setting the developer's own `charter.toml` declares.**
+#459. `[update] channel` is opt-in and new, so for its whole life `config.UPDATE` was
+``{"channel": "stable"}`` on every machine — which is what `test_statusline_brand`'s
+``UpdateIndicator`` and `test_version_lock`'s ``AutoSync`` assumed while isolating neither.
+The day charter's own dogfood plane declared ``channel = "dev"``, six tests started failing
+on that machine and nowhere else, and the feature became unusable: `charter update` on a
+charter checkout only refreshes the plugin on the dev channel, so the operator has to
+declare it — in a file `charter save` commits, which turns CI red for everyone.
+
+A value like that is not a fact about charter; it is a fact about whoever is running the
+suite. A test reading it is not "reading the real plane" in the benign sense above — it is
+asserting against a fixture it did not write and cannot see. So the values named in
+:data:`_GUARDED_SETTINGS` are replaced, whenever `charter.config` points at the real plane,
+by a `dict` that refuses to be read (:class:`RealPlaneRead`). Isolate the case and the real
+value is never in place to refuse: `config.use` re-derives every setting from the tmp root
+(`_isolation.PersonaIso`), and `mock.patch.object(config, "UPDATE", …)` replaces the object
+outright.
+
+The arming is by ROOT rather than a one-shot swap at import: :func:`charter.config.derive`
+is wrapped, so a derivation that resolves back to the real plane re-arms (a bare
+`config.use(config.ROOT)`, which two modules here do) and a derivation from a tmp root does
+not. `config.restore` needs nothing — it puts back the snapshot `config.use` took, and the
+refusing value is what was in place to snapshot.
 
 **Raised as a `BaseException`, deliberately.** charter is full of `except Exception`
 fallbacks that turn an unreachable path into a degraded one — `config.derive` catches
@@ -45,6 +70,8 @@ import builtins
 import io
 import os
 import shutil
+import sys
+import unittest
 
 #: The state directory of the plane this test PROCESS resolved at import — before any
 #: `setUp` could repoint `charter.config`, so unavoidably the developer's real one.
@@ -124,12 +151,150 @@ def _guard_os(name: str, *, arg: int = 0, both: bool = False) -> None:
     setattr(os, name, guarded)
 
 
+#: The settings no test may read off the developer's own ``charter.toml``.
+#:
+#: One name, and it is a list rather than a special case for exactly one reason: the next
+#: opt-in setting to arrive has the same shape, and the day it arrives is the day it should
+#: be guarded, not the day someone re-derives this argument from a red CI run.
+#:
+#: Not every `config.DERIVED` name belongs here, and the boundary is what the value is a
+#: fact ABOUT. ``ROOT``, ``STATE_DIR`` and the paths under them are facts about the
+#: machine's layout, and a test that reads them deliberately (`isolate_state_dir`'s whole
+#: purpose) is doing something this suite supports. ``UPDATE`` is a fact about the operator's
+#: *preference*, declared in a committed file that one contributor may edit and the rest may
+#: not have — so a test reading it asserts against a fixture written by whoever happens to
+#: run it. Values that are dicts, and only dicts: the refusal works by handing back an
+#: object that will not answer, and a `str` or a `Path` cannot be made to refuse without
+#: breaking the formatting of every message that legitimately quotes it.
+_GUARDED_SETTINGS = ("UPDATE",)
+
+
+class RealPlaneRead(BaseException):
+    """A test read a setting declared by the developer's own ``charter.toml``."""
+
+
+def _current_test() -> str:
+    """The `TestCase` on the stack, ``module.Class.method``, or a placeholder.
+
+    Walked rather than tracked, because there is no hook that fires per test in a plain
+    ``python3 -m unittest discover`` run. Only ever called on the refusal path, so the walk
+    costs nothing in a green suite. `unittest` already puts the test's name in the failure
+    header; this repeats it INSIDE the message so a failure quoted into an issue, a CI log
+    excerpt or a `git bisect` transcript still says which test it was.
+    """
+    frame = sys._getframe(1)
+    while frame is not None:
+        case = frame.f_locals.get("self")
+        if isinstance(case, unittest.TestCase):
+            method = getattr(case, "_testMethodName", "?")
+            return f"{type(case).__module__}.{type(case).__name__}.{method}"
+        frame = frame.f_back
+    return "this test"
+
+
+def _explain_read(name: str) -> str:
+    return (
+        f"REFUSED: read of config.{name}\n"
+        f"{_current_test()} is reading `{name}` while `charter.config` still points at the "
+        f"developer's REAL control plane ({_REAL_ROOT[0] if _REAL_ROOT else '?'}) — so what "
+        f"it asserts depends on what that machine's own charter.toml declares, not on a "
+        f"fixture. `[update] channel = \"dev\"` in a real plane is what turned six of these "
+        f"red on one machine and nowhere else (#459). Derive the case from "
+        f"`tests._isolation.PersonaIso`, which re-derives every setting from a tmp plane in "
+        f"one `config.use()` call, or pin just this one with "
+        f"`mock.patch.object(config, \"{name}\", {{...}})`.")
+
+
+class _RefusesToBeRead(dict):
+    """What a guarded setting holds while `charter.config` points at the real plane.
+
+    A `dict` subclass rather than a sentinel of its own type, because the readers type-check
+    first: `channel.channel` does ``isinstance(got, dict)`` and falls back to ``"stable"``
+    for anything else — a sentinel that failed that check would be *silently* ignored, which
+    is the behaviour this guard exists to end. Subclassing means the refusal happens where
+    the value is actually used, one line later.
+
+    Every way in is overridden, including the ones CPython would otherwise service from C
+    without consulting this class: ``dict(x)`` and ``{**x}`` take the fast path only while
+    ``tp_iter`` is dict's own, so overriding ``__iter__`` is what routes them through
+    ``keys()`` and into the refusal. ``__repr__`` and ``__len__`` are deliberately NOT
+    overridden — a debugger, a traceback, or `unittest`'s own error formatting may print
+    this object, and a guard that explodes while a test is already failing hides the
+    failure it was supposed to explain.
+    """
+
+    __slots__ = ("_setting",)
+
+    def __init__(self, setting: str, value: dict) -> None:
+        super().__init__(value)
+        self._setting = setting
+
+    def _refuse(self, *_args, **_kw):
+        raise RealPlaneRead(_explain_read(self._setting))
+
+    get = _refuse
+    __getitem__ = _refuse
+    __contains__ = _refuse
+    __iter__ = _refuse
+    keys = _refuse
+    values = _refuse
+    items = _refuse
+    copy = _refuse
+    __eq__ = _refuse
+    __ne__ = _refuse
+    __hash__ = None
+
+
+#: The control-plane root this test PROCESS resolved at import, in both spellings, for the
+#: same reason :data:`_REAL` carries two.
+_REAL_ROOT: tuple[str, ...] = ()
+
+
+def _guard_reads(config) -> None:
+    """Arm :data:`_GUARDED_SETTINGS` on every derivation that lands on the real plane."""
+    global _REAL_ROOT
+    if _REAL_ROOT:                        # idempotent: never wrap `derive` twice
+        return
+    written = os.path.abspath(str(config.ROOT))
+    resolved = os.path.realpath(written)
+    _REAL_ROOT = (written,) if written == resolved else (written, resolved)
+
+    def _is_real(where) -> bool:
+        try:
+            here = os.path.abspath(str(where))
+        except (OSError, TypeError, ValueError):
+            return False
+        return here in _REAL_ROOT or os.path.realpath(here) in _REAL_ROOT
+
+    original = config.derive
+
+    def derive(root, start=None):
+        d = original(root, start)
+        if _is_real(root):
+            for name in _GUARDED_SETTINGS:
+                value = d.get(name)
+                if isinstance(value, dict) and not isinstance(value, _RefusesToBeRead):
+                    d[name] = _RefusesToBeRead(name, value)
+        return d
+
+    derive.__module__ = __name__
+    config.derive = derive
+
+    # The bootstrap derivation already ran, at import of `charter.config`, before this
+    # module existed to wrap anything. Arm what it left behind.
+    for name in _GUARDED_SETTINGS:
+        value = getattr(config, name, None)
+        if isinstance(value, dict) and not isinstance(value, _RefusesToBeRead):
+            setattr(config, name, _RefusesToBeRead(name, value))
+
+
 def install() -> None:
     """Wrap every write primitive. Idempotent; called once at `tests` package import."""
     global _REAL
     if _REAL:
         return
     from charter import config
+    _guard_reads(config)
     try:
         written = os.path.abspath(str(config.STATE_DIR))
         resolved = os.path.realpath(written)

@@ -15,7 +15,7 @@ from __future__ import annotations
 import unittest
 
 from charter import config, doctor, persona
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, pin_update_channel
 
 
 class PersonaCheck(PersonaIso):
@@ -134,6 +134,11 @@ class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
     20s budget and then printed NOTHING — `cmd_doctor` collected every Result before
     showing a line, so a hang and a crash looked identical. Six call sites also bypassed
     `util.run` entirely just to pass their own timeout literal."""
+
+    def setUp(self) -> None:
+        # The two cases that drive the real `iter_all`/`run_all` reach
+        # `check_plugin_freshness`, and so the channel (#459).
+        pin_update_channel(self)
 
     def test_run_raises_a_charter_error_not_subprocess_timeoutexpired(self):
         """`cli.main` catches `KeyboardInterrupt` and nothing else, so a bare

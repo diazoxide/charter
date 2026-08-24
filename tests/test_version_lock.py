@@ -84,16 +84,21 @@ class LockFile(unittest.TestCase):
         instance.load(self.root)      # raises if the edit broke the syntax
 
 
-class AutoSync(unittest.TestCase):
-    """SessionStart conformance. Loud, non-blocking, and opt-in."""
+class AutoSync(PersonaIso):
+    """SessionStart conformance. Loud, non-blocking, and opt-in.
+
+    `PersonaIso`, not ``config.ROOT = tmp``. Assigning that one attribute moves where
+    `charter.toml` is READ from without re-deriving anything that follows from it, so
+    `config.UPDATE` kept naming the channel of the plane the suite resolved. Every case
+    below assumes the default `stable`: on the dev channel `hooks._autosync_version_lock`
+    answers with the pin-versus-dev CONFLICT message instead of installing, so on a machine
+    whose own `charter.toml` declares ``channel = "dev"`` these went red and nowhere else
+    (#459). `config.use` derives the whole set from the fixture root in one call.
+    """
 
     def setUp(self) -> None:
-        self._td = TemporaryDirectory()
-        self.root = Path(self._td.name)
-        self._orig = config.ROOT
-        config.ROOT = self.root
-        self.addCleanup(self._td.cleanup)
-        self.addCleanup(lambda: setattr(config, "ROOT", self._orig))
+        super().setUp()
+        self.root = self.tmp
         self.installs: list[str] = []
         self._sync = commands.sync_to
         commands.sync_to = lambda v: (self.installs.append(v), (True, v))[1]
@@ -103,6 +108,11 @@ class AutoSync(unittest.TestCase):
         (self.root / "charter.toml").write_text("schema = 1\n")
         if version:
             instance.set_locked_version(self.root, version)
+        # Re-derive: the fixture only becomes a control plane on this line, and the hook
+        # under test branches on `config.UPDATE` as well as on the pin it re-reads. A test
+        # that wanted the dev channel would write `[update]` into the file above and get it
+        # here, rather than inheriting it from the developer's machine.
+        config.use(self.root)
 
     def test_no_lock_does_nothing(self):
         """Opt-in: an unpinned control plane must behave exactly as before."""

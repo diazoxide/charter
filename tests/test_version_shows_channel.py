@@ -21,9 +21,8 @@ and `_top` share: the bare name `__version__`, interpolated with the literal wor
 `charter` glued directly in front of it. That is deliberately narrower than "every place
 `__version__` appears" — this package interpolates it in a dozen other places
 (`report.py`'s JSON export, `hooks.py`'s and `doctor.py`'s pin/plugin-drift warnings,
-`statusline._alerts`'s pinned-version alert, `commands_report._warn_if_stale`'s
-staleness nudge) that are answering "does what's running match what's declared", not
-"which channel is this plane on" — a different question `_brand`'s docstring is not
+`statusline._alerts`'s pinned-version alert) that are answering "does what's running
+match what's declared", not "which channel is this plane on" — a different question `_brand`'s docstring is not
 making a claim about. A scanner broad enough to flag all of those too would have to
 judge INTENT, which no syntax-level check can do honestly; a scanner narrowed by a
 hand-picked exclusion list for each of them would just be today's two-item allowlist
@@ -32,10 +31,11 @@ it is the literal shape of the bug: `_top`'s line was `f"... charter {__version_
 with nothing else in the expression naming a channel at all, and every one of the
 excluded sites above fails that literal test on its own text (see each one's inline
 comment in `_charter_version_idiom_sites`'s docstring). One real site DOES match the
-idiom and isn't fixed here: `commands_report._warn_if_stale` — filed as #458 rather than
-folded into this PR (out of #457's stated scope) or silently exempted, and carried below
-as a named, sourced `_KNOWN_GAPS` entry so fixing #458 is "implement the chip, delete
-the line" and the property test itself proves that fix.
+idiom and wasn't fixed by #457: `commands_report._warn_if_stale` — filed as #458 rather
+than folded into that PR (out of its stated scope) or silently exempted, and carried for
+one release as a named, sourced `_KNOWN_GAPS` entry. #458 has since landed; the entry is
+gone and `test_the_staleness_nudge_calls_the_chip_too` asserts the chip directly, which
+is exactly the hand-off that entry was written to make possible.
 
 Frame ids are `<workspace>-<launcher pid>` (`frame/state.py:frame_id`), and pid 1 is
 `launchd` — permanently alive on this machine. `_top` does not consult liveness at all
@@ -206,17 +206,22 @@ def _charter_version_idiom_sites(pkg_root: Path) -> list[tuple[str, int, str, bo
     return sites
 
 
-#: One real site the scanner finds that this PR deliberately does not touch: the same
-#: idiom, the same missing chip, but a different feature (a staleness nudge in `charter
-#: report`, comparing the running version against the latest published one — not
-#: identifying the channel). Filed upstream as #458 rather than folded in here (out of
-#: #457's stated scope) or silently exempted with no trace. Keyed by file rather than
-#: line, so a routine edit elsewhere in the file doesn't rot the entry, and paired with
-#: the exact source substring so a DIFFERENT, unrelated idiom landing in the same file
-#: later is not silently swallowed by this one's exemption.
-_KNOWN_GAPS = {
-    "charter/commands_report.py": "you are on charter",
-}
+#: Sites the scanner finds that are deliberately exempt — **empty**, and the machinery is
+#: kept for the next one rather than deleted with it.
+#:
+#: It held exactly one entry, `commands_report._warn_if_stale`: the same idiom and the same
+#: missing chip, left out of #457 as out of scope and filed upstream as #458 rather than
+#: silently exempted. #458 has landed, so the entry is gone and
+#: `test_the_staleness_nudge_calls_the_chip_too` below asserts the fix directly — which is
+#: what the entry's own docstring promised would happen ("implement the chip, delete the
+#: line, and the property test itself proves the fix").
+#:
+#: The shape, for whoever adds the next one: keyed by file rather than line, so a routine
+#: edit elsewhere in the file doesn't rot the entry, and paired with the exact source
+#: substring so a DIFFERENT, unrelated idiom landing in the same file later is not silently
+#: swallowed by this one's exemption. An entry with no upstream issue behind it is just a
+#: two-item allowlist wearing a longer coat.
+_KNOWN_GAPS: dict[str, str] = {}
 
 
 class EveryCharterVersionIdiomShowsTheChannel(unittest.TestCase):
@@ -239,6 +244,18 @@ class EveryCharterVersionIdiomShowsTheChannel(unittest.TestCase):
                         "_brand's idiom no longer calls _dev_chip")
         self.assertTrue(by_file.get("charter/frame/slots.py"),
                         "_top's idiom no longer calls _dev_chip")
+
+    def test_the_staleness_nudge_calls_the_chip_too(self):
+        """The third site, and the one that was carried as a `_KNOWN_GAPS` entry until
+        #458 landed. Named here rather than left to the sweep below, because "no offenders"
+        would also be true of a file the scanner had stopped finding at all."""
+        sites = _charter_version_idiom_sites(_PKG)
+        by_file = {f: chip for f, _ln, _src, chip in sites}
+        self.assertIn("charter/commands_report.py", by_file,
+                      "the staleness nudge no longer matches the idiom at all — if it was "
+                      "rewritten, say so here rather than losing the coverage silently")
+        self.assertTrue(by_file["charter/commands_report.py"],
+                        "_warn_if_stale's idiom no longer calls _dev_chip (#458)")
 
     def test_no_charter_version_idiom_anywhere_skips_the_channel(self):
         """The rule: every site matching the idiom calls `_dev_chip`, except the
@@ -263,10 +280,13 @@ class EveryCharterVersionIdiomShowsTheChannel(unittest.TestCase):
             "\n".join(f"  {f}:{line}  {src}" for f, line, src in offenders))
 
     def test_a_known_gap_still_matches_the_source_it_was_filed_against(self):
-        """The other direction: if #458 lands and `commands_report._warn_if_stale`
-        starts calling `_dev_chip`, the exemption above stops being needed — and this
-        test is what notices, rather than the exemption quietly outliving its reason
-        and starting to shadow a real, different regression in the same file."""
+        """The other direction, for whatever `_KNOWN_GAPS` holds: when the filed issue
+        lands and the site starts calling `_dev_chip`, the exemption stops being needed —
+        and this is what notices, rather than the exemption quietly outliving its reason
+        and starting to shadow a real, different regression in the same file. That is not
+        hypothetical: it is exactly how the one entry this ever held, `_warn_if_stale`,
+        left — #458 landed and this test said so. Asserts nothing while the dict is empty,
+        and goes live again with the next entry."""
         sites = _charter_version_idiom_sites(_PKG)
         by_file = {f: (has_chip, src) for f, _ln, src, has_chip in sites}
         for f, gap in _KNOWN_GAPS.items():
@@ -277,8 +297,8 @@ class EveryCharterVersionIdiomShowsTheChannel(unittest.TestCase):
                 self.assertIn(gap, src, f"{f}'s idiom no longer reads {gap!r} — "
                              "the _KNOWN_GAPS entry no longer matches what it was "
                              "filed against, update or remove it")
-                self.assertFalse(has_chip, f"{f} now calls _dev_chip — #458 is "
-                                "fixed, delete this _KNOWN_GAPS entry")
+                self.assertFalse(has_chip, f"{f} now calls _dev_chip — the issue this "
+                                "entry was filed against is fixed, delete the entry")
 
 
 if __name__ == "__main__":

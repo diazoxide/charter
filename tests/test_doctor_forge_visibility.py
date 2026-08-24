@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import config, doctor
+from tests._isolation import pin_update_channel
 
 _ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
 
@@ -169,6 +170,11 @@ class TestDoctorChecksDeclaredForgesOnly(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
         self._orig = (config.CONFIG_ERROR, config.HAS_CONTROL_PLANE, config.ROOT)
         self.addCleanup(self._restore)
+        # `doctor.run_all()` below reaches `check_plugin_freshness`, which branches on the
+        # channel. Three attributes are hand-set here and `UPDATE` is not one of them, so
+        # without this the forge assertions ran against the developer's own `[update]`
+        # section (#459).
+        pin_update_channel(self)
 
     def _restore(self):
         config.CONFIG_ERROR, config.HAS_CONTROL_PLANE, config.ROOT = self._orig

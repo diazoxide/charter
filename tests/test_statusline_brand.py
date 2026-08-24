@@ -17,6 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from charter import config, statusline, tui, update
+from tests._isolation import PersonaIso, pin_update_channel
 
 
 class BrandLayout(unittest.TestCase):
@@ -24,6 +25,11 @@ class BrandLayout(unittest.TestCase):
         self._spawn = update.maybe_spawn      # never fork a network child from a test
         update.maybe_spawn = lambda: None
         self.addCleanup(lambda: setattr(update, "maybe_spawn", self._spawn))
+        # `_brand` renders the `dev` chip from `config.UPDATE`, so every width assertion
+        # below is a function of the channel unless it is pinned (#459). This class is
+        # about LAYOUT and runs against the real plane on purpose; the chip belongs to
+        # `UpdateIndicator` and `test_dev_channel`, which own it against a fixture.
+        pin_update_channel(self)
 
     def test_brand_is_right_aligned_on_the_last_line(self):
         out = statusline._with_brand("short", 120)
@@ -68,13 +74,20 @@ class BrandLayout(unittest.TestCase):
             statusline._brand = orig
 
 
-class UpdateIndicator(unittest.TestCase):
+class UpdateIndicator(PersonaIso):
+    """`PersonaIso`, not a hand-rolled ``config.STATE_DIR`` redirect.
+
+    Every assertion here is about the STABLE channel's comparison — `update.newer_than`
+    hands off to `newer_head` on dev, where a cached ``"9.9.9"`` means nothing — and
+    redirecting one attribute left `config.UPDATE` reading the channel of whatever plane
+    the suite resolved. On a developer whose own `charter.toml` declares
+    ``channel = "dev"`` these went red, and only there (#459). `PersonaIso` re-derives
+    every setting from a tmp plane in one `config.use()` call, so the channel is the
+    default `stable` because the fixture says so, not because the machine does.
+    """
+
     def setUp(self) -> None:
-        self._td = TemporaryDirectory()
-        self._orig = config.STATE_DIR
-        config.STATE_DIR = Path(self._td.name)
-        self.addCleanup(self._td.cleanup)
-        self.addCleanup(lambda: setattr(config, "STATE_DIR", self._orig))
+        super().setUp()
         # _brand() calls maybe_spawn(), and a temp STATE_DIR always looks stale — so
         # without this every test here forks a real network child. A suite that
         # quietly reaches the internet is not hermetic.
@@ -137,6 +150,9 @@ class NeverBlocks(unittest.TestCase):
         config.STATE_DIR = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
         self.addCleanup(lambda: setattr(config, "STATE_DIR", self._orig))
+        # `test_render_never_raises_even_if_the_check_explodes` reaches `_brand`, and so
+        # the `dev` chip. Nothing here is about the channel, so it is pinned (#459).
+        pin_update_channel(self)
 
     def test_a_fresh_cache_spawns_nothing(self):
         p = config.STATE_DIR / "cache" / "update.json"

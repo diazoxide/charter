@@ -30,7 +30,7 @@ import unittest
 from pathlib import Path
 
 from charter import doctor
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, pin_update_channel
 
 
 class LauncherCase(PersonaIso):
@@ -185,6 +185,10 @@ class TestProjectScopedServersAreChecked(LauncherCase):
 
 
 class TestItIsWiredIn(unittest.TestCase):
+    def setUp(self) -> None:
+        # `run_all` reaches `check_plugin_freshness`, and so the channel (#459).
+        pin_update_channel(self)
+
     def test_the_check_runs_in_doctor(self):
         """A check nothing calls is the same silence it was written to end."""
         names = [r.name for r in doctor.run_all()]

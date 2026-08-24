@@ -50,9 +50,22 @@ class PersonaIso(unittest.TestCase):
         self._orig = config.use(self.tmp)
 
         config.PERSONAS_DIR.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(self._restore)
+        # PRIVATE, and name-mangled on purpose (`_PersonaIso__restore`). `addCleanup` binds
+        # a bound method by attribute lookup on the INSTANCE, so a subclass defining its own
+        # `_restore` — the obvious name for "put my stubs back" — replaced this one:
+        # `super().setUp()` registered the SUBCLASS's method, config was never restored, and
+        # `config.ROOT` stayed pointed at a tmp directory that had just been deleted for
+        # every test that ran afterwards. `test_secret_exec.SecretExecMode` did exactly
+        # that, and because discovery runs alphabetically it left every module from
+        # `test_secret_*` onward — 1193 tests — reading a dead plane. That is also why the
+        # two classes #459 is about failed when run alone and passed in a full run: a dead
+        # plane declares no channel, which looks exactly like the `stable` they assumed.
+        # `test_secret_cp_destination` had sidestepped the collision by hand, with a comment
+        # warning the next person; a hazard that needs a comment in every subclass is one
+        # the base class should have removed.
+        self.addCleanup(self.__restore)
 
-    def _restore(self) -> None:
+    def __restore(self) -> None:
         # An embedded plane's worktree root is a SIBLING of ROOT, so it survives the
         # rmtree below. Removed by name-prefix rather than by "is it outside tmp" — the
         # only path this ever creates is `<tmp>.worktrees`, and anything else sharing the
@@ -132,3 +145,25 @@ def isolate_state_dir(case) -> Path:
     case.addCleanup(lambda: (setattr(config, "STATE_DIR", orig),
                              shutil.rmtree(tmp, ignore_errors=True)))
     return config.STATE_DIR
+
+
+def pin_update_channel(case, channel: str = "stable") -> dict:
+    """Pin ``config.UPDATE`` for one test case, restoring after.
+
+    The companion to :func:`isolate_state_dir`, for the same shape of test and for the
+    reason `tests/_planeguard.py` sets out at length: a case that deliberately runs against
+    the REAL plane still may not read `[update] channel` off it, because that value belongs
+    to whoever is running the suite rather than to charter (#459). Without a pin, such a
+    case passes on a stable plane and fails on a dev one, and `tests._planeguard` refuses
+    the read rather than let it decide the assertion silently.
+
+    Defaults to ``"stable"`` — the channel almost every case here means when it means
+    nothing in particular, and the one `instance.UPDATE_DEFAULTS` gives a plane that
+    declares no ``[update]`` section at all. A case that is ABOUT the dev channel passes
+    ``"dev"`` and is then testing a fixture rather than an environment.
+    """
+    pinned = {"channel": channel}
+    patcher = mock.patch.object(config, "UPDATE", pinned)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return pinned

@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 
 from charter import config, statusline
-from tests._isolation import PersonaIso, isolate_state_dir
+from tests._isolation import PersonaIso, isolate_state_dir, pin_update_channel
 
 
 def _plain(parts):
@@ -34,6 +34,10 @@ def _payload(pct=None, read=None, write=None, usage=True):
 class ContextGaugeCase(unittest.TestCase):
     def setUp(self):
         isolate_state_dir(self)
+        # The render path brands the last line, and `_brand` renders the channel chip.
+        # This case runs against the real plane on purpose; the chip is not what it is
+        # about, so it is pinned rather than inherited (#459).
+        pin_update_channel(self)
         # `test_gauge_appears_in_the_rendered_summary` calls `statusline.render`, which
         # persists usage under `config.SESSIONS_DIR` — isolate it so the suite never
         # writes into this repo's own `.charter/sessions/`.

@@ -37,7 +37,7 @@ class TestIsolationHarnessHasControlPlane(unittest.TestCase):
             # Not just False by luck — actually derived from the harness's own ROOT.
             self.assertEqual(config.HAS_CONTROL_PLANE, (config.ROOT / root.MARKER).is_file())
         finally:
-            case._restore()
+            case.doCleanups()
             config.HAS_CONTROL_PLANE = original
 
     def test_a_control_plane_marker_in_the_temp_root_is_reflected_as_true(self):
@@ -55,7 +55,7 @@ class TestIsolationHarnessHasControlPlane(unittest.TestCase):
             self.assertEqual(config.ROOT, fixed_tmp)
             self.assertTrue(config.HAS_CONTROL_PLANE)
         finally:
-            case._restore()  # also removes fixed_tmp, since case.tmp == fixed_tmp
+            case.doCleanups()  # also removes fixed_tmp, since case.tmp == fixed_tmp
             config.HAS_CONTROL_PLANE = original
 
 
@@ -82,7 +82,7 @@ class TestIsolationHarnessInventory(unittest.TestCase):
             self.assertEqual(config.INVENTORY, config.ROOT / "inventory" / "repos.json")
             self.assertTrue(str(config.INVENTORY).startswith(str(config.ROOT)))
         finally:
-            case._restore()
+            case.doCleanups()
             self.assertEqual(config.INVENTORY, original)  # restored on cleanup
 
 
@@ -132,11 +132,58 @@ class EveryRootDerivedPathIsIsolated(PersonaIso):
 
     def test_every_path_constant_is_named_in_the_patch_tuple(self):
         """Belt and braces: a constant could coincidentally resolve inside the sandbox
-        while still being ambient. `_PATCH` is also what `_restore` reads, so a name
+        while still being ambient. `_PATCH` is also what the cleanup reads, so a name
         missing here is a value never put back after the test."""
         missing = [n for n, _ in self._path_constants() if n not in _PATCH]
         self.assertEqual(missing, [], f"config path constants absent from _PATCH (add "
                                       f"them there AND derive them in setUp): {missing}")
+
+
+class ASubclassCannotShadowTheHarnessCleanup(unittest.TestCase):
+    """`PersonaIso`'s cleanup is name-mangled, and this is why (#459).
+
+    `addCleanup(self._restore)` binds by attribute lookup on the INSTANCE, so a subclass
+    defining a `_restore` of its own — the obvious name for "put my stubs back" — replaced
+    the base class's method entirely: `super().setUp()` registered the SUBCLASS's cleanup,
+    config was never restored, and `config.ROOT` stayed pointed at a tmp directory that had
+    just been deleted for every test that ran afterwards.
+
+    `test_secret_exec.SecretExecMode` did exactly this. Because discovery runs
+    alphabetically, everything from `test_secret_*` onward then ran against a dead plane —
+    1193 tests, and the reason `test_statusline_brand`'s and `test_version_lock`'s missing
+    channel isolation (#459) showed up when those modules were run alone and vanished in a
+    full-suite run. `test_secret_cp_destination` had avoided the same collision by hand,
+    with a comment warning the next person; the collision is impossible now instead.
+    """
+
+    class _ShadowsRestore(PersonaIso):
+        def setUp(self) -> None:
+            super().setUp()
+            self.subclass_restore_ran = False
+            self.addCleanup(self._restore)
+
+        def _restore(self) -> None:
+            self.subclass_restore_ran = True
+
+        def runProbe(self) -> None:
+            """Deliberately not named ``test_*``: discovery collects this class, and this
+            method exists to be driven by the case below, not to run on its own."""
+            self.assertNotEqual(config.ROOT, self.outer_root)
+
+    def test_config_is_restored_even_when_the_subclass_defines_restore(self):
+        outer_root, outer_update = config.ROOT, config.UPDATE
+        case = self._ShadowsRestore("runProbe")
+        case.outer_root = outer_root
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertTrue(result.wasSuccessful(), result.errors or result.failures)
+        self.assertTrue(case.subclass_restore_ran,
+                        "the subclass's own cleanup must still run — the fix is that it no "
+                        "longer runs INSTEAD of the harness's")
+        self.assertEqual(config.ROOT, outer_root, "PersonaIso's cleanup was shadowed: "
+                                                  "config.ROOT is still the deleted tmp")
+        self.assertIs(config.UPDATE, outer_update)
+        self.assertFalse(case.tmp.exists(), "the tmp tree was never removed either")
 
 
 if __name__ == "__main__":
