@@ -435,14 +435,21 @@ _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg 
 #: the tool gate's surface on such a plane without being named there.
 #:
 #: `IGNORECASE` because the answer must not depend on which filesystem the guard happens to
-#: be running on. macOS/APFS and Windows fold case by default, so `.CHARTER/vaults/db.json`
-#: and `.charter/VAULTS/db.json` are the SAME INODE as the denied form there — and this
-#: pattern, being case-sensitive, allowed both. The flag closes every case spelling at once
-#: rather than a list of them; on a case-sensitive filesystem it costs a denial of a
-#: differently-cased directory that is not charter's, which is the fail-closed direction
-#: this guard already takes elsewhere (see `_names_a_vault_path`'s raw arm). The reader-name
-#: check has always `.lower()`ed for the same reason; the path check was the half that did
-#: not.
+#: be running on. macOS/APFS folds case by default, so `.CHARTER/vaults/db.json` and
+#: `.charter/VAULTS/db.json` are the SAME INODE as the denied form on half the machines
+#: charter runs on — and this pattern, being case-sensitive, allowed both. The flag closes
+#: every case spelling at once rather than a list of them; on a case-sensitive filesystem it
+#: costs a denial of a differently-cased directory that is not charter's, which is the
+#: fail-closed direction this guard already takes elsewhere (see `_names_a_vault_path`'s raw
+#: arm). The reader-name check has always `.lower()`ed for the same reason; the path check
+#: was the half that did not.
+#:
+#: This comment used to cite Windows alongside macOS, and the SEPARATOR is where that got
+#: expensive: the same argument reads as a reason to fold `\` too (#476). It is not, because
+#: charter's harness does not run on Windows — it builds and drives a tmux session and
+#: writes vaults at `0o600` — so folding a backslash would buy nothing on any supported host
+#: and would deny POSIX filenames that legitimately contain one. macOS carries the case
+#: argument on its own; nothing here answers for a platform charter does not support.
 _VAULT_PATH_RE = re.compile(
     r"\.(?:charter|edm)(?:/(?:vaults(?:/|$)|browser|active-|fingerprint)|/?$)",
     re.IGNORECASE)
@@ -497,6 +504,224 @@ def _names_a_vault_path(operand: str) -> bool:
     """
     norm = os.path.normpath(operand)
     return bool(_VAULT_PATH_RE.search(operand) or _VAULT_PATH_RE.search(norm))
+
+
+# --------------------------------------------------------------------------- #
+# The other half of the same guard: an operand that CONTAINS the vault          #
+# directory without naming it (#474).                                          #
+# --------------------------------------------------------------------------- #
+#: The names under `config.STATE_DIR` whose CONTENT is the secret — the same four things
+#: `_VAULT_PATH_RE` spells as text, listed here as directory entries because this half of
+#: the guard is about a walk that never spells them at all.
+#:
+#: Split into an EXACT name and three prefixes for the reason `_VAULT_PATH_RE` anchors
+#: `vaults` to a path segment: `.charter/vaults.json` is the REGISTRY — provider config and
+#: file paths, never a value — and an ordinary read that a wider match denies. A single
+#: `startswith` tuple here matched it, and the differential against `origin/main` caught
+#: `ag TOKEN .charter/vaults.json` newly refused, which is #443's false positive coming back
+#: through the other predicate. The other three are prefixes in `_VAULT_PATH_RE` too
+#: (`browser…`, `active-…`, `fingerprint…`), so they stay prefixes here.
+_GUARDED_STATE_EXACT = ("vaults",)
+_GUARDED_STATE_PREFIXES = ("browser", "active-", "fingerprint")
+
+
+def _guarded_state_entries() -> list[Path]:
+    """The state entries a directory WALK would read — asked of the filesystem.
+
+    Derived from `config.STATE_DIR` rather than from the literal `.charter/`, for the reason
+    `toolgate._control_roots` gives: `$CHARTER_HOME` puts this directory somewhere no
+    pattern can spell, and the legacy `.edm/` puts it somewhere else again.
+
+    An EMPTY guarded directory is left out on purpose. A fresh plane has `vaults/` and
+    nothing in it, and a guard that refuses `grep -r TODO .` there is refusing an ordinary
+    search to protect nothing — the fastest way to teach people that this denial is noise.
+    """
+    from . import config as _cfg
+    out: list[Path] = []
+    try:
+        entries = list(os.scandir(Path(_cfg.STATE_DIR)))
+    except OSError:
+        return out
+    for entry in entries:
+        if entry.name not in _GUARDED_STATE_EXACT and \
+                not entry.name.startswith(_GUARDED_STATE_PREFIXES):
+            continue
+        try:
+            if entry.is_dir() and next(os.scandir(entry.path), None) is None:
+                continue                    # an empty directory has nothing to leak
+        except OSError:
+            continue
+        out.append(Path(entry.path))
+    return out
+
+
+#: Readers that DESCEND INTO DIRECTORIES, and the options that tell them to. ``None`` means
+#: the program walks the tree with no option at all — `rg` and `ag` search everything below
+#: their operand, and below the cwd when given none.
+#:
+#: This is a subset of `_READERS` and inherits its ceiling exactly: a name missing from here
+#: is a walk this guard does not see, the same way a name missing from `_READERS` is a read
+#: it does not see. That ceiling is stated in `SECURITY.md` and is not raised by adding
+#: names — it is why the sentence there says *mistakes*.
+_TREE_WALKERS: dict[str, frozenset[str] | None] = {
+    "grep": frozenset({"-r", "-R", "--recursive", "--dereference-recursive"}),
+    "rg": None,
+    "ag": None,
+}
+
+#: Letters that swallow the rest of their token as a value, per walker. Without this a
+#: cluster scan reads the `R` in `grep -eR foo` — which is the PATTERN — as `-R`.
+_CLUSTER_STOPS = {"grep": frozenset("efmABCd")}
+
+#: Options whose value EXCLUDES a directory from the walk. Read so that the fix the denial
+#: prints actually runs: a guard that refuses the command it recommends is one people learn
+#: to route around, which is the lesson `_plane_root_branch_reason` records for the plane
+#: root's remedy.
+#:
+#: Deliberately permissive, and NOT a security boundary: it takes any of these values as a
+#: real exclusion without checking that the program would honour it there. This whole guard
+#: is about the accident of searching a plane from its top — an attacker with shell access
+#: has `sh -c`, which charter does not re-parse at all.
+_EXCLUDE_OPTS = ("--exclude-dir", "--exclude", "--ignore-dir", "-g", "--glob", "--iglob")
+
+
+def _excluded_names(prog: str, args: list[str]) -> list[str]:
+    """The directory-name patterns an invocation asks its walker to skip."""
+    out: list[str] = []
+    argv = args[1:] if args and args[0] == prog else args
+    take_next = False
+    for a in argv:
+        if take_next:
+            take_next = False
+            out.append(a)
+            continue
+        name, sep, val = a.partition("=")
+        if name in _EXCLUDE_OPTS:
+            if sep:
+                out.append(val)
+            else:
+                take_next = True
+    # `!x` is `rg`'s spelling of "exclude x"; `*/x/*` and `**/x/**` are how the same thing
+    # is spelled to a glob that matches whole paths. Strip the punctuation, keep the name.
+    return [p.lstrip("!").strip("/").removeprefix("**/").removeprefix("*/")
+             .removesuffix("/**").removesuffix("/*") for p in out if p]
+
+
+def _walks_directories(prog: str, args: list[str]) -> bool:
+    """True when *prog* would descend into subdirectories of the operands it is given."""
+    base = os.path.basename(prog).lower()
+    if base not in _TREE_WALKERS:
+        return False
+    flags = _TREE_WALKERS[base]
+    if flags is None:
+        return True                         # walks the tree with no option at all
+    argv = args[1:] if args and args[0] == prog else args
+    stops = _CLUSTER_STOPS.get(base, frozenset())
+    for i, a in enumerate(argv):
+        if not a.startswith("-") or a in ("-", "--"):
+            continue
+        name, sep, attached = a.partition("=")
+        if name in flags:
+            return True
+        # `grep -d recurse` / `--directories=recurse` is the long way to spell `-r`.
+        if name in ("-d", "--directories"):
+            val = attached if sep else (argv[i + 1] if i + 1 < len(argv) else "")
+            if val == "recurse":
+                return True
+            continue
+        if a.startswith("--"):
+            continue
+        for ch in a[1:]:
+            if f"-{ch}" in flags:
+                return True
+            if ch in stops:
+                break                       # this letter takes the rest as its value
+    return False
+
+
+def _walk_into_guarded_state(cwd: str, operands: list[str], excluded: list[str]) -> Path | None:
+    """The guarded state entry a walk rooted at one of *operands* would descend into.
+
+    **The property, named: does the walk REACH the directory** — not how the operand is
+    spelled and not how the recursion is requested. `.`, `..`, `$PWD` typed out, an absolute
+    path and a path through a symlinked parent are five spellings of one ancestor, and the
+    six bypasses this guard family has had were all a literal set of spellings. So the
+    operand is resolved against the shell's directory and compared by ANCESTRY, and the
+    thing it is compared against is asked of the filesystem (:func:`_guarded_state_entries`)
+    rather than matched as text.
+
+    `resolve()` costs a `stat` walk, which is why nothing above calls it: this runs only
+    after a reader that walks trees has already been identified, which is rare on the Bash
+    hot path and never true of the `cat`/`head`/`sed` case the guard usually answers.
+    """
+    import fnmatch
+    targets = _guarded_state_entries()
+    if not targets:
+        return None
+    base_dir = Path(cwd or ".")
+    for operand in operands:
+        try:
+            base = (Path(operand) if os.path.isabs(operand) else base_dir / operand).resolve()
+        except OSError:
+            continue
+        for target in targets:
+            try:
+                resolved = target.resolve()
+            except OSError:
+                continue
+            if resolved != base and base not in resolved.parents:
+                continue
+            # Everything between the operand and the entry is a directory the walk has to
+            # enter; excluding any one of them keeps it out. `fnmatch` because
+            # `--exclude-dir` takes a GLOB, and `.charter*` is how people write it.
+            try:
+                parts = resolved.relative_to(base).parts if resolved != base else ()
+            except ValueError:              # pragma: no cover — ancestry was just proved
+                parts = ()
+            hop = tuple(parts) + (resolved.name,)
+            if any(fnmatch.fnmatch(part, pat) for part in hop for pat in excluded):
+                continue
+            return resolved
+    return None
+
+
+def _glob_selects_inside(entry: Path, pattern: str, limit: int = 512) -> bool:
+    """True when *pattern* selects at least one file that is really inside *entry*.
+
+    A filesystem question rather than a reading of the glob: `*.py` over a directory holding
+    only `.json` vaults selects nothing, and refusing that search would be a false denial on
+    the commonest narrowed search an agent makes. Bounded, and the bound FAILS CLOSED — an
+    entry too large to answer cheaply is treated as selected.
+    """
+    import fnmatch
+    pat = pattern.rsplit("/", 1)[-1]
+    if entry.is_file():
+        return fnmatch.fnmatch(entry.name, pat)
+    seen = 0
+    for _base, _dirs, files in os.walk(entry):
+        for name in files:
+            seen += 1
+            if seen > limit or fnmatch.fnmatch(name, pat):
+                return True
+    return False
+
+
+def _walks_into_guarded_state(prog: str, args: list[str], cwd: str) -> Path | None:
+    """`_walk_into_guarded_state` for one invocation, or ``None`` if it walks nothing."""
+    if not _walks_directories(prog, args):
+        return None
+    operands = _file_operands(prog, args)
+    # A walker with no operand searches the CWD — `grep -r PATTERN` and `rg PATTERN` both
+    # do, verified — so "no path was named" is a path, and it is the one an agent standing
+    # in the plane root types most often.
+    return _walk_into_guarded_state(cwd, operands or ["."], _excluded_names(prog, args))
+
+
+#: What to do about it, in both spellings, so the refusal is one edit away from running.
+_WALK_FIX = (
+    "Exclude it — `grep -rn --exclude-dir=.charter …`, `rg --glob '!.charter' …` — or "
+    "search the path you actually mean. `charter … secret exec --env NAME=<key> -- <cmd>` "
+    "is how a command gets a value without anyone reading one.")
 
 
 #: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost
@@ -816,6 +1041,21 @@ def _leak_reason(cmd: str, cwd: str = "") -> str | None:
             hit = _opens(_spliced_operands(_file_operands(prog, args)))
             if hit:
                 return hit
+        # …and the operand that contains the vault directory without naming it (#474). The
+        # two arms above decide on the TEXT of the operand, so `grep -rn TOKEN .` from the
+        # plane root printed every vault file while naming none of them. This one decides
+        # on where the walk GOES.
+        # `where`, not `cwd`: main's segment walk already tracks a `cd` across segments
+        # and a wrapper's own `-C`, and the walk's operand has to resolve against the
+        # directory the program will really run in — `cd sub && grep -r x .` searches
+        # `sub`, not the plane root, in BOTH directions.
+        hit = _walks_into_guarded_state(
+            prog, args,
+            where if os.path.isabs(where) else posixpath.join(cwd, where))
+        if hit is not None:
+            return (f"walks a directory tree that contains the plane's own `{hit.name}` — "
+                    f"every file in it would be printed into the transcript, and none of "
+                    f"them is named on this command line. " + _WALK_FIX)
     return None
 
 
@@ -1841,47 +2081,149 @@ _RESET_TREE_MODES = ("--hard", "--merge", "--keep")
 #: stands aside, and a refusal is one flag wide. Not hypothetical: this repo's own commit
 #: convention is `git -c commit.gpgsign=false commit`, so `git -c …` is a form agents type
 #: already.
-_GIT_VALUE_OPTS = ("-c", "--config-env", "--git-dir", "--work-tree", "--namespace")
+#:
+#: `-C` is here for the same reason and was NOT, because `_git_target` used to lift its
+#: value out of the argv before anything counted options — so `git -C <plane> checkout
+#: feature` presented `<plane>` as its subcommand the moment that lifting moved (#483). The
+#: two readings of a token belong in one table; keeping them apart is what made a directory
+#: and a subcommand indistinguishable in the first place.
+_GIT_VALUE_OPTS = ("-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace",
+                   "--super-prefix")
+
+#: The env spellings of the two global options that NAME A REPOSITORY. git reads these
+#: whether or not the command line mentions them, and `GIT_DIR=<plane>/.git git checkout
+#: feature` moves the plane root's HEAD from anywhere — verified against git 2.50.
+_GIT_DIR_ENV = {"GIT_DIR": "git_dir", "GIT_WORK_TREE": "work_tree"}
 
 
-def _git_target(cwd: str, args: list[str]) -> tuple[Path, list[str]]:
-    """Which repo a git invocation acts on, and its argv with ``-C <path>`` removed.
+def _git_globals(args: list[str]) -> tuple[list[str], list[str]]:
+    """Split a git argv into ``(git's OWN options, the subcommand and everything after)``.
 
-    `git -C <path>` is how a session standing in a workspace reaches the shared tree, so a
-    guard that only looked at the cwd would leave the door open from every clone.
+    **The split is the fix for #483, and the reason it is a function.** git stops reading
+    its own globals at the first non-option token, and every option after that belongs to
+    the SUBCOMMAND — so `-C` means "change directory" in `git -C <dir> switch neu` and
+    means `--force-create` in `git switch -C neu`. `_git_target` used to strip `-C <value>`
+    from anywhere in the argv, which read the second as the first: `target` became
+    `<plane root>/neu`, a directory that is not the root, and the guard stood aside while
+    git answered *"Switched to a new branch 'neu'"*. The ATTACHED form `-Cneu` was refused
+    the whole time, which is what a spelling-shaped guard looks like from the inside.
 
-    **A `-C` is resolved against the SHELL's directory**, which is what *cwd* carries. It
-    used to be `Path(args[i + 1])`, so a relative one resolved against whatever directory
-    the hook process happened to be started in — a directory the command being judged has
-    nothing to do with. `git -C ../../.. checkout feature` from a workspace clone moves the
-    PLANE ROOT's HEAD (verified end to end against git 2.50: *"Switched to branch
-    'feature'"*, and the root's `symbolic-ref` follows), and the guard was reading it as a
-    command against a path three levels above the hook's cwd, found something that was not
-    the plane root, and stood aside. `git -C . checkout feature` typed in the root itself
-    landed the same way, and so did `cd .. && git -C <root-name> checkout feature`.
+    Nothing here knows which options are `switch`'s; it knows only WHERE git stops looking,
+    which is the property, and it costs no list that can go stale.
 
-    Joining onto the running *target* rather than onto *cwd* is also what git itself does
-    when a command carries several: *"each subsequent non-absolute `-C <path>` is
-    interpreted relative to the preceding one"* — verified, `git -C ../.. -C .` from a
-    subdirectory answers the top level.
-
-    *args* is `_invocation`'s argv, which INCLUDES the program — dropping it here is what
-    lets the caller take "the first non-flag token" as the subcommand rather than as `git`.
+    *args* is `_invocation`'s argv, which INCLUDES the program — dropped here, so the
+    caller can take ``rest[0]`` as the subcommand rather than as `git`.
     """
-    target = Path(cwd or ".")
-    rest: list[str] = []
-    i = 1 if args else 0
-    while i < len(args):
-        # Only the separated form: git rejects the attached one outright ("unknown option:
-        # -C.", verified), so reading `-C.` as a directory would be inventing a command.
-        if args[i] == "-C" and i + 1 < len(args):
-            val = args[i + 1]
-            target = Path(val) if os.path.isabs(val) else target / val
+    argv = args[1:] if args else []
+    i = 0
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in _GIT_VALUE_OPTS else 1
+    return argv[:i], argv[i:]
+
+
+def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
+    """Every directory a git invocation's GLOBAL options aim it at — the subjects a
+    plane-root guard has to compare against the root.
+
+    Three global options name a repository, and the guard used to read exactly one of them:
+
+    * `git -C <path>` is how a session standing in a workspace reaches the shared tree, so a
+      guard that only looked at the cwd would leave the door open from every clone.
+    * `--work-tree <path>` names the working tree directly.
+    * `--git-dir <path>` names the refs that move. With no `--work-tree` beside it the
+      **cwd becomes the work tree**, so such an invocation has two subjects — the repository
+      the git dir belongs to, and the directory the files land in — and both are returned.
+
+    All three were already in `_GIT_VALUE_OPTS`, where they were skipped as option values so
+    they could not be misread as a subcommand, and then never looked at again. That is
+    #477: `git --git-dir <plane>/.git checkout feature`, run from a clone, moved the plane
+    root's HEAD and was allowed, because `_git_target` answered "the shell's cwd".
+    `GIT_DIR` / `GIT_WORK_TREE` are the same two options spelled as environment, and
+    `_split_env` was already holding them.
+
+    **A list, not a single path, because more than one directory can be the subject.** A
+    caller denies when ANY of them is the plane root, which is the fail-closed direction:
+    the cost is refusing `git --git-dir=<elsewhere>/.git checkout feature` typed IN the
+    plane root — a command that really does overwrite the root's working tree with another
+    repository's branch — and the benefit is that no single-path answer has to choose which
+    of two real subjects to report.
+
+    **Relative paths resolve against the SHELL's directory**, which is what *cwd* carries.
+    A `-C` used to be `Path(args[i + 1])`, so a relative one resolved against whatever
+    directory the hook process happened to be started in — a directory the command being
+    judged has nothing to do with. `git -C ../../.. checkout feature` from a workspace clone
+    moves the PLANE ROOT's HEAD (verified end to end against git 2.50: *"Switched to branch
+    'feature'"*), and the guard read it as a command against a path three levels above the
+    hook's cwd, found something that was not the plane root, and stood aside.
+
+    Joining onto the running target rather than onto *cwd* is also what git itself does when
+    a command carries several `-C`: *"each subsequent non-absolute `-C <path>` is
+    interpreted relative to the preceding one"* — verified, `git -C ../.. -C .` from a
+    subdirectory answers the top level. `--git-dir` and `--work-tree` are resolved against
+    the directory the `-C`s ended at, which is git's own documented rule for them.
+
+    *pre* is `_git_globals`' first half — git's own options ONLY. Passing the whole argv
+    here is what let `git switch -C neu` be read as a change of directory (#483).
+
+    **What it still does not follow**, because none of it is in the argv this holds: an
+    `export GIT_DIR=…` in an earlier segment of the same command line (the `cd` tracking in
+    `_plane_root_git` is the one shell effect charter models), a `GIT_DIR` already in the
+    session's environment, and `--git-dir` pointing at a linked worktree's git dir, whose
+    HEAD is that worktree's and not the root's.
+    """
+    here = Path(cwd or ".")
+    git_dir = work_tree = None
+    # Environment first, command line second: an option on the line overrides the env.
+    for assign in env:
+        name, _, val = assign.partition("=")
+        which = _GIT_DIR_ENV.get(name)
+        if which == "git_dir":
+            git_dir = val
+        elif which == "work_tree":
+            work_tree = val
+    i = 0
+    while i < len(pre):
+        tok = pre[i]
+        name, sep, attached = tok.partition("=")
+        # Only the separated form of `-C`: git rejects the attached one outright ("unknown
+        # option: -C.", verified), so reading `-C.` as a directory would invent a command.
+        if tok == "-C" and i + 1 < len(pre):
+            val = pre[i + 1]
+            if val:                     # `-C ""` leaves the directory unchanged (git docs)
+                here = Path(val) if os.path.isabs(val) else here / val
             i += 2
             continue
-        rest.append(args[i])
-        i += 1
-    return target, rest
+        if name in ("--git-dir", "--work-tree"):
+            if sep:
+                val, step = attached, 1
+            else:
+                val, step = (pre[i + 1] if i + 1 < len(pre) else ""), 2
+            if val:
+                if name == "--git-dir":
+                    git_dir = val
+                else:
+                    work_tree = val
+            i += step
+            continue
+        i += 2 if tok in _GIT_VALUE_OPTS else 1
+
+    def _at(p: str) -> Path:
+        return Path(p) if os.path.isabs(p) else here / p
+
+    out: list[Path] = []
+    if work_tree is None:
+        # No work tree named: the cwd is where the files land, and it is a subject whether
+        # or not a `--git-dir` moved the refs somewhere else.
+        out.append(here)
+    else:
+        out.append(_at(work_tree))
+    if git_dir is not None:
+        # The repository a git dir belongs to is its PARENT for the ordinary `<repo>/.git`
+        # layout, and the git dir itself when it is bare. Both are offered rather than
+        # guessed at: the caller only asks whether one of them is the plane root.
+        gd = _at(git_dir)
+        out.extend((gd, gd.parent))
+    return out
 
 
 def _plane_root_git(cmd: str, cwd: str, root: Path):
@@ -1891,10 +2233,11 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
     Factored out rather than copied when the reset guard arrived (#401). Everything in here
     is a trap one of the two guards already fell into once, and a second hand-written copy
     of it would fall into them again on its own schedule: the `cd` tracking is #183's fix,
-    the `-C` handling is what stops the guard being scoped to the cwd, and `_GIT_VALUE_OPTS`
-    is what stops `git -c x=y <sub>` reading as a subcommand nobody guards. A guard's blind
-    spot is invisible — it looks exactly like the guard being present and never firing — so
-    the two of them share one pair of eyes.
+    `_git_target` is what stops the guard being scoped to the cwd, and `_git_globals` is
+    what stops `git -c x=y <sub>` reading as a subcommand nobody guards — and, since #483,
+    what stops `git switch -C neu` reading as a change of directory. A guard's blind spot is
+    invisible — it looks exactly like the guard being present and never firing — so the two
+    of them share one pair of eyes.
 
     Yields ``(subcommand, args-after-it, git's-own-options-before-it)``. The subcommand is
     yielded raw; deciding which ones matter is each guard's own business. The leading
@@ -1907,13 +2250,17 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
     without quoting — and these are the guards whose failure mode is annoyance, not a leaked
     credential. A phantom `git checkout` conjured out of a broken quote must not stop a
     turn. The leak and one-credential guards, which may not miss, keep scanning it.
+
+    **Any** subject the invocation names being the plane root is enough, because a git
+    invocation can have more than one: `git --git-dir <plane>/.git checkout feature` moves
+    the root's refs while its files land in the cwd. See :func:`_git_target`.
     """
     segments, parsed = _segment_argv_parsed(cmd)
     if not parsed:
         return
     here = cwd
     for _toks in segments:
-        prog, _env, args = _split_env(_toks)
+        prog, env, args = _split_env(_toks)
         base = os.path.basename(prog or "")
         # A `cd` earlier in the SAME command moves where the later segments run. Without
         # this the guard refused `cd workspaces/<ws>/<repo> && git checkout -b x` — which is
@@ -1926,18 +2273,15 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
             continue
         if base != "git":
             continue
-        target, rest = _git_target(here, args)
-        i = 0
-        while i < len(rest) and rest[i].startswith("-"):
-            i += 2 if rest[i] in _GIT_VALUE_OPTS else 1
-        if i >= len(rest):
+        pre, rest = _git_globals(args)
+        if not rest:
             continue                        # global options only: no subcommand to judge
         try:
-            if target.resolve() != root:
+            if not any(t.resolve() == root for t in _git_target(here, pre, env)):
                 continue
         except OSError:
             continue
-        yield rest[i], rest[i + 1:], rest[:i]
+        yield rest[0], rest[1:], pre
 
 
 def _checkout_operand_kind(root: Path, op: str) -> str:
@@ -2450,10 +2794,16 @@ def _plane_root_reset_reason(cmd: str, cwd: str) -> str | None:
     case still exits on a string comparison.
     """
     # This is the SECOND guard on the plane root, and it runs on every Bash call the first
-    # one let through, so it does not pay for a shell parse it cannot use. Sound rather than
-    # heuristic: the only thing below that can deny is a subcommand token equal to `reset`,
-    # and a token cannot be in the argv without its characters being in the string.
-    if "reset" not in cmd:
+    # one let through, so it does not pay for a shell parse it cannot use. The test used to
+    # be `"reset" not in cmd`, which was sound while the guard read the subcommand as
+    # written — and stopped being sound the moment it started following ALIASES below: with
+    # `wipe = reset --hard` in the repo's config, `git wipe origin/main` destroys unpushed
+    # commits in the plane root and does not contain the word (#467).
+    #
+    # `git` is the sound version of the same shortcut: `_plane_root_git` yields only for a
+    # program whose basename is `git`, so those three characters have to be in the string
+    # before anything below can deny, however the subcommand is spelled.
+    if "git" not in cmd:
         return None
     from . import config as _cfg
     try:
@@ -2461,9 +2811,16 @@ def _plane_root_reset_reason(cmd: str, cwd: str) -> str | None:
     except OSError:
         return None
 
-    for sub, post, _pre in _plane_root_git(cmd, cwd, root):
+    for sub, post, pre in _plane_root_git(cmd, cwd, root):
         if sub != "reset":
-            continue
+            # …yet. The branch guard has followed aliases since #461's round two, and this
+            # one did not, so `git -c alias.z='reset --hard origin/main' z` destroyed the
+            # commits the branch guard would have refused a checkout for (#467). One guard
+            # resolving what a command will really do and its sibling matching the spelling
+            # is the split that let the alias route survive a fix aimed at it.
+            sub, post = _resolve_git_alias(root, sub, post, pre)
+            if sub != "reset":
+                continue
         if not any(a in _RESET_TREE_MODES for a in post):
             continue
         # Same reading of `--` the branch guard settled on: what FOLLOWS the separator is
@@ -2834,9 +3191,18 @@ def pretooluse_read() -> int:
     the next paragraph said it would. Any future widening belongs in the shared predicate,
     never in one caller.
 
-    Known limit, shared with the Bash guard and stated rather than papered over: a `Grep`
-    rooted at the repo top searches vault files as collateral. Denying every broad search is
-    untenable, so this checks the path the caller actually named.
+    **And the same second half, on the same route** (#474). `Grep` recurses — that is what
+    it is — so `Grep(path=".")` in the plane root read every vault file as collateral and
+    named none of them, exactly as `grep -rn TOKEN .` did on the Bash route. It is the same
+    defect, so it gets the same answer from the same pair of functions
+    (:func:`_walk_into_guarded_state`, :func:`_guarded_state_entries`): where the first
+    predicate reads the operand's TEXT, this one resolves it and asks whether the walk
+    REACHES a state entry that exists and holds bytes. `Read` is exempt because it takes a
+    file and does not walk.
+
+    Two routes, two predicates, one implementation of each. #462's lesson is the reason: the
+    day one route carried a private half of the answer, the vault DIRECTORY was refused here
+    and allowed on Bash.
 
     **The `except` covers the READING of the payload and nothing else** (#438). It used to
     wrap the whole body, `_deny` included, so any exception out of the refusal itself
@@ -2861,11 +3227,28 @@ def pretooluse_read() -> int:
         # directory operand for both routes, so this route no longer needs a private half of
         # the answer, and a repaired hole cannot be repaired in one caller again.
         hit = any(_names_a_vault_path(t) for t in targets)
+        # `Grep` walks; `Read` opens one file. So only `Grep` can reach a vault it did not
+        # name, and a `Grep` with no `path` at all searches the session's directory — the
+        # commonest spelling of the search that read every vault (#474).
+        walked = None
+        if not hit and (data.get("tool_name") or "") == "Grep":
+            walked = _walk_into_guarded_state(data.get("cwd") or "", targets or ["."], [])
+            # `Grep` has no exclude, so its own narrowing is what stands in for one — and it
+            # is answered by looking, not by reading the glob: a search for `*.py` over a
+            # directory of `.json` vaults prints nothing, and refusing it would be a false
+            # denial on the commonest narrowed search there is.
+            glob = str(ti.get("glob") or "")
+            if walked is not None and glob and not _glob_selects_inside(walked, glob):
+                walked = None
     except Exception:
         return 0
-    if not hit:
+    if not hit and walked is None:
         return 0
     reason = _READ_REASON
+    if walked is not None:
+        reason = (f"walks a directory tree that contains the plane's own `{walked.name}` — "
+                  f"every file in it would be printed into the transcript, and none of "
+                  f"them is named on this call. " + _WALK_FIX)
     rc = _deny("PreToolUse", reason)
     _trace("deny", data.get("session_id"), reason=reason[:70],
            cmd=(data.get("tool_name") or "")[:40])

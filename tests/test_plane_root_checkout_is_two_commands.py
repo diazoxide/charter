@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -95,7 +96,12 @@ _SUBS = ("checkout", "switch")
 #: option charter cannot place — in each spelling git's parser accepts: long, short, and a
 #: cluster in BOTH orders, since a cluster is read left to right and `-qd` meets a different
 #: letter first than `-dq`.
-_OPTS = ("", "-q", "--ours", "--detach", "-d", "-qd", "-dq", "-b", "--orphan")
+#:
+#: `-B` and `-C` are here since #483, and they are the axis that issue is really about: a
+#: short option whose LETTER is also the name of one of git's own globals. Crossing them
+#: with the operands is what produces `git switch -C feature` without anyone deciding to
+#: type it.
+_OPTS = ("", "-q", "--ours", "--detach", "-d", "-qd", "-dq", "-b", "-B", "-C", "--orphan")
 
 #: One witness per operand CLASS: the plane's DEFAULT BRANCH — the remedy's name, and the
 #: one the carve-out used to hand a free pass to whatever stood beside it — another branch,
@@ -561,6 +567,11 @@ class TestGitItselfIsTheOracle(CheckoutCase):
         "git checkout -f feature", "git checkout -q feature", "git checkout -fq feature",
         "git checkout --guess feature", "git checkout -m feature",
         "git switch feature", "git switch -c neu", "git switch -cneu",
+        # Round five's bypass, and the reason it was one: `-C` is git's change-directory
+        # global AND `switch`'s `--force-create`, and `_git_target` stripped the first
+        # reading from anywhere in the argv, so the SEPARATED form retargeted the guard at a
+        # directory called `neu` and the attached `-Cneu` was refused the whole time (#483).
+        "git switch -C neu", "git switch -Cneu", "git switch -C feature",
         "git switch --orphan neu", "git switch --orphan=neu",
         "git switch --detach feature", "git switch -d feature",
         # Restores and no-ops: nothing here may move HEAD, and the guard's verdict on them
@@ -602,7 +613,8 @@ class TestGitItselfIsTheOracle(CheckoutCase):
         for must in ("git checkout --orphan README", "git checkout -bREADME",
                      "git switch -cneu", "git checkout -d feature",
                      "git checkout --detach main", "git switch -d main",
-                     "git switch -- feature", "git switch -q -- ambig"):
+                     "git switch -- feature", "git switch -q -- ambig",
+                     "git switch -C neu"):
             self.assertIn(must, movers)
 
     def test_no_promised_restore_moves_head_and_every_one_is_allowed(self):
@@ -635,6 +647,17 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
     So the routes are an axis too, crossed with commands whose effect **git decides** — the
     same oracle as above, run on the bare command once, because a route cannot change what a
     command does to HEAD.
+
+    **Round five added the routes that name a repository without naming a directory to stand
+    in** (#477). `--git-dir`, `--work-tree` and their `GIT_DIR` / `GIT_WORK_TREE` env
+    spellings were all already known to this guard — they sat in `_GIT_VALUE_OPTS`, where
+    they were skipped as option VALUES so they could not be misread as a subcommand, and
+    then never looked at again. Verified end to end against git 2.50 from a workspace clone:
+    `git --git-dir <plane>/.git checkout feature` answers *"Switched to branch 'feature'"*
+    and the plane root's `symbolic-ref` follows, and the guard printed nothing. That is the
+    shape this class exists for — a route the guard has heard of and does not follow — and
+    it survived three rounds of route work because the routes were a list rather than an
+    axis crossed with the commands.
     """
 
     #: `(subcommand, rest)`, kept split so the alias route can put the subcommand inside
@@ -643,6 +666,11 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
         ("checkout", "feature"), ("switch", "feature"), ("checkout", "-b chore/x"),
         ("checkout", "--detach main"), ("switch", "-d main"), ("checkout", "--orphan README"),
         ("switch", "-- feature"), ("checkout", "ambig"),
+        # #483's command, carried through every route on purpose: the `-C` that means
+        # `--force-create` here has to survive being crossed with the routes that spell
+        # themselves `-C`, and `git -C <root> switch -C neu` is where the two readings meet
+        # in one argv.
+        ("switch", "-C neu"),
         # Not movers — carried through the same loop so the routes are exercised on the
         # allowed half too, and a route that started refusing every restore fails here.
         ("checkout", "README"), ("restore", "README"), ("checkout", "main"),
@@ -670,6 +698,27 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                f"cd .. && git -C {self.root.name} {tail}")
         yield ("an alias, from the clone", self.clone,
                f"git -C {self.up} -c alias.zz={sub} zz {rest}".strip())
+        # #477: the two globals that name a repository WITHOUT naming a directory to stand
+        # in. Both were already in `_GIT_VALUE_OPTS`, where they were skipped as option
+        # values so they could not be misread as a subcommand — and then never looked at
+        # again, so `git --git-dir <plane>/.git checkout feature` from a clone moved the
+        # root's HEAD and the guard said nothing. Verified end to end against git 2.50.
+        yield "--git-dir, separated", self.clone, f"git --git-dir {self.root}/.git {tail}"
+        yield "--git-dir=, attached", self.clone, f"git --git-dir={self.root}/.git {tail}"
+        yield ("--work-tree and --git-dir", self.clone,
+               f"git --work-tree={self.root} --git-dir={self.root}/.git {tail}")
+        yield ("--work-tree alone", self.clone,
+               f"git --work-tree {self.root} --git-dir {self.root}/.git {tail}")
+        # A relative `--git-dir` is interpreted against the directory the `-C`s ended at,
+        # which is git's own documented rule for it — so the two compose.
+        yield ("--git-dir relative to a -C", self.clone,
+               f"git -C {self.up} --git-dir=.git {tail}")
+        # The same two options spelled as environment. `_split_env` was already holding
+        # them; nothing read them.
+        yield ("GIT_DIR in the environment", self.clone,
+               f"GIT_DIR={self.root}/.git git {tail}")
+        yield ("GIT_WORK_TREE in the environment", self.clone,
+               f"GIT_WORK_TREE={self.root} GIT_DIR={self.root}/.git git {tail}")
 
     def test_a_head_move_is_denied_by_every_route(self):
         movers = []
@@ -684,8 +733,16 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                     self.assertEqual(_decision(r), "deny", f"{label}: {cmd}")
                     self.assertIn("PLANE ROOT", _reason(r), cmd)
         # Non-vacuity: if git stopped moving HEAD for these — a fixture with no second
-        # branch, say — the loop above would assert nothing and still pass.
-        self.assertGreaterEqual(len(movers), 7, movers)
+        # branch, say — the loop above would assert nothing and still pass. And the ROUTES
+        # are counted too: a `routes()` that quietly stopped yielding the `--git-dir` half
+        # would leave every remaining assertion green while covering less than it did.
+        self.assertGreaterEqual(len(movers), 8, movers)
+        labels = {label for label, _cwd, _cmd in self.routes("checkout", "feature")}
+        self.assertGreaterEqual(len(labels), 15, sorted(labels))
+        for must in ("--git-dir, separated", "--git-dir=, attached",
+                     "--work-tree and --git-dir", "--git-dir relative to a -C",
+                     "GIT_DIR in the environment", "GIT_WORK_TREE in the environment"):
+            self.assertIn(must, labels)
 
     def test_a_restore_is_allowed_by_every_route(self):
         """The routes do not become a way to refuse what charter permits. Widening the
@@ -789,7 +846,20 @@ PINNED: tuple[tuple[str, str, str, str], ...] = (
     ("DENY", "root", "git switch -", "the previous branch, again"),
     ("DENY", "root", "git switch -c neu", ""),
     ("DENY", "root", "git switch -cneu", "attached"),
-    ("DENY", "root", "git switch -Cneu", "the ATTACHED spelling of the one #483 misses"),
+    ("DENY", "root", "git switch -Cneu", "the ATTACHED spelling, refused all along"),
+    # Was the LIMIT #483 row until this commit, and the flip is the point of pinning it:
+    # `-C` is git's change-directory global AND `switch`'s `--force-create`, and
+    # `_git_target` stripped the first reading from ANYWHERE in the argv — so this
+    # retargeted the guard at a directory called `neu`, which is not the plane root, and
+    # both plane-root guards stood aside without printing anything. git: "Switched to a new
+    # branch 'neu'". `_git_globals` now splits the argv at the subcommand first, which is
+    # the only position git itself reads a global `-C` in.
+    ("DENY", "root", "git switch -C neu", "#483: the SEPARATED short form on `switch`"),
+    ("DENY", "root", "git switch -C feature", "the same, force-creating over a branch that exists"),
+    ("DENY", "root", "git switch -q -C neu", "and with a restore-shaped option beside it"),
+    ("DENY", "root", "git -C . switch -C neu",
+     "both readings of `-C` in one argv: the global retargets, the option creates"),
+    ("DENY", "clone", "git -C {up} switch -C neu", "the same from a clone, relative"),
     ("DENY", "root", "git switch --create neu", ""),
     ("DENY", "root", "git switch --force-create neu", ""),
     ("DENY", "root", "git switch --orphan neu", ""),
@@ -830,6 +900,35 @@ PINNED: tuple[tuple[str, str, str, str], ...] = (
     ("DENY", "clone", "git -C {up} -C . checkout feature", "two `-C`, each relative to the one before"),
     ("DENY", "clone", "git -C {up} switch -c neu", "a create by that route"),
     ("DENY", "clone", "git -C {up} -c alias.zz=checkout zz feature", "an alias by that route"),
+    # Was the three LIMIT #477 rows until this commit. `--git-dir` and `--work-tree` name a
+    # repository without naming a directory to stand in, and both were in `_GIT_VALUE_OPTS`
+    # — skipped as option VALUES so they could not be misread as a subcommand, and then
+    # never looked at again. Verified against git 2.50: from a clone, each of these answers
+    # "Switched to branch 'feature'" and the plane root's `symbolic-ref` follows.
+    ("DENY", "clone", "git --git-dir={root}/.git checkout feature", "#477: --git-dir, attached"),
+    ("DENY", "clone", "git --git-dir {root}/.git checkout feature", "#477: the separated form"),
+    ("DENY", "clone", "git --work-tree={root} --git-dir={root}/.git checkout feature",
+     "#477: --work-tree names the tree directly"),
+    ("DENY", "clone", "git --git-dir={root}/.git switch -c neu", "#477, creating a branch"),
+    ("DENY", "clone", "git -C {up} --git-dir=.git checkout feature",
+     "#477: a relative --git-dir is read against the directory the -C landed in"),
+    ("DENY", "clone", "GIT_DIR={root}/.git git checkout feature", "#477: the env spelling"),
+    ("DENY", "clone", "GIT_WORK_TREE={root} GIT_DIR={root}/.git git switch feature",
+     "#477: both env spellings together"),
+    ("DENY", "clone", "git --git-dir={root}/.git switch -C neu",
+     "#477 and #483 in one argv: the route the guard could not follow, carrying the option "
+     "it could not read"),
+    ("DENY", "clone", "git --git-dir={root}/.git checkout --orphan README",
+     "#477 carrying round one's bypass"),
+    ("DENY", "clone", "git --git-dir={root}/.git --work-tree={root} checkout --detach main",
+     "#477 with the options the other way round, carrying round three's"),
+    ("DENY", "above", "git --git-dir={name}/.git checkout feature",
+     "#477 with a RELATIVE git dir, resolved against the shell like a `-C`"),
+    ("DENY", "clone", "GIT_DIR={root}/.git git -c alias.zz=switch zz -d main",
+     "#477's route carrying #467's alias"),
+    ("DENY", "clone", "git --work-tree {root} checkout feature",
+     "git itself refuses --work-tree without a git dir; charter refuses AHEAD of git, "
+     "deliberately, rather than depending on git continuing to"),
     ("DENY", "above", "cd {name} && git checkout feature", "a `cd` earlier in the SAME command"),
     ("DENY", "above", "cd {name} && git switch feature", ""),
     ("DENY", "root", "cd .. && git -C {name} checkout feature", "out and back in again"),
@@ -872,19 +971,22 @@ PINNED: tuple[tuple[str, str, str, str], ...] = (
     ("ALLOW", "clone", "git -C . checkout -b feature/x", "the reach is not 'anything with a -C in it'"),
     ("ALLOW", "clone", "git -C {clone} checkout -b feature/x", ""),
     ("ALLOW", "clone", "cd .. && git -C svc checkout -b feature/x", ""),
+    ("ALLOW", "clone", "git switch -C neu", "#483's option, in the repo where branch work belongs"),
+    ("ALLOW", "clone", "git --git-dir=.git switch -c feature/x",
+     "#477's option pointed at the clone's OWN git dir: the reach is the repository it names"),
+    ("ALLOW", "clone", "git --work-tree={clone} --git-dir={clone}/.git checkout -b feature/x", ""),
+    ("ALLOW", "clone", "GIT_DIR={clone}/.git git switch -c feature/x", "the env spelling of the same"),
+    ("ALLOW", "clone", "git --git-dir={root}/.git checkout README",
+     "#477 widened the REACH, not what is refused: a restore is still a restore there"),
 
     # --- ALLOW, and every row a KNOWN LIMIT: a command that DOES move the plane root's
     #     HEAD and is not refused. Pinned as facts rather than left as silent gaps, each
     #     naming the issue that tracks it. Closing one turns its row RED, which is the
     #     point: a limit should not disappear without somebody noticing and saying so.
-    ("ALLOW", "root", "git switch -C neu",
-     "LIMIT #483: `-C` is _git_target's change-directory global AND switch's --force-create; "
-     "the separated form is eaten as a directory. git: Switched to a new branch 'neu'"),
-    ("ALLOW", "clone", "git --git-dir={root}/.git checkout feature",
-     "LIMIT #477: --git-dir names the repository and _git_target does not read it"),
-    ("ALLOW", "clone", "git --git-dir {root}/.git checkout feature", "LIMIT #477: the separated form"),
-    ("ALLOW", "clone", "git --work-tree={root} --git-dir={root}/.git checkout feature",
-     "LIMIT #477: --work-tree names the tree directly"),
+    ("ALLOW", "clone", "export GIT_DIR={root}/.git && git checkout feature",
+     "LIMIT #496: the shared walk carries a `cd` across segments and not an env assignment, "
+     "so the ATTACHED spelling `GIT_DIR=… git …` is refused (#477) and this one is not. "
+     "git: Switched to branch 'feature', and the root's symbolic-ref follows"),
     # #430 CLOSED. These six rows were recorded as limits — `prog` came from token 0, so a
     # wrapper word or a shell keyword standing in front of `git` hid it from every guard in
     # the module. `_split_env_chdir` strips the wrapper run before naming the program and
@@ -993,13 +1095,13 @@ class TestThePinnedCorpusIsTheBaseline(CheckoutCase):
         denies = [r for r in PINNED if r[0] == "DENY"]
         allows = [r for r in PINNED if r[0] == "ALLOW"]
         limits = [r for r in PINNED if _LIMIT in r[3]]
-        self.assertGreaterEqual(len(denies), 70, len(denies))
-        self.assertGreaterEqual(len(allows) - len(limits), 30, len(allows) - len(limits))
-        # Was 12. Six of those rows were the #430 wrapper-prefix family, and they are not
-        # gone — they are still in the table, flipped to DENY and annotated with the issue
-        # that closed them. A floor over the count alone cannot tell "closed" from
-        # "deleted", so the closed six are named below and this number is what remains.
-        self.assertGreaterEqual(len(limits), 6, len(limits))
+        self.assertGreaterEqual(len(denies), 85, len(denies))
+        self.assertGreaterEqual(len(allows) - len(limits), 35, len(allows) - len(limits))
+        # There is deliberately NO floor on `len(limits)`. A count cannot tell "closed" from
+        # "deleted" in either direction: #430's six rows are still here, flipped to DENY and
+        # annotated, and #483/#477's four are gone because they were closed. What holds the
+        # limits honest is `LIMIT_ISSUES` below — the exact SET of issues cited, which fails
+        # when one is closed without saying so AND when one is added without saying so.
         self.assertEqual(sorted({r[0] for r in PINNED}), ["ALLOW", "DENY"])
 
     def test_a_closed_limit_stays_in_the_table_as_a_denial(self):
@@ -1024,15 +1126,30 @@ class TestThePinnedCorpusIsTheBaseline(CheckoutCase):
             self.assertNotIn(key, seen, f"{cmd!r} in {where} appears twice")
             seen[key] = verdict
 
+    #: The issues the remaining `LIMIT` rows track — the WHOLE set, not a floor.
+    #:
+    #: A count was the wrong shape and this commit is why. Round five closed #483 and #477,
+    #: which took the corpus from twelve limits to eight; a `>= 12` assertion turns closing
+    #: a hole into a red test with no name on it, and the only way to read that failure is
+    #: to lower the number, which is indistinguishable from a limit quietly reappearing. An
+    #: exact set fails in BOTH directions and says which issue moved: closing one leaves an
+    #: issue listed here with no row, and adding one leaves a row citing an issue not here.
+    LIMIT_ISSUES = {"#430", "#496"}
+
     def test_every_known_limit_names_the_issue_that_tracks_it(self):
         """A limit with no issue behind it is a gap somebody decided to live with and then
         forgot. The `#nnn` is what makes the row a decision rather than an omission — and
         what a reader follows when the row goes red because the limit was closed."""
         limits = [r for r in PINNED if _LIMIT in r[3]]
+        self.assertTrue(limits)
         for verdict, _where, cmd, note in limits:
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict, "ALLOW", "a LIMIT row records what is NOT refused")
                 self.assertRegex(note, r"LIMIT #\d+", cmd)
+        cited = {m for _v, _w, _c, note in limits
+                 for m in re.findall(r"LIMIT (#\d+)", note)}
+        self.assertEqual(cited, self.LIMIT_ISSUES,
+                         "a limit was closed or added without saying so here")
 
     def test_the_axes_the_recent_work_established_all_have_rows(self):
         """The spellings this guard was taught over four rounds, asserted to be PRESENT.
@@ -1043,10 +1160,13 @@ class TestThePinnedCorpusIsTheBaseline(CheckoutCase):
         """
         commands = " || ".join(f"{w} {c}" for _v, w, c, _n in PINNED)
         for axis in ("checkout -b", "checkout -B", "--detach", "--orphan", "git switch ",
-                     "switch -c", "switch -C", "switch -d", "checkout -d",
+                     "switch -c", "switch -C neu", "switch -d", "checkout -d",
                      "-qbREADME", "-qd", "-dq", "checkout -- ", "git restore ",
                      "git -C .", "git -C {root}", "git -C {up}", "cd {name} &&",
-                     "alias", "ambig", "notes/a.md", "$(echo"):
+                     "alias", "ambig", "notes/a.md", "$(echo",
+                     # Round five's axes: #483's separated short `-C`, and #477's three
+                     # spellings of "the repository is over there".
+                     "--git-dir=", "--git-dir ", "--work-tree", "GIT_DIR=", "GIT_WORK_TREE="):
             with self.subTest(axis=axis):
                 self.assertIn(axis, commands, f"no row covers {axis!r} any more")
 

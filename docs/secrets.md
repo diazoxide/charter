@@ -164,9 +164,10 @@ shell history**, while still letting an agent *use* the credential:
   the hook, is the control.
 
   `Glob` is not denied — it returns file *names*, and that a vault exists is not the secret.
-  Neither is a search rooted far above `.charter/`, which reads vault files as collateral;
-  denying every broad search is untenable, so both guards check the path you actually named.
-  What the two routes do **not** differ on is any spelling of a guarded path: they call one
+  A **recursive search rooted above the vault directory is** — `grep -rn TOKEN .` from the
+  plane root reads every vault file as collateral, and since #474 both routes refuse it and
+  name the exclusion that fixes it. What the two routes do **not** differ on is any spelling
+  of a guarded path: they call one
   predicate on the operand as written and neither adds a step of its own, which is asserted
   in both directions rather than assumed — the one round where the read route carried an
   extra step, the Bash route allowed `grep -rn TOKEN .charter/vaults` while `Grep` on the
@@ -197,16 +198,25 @@ shell history**, while still letting an agent *use* the credential:
   an ordinary file to every guard charter has. And a separator that is not `/`:
   normalisation is POSIX, so a Windows-style `.charter\vaults\db.json` is not folded,
   because on POSIX a backslash is an ordinary filename character and folding it would deny
-  real filenames.
+  real filenames. charter's harness targets POSIX — macOS and Linux, with tmux — and is
+  neither tested nor supported on Windows, which is why the guard is not made to answer
+  differently there (#476).
 
-  *The path you actually named.* An operand that **contains** the vault directory without
-  naming it is not a vault path: `grep -rn TOKEN .` from the plane root reads every vault
-  file as collateral, names none of them, and is allowed. This is the one that ends up
-  mattering most in practice, and it is deliberate on both routes — denying every broad
-  search is untenable, so both the Bash guard and the `Read`/`Grep` guard check the path in
-  the operand rather than the files a recursive walk would reach. It is also the reason
-  `charter init` gitignores the whole of `/.charter/` rather than relying on the guard to
-  keep a vault out of a commit.
+  *The path you actually named — and, since #474, the path the walk reaches.* An operand
+  that **contains** the vault directory without naming it used to be allowed: `grep -rn
+  TOKEN .` from the plane root reads every vault file as collateral and names none of them.
+  A second predicate now covers it on both routes. It asks whether the walk would **reach**
+  charter's state directory rather than how the operand is spelled — the operand is resolved
+  against the shell's directory and compared by ancestry, so `.`, `..`, `../..`, an absolute
+  path and a symlinked parent are one question — and it fires only when the guarded entries
+  exist and hold something, so a plane with no file-backed vault never sees it. The denial
+  names the fix: `grep -rn --exclude-dir=.charter …`, `rg --glob '!.charter' …`, and both
+  are asserted to run in `tests/test_vault_path_spellings.py`.
+
+  The ceiling on *that* predicate is the same one the reader list has: it knows which
+  programs walk directories, so `find . -type f -exec cat {} +`, `tar cf - .` and an
+  interpreter all reach the same files unguarded. `charter init` gitignores the whole of
+  `/.charter/`, which is what actually keeps a vault out of a commit.
 
   *Before any shell runs.* This is the one people discover the hard way. The hook is handed
   the command line and never sees what the shell makes of it, so every expansion is a read

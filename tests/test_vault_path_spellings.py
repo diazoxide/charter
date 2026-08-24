@@ -25,12 +25,22 @@ file and `tests/test_vault_read_guard.py` were green throughout. `TestTheTwoGuar
 is the answer to that shape: one corpus, both routes, fails in either direction, so a repair
 made in one caller reddens it instead of hiding in it.
 
+**And the operand that CONTAINS the vault directory without naming it** — `grep -rn TOKEN .`
+from the plane root, which reads every vault file and names none of them. That was pinned
+here as a limit for two rounds and is closed in round five (#474) by a SECOND predicate
+rather than by widening this one: text about a path cannot answer a question about a walk.
+`TestAnOperandThatContainsTheVaultDirectoryIsRefused` holds the property, and
+`TestTheWalkGuardDoesNotOverreach` holds the half that makes it liveable — a broad search
+that reaches no vault, and the exclusion the denial recommends, both still run.
+
 **What is deliberately NOT closed, pinned as behaviour rather than left to be rediscovered.**
-`TestWhatStillWalksPastBothGuards` — an operand that merely CONTAINS the vault directory,
-e.g. `grep -rn TOKEN .` (#474). `TestSeparatorMeansTheForwardSlash` — a Windows-style
-backslash spelling (#476). Both are stated as limits in `SECURITY.md`, `docs/secrets.md` and
-`skills/secrets/SKILL.md`, and if either ever starts being denied these tests fail next to
-the paragraph that has to move with it.
+`TestWhatStillWalksPastBothGuards` — a program charter does not know walks directories
+(`find … -exec cat`, `tar`), an interpreter's argument, and a `cd` earlier in the same
+command. `TestSeparatorMeansTheForwardSlash` — a Windows-style backslash spelling (#476),
+which stays unfolded because charter's harness targets POSIX and is not supported on
+Windows. All are stated as limits in `SECURITY.md`, `docs/secrets.md` and
+`skills/secrets/SKILL.md`, and if any ever starts being denied these tests fail next to the
+paragraph that has to move with it.
 
 **What this file does NOT claim, because the first version of this docstring did and it was
 false.** It said the decision "depends on the path an operand names, not on how it is
@@ -388,24 +398,238 @@ class TestTheTwoGuardsCannotDisagree(PersonaIso):
                 self.assertFalse(self._read_denies(spelling), spelling)
 
 
-class TestWhatStillWalksPastBothGuards(unittest.TestCase):
-    """The limit this round did NOT close, pinned so the docs cannot quietly outgrow it.
+class WalkCase(PersonaIso):
+    """An isolated plane whose vault directory HOLDS SOMETHING.
 
-    Anchoring `vaults` to a segment closes every spelling of an operand that NAMES the vault
-    directory. It does nothing for an operand that merely CONTAINS it: `grep -r TOKEN .`
-    walks every vault file and names none of them. That is the same limit `pretooluse_read`'s
-    docstring already states for `Grep` — denying every broad search is untenable — and
-    `docs/secrets.md` now states it for the Bash route in the same words, where the
-    completeness claim is made.
+    `PersonaIso` is not optional here and the class it replaced went without it. The old
+    `TestWhatStillWalksPastBothGuards` was a bare `TestCase` asserting that
+    `grep -rn TOKEN .` is allowed — an assertion that reached `config.STATE_DIR` for the
+    REAL plane, and in a linked worktree `root.find_root()` redirects that to the operator's
+    main tree. It passed because the answer was "allowed" everywhere; the moment the answer
+    depends on what is on disk, a test without isolation is a test that reads someone's
+    actual `.charter/`.
 
-    Pinned as BEHAVIOUR, not as a wish: if someone later denies these, this test fails next
-    to the paragraph that has to change with it."""
+    The fabricated file matters too: `_guarded_state_entries` deliberately ignores an EMPTY
+    guarded directory, because a fresh plane has one and refusing every broad search there
+    protects nothing. So a fixture that only `mkdir`-ed would make every denial below
+    unreachable and every allowance below unfalsifiable.
+    """
 
-    def test_a_search_rooted_above_the_plane_is_allowed_on_both_routes(self):
-        for operand in (".", "..", "./", "/", "~", "$PWD"):
+    def setUp(self) -> None:
+        super().setUp()
+        from charter import config
+        self.state = config.STATE_DIR
+        self.vaults = self.state / "vaults"
+        self.vaults.mkdir(parents=True, exist_ok=True)
+        # A fabricated name and a fabricated value; nothing here is a credential.
+        (self.vaults / "db.json").write_text('{"password": "FABRICATED-not-real-9f3a"}\n')
+        self.root = config.ROOT
+
+    def bash(self, cmd: str, cwd=None) -> str | None:
+        return hooks._leak_reason(cmd, str(cwd if cwd is not None else self.root))
+
+    def grep_tool(self, cwd=None, **ti) -> str | None:
+        r = run_hook(hooks.pretooluse_read,
+                     {"tool_name": "Grep", "tool_input": ti, "session_id": "s",
+                      "cwd": str(cwd if cwd is not None else self.root)})
+        return (r or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason")
+
+
+class TestAnOperandThatContainsTheVaultDirectoryIsRefused(WalkCase):
+    """The limit round three pinned and round five closed (#474).
+
+    Anchoring `vaults` to a path segment closed every spelling of an operand that NAMES the
+    vault directory. It did nothing for an operand that merely CONTAINS it: `grep -rn TOKEN
+    .` from the plane root printed every vault file and named none of them, and both guards
+    stood aside because both decided on the TEXT of the operand.
+
+    **The property is "the walk reaches the directory", and that is what is tested.** Not a
+    list of spellings of "here" — `.`, `..`, an absolute path, a path through a symlinked
+    parent and a path with dot segments in it are all the same ancestor, and the six
+    bypasses this guard family has had were every one of them a literal set. The operand is
+    resolved against the shell's directory and compared by ancestry, and the thing it is
+    compared against is asked of the filesystem rather than matched as text — so a plane
+    whose `$CHARTER_HOME` puts the vaults somewhere no pattern can spell is covered by the
+    same code.
+
+    What it costs, deliberately: a broad search from the plane root is now refused, with the
+    exclusion that fixes it in the message. `SECURITY.md` used to call that untenable. The
+    trade is revisited on purpose here — the denial is scoped to a plane that has vault
+    FILES, it is one flag away from running, and the thing it prevents is plaintext in a
+    transcript.
+    """
+
+    def test_the_reported_command(self):
+        """The exact reproduction in #474: a recursive grep of the plane root."""
+        reason = self.bash("grep -rn TOKEN .")
+        self.assertIsNotNone(reason)
+        self.assertIn("vaults", reason)
+        self.assertIn("--exclude-dir", reason)
+
+    def test_every_spelling_of_the_same_ancestor(self):
+        """One property, so the spellings are varied and the answer must not."""
+        for operand in (".", "./", "..", "./.", ".//", "x/..", str(self.root),
+                        str(self.root) + "/", str(self.root) + "/./"):
             with self.subTest(operand=operand):
-                self.assertIsNone(hooks._leak_reason(f"grep -rn TOKEN {operand}"))
-                self.assertFalse(hooks._names_a_vault_path(operand))
+                self.assertIsNotNone(self.bash(f"grep -rn TOKEN {operand}"), operand)
+
+    def test_a_symlinked_route_to_the_same_directory(self):
+        """`resolve()` is what makes this a question about the directory rather than about
+        the string, and a symlink is the cheapest proof that the two differ."""
+        link = self.tmp / "link-to-plane"
+        link.symlink_to(self.root)
+        self.assertIsNotNone(self.bash(f"grep -rn TOKEN {link}"))
+
+    def test_a_walker_that_needs_no_flag_at_all(self):
+        """`rg` and `ag` recurse by default, so gating on `-r` would have been a guard
+        against one program's spelling of a property two programs have."""
+        for cmd in ("rg TOKEN", "rg TOKEN .", "ag TOKEN", "ag TOKEN ."):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(self.bash(cmd), cmd)
+
+    def test_every_spelling_of_grep_recursion(self):
+        for cmd in ("grep -r TOKEN .", "grep -R TOKEN .", "grep --recursive TOKEN .",
+                    "grep --dereference-recursive TOKEN .", "grep -rn TOKEN .",
+                    "grep -nr TOKEN .", "grep -d recurse TOKEN .",
+                    "grep --directories=recurse TOKEN ."):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(self.bash(cmd), cmd)
+
+    def test_a_recursive_grep_with_no_operand_searches_here(self):
+        """`grep -r PATTERN` and `rg PATTERN` both default to the cwd, so "no path was
+        named" is a path — and it is the one an agent standing in the plane root types."""
+        self.assertIsNotNone(self.bash("grep -r TOKEN"))
+        self.assertIsNotNone(self.bash("rg TOKEN"))
+
+    def test_it_follows_the_shell_and_not_the_hook_process(self):
+        """A relative operand belongs to the SHELL's directory. Judged from a workspace
+        clone, `../..` is the plane root — the same class of defect `_git_target` had."""
+        clone = self.root / "workspaces" / "ws" / "svc"
+        clone.mkdir(parents=True, exist_ok=True)
+        import os as _os
+        up = _os.path.relpath(self.root, clone)
+        self.assertIsNotNone(self.bash(f"grep -rn TOKEN {up}", cwd=clone))
+        self.assertIsNone(self.bash("grep -rn TOKEN .", cwd=clone),
+                          "a search of the clone reaches no vault and must stay allowed")
+
+    def test_the_grep_tool_route_answers_the_same_way(self):
+        """#462's lesson: one operand, one answer, whichever route it arrives on."""
+        self.assertIsNotNone(self.grep_tool(pattern="TOKEN", path="."))
+        self.assertIsNotNone(self.grep_tool(pattern="TOKEN"), "no path means the cwd")
+        self.assertIsNotNone(self.grep_tool(pattern="TOKEN", path=str(self.root)))
+
+
+class TestTheWalkGuardDoesNotOverreach(WalkCase):
+    """The other half, and the reason the guard is scoped the way it is. Every denial that
+    is not needed is a denial that gets the guard switched off."""
+
+    def test_a_non_recursive_read_of_the_same_directory_is_untouched(self):
+        """`grep -n TOKEN .` without recursion reads the directory and no file in it — GNU
+        grep answers "Is a directory". Nothing leaks, so nothing is refused."""
+        self.assertIsNone(self.bash("grep -n TOKEN ."))
+        self.assertIsNone(self.bash("cat ."))
+
+    def test_a_search_of_a_sibling_directory_is_untouched(self):
+        (self.root / "docs").mkdir(exist_ok=True)
+        for cmd in ("grep -rn TOKEN docs", "grep -rn TOKEN ./docs", "rg TOKEN docs"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_a_search_outside_the_plane_is_untouched(self):
+        outside = self.tmp / "elsewhere"
+        outside.mkdir()
+        self.assertIsNone(self.bash(f"grep -rn TOKEN {outside}", cwd=outside))
+
+    def test_the_exclusion_the_denial_recommends_actually_runs(self):
+        """A guard that refuses the command it recommends teaches people to route around
+        it — the lesson the plane-root guard's remedy carve-out records. So the fix in the
+        message is executed here, in every spelling the message offers."""
+        for cmd in ("grep -rn --exclude-dir=.charter TOKEN .",
+                    "grep -rn --exclude-dir .charter TOKEN .",
+                    "grep -rn --exclude-dir=vaults TOKEN .",
+                    "grep -rn --exclude-dir='.charter*' TOKEN .",
+                    "rg --glob '!.charter' TOKEN .",
+                    "rg -g '!.charter/**' TOKEN ."):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_an_empty_vault_directory_is_not_worth_a_denial(self):
+        """A fresh plane has `vaults/` and nothing in it. Refusing every broad search there
+        protects nothing and spends the guard's credibility."""
+        (self.vaults / "db.json").unlink()
+        self.assertIsNone(self.bash("grep -rn TOKEN ."))
+
+    def test_a_narrowed_grep_tool_call_is_answered_by_looking(self):
+        """`Grep` has no exclude, so its own narrowing stands in for one — and whether a
+        glob reaches a vault is decided by looking inside the directory, not by reading the
+        pattern. `*.json` does select the fixture; `*.py` does not."""
+        self.assertIsNone(self.grep_tool(pattern="TOKEN", path=".", glob="*.py"))
+        self.assertIsNotNone(self.grep_tool(pattern="TOKEN", path=".", glob="*.json"))
+
+    def test_the_registry_is_the_boundary_control_for_the_WALK_predicate_too(self):
+        """#443's false positive, one predicate over.
+
+        `.charter/vaults.json` is the registry — provider config and file paths, never a
+        value — and `_VAULT_PATH_RE` anchors `vaults` to a path SEGMENT so that it stays an
+        ordinary read. The walk predicate has its own copy of that question ("which entries
+        under the state directory are guarded?"), and its first cut asked
+        `name.startswith(("vaults", …))`, which matched the registry and started refusing
+        `ag TOKEN .charter/vaults.json` — a command `origin/main` allows.
+
+        The sibling test one class up asserts this through `cat`, which does not walk, so it
+        could not have caught it. This one uses a walker on purpose.
+        """
+        registry = self.state / ("vaul" + "ts.json")
+        registry.write_text("{}\n")
+        for cmd in (f"ag TOKEN {registry}", f"rg TOKEN {registry}",
+                    f"grep -rn TOKEN {registry}"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.bash(cmd), cmd)
+        self.assertIsNone(self.grep_tool(pattern="TOKEN", path=str(registry)))
+
+    def test_an_exclusion_naming_the_vault_directory_still_lets_the_search_run(self):
+        """The same bug had a second face: with the registry counted as a guarded entry,
+        `--exclude-dir=vaults` excluded one target and not the other, so the remedy stopped
+        working while the denial kept recommending it."""
+        (self.state / ("vaul" + "ts.json")).write_text("{}\n")
+        self.assertIsNone(self.bash("grep -rn --exclude-dir=vaults TOKEN ."))
+
+    def test_read_does_not_walk(self):
+        """`Read` opens one file. It cannot reach a vault it did not name, and the named
+        case is the other predicate's."""
+        r = run_hook(hooks.pretooluse_read,
+                     {"tool_name": "Read", "tool_input": {"file_path": "README.md"},
+                      "session_id": "s", "cwd": str(self.root)})
+        self.assertIsNone(_decision(r))
+
+
+class TestWhatStillWalksPastBothGuards(WalkCase):
+    """The limits round five did NOT close, pinned so the docs cannot quietly outgrow them.
+
+    Closing #474 moved the boundary; it did not remove it. Each of these really does read a
+    vault file, and each is allowed. They are the `_READERS` ceiling and the shell residual
+    in a new shape, and both are stated in `SECURITY.md` and `docs/secrets.md` — if one ever
+    starts being denied, this test fails next to the paragraph that has to change with it.
+    """
+
+    def test_a_reader_charter_does_not_know_walks_unguarded(self):
+        """The ceiling `_READERS` already has: `_TREE_WALKERS` is a subset of it, and a name
+        missing from either is a read the guard does not see. Widening the list does not fix
+        this — the next name is always the missing one."""
+        for cmd in ("find . -type f -exec cat {} +", "tar cf - .",
+                    "python3 -c \"import pathlib;print(pathlib.Path('.').rglob('*'))\""):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_an_interpreters_argument_is_text_and_is_not_re_parsed(self):
+        self.assertIsNone(self.bash("sh -c 'grep -rn TOKEN .'"))
+
+    def test_a_cd_earlier_in_the_command_is_not_followed_by_this_guard(self):
+        """`_plane_root_git` follows a `cd`; `_leak_reason` does not, and that difference is
+        older than this change. Recorded here rather than half-fixed on the hot path."""
+        outside = self.tmp / "elsewhere"
+        outside.mkdir()
+        self.assertIsNone(self.bash(f"cd {self.root} && grep -rn TOKEN .", cwd=outside))
 
 
 class TestSeparatorMeansTheForwardSlash(unittest.TestCase):
@@ -414,8 +638,23 @@ class TestSeparatorMeansTheForwardSlash(unittest.TestCase):
     `_VAULT_PATH_RE` and `os.path.normpath` are both POSIX `/`. A Windows-style
     `.charter\\vaults\\db.json` names the same file on a Windows filesystem and a
     DIFFERENT one on POSIX, where a backslash is an ordinary filename character. Charter
-    does not fold it, and the docs say `/` rather than "separators" for that reason. Filed
-    separately rather than closed here: folding `\\` on POSIX would deny real filenames.
+    does not fold it, and the docs say `/` rather than "separators" for that reason.
+
+    **#476 asked whether that should change, and the answer is no, on the prerequisite the
+    issue itself named: charter's harness does not run on Windows.** It is a tmux program —
+    `charter claude` builds and drives a tmux session, the frame repaints panes, and the
+    suite is run on macOS and Ubuntu — and it writes its vaults at `0o600`, a mode Windows
+    does not have. There is no Windows CI and no Windows install path. Folding `\\` would
+    therefore buy nothing on any host charter supports, and would cost a real denial on
+    POSIX filenames that legitimately contain a backslash; a platform-CONDITIONAL fold
+    would buy the same nothing at the price of making the guard's answer depend on the host,
+    which is the exact property `re.IGNORECASE` was added to remove. `toolgate._norm` made
+    the same call for the same reason in #443, where an unconditional fold INVENTED a
+    spelling and matched nothing.
+
+    So this is pinned as a decision, not as a gap, and `SECURITY.md` and `docs/secrets.md`
+    now say "charter's harness targets POSIX" where they used to name Windows as a reason.
+    The day a Windows harness exists, this test is where the change starts.
     """
 
     def test_a_backslash_spelling_is_not_folded(self):

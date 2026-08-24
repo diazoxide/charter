@@ -18,7 +18,13 @@ classifiers = [
   "Environment :: Console",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
+  # POSIX, not "OS Independent", which is what this said and was not true: the harness
+  # builds and drives a tmux session and writes its vaults at 0o600. Neither exists on
+  # Windows, there is no Windows CI, and a vault guard was being asked to answer for a
+  # platform charter does not run on (#476).
+  "Operating System :: POSIX",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",

@@ -21,6 +21,7 @@ being true and the command refused, or that fact being false and the same comman
 
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -248,6 +249,147 @@ class TestItDoesNotOverreach(PlaneRootAheadCase):
         the same command moves where the later segments run."""
         self.assertIsNone(_decision(
             self.run_cmd(f"cd {self.clone} && git reset --hard HEAD~1")))
+
+
+class TestEveryRouteToTheRootReachesThisGuardToo(PlaneRootAheadCase):
+    """The routes are shared with the branch guard, and so are their holes (#477).
+
+    `_plane_root_git` is one pair of eyes for both plane-root guards, precisely so a route
+    taught to one is a route both can see. #477 was the case where that paid a debt in the
+    other direction: `--git-dir`, `--work-tree` and their env spellings name a repository
+    without naming a directory to stand in, and `_git_target` read only the cwd and `-C` —
+    so `git --git-dir <plane>/.git reset --hard <ref>` destroyed unpushed commits in the
+    plane root from a clone, with no refusal, exactly as the branch half did.
+
+    Run from the CLONE, so the shell's own directory is never the answer.
+    """
+
+    def _denied(self, cmd: str) -> None:
+        r = self.run_cmd(cmd, cwd=self.clone)
+        self.assertEqual(_decision(r), "deny", cmd)
+        self.assertIn("2 commits", _reason(r), cmd)
+
+    def test_git_dir_attached(self):
+        self._denied(f"git --git-dir={self.root}/.git reset --hard origin/main")
+
+    def test_git_dir_separated(self):
+        self._denied(f"git --git-dir {self.root}/.git reset --hard origin/main")
+
+    def test_work_tree_and_git_dir(self):
+        self._denied(f"git --work-tree={self.root} --git-dir={self.root}/.git "
+                     f"reset --hard origin/main")
+
+    def test_the_environment_spelling(self):
+        self._denied(f"GIT_DIR={self.root}/.git git reset --hard origin/main")
+
+    def test_a_git_dir_relative_to_a_dash_C(self):
+        up = os.path.relpath(self.root, self.clone)
+        self._denied(f"git -C {up} --git-dir=.git reset --hard origin/main")
+
+    def test_the_clones_own_git_dir_is_not_the_root(self):
+        """The reach is the repository the option NAMES, not "any command with a --git-dir
+        in it". Asserted through the BRANCH guard, which needs no upstream to speak: a reset
+        in this clone is silent whatever the route, because nothing here is unpushed, so it
+        could not tell a working route from a broken one."""
+        self.assertIsNone(_decision(
+            self.run_cmd(f"git --git-dir={self.clone}/.git switch -c feature/x",
+                         cwd=self.clone)))
+
+
+class TestAnAliasIsAnotherSpellingOfReset(PlaneRootAheadCase):
+    """`git reset` is not the only way to spell `git reset` (#467).
+
+    The branch guard has followed aliases since #461's round two, for a reason its docstring
+    states plainly: `co = checkout` is on a large share of developer machines, and `git co
+    feature` moves the plane root's HEAD exactly as far. This guard — the one that exists
+    because eleven memory commits were destroyed — kept comparing the subcommand token to
+    the string `"reset"`, so the SAME alias route walked past it while its sibling refused a
+    branch switch through it. One guard resolving what a command will really do and its twin
+    matching the spelling is the split that let a fixed route stay open one guard over.
+
+    Every command below is a real `git reset --hard` wearing another name, and each is run
+    against the fixture that has two commits no remote holds — so the denial it must produce
+    is the measured one, not a guess about a shape.
+    """
+
+    def _denied_as_the_reset_guard(self, cmd: str) -> str:
+        """Assert the REASON, not the status. `git wipe origin/main` would be refused by the
+        branch guard too if the alias resolved to `checkout`, and a test that only read the
+        decision could not tell which guard spoke — the failure mode this file's siblings
+        record as "a guard passing because a DIFFERENT guard caught it"."""
+        r = self.run_cmd(cmd)
+        self.assertEqual(_decision(r), "deny", cmd)
+        reason = _reason(r)
+        self.assertIn("PLANE ROOT", reason, cmd)
+        self.assertIn("2 commits", reason, cmd)
+        self.assertIn("charter save", reason, cmd)
+        return reason
+
+    def test_a_command_line_alias_that_carries_the_whole_command(self):
+        """#467's own spelling: the definition and the use are in one command line, and no
+        `reset` token survives as the subcommand. git 2.50 runs it."""
+        self._denied_as_the_reset_guard("git -c alias.z='reset --hard origin/main' z")
+
+    def test_a_command_line_alias_that_carries_only_the_subcommand(self):
+        """The caller's own arguments are appended to the expansion, exactly as git appends
+        them — so the mode and the ref arrive from the other half of the argv."""
+        self._denied_as_the_reset_guard("git -c alias.zz=reset zz --hard origin/main")
+
+    def test_a_repo_config_alias(self):
+        """The spelling the early exit could not see. `_plane_root_reset_reason` used to
+        return on `"reset" not in cmd`, which is sound for a subcommand read as written and
+        false the moment aliases are followed: these five characters are in the config, not
+        in the command."""
+        self._in(self.root, "config", "alias.wipe", "reset --hard")
+        self._denied_as_the_reset_guard("git wipe origin/main")
+
+    def test_an_alias_that_carries_the_mode_and_takes_the_ref(self):
+        self._in(self.root, "config", "alias.nuke", "reset --hard origin/main")
+        self._denied_as_the_reset_guard("git nuke")
+
+    def test_an_alias_to_an_alias(self):
+        """git follows the chain, so a guard that stopped at one hop would be one alias
+        short of the same hole."""
+        self._in(self.root, "config", "alias.wipe", "reset --hard")
+        self._in(self.root, "config", "alias.w2", "wipe")
+        self._denied_as_the_reset_guard("git w2 origin/main")
+
+    def test_a_bang_alias_that_is_a_plain_git_command(self):
+        """`!git reset --hard` is a git command wearing a shell alias's clothes."""
+        self._in(self.root, "config", "alias.bang", "!git reset --hard")
+        self._denied_as_the_reset_guard("git bang origin/main")
+
+    def test_the_alias_route_reaches_the_root_from_a_clone(self):
+        self._in(self.root, "config", "alias.wipe", "reset --hard")
+        r = self.run_cmd(f"git -C {self.root} wipe origin/main", cwd=self.clone)
+        self.assertEqual(_decision(r), "deny")
+        self.assertIn("2 commits", _reason(r))
+
+    def test_the_same_alias_inside_a_clone_is_untouched(self):
+        """The widening is about WHAT the command is, not about where charter will refuse
+        it. Branch and reset work in a clone is the workflow both denials recommend."""
+        self._in(self.clone, "config", "alias.wipe", "reset --hard")
+        self.assertIsNone(_decision(self.run_cmd("git wipe HEAD~1", cwd=self.clone)))
+
+    def test_an_alias_that_is_not_a_reset_is_not_refused(self):
+        """The resolution has to be able to answer "no", or it is not resolution."""
+        self._in(self.root, "config", "alias.st", "status --short")
+        self._in(self.root, "config", "alias.lg", "log --oneline")
+        for cmd in ("git st", "git lg", "git -c alias.z='status --short' z"):
+            self.assertIsNone(_decision(self.run_cmd(cmd)), cmd)
+
+    def test_an_alias_to_a_soft_reset_is_not_refused(self):
+        """Following the alias does not widen what `reset` means: `--soft` leaves every byte
+        on disk for the next `charter save`, and is allowed spelled either way."""
+        self._in(self.root, "config", "alias.amend", "reset --soft HEAD~1")
+        self.assertIsNone(_decision(self.run_cmd("git amend")))
+
+    def test_a_shell_alias_charter_cannot_read_is_not_pretended_about(self):
+        """`s = !sh -c '…'` runs a shell charter does not parse. It stands aside rather than
+        refusing every shell alias in the plane root — the documented limit, pinned so a
+        later claim of completeness fails here."""
+        self._in(self.root, "config", "alias.sh1", "!sh -c 'git reset --hard origin/main'")
+        self.assertIsNone(_decision(self.run_cmd("git sh1")))
 
 
 class TestItIsScopedToAPlane(PlaneRootAheadCase):
