@@ -218,6 +218,12 @@ _TERM_CANDIDATES = tuple(dict.fromkeys(
 #: so "not probed yet" and "probed, and the answer is False" stay distinguishable.
 _PANE_DIED_FIRES: list[bool] = []
 
+#: Whether THIS tmux's `new-session` accepts `-e` at all. Probed once per process, the
+#: same shape as `_PANE_DIED_FIRES` and for the same reason: it is a property of the
+#: binary on this machine rather than of any one test, and `-e` arrived in tmux 3.2
+#: (`tmuxctl.SESSION_ENV_FLOOR`) while charter still launches below that.
+_NEW_SESSION_TAKES_ENV: list[bool] = []
+
 #: How long ONE forked client gets to register with tmux before this gives up on it.
 #:
 #: Generous on purpose, and NOT the thing that detects a refusal: a refused `tmux attach`
@@ -2661,6 +2667,96 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                          "`server` marker — if it has stopped doing that, `state.reap`'s "
                          "migration case changed and the isolation this class rests on "
                          "is no longer being exercised by anything")
+
+
+class ASecondFrameOnTheSharedServer(_TmuxServerFixture, PersonaIso):
+    """#411 — what a `new-session` inherits when the server is ALREADY running.
+
+    Every frame on charter's own server is a session on ONE shared server
+    (`commands_frame`'s module docstring), so exactly one launch per machine is the one
+    whose `new-session` actually starts it. That distinction was invisible in the code
+    until it cost a frame: `layout.respawn_argv`'s docstring said charter's own variables
+    reach the harness "because `new-session` starts the server and the server inherits
+    the launcher's environment", which is true of the first launch and of no other.
+
+    No mock can observe this. It is tmux's own rule about where a new pane's environment
+    comes from, and the whole `-e` on `layout.session_argv` exists because of it — so it
+    is measured here, against a real server with a real second session on it, and will
+    fail loudly if tmux ever changes it (at which point the flag stops being necessary,
+    which is worth being told rather than left carrying forever).
+    """
+
+    #: Not `CHARTER_SESSION_ID`: this class is measuring TMUX's inheritance rule, and
+    #: charter's own variable may be present in the test runner's environment already
+    #: (the suite runs inside a frame on this project), which would leave the "inherited"
+    #: assertion able to pass on a value neither session set.
+    _VAR = "CHARTER_INTEG_PROBE"
+
+    def _session_reading_the_var(self, name: str, *, client_value: str,
+                                 carry: str | None = None) -> str:
+        """A session on `SOCKET` whose pane writes `$_VAR` out; returns what it wrote.
+
+        *client_value* is what the tmux CLIENT process is started with — the thing a
+        launcher controls without `-e`. *carry* is `-e`, or `None` for a call that
+        passes none. The pane sleeps afterwards so the SERVER stays up for the next
+        session: a server that empties shuts itself down, and a second `new-session`
+        against a dead server would start a fresh one and quietly measure nothing.
+        """
+        out = os.path.join(self._gate_dir, f"env-{name}")
+        args = ["new-session", "-d", "-s", name, "-x", "80", "-y", "24",
+                "-P", "-F", "#{pane_pid}"]
+        if carry is not None:
+            args += ["-e", f"{self._VAR}={carry}"]
+        args += ["--", "sh", "-c",
+                 f'printf "%s" "${self._VAR}" > {out}; exec sleep 60']
+        r = _tmux(*args, env=dict(os.environ, **{self._VAR: client_value}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.addCleanup(_kill_pid, r.stdout.strip())
+        self.assertTrue(_await_file(out),
+                        f"the pane for session {name} never wrote its environment out")
+        return Path(out).read_text()
+
+    def _require_new_session_env(self) -> None:
+        """Skip unless `new-session -e` is a flag this tmux knows.
+
+        Capability, never a version string (this module's own rule). `-e` arrived in
+        tmux 3.2 and `commands_frame.cmd_launch` withholds the environment below
+        `tmuxctl.SESSION_ENV_FLOOR` precisely because an older tmux does not degrade on
+        it — it refuses the command outright. A machine there cannot measure the fix,
+        and says which flag it lacked rather than failing as though charter were wrong.
+        """
+        if not _NEW_SESSION_TAKES_ENV:
+            r = _tmux("new-session", "-d", "-s", "envprobe", "-e", "X=1", "--", "true")
+            _NEW_SESSION_TAKES_ENV.append(r.returncode == 0)
+            _tmux("kill-session", "-t", "envprobe")
+        if not _NEW_SESSION_TAKES_ENV[0]:
+            self.skipTest("this tmux's `new-session` does not accept `-e`, so the "
+                          "environment charter carries with it cannot be measured here")
+
+    def test_a_later_session_inherits_the_servers_environment_not_its_own_clients(self):
+        """The defect, reproduced as tmux's own behaviour. The second launcher exports a
+        different value and tmux hands its pane the FIRST one — which is why a second
+        frame's harness read another frame's id, wrote another frame's workspace pointer,
+        and bumped another frame's version while its own panels waited for a change that
+        was being recorded somewhere else."""
+        self.assertEqual(self._session_reading_the_var("first", client_value="one"),
+                         "one", "the launch that STARTS the server does set it")
+        self.assertEqual(
+            self._session_reading_the_var("second", client_value="two"), "one",
+            "if tmux now gives a later session its own client's environment, the `-e` "
+            "in `layout.session_argv` is no longer load-bearing — say so rather than "
+            "carrying a flag nothing needs")
+
+    def test_the_e_flag_is_what_gets_a_later_session_its_own_value(self):
+        """The fix, measured against the same server in the same state. Same two
+        sessions, same client environments; the only difference is the `-e` that
+        `layout.session_argv` now carries."""
+        self._require_new_session_env()
+        self.assertEqual(self._session_reading_the_var("first", client_value="one"),
+                         "one")
+        self.assertEqual(
+            self._session_reading_the_var("second", client_value="two", carry="two"),
+            "two", "`-e` did not reach the pane `new-session` itself creates")
 
 
 if __name__ == "__main__":

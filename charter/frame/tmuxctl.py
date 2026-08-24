@@ -67,6 +67,44 @@ FLOOR = (3, 2)
 #: two constants.
 RESIZE_HOOK_FLOOR = (3, 3)
 
+#: The first tmux release in which `new-session` accepts `-e` at all — the VERSION is
+#: read from tmux's own published CHANGES file (github.com/tmux/tmux, "CHANGES FROM 3.1c
+#: TO 3.2"): "Add -e flag for new-session to set environment variables, like the same
+#: flag for new-window." Confirmed present in this machine's 3.7c man page
+#: (``new-session … [-e environment]``, "-e takes the form 'VARIABLE=value'").
+#:
+#: Numerically equal to `FLOOR` and deliberately a SECOND constant, for the same reason
+#: `RESIZE_HOOK_FLOOR` is: it is a different fact about tmux and it will not necessarily
+#: move with the other. `FLOOR` is where charter WARNS; this is where a `new-session`
+#: carrying `-e` stops being a command tmux can parse — below it the flag is not degraded
+#: but rejected outright ("unknown option"), which would take the whole launch down on a
+#: tmux that `below_floor_message` explicitly still allows to launch.
+#:
+#: **What that costs below 3.2, stated exactly.** #411 stays unfixed there: the harness of
+#: a SECOND frame on charter's shared private server goes on inheriting the FIRST frame's
+#: `$CHARTER_SESSION_ID`, so `charter ws use` writes the first frame's workspace pointer
+#: and hooks bump the first frame's version — that frame's panels do not follow it. (Its
+#: PANELS still get their own id: `commands_frame._session_id_env_argv` ties that to the
+#: session, which tmux applies to panes split later, so the two halves disagree.)
+#:
+#: An earlier version of this comment said that was "exactly as every frame did before
+#: #411", and that was wrong in the direction that matters. Suppression (ADR 0019) keys on
+#: the same variable, so on the id alone that operator's status line would ALSO have gone
+#: blank against a frame that is not theirs — leaving no correct surface at all, where
+#: before they at least had a correct footer. `state.is_live` takes the harness PANE as
+#: well for exactly this band: below 3.2 the second frame's harness holds the first
+#: frame's id but sits in a pane the first frame never recorded, so its status line keeps
+#: drawing.
+SESSION_ENV_FLOOR = (3, 2)
+
+#: The first tmux release in which `split-window` (and `new-window`, and `respawn-pane`)
+#: accepts `-e` — VERSION read from tmux's own published CHANGES ("CHANGES FROM 2.9 TO
+#: 3.0"): "Add a -e flag to new-window, split-window, respawn-window, respawn-pane to set
+#: environment variables." LOWER than :data:`SESSION_ENV_FLOOR`, because `new-session`
+#: only grew the same flag two releases later — two flags, two facts, two constants, the
+#: same reason `RESIZE_HOOK_FLOOR` is not folded into `FLOOR`.
+PANE_ENV_FLOOR = (3, 0)
+
 #: The session-scoped tmux environment variable carrying the interpreter that runs
 #: charter from inside a frame — `"$CHARTER_PY" -m charter …`, never a bare `charter`
 #: off `$PATH`. Defined HERE, not in either of the two modules that build text around it

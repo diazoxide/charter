@@ -830,6 +830,12 @@ def check_frame() -> Result:
                            "install tmux (or your package manager). Without it, "
                            "charter <harness> --no-frame still runs the harness bare.")
     missing = frame_slots.unimplemented(config.FRAME["slots"])
+    # A blank status line is the one frame behaviour that shows the operator NOTHING —
+    # ADR 0019's own rule is that a surface which vanished for an invisible reason is the
+    # worst outcome available, so the reason is said out loud on the surface built to
+    # answer on demand. Appended to whatever else this row reports rather than replacing
+    # it: it is a statement of fact about right now, never a warning.
+    quiet = _statusline_suppressed_note()
     if v < tmuxctl.FLOOR:
         # Not "the hotkey menu is disabled" — nothing disables it. `cmd_launch` warns
         # and continues, and `conf_text` emits the bind unchanged; what is actually at
@@ -839,11 +845,36 @@ def check_frame() -> Result:
         hint = tmuxctl.below_floor_message(v)
         if missing:
             hint += " " + commands_frame_no_renderer(missing)
-        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}", hint=hint)
+        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}", hint=hint + quiet)
     if missing:
         return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}",
-                      hint=commands_frame_no_renderer(missing))
-    return Result(name, OK, detail=f"tmux {v[0]}.{v[1]}")
+                      hint=commands_frame_no_renderer(missing) + quiet)
+    return Result(name, OK, detail=f"tmux {v[0]}.{v[1]}",
+                  hint=quiet.strip() or None)
+
+
+def _statusline_suppressed_note() -> str:
+    """`" …"` naming the frame this session's status line is being blanked for, or `""`.
+
+    Asks the same question `statusline.main` asks, through the same function, so the two
+    can never disagree about whether a line is suppressed — the failure this note exists
+    to make impossible is an operator seeing a blank footer and finding nothing anywhere
+    that admits it is deliberate. `charter doctor` runs in the operator's own shell, whose
+    stdout may well be a tty, so the tty rung of `a_frame_owns_this_surface` is deliberately
+    not consulted here: the question is "is this session's footer being suppressed", not
+    "would MY stdout be".
+    """
+    import os
+
+    from .frame import state as frame_state
+
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    if not fid or not frame_state.is_live(fid, pane=os.environ.get("TMUX_PANE", "")):
+        return ""
+    return (f" This session's status line is intentionally blank: frame {fid} is drawing "
+            f"the plane instead (ADR 0019). `charter statusline` still runs — it records "
+            f"this session's token usage — and still prints in full when you run it "
+            f"yourself.")
 
 
 def commands_frame_no_renderer(missing: list[str]) -> str:

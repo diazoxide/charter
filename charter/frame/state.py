@@ -206,6 +206,61 @@ def clear_exit(fid: str) -> None:
         return
 
 
+def record_harness_pane(fid: str, pane: str) -> None:
+    """Write down which tmux pane this frame runs its harness in.
+
+    One fact, for one question `$CHARTER_SESSION_ID` alone cannot answer: **is this
+    process the harness of that frame, or merely a process that inherited its id?** The
+    two are not the same, and reading them as the same is how suppression (ADR 0019)
+    blanks the wrong status line:
+
+    * Below ``tmuxctl.SESSION_ENV_FLOOR`` charter cannot put the frame id on
+      `new-session`, so a SECOND frame's harness on the shared private server inherits the
+      FIRST frame's id (#411). Without this file it would look exactly like frame one's
+      own harness and go blank, while its panels followed frame one — leaving that
+      operator no correct surface at all, where before they at least had a correct status
+      line.
+    * An operator who exports ``CHARTER_SESSION_ID`` in a shell rc (a per-shell id of
+      their own, say) gets a frame directory minted by the first hook that fires
+      (`notify.plane_changed` calls `bump` for any id) and a pid that is permanently live,
+      because it is their own shell's. A directory plus a live pid is not proof of a
+      frame; a pane a launcher actually started one in is.
+
+    `$TMUX_PANE` is what the other side reads, and tmux sets it in every process it starts
+    in a pane — measured 2026-08-24 through a real Claude Code `statusLine` command inside
+    a tmux pane, which reported ``PANE=[%0]``, so it survives the harness's own spawning
+    of the command. Same atomic-write, never-raise shape as :func:`record_server`, and
+    for the same reason: a launch is not worth failing over a bookkeeping file. A frame
+    whose pane could not be recorded simply never suppresses, which is the safe direction
+    — a duplicated status line rather than a missing one.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "harness.tmp"
+    try:
+        tmp.write_text(f"{pane}\n")
+        os.replace(tmp, d / "harness")
+    except OSError:
+        return
+
+
+def harness_pane(fid: str) -> str | None:
+    """The pane *fid* runs its harness in, or ``None`` when charter does not know.
+
+    ``None`` for a frame launched by a charter that predates :func:`record_harness_pane`,
+    for a directory that is not a frame's at all, and for a file that cannot be read —
+    three different reasons, deliberately one answer, because every caller does the same
+    safe thing with it (see :func:`is_live`: no proof, no suppression)."""
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "harness").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def record_server(fid: str, server: str) -> None:
     """Write down which tmux server this frame's session (or window) lives on.
 
@@ -420,6 +475,57 @@ def _launcher_is_alive(pid: int) -> bool:
         return False
     except OSError:
         return True       # alive, and not ours to signal
+    return True
+
+
+def is_live(fid: str, *, pane: str | None = None) -> bool:
+    """Is *fid* a frame of THIS plane that is running, and is *pane* its harness?
+
+    The question ADR 0019 asks before it draws nothing at all, so every way of being wrong
+    here costs somebody a surface. Four things are checked and each one is the only guard
+    against a failure that really happens:
+
+    * **A server marker a LAUNCHER wrote** (:func:`frame_server`). This is also the whole
+      of "is there a frame directory here at all", and deliberately not a second check:
+      the marker cannot exist without the directory, so a separate ``is_dir()`` would be a
+      guard no mutation could turn red — the shape this suite has been bitten by before.
+      What it rules out, in one read: an id that names nothing here (``$CHARTER_SESSION_ID``
+      is not a frame's variable alone — every harness that knows its own session sets it,
+      and Claude Code's UUID can end in an all-digit group that parses as a pid); an id
+      :func:`frame_dir` refuses outright; and a directory no launcher made — :func:`bump`
+      creates one on demand and `notify.plane_changed` calls it from seven hook sites for
+      whatever id is in the environment, so an operator who exports ``CHARTER_SESSION_ID``
+      in a shell rc gets a directory minted by their first tool call, carrying their own
+      shell's permanently-live pid. Only `cmd_launch` records a server. (A frame from a
+      charter old enough to predate the marker answers ``None`` too, and gets a duplicated
+      status line — which is exactly what it had.) It also keeps the SUITE honest: every
+      test that touches plane state repoints ``config.STATE_DIR``, so suppression cannot
+      switch itself on because of whatever frame the developer's terminal is sitting in.
+    * **A launcher pid still running.** The id ends in it (:func:`frame_id`), so
+      ``os.kill(pid, 0)`` answers with a syscall and no tmux subprocess on a path that
+      runs every time Claude Code repaints its footer. Without it, a directory left by a
+      crashed launcher would blank that plane's status line forever.
+    * **The harness pane, when the caller offers one** (:func:`harness_pane`). The
+      previous three establish that a live frame exists somewhere; only this one
+      establishes that the process asking is *inside* it. `is_live` is called by a
+      status line that would otherwise vanish, and a process can hold a frame id it
+      merely inherited — see :func:`record_harness_pane` for the two ways that happens
+      and what each one costs.
+
+    *pane* is optional because :func:`reap`'s question is the frame's existence, not any
+    process's membership of it. ``None`` means "do not ask", not "assume yes".
+
+    Every unknown answers ``False``, which for the status line means "render" — a
+    duplicated line is recoverable in a way a line that vanished for an invisible reason
+    is not.
+    """
+    if frame_server(fid) is None:
+        return False
+    pid = _launcher_pid(fid)
+    if pid is None or not _launcher_is_alive(pid):
+        return False
+    if pane is not None and harness_pane(fid) != pane:
+        return False
     return True
 
 

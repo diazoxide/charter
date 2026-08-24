@@ -332,7 +332,26 @@ FRAME_SLOTS = ("top", "bottom", "left", "right")
 #: impossible by construction rather than merely unlikely. Only the ``toml_key`` spelling
 #: is ever honoured — the underscore form is not accepted as a second, undocumented alias.
 FRAME_FIELDS = {
-    "slots": (["top", "bottom"], "slots"),
+    #: All four edges, because the frame now OWNS the surface (ADR 0019): inside a frame
+    #: `charter statusline` draws nothing, so whatever the frame does not show is not
+    #: shown anywhere. Two one-line strips are not a frame — they are the status line
+    #: again, in a worse shape — and that is exactly how the first release of this was
+    #: reported: *"only top and bottom single lines added, no left right sidebar."*
+    #: `slots.SLOTS` has had `left` (repo rows) and `right` (persona chips) since #385;
+    #: they were built, tested and switched off. `layout.visible_slots` drops the two
+    #: side panels first on any shortage against `min_cols`/`min_rows`, so a narrow
+    #: terminal degrades to exactly the frame this default used to be.
+    #:
+    #: **The ORDER is the geometry, not a reading order.** `layout.panel_argvs` splits
+    #: each slot off the harness pane in list order, so a slot listed after `left`/`right`
+    #: gets only the width they left behind. Measured against tmux 3.7c in a 200x50
+    #: window: this order gives a 200-column `bottom`, with the side panels 46 rows tall
+    #: between the two strips; `["top", "left", "right", "bottom"]` instead gives 48-row
+    #: side panels and a `bottom` of **154 columns**, inset between them. `bottom` is the
+    #: row that carries the one alert and the command that fixes it, and `slots._bottom`
+    #: drops whole fields when it runs out of width — so the 46 columns belong to it and
+    #: not to two side panels that are already truncating their own 22.
+    "slots": (["top", "bottom", "left", "right"], "slots"),
     #: Off by default: tmux's `set -g mouse on` takes over drag-select, so turning this on
     #: trades the operator's terminal text-selection for clickable panels. That trade
     #: belongs to a later release that actually ships clickable panels, not this one.

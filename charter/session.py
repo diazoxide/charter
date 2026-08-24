@@ -28,12 +28,36 @@ _SAFE = re.compile(r"[^A-Za-z0-9._-]")
 def current(explicit: str | None = None) -> str | None:
     """This session's id, or ``None`` when there is not one.
 
-    ``explicit`` first — the status line receives the id in its stdin payload rather than
-    its environment, which Claude Code scrubs. Then ``$CHARTER_SESSION_ID``, which any
-    harness sets when it knows its own session (opencode's plugin reads it off
+    ``explicit`` first — the status line receives the id in its stdin payload, which is
+    the only source that is certainly THIS session's. Then ``$CHARTER_SESSION_ID``, which
+    any harness sets when it knows its own session (opencode's plugin reads it off
     ``shell.env``'s ``input.sessionID``, per invocation — one server hosts many sessions,
     so nothing may be cached). Then ``$CLAUDE_CODE_SESSION_ID``, kept so no session
     already running regresses the day the neutral name ships.
+
+    **Two earlier versions of this paragraph were wrong in opposite directions, so both
+    are recorded rather than quietly replaced.** It first said Claude Code *scrubs* the
+    environment; it then said Claude Code has no session id in the environment *at all*.
+    Measured 2026-08-24 against Claude Code 2.1.241 through a real `statusLine` command:
+    the environment arrives intact AND carries ``CLAUDE_CODE_SESSION_ID`` (a UUID), which
+    is exactly why the third rung above exists and reads it. Neither claim survives a
+    probe; the fallback chain below is the whole truth.
+
+    **Inside a frame, ``$CHARTER_SESSION_ID`` holds the FRAME's id — so it SHADOWS Claude
+    Code's own, which is present one rung down.** Deliberate (ADR 0019, ``docs/frame.md``):
+    the two ids compete for one slot and the frame wins it, so every process the frame
+    contains — the agent's shell, each panel, any `charter` command typed inside it —
+    answers this question identically. That is what makes `charter ws use` in the agent's
+    shell move the panels, and nothing else could: the per-terminal pointer is keyed by
+    ``$TMUX_PANE`` and those processes are in different panes.
+
+    What the shadowing costs, stated because it is not obvious from here: everything keyed
+    on :func:`current` becomes per-FRAME for the life of that frame. `workspace.set_active`
+    writes its pointer and its **session lock** under the frame's id, so the lock belongs
+    to the frame rather than to the Claude Code conversation inside it — resume the same
+    conversation in a new frame and it is a new key, with no lock and no pointer. What
+    still keys on Claude Code's own id is what arrives by payload and never reads the
+    environment: the token-usage history and the session trace.
 
     Sanitised, because the value becomes a filename.
     """

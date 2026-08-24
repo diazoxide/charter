@@ -1,0 +1,309 @@
+"""ADR 0019 — inside a frame the frame draws, and `charter statusline` does not.
+
+Two properties, and the second is the one that will look like dead code to a future
+reader: the command **keeps running**. Claude Code's per-turn payload is the only place
+this session's token usage exists (`hooks.py` has no reference to any usage field), so a
+suppression that unwired the command would delete the record rather than hide a
+duplicate. `FrameOwnsTheSurface.test_the_turn_is_still_recorded_while_the_line_is_blank`
+is what a "this command prints nothing, remove it" change has to get past.
+
+**Every fixture id ends in a pid that is really that pid.** `state.is_live` reads the
+number at the end of a frame id and asks whether that process exists, so `something-1`
+is `launchd` — permanently alive — and a fixture named that way makes "the frame was
+gone, so it rendered" unfailable. Live means `os.getpid()`, this very process; dead means
+`_a_dead_pid()`, a child that has exited and been reaped.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import subprocess
+import sys
+import unittest
+from contextlib import redirect_stdout
+from unittest import mock
+
+from charter import statusline, workspace
+from charter.frame import slots, state
+
+from tests._isolation import PersonaIso
+
+
+def _a_dead_pid() -> int:
+    """A real pid that has exited and been reaped — see `tests/test_frame_state.py`,
+    which needs this for the same reason and says why a made-up number is a guess about
+    the machine rather than a fact about it."""
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+class _Tty(io.StringIO):
+    """A captured stdout that answers `isatty()` the way a terminal does. `io.StringIO`
+    says False, which is exactly the piped case, so a test of the tty branch cannot use
+    the plain one."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+#: One turn's worth of what Claude Code actually sends: a session id and the token
+#: counters `_context_gauge`/`record_usage` read. The numbers are what makes the
+#: recording assertions below observable at all — a payload without them records
+#: nothing, correctly, and would make every recording test pass for the wrong reason.
+_PAYLOAD = {
+    "session_id": "cc-session-1",
+    "context_window": {"used_percentage": 42,
+                       "current_usage": {"cache_read_input_tokens": 90_000,
+                                         "cache_creation_input_tokens": 10_000}},
+}
+
+
+class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
+    """`statusline.main` with a payload on stdin, exactly as Claude Code invokes it.
+
+    `PersonaIso` is load-bearing rather than hygiene here: `state.is_live` looks for the
+    frame's directory under `config.STATE_DIR`, so an isolated plane is what keeps this
+    module's own answers independent of whether the developer ran the suite from inside
+    a real frame — the property that let this check live at the command edge at all.
+    """
+
+    #: The pane the fixture frames below record as their harness's, and the one
+    #: `_run` claims to be in unless a test deliberately says otherwise.
+    _PANE = "%7"
+
+    def _run(self, *, fid: str | None, tty: bool = False, pane: str = _PANE,
+             harness: str = "claude-code", payload: dict | None = None) -> str:
+        env = {"CHARTER_SESSION_ID": fid} if fid else {}
+        if pane:
+            env["TMUX_PANE"] = pane
+        if harness:
+            # Stated, never left to `harness.current()`'s detection fallback: suppression
+            # only ever applies to the harness whose surface the panels duplicate, so a
+            # test that did not say which harness it was would be asserting about
+            # whatever the developer's own terminal happened to look like.
+            env["CHARTER_HARNESS"] = harness
+        out = _Tty() if tty else io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch("sys.stdin", io.StringIO(json.dumps(payload or _PAYLOAD))), \
+             redirect_stdout(out):
+            rc = statusline.main([])
+        self.assertEqual(rc, 0, "the status line exits 0 whatever it decides to draw")
+        return out.getvalue()
+
+    def _a_live_frame(self, *, pane: str = _PANE) -> str:
+        """A frame the way `cmd_launch` leaves one: a directory, a recorded server, a
+        recorded harness pane, and a launcher pid that is this very test process.
+
+        Written out longhand rather than hidden behind one call, because each of the
+        four is separately load-bearing in `state.is_live` and a test that removes one
+        (there are three below) has to be able to say which."""
+        fid = f"demo-{os.getpid()}"
+        state.bump(fid)                          # the directory
+        state.record_server(fid, "charter")      # proof a LAUNCHER made it
+        state.record_harness_pane(fid, pane)     # which pane is this frame's harness
+        return fid
+
+    # -- blank inside a frame ---------------------------------------------------- #
+
+    def test_inside_a_live_frame_the_line_is_blank(self):
+        self.assertEqual(self._run(fid=self._a_live_frame()).strip(), "")
+
+    def test_inside_a_live_frame_nothing_is_even_rendered(self):
+        """Not merely "the output was empty": a `render` that returned an empty string
+        for some unrelated reason would satisfy the test above. The frame path must not
+        reach the renderer at all — that is what makes suppression cost nothing rather
+        than gather the whole plane and throw it away every ten seconds."""
+        with mock.patch.object(statusline, "render") as render:
+            self._run(fid=self._a_live_frame())
+        render.assert_not_called()
+
+    # -- and still recording ----------------------------------------------------- #
+
+    def test_the_turn_is_still_recorded_while_the_line_is_blank(self):
+        """The reason the command is kept wired at all (ADR 0019). Claude Code's payload
+        is the only source of these numbers — nothing in `hooks.py` sees them — so a
+        change that stopped invoking `charter statusline` inside a frame would delete
+        the history, not merely the duplicate line."""
+        self._run(fid=self._a_live_frame())
+        self.assertEqual(statusline._history("cc-session-1"), [(90_000, 10_000)])
+
+    def test_a_payload_with_no_numbers_records_nothing_rather_than_a_zero(self):
+        """The other half, and what stops the test above from passing against a recorder
+        that writes on every call: early in a session (and right after `/compact`) the
+        payload carries no usage at all, and a recorded zero would be an invented turn."""
+        self._run(fid=self._a_live_frame(), payload={"session_id": "cc-session-1"})
+        self.assertEqual(statusline._history("cc-session-1"), [])
+
+    # -- and drawing everywhere else --------------------------------------------- #
+
+    def test_a_human_asking_at_a_terminal_still_gets_the_line(self):
+        """Claude Code pipes this command's stdout; a tty means somebody typed
+        `charter statusline` themselves, and a frame elsewhere on the screen is no
+        reason to answer them with a blank line."""
+        self.assertIn("charter", self._run(fid=self._a_live_frame(), tty=True))
+
+    def test_a_frame_whose_launcher_is_gone_does_not_blank_it_forever(self):
+        """A frame directory outlives a crashed launcher until some later launch reaps
+        it. Reading the directory alone as "a frame is running" would leave this plane's
+        status line blank for every session afterwards, with nothing on screen to say
+        why. The pid at the end of the id is what answers it, with no tmux call on a
+        path that runs every time the footer repaints."""
+        fid = f"demo-{_a_dead_pid()}"
+        state.bump(fid)
+        # COMPLETE in every other respect, and that is the point: a fixture missing the
+        # server marker or the pane would be refused before the pid was ever consulted,
+        # and this test would pass with the liveness check deleted outright. Measured —
+        # it did, until the marker check was added underneath it.
+        state.record_server(fid, "charter")
+        state.record_harness_pane(fid, self._PANE)
+        self.assertIn("charter", self._run(fid=fid))
+
+    def test_an_id_that_names_no_frame_on_this_plane_renders(self):
+        """`$CHARTER_SESSION_ID` is not a frame's variable alone — any harness that knows
+        its own session sets it (`charter.session.current`), and a UUID's last group can
+        be all digits. A live frame has a directory; an id that never named one here is
+        not this plane's frame, whatever its digits parse as."""
+        self.assertIn("charter", self._run(fid=f"demo-{os.getpid()}"))
+
+    def test_a_directory_no_launcher_made_is_not_a_frame(self):
+        """A directory is not proof of frame-ness, and this is the operator it protects:
+        someone who exports `CHARTER_SESSION_ID=proj-$$` in their shell rc. The first
+        hook that fires calls `notify.plane_changed` -> `state.bump`, which MINTS the
+        directory, and the pid in that id is their own live shell — so directory-plus-pid
+        is satisfied, permanently, for a frame that never existed. Only `cmd_launch`
+        writes a server marker."""
+        fid = f"demo-{os.getpid()}"
+        state.bump(fid)                          # exactly what a hook does, and no more
+        state.record_harness_pane(fid, self._PANE)
+        self.assertIsNone(state.frame_server(fid), "fixture no longer matches a hook")
+        self.assertIn("charter", self._run(fid=fid))
+
+    def test_a_process_that_merely_inherited_the_id_is_not_inside_the_frame(self):
+        """The regression this guard exists for, and it is one this PR would otherwise
+        have CAUSED. Below `tmuxctl.SESSION_ENV_FLOOR` charter cannot put the frame id on
+        `new-session`, so a second frame's harness on the shared private server inherits
+        the FIRST frame's id (#411) — live, on this plane, launcher running, every other
+        condition satisfied. Suppressing there blanks a footer whose panels are already
+        following another frame: no correct surface at all, where before this change that
+        operator at least had a correct status line.
+
+        The pane is what tells them apart: tmux gives each pane its own `$TMUX_PANE`, and
+        only one of them is the pane the launcher recorded."""
+        fid = self._a_live_frame()
+        self.assertIn("charter", self._run(fid=fid, pane="%99"))
+
+    def test_no_pane_at_all_is_not_inside_the_frame_either(self):
+        """`$TMUX_PANE` absent is an ANSWER — "not in any pane" — not a reason to stop
+        asking. Read as "unknown, carry on" instead, a process holding an inherited id
+        outside tmux entirely would suppress."""
+        fid = self._a_live_frame()
+        self.assertIn("charter", self._run(fid=fid, pane=""))
+
+    def test_outside_a_frame_nothing_changes_at_all(self):
+        self.assertIn("charter", self._run(fid=None))
+
+    def test_a_harness_with_no_status_bar_of_its_own_is_never_suppressed(self):
+        """opencode has no footer for a panel to duplicate, so charter wires the plane in
+        as an on-demand `/charter` slash command whose body is
+        ``!`echo '{}' | charter statusline` `` (`harness/opencode.py`'s `COMMAND`).
+
+        That invocation satisfies every OTHER condition perfectly — its stdout is a pipe
+        because it is a shell substitution, its `$CHARTER_SESSION_ID` is the live frame's,
+        and its `$TMUX_PANE` IS the recorded harness pane, because opencode is what runs
+        there. Suppressing it removed nothing and cost everything: `/charter` exists to put
+        plane state into the AGENT'S CONTEXT, which no panel can do — a panel draws to a
+        pane the model never reads. Reproduced as a blank line before this rung existed."""
+        self.assertIn("charter", self._run(fid=self._a_live_frame(), harness="opencode"))
+
+    def test_a_harness_charter_cannot_identify_is_not_suppressed_either(self):
+        """The safe direction, stated as a property rather than left to luck: an unknown
+        (or absent) harness answers "not the surface being duplicated", so the worst case
+        is the duplicate line this release removes — never a surface that vanished."""
+        self.assertIn("charter", self._run(fid=self._a_live_frame(), harness=""))
+
+
+class SuppressionSaysSoOnDemand(PersonaIso, unittest.TestCase):
+    """A blank footer is the one frame behaviour that shows nothing at all, so something
+    has to admit it is deliberate. ADR 0019's own rule is that a surface which vanished
+    for an invisible reason is the worst outcome available — `charter doctor`'s frame row
+    is the surface built to answer on demand."""
+
+    def _row(self, env: dict):
+        from charter import doctor
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)):
+            return doctor.check_frame()
+
+    def test_the_frame_row_names_the_frame_that_is_drawing_instead(self):
+        fid = f"demo-{os.getpid()}"
+        state.bump(fid)
+        state.record_server(fid, "charter")
+        state.record_harness_pane(fid, "%7")
+        row = self._row({"CHARTER_SESSION_ID": fid, "TMUX_PANE": "%7"})
+        self.assertIn(fid, row.hint or "",
+                      "a suppressed status line must be explained somewhere")
+        self.assertIn("blank", (row.hint or "").lower())
+
+    def test_a_session_that_is_not_suppressed_is_not_told_that_it_is(self):
+        """The control, and the one that fails if the row simply always says it: an
+        ordinary session's frame row must carry no such note."""
+        row = self._row({})
+        self.assertNotIn("blank", (row.hint or "").lower())
+
+
+class PanelFollowsWorkspaceUse(PersonaIso, unittest.TestCase):
+    """`charter ws use` inside a frame moves that frame's panels (#411).
+
+    This is the collision #386 had to decide, pinned. The launcher exports the frame id
+    under `$CHARTER_SESSION_ID` — the variable `charter.session.current` already owns —
+    so the agent's shell, every panel, and every `charter` command typed inside the frame
+    agree about which charter session they belong to. `workspace.set_active` writes its
+    per-session pointer under that id and `slots._top` reads it back under the same one.
+    Nothing else connects the two: the per-TERMINAL pointer is keyed by `$TMUX_PANE`, and
+    the harness and each panel are different panes, so it is structurally unable to carry
+    a switch from one to the other.
+    """
+
+    def _top(self, fid: str) -> str:
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid}, clear=True):
+            return slots._top(fid)
+
+    def test_the_top_panel_follows_a_switch_made_inside_the_frame(self):
+        """Switched TWICE, and both are asserted. One switch alone passes against a
+        panel that read the workspace once at launch and never again, as long as the
+        launch happened to be in the workspace the test switched to; a second switch
+        to a different name is what makes the panel prove it is still reading."""
+        fid = f"demo-{os.getpid()}"
+        workspace.ensure("alpha")
+        workspace.ensure("beta")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid}, clear=True):
+            workspace.set_active("alpha")
+        self.assertIn("alpha", self._top(fid))
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid}, clear=True):
+            workspace.set_active("beta", force=True)
+        self.assertIn("beta", self._top(fid))
+
+    def test_a_switch_made_under_another_id_does_not_move_this_frame(self):
+        """The other direction, and the shape of #411 itself: writer and reader agreeing
+        is the whole mechanism, so a pointer written under a DIFFERENT session id must
+        leave this frame's panel exactly where it was. Without this, a `resolve()` that
+        ignored the session pointer entirely — and answered from some global — would
+        still pass the test above."""
+        fid = f"demo-{os.getpid()}"
+        workspace.ensure("alpha")
+        workspace.ensure("beta")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid}, clear=True):
+            workspace.set_active("alpha")
+        with mock.patch.dict(os.environ,
+                             {"CHARTER_SESSION_ID": "someone-elses-frame-1234"},
+                             clear=True):
+            workspace.set_active("beta")
+        self.assertIn("alpha", self._top(fid))
+        self.assertNotIn("beta", self._top(fid))
+
+
+if __name__ == "__main__":
+    unittest.main()
