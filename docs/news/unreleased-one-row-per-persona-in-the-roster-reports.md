@@ -26,12 +26,19 @@ Nothing is executed off the back of a table row, so this is not a privilege boun
 a forged row can do is name a persona that does not exist, or hide one that does, in the
 report a steward prunes the roster from.
 
-Both renderers now map the roster through `contain.one_line` **before** they measure their
-column widths, and print from that. The order matters: both size their columns from the
-names, and `one_line` grows a name (a separator becomes a four-character escape), so
-bounding at the `print` alone would leave every column after PERSONA misaligned for every
-persona in the table. The role, the vault name, the vault status and the skills block get
-the same treatment — all of them come out of committed files.
+Both renderers now map every committed value through `contain.one_line`, and print from
+that. The role, the vault name, the vault status and the skills block get the same
+treatment — all of them come out of committed files.
+
+Where the bound goes differs, because only one of the two measures anything. `persona
+list` sizes its PERSONA column from the names it is about to print, so it has to bound
+them **before** it measures: `one_line` grows a name — a separator becomes a
+four-character escape — and bounding at the `print` alone would leave every column after
+PERSONA misaligned for every persona in the table. `persona stats` measures nothing; it
+prints into a fixed 28-wide column, so it is bounded at the `print`. A name longer than 28
+characters still pushes that row's later columns to the right there, exactly as it did
+before — `one_line` bounds line STRUCTURE, which is what forged the extra row, not width
+(#508).
 
 The active marker still compares the **raw** names. Bounding is a display transform and two
 different names can share one rendered form, so deciding the marker from the rendering would

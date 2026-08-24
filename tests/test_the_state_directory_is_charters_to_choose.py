@@ -514,6 +514,69 @@ class TheScanSeesWhatItClaims(unittest.TestCase):
         src = ("def f():\n    config.private_mkdir(config.STATE_DIR / 'cache')\n")
         self.assertEqual(scan.violations(src, self.names), [])
 
+    #: Every spelling of "make a directory here" the stdlib offers, and where each one
+    #: keeps its path. The scan advertised ``makedirs`` coverage while reading the
+    #: RECEIVER of every attribute call — which is where ``p.mkdir()`` keeps its path and
+    #: not where ``os.makedirs(p)`` does, so ``os.makedirs`` was scanned as the expression
+    #: ``os`` and never flagged. Keying on the NAME instead (``makedirs`` takes an
+    #: argument, ``mkdir`` a receiver) swaps one spelling for another and still lets
+    #: ``os.mkdir(p)`` through, so the table is the test: each of these creates a
+    #: directory at a state path, and the scan owes the same answer to all of them.
+    MAKERS = {
+        "bound method, path is the receiver":
+            "def f():\n    (config.STATE_DIR / 'x').mkdir(parents=True, exist_ok=True)\n",
+        "module function, path is argument 0":
+            "import os\ndef f():\n    os.makedirs(config.STATE_DIR / 'x', exist_ok=True)\n",
+        "os.mkdir — the one a `makedirs` name-match still misses":
+            "import os\ndef f():\n    os.mkdir(config.STATE_DIR / 'x')\n",
+        "the path arrives by keyword":
+            "import os\ndef f():\n    os.makedirs(name=config.STATE_DIR / 'x')\n",
+        "imported bare":
+            "from os import makedirs\ndef f():\n    makedirs(config.STATE_DIR / 'x')\n",
+        "imported under another name":
+            "from os import makedirs as md\ndef f():\n    md(config.STATE_DIR / 'x')\n",
+        "unbound, path is argument 0 of an attribute call":
+            "from pathlib import Path\ndef f():\n    Path.mkdir(config.STATE_DIR / 'x')\n",
+    }
+
+    def test_every_spelling_of_making_a_directory_is_scanned(self) -> None:
+        """The scan's own title claims ``mkdir``/``makedirs``. This is that claim."""
+        for label, src in self.MAKERS.items():
+            with self.subTest(label):
+                hits = scan.violations(src, self.names)
+                self.assertEqual([e for _ln, e in hits], ["config.STATE_DIR / 'x'"],
+                                 f"{label}: a state directory made here went unseen")
+
+    def test_the_same_spellings_on_a_committed_path_are_left_alone(self) -> None:
+        """The other half of the claim, and the one a scan that flagged every argument
+        would fail: widening where the path is looked for must not widen WHAT counts as
+        one, or the fix is to route committed directories through the private walk."""
+        for label, src in self.MAKERS.items():
+            with self.subTest(label):
+                self.assertEqual(
+                    scan.violations(src.replace("STATE_DIR", "PERSONAS_DIR"), self.names),
+                    [], f"{label}: a committed directory was flagged as state")
+
+    def test_a_mode_argument_is_not_mistaken_for_a_path(self) -> None:
+        """`Path.mkdir`'s first positional argument is the MODE. Scanning every position
+        that could hold a path means scanning that one too, and it must not hit."""
+        src = "def f():\n    (config.PERSONAS_DIR / 'x').mkdir(0o700, exist_ok=True)\n"
+        self.assertEqual(scan.violations(src, self.names), [])
+
+    def test_the_handed_half_sees_the_module_function_spellings_too(self) -> None:
+        """The handed scan reads the path out of the same place the named one does, so
+        the blind spot was shared. `memstore` is the module that fell through once."""
+        caller = ("from . import store\n\n"
+                  "def go():\n    store.write(config.STATE_DIR / 'x', 'y')\n")
+        for label, body in (("os.makedirs", "    os.makedirs(mem_dir, exist_ok=True)\n"),
+                            ("os.mkdir", "    os.mkdir(mem_dir)\n")):
+            with self.subTest(label):
+                mods = scan.modules_from({
+                    "store": "import os\n\ndef write(mem_dir, text):\n" + body,
+                    "caller": caller})
+                self.assertEqual(scan.handed_violations(mods, self.names),
+                                 {"charter/store.py": [(4, "mem_dir")]})
+
 
 class TheHandedScanSeesWhatItClaims(unittest.TestCase):
     """The second half of the scanner's accuracy, against a package built for the purpose.

@@ -44,6 +44,17 @@ path into a package function taints that parameter, transitively across modules,
 `mkdir` on a tainted parameter is a violation exactly as `config.STATE_DIR / "x"` is. Put
 `memstore`'s bare `mkdir` back and the scan names the file and line.
 
+It also stopped guessing *where in a call the path is*, which was the same mistake one
+level down. `p.mkdir(…)` keeps its path in the receiver and `os.makedirs(p)` in the first
+argument, and both are attribute calls — so reading the receiver of every attribute call,
+which is what the scan did, saw `os.makedirs(config.STATE_DIR / "x")` as the expression
+`os` and never flagged it. Keying on the name instead (`makedirs` takes an argument,
+`mkdir` a receiver) only swaps one spelling for another and still lets `os.mkdir(p)`
+through. So the shape is no longer decided at all: every position that could hold the path
+is scanned — receiver, first argument, and the `path=`/`name=` keywords — and a state path
+in any of them is a violation. Nothing in `charter/` uses those spellings today; the scan
+now enforces the coverage its title always claimed.
+
 `umask 000`, `umask 022`, `umask 077`: `.charter` comes out 0700 in all three, on `vault
 add`, on the SessionStart hook, on the PreToolUse hook and on `persona remember
 --ephemeral`. The property being tested is that the umask does not decide it — a fix that

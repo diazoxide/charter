@@ -41,7 +41,19 @@ violation exactly as a ``mkdir`` on ``config.STATE_DIR / …`` is. This is what 
 scan match reachability rather than a spelling, and what closes the gap the docstring
 above it used to describe and excuse.
 
-**What it still cannot see, said out loud.** A path assembled from a string
+**Which subexpression is the path is a property, not a spelling.** ``p.mkdir(…)`` keeps its
+path in the RECEIVER and ``os.makedirs(p)`` in the first ARGUMENT, and both are attribute
+calls — so the first cut, which read the receiver of every attribute call, scanned
+``os.makedirs(config.STATE_DIR / 'x')`` as the expression ``os`` and the advertised
+``makedirs`` coverage was dead for the only spelling anyone writes. The shape is no longer
+decided: `_mkdir_sites` yields every position that could hold the path — receiver, first
+argument, and the ``path=``/``name=`` keywords the stdlib signatures use — and a state path
+in any of them is a violation. A wrong guess now costs a false positive, which is loud and
+in the safe direction, rather than a silence.
+
+**What it still cannot see, said out loud.** A directory maker reached through a local
+rebinding (``mk = os.makedirs`` … ``mk(p)``) is not recognised as one: the aliased *import*
+is followed, an assignment is not. A path assembled from a string
 (``Path(str(config.ROOT) + "/.charter")``) is invisible: no attribute is named and no
 call is made. A path arriving from outside the package — read out of JSON, taken from
 ``argv`` — is invisible for the same reason. Neither is closed here, and the honest reason
@@ -196,10 +208,13 @@ def violations(source: str, state_names: set[str]) -> list[tuple[int, str]]:
     tree = ast.parse(source)
     state_funcs = state_path_functions(tree, state_names)
     out = []
-    for node, expr, enclosing in _mkdir_sites(tree):
-        full = _expand(expr, _local_assigns(enclosing))
-        if _mentions_state(full, state_names) or _calls(full, state_funcs):
-            out.append((node.lineno, expr))
+    for node, exprs, enclosing in _mkdir_sites(tree):
+        assigns = _local_assigns(enclosing)
+        for expr in exprs:
+            full = _expand(expr, assigns)
+            if _mentions_state(full, state_names) or _calls(full, state_funcs):
+                out.append((node.lineno, expr))
+                break
     return out
 
 
@@ -229,23 +244,56 @@ def _local_assigns(fn) -> dict[str, str]:
     return assigns
 
 
+#: The keywords the stdlib gives the path of a directory-making call: ``os.mkdir(path=…)``
+#: and ``os.makedirs(name=…)``. Read from the signatures, not invented.
+_PATH_KWARGS = ("path", "name")
+
+
+def _maker_aliases(tree: ast.AST) -> set[str]:
+    """Local names bound to ``os.mkdir`` / ``os.makedirs`` by an *aliased* import.
+
+    ``from os import makedirs`` already lands under the bare name; ``from os import
+    makedirs as md`` renames the call site, and a filter reading the local spelling would
+    let the alias walk out of the scan.
+    """
+    out = set()
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.ImportFrom) or n.level != 0 or n.module != "os":
+            continue
+        out |= {a.asname for a in n.names if a.name in ("mkdir", "makedirs") and a.asname}
+    return out
+
+
 def _mkdir_sites(tree: ast.AST):
-    """``(call node, path expression, enclosing function)`` for every ``mkdir``/``makedirs``."""
+    """``(call node, candidate path expressions, enclosing function)`` per ``mkdir``.
+
+    **Which subexpression is the path is a property of the call shape, and the first cut
+    matched a spelling instead.** ``p.mkdir(…)`` is a bound method and the path is the
+    RECEIVER; ``os.mkdir(p)`` / ``os.makedirs(p)`` are module functions and the path is the
+    first ARGUMENT. Both are attribute calls, and reading the receiver of every attribute
+    call — which is what this did — scanned ``os.makedirs(config.STATE_DIR / 'x')`` as the
+    expression ``os``, so the advertised ``makedirs`` coverage was dead for the only
+    spelling anyone writes. Keying instead on the name (``makedirs`` takes an argument,
+    ``mkdir`` a receiver) trades one spelling for another and still misses ``os.mkdir(p)``.
+
+    So the shape is not decided at all: every position that COULD hold the path is
+    yielded, and a state path in any of them is a violation. A wrong guess costs a false
+    positive — loud, and in the safe direction — where a wrong shape costs silence.
+    """
     scopes = _scopes(tree)
+    aliases = _maker_aliases(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
         name = getattr(fn, "attr", None) or getattr(fn, "id", None)
-        if name not in ("mkdir", "makedirs"):
+        if name not in ("mkdir", "makedirs") and name not in aliases:
             continue
-        if isinstance(fn, ast.Attribute):
-            expr = ast.unparse(fn.value)
-        elif node.args:
-            expr = ast.unparse(node.args[0])
-        else:
-            continue
-        yield node, expr, _enclosing(scopes, node.lineno)
+        exprs = [ast.unparse(fn.value)] if isinstance(fn, ast.Attribute) else []
+        exprs += [ast.unparse(a) for a in node.args[:1]]
+        exprs += [ast.unparse(k.value) for k in node.keywords if k.arg in _PATH_KWARGS]
+        if exprs:
+            yield node, tuple(exprs), _enclosing(scopes, node.lineno)
 
 
 def _params(fn) -> list[str]:
@@ -451,17 +499,19 @@ def handed_violations(mods, state_names: set[str]) -> dict[str, list[tuple[int, 
     found: dict[str, list[tuple[int, str]]] = {}
     for module, (path, tree) in mods.items():
         scopes = _scopes(tree)
-        for node, expr, here in _mkdir_sites(tree):
+        for node, exprs, here in _mkdir_sites(tree):
             if here is None or f"{module}.{here.name}" in THE_WALK:
                 continue
             mine = [q.rpartition(".")[2] for q in tainted
                     if q.startswith(f"{module}.{here.name}.")]
             if not mine:
                 continue
-            full = _expand(expr, _local_assigns(here))
-            if _names(full, mine):
-                found.setdefault(str(path.relative_to(PACKAGE.parent)), []).append(
-                    (node.lineno, expr))
+            assigns = _local_assigns(here)
+            for expr in exprs:
+                if _names(_expand(expr, assigns), mine):
+                    found.setdefault(str(path.relative_to(PACKAGE.parent)), []).append(
+                        (node.lineno, expr))
+                    break
     for hits in found.values():
         hits.sort()
     return found
