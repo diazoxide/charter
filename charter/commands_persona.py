@@ -181,8 +181,13 @@ def cmd_persona_list(args) -> int:
         # such twin active as soon as one of them is. The raw names are what charter
         # resolves a dispatch against, so they are what this compares.
         mark = "* " if n == active else "  "
+        # `PATH_DISPLAY_LIMIT`, not the display default: a vault's status line names PATHS
+        # (`listed by other accounts: .charter 755 (want 700 — chmod 700)`), and a remedy
+        # clipped at 160 characters is one the reader cannot act on. Still a fixed budget,
+        # for the reason `contain` gives: a budget the input can grow is no budget.
         print(fmt.format(mark, shown[n], roles[n][:rw - 2], vaults[n],
-                         contain.one_line(_vault_status(named[n]))))
+                         contain.one_line(_vault_status(named[n]),
+                                          contain.PATH_DISPLAY_LIMIT)))
     return 0
 
 
