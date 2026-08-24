@@ -218,6 +218,42 @@ class ItRoutesTheSameWayTheManifestDoes(unittest.TestCase):
             with self.subTest(tool=oc_id):
                 self.assertEqual(opencode.POST_HOOKS.get(oc_id), want)
 
+    def _manifest_names(self, event: str, handler: str) -> set[str]:
+        """Every Claude Code tool name `hooks/hooks.json` registers against *handler*."""
+        doc = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]
+        names: set[str] = set()
+        for e in doc[event]:
+            for h in e["hooks"]:
+                c = h["command"]
+                if ("charter hook " in c
+                        and c.split("charter hook ")[1].split()[0] == handler):
+                    names |= set((e.get("matcher") or "").split("|")) - {""}
+        return names
+
+    def test_a_routed_tool_arrives_under_a_name_that_handler_answers_to(self):
+        """`TOOL_NAMES`, `PRE_HOOKS` and `POST_HOOKS` are three tables, and all three
+        agreeing with each other is not the same as agreeing with the handler.
+
+        Every one of these handlers opens by testing `tool_name` and returning 0 when it
+        does not recognise it. So a routed tool whose translated name that handler is not
+        registered for produces a hook that runs, decides nothing, and looks wired — #433's
+        exact shape, reachable without touching the routing at all. `TOOL_NAMES["write"] =
+        "write"` is the one-word version a review shipped past the whole suite; adding a
+        tool to `POST_HOOKS` under a handler whose matcher does not name it is the version
+        nobody has written yet.
+
+        Read out of the manifest rather than restated, so the two harnesses cannot drift.
+        Tools with no entry are exempt and deliberately so: they fall to
+        :data:`DEFAULT_PRE_HOOK`, which guards Bash by reading ``tool_input["command"]``
+        and never looks at `tool_name` at all.
+        """
+        for event, table in (("PreToolUse", opencode.PRE_HOOKS),
+                             ("PostToolUse", opencode.POST_HOOKS)):
+            for oc_id, handler in table.items():
+                with self.subTest(event=event, tool=oc_id):
+                    self.assertIn(opencode.TOOL_NAMES[oc_id],
+                                  self._manifest_names(event, handler))
+
     def test_charters_tool_names_cover_every_tool_that_is_routed(self):
         """A routed tool whose id charter never translates arrives with `tool_name` set to
         opencode's lowercase id, and every handler's `tool_name` test then fails — a hook
@@ -273,18 +309,30 @@ class TheHandlersReadTheArgumentNamesOpencodeSENDS(PersonaIso):
 
     def test_a_secret_written_into_committed_memory_is_still_caught(self):
         """`posttooluse` read only `file_path`, so on opencode every branch below its path
-        lookup — the secret scan included — was a no-op that looked wired."""
-        name = self.make_persona("scanned")
-        p = config.PERSONAS_DIR / name / "memory" / "leak.md"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        body = "token: ghp_" + "a" * 36
-        p.write_text(body)
-        r = run_hook(hooks.posttooluse,
-                     {"hook_event_name": "PostToolUse", "session_id": "s",
-                      "cwd": str(self.tmp), "tool_name": "Write",
-                      "tool_input": {"filePath": str(p), "content": body}})
-        note = (r or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
-        self.assertIn("SECURITY", note)
+        lookup — the secret scan included — was a no-op that looked wired.
+
+        `tool_name` comes from `TOOL_NAMES`, never spelled here. It used to read `"Write"`
+        literally, and that literal is why `TOOL_NAMES["write"] = "write"` — a case change
+        — passed the whole suite: the one test that drove this handler agreed with itself
+        about the name while the shim had stopped sending it. Both tools that route here,
+        because `write` and `edit` are two independent one-word mutations.
+        """
+        for tool in ("write", "edit"):
+            with self.subTest(tool=tool):
+                name = self.make_persona(f"scanned-{tool}")
+                p = config.PERSONAS_DIR / name / "memory" / "leak.md"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                # Not a real credential: the prefix and the length are all the scanner
+                # matches on, and this string authenticates to nothing.
+                body = "token: ghp_" + "a" * 36
+                p.write_text(body)
+                r = run_hook(hooks.posttooluse,
+                             {"hook_event_name": "PostToolUse", "session_id": "s",
+                              "cwd": str(self.tmp),
+                              "tool_name": opencode.TOOL_NAMES[tool],
+                              "tool_input": {"filePath": str(p), "content": body}})
+                note = (r or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
+                self.assertIn("SECURITY", note)
 
     def test_a_skill_invocation_is_tallied_under_opencodes_own_key(self):
         from charter import skilluse

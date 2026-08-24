@@ -234,6 +234,30 @@ const POST_HOOKS = %(post_hooks)s
 
 const EFFECTFUL = %(effectful)s
 
+// Every table above is indexed by a string opencode chose, and a plain `TABLE[key]` does
+// not ask the table — it asks the whole prototype chain. `PRE_HOOKS["constructor"]` is
+// `Object`, `["toString"]` is a function, and `??` never fires for either, so a tool with
+// one of those ids used to spawn `charter hook function Object() { [native code] }`,
+// charter exited non-zero, this shim failed OPEN, and the call reached no guard at all —
+// not even the Bash catch-all. On the after-block the same lookup walked past `if (!hook)
+// return`, the one gate that exists because there is no safe catch-all there.
+//
+// So ask the PROPERTY instead of screening names: is this an OWN key of this table, and is
+// what it holds a string this may put on a command line? That answers "not in the table"
+// for every inherited property name there is — `constructor`, `toString`, `valueOf`,
+// `__proto__`, and whichever ones a future runtime adds — without this file carrying a
+// list of them to go stale.
+const own = (table, key) => {
+  if (typeof key !== "string" || !Object.hasOwn(table, key)) return undefined
+  const value = table[key]
+  return typeof value === "string" ? value : undefined
+}
+
+// opencode's tool id, or "". Normalised ONCE per call so the routing lookup, the name
+// translation and the EFFECTFUL test all read the same value, and so a `tool` that is not
+// a string can never become a command-line word or a `tool_name` charter has to parse.
+const toolId = (input) => (typeof input?.tool === "string" ? input.tool : "")
+
 export const CharterPlugin = async ({ $, directory }) => {
   return {
     "shell.env": async (input, output) => {
@@ -244,12 +268,13 @@ export const CharterPlugin = async ({ $, directory }) => {
     // Awaited before the tool runs, and `Plugin.trigger` wraps each hook in
     // `Effect.promise` with no try/catch — so throwing here is what denial IS.
     "tool.execute.before": async (input, output) => {
-      const hook = PRE_HOOKS[input?.tool] ?? DEFAULT_PRE_HOOK
+      const tool = toolId(input)
+      const hook = own(PRE_HOOKS, tool) ?? DEFAULT_PRE_HOOK
       const payload = {
         hook_event_name: "PreToolUse",
         session_id: input?.sessionID ?? "",
         cwd: directory,
-        tool_name: TOOL_NAMES[input?.tool] ?? input?.tool ?? "",
+        tool_name: own(TOOL_NAMES, tool) ?? tool,
         tool_input: output?.args ?? {},
       }
       let parsed
@@ -288,13 +313,14 @@ export const CharterPlugin = async ({ $, directory }) => {
     // decides whether its answer may be written into the tool's output. Treating them as
     // one is what kept `skill` and `task` from ever being tallied on this harness.
     "tool.execute.after": async (input, output) => {
-      const hook = POST_HOOKS[input?.tool]
+      const tool = toolId(input)
+      const hook = own(POST_HOOKS, tool)
       if (!hook) return
       const payload = {
         hook_event_name: "PostToolUse",
         session_id: input?.sessionID ?? "",
         cwd: directory,
-        tool_name: TOOL_NAMES[input?.tool] ?? input?.tool ?? "",
+        tool_name: own(TOOL_NAMES, tool) ?? tool,
         tool_input: input?.args ?? {},
         tool_response: { output: String(output?.output ?? "") },
       }
@@ -314,7 +340,7 @@ export const CharterPlugin = async ({ $, directory }) => {
       } catch (e) {
         return
       }
-      if (!note || !EFFECTFUL.includes(input?.tool)) return
+      if (!note || !EFFECTFUL.includes(tool)) return
       // Fenced, so nothing here can be read back as the tool's own output.
       output.output = `${output?.output ?? ""}\n\n--- charter ---\n${note}\n--- end charter ---`
     },

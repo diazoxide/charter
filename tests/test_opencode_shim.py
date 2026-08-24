@@ -82,12 +82,20 @@ class GuardForwarding(unittest.TestCase):
         self.assertEqual(opencode.TOOL_NAMES["bash"], "Bash")
         for oc_id, charter_name in opencode.TOOL_NAMES.items():
             with self.subTest(tool=oc_id):
-                self.assertIn(f'"{oc_id}"', self.src)
-                self.assertIn(f'"{charter_name}"', self.src)
+                # The PAIR, as `PRE_HOOKS` below is already pinned — not the two halves
+                # separately, which is what shipped and what `"write": "write"` satisfied
+                # twice over. That one-word mutation passed the whole suite while
+                # `posttooluse` bailed at `tool_name not in ("Write","Edit","MultiEdit")`
+                # and the committed-secret scan stopped firing on this harness.
+                self.assertIn(f'"{oc_id}": "{charter_name}"', self.src)
+                # …and translating has to CHANGE the name. opencode's ids are lowercase
+                # and charter's guards match Claude Code's CamelCase, so an entry that
+                # returns its own key has translated nothing — it only looks like a table.
+                self.assertNotEqual(charter_name, oc_id)
         # …and the table is READ, at both call sites. The same gap as #433 one field over:
         # a correct map that nothing indexes leaves `tool_name` as opencode's own id, and
         # every guard that matches on the Claude Code name silently stops matching.
-        self.assertEqual(self.src.count("TOOL_NAMES[input?.tool] ?? input?.tool"), 2)
+        self.assertEqual(self.src.count("own(TOOL_NAMES, tool) ?? tool"), 2)
 
     def test_it_sends_the_payload_charter_reads_and_throws_on_deny(self):
         for token in ("hook_event_name", "PreToolUse", "session_id", "tool_name",
@@ -120,11 +128,34 @@ class GuardForwarding(unittest.TestCase):
         So pin the CALL SITE. `tests/test_opencode_shim_dispatches_at_runtime.py` pins the
         same thing by running it; this one holds when no JS runtime is installed."""
         self.assertEqual(self.src.count("charter hook ${hook}"), 2)
-        self.assertIn("const hook = PRE_HOOKS[input?.tool] ?? DEFAULT_PRE_HOOK", self.src)
+        self.assertIn("const hook = own(PRE_HOOKS, tool) ?? DEFAULT_PRE_HOOK", self.src)
         for handler in {*opencode.PRE_HOOKS.values(), *opencode.POST_HOOKS.values(),
                         opencode.DEFAULT_PRE_HOOK}:
             with self.subTest(handler=handler):
                 self.assertNotIn(f"charter hook {handler} ", self.src)
+
+    def test_no_table_is_indexed_by_a_tool_id_directly(self):
+        """`TABLE[input?.tool]` does not ask the table, it asks the prototype chain.
+
+        `PRE_HOOKS["constructor"]` is `Object` — a function, so `??` never fires — and the
+        shim spawned `charter hook function Object() { [native code] }`, charter exited
+        non-zero, the shim took its fail-open path, and the tool reached no guard at all.
+        `POST_HOOKS["toString"]` walked past `if (!hook) return` the same way.
+
+        `own()` asks the property instead: OWN key, string value. Pinned here as an
+        absence because a fourth table added tomorrow must not reintroduce the class;
+        `tests/test_opencode_shim_dispatches_at_runtime.py` proves the behaviour by
+        running every name the runtime's own `Object.prototype` carries.
+        """
+        self.assertIn("Object.hasOwn(table, key)", self.src)
+        # Comment lines dropped first: the shim explains this bug by quoting the spelling
+        # it no longer uses, and an absence check that read the prose would be satisfied
+        # by deleting the explanation instead of by keeping the fix.
+        code = "\n".join(ln for ln in self.src.splitlines()
+                         if not ln.lstrip().startswith("//"))
+        for table in ("TOOL_NAMES", "PRE_HOOKS", "POST_HOOKS"):
+            with self.subTest(table=table):
+                self.assertNotIn(f"{table}[", code)
 
 
 class MidSessionNudges(unittest.TestCase):
@@ -149,7 +180,7 @@ class MidSessionNudges(unittest.TestCase):
         five the manifest dispatches — never ran here."""
         self.assertIn('"tool.execute.after"', self.src)
         self.assertIn("charter hook ${hook}", self.src)
-        self.assertIn("const hook = POST_HOOKS[input?.tool]", self.src)
+        self.assertIn("const hook = own(POST_HOOKS, tool)", self.src)
         for tool, handler in opencode.POST_HOOKS.items():
             with self.subTest(tool=tool):
                 self.assertIn(f'"{tool}": "{handler}"', self.src)
@@ -172,7 +203,7 @@ class MidSessionNudges(unittest.TestCase):
         self.assertIn("task", opencode.POST_HOOKS)
         self.assertNotIn("skill", opencode.EFFECTFUL_TOOLS)
         self.assertNotIn("task", opencode.EFFECTFUL_TOOLS)
-        self.assertIn("if (!note || !EFFECTFUL.includes(input?.tool)) return", self.src)
+        self.assertIn("if (!note || !EFFECTFUL.includes(tool)) return", self.src)
 
     def test_the_appended_text_is_fenced_so_it_cannot_be_mistaken_for_output(self):
         self.assertIn("charter", self.src.lower())

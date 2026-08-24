@@ -47,12 +47,38 @@ diffs it against the manifest is not enough either, and an adversarial review of
 version of this fix is what showed it: put the literal `charter hook pretooluse` back at the
 call site and leave the routing table sitting three lines above it, unread, and every
 assertion still passed. A table present but ignored is precisely the state that shipped for
-four releases. So the suite now pins the **call site**: the reachability check resolves each
+four releases. So the suite pins the **call site**: the reachability check resolves each
 `charter hook` through the constants that call site actually names, and — wherever Bun or
 Node is installed — the shim is *executed*, against a stand-in for Bun's `$` that records
 the command line it builds, and asked which handler each tool really reached. A handler
 added tomorrow fails the suite until opencode routes it or somebody writes down why it
 cannot; a handler unwired tomorrow fails it the same day.
+
+**A second review broke that too, and the same way: by matching a string.** Reaching the
+right handler is not the same as reaching it with something it can decide about. `TOOL_NAMES`
+was pinned by looking for each half of a mapping separately, so `"write": "write"` — a case
+change — satisfied every assertion while `posttooluse` bailed at its `Write`/`Edit`/`MultiEdit`
+test and the committed-secret warning above stopped firing on this harness. The `PostToolUse`
+payload was asserted nowhere at all, so emptying `tool_input` did the same thing by a
+different route, and blanking `cwd` disarmed the containment rule while every test stayed
+green. So the suite no longer asks what the shim *says*. It runs the generated plugin, takes
+the payload it really built, hands that exact dict to the real Python handler, and asserts
+what the handler **decided** — the vault read refused, the secret warned about for `write`
+and for `edit`, the skill and dispatch tallies incremented, the branch move in the plane root
+refused and the same command in a workspace clone allowed. Every field the shim fills is
+load-bearing by construction, and both payloads are compared whole, so a field dropped and a
+field invented are the same failure.
+
+**And one lookup was not asking the table it looked like it was asking.** `PRE_HOOKS[tool]`
+does not consult `PRE_HOOKS`, it consults the prototype chain: a tool id of `constructor`
+returned `Object` — a function, so the `??` fallback never fired — and the shim spawned
+`charter hook function Object() { [native code] }`, charter exited non-zero, the shim took
+its fail-open path, and the call reached no guard at all, not even the Bash catch-all. On the
+after-block the same lookup walked past `if (!hook) return`, which is the only gate there is
+on that side. Every table lookup now tests the property instead — own key, string value — so
+`constructor`, `toString`, `__proto__` and whatever a future runtime adds to `Object.prototype`
+are all simply "not in the table", with no list of them anywhere to go stale. The test asks
+the JS runtime for that list rather than keeping a copy.
 
 **To adopt it: update charter.** The plugin is stamped with the version that wrote it, so
 `charter init` / `charter update` replaces it. A plugin you edited yourself is left alone

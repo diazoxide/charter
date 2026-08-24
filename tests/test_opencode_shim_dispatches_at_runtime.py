@@ -67,13 +67,29 @@ class RuntimeDispatch(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return json.loads(proc.stdout)
 
-    def _before(self, tool: str, args: dict | None = None, reply: str = _ALLOW) -> dict:
+    def _before(self, tool, args: dict | None = None, reply: str = _ALLOW,
+                session: str = "s1", directory: str = "/plane") -> dict:
         return self._run({"event": "before", "tool": tool, "args": args or {},
-                          "sessionID": "s1", "reply": reply})[0]
+                          "sessionID": session, "directory": directory,
+                          "reply": reply})[0]
 
-    def _after(self, tool: str, reply: str, output: str = "ran") -> dict:
-        return self._run({"event": "after", "tool": tool, "args": {}, "sessionID": "s1",
+    def _after(self, tool, reply: str, output: str = "ran", args: dict | None = None,
+               session: str = "s1", directory: str = "/plane") -> dict:
+        return self._run({"event": "after", "tool": tool, "args": args or {},
+                          "sessionID": session, "directory": directory,
                           "reply": reply, "output": output})[0]
+
+    def _prototype_keys(self) -> list[str]:
+        """Every name a plain ``TABLE[key]`` would resolve through the prototype chain.
+
+        Asked of the RUNTIME rather than written down here. A list in Python is the shape
+        this audit keeps finding one spelling short — and `Object.prototype` is a set the
+        engine owns, not one charter gets to enumerate correctly forever.
+        """
+        keys = self._run({"event": "protokeys"})[0]["keys"]
+        self.assertIn("constructor", keys)     # a fixture that returned [] would pass
+        self.assertIn("__proto__", keys)       # every assertion below unfailably
+        return keys
 
     # -- PreToolUse -------------------------------------------------------------
 
@@ -101,6 +117,97 @@ class RuntimeDispatch(unittest.TestCase):
         self.assertEqual(res["calls"][0]["payload"]["tool_input"],
                          {"filePath": ".charter/vaults/devops.json"})
         self.assertEqual(res["calls"][0]["payload"]["tool_name"], "Read")
+
+    def test_the_before_payload_carries_every_field_and_nothing_else(self):
+        """An EQUALITY, deliberately, and against values this test chose.
+
+        The previous round asserted two of the five fields, and a review blanked the rest
+        one at a time with the whole suite green: `cwd: ""` is what the containment rule
+        reads, `session_id: ""` is what every workspace resolution and every trace record
+        keys on. A per-field presence check is a list of fields, which is the shape that
+        goes one entry short; comparing the whole dict makes "a field the call site
+        dropped" and "a field the call site invented" the same failure.
+        """
+        res = self._before("read", {"filePath": "notes.md"},
+                           session="sess-7", directory="/some/plane")
+        self.assertEqual(res["calls"][0]["payload"], {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-7",
+            "cwd": "/some/plane",
+            "tool_name": "Read",
+            "tool_input": {"filePath": "notes.md"},
+        })
+
+    def test_the_after_payload_carries_every_field_and_nothing_else(self):
+        """The twin of the block above, which did not exist and is why `tool_input: {}` on
+        the after-block passed the entire suite while killing the secret scan on this
+        harness: `posttooluse` reads the path out of `tool_input` and returns immediately
+        when it finds none."""
+        res = self._after("write", _ALLOW, output="wrote 1 line",
+                          args={"filePath": "notes.md", "content": "hi"},
+                          session="sess-7", directory="/some/plane")
+        self.assertEqual(res["calls"][0]["payload"], {
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-7",
+            "cwd": "/some/plane",
+            "tool_name": "Write",
+            "tool_input": {"filePath": "notes.md", "content": "hi"},
+            "tool_response": {"output": "wrote 1 line"},
+        })
+
+    def test_every_id_the_table_translates_arrives_as_the_name_it_translates_to(self):
+        """`TOOL_NAMES` being right is not the same as the shim sending what it says.
+
+        Two failures at once, both green on the full suite before this: a value equal to
+        its key (`"write": "write"`) satisfied every assertion that looked for the two
+        halves separately, and a key spelled `__proto__` would be swallowed by the object
+        literal rather than stored. Running the shim asks the only question that matters —
+        send this id, read back the name — and neither survives it.
+        """
+        for oc_id, charter_name in opencode.TOOL_NAMES.items():
+            with self.subTest(tool=oc_id):
+                res = self._before(oc_id, {})
+                self.assertEqual(res["calls"][0]["payload"]["tool_name"], charter_name)
+                self.assertNotEqual(charter_name, oc_id)
+
+    def test_a_tool_id_that_names_an_inherited_property_is_not_a_table_entry(self):
+        """`PRE_HOOKS["constructor"]` used to be `Object` — a function, so `??` never fired,
+        the command line became `charter hook function Object() { [native code] }`, charter
+        exited non-zero and this shim failed OPEN. The tool then reached no guard at all,
+        not even the Bash catch-all, and `tool_name` vanished from the payload entirely
+        because `JSON.stringify` drops function values.
+
+        The ids come from the runtime's own `Object.prototype`, so this covers the class
+        rather than the three names that happened to be tried.
+        """
+        for key in self._prototype_keys():
+            with self.subTest(tool=key):
+                res = self._before(key, {"command": "ls"})
+                self.assertEqual([_hook_of(c["command"]) for c in res["calls"]],
+                                 [opencode.DEFAULT_PRE_HOOK])
+                # Forwarded under its own id, as any unknown tool is — and as a STRING, so
+                # the handler's `tool_name` test is a comparison and not a coercion.
+                self.assertEqual(res["calls"][0]["payload"]["tool_name"], key)
+
+    def test_an_inherited_property_name_spawns_nothing_after_the_fact(self):
+        """The after-block has no catch-all on purpose, and `POST_HOOKS["toString"]` walked
+        straight past `if (!hook) return` — the single gate that decision rests on."""
+        for key in self._prototype_keys():
+            with self.subTest(tool=key):
+                self.assertEqual(self._after(key, _ALLOW)["calls"], [])
+
+    def test_a_tool_id_that_is_not_a_string_still_reaches_the_catch_all(self):
+        """opencode types `tool` as a string; this is about what happens when something
+        upstream is wrong rather than about a reachable attack. A number or an object used
+        to be interpolated into the command line and into `tool_name` verbatim, which is a
+        guard deciding about a value charter cannot compare."""
+        for tool in (None, 42, {"toString": "x"}, ["read"]):
+            with self.subTest(tool=tool):
+                res = self._before(tool, {"command": "ls"})
+                self.assertEqual([_hook_of(c["command"]) for c in res["calls"]],
+                                 [opencode.DEFAULT_PRE_HOOK])
+                self.assertEqual(res["calls"][0]["payload"]["tool_name"], "")
+                self.assertEqual(self._after(tool, _ALLOW)["calls"], [])
 
     def test_a_tool_with_no_entry_falls_to_the_catch_all_and_not_to_silence(self):
         for tool in _UNROUTED_PRE:
@@ -177,6 +284,65 @@ class RuntimeDispatch(unittest.TestCase):
         res = self._before("read", {"filePath": "notes.md"})
         self.assertEqual(res["calls"][0]["env"],
                          {"CHARTER_HARNESS": "opencode", "CHARTER_SESSION_ID": "s1"})
+
+
+@unittest.skipIf(_RUNTIME is None, "neither bun nor node is installed")
+class OnlyAStringEverLeavesATable(unittest.TestCase):
+    """`own()` hands back a table's value only when it IS a string, and that half of it
+    cannot be reached by anything opencode sends: every value charter generates is one.
+
+    It exists for the other direction — a table that is wrong — and that is not
+    hypothetical, it is #433's second half exactly. The prototype walk did not produce a
+    bad *decision*; it produced ``charter hook function Object() { [native code] }``,
+    a non-zero exit, and a shim that failed open with the tool having reached no guard at
+    all. Whatever a lookup returns ends up as a command-line word, so "it is a string"
+    is the property, and `Object.hasOwn` is only one of the two ways it can be violated.
+
+    The only honest way to exercise a branch that charter's own generation cannot trigger
+    is to generate a table that triggers it. So this rewrites one VALUE in the generated
+    source and leaves every line of code alone — deleting either half of `own()` turns
+    one of these red, which is the point: a defensive line with no test is the thing this
+    audit was called to remove, not something to add more of.
+    """
+
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="charter-oc-nonstr-"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        (self.dir / "drive.mjs").write_text(_DRIVER.read_text())
+
+    def _with_entry(self, entry: str, replacement: str, scenario: dict) -> dict:
+        src = opencode.SHIM
+        self.assertIn(entry, src)          # a no-op edit would prove nothing
+        (self.dir / "charter.mjs").write_text(src.replace(entry, replacement, 1))
+        proc = subprocess.run([_RUNTIME, "drive.mjs"], input=json.dumps([scenario]),
+                              capture_output=True, text=True, timeout=120, cwd=self.dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)[0]
+
+    def test_a_routing_entry_that_is_not_a_string_falls_to_the_catch_all(self):
+        """Not to `charter hook [object Object]`, which charter answers non-zero and this
+        shim then reads as "guard unavailable" — allowing the tool."""
+        res = self._with_entry('"read": "pretooluse-read"',
+                               '"read": {"handler": "pretooluse-read"}',
+                               {"event": "before", "tool": "read", "args": {},
+                                "sessionID": "s1", "reply": _ALLOW})
+        self.assertEqual([_hook_of(c["command"]) for c in res["calls"]],
+                         [opencode.DEFAULT_PRE_HOOK])
+
+    def test_a_tool_name_entry_that_is_not_a_string_forwards_the_raw_id(self):
+        """`tool_name` reaches a Python `in` test. An object there is a guard comparing
+        something it cannot compare, which decides nothing and looks wired."""
+        res = self._with_entry('"read": "Read"', '"read": ["Read"]',
+                               {"event": "before", "tool": "read", "args": {},
+                                "sessionID": "s1", "reply": _ALLOW})
+        self.assertEqual(res["calls"][0]["payload"]["tool_name"], "read")
+
+    def test_a_post_entry_that_is_not_a_string_spawns_nothing(self):
+        """The after-block's `if (!hook) return` is the only gate there is on that side."""
+        res = self._with_entry('"write": "posttooluse"', '"write": {}',
+                               {"event": "after", "tool": "write", "args": {},
+                                "sessionID": "s1", "reply": _ALLOW, "output": "ran"})
+        self.assertEqual(res["calls"], [])
 
 
 if __name__ == "__main__":

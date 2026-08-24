@@ -19,6 +19,14 @@ const scenarios = JSON.parse(await new Promise((res) => {
 const results = [];
 
 for (const s of scenarios) {
+  // Not a shim call: the RUNTIME's own list of inherited property names, so the test can
+  // exercise every id a plain `TABLE[key]` would resolve through the prototype chain
+  // without keeping a copy of that list in Python — including whichever names a future
+  // JS engine adds to `Object.prototype`.
+  if (s.event === 'protokeys') {
+    results.push({ keys: Object.getOwnPropertyNames(Object.prototype) });
+    continue;
+  }
   const calls = [];
   const $ = (strings, ...values) => {
     let command = '';
