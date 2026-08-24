@@ -17,6 +17,21 @@ side, and this module is the boundary for all three:
 
 Every test here asserts the withholding direction: the interesting outcome is always
 "the vault did NOT reach that command", never "sync-agents crashed".
+
+**Three rounds of review then found the same class of hole in the fixes themselves, and
+it was the same mistake every time: the guard was put on the FIELD that had just been
+attacked rather than on the SURFACE it is printed on.** Round one matched a NAME (``""``
+was blank, ``"   "`` was not). Round two matched a CHARACTER and a LIST (``str.isprintable``
+plus a regex over the ASCII space; a tuple of four blank strings) and U+3164 walked past
+both. Round three matched the right class — every codepoint outside printable ASCII — but
+matched it inside `describe`, while the ``persona/server`` label sharing that row went to
+the terminal untouched, and while `secrets` stayed in the digest and off the line.
+
+So the tests that hold the line here are of two shapes and neither of them is a list of
+bad inputs: a SWEEP over all 1,114,112 codepoints for what `_safe` must catch, and a
+SURFACE assertion over the whole printed transcript of a real `sync-agents` run for where
+committed text is allowed to appear. A field added to the consent line later is covered by
+the second without anybody remembering to add it to the first.
 """
 
 from __future__ import annotations
@@ -33,6 +48,10 @@ from charter import commands_persona, config, mcpseen, persona
 from tests._isolation import PersonaIso
 
 VAULT = "reddit"
+
+#: Charter's own colour codes, which `util` adds and a terminal does not print. Stripped
+#: before a line is measured, so the width asserted is the width the operator sees.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 STDIO = {
     "type": "stdio",
@@ -183,12 +202,44 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
         self.assertIn("PATH", line)
         self.assertIn("NODE_OPTIONS", line)
 
-    def test_the_consent_line_shows_no_secret_values(self):
-        """It prints vault KEY names, never values — and the entry has no values to print
-        in the first place. Asserted so a future 'be more helpful' edit cannot add them."""
-        line = mcpseen.describe(dict(STDIO, secrets={"REDDIT_CLIENT_ID": "client-id"}))
+    def test_the_consent_line_names_the_vault_key_it_would_hand_over(self):
+        """The next spelling of the homoglyph finding, one field further in — and the one
+        this test used to assert the wrong way round.
+
+        `secrets` is `{ENV_VAR: vault-key}`, so `client-id` below is a KEY NAME, and it is
+        the field that decides WHICH credential the command receives —
+        `mcp_render_entry` turns it into `secret exec <vault> --env REDDIT_CLIENT_ID=client-id`.
+        It is in the digest, so editing it lapses the approval and the operator is asked
+        again; it was not on the line, so the line they were asked under was byte-identical
+        to the one they had already approved. Being re-asked under an unchanged line is a
+        second chance to make the same mistake, which is finding three's shape exactly.
+
+        The credential's VALUE cannot reach the line, and not because anything strips it:
+        `describe` is a pure function of the entry, the value is not in the entry, and this
+        module never opens a vault. The last assertion pins that — every token on the line
+        came either out of the entry or out of charter's own words."""
+        entry = dict(STDIO, secrets={"REDDIT_CLIENT_ID": "client-id"})
+        line = mcpseen.describe(entry)
         self.assertIn("uvx", line)
-        self.assertNotIn("client-id", line)
+        self.assertIn("REDDIT_CLIENT_ID=client-id", line)
+
+        repointed = dict(STDIO, secrets={"REDDIT_CLIENT_ID": "aws-root-key"})
+        self.assertNotEqual(mcpseen.fingerprint(VAULT, entry),
+                            mcpseen.fingerprint(VAULT, repointed),
+                            "precondition: re-pointing the credential does re-ask")
+        self.assertNotEqual(line, mcpseen.describe(repointed),
+                            "and the line it re-asks under has to have changed too")
+
+        # `secret_files` is the same decision through a different mechanism (#190): a path
+        # to a materialised file rather than a value. Same key, same need to show it.
+        files = mcpseen.describe(dict(STDIO, secret_files={"GOOGLE_APPLICATION_CREDENTIALS":
+                                                          "prod-sa-json"}))
+        self.assertIn("GOOGLE_APPLICATION_CREDENTIALS=prod-sa-json", files)
+
+        charters_own = {"vault", "file", "env", "http", "more", "chars"}
+        for token in re.findall(r"[A-Za-z0-9_./-]{3,}", line):
+            self.assertTrue(token in json.dumps(entry) or token in charters_own,
+                            f"{token!r} reached the consent line from outside the entry")
 
     def test_control_characters_cannot_repaint_the_line(self):
         """The next input through this door. The line IS the consent, so a committed
@@ -313,7 +364,7 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
                 # escaping rather than of stripping.
                 line = mcpseen.describe({"type": "stdio", "command": shown * 3,
                                          "secrets": {"ACME_TOKEN": "acme-token"}})
-                self.assertEqual(line, f"\\u{ord(shown):04x}" * 3)
+                self.assertEqual(line.split("  ")[0], f"\\u{ord(shown):04x}" * 3)
 
         name = self._persona({"type": "stdio", "command": "   ",
                               "secrets": {"ACME_TOKEN": "acme-token"}})
@@ -519,6 +570,186 @@ class ApproveMcpAsksBeforeItRecords(ApprovalBase):
         self.assertEqual(self.asked, 1, "and it was a real question, asked once")
         self.assertEqual(mcpseen.approved(name), set(), "no is still no")
         self.assertWithheld(self._render(name))
+
+    def test_no_committed_text_reaches_the_transcript_as_a_glyph_or_as_a_page(self):
+        """The SURFACE, not the field — which is the one lesson three rounds have each
+        paid for. `describe` was hardened three times, and the `persona/server` label
+        printed in front of it on the same row went to the terminal untouched all three
+        times, because each round guarded the field that had just been attacked.
+
+        Reproduced end to end before this existed, through this same fixture: a server
+        named `"\u3164" * 3` printed `reddit/ \u2192 uvx some-reddit-mcp` with nothing
+        between the slash and the arrow; one carrying `ESC[2K\r` erased charter's own
+        words beside it and repainted the row from column zero; `"\u202e"` reversed it;
+        and one of a hundred thousand characters put twelve hundred rows in front of the
+        destination while `MAX_LINE` was satisfied, because `describe` never saw the name.
+
+        So the assertion is over the whole printed transcript rather than over any field
+        in it: run the real command with each field of the entry hostile in turn, and the
+        transcript may hold no glyph a benign run does not hold, and no line wider than
+        the screen the question is asked on. A field added to this line later is covered
+        without this test being edited.
+
+        Charter's own decoration — the bullet, the tick, the arrow, the em dash — is
+        DERIVED from a benign run of the same command rather than listed here. A list
+        would drift the first time a message gained a glyph, and this file has already
+        watched two lists of characters be walked past.
+        """
+        ours: set[str] = set()
+        for benign in (dict(STDIO), {"type": "http", "secrets": dict(STDIO["secrets"])}):
+            self._persona(benign)
+            _rc, out = self._sync(_Tty(), answers=["n"])
+            ours |= {c for c in out if not (" " <= c <= "~")}
+        self.assertIn("→", ours, "precondition: the arrow is charter's own")
+
+        hostiles = {
+            "server name": ("\u3164" * 3, "a\x1b[2K\rharmless", "z" * 100000,
+                            "\u202eevil", "   ", "a\nb"),
+            "command": ("\u3164" * 3, "npx\r\x1b[2K", "\U0001f600" * 400),
+            "arg": ("\u2800" * 300, "--x\u0301" * 90),
+            "env key": ("PATH\u200b", "\u115f" * 40),
+            "vault key": ("client-id\u202e", "\u1160" * 40),
+        }
+        for where, inputs in hostiles.items():
+            for hostile in inputs:
+                with self.subTest(where=where, input=repr(hostile[:14])):
+                    name = "reddit"
+                    self.make_persona(name, role="R", vault=VAULT,
+                                      **{"delegate-when": "things"})
+                    entry = {"type": "stdio", "command": "uvx",
+                             "args": ["some-reddit-mcp"], "env": {"PATH": "/usr/bin"},
+                             "secrets": {"REDDIT_CLIENT_ID": "client-id"}}
+                    server = "reddit"
+                    if where == "server name":
+                        server = hostile
+                    elif where == "command":
+                        entry["command"] = hostile
+                    elif where == "arg":
+                        entry["args"] = [hostile, "--read-only"]
+                    elif where == "env key":
+                        entry["env"] = {hostile: "1"}
+                    else:
+                        entry["secrets"] = {"REDDIT_CLIENT_ID": hostile}
+                    self._write(name, {server: entry})
+
+                    _rc, err = self._sync(_Tty(), answers=["n"])
+                    stray = {c for c in err if not (" " <= c <= "~")} - ours
+                    self.assertEqual(stray, set(),
+                                     "committed text put a glyph on the terminal that a "
+                                     "benign run never puts there")
+                    # The screen, measured on the line as PRINTED — bullet, indent, label,
+                    # arrow and destination — not on the half `describe` happens to bound.
+                    screen = mcpseen.MAX_COLS * mcpseen.MAX_ROWS
+                    for ln in err.splitlines():
+                        self.assertLessEqual(
+                            len(_ANSI.sub("", ln)), screen,
+                            f"{len(ln) // mcpseen.MAX_COLS} rows is a page the operator "
+                            f"scrolls, not a line they read: {ln[:60]!r}")
+
+    def test_the_destination_ceiling_leaves_room_for_the_label_beside_it(self):
+        """The behaviour behind the arithmetic. `describe`'s ceiling is not the screen —
+        it is the screen MINUS the label and the decoration printed on the same row, since
+        those columns are spent whatever the destination does. A ceiling on the part you
+        were looking at rather than on the line you print is a ceiling the other part is
+        free to walk past, and that is precisely how a hundred-thousand-character server
+        name printed twelve hundred rows with `MAX_LINE` satisfied throughout.
+
+        The entry below sits in the gap between the two ceilings: refused today, and
+        rendered — beside a name that fills the label — by anything that spends the whole
+        screen on the destination."""
+        fat = {"type": "stdio", "command": "uvx", "args": ["a" * 90] * 8,
+               "secrets": {"REDDIT_CLIENT_ID": "client-id"}}
+        self.assertEqual(mcpseen.describe(fat), "",
+                         "a destination this size does not leave room for the label")
+
+        name = "reddit"
+        self.make_persona(name, role="R", vault=VAULT, **{"delegate-when": "things"})
+        self._write(name, {"z" * 100000: fat})
+        _rc, err = self._sync(_Tty(), answers=["y"])
+        self.assertEqual(self.asked, 0, "nothing showable, nothing to ask")
+        for ln in err.splitlines():
+            self.assertLessEqual(len(_ANSI.sub("", ln)),
+                                 mcpseen.MAX_COLS * mcpseen.MAX_ROWS, ln[:60])
+
+    def test_an_interrupt_names_the_persona_through_the_same_escape(self):
+        """Ctrl-C at the prompt. Every other half of every other line here goes through
+        `mcpseen.label`; so does this one, because "that half is safe today" is exactly
+        the reasoning the label was shipped on for three rounds. `valid_name` bounds a
+        persona's alphabet and not its length, so a 200-character directory is the case
+        that is not hypothetical."""
+        from contextlib import redirect_stderr, redirect_stdout
+        name = self._persona(name="z" * 200)
+        buf = io.StringIO()
+        args = SimpleNamespace(persona=None, approve_mcp=True, yes=False, dry_run=False)
+
+        def boom(prompt=""):
+            raise KeyboardInterrupt
+
+        with mock.patch("sys.stdin", _Tty()), mock.patch("builtins.input", boom), \
+                redirect_stdout(io.StringIO()), redirect_stderr(buf):
+            rc = commands_persona.cmd_persona_sync_agents(args)
+        self.assertEqual(rc, 130)
+        self.assertEqual(mcpseen.approved(name), set(), "and nothing was recorded")
+        line = [ln for ln in buf.getvalue().splitlines() if "interrupted" in ln]
+        self.assertEqual(len(line), 1, buf.getvalue())
+        # From the word itself: the prompt this interrupted printed no newline, so the
+        # message shares a physical row with it.
+        tail = line[0][line[0].index("interrupted"):]
+        self.assertLessEqual(len(_ANSI.sub("", tail)), mcpseen.MAX_COLS,
+                             "one row, like every other line the operator reads here")
+        self.assertIn(mcpseen.label(name), tail)
+        self.assertNotIn(name, tail, "the whole 200-character directory name reached it")
+
+    def test_every_field_that_reaches_the_line_goes_through_the_escape(self):
+        """The routing half of the guarantee, split from the class half deliberately.
+
+        `test_a_consent_line_is_printable_ascii_and_nothing_else` sweeps all 1,114,112
+        codepoints through `_safe`, so WHICH codepoints are caught is settled there. What
+        is left to check is whether each field reaches `_safe` at all — and one escaped
+        codepoint per field settles that, because `_safe` is total: a field that skips it
+        fails on the first non-ASCII character, whichever one is used. Listing fields is
+        safe in a way that listing codepoints never was; the list is closed, it is the
+        signature of `describe` plus the signature of `label`, and a field left off it
+        fails the transcript test above instead.
+        """
+        blank, esc = "\u3164", "\\u3164"
+        renders = {
+            "command": lambda s: mcpseen.describe({"command": s}),
+            "arg": lambda s: mcpseen.describe(dict(STDIO, args=[s])),
+            "type": lambda s: mcpseen.describe({"type": s, "url": "https://x.example"}),
+            "url": lambda s: mcpseen.describe({"type": "http", "url": s}),
+            "env key": lambda s: mcpseen.describe(dict(STDIO, env={s: "1"})),
+            "secrets var": lambda s: mcpseen.describe(dict(STDIO, secrets={s: "k"})),
+            "secrets vault key": lambda s: mcpseen.describe(dict(STDIO, secrets={"V": s})),
+            "secret_files var": lambda s: mcpseen.describe(dict(STDIO, secret_files={s: "k"})),
+            "secret_files vault key": lambda s: mcpseen.describe(
+                dict(STDIO, secret_files={"V": s})),
+            "persona name": lambda s: mcpseen.label(s, "acme"),
+            "server name": lambda s: mcpseen.label("reddit", s),
+        }
+        for where, render in renders.items():
+            with self.subTest(where=where):
+                out = render(blank * 3)
+                self.assertIn(esc, out, f"{where} does not go through the escape")
+                self.assertTrue(all(" " <= c <= "~" for c in out),
+                                f"{where} put a glyph on the line: {out!r}")
+
+    def test_a_name_is_bounded_by_a_number_and_not_by_the_input(self):
+        """`_clip` announces how much it cut, and that marker's own width grows with the
+        input it describes — fine for a destination, where the count is what the operator
+        needs, and wrong for a label, where the point is a hard bound. A budget a longer
+        input makes longer is not a budget."""
+        for n in (10 ** 3, 10 ** 5):
+            with self.subTest(n=n):
+                half = mcpseen.label("z" * n).split("/")[0]
+                self.assertLessEqual(len(half), mcpseen.MAX_NAME)
+                self.assertTrue(half.endswith("..."), "and the cut is still announced")
+        self.assertEqual(mcpseen.label("   ", "reddit"), '""/reddit',
+                         "a half that renders as nothing is named, not left as a gap")
+        self.assertLessEqual(
+            mcpseen.MAX_LABEL + mcpseen.MAX_LINE + mcpseen._DECORATION,
+            mcpseen.MAX_COLS * mcpseen.MAX_ROWS,
+            "the destination budget must leave room for the label printed beside it")
 
     def test_invisible_padding_is_refused_before_anyone_is_asked(self):
         """The other half of the same input: nine args of 200 blank columns fit under the

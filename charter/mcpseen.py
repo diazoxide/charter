@@ -68,14 +68,27 @@ UNRENDERABLE = "(charter cannot show this entry in full — nothing to approve)"
 #: holds in both directions.
 MAX_PART = 200
 
-#: The narrowest terminal charter assumes, and the most rows one consent line may take on
-#: it. Their product is the hard ceiling on the whole line.
+#: The narrowest terminal charter assumes, and the most rows one PRINTED consent line may
+#: take on it. Their product is the hard ceiling on that line — label, decoration and
+#: destination together, because all three are on the same screen.
 MAX_COLS = 80
 MAX_ROWS = 10
 
-#: Hard ceiling on the whole consent line. An entry with so many parts that even their
-#: clipped forms do not fit is one the operator cannot be shown in full, so it is not
-#: renderable and (via :func:`fingerprint`) not approvable. See :func:`describe`.
+#: Longest either half of the ``persona/server`` label prints as. See :func:`label`.
+MAX_NAME = 35
+
+#: The whole label as printed: both halves and the ``/`` between them.
+MAX_LABEL = MAX_NAME * 2 + 1
+
+#: Everything charter itself puts on a printed consent line and nobody committed: the
+#: ``• `` bullet `util.info` prefixes, the two-space indent, and the ``→`` with a space on
+#: each side. Counted here because the ceiling below is a screen, and a screen does not
+#: care who put the columns on it.
+_DECORATION = len("• ") + len("  ") + len(" → ")
+
+#: Ceiling on the DESTINATION half — what :func:`describe` may return. An entry with so
+#: many parts that even their clipped forms do not fit is one the operator cannot be shown
+#: in full, so it is not renderable and (via :func:`fingerprint`) not approvable.
 #:
 #: This is a SCREEN, not a byte count, and that is the whole reason it exists. The
 #: operator answers the prompt printed *under* this line, so a line taller than the
@@ -84,7 +97,13 @@ MAX_ROWS = 10
 #: and nine args of 200 padding columns each fit inside it with the destination out of
 #: view. Escaping (see :func:`_safe`) makes such padding visible; it does not make it
 #: short, so the ceiling has to be the screen itself.
-MAX_LINE = MAX_COLS * MAX_ROWS
+#:
+#: The label and the decoration are SUBTRACTED rather than ignored, which is the round
+#: after that one: a ceiling that bounds the part charter was looking at and not the line
+#: it prints is bounded by whatever the attacker puts in the other part. A committed
+#: server name of a hundred thousand characters printed twelve hundred rows in front of a
+#: destination that was itself comfortably inside the ceiling.
+MAX_LINE = MAX_COLS * MAX_ROWS - MAX_LABEL - _DECORATION
 
 #: Two or more ASCII spaces. After :func:`_safe` escapes every codepoint outside printable
 #: ASCII, the ASCII space is the ONLY character that can still reach a consent line and
@@ -259,16 +278,84 @@ def _clip(text: str, budget: int) -> str:
     let a committed ``args`` of 600 characters produce a consent line naming neither the
     ``env`` it sets nor the ``url`` it points at, because both are appended after ``args``
     — so the important half of the line was the half that got cut.
+
+    The marker is ASCII, like everything else :func:`_safe` lets through, so that "a
+    consent line is printable ASCII" needs no footnote reading "except charter's own
+    ellipsis". A claim with an exception is a claim its test has to carve a hole in, and
+    the hole is where the next spelling goes.
     """
     return text if len(text) <= budget else (
-        text[:budget] + f"… (+{len(text) - budget} more chars)")
+        text[:budget] + f"... (+{len(text) - budget} more chars)")
+
+
+def _name(part) -> str:
+    """One half of a :func:`label`: printable ASCII, never wider than :data:`MAX_NAME`.
+
+    Clipped with a FIXED marker rather than with :func:`_clip`'s counted one. The count is
+    what the operator needs for a destination — how much of the command is off the line —
+    and it is exactly wrong here, because its own width grows with the input it describes.
+    A budget that a longer input makes longer is not a bound, and a bound is the only
+    thing standing between a committed name and the rows it costs.
+
+    A half that renders as nothing shows as ``""`` rather than as an invisible gap, the
+    same convention :func:`describe` uses for an ``env`` key, so ``reddit/""`` reads as a
+    server whose name is blank instead of as a missing word.
+    """
+    shown = _safe(str(part))
+    if len(shown) > MAX_NAME:
+        shown = shown[:MAX_NAME - 3] + "..."
+    return shown or '""'
+
+
+def label(*parts) -> str:
+    """The ``persona/server`` a consent line puts in front of the destination.
+
+    :func:`describe` has been hardened three times, and this half of the same printed line
+    reached the terminal untouched on all three — which is this fix's own lesson arriving
+    at its own expense. Each round put the guard on the FIELD that was attacked rather
+    than on the SURFACE it is printed on, so the next spelling only had to move one field
+    over. It moved here.
+
+    The ``server`` half is the live one: it is a key of a committed ``mcp.json``, so it is
+    an arbitrary JSON string, of arbitrary length, in any script. Confirmed end to end
+    through ``sync-agents --approve-mcp`` before this existed — a server named with three
+    U+3164 HANGUL FILLERs printed ``reddit/ → uvx some-reddit-mcp`` with nothing between
+    the slash and the arrow; one carrying an ANSI erase wiped charter's own words standing
+    beside it and repainted the row from column zero; a bidi override reversed the line;
+    and a name of a hundred thousand characters printed twelve hundred rows before the
+    destination reached the screen, with :data:`MAX_LINE` satisfied throughout because
+    :func:`describe` never saw the name.
+
+    The ``persona`` half is *already* contained: it is a directory under ``personas/``, and
+    `persona.reference_ok` refuses any reference outside ``[a-z0-9][a-z0-9._-]*`` (#328),
+    so a persona whose name is not printable ASCII resolves to nothing and never reaches
+    this line. It goes through the same escape anyway, because charter joins guards rather
+    than choosing between them — this one still holds if that alphabet is ever widened.
+    And the half of it that is not hypothetical: `valid_name` bounds the ALPHABET and not
+    the LENGTH, so only the clip here keeps a 255-character persona directory off four
+    rows of the screen the question is asked on.
+    """
+    return "/".join(_name(p) for p in parts)
 
 
 def describe(entry: dict) -> str:
     """Where the credential would go, as the line that asks the operator to look at it.
 
     Names and keys only — a ``secrets`` map holds vault KEY names, never values, so this
-    is safe to print and the operator needs to see it to judge the request.
+    is safe to print; and it IS printed, because the question the operator is answering is
+    "which credential goes where", and the line used to answer only the second half.
+
+    **Which credential, not just which command.** ``secrets`` and ``secret_files`` are what
+    `persona.mcp_render_entry` turns into ``--env VAR=<vault key>`` and
+    ``--file VAR=<vault key>``, so the vault key named there decides *what value* the
+    command receives. They were in the digest and not on the line, which is finding three
+    of round three — a homoglyph re-point that lapses the approval and re-asks under a line
+    that reads the same — moved to the field that chooses the credential rather than the
+    destination: editing ``{"REDDIT_CLIENT_ID": "client-id"}`` to
+    ``{"REDDIT_CLIENT_ID": "aws-root-key"}`` in a committed ``mcp.json`` produced a
+    byte-identical consent line and a different fingerprint, so the operator was correctly
+    re-asked and correctly could not tell why. Being re-asked under an unchanged line is
+    not consent, it is a second chance to make the same mistake.
 
     ``""`` when the entry has no destination to show, which :func:`fingerprint` turns into
     "not approvable" — so a line the operator cannot read is a line nobody can consent to.
@@ -310,7 +397,21 @@ def describe(entry: dict) -> str:
     ``env`` keys are shown because they choose the destination as surely as ``command``
     does: ``PATH`` decides which binary ``execvpe`` finds, ``NODE_OPTIONS`` decides what
     it loads (#426).
+
+    The rule the three suffixes are instances of, said once so a fourth field does not
+    have to be found the way these were: **everything the digest covers that changes what
+    the vault hands over, or where it lands, is on the line.** ``env`` chooses the binary,
+    ``url`` chooses the endpoint, ``secrets`` and ``secret_files`` choose the credential.
+    A field that lapses an approval without changing the line spends the operator's second
+    look on a line they have already read.
     """
+    def _shown(x) -> str:
+        # `or '""'`: a name that renders blank is still a name the harness would use, so
+        # it is printed as an empty string rather than left as an invisible gap in a list.
+        # Applied only to what actually reaches the line — an `env` VALUE never does, and
+        # escaping a megabyte nobody will read is work done on an attacker's behalf.
+        return _clip(_safe(str(x)), MAX_PART) or '""'
+
     if not isinstance(entry, dict):
         return ""
     raw = entry.get("args")
@@ -325,10 +426,14 @@ def describe(entry: dict) -> str:
         return ""
     env = entry.get("env")
     if isinstance(env, dict) and env:
-        # `or '""'`: a key that renders blank is still a key the harness would set, so it
-        # is named as an empty string rather than left as an invisible gap in the list.
-        keys = sorted(_clip(_safe(str(k)), MAX_PART) or '""' for k in env)
-        dest += "  (env: " + ", ".join(keys) + ")"
+        dest += "  (env: " + ", ".join(sorted(_shown(k) for k in env)) + ")"
+    for field, shown_as in (("secrets", "vault"), ("secret_files", "vault file")):
+        m = entry.get(field)
+        if isinstance(m, dict) and m:
+            # `VAR=key`, the shape `mcp_render_entry` builds — so the line reads like the
+            # `secret exec` argv the answer authorises rather than like a summary of it.
+            pairs = sorted(f"{_shown(var)}={_shown(key)}" for var, key in m.items())
+            dest += f"  ({shown_as}: " + ", ".join(pairs) + ")"
     # Not truncated: refused. A line this long does not fit on the screen the question is
     # asked on, and cutting it would put us back where round one was — deciding which half
     # of the destination the operator gets to see. The digest covers every byte either way.

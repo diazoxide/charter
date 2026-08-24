@@ -48,7 +48,7 @@ the `env` keys it used to push off — here is the tail of one whose `--config` 
 characters:
 
 ```
-  … (+443 more chars)  [stdio https://evil.example/mcp]  (env: NODE_OPTIONS, PATH)
+  ... (+443 more chars)  [stdio https://evil.example/mcp]  (env: NODE_OPTIONS, PATH)
 ```
 
 **The consent line is printable ASCII, and everything else is spelled out.** The first two
@@ -67,6 +67,11 @@ and any plane, is shown as `\uXXXX`:
   reddit/acme   → http https://api.\u0430\u0441me.example/mcp
 ```
 
+Precisely: *everything on that row which came out of a committed file* is printable
+ASCII. The `•` and the `→` around it are charter's own punctuation — as is the `...` that
+marks a clip, which is ASCII rather than `…` for exactly this reason, so the claim needs
+no footnote and its test needs no hole cut in it.
+
 That closes three shapes at once. Blankness becomes decidable rather than enumerable,
 because on the escaped line the ASCII space is the only character left that shows nothing.
 A combining mark can no longer repaint the rows around the line. And a homoglyph re-point
@@ -79,6 +84,33 @@ eight-digit `\UXXXXXXXX` form, since `\u1f600` is five hex digits and would equa
 `U+1F60` followed by `0`, and a literal backslash is doubled, so a committed `command`
 holding the six ASCII characters `\u3164` cannot imitate one holding U+3164. Windows paths
 show as `C:\\Users\\x`.
+
+And it covers the whole line, not the destination half of it. The `persona/server` label
+printed in front of the arrow had gone to the terminal untouched while the destination
+beside it was hardened three times over — which is this fix's own lesson arriving at its
+own expense. A server name is a key of a committed `mcp.json`: an arbitrary string, of
+arbitrary length, in any script. Three fillers printed as `reddit/ → uvx`; an ANSI erase
+wiped charter's own words standing beside it; a hundred thousand characters put twelve
+hundred rows in front of the destination while the line's own ceiling was satisfied,
+because the function that enforced it never saw the name.
+
+Both halves of the label are now escaped and clipped to a fixed width, and the
+destination's ceiling is what is left of the screen once the label is paid for. A ceiling
+on the part you were looking at, rather than on the line you print, is a ceiling the other
+part walks past. (A persona name cannot be hostile to begin with — `personas/` entries are
+held to `[a-z0-9][a-z0-9._-]*` — but that alphabet bounds the characters and not the
+length, and it goes through the same escape regardless, because charter joins its guards
+rather than choosing between them.)
+
+**And the line says which credential, not only which command.** `secrets` and
+`secret_files` map an environment variable to a *vault key*, and that key is what decides
+which of the vault's values the command receives. They were in the digest and not on the
+line, so editing `{"REDDIT_CLIENT_ID": "client-id"}` to `{"REDDIT_CLIENT_ID": "aws-root-key"}`
+lapsed the approval, asked you again, and asked under a line byte-for-byte identical to the
+one you had already approved — the same shape as the homoglyph above, in the field that
+chooses the credential rather than the destination. Both now print as `VAR=key`, the shape
+the `secret exec` argv is built from. Key names only; a value lives in the vault and never
+enters the process that prints this line.
 
 **And the line has to fit on a screen.** The ceiling on the whole line used to be 2000
 characters — twenty-five rows of an 80-column terminal. Nine args of 200 invisible columns
@@ -96,7 +128,7 @@ server of every persona and printed what it had approved *afterwards*. It now pr
 server and asks about it, one at a time, before recording anything:
 
 ```
-  reddit/acme → http https://api.acme.example/mcp  (env: HTTPS_PROXY)
+  reddit/acme → http https://api.acme.example/mcp  (env: HTTPS_PROXY)  (vault: ACME_TOKEN=acme-token)
     approve reddit/acme? [y/N]
 ```
 

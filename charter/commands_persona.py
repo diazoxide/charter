@@ -1408,6 +1408,14 @@ def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
 
     The recorded set is replaced per persona, as `mcpseen.approve` documents, so a server
     the operator declines here stops being approved even if it was approved before.
+
+    **Both halves of every line printed here come from `mcpseen`.** The destination goes
+    through `mcpseen.describe` and the `persona/server` in front of it through
+    `mcpseen.label`, because both are committed data and they share a row: a server name
+    built out of blank codepoints, an ANSI erase or a hundred thousand characters is a
+    line the operator cannot read just as surely as a padded `args` is. Interpolating
+    either of them raw is how this file put three hardened `describe` calls behind an
+    unescaped label.
     """
     if not (yes or dry_run or sys.stdin.isatty()):
         util.err("--approve-mcp hands a persona's vault value to a command a COMMITTED "
@@ -1431,19 +1439,22 @@ def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
                 # recording an approval would be approving a blank line (#427). Said out
                 # loud rather than skipped — the server is declared and does want a
                 # credential, so the operator has to hear that it was refused one.
-                util.warn(f"  cannot approve {n}/{server} — {mcpseen.UNRENDERABLE}")
+                util.warn(f"  cannot approve {mcpseen.label(n, server)} — "
+                          f"{mcpseen.UNRENDERABLE}")
                 continue
             # Printed BEFORE the question, not after the recording: an approval nobody
             # can see in the transcript is not consent, it is a flag that was typed.
-            util.info(f"  {n}/{server} → {mcpseen.describe(entry)}")
+            util.info(f"  {mcpseen.label(n, server)} → {mcpseen.describe(entry)}")
             if dry_run:
                 continue
             try:
-                if not (yes or _confirm(f"    approve {n}/{server}? [y/N] ")):
-                    util.info(f"    skipped {n}/{server} — the vault stays withheld")
+                if not (yes or _confirm(
+                        f"    approve {mcpseen.label(n, server)}? [y/N] ")):
+                    util.info(f"    skipped {mcpseen.label(n, server)} — "
+                              f"the vault stays withheld")
                     continue
             except KeyboardInterrupt:
-                util.err(f"interrupted — nothing recorded for {n}")
+                util.err(f"interrupted — nothing recorded for {mcpseen.label(n)}")
                 return 130
             keep.append(fp)
         if not dry_run:
@@ -1504,7 +1515,7 @@ def cmd_persona_sync_agents(args) -> int:
                   f"receive it, and this one has not been approved on this machine.")
         for n, servers in sorted(withheld.items()):
             for server, entry in servers:
-                util.info(f"  {n}/{server} → "
+                util.info(f"  {mcpseen.label(n, server)} → "
                           f"{mcpseen.describe(entry) or mcpseen.UNRENDERABLE}")
         util.info("  Read the command above. If it is what you expect, approve it with:")
         util.info("    charter persona sync-agents --approve-mcp")

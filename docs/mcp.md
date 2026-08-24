@@ -135,7 +135,7 @@ command it withheld from, which is the thing worth looking at.
 `--approve-mcp` asks **per server**, and prints the entry before it asks:
 
 ```
-  reddit/acme → http https://api.acme.example/mcp  (env: HTTPS_PROXY)
+  reddit/acme → http https://api.acme.example/mcp  (env: HTTPS_PROXY)  (vault: ACME_TOKEN=acme-token)
     approve reddit/acme? [y/N]
 ```
 
@@ -151,9 +151,20 @@ teammate re-pointing an existing server at a new binary, a new endpoint or a new
 the case this exists for.
 
 The printed line names every part of that destination, and **no part can push another one
-off it**. Each part — the command, each arg, the `url`, each `env` key — gets its own
-budget and is clipped on its own with the cut announced, so padding `args` in a committed
-file cannot scroll the `env` or the endpoint out of view.
+off it**. Each part — the command, each arg, the `url`, each `env` key, each vault key —
+gets its own budget and is clipped on its own with the cut announced, so padding `args` in
+a committed file cannot scroll the `env` or the endpoint out of view.
+
+**Which credential, and not only which command.** `secrets` and `secret_files` map an
+environment variable to a *vault key*, and that key decides which of the vault's values
+the command receives — so both are on the line as `VAR=key`, in the shape the `secret exec`
+argv is built from. They are in the digest too, so editing one lapses the approval and you
+are asked again; before they were shown, that second question arrived under a line
+identical to the one you had already approved, which is a second chance to make the same
+mistake rather than a chance to catch it. The rule the suffixes are instances of:
+everything the digest covers that changes what the vault hands over, or where it lands, is
+on the line. (Key *names*, never values — a value lives in the vault and never enters the
+process that prints this.)
 
 **The line is printable ASCII, and everything else is spelled out as `\uXXXX`.** Not
 "unprintable characters are escaped" — every codepoint outside `U+0020..U+007E` is,
@@ -166,11 +177,33 @@ anything else here is a reason to *show the escape* rather than the glyph. Escap
 also what makes "renders as nothing" answerable: charter decides it on the escaped line,
 where the ASCII space is the only character left that shows nothing.
 
+Read that claim precisely, because it is the kind of sentence this section has already had
+to withdraw twice: *everything on the row that came out of a committed file* is printable
+ASCII. The `•` and the `→` around it are charter's own punctuation, put there by charter
+and not by anyone's `mcp.json` — including the `...` that marks a clip, which is ASCII for
+exactly this reason. The test derives that set from a benign run rather than listing it.
+
 The escaping is one-to-one, which is the part that makes reading the line worth anything:
 astral codepoints use the eight-digit `\UXXXXXXXX` form (`\u1f600` is five hex digits and
 would also spell `U+1F60` followed by `0`), and a literal backslash is doubled, so every
 `\uXXXX` you see is a codepoint that was really there rather than six ASCII characters
 imitating one. A Windows path therefore shows as `C:\\Users\\x`.
+
+That covers the **whole** line, including the `persona/server` label in front of the
+arrow — the half that had gone to the terminal untouched while the destination beside it
+was hardened three times. A server name is a key of a committed `mcp.json`: an arbitrary
+string, of arbitrary length, in any script. So a server named with three U+3164 fillers no
+longer prints as `reddit/ → uvx`, one carrying an ANSI erase no longer wipes the words
+standing beside it, and one of a hundred thousand characters no longer puts twelve hundred
+rows in front of the destination. Both halves of the label are clipped to a fixed width
+and escaped the same way, and the destination's own budget is what is left of the screen
+once the label has been paid for — a ceiling on the part charter was looking at, rather
+than on the line it prints, is a ceiling the other part is free to walk past.
+
+(A persona name cannot reach that line hostile in the first place: `personas/` entries are
+held to `[a-z0-9][a-z0-9._-]*`. It goes through the same escape anyway — charter joins its
+guards rather than choosing between them — and the clip is not belt-and-braces at all,
+since that alphabet bounds the characters and not the length.)
 
 An entry charter cannot show in full cannot be approved at all and is reported as withheld.
 Two ways to get there: it names no destination (no `command`, no `args`, no `url` — a part
