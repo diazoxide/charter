@@ -187,9 +187,20 @@ def read_for(dirs, branches: dict) -> dict:
 def maybe_spawn(dirs, workspace: str | None = None) -> None:
     """Kick off a detached background refresh if the cache is stale. Non-blocking.
 
-    ``workspace`` is passed to the child explicitly (via ``--workspace``) because
-    the status line's env is scrubbed — the child couldn't otherwise resolve the
-    session's active workspace on its own.
+    ``workspace`` is passed to the child explicitly (via ``--workspace``), and the reason
+    written here for years — "the status line's env is scrubbed" — is **false**. Measured
+    2026-08-24 against Claude Code 2.1.241 with a real `statusLine` command: the
+    environment arrives intact, `$CHARTER_WORKSPACE` included. (Same false belief appeared
+    in :mod:`charter.statusline` and :mod:`charter.session`; all three are corrected
+    together rather than one at a time, because a claim in three places is a claim
+    somebody will re-derive from whichever copy survives.)
+
+    Passing it explicitly is still right, for a better reason: the status line resolves
+    the workspace for the SESSION — from the payload's `session_id` and `cwd`, which are
+    not this process's — while the child would resolve it for ITSELF, from its own
+    environment and its own directory. A refresh keyed to a different workspace than the
+    row it is refreshing is the defect; an environment variable was never what stood
+    between them.
     """
     now = time.time()
     try:

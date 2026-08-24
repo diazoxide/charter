@@ -52,11 +52,30 @@ class FrameDefaults(unittest.TestCase):
     def test_a_valid_slots_override_actually_takes_effect(self):
         """Companion to the test above: a *different* valid override must actually be
         honoured, not just filtered. Every slot name is in the shipped default now, so
-        "shares no element with it" is no longer available to anything — what rules a
-        default-returning stub out here is the list itself: two entries, in an order the
-        default does not have them in."""
+        "shares no element with it" is no longer available to anything; what rules a
+        default-returning stub out here is the length.
+
+        `["right", "left"]` and not `["left", "right"]`, and that is the whole point of
+        the pair below it: the first draft of this claimed to check an order "the default
+        does not have them in" while using the order the default DOES have them in."""
         f = instance.frame_of({"frame": {"slots": ["left", "right"]}})
         self.assertEqual(f["slots"], ["left", "right"])
+
+    def test_the_operators_own_slot_order_is_kept_exactly(self):
+        """**Order is geometry, so order is a promise.** `layout.panel_argvs` splits each
+        slot off the harness pane in list order, so `["top", "left", "right", "bottom"]`
+        and `["top", "bottom", "left", "right"]` are two different frames from the same
+        four names — measured on tmux 3.7c at 200x50, a 154-column bottom row inset
+        between the sidebars versus a full-width 200-column one (see
+        `instance.FRAME_FIELDS`).
+
+        Nothing pinned that. A `frame_of` that re-sorted an operator's `slots` into the
+        shipped order — silently handing them a frame they did not ask for — passed the
+        entire suite, including the test above, because every list it was ever given was
+        already in the default's relative order. `["right", "left"]` is the shortest list
+        that is not."""
+        f = instance.frame_of({"frame": {"slots": ["right", "left"]}})
+        self.assertEqual(f["slots"], ["right", "left"])
 
     def test_a_malformed_section_falls_back_instead_of_raising(self):
         """`config` is imported by every command including `charter --version`, so a bad

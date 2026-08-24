@@ -68,9 +68,24 @@ Three conditions, all cheap enough for a path that runs every time the footer re
   one syscall and no tmux subprocess. Without it, a directory left behind by a crashed
   launcher would blank this plane's status line forever, with nothing on screen to say
   why. `state.reap` already asks the same question for the same reason.
+* **a server marker a LAUNCHER wrote.** A directory is not proof that a frame exists:
+  `state.bump` creates one on demand and `notify.plane_changed` calls it from seven hook
+  sites for whatever id is in the environment — so an operator who exports
+  `CHARTER_SESSION_ID` in a shell rc gets a directory minted by their first tool call,
+  carrying their own shell's permanently-live pid. Only `cmd_launch` records a server.
+* **the harness pane the launcher recorded matches this process's `$TMUX_PANE`.** The
+  four conditions above establish that a live frame exists; only this one establishes
+  that the process asking is *inside* it. A process can hold an id it merely inherited —
+  most sharply below `tmuxctl.SESSION_ENV_FLOOR`, where charter cannot put the frame id on
+  `new-session` and a second frame's harness inherits the first frame's (#411). Blanking
+  there would take away the one correct surface that operator still had. tmux sets
+  `$TMUX_PANE` in every process it starts in a pane, and it survives the harness's own
+  spawning of this command (measured: a real `statusLine` invocation reported `PANE=[%0]`).
 
 Every failure answers "not in a frame", which renders. A status line that vanished for a
-reason nobody can see is the worst outcome available here.
+reason nobody can see is the worst outcome available here — which is also why `charter
+doctor`'s frame row says so when a session's line is being suppressed, rather than leaving
+a blank footer to be explained by reading source.
 
 ## The frame must therefore SHOW what it suppresses
 
@@ -108,17 +123,28 @@ belongs to". Inside a frame, that is the frame.** Every process the frame contai
 agent's shell, each panel, any `charter` command typed inside it — agrees on one identity,
 which is what makes a switch made in the harness visible on the edges.
 
-There are then two session identities in a framed session, and they key different things:
+**They are not two variables with two jobs. They are two ids competing for one slot, and
+the frame is chosen to win it.** An earlier draft of this ADR argued the comfortable
+version — that Claude Code's id "reaches charter through stdin, never the environment" —
+and it is false: measured 2026-08-24 against Claude Code 2.1.241, `$CLAUDE_CODE_SESSION_ID`
+is right there in the environment, and `session.current()` reads it one rung below
+`$CHARTER_SESSION_ID`. Inside a frame the frame id **shadows** it.
 
-* **Claude Code's own session id** keys everything that arrives by payload — the usage
-  history above, the session trace. It reaches charter through stdin, never the
-  environment.
-* **the frame id** keys everything a process can only read off its environment — the
-  workspace pointer, the frame's version counter, the gather cache.
+Choosing that deliberately is still the right answer, because the alternative is worse:
+the harness and its panels are different panes and different processes, and the frame id
+is the only name all of them can agree on. But it has to be argued as what it is, and it
+has a consequence the comfortable version hides:
 
-Two identities with two jobs, not one identity with a bug. Pinned by
-`tests/test_frame_owns_the_surface.py`, which asserts that a panel follows a `ws use` made
-under the frame's id and does *not* follow one made under any other.
+* **Everything keyed on `session.current()` becomes per-FRAME for the life of the frame** —
+  the workspace pointer, and `workspace.set_active`'s **session lock** with it. The lock
+  belongs to the frame rather than to the Claude Code conversation inside it: resume the
+  same conversation in a new frame and it is a new key, with no lock and no pointer
+  carried over.
+* **What still keys on Claude Code's own id is what arrives by payload and never reads the
+  environment**: the token-usage history this ADR keeps alive, and the session trace.
+
+Pinned by `tests/test_frame_owns_the_surface.py`, which asserts that a panel follows a
+`ws use` made under the frame's id and does *not* follow one made under any other.
 
 That rule sends a bill, and #411 was it: charter's private tmux server is shared by every
 frame on the machine, so only the first launch's `new-session` starts it, and tmux builds
@@ -126,8 +152,29 @@ a later session's pane environment from the SERVER's global one. Measured agains
 3.7c, a second frame's harness read the *first* frame's `$CHARTER_SESSION_ID` — so
 `charter ws use` wrote the first frame's pointer and every hook bumped the first frame's
 version, while the second frame's panels sat waiting for a change recorded somewhere else.
-`layout.session_argv` now carries the frame's environment on `-e`, the same way the
-operator's-tmux path already did.
+`layout.session_argv` now carries the frame's identity on `-e`, the same way the
+operator's-tmux path already carried it.
+
+**Only the identity, and that is a security boundary rather than an economy.** A tmux `-e`
+becomes the client's command line: world-readable in `/proc/<pid>/cmdline`, visible to
+`ps`, recorded permanently by exec-audit tooling. `_frame_env` is the operator's entire
+environment — measured at 138 argv elements and 7,696 bytes on a real machine, carrying
+two live service-account tokens — so charter puts exactly four names there
+(`commands_frame._FRAME_IDENTITY`: the frame id, the harness, the plane root, the
+workspace pin), each one a value that must be *this* frame's rather than whichever
+launcher started the shared server, and none of them ever a credential. Everything else
+keeps reaching the harness the way it always did, through the tmux client's own
+environment. Each of the four is emitted even when the launcher does not have it
+(`NAME=`), because inheriting a value is as wrong as carrying a stale one — a pinned
+`$CHARTER_WORKSPACE` outranks every pointer in `workspace.resolve`, so an inherited pin
+would make `charter ws use` unable to move that frame at all.
+
+The inside-a-tmux path still passes the whole environment, deliberately and now
+documented: there the `-e` overlay lands on the operator's own tmux server environment,
+which may predate this plane entirely, so charter states everything rather than trusting
+it. That is a real exposure with a real reason; narrowing it needs its own measurement of
+what a harness may safely inherit from a server charter does not own, and this ADR does
+not pretend to have made it.
 
 ## Consequences, including the ones that cost something
 

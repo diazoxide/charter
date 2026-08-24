@@ -29,9 +29,19 @@ tmux does apply to panes split later — so this closes the one pane that call c
 the one `new-session` itself creates.
 
 `new-session -e` arrived in tmux 3.2, and charter still launches below that (it warns and
-degrades rather than refusing). Below 3.2 the flag is not ignored, it is a parse error
-that would take the whole launch down, so the environment is withheld there and a second
-frame behaves exactly as every frame did before this fix.
+degrades rather than refusing). Below 3.2 the flag is not ignored, it is a parse error that
+would take the whole launch down, so the environment is withheld there — and on tmux 3.0
+or 3.1 a second frame's panels go on following the first frame, exactly as they did before
+this fix. What does **not** happen there is the status line going quiet against somebody
+else's frame: charter now records which pane each frame runs its harness in, and a process
+holding an inherited frame id is sitting in a pane that frame never claimed. So that
+operator keeps the correct footer they already had, rather than losing it as well.
+
+The same recorded pane closes a quieter case at every tmux version: an operator who
+exports `CHARTER_SESSION_ID` in their shell rc used to be one hook away from a frame
+directory minted in their name, with their own shell's pid at the end of it — permanently
+live, permanently "a running frame". Suppression now asks for a frame a launcher actually
+made and a pane it actually started.
 
 Nothing to adopt: upgrading is the whole of it. A frame already running keeps whatever id
 it was started with — start it again to pick this up.

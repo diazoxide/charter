@@ -280,6 +280,30 @@ def _cache_hint(streak: int) -> str | None:
             f"churns the prefix; prefer {_R}{_BOLD}/rewind{_R}{_DIM} over /compact{_R}")
 
 
+def _usage_numbers(payload: dict) -> tuple[str, int, int, int] | None:
+    """``(session_id, cache_read, cache_write, hit%)`` out of a status-line payload, or
+    ``None`` when this turn carries no live numbers.
+
+    The one place that knows where those numbers live and what counts as a turn having
+    any. :func:`record_usage` and :func:`_context_gauge` both go through it — a claim the
+    first version of this split made in a docstring and did not deliver, leaving the
+    gauge extracting `read`/`write`/`hit` a second time from the same payload. Two
+    extractions is how the drawn number and the recorded number come to disagree about
+    the same turn.
+
+    ``None`` and not zeros: early in a session, and right after ``/compact``, the payload
+    has no usage at all, and a zero recorded there would be an invented turn (and a
+    ``0/0`` divided).
+    """
+    cu = ((payload or {}).get("context_window") or {}).get("current_usage") or {}
+    read = cu.get("cache_read_input_tokens") or 0
+    write = cu.get("cache_creation_input_tokens") or 0
+    if not (read or write):
+        return None
+    return ((payload or {}).get("session_id") or "", read, write,
+            round(100 * read / (read + write)))
+
+
 def record_usage(payload: dict) -> list[int]:
     """Write this turn's cache numbers into the session's trend; return the trend.
 
@@ -289,8 +313,9 @@ def record_usage(payload: dict) -> list[int]:
     handed them — so a "suppression" that stopped invoking this command would delete the
     record rather than merely hide a duplicate of it. Splitting the write out of
     :func:`_context_gauge` is what lets the blank path keep the record without drawing a
-    character, and keeps the extraction of ``read``/``write``/``hit`` in ONE place so the
-    drawing path and the recording path cannot come to disagree about what a turn was.
+    character. The extraction itself lives in :func:`_usage_numbers`, which both paths
+    call, so the drawn number and the recorded number cannot come to disagree about what
+    a turn was.
 
     Reads nothing that is not in *payload*, so a caller that does not intend to draw pays
     one file read and one file write and nothing else — no git, no forge, no persona scan.
@@ -298,14 +323,11 @@ def record_usage(payload: dict) -> list[int]:
     session and right after ``/compact``: there is nothing to record then, and recording a
     zero would be inventing a turn.
     """
-    cw = (payload or {}).get("context_window") or {}
-    cu = cw.get("current_usage") or {}
-    read = cu.get("cache_read_input_tokens") or 0
-    write = cu.get("cache_creation_input_tokens") or 0
-    if not (read or write):
+    nums = _usage_numbers(payload)
+    if nums is None:
         return []
-    hit = round(100 * read / (read + write))
-    return _record_turn((payload or {}).get("session_id") or "", hit, read, write)
+    sid, read, write, hit = nums
+    return _record_turn(sid, hit, read, write)
 
 
 def _context_gauge(payload: dict) -> list[str]:
@@ -333,18 +355,15 @@ def _context_gauge(payload: dict) -> list[str]:
     if isinstance(pct, (int, float)):
         col = _GREEN if pct < 50 else (_YELLOW if pct < 80 else _RED)
         out.append(f"{_DIM}ctx{_R} {col}{int(pct)}%{_R}")
-    cu = cw.get("current_usage") or {}
-    read = cu.get("cache_read_input_tokens") or 0
-    write = cu.get("cache_creation_input_tokens") or 0
-    if read or write:
-        hit = round(100 * read / (read + write))
+    nums = _usage_numbers(payload)
+    if nums is not None:
+        sid, _read, _write, hit = nums
         # <50% sustained = the prefix is churning; that's the expensive failure mode.
         col = _GREEN if hit >= 80 else (_YELLOW if hit >= 50 else _RED)
         # Dim label, coloured number — the exact shape `ctx NN%` above uses, so the two
         # session gauges read as a pair rather than as a word and a symbol.
         out.append(f"{_DIM}cache{_R} {col}{hit}%{_R}")
         try:
-            sid = payload.get("session_id") or ""
             trend = record_usage(payload)
             # Rebuilds are the dominant cost and are invisible in the ratio — surface them
             # cumulatively so the price of a mid-task switch stays on screen.
@@ -2093,12 +2112,24 @@ def a_frame_owns_this_surface() -> bool:
     * **stdout is not a tty.** Claude Code invokes this command with its stdout piped, so
       a tty means a human ran `charter statusline` by hand and wants to see the thing they
       asked for — a frame on the same screen is no reason to hand them a blank line.
-    * **``$CHARTER_SESSION_ID`` names a live frame of this plane.** The frame launcher
-      exports the frame id under that name (`commands_frame._frame_env`) and Claude Code
-      passes its own environment to this command intact, so the variable is here to be
-      read. :func:`charter.frame.state.is_live` is what decides "live", by the pid the id
-      ends in — no tmux call on a path that runs every time the footer repaints, and no
-      stale directory left by a crashed frame blanking this plane's status line forever.
+    * **``$CHARTER_SESSION_ID`` names a live frame of this plane, and this process is
+      inside it.** The frame launcher exports the frame id under that name
+      (`commands_frame._frame_env`) and Claude Code passes its own environment to this
+      command intact, so the variable is here to be read.
+
+    **Holding the id is not the same as being in the frame, and the difference is the
+    whole reason `$TMUX_PANE` is passed down.** A process can inherit a frame id it does
+    not belong to — most sharply below `tmuxctl.SESSION_ENV_FLOOR`, where charter cannot
+    put the id on `new-session` and a SECOND frame's harness on the shared private server
+    inherits the FIRST frame's (#411). Suppressing on the id alone would blank that
+    operator's footer while their panels followed another frame: no correct surface at
+    all, where before they at least had a correct status line. tmux sets `$TMUX_PANE` in
+    every process it starts in a pane and it survives the harness's own spawning of this
+    command (measured through a real `statusLine` invocation: ``PANE=[%0]``), so comparing
+    it against the pane the launcher recorded answers "is this frame mine" exactly.
+
+    Read with a ``""`` default rather than ``None``, deliberately: absent means "not in
+    any pane", which is an answer — not a reason to stop asking the question.
 
     Never raises. Everything it touches is ambient, and every failure means "no frame"
     (which renders) rather than a status line that vanished for a reason nobody can see.
@@ -2110,7 +2141,7 @@ def a_frame_owns_this_surface() -> bool:
         if not fid:
             return False
         from .frame import state as frame_state
-        return frame_state.is_live(fid)
+        return frame_state.is_live(fid, pane=os.environ.get("TMUX_PANE", ""))
     except Exception:
         return False
 

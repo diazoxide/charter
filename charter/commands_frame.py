@@ -944,6 +944,59 @@ def _frame_env(fid: str, h) -> dict[str, str]:
     return env
 
 
+#: The variables whose value must be THIS frame's rather than whichever launcher
+#: happened to start the shared tmux server — the whole of what `_frame_identity_env`
+#: puts on a tmux command line.
+#:
+#: Named one at a time rather than globbed on a `CHARTER_` prefix, because the list is a
+#: PROMISE about what reaches `/proc/<pid>/cmdline` and a prefix match would quietly keep
+#: that promise for a variable nobody has invented yet. Each is here for a reason a second
+#: frame makes real:
+#:
+#: * ``CHARTER_SESSION_ID`` — the frame's own id, and #411 itself.
+#: * ``CHARTER_HARNESS`` — two frames may run two different harnesses.
+#: * ``CHARTER_ROOT`` — two frames may be two different PLANES, and a harness reading the
+#:   other one's root writes into a control plane nobody in this frame chose.
+#: * ``CHARTER_WORKSPACE`` — `workspace.resolve` puts this above every pointer, so an
+#:   inherited pin outranks the frame's own answer and `charter ws use` cannot move it.
+#:
+#: None of the four is ever a credential. That is the property that makes putting them on
+#: an argv acceptable at all — see :func:`_frame_identity_env`.
+_FRAME_IDENTITY = ("CHARTER_SESSION_ID", "CHARTER_HARNESS", "CHARTER_ROOT",
+                   "CHARTER_WORKSPACE")
+
+
+def _frame_identity_env(env: dict[str, str]) -> dict[str, str]:
+    """Just the part of *env* that has to travel on a tmux COMMAND LINE, and no more.
+
+    **A tmux `-e` is argv, and argv is not private.** `_frame_env` is
+    ``dict(os.environ, …)`` — the operator's whole environment, `SSH_AUTH_SOCK`, API
+    tokens, vault service-account tokens and all. Handed to `subprocess.run(env=…)` that
+    is an ordinary child environment, readable only by the owner via `/proc/<pid>/environ`.
+    Expanded into ``-e NAME=VALUE`` argv elements it becomes the tmux client's COMMAND
+    LINE: world-readable in `/proc/<pid>/cmdline` on Linux for as long as the client runs,
+    visible to `ps` for every local user, and recorded permanently by exec-audit and
+    process-accounting tooling. Measured on a real environment: 138 argv elements, 7,696
+    bytes, carrying two live service-account tokens. `charter claude` is the default path,
+    so that would have been every launch on every machine.
+
+    So only :data:`_FRAME_IDENTITY` travels, and the rest keeps arriving exactly the way
+    it always did — through the tmux client's own environment on charter's server, and
+    through the operator's already-running server on theirs.
+
+    **Every name is emitted, including the ones that are absent, as ``NAME=``.** An
+    inherited value is as wrong as a stale one: a launcher that pinned `$CHARTER_WORKSPACE`
+    starts the shared server with it, and the NEXT frame — which pinned nothing — would
+    otherwise inherit that pin and have `workspace.resolve` rank it above its own
+    pointers. Measured against tmux 3.7c: ``-e FOO=`` leaves the variable set and empty
+    rather than unset, which is what charter's own readers already treat as absent
+    (`workspace.resolve` and `root.find_root` both test the value for truth, not for
+    presence). Being explicit in both directions is what makes a frame's charter identity
+    the launcher's answer rather than half of somebody else's.
+    """
+    return {name: env.get(name, "") for name in _FRAME_IDENTITY}
+
+
 def _remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`set-option -p`: keep THIS pane in place after its program exits, and no other.
 
@@ -1053,6 +1106,10 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[
                  "and pane id — cannot scope the frame to it")
         return 1
     harness_pane = harness_pane.strip()
+    # What tells a process inside this frame apart from one that merely inherited its id
+    # (ADR 0019, `state.record_harness_pane`). Recorded before the harness is started, so
+    # the very first status line it spawns can already answer.
+    state.record_harness_pane(fid, harness_pane)
 
     def _close_window() -> None:
         tmuxctl.run("closing the frame's window",
@@ -1522,11 +1579,17 @@ def cmd_launch(args) -> int:
     # this call is what starts the server. Every frame after the first on `SOCKET` finds
     # it already running, and its harness would inherit the FIRST frame's
     # `$CHARTER_SESSION_ID` — #411, measured against tmux 3.7c; see `layout.session_argv`.
+    #
+    # `_frame_identity_env(env)` and NEVER `env`: a `-e` is argv, and argv is world-
+    # readable. The rest of the environment still reaches the harness the way it always
+    # did, through the client this call is run with. See `_frame_identity_env`.
+    #
     # Withheld below `SESSION_ENV_FLOOR`, where `-e` is a parse error rather than a
     # missing feature and would take the whole launch down with it.
-    session_cmd = layout.session_argv(session=fid, conf=str(conf_path), socket=SOCKET,
-                                      cols=cols, rows=rows, harness_argv=argv,
-                                      env=env if v >= tmuxctl.SESSION_ENV_FLOOR else None)
+    session_cmd = layout.session_argv(
+        session=fid, conf=str(conf_path), socket=SOCKET, cols=cols, rows=rows,
+        harness_argv=argv,
+        env=_frame_identity_env(env) if v >= tmuxctl.SESSION_ENV_FLOOR else None)
     proc = tmuxctl.run("starting the frame", session_cmd, env=env)
     if proc.returncode != 0:
         return 1
@@ -1535,6 +1598,10 @@ def cmd_launch(args) -> int:
         util.err("charter frame: tmux started the session but did not report a pane id "
                  "— cannot scope the exit-code hook to it")
         return 1
+    # See the identical call on the operator's-tmux path: this is what lets a status line
+    # tell "I am this frame's harness" from "I inherited this frame's id", which below
+    # `SESSION_ENV_FLOOR` a second frame on this shared server genuinely does.
+    state.record_harness_pane(fid, harness_pane)
 
     frame = config.FRAME
     conf_path.write_text(conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
@@ -1658,8 +1725,15 @@ def cmd_launch(args) -> int:
                      f"detached; reattach manually if you must: "
                      f"tmux -L {SOCKET} attach -t {fid}")
         else:
-            panes = _draw_panels(SOCKET, slots=slots, fid=fid, harness_pane=harness_pane,
-                                 env=env, v=v)
+            # `pane_env` on this path too, since #411: a panel splits off a server that
+            # may have been started by ANOTHER launcher, so `$CHARTER_WORKSPACE` and
+            # `$CHARTER_ROOT` reach it from that launcher unless charter states them.
+            # Identity only — a `-e` is argv (see `_frame_identity_env`) — and withheld
+            # below `PANE_ENV_FLOOR`, where `split-window` cannot parse the flag.
+            panes = _draw_panels(
+                SOCKET, slots=slots, fid=fid, harness_pane=harness_pane, env=env, v=v,
+                pane_env=(_frame_identity_env(env)
+                          if v >= tmuxctl.PANE_ENV_FLOOR else None))
             for slot, pane_id in panes.items():
                 # This panel's OWN `pane-died` hook, so a panel whose process dies
                 # outright is brought back instead of leaving a hole for the frame's

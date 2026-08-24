@@ -147,10 +147,25 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     environment instead. `session_argv` now carries the same `-e` for the same reason —
     see its docstring for what was measured.
 
-    Measured against tmux 3.7c: `respawn-pane -e` REPLACES the pane's environment rather
-    than adding to whatever `new-window -e` set, so everything the harness needs is on
-    THIS call. Every `-e` lands before the `--` — they are `respawn-pane`'s own options,
-    and must never be grafted onto the harness's own argv.
+    **`respawn-pane -e` ADDS to the pane's environment; it does not replace it.** This
+    said the opposite ("REPLACES ... so everything the harness needs is on THIS call"),
+    which is why this call carries `dict(os.environ, ...)` whole. Re-measured against tmux
+    3.7c: a server started with `FOO`/`BAZ` in its environment, respawned with only
+    `-e BAR=…`, produced a pane holding all three and a full-length `$PATH`. So the `-e`
+    set is an OVERLAY on whatever the pane would have inherited anyway.
+
+    That matters twice. It means a caller may carry only the variables that must differ
+    (which `session_argv` and `panel_argvs` on charter's own server now do — see
+    `commands_frame._frame_identity_env`, and note that a `-e` is argv and argv is
+    world-readable). And it means this call site's full-environment pass is a CHOICE
+    rather than a requirement: on the operator's server the base the overlay lands on is
+    THEIR tmux server's environment, which may predate this plane entirely, so charter
+    states everything rather than trusting it. That choice keeps the operator's whole
+    environment on a tmux command line, which is a real exposure with a real reason and
+    is not this issue's to change unmeasured.
+
+    Every `-e` lands before the `--` — they are `respawn-pane`'s own options, and must
+    never be grafted onto the harness's own argv.
 
     *cwd* is `-c`, and it is not optional. A pane in a server charter did not start
     inherits its start directory from the SESSION's, which is wherever the operator
@@ -267,14 +282,24 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
     correct that (an index would renumber under the very next split, same failure the
     module docstring already measures for the harness pane).
 
-    *env* is `-e`, and is only ever passed inside a tmux charter did not start. A pane
-    created on somebody else's server inherits THAT SERVER's environment — whatever
-    their shell had when they first ran `tmux`, possibly days ago and in another plane —
-    and a panel resolves the plane it draws (`config.STATE_DIR` among it) from its own.
-    On charter's own server the panels inherit the launcher's environment because
-    `new-session` is what starts that server, so nothing is passed and the command is
-    unchanged. See `respawn_argv` for the same mechanism carrying the same values to the
-    harness.
+    *env* is `-e`. On somebody else's server it carries the launcher's environment whole,
+    because a pane created there inherits THAT SERVER's — whatever their shell had when
+    they first ran `tmux`, possibly days ago and in another plane — and a panel resolves
+    the plane it draws (`config.STATE_DIR` among it) from its own.
+
+    **On charter's own server it carries charter's identity and nothing else, and the
+    sentence that used to be here was wrong.** It said the panels inherit the launcher's
+    environment "because `new-session` is what starts that server" — true of the launch
+    that starts it and of no other (#411; see :func:`session_argv`). Every later frame's
+    panels inherited the FIRST launcher's, and `$CHARTER_WORKSPACE` is the sharp one:
+    `workspace.resolve` ranks it above every pointer, so a panel that inherited another
+    launcher's pin could not be moved by `charter ws use` at all. `$CHARTER_SESSION_ID`
+    was already correct there by a different route — `commands_frame._session_id_env_argv`
+    ties it to the SESSION, which tmux applies to panes split later — and this fixes the
+    rest of the identity alongside it.
+
+    Only `commands_frame._FRAME_IDENTITY` travels, never the whole environment: a `-e` is
+    argv, and argv is world-readable. See `commands_frame._frame_identity_env`.
     """
     cmds: list[list[str]] = []
     for slot in slots:

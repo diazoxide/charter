@@ -1141,6 +1141,25 @@ def _outside_tmux():
     return mock.patch.dict(os.environ, stripped, clear=True)
 
 
+def _carried_env(cmd: list[str]) -> dict[str, str]:
+    """The `-e NAME=VALUE` pairs in *cmd*, as a dict — the ONLY thing a test here may
+    assert an environment against.
+
+    Never `assertIn(pair, cmd)` or `assertNotIn("-e", cmd)`: unittest prints the whole
+    sequence on failure, and on the operator's-tmux path that sequence is the operator's
+    entire environment. A failing assertion would print their live tokens into the test
+    log, which in CI is a public artifact — the very exposure `commands_frame
+    ._frame_identity_env` exists to prevent, reintroduced by the tests that check it.
+    Projecting first keeps a failure message to names and charter's own values.
+    """
+    out = {}
+    for i, part in enumerate(cmd):
+        if part == "-e" and i + 1 < len(cmd):
+            name, _, value = cmd[i + 1].partition("=")
+            out[name] = value
+    return out
+
+
 def _launch(fake: _FakeTmux, *, cols=200, rows=50, version=(3, 7), harness="claude",
            rest=(), which=None):
     _refuse_the_real_plane()
@@ -1883,25 +1902,112 @@ class Launch(PersonaIso, unittest.TestCase):
         rc = _launch(fake)
         self.assertEqual(rc, 0)
         session_cmd = next(c for c in fake.calls if "new-session" in c)
+        self.assertEqual(_carried_env(session_cmd).get("CHARTER_SESSION_ID"), fake.fid,
+                         "the harness pane's own environment must carry this frame's id")
         pair = f"CHARTER_SESSION_ID={fake.fid}"
-        self.assertIn(pair, session_cmd,
-                      "the harness pane's own environment must carry this frame's id")
-        self.assertEqual(session_cmd[session_cmd.index(pair) - 1], "-e")
         self.assertLess(session_cmd.index(pair), session_cmd.index("--"),
                         "-e is new-session's own option — after `--` it is the "
                         "harness's argv")
+
+    def test_nothing_but_charters_own_identity_reaches_the_command_line(self):
+        """**A `-e` is argv, and argv is not private.** `/proc/<pid>/cmdline` is
+        world-readable to every local user for as long as the tmux client runs, `ps` shows
+        it, and exec-audit tooling records it forever. `_frame_env` is
+        `dict(os.environ, ...)` — measured on a real environment at 138 elements and 7,696
+        bytes, carrying two live service-account tokens — so expanding THAT into `-e`
+        pairs would have put every secret in the operator's shell on the command line of
+        the default `charter claude` path.
+
+        Asserted as a set of NAMES, never by scanning for any particular secret: a test
+        that looked for `TOKEN` would pass for the next variable nobody thought of. And
+        the assertion message carries names only — a failure here must not print the
+        values it exists to keep off a command line."""
+        fake = _FakeTmux(exit_code=0)
+        with mock.patch.dict(os.environ, {"MY_FAKE_TOKEN": "sk-super-secret",
+                                          "SSH_AUTH_SOCK": "/tmp/agent.sock"}):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        session_cmd = next(c for c in fake.calls if "new-session" in c)
+        self.assertEqual(sorted(_carried_env(session_cmd)),
+                         ["CHARTER_HARNESS", "CHARTER_ROOT", "CHARTER_SESSION_ID",
+                          "CHARTER_WORKSPACE"],
+                         "only charter's own identity may ride on a tmux command line")
+
+    def test_an_identity_variable_the_launcher_lacks_is_carried_as_empty(self):
+        """Absent is a value here, and inheriting is the bug. A launcher that pinned
+        `$CHARTER_WORKSPACE` starts the shared server carrying it; the NEXT frame, which
+        pinned nothing, would otherwise inherit that pin — and `workspace.resolve` ranks
+        `$CHARTER_WORKSPACE` above every pointer, so `charter ws use` could not move it.
+        Measured against tmux 3.7c: `-e FOO=` leaves the variable set and empty, which is
+        what charter's own readers already treat as absent."""
+        fake = _FakeTmux(exit_code=0)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CHARTER_WORKSPACE", None)
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        session_cmd = next(c for c in fake.calls if "new-session" in c)
+        self.assertEqual(_carried_env(session_cmd).get("CHARTER_WORKSPACE"), "",
+                         "an identity variable must be stated, not left to be inherited")
+
+    def test_the_harness_pane_is_recorded_for_this_frame(self):
+        """What lets a status line tell "I am this frame's harness" from "I inherited this
+        frame's id" (ADR 0019, `state.record_harness_pane`). Not recorded, `is_live`
+        answers `None != <pane>` and no frame ever suppresses — a duplicated status line,
+        which nobody reports as a bug and no other test would notice."""
+        fake = _FakeTmux(exit_code=0)
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(state.harness_pane(fake.fid), fake.pane_id)
+
+    def test_the_panels_are_told_the_frames_identity_too(self):
+        """#411's other half, and the one that outlives the tmux floor. A panel splits off
+        a server another launcher may have started, so `$CHARTER_WORKSPACE` and
+        `$CHARTER_ROOT` reach it from THAT launcher — and `workspace.resolve` ranks
+        `$CHARTER_WORKSPACE` above every pointer, so an inherited pin makes `charter ws
+        use` unable to move that panel at all. (`$CHARTER_SESSION_ID` was already right
+        there by a different route — `_session_id_env_argv` ties it to the session — which
+        is exactly why the two halves could disagree.)"""
+        fake = _FakeTmux(exit_code=0)
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        splits = [c for c in fake.calls if "split-window" in c]
+        self.assertTrue(splits, "no panel was drawn at all")
+        for cmd in splits:
+            carried = _carried_env(cmd)
+            self.assertEqual(carried.get("CHARTER_SESSION_ID"), fake.fid)
+            self.assertEqual(sorted(carried),
+                             ["CHARTER_HARNESS", "CHARTER_ROOT", "CHARTER_SESSION_ID",
+                              "CHARTER_WORKSPACE"],
+                             "a panel's -e is argv too — identity only")
+
+    def test_below_the_pane_env_floor_the_panels_carry_nothing(self):
+        """`split-window -e` arrived in tmux 3.0 — two releases before `new-session` grew
+        the same flag, which is why `PANE_ENV_FLOOR` is its own constant. Below it the
+        panels are drawn without one rather than not drawn at all."""
+        fake = _FakeTmux(exit_code=0)
+        rc = _launch(fake, version=(2, 9))
+        self.assertEqual(rc, 0)
+        splits = [c for c in fake.calls if "split-window" in c]
+        self.assertTrue(splits, "the panels must still be drawn")
+        for cmd in splits:
+            self.assertEqual(_carried_env(cmd), {})
 
     def test_below_the_env_floor_the_launch_carries_nothing_rather_than_failing(self):
         """`new-session -e` arrived in tmux 3.2 (`tmuxctl.SESSION_ENV_FLOOR`, read from
         tmux's own CHANGES). Below that it is not a flag that degrades, it is one that
         makes the command a parse error — and `below_floor_message` explicitly still lets
         a pre-3.2 operator launch. So the environment is withheld there and the frame
-        still starts, which is exactly what every frame did before #411."""
+        still starts.
+
+        What that costs is #411, unfixed, on tmux 3.0/3.1 only: a second frame's harness
+        goes on inheriting the first frame's id. What it must NOT cost any more is the
+        status line — see `state.is_live`'s harness-pane check, which is what keeps that
+        operator's footer visible rather than blanking it against another frame."""
         fake = _FakeTmux(exit_code=0)
         rc = _launch(fake, version=(3, 1))
         self.assertEqual(rc, 0)
         session_cmd = next(c for c in fake.calls if "new-session" in c)
-        self.assertNotIn("-e", session_cmd,
+        self.assertEqual(_carried_env(session_cmd), {},
                          "a tmux that cannot parse -e must be handed none")
 
     def test_columns_and_lines_are_stripped_from_the_environment_handed_to_tmux(self):
@@ -3293,6 +3399,20 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         size.assert_not_called()
         self.assertFalse([c for c in fake.calls if "split-window" in c],
                          "a 60x8 tmux window has no room for a panel")
+
+    def test_the_harness_pane_is_recorded_on_this_path_too(self):
+        """ADR 0019's suppression asks `state.harness_pane(fid)` whether the process
+        holding a frame id is actually inside that frame; a path that forgot to record it
+        would answer `None` and quietly never suppress — a duplicated status line nobody
+        would report as a bug. Written down here rather than assumed shared, because the
+        two launch paths capture their pane id in two different places and only one of
+        them had a test."""
+        fake = _FakeOperatorTmux(exit_code=0, pane_id="%7",
+                                 panel_pane_ids={"top": "%8", "bottom": "%9",
+                                                 "left": "%10", "right": "%11"})
+        _launch_inside(fake)
+        fid = state.frame_id("demo", os.getpid())
+        self.assertEqual(state.harness_pane(fid), "%7")
 
     def test_the_panels_are_split_off_the_harness_pane(self):
         """The slot list is pinned here rather than left to the shipped default: this

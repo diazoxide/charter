@@ -70,9 +70,15 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
     a real frame — the property that let this check live at the command edge at all.
     """
 
-    def _run(self, *, fid: str | None, tty: bool = False,
+    #: The pane the fixture frames below record as their harness's, and the one
+    #: `_run` claims to be in unless a test deliberately says otherwise.
+    _PANE = "%7"
+
+    def _run(self, *, fid: str | None, tty: bool = False, pane: str = _PANE,
              payload: dict | None = None) -> str:
         env = {"CHARTER_SESSION_ID": fid} if fid else {}
+        if pane:
+            env["TMUX_PANE"] = pane
         out = _Tty() if tty else io.StringIO()
         with mock.patch.dict(os.environ, env, clear=True), \
              mock.patch("sys.stdin", io.StringIO(json.dumps(payload or _PAYLOAD))), \
@@ -81,10 +87,17 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0, "the status line exits 0 whatever it decides to draw")
         return out.getvalue()
 
-    def _a_live_frame(self) -> str:
-        """A frame directory on THIS plane whose launcher is this test process."""
+    def _a_live_frame(self, *, pane: str = _PANE) -> str:
+        """A frame the way `cmd_launch` leaves one: a directory, a recorded server, a
+        recorded harness pane, and a launcher pid that is this very test process.
+
+        Written out longhand rather than hidden behind one call, because each of the
+        four is separately load-bearing in `state.is_live` and a test that removes one
+        (there are three below) has to be able to say which."""
         fid = f"demo-{os.getpid()}"
-        state.bump(fid)               # creates the directory `is_live` looks for
+        state.bump(fid)                          # the directory
+        state.record_server(fid, "charter")      # proof a LAUNCHER made it
+        state.record_harness_pane(fid, pane)     # which pane is this frame's harness
         return fid
 
     # -- blank inside a frame ---------------------------------------------------- #
@@ -134,6 +147,12 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
         path that runs every time the footer repaints."""
         fid = f"demo-{_a_dead_pid()}"
         state.bump(fid)
+        # COMPLETE in every other respect, and that is the point: a fixture missing the
+        # server marker or the pane would be refused before the pid was ever consulted,
+        # and this test would pass with the liveness check deleted outright. Measured —
+        # it did, until the marker check was added underneath it.
+        state.record_server(fid, "charter")
+        state.record_harness_pane(fid, self._PANE)
         self.assertIn("charter", self._run(fid=fid))
 
     def test_an_id_that_names_no_frame_on_this_plane_renders(self):
@@ -143,8 +162,71 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
         not this plane's frame, whatever its digits parse as."""
         self.assertIn("charter", self._run(fid=f"demo-{os.getpid()}"))
 
+    def test_a_directory_no_launcher_made_is_not_a_frame(self):
+        """A directory is not proof of frame-ness, and this is the operator it protects:
+        someone who exports `CHARTER_SESSION_ID=proj-$$` in their shell rc. The first
+        hook that fires calls `notify.plane_changed` -> `state.bump`, which MINTS the
+        directory, and the pid in that id is their own live shell — so directory-plus-pid
+        is satisfied, permanently, for a frame that never existed. Only `cmd_launch`
+        writes a server marker."""
+        fid = f"demo-{os.getpid()}"
+        state.bump(fid)                          # exactly what a hook does, and no more
+        state.record_harness_pane(fid, self._PANE)
+        self.assertIsNone(state.frame_server(fid), "fixture no longer matches a hook")
+        self.assertIn("charter", self._run(fid=fid))
+
+    def test_a_process_that_merely_inherited_the_id_is_not_inside_the_frame(self):
+        """The regression this guard exists for, and it is one this PR would otherwise
+        have CAUSED. Below `tmuxctl.SESSION_ENV_FLOOR` charter cannot put the frame id on
+        `new-session`, so a second frame's harness on the shared private server inherits
+        the FIRST frame's id (#411) — live, on this plane, launcher running, every other
+        condition satisfied. Suppressing there blanks a footer whose panels are already
+        following another frame: no correct surface at all, where before this change that
+        operator at least had a correct status line.
+
+        The pane is what tells them apart: tmux gives each pane its own `$TMUX_PANE`, and
+        only one of them is the pane the launcher recorded."""
+        fid = self._a_live_frame()
+        self.assertIn("charter", self._run(fid=fid, pane="%99"))
+
+    def test_no_pane_at_all_is_not_inside_the_frame_either(self):
+        """`$TMUX_PANE` absent is an ANSWER — "not in any pane" — not a reason to stop
+        asking. Read as "unknown, carry on" instead, a process holding an inherited id
+        outside tmux entirely would suppress."""
+        fid = self._a_live_frame()
+        self.assertIn("charter", self._run(fid=fid, pane=""))
+
     def test_outside_a_frame_nothing_changes_at_all(self):
         self.assertIn("charter", self._run(fid=None))
+
+
+class SuppressionSaysSoOnDemand(PersonaIso, unittest.TestCase):
+    """A blank footer is the one frame behaviour that shows nothing at all, so something
+    has to admit it is deliberate. ADR 0019's own rule is that a surface which vanished
+    for an invisible reason is the worst outcome available — `charter doctor`'s frame row
+    is the surface built to answer on demand."""
+
+    def _row(self, env: dict):
+        from charter import doctor
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)):
+            return doctor.check_frame()
+
+    def test_the_frame_row_names_the_frame_that_is_drawing_instead(self):
+        fid = f"demo-{os.getpid()}"
+        state.bump(fid)
+        state.record_server(fid, "charter")
+        state.record_harness_pane(fid, "%7")
+        row = self._row({"CHARTER_SESSION_ID": fid, "TMUX_PANE": "%7"})
+        self.assertIn(fid, row.hint or "",
+                      "a suppressed status line must be explained somewhere")
+        self.assertIn("blank", (row.hint or "").lower())
+
+    def test_a_session_that_is_not_suppressed_is_not_told_that_it_is(self):
+        """The control, and the one that fails if the row simply always says it: an
+        ordinary session's frame row must carry no such note."""
+        row = self._row({})
+        self.assertNotIn("blank", (row.hint or "").lower())
 
 
 class PanelFollowsWorkspaceUse(PersonaIso, unittest.TestCase):
