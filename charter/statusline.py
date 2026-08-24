@@ -1746,6 +1746,27 @@ def _session_strip(payload: dict, sid: str | None) -> str:
     return f"{_DIM} · {_R}".join(parts) if parts else ""
 
 
+def _dev_chip() -> str:
+    """`` dev``, dimmed, glued right after a version — when THIS plane is on the dev
+    channel. Empty string otherwise, so a caller can interpolate it unconditionally.
+
+    Split out of `_brand` (#457) so a second surface that glues the literal word
+    `charter` onto `__version__` — `frame.slots._top`, and whatever grows the idiom
+    next — calls this rather than re-deriving `channel.is_dev()` and the try/except
+    around it a second time. A fix to what the chip says, or when it fires, then lands
+    everywhere `charter {version}` is rendered, the moment it lands here.
+
+    See `_brand`'s own docstring for the full argument for why this is about the
+    CHANNEL and not the build — that reasoning is not repeated per caller.
+    """
+    from . import channel
+    try:
+        dev = channel.is_dev()
+    except Exception:
+        dev = False
+    return f" {_DIM}dev{_R}" if dev else ""
+
+
 def _brand() -> str:
     """`⬢ charter x.y.z`, plus `dev` on the dev channel, plus `↑ a.b.c` when something
     newer is cached.
@@ -1767,14 +1788,8 @@ def _brand() -> str:
     it. A plane that declares dev while still running the PyPI wheel renders `dev ↑a1b2c3d`,
     because `update.newer_head` counts "installed from no commit at all" as behind.
     """
-    from . import __version__, channel, update
-    out = f"{_DIM}⬢ charter {__version__}{_R}"
-    try:
-        dev = channel.is_dev()
-    except Exception:
-        dev = False
-    if dev:
-        out += f" {_DIM}dev{_R}"
+    from . import __version__, update
+    out = f"{_DIM}⬢ charter {__version__}{_R}{_dev_chip()}"
     try:
         update.maybe_spawn()
         newer = update.newer_than(__version__)
