@@ -1321,10 +1321,10 @@ def cmd_guard_allow(args) -> int:
     rc, wrote = 0, False
     for h, status, detail in results:
         if status == "added":
-            util.ok(f"{h.name}: allowing {h.allow_rule(pattern)} → {detail}")
+            util.ok(f"{h.name}: allowing {h.rule_text(pattern)} → {detail}")
             wrote = True
         elif status == "present":
-            util.ok(f"{h.name}: already allowing {h.allow_rule(pattern)}.")
+            util.ok(f"{h.name}: already allowing {h.rule_text(pattern)}.")
             wrote = True
         elif status == "malformed":
             util.err(f"{h.name}: {detail} is not valid — left untouched.")
@@ -1394,10 +1394,10 @@ def cmd_guard_ask(args) -> int:
     rc, wrote = 0, False
     for h, status, detail in results:
         if status == "added":
-            util.ok(f"{h.name}: asking for {h.ask_rule(pattern)} → {detail}")
+            util.ok(f"{h.name}: asking for {h.rule_text(pattern)} → {detail}")
             wrote = True
         elif status == "present":
-            util.ok(f"{h.name}: already asking for {h.ask_rule(pattern)}.")
+            util.ok(f"{h.name}: already asking for {h.rule_text(pattern)}.")
             wrote = True
         elif status == "malformed":
             util.err(f"{h.name}: {detail} is not valid — left untouched.")

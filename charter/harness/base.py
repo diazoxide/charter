@@ -131,8 +131,45 @@ class Harness:
         The operator types one sentence — `charter guard ask "git push *"` — and never
         learns three syntaxes. ADR 0014: charter writes the harness's rules and keeps no
         list of its own, which only holds if the translation lives here.
+
+        The RETURN TYPE is the harness's, not charter's: a string where the harness's
+        rules are strings, a structure where they are structures. :meth:`rule_text` is
+        what a human is shown, so the writer never has to trade the shape it needs for
+        one that happens to print.
         """
         return None
+
+    def rule_text(self, pattern: str) -> str:
+        """*pattern* as this harness's own FILE spells it — the line `guard` prints.
+
+        `guard` prints what it wrote so the operator can read it back against the file,
+        and 0.49.0's argument for that is a guard's whole worth: *"a guard whose output
+        cannot be trusted is worse than no guard, because the tick is what stops you
+        checking"*. Since #374 the read-back also carries a name the operator never
+        typed — charter TRANSLATES an MCP pattern for opencode, and cannot check that
+        their `mcp` block spells the server the same way — so this line is the only thing
+        standing between a mistyped server and a rule that is inert for it.
+
+        Separate from :meth:`ask_rule` because the two answer different questions.
+        `ask_rule` answers the writer, in whatever shape that harness's file needs;
+        this answers a human, in the spelling they will go looking for. Interpolating
+        the first into a sentence is how opencode's `(tool, glob)` pair reached the
+        operator as ``('slack_send', '*')`` — Python's repr of a 2-tuple, a thing that
+        appears in no `opencode.json` ever written (#395).
+
+        The default covers a harness whose rule already IS its spelling. A harness whose
+        rule is structural must override: the base class does not know how that file
+        writes it down, and a generic join would print a plausible shape nothing holds —
+        the same defect in a different costume. ``""`` when there is no rule at all, and
+        `guard` never prints this for a rule that was not written.
+
+        One rendering serves both verbs, because it names WHERE the rule lives and the
+        surrounding sentence carries the decision ("asking for" / "allowing"). That holds
+        while :meth:`allow_rule` keeps its shared default; `TestBothVerbsTranslateTheSameWay`
+        is what fails the day a harness overrides it.
+        """
+        rule = self.ask_rule(pattern)
+        return rule if isinstance(rule, str) else ""
 
     def apply_ask_rule(self, root: Path, pattern: str, local: bool = False,
                        dry_run: bool = False) -> tuple[str, str]:
