@@ -39,7 +39,13 @@ rule while one who reads a bare refusal files an issue.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
-  is almost always meant for a clone.
+  is almost always meant for a clone. `--detach` counts, with or without an operand.
+  Restoring a file does **not**: `git checkout` is two commands wearing one name, and which
+  one you typed is settled by asking git whether the operand resolves as a revision or names
+  a path it tracks — so `git checkout <path>` and `git checkout <tree-ish> -- <paths>` run
+  here exactly as `git restore <path>` always has. Where a branch and a tracked file share a
+  name the answer is genuinely ambiguous, git breaks the tie in favour of the ref, and the
+  denial says *that* and names the two unambiguous spellings rather than assuming a branch.
 - **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root
   that would take commits off the branch which no remote has a copy of — the command that
   destroyed eleven memory commits in one session. Only that: the unstage
@@ -278,6 +284,15 @@ Neither has a secret surface to scan, by construction.
 
 Hooks swallow their exceptions. A tally that breaks a turn is worse than a tally that
 misses a row, and none of this is load-bearing for the work itself.
+
+**A denial is the exception, and it is load-bearing.** A guard refuses by printing one JSON
+object on stdout, so a hook that cannot write has said nothing — and a `PreToolUse` hook
+that says nothing is an *allow*. Deciding is still allowed to fail: a payload charter cannot
+parse is an allow, as it always was. Refusing is not. When the verdict is deny and the write
+fails, the process exits **2** with the reason on stderr, which is the harness's other
+refusal channel — every other non-zero status is a non-blocking error and the tool call goes
+ahead. That is why the number is 2 and not "any failure": `charter … | head` legitimately
+exits 141, and 141 lets the call through (#438).
 
 The deliberate exception is version skew, in **both** directions — that is the failure shape
 this project keeps paying for, so it is the one thing a hook says out loud, once, at session

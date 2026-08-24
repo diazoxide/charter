@@ -88,12 +88,70 @@ _OVERRIDE_NOTE = (
 )
 
 
-def _deny(event: str, reason: str) -> None:
-    _emit({"hookSpecificOutput": {
-        "hookEventName": event,
-        "permissionDecision": "deny",
-        "permissionDecisionReason": f"charter guard: {reason}{_OVERRIDE_NOTE}",
-    }})
+#: The exit status that BLOCKS a tool call: the harness reads 2 from a `PreToolUse` hook as
+#: "refused", with stderr as the reason. Every OTHER non-zero status is a non-blocking
+#: error and the tool call **proceeds** — which is why the fallback below has to be exactly
+#: this number and cannot be "any failure exit". `cli.main` turns a `BrokenPipeError` into
+#: 141 (128 + SIGPIPE), the correct answer for `charter … | head` and the wrong one here.
+DENY_EXIT = 2
+
+#: Denials this process decided and could not WRITE (#438).
+#:
+#: `_deny` refuses by printing JSON on stdout, so a hook whose stdout is gone has said
+#: nothing at all — and a `PreToolUse` hook that says nothing is an ALLOW. That is the one
+#: direction a guard may not fail in, and it is a different question from the rest of this
+#: module's silent-on-error discipline: a tally that misses a row costs a row, a denial that
+#: misses its channel costs the thing the denial exists to stop.
+#:
+#: Recorded here rather than only returned, so the fallback cannot be lost by a call site
+#: that forgets to propagate it — `dispatch` checks this list at the process boundary, which
+#: is the only place an exit status means anything, and every present and future `_deny`
+#: call is covered by construction.
+_undelivered_deny: list[str] = []
+
+
+def _deny(event: str, reason: str) -> int:
+    """Refuse the tool call; return the exit status the handler should return.
+
+    ``0`` when the verdict went out as JSON on stdout (the normal path — the JSON *is* the
+    refusal and the process exits cleanly). :data:`DENY_EXIT` when writing it failed, which
+    is the whole point of the return value: the emit is a `print`, a `print` to a closed
+    pipe raises, and until #438 that exception either propagated (`cli.main` → 141 → tool
+    proceeds) or was swallowed by a caller's `except Exception: return 0` (→ tool
+    proceeds). Both spellings of "the guard broke" meant "allowed".
+
+    Reachability is low and the direction is what matters: the two sibling vault guards
+    failed in *opposite* directions, in a module that argues at length that they must never
+    disagree. So this is fixed once, here, for every guard rather than at the call site the
+    audit happened to look at.
+    """
+    text = f"charter guard: {reason}{_OVERRIDE_NOTE}"
+    try:
+        _emit({"hookSpecificOutput": {
+            "hookEventName": event,
+            "permissionDecision": "deny",
+            "permissionDecisionReason": text,
+        }})
+    except Exception:  # noqa: BLE001 - the channel, not the verdict
+        _undelivered_deny.append(text)
+        # stderr is what exit 2 hands to the model, so the reason still arrives.
+        try:
+            print(text, file=sys.stderr)
+        except Exception:  # noqa: BLE001 - best effort; the exit status is the guard
+            pass
+        # And stop the interpreter trying to flush the dead stream on the way out: a failed
+        # shutdown flush REPLACES the exit status with 120, which is in the "tool call
+        # proceeds" bucket — the same fd-level move, and the same guard, as `cli.main`.
+        try:
+            fd = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(fd, sys.stdout.fileno())
+            finally:
+                os.close(fd)
+        except Exception:  # noqa: BLE001 - no real pipe under test; nothing to suppress
+            pass
+        return DENY_EXIT
+    return 0
 
 
 #: The one host permission mode that means NOBODY IS WATCHING. Deliberately not a set that
@@ -753,6 +811,20 @@ _BRANCH_MOVERS = ("checkout", "switch")
 #: Flags that make one of the above CREATE a branch rather than move to an existing one.
 _BRANCH_CREATORS = ("-b", "-B", "-c", "-C")
 
+#: `--detach` takes the root OFF its branch with no operand at all — `git checkout --detach`
+#: and `git switch --detach` both answer "HEAD is now at …", verified. The guard used to
+#: require an operand, so the one spelling of a HEAD move that needs no argument was the one
+#: it could not see. It is a ref move, never a restore, and it suppresses the file-restore
+#: carve-out below for exactly that reason.
+_DETACH = "--detach"
+
+#: How many trailing operands of a `git checkout <tree-ish> <paths…>` the guard will resolve
+#: before it stops and keeps refusing. One local `ls-files` each, on the `PreToolUse` path,
+#: so the work an agent can ask for here is bounded. Past it the answer is "refused", which
+#: costs nothing real: the bulk spelling of a bulk restore is `git checkout -- <paths…>`,
+#: and everything after a `--` is already allowed without asking git anything.
+_MAX_CHECKOUT_OPERANDS = 32
+
 #: `git reset` modes that overwrite the WORKING TREE as they move HEAD. These are the forms
 #: that DESTROY: reset off a commit with one of them and the files that commit introduced
 #: are deleted from disk, leaving the reflog as the only copy of content that was never
@@ -845,6 +917,67 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
         yield rest[i], rest[i + 1:]
 
 
+def _checkout_operand_kind(root: Path, op: str) -> str:
+    """What ``git checkout <op>`` would make of *op* in *root*: ``"rev"``, ``"path"``,
+    ``"both"``, ``"neither"`` or ``"unknown"`` — **asked of git**, never inferred from the
+    spelling.
+
+    `git checkout` is two commands wearing one name. ``git checkout <rev>`` moves HEAD;
+    ``git checkout <pathspec>`` restores files and moves nothing — the same operation
+    `git restore <pathspec>` performs, which charter has always allowed. The plane-root
+    guard read the second as the first and refused `git checkout charter.toml` with a
+    confident, detailed, wrong explanation of what the command does (#461). `git switch`
+    exists precisely because this overload is confusing; the guard should not inherit the
+    confusion, and it cannot resolve it by matching command *shape*.
+
+    git's own rule, so this asks git's own questions:
+
+    * ``rev-parse --verify --quiet <op>^{commit}`` — does the operand resolve to a commit?
+      Branches, tags, ``HEAD~1`` and raw SHAs all do; ``charter.toml`` does not.
+    * ``ls-files --error-unmatch -- <op>`` — does it name something git TRACKS? That is the
+      right question rather than `os.path.exists`: an untracked file is not restorable
+      (``error: pathspec … did not match any file(s) known to git``), while ``.``,
+      ``src/*.py`` and ``:/`` are pathspecs that match plenty and exist as no single file.
+
+    ``"path"`` — and only ``"path"`` — is the answer that lets a command through, and it is
+    an *affirmative* demonstration rather than the absence of a bad spelling: git cannot
+    read the operand as a commit, and can read it as a tracked path. Everything else keeps
+    guarding, which is what makes the unresolvable cases safe:
+
+    * ``"both"`` is the genuinely ambiguous case a file and a branch sharing a name creates.
+      Verified against git: it resolves in favour of the BRANCH and answers "Switched to
+      branch". Refusing is right there, and the denial says *ambiguous* rather than
+      asserting a branch.
+    * ``"neither"`` is not an allow. A remote-only branch (``git checkout lonely`` with only
+      ``origin/lonely``) answers neither question, and git's DWIM creates a local branch and
+      moves HEAD — verified. Its one overlap with a tracked path is the case git itself
+      refuses: *"fatal: 'x' could be both a local file and a tracking branch"*. A shell form
+      charter did not resolve (``git checkout "$BR"``, ``$(…)``) lands here too. There is no
+      spelling of a branch move that becomes an allow by being unreadable.
+    * ``"unknown"`` is a git that could not be run or did not answer in time — kept denied
+      for the same reason: a guard that opened because it failed to ask is the fail-open
+      shape #438 is about.
+    """
+    from . import util as _util
+    from .doctor import _git_in
+    # `-` is `@{-1}`, the previous branch — a ref, and the cheapest form of the repeated
+    # switch this guard exists to stop. Never a pathspec, and never handed to git here,
+    # where it would be read as an option rather than as an operand.
+    if op == "-":
+        return "rev"
+    try:
+        rev = _git_in(root, "rev-parse", "--verify", "--quiet",
+                      f"{op}^{{commit}}").returncode == 0
+        path = _git_in(root, "ls-files", "--error-unmatch", "--", op).returncode == 0
+    except (_util.ProcTimeout, OSError, ValueError):
+        return "unknown"
+    if rev and path:
+        return "both"
+    if rev:
+        return "rev"
+    return "path" if path else "neither"
+
+
 def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     """Deny a git command that would move the PLANE ROOT between branches (#157).
 
@@ -854,7 +987,7 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     reading and dismissing `doctor`'s warning each time, while two background agents in one
     tree silently clobber each other through exactly this.
 
-    Three things keep it a guard rather than a cage:
+    Four things keep it a guard rather than a cage:
 
     * **Only branch moves.** `git commit` is untouched — `charter save` commits here by
       design, and advancing HEAD along the branch you are on is not the failure.
@@ -863,9 +996,20 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     * **The remedy stays executable.** `doctor` prints *"Put the root back:
       `git -C <plane> checkout main`"*, so returning to the plane's default branch is
       always allowed. A guard that blocks the fix it recommends teaches people to bypass it.
+    * **A file restore is not a branch move** (#461). `git checkout <path>` restores a path
+      and never touches HEAD — the same operation `git restore <path>` performs, which this
+      guard has always allowed. Refusing one spelling of an operation charter permits is a
+      false positive, not a policy, and the denial was confidently *wrong about what the
+      command does*: an operator following its advice would go create a workspace clone to
+      restore one file. Which of the two a `checkout` is gets resolved by
+      :func:`_checkout_operand_kind`, by asking git, and only a positive "this is a tracked
+      path and not a revision" opens the gate. The ambiguous case — a file and a branch
+      sharing a name — stays DENIED and the message says so.
 
-    Costs one `git symbolic-ref` only once a candidate is found — this runs on every Bash
-    call, and the common case exits on a string comparison.
+    Costs one `git symbolic-ref` only once a candidate is found, plus two read-only git
+    questions per operand of a `checkout` that is not the remedy, bounded by
+    :data:`_MAX_CHECKOUT_OPERANDS` — this runs on every Bash call, and the common case still
+    exits on a string comparison.
     """
     from . import config as _cfg
     try:
@@ -892,22 +1036,86 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
                 continue                    # paths follow: a restore, HEAD does not move
             post = post[:cut]               # a trailing bare `--` still switches
         creating = any(a in _BRANCH_CREATORS for a in post)
+        detaching = _DETACH in post
         # A bare `-` is a REF (the previous branch), not a flag — and `git checkout -` is
         # what makes a six-switch session cheap to repeat, so reading it as a flag would
         # leave the guard blind to the cheapest form of the thing it exists to stop.
         wants = [a for a in post if a == "-" or not a.startswith("-")]
-        if not wants and not creating:
+        if not wants and not (creating or detaching):
             continue  # bare `git checkout` moves nothing
 
         if not creating and wants:
+            from . import util as _util
             from .doctor import _plane_default_branch
-            if wants[0] == _plane_default_branch(root):
+            try:
+                default = _plane_default_branch(root)
+            except (_util.ProcTimeout, OSError):
+                # A git that will not answer is not a licence to skip the guard — and it
+                # used to be worse than that: this raised straight out of a `PreToolUse`
+                # handler, which is a broken turn rather than a verdict.
+                default = None
+            if default is not None and wants[0] == default:
                 continue  # the documented remedy — must stay runnable
 
-        moving = f"create '{wants[0]}'" if creating and wants else (
-            f"switch to '{wants[0]}'" if wants else "switch branches")
+        # Is this `checkout` the RESTORE half of the overload (#461)? Only `checkout` is
+        # asked: `git switch` takes branches and nothing else, which is why it exists.
+        # `--detach` and `-b`/`-B` are ref moves whatever the operand looks like, so
+        # neither reaches this.
+        kind = "rev"
+        if sub == "checkout" and wants and not creating and not detaching:
+            kind = _checkout_operand_kind(root, wants[0])
+            if len(wants) == 1:
+                restore = kind == "path"
+            else:
+                # `git checkout <tree-ish> <paths…>` and `git checkout <paths…>` are both
+                # restores; HEAD stays put in each — verified: `checkout feature README`
+                # answers "Updated 1 path from <sha>" and leaves the branch alone.
+                #
+                # The trailing operands are RESOLVED rather than assumed to be paths, and
+                # that is not pedantry: charter's tokeniser flattens `git checkout
+                # $(echo feature)` into five tokens, so "more than one operand means a
+                # restore" would have handed every command substitution a free pass at the
+                # branch guard — a new spelling of the same misreading this fix is about.
+                # Every trailing operand has to be something git tracks; anything else and
+                # the guard keeps speaking.
+                rest = wants[1:]
+                restore = (len(rest) <= _MAX_CHECKOUT_OPERANDS
+                           and all(_checkout_operand_kind(root, w) == "path" for w in rest))
+            if restore:
+                continue                      # `git restore <path>`, spelled the old way
+
+        # Say what charter actually knows. The denial this replaces asserted a branch
+        # switch for every operand it saw, including a file — and being confidently wrong
+        # about what the command does is most of #461: an operator following that advice
+        # goes and creates a workspace clone in order to restore one file.
+        if kind == "both":
+            opening = (
+                f"cannot tell what `git checkout {wants[0]}` does in the PLANE ROOT — it is "
+                f"AMBIGUOUS: '{wants[0]}' is both a tracked path here and a name git "
+                f"resolves to a commit, so it could be a file restore or a ref move, and "
+                f"git breaks that tie in favour of the REF — this would switch the root. "
+                f"Say which you meant and it runs: `git restore {wants[0]}` (or "
+                f"`git checkout -- {wants[0]}`) restores the file, and charter allows that "
+                f"here in either spelling. ")
+        elif kind == "neither":
+            opening = (
+                f"would move HEAD in the PLANE ROOT: '{wants[0]}' is not a path this tree "
+                f"tracks, so `git checkout` reads it as a revision — and a branch of that "
+                f"name on a remote is checked out here as a new local branch. (Meant the "
+                f"file? `git restore {wants[0]}` is allowed, and would tell you git has "
+                f"never heard of that path either.) ")
+        elif kind == "unknown":
+            opening = (
+                f"would move HEAD in the PLANE ROOT — charter could not ask git whether "
+                f"'{wants[0]}' is a path or a revision here, and a guard that opened "
+                f"because it failed to ask is no guard. ")
+        else:
+            moving = (f"create '{wants[0]}'" if creating and wants
+                      else "detach HEAD" if detaching and not wants
+                      else f"switch to '{wants[0]}'" if wants else "switch branches")
+            opening = f"would {moving} in the PLANE ROOT. "
         return (
-            f"would {moving} in the PLANE ROOT, which is one working tree every session "
+            f"{opening}The plane root is one working tree every session "
             f"shares — two agents here silently clobber each other's branches, and the "
             f"symptom looks like an unrelated bug. Branch work belongs in a workspace "
             f"clone: `charter workspace create <task>`, then `charter clone <repo>`. "
@@ -1363,6 +1571,13 @@ def pretooluse_read() -> int:
     Known limit, shared with the Bash guard and stated rather than papered over: a `Grep`
     rooted at the repo top searches vault files as collateral. Denying every broad search is
     untenable, so this checks the path the caller actually named.
+
+    **The `except` covers the READING of the payload and nothing else** (#438). It used to
+    wrap the whole body, `_deny` included, so any exception out of the refusal itself
+    returned 0 — an allow. `pretooluse`, the sibling guard on the same invariant, has no
+    such wrapper, so the two failed in opposite directions in a module that argues above
+    that they must never disagree about what a vault is. Deciding is fallible and is
+    excused; *refusing* is not, and now cannot be: see :func:`_deny`.
     """
     data = _read_stdin()
     _touch_piece(data)
@@ -1376,17 +1591,18 @@ def pretooluse_read() -> int:
         # out of it — so a Grep rooted at the DIRECTORY `.charter/vaults` would otherwise
         # walk past a guard that stops every file inside it. Appending cannot create a false
         # positive: `.charter/vaults.json/` still has no `vaults/` in it.
-        if not any(_VAULT_PATH_RE.search(t) or _VAULT_PATH_RE.search(t + "/")
-                   for t in targets):
-            return 0
-        reason = ("reads a vault/secret file directly (would print plaintext). "
-                  "Use `charter … secret exec`/`cp` instead of reading `.charter/`")
-        _deny("PreToolUse", reason)
-        _trace("deny", data.get("session_id"), reason=reason[:70],
-               cmd=(data.get("tool_name") or "")[:40])
+        hit = any(_VAULT_PATH_RE.search(t) or _VAULT_PATH_RE.search(t + "/")
+                  for t in targets)
     except Exception:
         return 0
-    return 0
+    if not hit:
+        return 0
+    reason = ("reads a vault/secret file directly (would print plaintext). "
+              "Use `charter … secret exec`/`cp` instead of reading `.charter/`")
+    rc = _deny("PreToolUse", reason)
+    _trace("deny", data.get("session_id"), reason=reason[:70],
+           cmd=(data.get("tool_name") or "")[:40])
+    return rc
 
 
 def _piece_announcement(data: dict) -> str | None:
@@ -1479,9 +1695,9 @@ def pretooluse() -> int:
     # A: a secret would leak into the conversation → hard DENY (a real safety invariant).
     leak = _leak_reason(cmd)
     if leak:
-        _deny("PreToolUse", leak)
+        rc = _deny("PreToolUse", leak)
         _trace("deny", sid, reason=leak[:70], cmd=head)
-        return 0
+        return rc
     # A2: golden rule — one credential (each forge's token over HTTPS); no SSH, no signing.
     #
     # Gated on there being a control plane at all. The plugin is installed per USER or per
@@ -1497,39 +1713,39 @@ def pretooluse() -> int:
     hit = _single_credential_hit(cmd) if _cfg.HAS_CONTROL_PLANE else None
     if hit:
         shape, detail = hit
-        _deny("PreToolUse", _SINGLE_CREDENTIAL_FIX + detail)
+        rc = _deny("PreToolUse", _SINGLE_CREDENTIAL_FIX + detail)
         # `reason` stays the stable tally key it has always been; `shape` is the new field
         # that says WHICH trigger matched (#289). Additive on purpose — an existing trace
         # reader keeps working, and the question "what tripped this 335 times" becomes
         # answerable from the same records.
         _trace("deny", sid, reason="single-credential", shape=shape, cmd=head)
-        return 0
+        return rc
     # A3: the plane root is one shared working tree — refuse a branch move in it (#157).
     # Same gate as A2, and for the same reason: outside a plane there is no plane root, and
     # denying there would explain a control plane that does not exist on that machine.
     branch = _plane_root_branch_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
     if branch:
-        _deny("PreToolUse", branch)
+        rc = _deny("PreToolUse", branch)
         _trace("deny", sid, reason="plane-root-branch", cmd=head)
-        return 0
+        return rc
     # A3b: and refuse a `git reset` in the root that would destroy commits no remote has
     # (#401). Same gate, a separate guard: A3's subject is "HEAD moved between branches"
     # and this one's is "commits were destroyed" — different prose, different remedy, and
     # this one only speaks when it has measured that something really would be lost.
     wipe = _plane_root_reset_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
     if wipe:
-        _deny("PreToolUse", wipe)
+        rc = _deny("PreToolUse", wipe)
         _trace("deny", sid, reason="plane-root-reset", cmd=head)
-        return 0
+        return rc
     # A4: an unattended run may not publish (#299). It used to matter that this ran before
     # the clone nudge — that nudge matched `tag`/`push` and stopped releases by accident
     # until 0.46.0 turned its unattended `ask` into an `allow`. The nudge is gone (#371);
     # this guard stands on its own, which is what "on purpose" was always supposed to mean.
     pub = _release_floor_reason(cmd, data) if _cfg.HAS_CONTROL_PLANE else None
     if pub:
-        _deny("PreToolUse", pub)
+        rc = _deny("PreToolUse", pub)
         _trace("deny", sid, reason="release-floor", cmd=head)
-        return 0
+        return rc
     # B WAS HERE: the clone-commit nudge, removed in #371 — see the note where it lived.
     # Nothing on this handler asks any more; every remaining verdict is a deny or an allow.
     # fall through to the allow-only persona tool-gate (unchanged behaviour)
@@ -2940,10 +3156,10 @@ def pretooluse_edit() -> int:
     # the agent to approve a write that widens the agent's own permissions is no guard.
     state = _state_write_reason(data)
     if state:
-        _deny("PreToolUse", state)
+        rc = _deny("PreToolUse", state)
         _trace("deny", data.get("session_id"), reason=state[:70],
                cmd=(data.get("tool_name") or "")[:40])
-        return 0
+        return rc
     names = _route_mark_take(data.get("session_id"))
     if not names:
         return 0
@@ -3324,6 +3540,10 @@ def dispatch(name: str, plugin_version: str | None) -> int:
     README.md promised "a plugin newer than the CLI says so loudly at session start". It
     now rides out as `systemMessage`, which renders at exit 0 and blocks nothing.
     """
+    # One hook is one process, so this list belongs to this call. Cleared rather than
+    # assumed empty because the handlers are also driven in-process by the test suite, and
+    # a leftover row there would turn an unrelated later hook into a refusal.
+    _undelivered_deny.clear()
     _queue_plugin_notices(name, plugin_version)
     fn = _HANDLERS.get(name)
     if fn is None:
@@ -3334,5 +3554,12 @@ def dispatch(name: str, plugin_version: str | None) -> int:
     # A handler that emitted nothing would swallow the message with it — sessionstart
     # stays silent when there is no persona, no memory and no news to inject.
     if _pending_system:
-        _emit({})
-    return rc
+        try:
+            _emit({})
+        except Exception:  # noqa: BLE001 - an injection is not worth a broken turn
+            pass
+    # A denial charter decided and could not WRITE is not an allow (#438). The handlers all
+    # return `_deny`'s status already; this is the backstop that makes it true of the ones
+    # written after this line, since a guard's fail-open is invisible — it looks exactly
+    # like the guard being present and never firing.
+    return DENY_EXIT if _undelivered_deny else rc
