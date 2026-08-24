@@ -116,7 +116,12 @@ deaths in one frame's life is a broken panel, not a streak to start over. A pane
 been able to take the agent down with it; the hook is scoped to the panel's own pane, so it
 cannot reach the harness pane's hooks, which are what carry the agent's exit code. It works
 the same inside a tmux you already have — which it did not until recently: a panel that
-died there used to stay dead for the life of the frame.
+died there used to stay dead for the life of the frame. Making it work there needs one more
+thing than the hook, and it is the reason the first attempt at this changed nothing: tmux
+only runs a `pane-died` hook for a pane that died and *stayed*, and at tmux's default a pane
+whose program exits is destroyed along with its hook. Charter sets that one option on the
+**window it opened** and nowhere else, so panes in your own windows still close the way they
+always did.
 
 Charter never touches `~/.tmux.conf` — the frame's settings go into a private server of
 charter's own (`tmux -L charter`), one server shared by every frame on the machine, with
@@ -132,8 +137,11 @@ when the harness exits, charter closes the window, tmux puts you back where you 
 `charter claude` exits with the harness's own code.
 
 Charter is a guest there, and behaves like one — it writes **nothing** of yours. Not a
-server option, not a session option, not a key binding. That has costs, and they are the
-honest price of the sentence above:
+server option, not a session option, not a key binding. What it does write is scoped to the
+window it opened and the panes it created inside that window: those keep their dead panes so
+charter can read an exit code and bring a dead panel back. Your other windows are not
+touched by it, and the setting goes when the window does. That boundary has costs, and they
+are the honest price of the sentence above:
 
 - **Your scrollback limit and your mouse setting apply, not charter's.** `history-limit`
   and `mouse` are session options in tmux; setting them for the frame would set them for

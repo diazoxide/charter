@@ -23,6 +23,16 @@ in one and a session in the other. A server that does not answer at all is not t
 an empty one: charter declines to respawn rather than aim a command at a tmux it could not
 reach.
 
+An armed hook and a hook that can **fire** turned out to be two different claims, and the
+first round of this fix bought only the first. tmux runs `pane-died` for a pane that died
+and *stayed*; your tmux is at tmux's own default, where a pane whose program exits is
+destroyed on the spot and takes its own hook with it. So every argv was correct and nothing
+ever ran. Charter's private server never showed it, because that server has `remain-on-exit`
+set globally and every pane on it already stays. The frame's own window now keeps its dead
+panes — the window charter opened, and no other: your windows still close their panes the
+way they always did, and your server's setting is untouched. It is set once, before the
+first panel is split, so a panel that dies in its own first second is covered too.
+
 The hook also carries what it needs on its own command line now — the interpreter and the
 frame id — rather than reading them back from tmux session variables. Those are set with
 `set-environment`, which charter does not write on a server it is a guest on, so there was

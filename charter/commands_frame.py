@@ -1137,6 +1137,19 @@ def _frame_identity_env(env: dict[str, str]) -> dict[str, str]:
     (`workspace.resolve` and `root.find_root` both test the value for truth, not for
     presence). Being explicit in both directions is what makes a frame's charter identity
     the launcher's answer rather than half of somebody else's.
+
+    **Shadowing is all there is: `-e` is purely ADDITIVE and cannot REMOVE a name.** The
+    obvious-looking alternative is a bare `-e NAME` with no `=`, and it is not an unset —
+    measured on the same tmux, and the measurement is worse than a refusal would have
+    been: tmux ACCEPTS it, returns 0, prints nothing, and leaves the inherited value
+    exactly where it was. There is no `-u`/`-r` counterpart on any of the three commands
+    charter puts a `-e` on either. So a variable already in the server's or session's
+    environment can only be OVERWRITTEN with an explicit empty value, which is what the
+    line below emits for every absent name; a future reader reaching for the bare form
+    would be choosing inheritance, silently, and would get no error to tell them. Pinned
+    in `tests/test_frame_tmux_integration.py::ASecondFrameOnTheSharedServer::
+    test_a_bare_e_name_cannot_take_a_variable_away`, which will say so if tmux ever
+    grows the unset this wants.
     """
     return {name: env.get(name, "") for name in _FRAME_IDENTITY}
 
@@ -1186,17 +1199,52 @@ def _guest_harness_env(env: dict[str, str]) -> dict[str, str]:
 def _remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`set-option -p`: keep THIS pane in place after its program exits, and no other.
 
-    PANE-scoped, which is the only scope that works on a server charter is a guest on.
-    `remain-on-exit` is a window option in tmux with a global default; `-g` there would
-    leave every pane the operator closes hanging around as a dead pane, and `-w` would do
-    it to every pane in a window charter does not own until it does. `-p` names one pane
-    — the harness's — and tmux keeps it, and its `#{pane_dead_status}`, until charter has
-    read the status and closed the window itself.
+    PANE-scoped, and armed at the one moment nothing else can cover: between the window
+    being created and the harness being started into it. `_panel_remain_on_exit_argv`
+    arms the whole of charter's own window later, when the panels are drawn — but that is
+    after `layout.respawn_argv` has already put the harness in, and a harness that dies
+    in the gap is exactly the early death #384 is about. `-p` here holds the harness pane,
+    and its `#{pane_dead_status}`, from before its program exists.
 
-    Charter's own private server arms the same setting globally instead
+    `-g` is the scope that must never be used on somebody else's server: it would leave
+    every pane the OPERATOR closes hanging around as a dead pane, in every window they
+    have open. Charter's own private server arms it globally on purpose
     (`_PLACEHOLDER_CONF`), because there is nothing on that server that is not charter's.
     """
     return tmuxctl.server_argv(socket, "set-option", "-p", "-t", harness_pane,
+                               "remain-on-exit", "on")
+
+
+def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
+    """`set-option -w`: keep dead panes in CHARTER'S OWN WINDOW, and in no other.
+
+    **Without this a panel's respawn hook cannot fire at all, and #408 was only half
+    fixed.** tmux runs `pane-died` only for a pane that DIED AND STAYED — with
+    `remain-on-exit` off, the pane is destroyed, its pane-scoped hook is destroyed with
+    it, and nothing runs. Measured on tmux 3.7c against a server left at tmux's own
+    default (which is what an operator's tmux is): a panel pane armed exactly as
+    `_arm_panel_respawn` arms it, dying exactly as a panel dies, reached no shell and
+    left no pane — and the same run with this one option set reached the shell and kept
+    the pane. Charter's private server never showed it because `_PLACEHOLDER_CONF` sets
+    `remain-on-exit` server-globally there, so every pane on it already stays.
+
+    **WINDOW-scoped, not per panel pane, and the reason is a race rather than a
+    preference.** A pane option can only be set on a pane that already exists, so a
+    `set-option -p` after each `split-window` leaves every panel unprotected for the
+    milliseconds between tmux starting its program and charter arming it — and a panel
+    that dies in that gap (a bad interpreter, an import error) is precisely the one #382
+    is about. The window is armed BEFORE the first split, so a pane created into it is
+    born covered. It also covers the panes a later `_relayout` adds without arming
+    anything twice.
+
+    The scope is charter's own window and reaches nothing of the operator's — measured,
+    not reasoned: `-w -t <a pane id>` resolves to that pane's window, and after this runs
+    charter's window reads `on` while the operator's own window still reads the global
+    default and their own panes still vanish when their programs exit. `kill-pane` also
+    still destroys a pane this is holding, which is what lets `cmd_density` drop a slot
+    (see `_disarm_panel_respawn`) rather than leave a corpse behind in the frame.
+    """
+    return tmuxctl.server_argv(socket, "set-option", "-w", "-t", harness_pane,
                                "remain-on-exit", "on")
 
 
@@ -1233,11 +1281,15 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[
     every window on their server to reach a redundant menu is a worse trade than no key
     — `frame/slots.py` drops the hotkey hint from the bottom panel to match.
 
-    Two things that ARE written are charter's own and reach nothing of theirs, both
-    PANE-scoped and both on a pane charter created in a window charter created:
-    `remain-on-exit` on the harness pane (`_remain_on_exit_argv`), and each panel pane's
-    own `pane-died` respawn hook (`_arm_panel_respawn`, #408 — it refused here until the
-    hook could name this server rather than charter's).
+    Three things that ARE written are charter's own and reach nothing of theirs, because
+    every one of them is scoped to a pane charter created or to the window charter
+    created: `remain-on-exit` on the harness pane (`_remain_on_exit_argv`, PANE-scoped);
+    `remain-on-exit` on the frame's own window, so a dead PANEL stays long enough for its
+    hook to run (`_panel_remain_on_exit_argv`, WINDOW-scoped — measured to leave the
+    operator's own windows at their own default); and each panel pane's own `pane-died`
+    respawn hook (`_arm_panel_respawn`, PANE-scoped, #408 — it refused here until the
+    hook could name this server rather than charter's, and then never fired here until
+    the window kept the corpse it has to fire from).
 
     **The harness's exit code travels without hooks here, and that is a real
     difference.** The private-server path needs `pane-died[0]`/`pane-died[1]` because it
@@ -1461,7 +1513,22 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     The splitting half of :func:`_draw_panels`, separated from the hook-and-record half so
     a live re-layout (`_relayout`) can add panes to a frame that already has some without
     re-installing hooks per batch or overwriting the map it is in the middle of building.
+
+    **The one funnel every panel pane charter creates comes out of, which is why
+    `remain-on-exit` is armed here** — before the first `split-window`, so no panel is
+    ever born into a window that would throw its corpse away and its respawn hook with it
+    (`_panel_remain_on_exit_argv`, #408). Both launch paths and every density change
+    reach panels through this function; arming at the call sites instead is what left the
+    operator's server covered on one of two.
+
+    Reported but not fatal, like the splits themselves: a frame whose panels cannot be
+    respawned is still a frame, and the harness pane's own `remain-on-exit` was armed
+    separately and earlier (`_remain_on_exit_argv`), so the exit code does not ride on
+    this.
     """
+    tmuxctl.run("keeping the frame's own dead panes long enough to bring them back",
+                _panel_remain_on_exit_argv(socket=socket, harness_pane=harness_pane),
+                env=env)
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
                                     harness_pane=harness_pane, env=pane_env)
     # Zipped with `slots`, not just iterated: `_resize_hook_argv` needs to know WHICH slot
@@ -1580,6 +1647,16 @@ def _arm_panel_respawn(socket: str, *, fid: str, panes: dict[str, str],
     the life of the frame, with no message, no respawn and no backoff. Both ends now build
     their argv through `tmuxctl.server_argv` and resolve liveness through `_frame_is_live`,
     so the same hook is correct on either server and there is nothing left here to refuse.
+
+    **An armed hook and a hook that can FIRE are two claims, and the first round of #408
+    only bought the first.** tmux runs `pane-died` for a pane that died and STAYED; a
+    pane on a server left at `remain-on-exit off` — an operator's own tmux — is destroyed
+    at death, taking its pane-scoped hook with it, and every argv here can be perfect
+    while nothing ever runs. What makes this reachable is `_panel_remain_on_exit_argv`,
+    armed on charter's own window before the first panel is split; the measurement is in
+    that function's docstring and the end-to-end test is
+    `WindowInsideAnOperatorsTmux.test_a_panels_respawn_hook_is_armed_against_this_server_and_fires`,
+    which runs against a server nothing has pre-armed.
 
     A pane charter will not arm (`_panel_died_hook_argv` returning ``None`` — see its own
     docstring for what fails that check) is NAMED rather than skipped in silence: the

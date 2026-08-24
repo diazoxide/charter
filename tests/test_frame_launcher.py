@@ -1313,6 +1313,22 @@ class _FakeTmux:
         raise AssertionError(f"unexpected tmux command in test: {cmd}")
 
 
+def _arms_remain_on_exit(cmd: list[str], scope: str) -> bool:
+    """Is *cmd* an arming of `remain-on-exit` at *scope* (`-g`, `-w` or `-p`)?
+
+    Charter issues this option at three scopes for three different reasons — the whole
+    server (`_PLACEHOLDER_CONF`'s backstop), the frame's own window (`_split_panels`, so
+    a dead panel is still there for its hook to fire from) and the harness pane alone
+    (`_remain_on_exit_argv`) — and a test that matched the bare STRING would be answered
+    by whichever of the three happened to run. The scope is the fact each of those tests
+    is about, so it is what gets matched, and the value is checked too: `off` is also a
+    command with `remain-on-exit` in it.
+    """
+    return (scope in cmd and "remain-on-exit" in cmd
+            and cmd[cmd.index("remain-on-exit") + 1:cmd.index("remain-on-exit") + 2]
+            == ["on"])
+
+
 def _outside_tmux():
     """Say, explicitly, that this launch is NOT happening inside somebody's tmux.
 
@@ -1701,17 +1717,48 @@ class Launch(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(exit_code=0, pre_existing_sessions=frozenset({"someone-elses"}))
         rc = _launch(fake)
         self.assertEqual(rc, 0)
-        self.assertTrue(any("remain-on-exit" in c for c in fake.calls),
+        self.assertTrue(any(_arms_remain_on_exit(c, "-g") for c in fake.calls),
                         "remain-on-exit was not armed directly ahead of a running server")
 
     def test_remain_on_exit_is_not_armed_a_second_way_on_a_fresh_server(self):
         """Companion: when nothing else is running, the placeholder `-f` is sufficient
-        (it IS what starts the server), so the direct arm command should not run —
+        (it IS what starts the server), so the direct SERVER-WIDE arm should not run —
         pinning that the condition is actually checked, not that running it twice would
-        itself be wrong."""
+        itself be wrong.
+
+        Scoped to `-g`, and that is the whole subject. `_split_panels` arms
+        `remain-on-exit` on the frame's own WINDOW on every launch on either server
+        (#408: a panel pane destroyed at death takes its respawn hook with it), which is
+        a different command answering a different question — the test below pins that it
+        runs here, so narrowing this one to `-g` gives nothing away."""
         fake = _FakeTmux(exit_code=0)  # pre_existing_sessions defaults to empty
         _launch(fake)
-        self.assertFalse(any("remain-on-exit" in c for c in fake.calls))
+        self.assertFalse(any(_arms_remain_on_exit(c, "-g") for c in fake.calls),
+                         "the server-wide arm ran on a server the placeholder started")
+
+    def test_the_frames_own_window_keeps_its_dead_panes_on_either_server(self):
+        """#408's second half, on charter's OWN server — where it is redundant and is
+        issued anyway.
+
+        `_PLACEHOLDER_CONF` already sets `remain-on-exit` server-globally here, so this
+        command changes nothing on this path. It is unconditional because the ALTERNATIVE
+        is the defect: a rule applied per call site is what left the operator's server
+        arming one of two panes' worth of state, twice now (#412 then #446 for `-e`, #408
+        for this). One funnel, one rule, on every server — and on this one it is also the
+        backstop for the case the launcher already knows about, where `-f` is silently
+        ignored because some other charter started the server first.
+
+        The pane it names is the harness pane the launcher read off `new-session`'s own
+        stdout, never a hardcoded `%0` — so a launcher that armed the wrong window would
+        show up here."""
+        fake = _FakeTmux(exit_code=0)
+        self.assertEqual(_launch(fake), 0)
+        armed = [c for c in fake.calls if _arms_remain_on_exit(c, "-w")]
+        self.assertEqual(len(armed), 1,
+                         f"expected exactly one window-scoped arm, got {len(armed)}")
+        self.assertEqual(armed[0][armed[0].index("-t") + 1], fake.pane_id,
+                         "the frame's window was named by something other than the pane "
+                         "id tmux reported for this launch")
 
     def test_a_still_live_session_after_attach_is_a_detach_not_a_silent_zero(self):
         """The spec's own words: "Detach is allowed and prints how to reattach...
@@ -3475,15 +3522,46 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertEqual(respawn[respawn.index("--") + 1:], ["claude"])
 
     def test_the_pane_is_kept_askable_before_the_harness_can_exit(self):
+        """Matched on the PANE scope, not on the string: charter arms `remain-on-exit`
+        twice on this path now (`-p` on the harness pane here, `-w` on the frame's own
+        window when the panels are drawn — #408), and a `next(... if "remain-on-exit" in
+        c)` would silently start answering about whichever came first."""
         fake = _FakeOperatorTmux(exit_code=0)
         _launch_inside(fake)
-        arm = next(i for i, c in enumerate(fake.calls) if "remain-on-exit" in c)
+        arm = next(i for i, c in enumerate(fake.calls)
+                   if _arms_remain_on_exit(c, "-p"))
         respawn = next(i for i, c in enumerate(fake.calls) if "respawn-pane" in c)
         self.assertLess(arm, respawn,
                         f"remain-on-exit must be armed first: {fake.calls}")
         armed = fake.calls[arm]
-        self.assertIn("-p", armed, "pane-scoped, never the operator's own -g or session")
         self.assertEqual(armed[armed.index("-t") + 1], "%7")
+
+    def test_a_dead_panel_is_still_there_for_its_hook_to_fire_from(self):
+        """#408's second half on the guest path, at the launcher's own level: the
+        respawn hook is armed on each panel PANE, and tmux runs a `pane-died` hook only
+        for a pane that died and stayed. At the operator's default the pane is destroyed
+        and takes the hook with it, so an armed hook that never fires is what the first
+        round of this fix shipped.
+
+        Ordered BEFORE the first `split-window`, and that is the assertion rather than a
+        detail: a pane option cannot be set on a pane that does not exist yet, so a panel
+        that dies in its own first milliseconds is only covered if the WINDOW was armed
+        ahead of it."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        _launch_inside(fake)
+        # Positions and the option's own argv only — never `fake.calls`, which carries a
+        # `respawn-pane -e PATH=…` holding the whole of this machine's `$PATH`.
+        armed = [i for i, c in enumerate(fake.calls) if _arms_remain_on_exit(c, "-w")]
+        self.assertEqual(len(armed), 1, "expected exactly one window-scoped arm, "
+                                        f"got {len(armed)}")
+        cmd = fake.calls[armed[0]]
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%7",
+                         "the window was named through a pane that is not the harness's")
+        splits = [i for i, c in enumerate(fake.calls) if "split-window" in c]
+        self.assertTrue(splits, "no panel was drawn, so this test measured nothing")
+        self.assertLess(armed[0], splits[0],
+                        f"the first panel was split (call {splits[0]}) before its window "
+                        f"was armed to keep it (call {armed[0]})")
 
     def test_nothing_of_the_operators_is_written(self):
         """Their config untouched, in the spec's own words. Every one of these would
