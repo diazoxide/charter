@@ -1,12 +1,12 @@
 ---
 version: unreleased
-headline: The tool-gate stopped smoothing six things a `tools:` line never meant to grant
+headline: The tool-gate stopped smoothing seven things a `tools:` line never meant to grant
 ---
 
 `tools:` in a persona pre-approves a **program**, and every argument rides along with it.
 That is the feature — an operator who writes `tools: gh` means `gh` — and it is also where
-six holes lived, each one arriving under a name that made the declaration look narrower
-than it was. All six are now cases where the gate declines to smooth and you get the
+seven holes lived, each one arriving under a name that made the declaration look narrower
+than it was. All seven are now cases where the gate declines to smooth and you get the
 normal permission prompt. Nothing here denies anything; the gate still cannot block work,
 only fail to remove a prompt.
 
@@ -18,12 +18,38 @@ teaches — ran all three with no prompt at all. Everything else charter does is
 `charter persona list`, `charter workspace status`, `charter trace` still run without a
 prompt for a persona that declared the binary, because that is what it was declared for.
 
-**An interpreter or a wrapper is a declaration of every command, and is never smoothed.**
-`bash`, `sh`, `python3` (and `python3.12`), `node`, `perl`, `ruby`, `env`, `xargs`, `sudo`,
-`timeout`, `npx` and their relatives. `tools: python3` reads as *this persona writes
-Python*. What it granted was `python3 -c "print(open('.charter/vaults/devops.json').read())"`
-with an affirmative `allow`, which is worse than silence: it removed the human prompt that
-was the last remaining control. If you want that, it is one prompt away, on purpose.
+**An interpreter is a declaration of every command, and is not smoothed.** `bash`, `sh`,
+`python3` (and `python3.12`), `node`, `perl`, `ruby`, `env`, `xargs`, `sudo`, `timeout`,
+`npx`. `tools: python3` reads as *this persona writes Python*. What it granted was
+`python3 -c "print(open('.charter/vaults/devops.json').read())"` with an affirmative
+`allow`, which is worse than silence: it removed the human prompt that was the last
+remaining control. If you want that, it is one prompt away, on purpose.
+
+**That list is a list of names, and a wrapper absent from it walked straight past it.**
+`caffeinate -s ./evil` and `arch -arm64 ./evil` were each answered `allow`, and `./evil` —
+a program the agent had written seconds earlier — ran. So were `flock /tmp/l ./evil`,
+`taskset 1 ./evil`, `chrt 0 ./evil`, `nsenter ./evil`, `runuser -u u -- ./evil`,
+`systemd-run ./evil`, `proot ./evil` and `ssh host ./evil`. `nice`, `ionice` and `timeout`
+were on the list; `chrt`, `taskset` and `flock`, which do the same job, were not.
+
+So the wrapper is no longer a question about the binary's **name**. **A command whose
+argument names a file this machine would execute runs two programs, and only one of them
+was declared** — so it is not smoothed, whatever the binary is called. That is one `stat`
+of the path the shell will hand over, which means a wrapper nobody has heard of is covered
+the day it is written. The list stays for what that cannot reach: a program named as *text*
+rather than as a file (`bash -c hostname`, `awk 'BEGIN{system("id")}'`), where there is
+nothing to stat. It is best-effort and `docs/hooks.md` now says so instead of presenting a
+closed category.
+
+One residual is disclosed rather than half-closed: an argument that is a **bare name** is
+resolved by the callee through `PATH`, and charter does not read it as a program. Treating
+every argument `shutil.which` answers as one would make `git log`, `gh pr list`,
+`docker ps`, `kubectl top` and `kubectl apply` prompts, because `log`, `pr`, `ps`, `top`
+and `apply` are all binaries — that is not one prompt; it is the end of the allowance. It
+needs a program the agent can already reach on `PATH`, the same precondition as the
+command-word residual below. **The price of the half that did close: `git add ./release.sh`
+and `cat ./deploy.sh` are prompts now**, because in `argv` an executable file is not
+distinguishable from a program about to be run.
 
 **A command whose arguments reach a vault is never smoothed, whatever the binary is.** The
 Bash leak guard asks *is this program a reader?* — answerable for `cat`, hopeless for `curl
@@ -91,8 +117,10 @@ subcommands are read as *words* of the command rather than as whole arguments �
 delete every untracked file.
 
 Two things that reading `argv` cannot reach are written down in `docs/hooks.md` rather than
-half-closed: a flag whose value is another program (`tar --use-compress-program=`,
-`git -c core.pager=`), and a verb that never appears in the command at all — a `z = clean`
+half-closed: a flag whose value is another program *named as a bare name*
+(`tar --use-compress-program=gzip`, `git -c core.pager=less`) — the half of that shape
+whose value is a path to an executable file is refused by the rule above, without the flag
+being named — and a verb that never appears in the command at all — a `z = clean`
 alias already sitting in `.git/config` makes `git z -xfd` a command whose every word is
 innocent. Closing either means a list of the flags somebody thought of, which is the shape
 that has been bypassed in every round of this so far.
@@ -150,6 +178,7 @@ wall charter holds.
 
 Nothing to adopt: upgrading is the whole of it. If a persona in your plane declares an
 interpreter, `charter`, or a shell, expect prompts where there were none — and expect them
-too wherever a command carries a `*`, a `~`, a `{`, a `$` or a `#`, a `VAR=` prefix, or a
-declared tool invoked by path rather than by name, however harmless it looks. That is the
-change, and `charter guard allow` is how you take a specific one back on purpose.
+too wherever a command carries a `*`, a `~`, a `{`, a `$` or a `#`, a `VAR=` prefix, a
+declared tool invoked by path rather than by name, or an argument that is an executable
+file, however harmless it looks. That is the change, and `charter guard allow` is how you
+take a specific one back on purpose.

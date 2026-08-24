@@ -137,11 +137,21 @@ class TestInterpretersAndWrappers(GateCase):
         """A guard that knows `python3` and not `python3.12` is the demo, not the class."""
         self.assertIsNone(self.gate("python3.12 -c print(1)"))
 
-    def test_a_wrapper_never_auto_approves(self):
+    def test_a_wrapper_on_the_list_never_auto_approves(self):
+        """Named for what it can prove, after round four found what it could not.
+
+        Every command here is a wrapper `_INTERPRETERS` already contains, so this pins the
+        members and NOT the class — it stayed green while `caffeinate -s ./evil`,
+        `flock /tmp/l ./evil` and `taskset 1 ./evil` were answered `allow` and `./evil`
+        ran. The class is pinned in `TestAnArgumentThatIsItselfAProgram`, against a
+        wrapper invented in the test so no addition to this frozenset can satisfy it.
+        """
         for cmd in ("env kubectl get pods", "xargs kubectl get pods",
                     "sudo kubectl get pods", "timeout 5 kubectl get pods",
                     "npx some-package --run"):
             with self.subTest(cmd=cmd):
+                self.assertTrue(toolgate._is_interpreter(cmd.split()[0]),
+                                "this test only covers names already on the list")
                 self.assertIsNone(self.gate(cmd))
 
     def test_a_declared_ordinary_binary_still_smooths(self):
@@ -1160,6 +1170,176 @@ class TestADangerousVerbPackedIntoAToken(GateCase):
         self.assertIsNone(self.gate('git commit -m "clean up the tests"'))
 
 
+# --------------------------------------------------------------------------- #
+# #450 round four — the wrapper was a LIST of names, and a name walked past it   #
+# --------------------------------------------------------------------------- #
+class TestAnArgumentThatIsItselfAProgram(GateCase):
+    """`_INTERPRETERS` is a hardcoded frozenset, and a wrapper absent from it was
+    arbitrary unprompted execution.
+
+    Measured through the real `hooks.pretooluse` at the parent commit, each of these was
+    an affirmative `allow`, and for the first two the agent-written `./evil` really ran in
+    a real bash::
+
+        caffeinate -s ./evil        arch -arm64 ./evil      ssh host ./evil
+        flock /tmp/l ./evil         taskset 1 ./evil        chrt 0 ./evil
+        nsenter ./evil              runuser -u u -- ./evil  systemd-run ./evil
+        proot ./evil
+
+    `nice`, `ionice` and `timeout` were on the list; `chrt`, `taskset` and `flock`, which
+    do the same job, were not. That is what a list rather than a property looks like from
+    the outside, and it is the same failure as round one (a NAME), round two (a CHARACTER
+    CLASS) and round three (a LONGER LIST).
+
+    So the tests below refuse to name a wrapper. The wrapper is INVENTED here — a script
+    called `runner` that does nothing but `exec "$@"` — and every case asserts that
+    `_is_interpreter` says *no* about it before asserting that the gate declines anyway.
+    A future fix that adds `caffeinate` to the frozenset does not turn this class green;
+    only a rule that asks what the argument IS does.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.work = self.tmp / "work"
+        self.work.mkdir()
+        self.evil = self.work / "evil"
+        self.proof = self.work / "proof.txt"
+        self.evil.write_text("#!/bin/sh\nprintf pwned > %s\n" % self.proof)
+        self.evil.chmod(0o755)
+        # A wrapper nobody has heard of, on PATH so the command word is a bare declared
+        # name and every earlier rule is satisfied — this class is about the ARGUMENT.
+        self.bindir = self.tmp / "bin"
+        self.bindir.mkdir()
+        (self.bindir / "runner").write_text('#!/bin/sh\nexec "$@"\n')
+        (self.bindir / "runner").chmod(0o755)
+        self.enterContext(mock.patch.dict(
+            os.environ, {"PATH": str(self.bindir) + os.pathsep + os.environ["PATH"]}))
+        self.activate("sre", "runner, cat, ls, git, kubectl, tar")
+        toolgate.snapshot(SID)
+
+    def gate(self, command, sid=SID):
+        return toolgate.decide(command, sid, str(self.work))
+
+    def test_the_invented_wrapper_really_runs_its_argument(self):
+        """The refusals below are worth nothing unless the thing refused is real. This is
+        the consequence, in a real shell: the wrapper hands `./evil` to the kernel."""
+        subprocess.run(["bash", "-c", "runner ./evil"], cwd=str(self.work), check=True)
+        self.assertEqual(self.proof.read_text(), "pwned")
+
+    def test_a_wrapper_the_list_never_heard_of_does_not_smooth_its_program(self):
+        self.assertFalse(toolgate._is_interpreter("runner"),
+                         "the point of this class is that the LIST does not answer")
+        (self.work / "logs").mkdir(exist_ok=True)
+        for cmd in ("runner ./evil", "runner -x ./evil", "runner -- ./evil",
+                    "runner ./logs/../evil", "runner %s" % self.evil):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.gate(cmd))
+
+    def test_the_wrappers_the_reviewer_used_are_the_same_answer(self):
+        """The ten spellings that were measured as `allow`, run against the property
+        rather than against a list that now contains them — each is asserted to be absent
+        from `_INTERPRETERS` first."""
+        self.activate("sre2", "caffeinate, arch, ssh, flock, taskset, chrt, nsenter, "
+                              "runuser, systemd-run, proot")
+        toolgate.snapshot(SID)
+        for cmd in ("caffeinate -s ./evil", "arch -arm64 ./evil", "ssh host ./evil",
+                    "flock /tmp/l ./evil", "taskset 1 ./evil", "chrt 0 ./evil",
+                    "nsenter ./evil", "runuser -u u -- ./evil", "systemd-run ./evil",
+                    "proot ./evil"):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(toolgate._is_interpreter(cmd.split()[0]))
+                self.assertIsNone(self.gate(cmd))
+
+    def test_the_hook_carries_it(self):
+        """Through the real handler with the session id and cwd it passes — where the
+        reviewer measured `allow` and then watched `./evil` execute."""
+        from charter import hooks
+        out = run_hook(hooks.pretooluse, {
+            "hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": SID,
+            "cwd": str(self.work), "tool_input": {"command": "runner ./evil"}})
+        self.assertNotEqual(
+            ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecision"),
+            "allow")
+
+    def test_a_symlink_to_the_program_is_the_same_answer(self):
+        """Identity, not spelling: the rule stats the object the shell hands over."""
+        (self.work / "harmless").symlink_to(self.evil)
+        self.assertIsNone(self.gate("runner ./harmless"))
+
+    def test_a_program_behind_a_flag_is_the_same_answer(self):
+        """`_path_candidates` already reads past a `--flag=` and a leading `@`, and this
+        rule reads it — so `--use-compress-program=./evil`, which really does run `./evil`
+        inside a smoothed `tar`, is refused without `tar` or that flag being named
+        anywhere. Round four disclosed that shape as unreachable; the half of it that
+        names a FILE is reachable after all, and `TestTheGateReadsArgvAndNothingElse`
+        now records only the half that is not."""
+        self.assertIsNone(self.gate("tar --use-compress-program=./evil -cf /tmp/o.tar f"))
+
+    def test_an_ordinary_argument_still_smooths(self):
+        """The other way to lose. A rule that refused every path-shaped argument would
+        pass every test above and be a ban on work."""
+        (self.work / "README.md").write_text("hi")
+        (self.work / "logs").mkdir()
+        for cmd in ("cat ./README.md", "cat %s" % (self.work / "README.md"),
+                    "ls -la ./logs", "ls -la %s" % (self.work / "logs"),
+                    "kubectl get pods -n prod", "git status",
+                    # `log` is a binary on an ordinary machine. This is the bare-name
+                    # residual from the other side: resolving argument names through PATH
+                    # would take this command with it.
+                    "git log --oneline -10"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(self.gate(cmd))
+
+    def test_a_directory_is_not_a_program_even_though_it_is_executable(self):
+        """Every directory carries an execute bit. `os.path.isfile` is what keeps
+        `ls -la workspaces` a smoothed command, and it is asserted rather than assumed."""
+        d = self.work / "logs"
+        d.mkdir(exist_ok=True)
+        self.assertTrue(os.access(d, os.X_OK), "a directory really is +x")
+        self.assertFalse(toolgate._argv_names_another_program(["ls", str(d)]))
+
+    def test_the_price_is_stated_here_rather_than_discovered(self):
+        """One prompt each, never a denial. An argument that happens to be an executable
+        file reads as a second program, because in `argv` there is nothing else it could
+        be."""
+        script = self.work / "release.sh"
+        script.write_text("#!/bin/sh\ntrue\n")
+        script.chmod(0o755)
+        self.assertIsNone(self.gate("git add ./release.sh"))
+        self.assertIsNone(self.gate("cat ./release.sh"))
+
+    def test_the_residual_is_a_name_this_process_cannot_resolve_to_a_file(self):
+        """Disclosed, not closed, and pinned so it stays a disclosure.
+
+        A bare argument is resolved by the CALLEE through `PATH`, and treating every
+        argument `shutil.which` answers as a program ends the feature: on an ordinary
+        machine `log`, `pr`, `ps`, `top`, `apply` and `cp` are all binaries, so
+        `git log`, `gh pr list`, `docker ps`, `kubectl top` and `kubectl apply` would each
+        become a prompt. The precondition for exploiting it — an agent that can write into
+        a directory already on `PATH` — is the one `_runs_the_declared_program` already
+        discloses for the command word.
+
+        The same floor covers a program named as TEXT: `ssh host rm` runs `rm` on another
+        machine, and `bash -c hostname` names no file at all. That is what the
+        `_INTERPRETERS` list is a best-effort answer for, and a list is all it is.
+        """
+        self.assertIsNotNone(self.gate("runner cat"),
+                             "if this closes, docs/hooks.md must stop disclosing it")
+        self.assertIsNotNone(self.gate("tar --use-compress-program=gzip -cf /tmp/o.tar f"))
+
+    def test_the_docs_say_the_list_is_not_the_rule(self):
+        """An overclaiming security document is the defect this audit was called to
+        remove. Three documents said this category was closed while `caffeinate -s ./evil`
+        executed, so the corrected sentences are asserted, not trusted."""
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[1]
+        hooks_md = " ".join((repo / "docs" / "hooks.md").read_text().split())
+        self.assertIn("an argument that is itself a program", hooks_md)
+        self.assertIn("a list of names, and it is best-effort", hooks_md)
+        personas_md = " ".join((repo / "docs" / "personas.md").read_text().split())
+        self.assertIn("an argument that is itself an executable file", personas_md)
+
+
 class TestTheGateReadsArgvAndNothingElse(GateCase):
     """The next spelling, named because it is not closed rather than because it is.
 
@@ -1195,19 +1375,30 @@ class TestTheGateReadsArgvAndNothingElse(GateCase):
             toolgate.decide("curl -K req.conf", SID, str(self.tmp)),
             "if this ever returns None the gap closed and the docs below must say so")
 
-    def test_a_flag_whose_value_is_another_program_is_the_same_boundary(self):
-        """Found in round four and disclosed rather than closed.
+    def test_a_flag_whose_value_is_another_program_is_now_half_closed(self):
+        """Found in round four, disclosed then, and narrowed since — so the disclosure is
+        narrowed with it rather than left standing as a bigger hole than it is.
 
         `tar --use-compress-program=X` runs `X`; measured, a script of the reviewer's own
-        printed to stderr from inside a smoothed `tar`. `git -c core.pager=X log` is the
-        same shape. Both are the binary's own documented feature, both are in `argv`, and
-        neither is distinguishable there from an ordinary argument — closing them is the
-        list of flags somebody thought of, one hat away from `curl -K`.
+        printed to stderr from inside a smoothed `tar`. Where `X` is a PATH to a file this
+        machine would execute, `_argv_names_another_program` now stats it and the command
+        is not smoothed — no flag is named anywhere for that to work.
+
+        What is left is the half that names no file this process can find: a bare name the
+        callee resolves through `PATH`. `--use-compress-program=gzip` is indistinguishable
+        in `argv` from `--output=gzip`, and closing it means treating every argument
+        `shutil.which` answers as a program, which is `git log` and `docker ps` too.
         """
+        agent_wrote = self.tmp / "x"
+        agent_wrote.write_text("#!/bin/sh\ntrue\n")
+        agent_wrote.chmod(0o755)
+        self.assertIsNone(toolgate.decide(
+            "tar --use-compress-program=./x -cf /tmp/o.tar f", SID, str(self.tmp)))
+        self.assertIsNone(toolgate.decide(
+            "git -c core.pager=./x log", SID, str(self.tmp)))
         self.assertIsNotNone(toolgate.decide(
-            "tar --use-compress-program=/tmp/x -cf /tmp/o.tar f", SID, str(self.tmp)))
-        self.assertIsNotNone(toolgate.decide(
-            "git -c core.pager=/tmp/x log", SID, str(self.tmp)))
+            "tar --use-compress-program=gzip -cf /tmp/o.tar f", SID, str(self.tmp)),
+            "the bare-name half is disclosed in docs/hooks.md, not closed")
 
     def test_a_verb_that_never_reaches_argv_is_the_same_boundary(self):
         """`_is_dangerous` reads every word of `argv`, so `git -c alias.z=clean z` is seen

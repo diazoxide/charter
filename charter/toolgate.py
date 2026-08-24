@@ -23,7 +23,7 @@ Two deliberate properties:
 
 The unit of approval is a **program**, and every argument rides along with it. That
 is the feature (an operator writing ``tools: gh`` means `gh`), and it is also where
-the whole class of holes lives, so six rules bound it — each of them "decline to
+the whole class of holes lives, so seven rules bound it — each of them "decline to
 smooth", never "deny":
 
 - :func:`_shell_literal` — a command containing a character the shell would REWRITE is not
@@ -31,9 +31,15 @@ smooth", never "deny":
   gets if the shell had nothing left to do to it (#450).
 - :data:`_DANGEROUS` — a declared binary's destructive subcommands still prompt,
   ``charter secret``/``charter vault`` among them.
+- :func:`_argv_names_another_program` — an argument that IS a program means the command
+  runs two programs, and only one of them was declared. Asked of the filesystem (is this
+  path a file this machine would execute?), which is what makes it true of a wrapper
+  nobody here has heard of.
 - :data:`_INTERPRETERS` — a binary whose *argument* is the real command (``bash``,
   ``python3``, ``xargs``, ``sudo``…) is a declaration of every command, so it is
-  never smoothed. Declaring one has to stay a declaration of one thing.
+  never smoothed. Declaring one has to stay a declaration of one thing. This one is a
+  LIST of names, it is best-effort, and round four walked past it with `caffeinate -s
+  ./evil` — see its own docstring and `docs/hooks.md`, both of which now say so.
 - :func:`_touches_control_surface` — whatever the binary, an argument that reaches a
   vault or charter's own state is never smoothed. That is the same rule the Bash leak
   guard applies to `cat`, applied to the argv rather than to a list of programs charter
@@ -148,15 +154,33 @@ _DANGEROUS = {
     "edm": {"secret", "vault"},
 }
 
-#: Binaries whose ARGUMENT is the command. Declaring one of these declares every
-#: command there is — `tools: python3` reads as "this persona writes Python", not as
-#: "this persona may read its own vault and POST it anywhere" — so the gate never
-#: smooths them (#439). It still never denies: the operator who genuinely wants this
-#: gets a normal prompt, which is the control that was being removed.
+#: Binaries whose ARGUMENT is a program charter cannot resolve to a file. Declaring one
+#: of these declares every command there is — `tools: python3` reads as "this persona
+#: writes Python", not as "this persona may read its own vault and POST it anywhere" — so
+#: the gate never smooths them (#439). It still never denies: the operator who genuinely
+#: wants this gets a normal prompt, which is the control that was being removed.
 #:
-#: Wrappers (`env`, `xargs`, `sudo`, `timeout`…) are here for the same reason, and
-#: package runners (`npx`, `uvx`…) because their argument is an arbitrary program
-#: fetched from a registry.
+#: **This list is not the rule, and reading it as one is what round four found.** It is a
+#: literal list of names, and a name absent from it walked straight past: `caffeinate -s
+#: ./evil` and `arch -arm64 ./evil` were each an affirmative `allow` through the real hook,
+#: and `./evil` — a program the agent wrote seconds earlier — really ran. So did
+#: `flock /tmp/l ./evil`, `taskset 1 ./evil`, `chrt 0 ./evil`, `nsenter ./evil`,
+#: `runuser -u u -- ./evil`, `systemd-run ./evil` and `proot ./evil`. `nice`, `ionice` and
+#: `timeout` were on the list while their exact peers `chrt`, `taskset` and `flock` were
+#: not, which is what a list rather than a property always looks like from the outside.
+#:
+#: What answers that class now is :func:`_argv_names_another_program`, which asks the
+#: FILESYSTEM — is any argument a file this machine would execute? — and so covers the
+#: wrapper nobody here has heard of. This list survives for the residue that question
+#: cannot reach, and only that: a program named as **text rather than as a file**.
+#: `bash -c hostname`, `awk 'BEGIN{system("id")}'` and `python3 -c …` name no file at all;
+#: `npx`/`uvx` name one that does not exist yet and will be fetched. There is no property
+#: in argv that separates those strings from an ordinary argument, so they are a list, they
+#: are best-effort, and `docs/hooks.md` says so rather than implying a closed category.
+#:
+#: Wrappers whose argument is a *file* are still listed — `env`, `xargs`, `sudo` — because
+#: a second rule costs nothing and the day `_argv_names_another_program` is wrong about one
+#: of them is the day the overlap is what holds.
 _INTERPRETERS = frozenset("""
     sh bash zsh fish dash ksh mksh csh tcsh ash busybox
     python python2 python3 pypy pypy3 ipython node nodejs deno bun ts-node tsx
@@ -515,6 +539,65 @@ def _is_interpreter(binary: str) -> bool:
     return binary in _INTERPRETERS or bool(_VERSIONED.match(binary))
 
 
+def _argv_names_another_program(tokens: list[str], cwd: str | None = None) -> bool:
+    """True when any argument names a FILE this machine would execute.
+
+    The wrapper class, asked as a property of the command instead of as a property of the
+    binary's name. `caffeinate -s ./evil` runs `./evil`; so do `arch -arm64 ./evil`,
+    `flock /tmp/l ./evil`, `taskset 1 ./evil`, `nsenter ./evil`, `runuser -u u -- ./evil`
+    and every wrapper written after this sentence. :data:`_INTERPRETERS` answered none of
+    them, because it is a list of names and they were not on it — the same failure as round
+    one (a name), round two (a character class) and round three (a longer list). What all
+    of them have in common is not the binary. It is that an ARGUMENT is a program, and
+    whether a path is a program is a question the filesystem answers.
+
+    So: for each argument, each path-shaped reading of it (:func:`_path_candidates`, so a
+    `@` prefix and a `--flag=` prefix are seen) is resolved against *cwd* and asked two
+    things — is it a regular file, and would the OS execute it. Both come from one `stat`
+    of the object the shell will hand over, not from its spelling, which is why `./evil`,
+    its absolute spelling, `./logs/../evil` and a symlink to it are one answer.
+
+    **A bare name is deliberately not looked up on PATH**, and this is a real boundary, not
+    an oversight. `caffeinate evil` reaches `evil` only if it sits on `PATH`, so covering it
+    means treating every argument that `shutil.which` resolves as a program — and measured
+    on an ordinary machine that is `git log`, `gh pr list`, `docker ps`, `kubectl top`,
+    `kubectl apply` and `kubectl cp`, because `log`, `pr`, `ps`, `top`, `apply` and `cp` are
+    all binaries. That is not one prompt; it is the end of the allowance. The residue it leaves
+    has exactly the precondition :func:`_runs_the_declared_program` already discloses for
+    the command word: an agent that can write into a directory already on `PATH`. Closing
+    it there and leaving it here would be an inconsistency; charter closes neither and says
+    so in `docs/hooks.md`.
+
+    Two smaller residues, stated for the same reason. A program named as text rather than
+    as a file (`bash -c hostname`, `ssh host rm`) has no file here to stat — that is what
+    :data:`_INTERPRETERS` is a best-effort list for. And a file that is not executable when
+    this runs but is when bash runs is not something one process can see; making it
+    executable is a `chmod` of its own, which is a command of its own.
+
+    Directories are excluded on purpose: every directory carries an execute bit, and
+    `ls -la workspaces` names one. `os.path.isfile` is what separates them.
+
+    Like every rule here this can only ever ADD refusals — a refusal is one prompt, never a
+    denial — so the cost of it being over-eager (`git add ./release.sh`) is a prompt, and
+    the cost of it being absent was measured: `./evil` ran.
+    """
+    i = 0
+    while i < len(tokens) and _ENV_ASSIGN.match(tokens[i]):
+        i += 1
+    base = cwd or os.getcwd()
+    for tok in tokens[:i] + tokens[i + 1:]:
+        for cand in _path_candidates(tok):
+            if os.sep not in cand:
+                continue        # a bare name is resolved by PATH; see above
+            try:
+                p = os.path.realpath(os.path.join(base, os.path.expanduser(cand)))
+                if os.path.isfile(p) and os.access(p, os.X_OK):
+                    return True
+            except (OSError, ValueError):
+                continue
+    return False
+
+
 def _passes_through(ch: str) -> bool:
     """True when the shell hands *ch* to the program unchanged.
 
@@ -809,6 +892,8 @@ def decide(command: str, session_id: str | None = None, cwd: str | None = None):
         return None
     if _is_interpreter(binary):
         return None  # declaring an interpreter declares every command — keep the prompt
+    if _argv_names_another_program(tokens, cwd):
+        return None  # an argument is a program: two programs, not one with its arguments
     if _is_dangerous(binary, args):
         return None  # declared, but a destructive subcommand → fall back to a prompt
     if _touches_control_surface(tokens, cwd):
