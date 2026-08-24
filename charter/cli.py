@@ -943,8 +943,10 @@ def _sa_exec(p):
                         "GOOGLE_APPLICATION_CREDENTIALS takes a path, not a value) — the "
                         "case --exec cannot serve, because exec leaves nothing alive to "
                         "clean up. Output is NOT redacted (nothing is captured). Cleanup "
-                        "survives SIGINT, SIGTERM and SIGHUP; only a SIGKILLed charter "
-                        "runs no cleanup, and then the 0600 file survives.")
+                        "survives every terminating signal charter may catch — SIGINT, "
+                        "SIGTERM, SIGHUP, SIGQUIT and the rest. It does not survive "
+                        "SIGKILL, which cannot be caught, or a fault (SIGSEGV, SIGABRT), "
+                        "which charter does not intercept; then the 0600 file survives.")
     p.add_argument("--exec", dest="exec_mode", action="store_true",
                    help="Replace this process with the command (os.exec) instead of capturing "
                         "it, so stdio streams through — required for a long-running child such "

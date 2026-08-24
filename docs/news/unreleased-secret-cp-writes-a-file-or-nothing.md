@@ -25,6 +25,8 @@ resolves the value at all:
 
 - a device, FIFO, socket or directory is refused — `/dev/stdout`, `/dev/stderr` and
   `/dev/fd/*` by name in the message, because they are this conversation;
+- **a destination that IS one of charter's own three streams is refused by identity**,
+  before existence or `--force` is considered at all (see below);
 - a symlink is refused rather than followed, and the write itself uses `O_NOFOLLOW`, so
   a link planted between the check and the open cannot redirect it either;
 - an existing file is refused; overwriting one takes `--force`, and charter says
@@ -35,6 +37,24 @@ resolves the value at all:
 - a destination inside the plane that git would track is refused, the same rule
   `charter vault add` already applies to a plain-file vault — otherwise the next
   `charter save` commits the credential.
+
+**The first version of that guard was bypassed, which is why the list above says "by
+identity".** It asked what a destination was *called*: `os.lstat` on the path. On macOS
+`/dev/fd/1` is neither a symlink nor a device — it is the underlying object — so the
+answer came back "an ordinary file that already exists", which is precisely the arm
+`--force` switches off. `charter secret cp <vault> <key> /dev/fd/1 --force` then wrote the
+credential into charter's own captured stdout and printed *Value not shown.* on top of
+it: issue #421's symptom, reproduced through its own fix. Without `--force` the refusal
+ended *"Pass --force to overwrite it deliberately"* — a guard printing the recipe for its
+own bypass, the pattern #421 was filed about in the first place.
+
+No list of names closes that. `/dev/stdout`, `/dev/fd/1`, `/proc/self/fd/1`, the path
+`readlink` gives for a transcript log and any hardlink to it are one file with five
+names. So charter compares the destination's `(st_dev, st_ino)` — taken from an `fstat`
+of the descriptor it actually opened, not from the path — against `fstat` of its own
+stdin, stdout and stderr. One object, one answer, however it is spelled. The comparison
+runs before the vault is read and before anything is truncated, `--force` does not reach
+it, and the refusal it prints names no flag at all.
 
 **A `secret exec` child no longer inherits other vaults' identity variables.** `env =
 dict(os.environ)` handed the child every credential in the caller's shell. Measured with
@@ -48,17 +68,28 @@ read — both halves of each binding, the variable the CLI reads and the variabl
 machine carries it in. The vault being read keeps its own, and nothing else is touched,
 so `PATH`, your locale and every unrelated setting arrive as before.
 
-**`--stream` cleans up after SIGTERM and SIGHUP.** The temp-file cleanup is a `finally`,
-and a `finally` unwinds an exception — a default-action signal unwinds nothing. Python
-installs a handler for exactly one of them, so `SIGINT` was clean and `SIGTERM` left a
-`-rw-------` file holding the value in the system temp directory. The docs named only
-SIGKILL, which reads as vanishingly rare; SIGTERM is what a supervisor, a `kill`, or a
-harness reaping a hung tool call sends at every ordinary shutdown, and `--stream` exists
-for exactly the long-running children that get SIGTERMed. Both signals now raise
-`SystemExit(128+N)` for the duration of the command, which runs the same cleanup an
-ordinary exit does and kills the child on the way out. SIGKILL remains the stated limit,
-because nothing can catch it — and that is now the whole of the limit rather than the
-politest third of it.
+**`--stream` cleans up after every terminating signal charter can catch.** The temp-file
+cleanup is a `finally`, and a `finally` unwinds an exception — a default-action signal
+unwinds nothing. Python installs a handler for `SIGINT` and nothing else, so `SIGINT` was
+clean and `SIGTERM` left a `-rw-------` file holding the value in the system temp
+directory. The docs named only SIGKILL, which reads as vanishingly rare; SIGTERM is what
+a supervisor, a `kill`, or a harness reaping a hung tool call sends at every ordinary
+shutdown, and `--stream` exists for exactly the long-running children that get SIGTERMed.
+
+Handling SIGTERM and SIGHUP and then calling SIGKILL the whole limit was still false.
+SIGQUIT is Ctrl-\ from any terminal, and it left the same file; so did SIGUSR1 and
+SIGXCPU. Every catchable default-terminate signal has the property, not the two that
+happened to get reported — a list of signals to *catch* is a list of spellings, and the
+next one is never on it. charter now derives the set by exclusion: everything in
+`signal.Signals` except what cannot be caught, what does not terminate, what suspends the
+process (Ctrl-Z must background a command, not kill it), and the faults. Each of the rest
+raises `SystemExit(128+N)` for the duration of the command, which runs the same cleanup
+an ordinary exit does and kills the child on the way out.
+
+The stated limit is a category now rather than three examples: cleanup does not survive
+SIGKILL, which no process can catch, or a fault — SIGSEGV, SIGBUS, SIGABRT — which
+charter deliberately does not intercept, because a handler running on a process whose
+state is already wrong can turn a crash into a hang.
 
 **And charter no longer says it shreds anything.** `_safe_unlink` is `os.unlink`, and it
 should stay that way: an overwrite pass is meaningless on a copy-on-write filesystem,

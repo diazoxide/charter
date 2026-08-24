@@ -16,6 +16,16 @@ These tests are written against the *class*, not the one string in the report: e
 non-regular kind, both spellings of "the agent's own pipe", the symlink that gets past a
 naive `S_ISREG` check on the target, and the pre-existing file. The fabricated value
 below is not a credential and appears in no assertion message.
+
+Round one of that fix was bypassed, and the bypass is the reason for
+`TestCharterOwnStreamsAreRefusedByIdentity` below. The first guard asked what a path was
+CALLED — `os.lstat` on the path — and `/dev/fd/1` is not a symlink and not a device on
+macOS, it is the underlying object, so it read as an ordinary existing file and fell into
+the arm `--force` switches off. `charter secret cp v k /dev/fd/1 --force` wrote the value
+into charter's own captured stdout and printed "Value not shown." after it. No list of
+names closes that: `/dev/stdout`, `/dev/fd/1`, `/proc/self/fd/1`, the readlink'd log path
+and any hardlink to it are one inode with five names. The guard now compares IDENTITY —
+`(st_dev, st_ino)` against `os.fstat(0/1/2)` — which has one answer per object.
 """
 
 from __future__ import annotations
@@ -104,6 +114,167 @@ class TestANonRegularDestinationIsRefused(CpCase):
         rc, out, err = self.cp(self.out_dir)
         self.assertRefused(rc, out, err)
         self.assertIn("directory", err)
+
+
+class TestCharterOwnStreamsAreRefusedByIdentity(CpCase):
+    """The bypass that survived round one, and the reason it survived.
+
+    Round one asked what the destination was CALLED. `os.lstat('/dev/fd/1')` on macOS
+    does not report a symlink and does not report a device — `/dev/fd/N` there is the
+    underlying object re-opened, so it reported mode 0o100200, a plain regular file. The
+    guard therefore fell through to its "already exists" arm, whose whole purpose is to
+    be switched off by `--force`. Measured against the branch::
+
+        charter secret cp v k /dev/fd/1 --force
+        -> rc=0, the value in the file behind fd 1, and
+           "✓ Wrote 'v/k' to /dev/fd/1 (0600). Value not shown." on top of it
+
+    which is issue #421's headline symptom reproduced through its own fix. Worse, the
+    no-`--force` refusal read "Pass --force to overwrite it deliberately": the guard
+    printing the recipe for its own bypass, the pattern #421 was filed about.
+
+    These cases all pin IDENTITY — `(st_dev, st_ino)` against `os.fstat(0/1/2)` — which
+    has one answer per object no matter how many names point at it. They run with fd 1
+    and fd 2 pointed at regular files this test owns, because that is the reviewer's
+    condition (and this harness's): the pre-existing `/dev/fd/1` case passed only because
+    the runner's fd 1 happened to be a pipe, and `assertRefused` accepted the "already
+    exists" message as though it were the device refusal.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.transcript = self.out_dir / "transcript.log"
+        self.transcript.write_text("earlier conversation\n")
+        os.chmod(self.transcript, 0o644)
+        self.saved = {}
+        for fd in (1, 2):
+            opened = os.open(self.transcript, os.O_WRONLY | os.O_APPEND)
+            self.saved[fd] = os.dup(fd)
+            os.dup2(opened, fd)
+            os.close(opened)
+        # NOT named `_restore`: `PersonaIso` has a method by that name and registers it
+        # as its own cleanup, so an override here would run twice (EBADF on the second)
+        # and the plane isolation would never be undone.
+        self.addCleanup(self._restore_streams)
+
+    def _restore_streams(self) -> None:
+        for fd, saved in self.saved.items():
+            os.dup2(saved, fd)
+            os.close(saved)
+
+    def assertTranscriptIntact(self):
+        """Nothing written, nothing truncated, and the mode not quietly changed.
+
+        The last one is its own assertion because the broken version's `fchmod` landed
+        on the descriptor it had opened — charter's own stdout — and left the harness's
+        transcript at 0600.
+        """
+        self.assertNotIn(VALUE, self.transcript.read_text(),
+                         "the secret was written into charter's own stream")
+        self.assertEqual(self.transcript.read_text(), "earlier conversation\n",
+                         "charter's own stream was truncated or appended to")
+        self.assertEqual(stat.S_IMODE(self.transcript.stat().st_mode), 0o644,
+                         "a refused write still chmodded charter's own stream")
+
+    def test_the_file_behind_stdout_is_refused_under_its_own_name(self):
+        """The plainest spelling and the one no name-list would ever contain: the real
+        path of the file charter's stdout is redirected to."""
+        rc, out, err = self.cp(self.transcript, force=True)
+        self.assertRefused(rc, out, err)
+        self.assertIn("charter's own standard output", err)
+        self.assertTranscriptIntact()
+
+    def test_dev_fd_1_backed_by_a_regular_file_is_refused(self):
+        """The reviewer's exact input, without `--force`."""
+        rc, out, err = self.cp("/dev/fd/1")
+        self.assertRefused(rc, out, err)
+        self.assertTranscriptIntact()
+
+    def test_dev_fd_1_backed_by_a_regular_file_is_refused_under_force(self):
+        """The reviewer's exact input. `--force` was the bypass; it must now buy nothing
+        but a different refusal path to the same answer."""
+        rc, out, err = self.cp("/dev/fd/1", force=True)
+        self.assertRefused(rc, out, err)
+        self.assertTranscriptIntact()
+
+    def test_dev_fd_2_is_the_same_channel_by_another_number(self):
+        rc, out, err = self.cp("/dev/fd/2", force=True)
+        self.assertRefused(rc, out, err)
+        self.assertTranscriptIntact()
+
+    def test_a_second_hard_name_for_the_transcript_is_refused(self):
+        """One inode, two names, and the second one is in no table of spellings. Identity
+        is what makes this case free; a path check would have to enumerate it."""
+        other = self.out_dir / "not-obviously-the-transcript"
+        os.link(self.transcript, other)
+        rc, out, err = self.cp(other, force=True)
+        self.assertRefused(rc, out, err)
+        self.assertIn("charter's own standard output", err)
+        self.assertTranscriptIntact()
+
+    def test_the_refusal_never_names_a_flag_that_would_get_past_it(self):
+        """#421 in one sentence: a guard must not print its own bypass. The refusal this
+        replaced ended "Pass --force to overwrite it deliberately", and `--force` was the
+        bypass."""
+        for dest, force in ((self.transcript, False), ("/dev/fd/1", False),
+                            (self.transcript, True), ("/dev/fd/1", True)):
+            with self.subTest(dest=str(dest), force=force):
+                _, _, err = self.cp(dest, force=force)
+                self.assertNotIn("--force", err,
+                                 "the refusal suggests the flag that used to bypass it")
+                self.assertNotIn("--reveal", err)
+
+    def test_the_vault_is_never_read_for_one_of_our_own_streams(self):
+        """The value must not exist in this process for the case that was about to print
+        it — refusing after resolving would still put the plaintext one bug from the
+        stream it was refused from."""
+        spy = _SpyProvider()
+        with mock.patch.object(cs, "_provider", lambda _name: spy):
+            rc, _, _ = self.cp("/dev/fd/1", force=True)
+        self.assertEqual(rc, 2)
+        self.assertEqual(spy.reads, [], "a refused stream still read the vault")
+
+    def test_a_name_is_recognised_without_opening_anything(self):
+        """Two lookups answer two questions, so each needs its own case or one of them
+        is decoration. `lstat` alone recognises a second NAME for the inode — a hardlink,
+        or the path `readlink` gives for the log — and costs no open; the descriptor is
+        what `/dev/fd/N` needs, because macOS reports devfs's `st_dev` there rather than
+        the file's. With the descriptor half stubbed out, the cheap half must still hold."""
+        other = self.out_dir / "another-name"
+        os.link(self.transcript, other)
+        with mock.patch.object(cs, "_identify_dest", lambda _raw: None):
+            rc, out, err = self.cp(other)
+        self.assertRefused(rc, out, err)
+        self.assertIn("charter's own standard output", err)
+        self.assertNotIn("--force", err)
+
+    def test_the_open_refuses_even_when_the_path_check_is_bypassed(self):
+        """The guarantee, separated from the courtesy. Everything the path check sees can
+        be swapped between the `lstat` and the `open`; only the descriptor cannot. With
+        the path check stubbed out — the shape of a lost race — the `fstat` after the
+        open is the whole defence, and it has to hold on its own.
+
+        Both spellings, because they fail differently: `/dev/fd/1` is the input the
+        reviewer used, and the real path is the one that proves nothing was destroyed on
+        the way to the refusal. macOS devfs quietly ignores `O_TRUNC` on `/dev/fd/N`, so
+        an open that truncated before deciding would look harmless through that name and
+        empty the file through this one.
+        """
+        for dest in ("/dev/fd/1", self.transcript):
+            with self.subTest(dest=str(dest)):
+                with mock.patch.object(cs, "_cp_dest_refusal", lambda *a, **k: None):
+                    rc, out, err = self.cp(dest, force=True)
+                self.assertRefused(rc, out, err)
+                self.assertTranscriptIntact()
+
+    def test_an_ordinary_destination_is_still_written(self):
+        """The guard must refuse charter's streams, not every file — with fd 1 on a
+        regular file, an over-broad identity test would refuse everything."""
+        dest = self.out_dir / "kubeconfig"
+        rc, out, err = self.cp(dest)
+        self.assertEqual(rc, 0)
+        self.assertEqual(dest.read_text(), VALUE)
+        self.assertNotIn(VALUE, out + err)
 
 
 class TestASymlinkIsNeverFollowed(CpCase):
@@ -235,6 +406,36 @@ class TestTheOpenIsTheSecondLineOfDefence(CpCase):
         self.assertEqual(rc, 2)
         self.assertNotIn(VALUE, out + err)
         self.assertEqual(victim.read_text(), "original-config\n")
+
+    def test_a_device_that_appears_after_the_check_is_refused_by_the_descriptor(self):
+        """`O_EXCL` and `O_NOFOLLOW` cover the plants they cover; neither says anything
+        about *kind*. Under `--force` there is no `O_EXCL`, so a character device swapped
+        in after the check opens cleanly and takes the write. The `fstat` asks the
+        descriptor what it is, which is the same question the path check asked and the
+        only version of it nothing can race."""
+        rc, out, err = self.cp_as_if_the_path_were_empty("/dev/null", force=True)
+        self.assertEqual(rc, 2)
+        self.assertNotIn(VALUE, out + err)
+        self.assertIn("character device", err)
+
+    def test_a_fifo_with_a_reader_is_refused_by_the_descriptor(self):
+        """The case the kind check exists for. A FIFO nobody is reading fails the open
+        outright (ENXIO under `O_NONBLOCK`) — but a FIFO with a reader already attached
+        opens straight through, and the reader on the other end is whoever planted it."""
+        fifo = self.out_dir / "planted-pipe"
+        os.mkfifo(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        self.addCleanup(os.close, reader)
+
+        rc, out, err = self.cp_as_if_the_path_were_empty(fifo, force=True)
+        self.assertEqual(rc, 2)
+        self.assertNotIn(VALUE, out + err)
+        self.assertIn("FIFO", err)
+        try:
+            drained = os.read(reader, 4096).decode("utf-8", "replace")
+        except BlockingIOError:
+            drained = ""
+        self.assertNotIn(VALUE, drained, "the reader on the pipe got the credential")
 
     def test_a_planted_symlink_is_not_followed_under_force_either(self):
         """The case `O_EXCL` cannot cover: `--force` opens with `O_TRUNC`, so the plant

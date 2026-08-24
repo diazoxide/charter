@@ -14,14 +14,19 @@ it had to keep a plugin purely to carry them.
 `exec` bought here** — a forked child inherits the parent's descriptors — so the only thing
 given up is replacing the process, which is exactly the thing that made cleanup impossible.
 
-The limit is stated rather than implied away, and it is now the narrowest one available: a
-`SIGKILL`ed charter runs no cleanup and the 0600 file survives until it is removed. SIGKILL
-alone, because SIGTERM and SIGHUP are handled here — they used to be in the same sentence,
-and they should never have been. SIGKILL is what you reach for when something is already
-stuck; SIGTERM is what a supervisor, a `kill`, or a harness reaping a hung tool call sends
-at every ordinary shutdown, and `--stream` exists for exactly the long-running children that
-get SIGTERMed. Measured before the fix: SIGTERM at t+2s left `charter-<v>-<k>-…` at
-`-rw-------` holding the value.
+The limit is stated rather than implied away, and stating it correctly took two goes. The
+first version said SIGKILL when SIGTERM leaked too — SIGTERM at t+2s left `charter-<v>-<k>-…`
+at `-rw-------` holding the value. The second handled SIGTERM and SIGHUP and said SIGKILL
+again, which was still false: SIGQUIT (Ctrl-\\), SIGUSR1 and SIGXCPU each left the same file,
+because *every* catchable default-terminate signal has the property, not the two that got
+reported. Both mistakes were the same mistake — a list of signals to CATCH is a list of
+spellings, and the next one is never on it.
+
+So the set is derived by exclusion (`commands_secrets._SIGNALS_LEFT_ALONE`) and the stated
+limit is now a category: cleanup survives every terminating signal charter may catch, and
+does not survive SIGKILL, which no process can catch, or a fault (SIGSEGV, SIGBUS, SIGABRT),
+which charter deliberately does not intercept because a handler on an already-broken process
+can turn a crash into a hang.
 """
 
 from __future__ import annotations
@@ -170,6 +175,49 @@ class TestTheLimitIsStated(unittest.TestCase):
         self.assertIn("SIGTERM", stream_help)
         self.assertIn("SIGKILL", stream_help)
 
+    def test_the_help_does_not_blame_sigkill_for_what_sigquit_does(self):
+        """The same finding, one round later. With SIGTERM and SIGHUP handled, three
+        places said SIGKILL was now the WHOLE limit — and SIGQUIT, which is Ctrl-\\ from
+        any terminal, still left the 0600 file. A narrower false sentence is still a
+        false sentence.
+
+        Pinned on SIGQUIT specifically because it is the one the measurement named, and
+        on the fault category because that is the other half of the honest answer: it is
+        what charter chooses not to catch, and choosing must be said out loud."""
+        import inspect
+
+        from charter import cli
+        src = inspect.getsource(cli)
+        stream_help = src[src.index('p.add_argument("--stream"'):]
+        stream_help = stream_help[:stream_help.index('p.add_argument("--exec"')]
+        self.assertIn("SIGQUIT", stream_help,
+                      "the help still implies SIGKILL is the only thing that leaks")
+        self.assertIn("SIGSEGV", stream_help,
+                      "the faults charter chooses not to catch are part of the limit")
+
+
+class TestTheHandledSetIsDerivedNotListed(unittest.TestCase):
+    """Round one caught the two signals that were reported. The set must instead be
+    everything that terminates and can be caught, so a signal nobody has thought of is
+    already handled rather than already leaking."""
+
+    def test_the_catchable_terminating_signals_are_all_handled(self):
+        import signal as _signal
+        handled = {s.name for s in cs._TERMINATION_SIGNALS}
+        for name in ("SIGTERM", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2", "SIGXCPU"):
+            if hasattr(_signal, name):
+                self.assertIn(name, handled)
+
+    def test_the_signals_charter_must_not_take_over_are_left_alone(self):
+        """Each exclusion is a reason, not an omission: SIGKILL/SIGSTOP cannot be caught,
+        SIGTSTP is job control (Ctrl-Z must background, not kill), SIGINT already unwinds
+        via KeyboardInterrupt, SIGCHLD does not terminate anything, and a fault handler
+        runs on a process whose state is already wrong."""
+        handled = {s.name for s in cs._TERMINATION_SIGNALS}
+        for name in ("SIGKILL", "SIGSTOP", "SIGTSTP", "SIGINT", "SIGCHLD", "SIGPIPE",
+                     "SIGSEGV", "SIGABRT", "SIGBUS"):
+            self.assertNotIn(name, handled)
+
 
 class TestTerminationStillCleansUp(StreamCase):
     """SIGTERM and SIGHUP run no `finally` by default, so the 0600 file outlived the
@@ -185,7 +233,7 @@ class TestTerminationStillCleansUp(StreamCase):
         # whole suite — the case then fails on its assertions, which is the point.
         import signal as _signal
         self.caught: list[int] = []
-        for sig in (_signal.SIGTERM, _signal.SIGHUP):
+        for sig in (_signal.SIGTERM, _signal.SIGHUP, _signal.SIGQUIT, _signal.SIGUSR1):
             prev = _signal.signal(sig, lambda n, f: self.caught.append(n))
             self.addCleanup(_signal.signal, sig, prev)
 
@@ -239,17 +287,41 @@ class TestTerminationStillCleansUp(StreamCase):
         self.assertFalse(os.path.exists(path),
                          "the 0600 credential file survived a SIGHUP")
 
+    def test_a_sigquit_parent_still_cleans_up(self):
+        """Ctrl-\\ from a terminal, and the case that proved the first version of this
+        sentence false. SIGTERM and SIGHUP were handled and the docs then said SIGKILL
+        was the whole limit — but SIGQUIT, SIGUSR1, SIGXCPU and every other catchable
+        default-terminate signal has the identical property, and SIGQUIT left the 0600
+        file exactly as SIGTERM had. The set is now derived by exclusion rather than
+        listed, so "the next signal nobody named" is in it already."""
+        path, raised, expected = self.run_and_signal_self("QUIT")
+        self.assertIsNotNone(raised, "SIGQUIT terminated without unwinding")
+        self.assertEqual(raised.code, expected)
+        self.assertFalse(os.path.exists(path),
+                         "the 0600 credential file survived a SIGQUIT")
+
+    def test_a_sigusr1_parent_still_cleans_up(self):
+        """Not a terminal key at all — a supervisor's reload/rotate poke, whose default
+        action still terminates. Named separately from SIGQUIT because a fix that added
+        two more entries to a hand-written list would pass one of these and fail the
+        other."""
+        path, raised, expected = self.run_and_signal_self("USR1")
+        self.assertIsNotNone(raised, "SIGUSR1 terminated without unwinding")
+        self.assertEqual(raised.code, expected)
+        self.assertFalse(os.path.exists(path),
+                         "the 0600 credential file survived a SIGUSR1")
+
     def test_the_handlers_are_removed_again_afterwards(self):
         """charter is a library as well as a CLI (`charter persona`, the hooks, the
         tests themselves run in-process). A handler left installed after the command
         returns would change how the whole host process dies."""
         import signal as _signal
-        before = {s: _signal.getsignal(s)
-                  for s in (_signal.SIGTERM, _signal.SIGHUP)}
+        watched = tuple(cs._TERMINATION_SIGNALS)
+        self.assertIn(_signal.SIGQUIT, watched, "the widened set is what must be undone")
+        before = {s: _signal.getsignal(s) for s in watched}
         rc, _ = self.run_exec(["sh", "-c", "exit 0"], stream_mode=True, file=["F=k"])
         self.assertEqual(rc, 0)
-        after = {s: _signal.getsignal(s)
-                 for s in (_signal.SIGTERM, _signal.SIGHUP)}
+        after = {s: _signal.getsignal(s) for s in watched}
         self.assertEqual(after, before)
 
 

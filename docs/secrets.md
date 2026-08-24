@@ -43,9 +43,13 @@ shell history**, while still letting an agent *use* the credential:
   prints only the path, never the contents. The destination has to be a **real file it
   creates**: a device, a FIFO, a directory or a symlink is refused, because
   `/dev/stdout`, `/dev/stderr` and `/dev/fd/*` are the agent's own transcript and
-  writing there is the leak this command exists to avoid. An **existing** file is
-  refused too — overwriting one destroys its contents and sets it to 0600, so it takes
-  `--force` and says so afterwards.
+  writing there is the leak this command exists to avoid. A destination that turns out
+  to **be** one of charter's own streams is refused whatever it is called — the test is
+  `(st_dev, st_ino)` from an `fstat` of the descriptor charter opened, compared against
+  its own stdin, stdout and stderr, so a hardlink, a `readlink`'d log path and
+  `/dev/fd/1` are all the same one object and get the same answer. `--force` does not
+  reach that check. An **existing** file is refused too — overwriting one destroys its
+  contents and sets it to 0600, so it takes `--force` and says so afterwards.
 - **`charter secret get`** is masked by default — it prints a byte count and a SHA-256
   fingerprint, never the value.
 - **`charter secret get --reveal`** is the one path that *can* print plaintext, and it

@@ -50,6 +50,11 @@ is not pedantry: `charter secret cp <vault> <key> /dev/stdout` would write the p
 straight into this conversation — that is the one thing the vault exists to prevent, so
 do not go looking for a path that gets around the refusal.
 
+There is not one to find. A destination that is charter's own stdin, stdout or stderr is
+refused by identity — the inode, not the spelling — so `/dev/fd/1`, `/proc/self/fd/1`,
+the transcript's real path and any hardlink to it are one object with one answer, and
+`--force` does not reach that check.
+
 **As a dotenv file**, for a tool that reads one (this is how a browser driver gets a
 login without the password being typed into the page by you):
 
