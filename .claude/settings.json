@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CHARTER_HARNESS": "claude-code"
+  },
   "statusLine": {
     "type": "command",
     "command": "charter statusline",
@@ -7,8 +10,5 @@
   },
   "enabledPlugins": {
     "charter@charter": true
-  },
-  "env": {
-    "CHARTER_HARNESS": "claude-code"
   }
 }

@@ -19,3 +19,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Tests that call charter's real cmd_launch must derive from PersonaIso: c](20260823-203625-tests-that-call-charter-s-real-cmd-launch-must-d.md)
 - [Never run a test suite concurrently with a mutation battery: the battery](20260823-215040-never-run-a-test-suite-concurrently-with-a-mutat.md)
 - [On the panel-visible-failure branch (#382), _panel_died_hook_argv and cm](20260824-015930-on-the-panel-visible-failure-branch-382-panel-di.md)
+- [In the charter repo, git worktrees don't get their own control plane: ch](20260824-172537-in-the-charter-repo-git-worktrees-don-t-get-thei.md)
