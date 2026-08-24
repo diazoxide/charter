@@ -14,10 +14,10 @@ for a command charter has no launcher for at all. That is not just naming: once 
 frame` is on the command line, everything after it is grafted onto the harness's own argv
 verbatim, before charter's own argument parser ever sees it, so `frame claude -p hi` would
 hand `claude -p hi` to the `frame --` mechanism rather than route anywhere. The same reason
-keeps `frame-menu`, `frame-action`, `frame-density` and `frame-probe` — the command tmux's
-hotkey calls back into, the one every menu action calls back into, the one the density
-entries run, and the read-only probe — as top-level names rather than nested under `frame`
-too.
+keeps `frame-menu`, `frame-action`, `frame-density`, `frame-resize` and `frame-probe` —
+the command tmux's hotkey calls back into, the one every menu action calls back into, the
+one the density entries run, the one the `window-resized` hook calls back into, and the
+read-only probe — as top-level names rather than nested under `frame` too.
 
 ## What it needs
 
@@ -29,7 +29,7 @@ the harness's exit code back out. Below 3.2 `charter <harness>` still starts and
 is switched off: the hotkey stays bound but may open nothing, and if the exit-code hooks
 fail to install charter says so and declines to attach rather than risk a session nothing
 can end. The resize-recovery hook needs a further 3.3; below that a resize still works,
-panels can just drift out of their fixed size until the next one.
+panels can just drift out of shape until the frame is relaunched.
 
 `charter <harness> --probe` (or the standalone `charter frame-probe`) answers "can a frame
 run here, and what will it not be able to do" without starting anything: exit 0 if a frame
@@ -240,14 +240,28 @@ The size those floors are measured against is the terminal — or, inside a tmux
 already have, the tmux WINDOW the frame gets, which is what charter asks tmux for rather
 than measuring the pane it was typed in.
 
-Below `[frame]`'s `min-cols`/`min-rows`, the side panels (`left`/`right`) are the first to
-drop — any shortage costs them, since neither can spare its own divider. A further shortage
-in rows drops `top` too. Below half of either floor, every panel drops and the harness
-simply gets the whole terminal, the same choice `charter`'s own status line makes when it
-runs out of width. So a narrow terminal degrades to the two strips on its own; nothing has
-to be configured for it. A density change goes through the same floors, so choosing `full`
-in a terminal with no room for side panels gives you the edges that fit rather than a
-failed split.
+Below `[frame]`'s `min-cols`/`min-rows`, the side panel (`right`) is the first to drop —
+any shortage costs it, since it cannot spare its own divider. A further shortage in rows
+drops `top` too. Below half of either floor, every panel drops and the harness simply gets
+the whole terminal, the same choice `charter`'s own status line makes when it runs out of
+width. So a narrow terminal degrades to the two strips on its own; nothing has to be
+configured for it. A density change goes through the same floors, so choosing `full` in a
+terminal with no room for a side panel gives you the edges that fit rather than a failed
+split.
+
+`bottom` is never dropped by those floors — it **shrinks** instead. Its height is its
+content's: one row per repo (and per worktree, in a single-repo workspace), plus the
+attention row, capped so the harness always keeps at least 12 rows and floored at the one
+row `bottom` has always been. A workspace with no clones gets exactly that one row. The
+cap is recomputed on every terminal resize, not remembered from the launch — tmux does not
+refuse an over-large pane height, it takes the difference out of the neighbouring pane,
+and the neighbour is your agent session.
+
+If the frame ends up narrower than the repo table's own columns (95), the table is not
+drawn rather than drawn with its right-hand columns cut off: a row trimmed past the branch
+loses the CI glyph and the open-change count, and a dirty, failing repo then reads as a
+clean one. The attention row above it is unaffected — it drops whole fields instead, in
+priority order.
 
 If a future `[frame] slots` ever names an edge charter sizes but has no renderer for, that
 slot is skipped rather than drawn as a dead pane — the harness keeps the space — and
@@ -303,7 +317,7 @@ jobs. See ADR 0019.
 
 ```toml
 [frame]
-slots = ["top", "bottom", "left", "right"]
+slots = ["top", "bottom", "right"]
 density = "full"
 mouse = false
 hotkey = "F2"
@@ -319,9 +333,9 @@ There are three levels:
 
 | level | edges | each panel says |
 |---|---|---|
-| `minimal` | one-line `top` and `bottom` | only its most important field |
-| `normal` | `top` and `bottom` | everything it has |
-| `full` | all four edges | everything it has |
+| `minimal` | `top` and `bottom` | one field on the attention row, four rows of repo table |
+| `normal` | `top` and `bottom` | everything they have, table as tall as the window can spare |
+| `full` | every edge | everything they have |
 
 `full` is the shipped frame, so writing nothing at all and writing `density = "full"`
 give you the same thing — and that is enforced rather than trusted: charter's own test
@@ -336,9 +350,11 @@ primitive, and if you wrote a list you meant that list.
 `minimal` and `normal` are how you ask for less. Both drop to the two strips; `minimal`
 also makes each panel terser — `top` drops the charter version (the workspace and the
 persona are what it exists to tell you), and `bottom` keeps only its highest-priority
-field: an alert if there is one, the spinner if work is running, otherwise the todo
-count, so the row is never blank. If you have kept the sidebars by writing `slots`
-yourself, `minimal` shows four rows in each and says how many it hid.
+attention field (an alert if there is one, the spinner if work is running, otherwise the
+todo count, so the row is never blank) and at most four rows of repo table under it. The
+four that survive are the ones worth keeping — the repo you are standing in, and the ones
+with something on them — and the table still says how many it hid. If you have kept
+`right` by writing `slots` yourself, `minimal` shows four chips in it and says the same.
 
 **The hotkey changes the density of the running frame, and nothing else.** `F2` opens the
 menu, which now lists all three levels with a `•` on the one in effect; choosing one
@@ -361,13 +377,21 @@ cannot make sense of it. That check is not cosmetic: this value is interpolated 
 configuration that `source-file` *executes*, and `charter.toml` is a committed, shared
 file that arrives from someone else's machine.
 
-All four edges are on by default. `top` and `bottom` are one-line strips; `left` (repo
-rows) and `right` (persona chips) are 22-column sidebars, and both drop themselves on a
-terminal too small for them (see above). The **order** is the order the panes are split
-in, and therefore the geometry: with `bottom` before the sidebars its row spans the whole
-frame and the sidebars sit between the two strips, while listing it last leaves it only
-the width the sidebars did not take. The bottom row is where an alert and the command that
-fixes it appear, so the shipped order gives it the full width.
+Every edge is on by default. `top` is a one-line strip; `bottom` is the attention row
+plus the repo table under it, as many rows tall as the plane and the terminal allow (see
+above); `right` (persona chips) is a 22-column sidebar that drops itself on a terminal too
+small for it. The **order** is the order the panes are split in, and therefore the
+geometry: with `bottom` before the sidebar its rows span the whole frame, while listing it
+last leaves it only the width the sidebar did not take. `bottom` is where an alert, the
+command that fixes it, and the repo table all appear, so the shipped order gives it the
+full width.
+
+**There used to be a `left` sidebar, and it is gone.** It drew repo rows recomposed for 22
+columns — narrower than the name and branch columns of the table it was standing in for,
+so a real branch name was always elided and a dirty, CI-failing repo could render looking
+clean. `bottom` draws that table properly now, and the 22 columns go back to your agent
+session. A `charter.toml` still naming `left` in `slots` is not an error: the name is
+dropped the way any unknown slot is, and you get the rest of your list.
 
 `slots`/`density`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`,
 `min-cols` and `min-rows` are the three that are not: charter.toml spells them with a

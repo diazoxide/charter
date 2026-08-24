@@ -39,9 +39,13 @@ from .. import tui
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_PERIOD = 0.2
 
-#: How many rows a full-height panel (`left`, `right`) draws at `terse`. The horizontal
-#: strips have no equivalent — `top` and `bottom` are one row at every density
-#: (`layout.SLOT_SIZE`), so what "less" means for them is FIELDS, not rows.
+#: How many rows the full-height `right` panel draws at `terse`, and how many rows of
+#: repo table `bottom` keeps there. `top` has no equivalent — it is one row at every
+#: density (`layout.SLOT_SIZE`), so what "less" means for it is FIELDS, not rows.
+#:
+#: `bottom` is BOTH now (#488): at `terse` its attention row keeps one field and its
+#: table keeps this many rows, because a density that buys back rows has to buy them
+#: from the slot that actually has rows to give.
 _TERSE_ROWS = 4
 
 
@@ -103,6 +107,31 @@ def _width() -> int:
         return os.get_terminal_size(sys.stdout.fileno()).columns
     except OSError:
         return tui.term_width(default=80, floor=20)
+
+
+#: Rows a renderer assumes when this pane's own tty cannot be measured at all — the same
+#: number, and the same case, as `panel._DEFAULT_ROWS`: stdout piped somewhere with no
+#: tty behind it (a test, or `charter panel bottom --session x > /tmp/log` run by hand).
+_DEFAULT_ROWS = 24
+
+
+def _height() -> int:
+    """The pane's own height in rows — measured, exactly the way :func:`_width` measures
+    its width, and for the same reason `panel._rows` measures it there.
+
+    **A renderer needs this now, and #488 is why.** Until `bottom` grew the repo table,
+    every renderer emitted whatever it had and `panel._paint` clamped the LINE COUNT
+    afterwards — right for a one-row strip, wrong the moment a renderer has to CHOOSE
+    which rows to spend its pane on. Clamping after the fact would cut the table off at
+    whatever came last, which is the unranked slice `statusline._pick_rows` exists to
+    prevent (its own docstring: thirteen clean repos shown and the dirty one hidden).
+    So the budget is measured before anything is composed, and `panel._paint`'s clamp
+    goes back to being the safety net it is elsewhere rather than the mechanism.
+    """
+    try:
+        return os.get_terminal_size(sys.stdout.fileno()).lines
+    except OSError:
+        return _DEFAULT_ROWS
 
 
 def _top(fid: str) -> str:
@@ -172,7 +201,7 @@ class _RowKey:
     """A directory-shaped key for one cache row: `_pick_rows` wants something with
     a `.name` it can compare against `cur_repo` and use as a `states`/`gl` dict
     key (ordinarily a `Path`) — this is that, minus the filesystem, since nothing
-    in :func:`_left` touches one. Identity-hashed on purpose (no `__eq__`
+    in :func:`_table_lines` touches one. Identity-hashed on purpose (no `__eq__`
     override): two repos can share a name only if the cache itself is
     inconsistent, and identity keeps every row distinct even then, the same
     guarantee a real `Path` object would not actually make either (two `Path`s
@@ -188,238 +217,205 @@ def _needs_attention(r: dict) -> bool:
     """True when a repo/piece row has something on it worth a look — the same
     four facts `_repo_rows`' own "…(+N more)" line checks before it dares say
     "all clean": dirty, unpushed/behind, a failing or running pipeline, an open
-    change. Shared by :func:`_left`'s own overflow line so the two claims (which
-    repos are hidden, and whether that is safe to say) cannot drift apart."""
+    change. Shared by :func:`_table_lines`' own overflow line so the two claims
+    (which repos are hidden, and whether that is safe to say) cannot drift
+    apart."""
     return bool(r.get("dirty") or r.get("ahead") or r.get("behind")
                or r.get("ci") in ("failed", "running") or r.get("change"))
 
 
-def _row(lead: str, name_markup: str, r: dict, width: int, badge_n: int = 0) -> str:
-    """One row — *lead* glyphs, a name, then branch+markers, CI, an open
-    change, and (last, lowest priority) a `⑂N` piece-count badge — each field
-    sized against its OWN budget rather than the assembled line trimmed once
-    from the right at the end.
+def _table_row(lead: str, name_markup: str, r: dict, width: int,
+               branch_override: str | None = None) -> str:
+    """One row of the WIDE repo table — the same four columns
+    `statusline._tree_cells` draws, at the same declared widths, so a row in the
+    frame's `bottom` pane and a row in the status line's own table line up
+    character for character.
 
-    **Fix round 1, finding 1.** The first version of this function built the
-    whole line (`f"{name} {branch}{marks} {ci} {change}"`) and let a single
-    `tui.truncate` at the call site cut whatever didn't fit off the end. On
-    this project's own branches — `worktree-recall-since`,
-    `browser-session-scope`, `global-shim-refresh`: 21-28 characters is the
-    NORM here, not an edge case — `name + " " + branch` alone already fills a
-    22-column pane, so the cut always landed on the markers, the CI glyph and
-    the change sigil. A dirty, CI-failing, unpushed repo rendered as
-    `"charter worktree-reca…"` — a FALSE CLEAN reading, worse than not having
-    the panel at all for a panel that exists to surface exactly that.
+    **Composed here rather than by calling `_tree_cells` itself, and the reason is
+    the idle-cost rule, not style.** That function ends in `_presence_for_dir(d)`,
+    which is a `worktree.locate`/`workspace.clone_of` pair — a filesystem walk PER
+    ROW, on every repaint. `bottom` is the one animated slot (:data:`ANIMATED`), so
+    at `panel.TICK` a fourteen-row table would be seventy directory walks a second
+    while any dispatch is in flight. #387 pinned a panel's idle tick at exactly one
+    `stat` and #488 must not spend that back: everything below comes out of
+    `gather.read(fid)`'s cache and touches no repo directory at all.
 
-    `statusline._branch_cell_for` already keeps the right rule for the wide
-    table (`_BRANCH_W - width(marks)`, so the branch shrinks and the markers
-    never do) — this generalises it to a whole LINE's budget rather than one
-    fixed-width cell, and extends the same "shrink the least important field
-    first" idea to CI and an open change: they are appended whole or not at
-    all (never character-truncated — half a glyph reads as broken, an absent
-    one reads honestly as "no room to say"), in priority order behind the
-    markers, and the branch — read last on this line, and the one field
-    genuinely fine to abbreviate — is what actually gives up its columns.
+    The cost is stated rather than hidden: the frame's table has no presence column
+    ("who else is standing in this tree"). It is the one field of `_tree_cells` that
+    cannot be answered from the gather, and `_branch_cell_for` already treats it as
+    the field that loses its columns first — so the frame draws the cell exactly as
+    the status line draws it on a pane too narrow for presence.
 
-    `_markers` and `_CI_MARK` are `statusline.py`'s own — called, not
-    reimplemented, so a fix to what a marker or a CI glyph means lands here
-    the moment it lands in the wide table.
+    Everything else IS `statusline.py`'s own — `_markers`, `_branch_cell_for`,
+    `_ci_part`, `_CI_MARK`, the four column widths, `_GAP` — called, not
+    reimplemented, so a fix to what a marker or a CI glyph means lands in both
+    surfaces at once.
+
+    *branch_override* is `_tree_cells`' own `branch=` parameter under a clearer name:
+    ``""`` prints the markers alone, which is what a piece whose branch merely
+    restates its own name gets (see :func:`_table_lines`).
     """
     from .. import statusline as sl
 
-    _plain, marks, _dirty = sl._markers(r)
-    marks_w = tui.width(marks)
-
-    ci = r.get("ci")
-    ci_text = ""
-    if ci:
-        c, glyph, _label = sl._CI_MARK.get(ci, (sl._DIM, "?", ci))
-        ci_text = f" {c}{glyph}{sl._R}"
-    ci_w = tui.width(ci_text)
+    marks_plain, marks_col, is_dirty = sl._markers(r)
+    text = r.get("branch") or "?" if branch_override is None else branch_override
+    branch_cell = sl._branch_cell_for(text, "", marks_plain, marks_col, is_dirty)
 
     change = r.get("change")
-    change_text = ""
-    if change:
-        sigil = r.get("sigil") or "!"
-        change_text = f" {sl._GREEN}{sigil}{change}{sl._R}"
-    change_w = tui.width(change_text)
+    sigil = r.get("sigil") or "!"
+    mr = f"{sl._GREEN}{sigil}{change}{sl._R}" if change else ""
 
-    badge_text = f" {sl._DIM}⑂{badge_n}{sl._R}" if badge_n else ""
-    badge_w = tui.width(badge_text)
-
-    branch = r.get("branch") or "?"
-    lead_w = tui.width(lead)
-
-    budget = max(0, width - lead_w)
-    name_w = min(tui.width(name_markup), max(1, budget // 2))
-    name_shown = tui.truncate(name_markup, name_w)
-    budget -= tui.width(name_shown)
-
-    sep = " " if budget > 0 else ""
-    budget -= tui.width(sep)
-
-    # What's left for the branch, once the markers glued to it are reserved.
-    remaining = budget - marks_w
-    # CI, an open change, and the piece badge are included only while there is
-    # still at least 1 column left over for the branch itself after they are —
-    # dropped whole, priority order, rather than let any of them crowd the
-    # branch out entirely.
-    show_ci = bool(ci_text) and (remaining - ci_w) >= 1
-    tail_w = ci_w if show_ci else 0
-    show_change = bool(change_text) and (remaining - tail_w - change_w) >= 1
-    if show_change:
-        tail_w += change_w
-    show_badge = bool(badge_text) and (remaining - tail_w - badge_w) >= 1
-    if show_badge:
-        tail_w += badge_w
-
-    branch_w = max(1, remaining - tail_w)
-    branch_shown = tui.truncate(f"{sl._DIM}{branch}{sl._R}", branch_w)
-
-    line = f"{lead}{name_shown}{sep}{branch_shown}{marks}"
-    if show_ci:
-        line += ci_text
-    if show_change:
-        line += change_text
-    if show_badge:
-        line += badge_text
-    # Safety net, not the fix: correct budgeting above should already leave
-    # this a no-op (`tui.truncate`'s own fast path returns unchanged input
-    # unmodified) — kept only so a rounding slip degrades to a trimmed line
-    # rather than an over-width one, the same belt-and-braces `panel.py`
-    # already keeps around its own measurements.
-    return tui.truncate(line, width)
+    row = tui.Row(tui.Cell(f"{lead}{name_markup}", 2 + 3 + sl._NAME_W),
+                  tui.Cell(branch_cell, sl._BRANCH_W),
+                  tui.Cell(sl._ci_part(r.get("ci")), sl._CI_W),
+                  tui.Cell(mr, sl._MR_W),
+                  gap=sl._GAP)
+    return row.render(width)[0]
 
 
-def _repo_line(r: dict, color: str, width: int, badge_n: int = 0) -> str:
-    """One repo, one line: name (bold+underline if it is where you are
-    standing, coloured by the same per-position palette `_repo_rows` cycles),
-    then :func:`_row`'s shared branch/markers/CI/change/badge composition.
+def _table_lines(data: dict, width: int, budget: int) -> list[str]:
+    """The repo table `bottom` draws under its attention row, at most *budget* lines.
 
-    *badge_n* is the repo's `⑂N` — the pieces NOT already shown as their own
-    rows below it (see :func:`_left`'s own docstring: `0` when every piece
-    already has a row, or when the repo has none)."""
-    from .. import statusline as sl
-    emph = f"{sl._BOLD}{sl._UNDER}" if r.get("current") else ""
-    name_markup = f"{emph}{color}{r['name']}{sl._R}"
-    return _row("", name_markup, r, width, badge_n=badge_n)
+    **This is #488's actual answer**: the frame used to show LESS of the plane's repo
+    state than the status line it suppresses (#386), because the only slot drawing repos
+    was a 22-column sidebar whose own docstring conceded that `_NAME_W` (32) and
+    `_BRANCH_W` (34) alone exceed the whole pane. `bottom` is the frame's full-width
+    slot, so the table goes here and is drawn at the widths it was designed for.
 
+    Reads ONLY *data* — one `gather.read(fid)` in the caller — and never a repo
+    directory, a `git status` or a `glstate.read_for` of its own. Every field a row needs
+    (`name`, `branch`, `dirty`, `tracked_dirty`, `ahead`, `behind`, `ci`, `change`,
+    `sigil`, `current`, `worktree_count`) is already in that one gather.
 
-def _piece_line(p: dict, width: int) -> str:
-    """One piece (worktree), indented under its repo — same composition as
-    :func:`_repo_line` minus the palette colour and the bold/underline
-    emphasis, which belong to a REPO's row, not one of its pieces."""
-    from .. import statusline as sl
-    lead = f"{sl._DIM}{sl._TREE_WT}{sl._R}"
-    return _row(lead, p["name"], p, width)
+    `statusline._pick_rows` is called rather than reinvented, for the reason its own
+    docstring records in production: an unranked slice of 18 clones showed thirteen clean
+    repos on `main` and hid the one dirty repo you were standing in. It wants
+    directory-shaped keys (`.name`, hashable), so each cache row is wrapped in a bare
+    :class:`_RowKey` — nothing here touches a filesystem, and a `Path` would imply one
+    exists to touch.
 
+    *budget* is the pane's real height minus the attention row, measured by
+    :func:`_height` before anything is composed. The budget is spent in priority order —
+    repo rows first, then the `…(+N more)` line that admits what was dropped, then piece
+    rows — so a short pane loses DETAIL rather than losing a repo. That ordering is
+    `statusline._repo_rows`' own (`wt_budget` there), kept because the two tables are
+    meant to read alike.
 
-def _left(fid: str) -> str:
-    """Repo rows, narrow: the same per-tree facts `_tree_cells` draws in the wide
-    status-line table (name, branch, dirty/ahead/behind markers, CI, open
-    change), recomposed for a 22-column pane rather than reusing the `tui.Node`s
-    built for the wide one — `_NAME_W` (32) and `_BRANCH_W` (34) alone already
-    exceed this whole pane's width, which is exactly why "share the gather, not
-    the composition" is this plan's own rule.
-
-    Reads ONLY `gather.read(fid)` — the cache Task 1 built and Task 2 keeps
-    refreshed — never a repo directory listing, a `git status`, or a
-    `glstate.read_for` of its own; every field a row needs (`name`, `branch`,
-    `dirty`, `tracked_dirty`, `ahead`, `behind`, `ci`, `change`, `sigil`,
-    `current`, `worktree_count`) is already sitting in that one gather.
-    `_pick_rows` is called rather than reinvented for the same reason: it
-    already carries the lesson `statusline.py` paid for in production (an
-    unranked slice of 18 clones showed thirteen clean repos on `main` and hid
-    the one dirty repo you were actually standing in) — `_pick_rows` wants
-    directory-shaped keys (`.name`, hashable), so each cache row is wrapped in
-    a bare `_RowKey` rather than a `Path`: nothing here touches a filesystem,
-    and a `Path` would imply one exists to touch (and, unlike a `Path`, two
-    `_RowKey`s never compare equal just because their names happen to match —
-    see its own docstring).
-
-    `left` is a full-height pane with rows to fill, unlike `top`/`bottom`'s fixed
-    single row — but nothing in this module measures how many it actually has
-    (`_width` measures COLUMNS; there is no equivalent asked for here). The
-    budget handed to `_pick_rows` is `_MAX_REPO_LINES`, the same cap the wide
-    table itself uses, reused rather than invented fresh; `panel.py`'s own
-    height clamp (`_rows()` there — see its "Height is this module's job"
-    section) is what actually protects a short pane from an overflow.
-
-    Piece rows come from `data["worktrees"]`, which `gather.scan` populates
-    ONLY when the workspace resolves to exactly one repo — it mirrors
-    `statusline._detail_worktrees`'s own single-repo rule verbatim (see that
-    function's docstring: spending rows on piece detail is only a good trade
-    when there is exactly one repo to spend them on). Every OTHER repo's
-    pieces — the ones never turned into rows of their own — still get a `⑂N`
-    badge on their repo's own line, from `worktree_count` (fix round 1,
-    finding 2, #385: this used to be missing from the cache entirely for a
-    multi-repo workspace; `gather.py`'s own module docstring records the
-    fix). `_repo_line` is handed `0` whenever every one of a repo's pieces
-    already has its own row — the badge means "there is more you cannot see
-    here," not "this repo has pieces."
-
-    **At `terse` the budget drops to :data:`_TERSE_ROWS` and piece rows go.** `_pick_rows`
-    is asked for fewer rows rather than the result being sliced afterwards, so the rows
-    that survive are still the ones worth keeping (the repo you are standing in, the ones
-    with something on them) rather than whichever happened to come first — the exact
-    lesson `statusline.py` paid for and this function already borrows. The `…(+N more)`
-    line and its "all clean" claim come along unchanged, so a terse panel still says how
-    much it is not showing, which is what makes showing less honest rather than
-    misleading. Pieces are dropped whole: they are DETAIL under a repo that still has its
-    own row, so losing them costs no repo its line.
+    Piece rows come from ``data["worktrees"]``, which `gather.scan` populates only when
+    the workspace resolves to exactly one repo — `statusline._detail_worktrees`' rule
+    verbatim. Every OTHER repo's pieces get a `⑂N` badge on the repo's own row instead,
+    from `worktree_count`; the badge means "there is more you cannot see here", so it is
+    dropped whenever every piece already has its own row.
     """
     from .. import statusline as sl
-    from . import gather
 
-    data = gather.read(fid)
     repos = data.get("repos") or []
-    w = _width()
-    if not repos:
-        return tui.truncate(f"{sl._DIM}no repos{sl._R}", w)
+    if not repos or budget <= 0:
+        return []
+    # **Too narrow for the table is NO table, not a cut one**, and the alternative is
+    # the exact failure this plan's Global Constraints name. Every column after the
+    # branch — the CI glyph, an open change — sits at a fixed offset past
+    # `_NAME_W + _BRANCH_W`, so a pane narrower than the row simply loses them off the
+    # right-hand end, and a dirty, CI-failing, unpushed repo renders as a clean-looking
+    # `charter  main`. Refusing to draw says "no room to say" where a trimmed row says
+    # "nothing to say".
+    #
+    # Reachable but not ordinary: `bottom` is split BEFORE `right` (the slot order IS
+    # the geometry — `instance.FRAME_FIELDS`), so its width is the whole WINDOW's, and
+    # `_LEFT_W` (95) is below the shipped `[frame] min-cols` (100) — every frame at or
+    # above its own floor draws the full table. What lands here is a frame on a
+    # hand-lowered `min-cols`, or the transient mid-resize starvation `layout.py`'s
+    # module docstring measures. The attention row above is unaffected either way; it
+    # does its own per-field budgeting (`_fit_fields`).
+    if width < sl._LEFT_W:
+        return []
 
-    color_by_name = {r["name"]: sl._PALETTE[i % len(sl._PALETTE)]
-                     for i, r in enumerate(repos)}
     keys = [_RowKey(r["name"]) for r in repos]
     by_key = dict(zip(keys, repos))
     cur_repo = data.get("current_repo")
+    palette = {r["name"]: sl._PALETTE[i % len(sl._PALETTE)] for i, r in enumerate(repos)}
 
-    # How many of a repo's pieces already have their own row below it
-    # (`data["worktrees"]`, single-repo-only — see the docstring above), so
-    # the badge can say "there is more" rather than double-count what is
-    # already on screen.
+    capped = len(keys) > budget
+    show = (sl._pick_rows(keys, max(1, budget - 1), cur_repo, by_key, by_key)
+            if capped else keys)
+
+    pieces = list(data.get("worktrees") or [])
     shown_pieces: dict = {}
-    for p in (data.get("worktrees") or []):
+    for p in pieces:
         shown_pieces[p.get("repo")] = shown_pieces.get(p.get("repo"), 0) + 1
 
-    def _badge_for(r: dict) -> int:
+    # Rows left for piece detail once every repo has its own row and, if capped, the
+    # overflow line has been reserved. `statusline._repo_rows` spends its budget in
+    # exactly this order and for exactly this reason: a repo must never lose its row to
+    # another repo's pieces.
+    room = budget - len(show) - (1 if capped else 0)
+    kids = pieces[:max(0, room)] if len(show) == 1 else []
+
+    lines: list[str] = []
+    for i, k in enumerate(show):
+        r = by_key[k]
         total = r.get("worktree_count") or 0
-        return total if shown_pieces.get(r["name"], 0) < total else 0
-
-    terse = verbosity(fid) == "terse"
-    budget = _TERSE_ROWS if terse else sl._MAX_REPO_LINES
-    capped = len(keys) > budget
-    show = sl._pick_rows(keys, (budget - 1) if capped else budget,
-                         cur_repo, by_key, by_key) if capped else keys
-
-    lines = [_repo_line(by_key[k], color_by_name[by_key[k]["name"]], w,
-                        badge_n=_badge_for(by_key[k]))
-             for k in show]
+        badge = (f"{sl._DIM} ⑂{total}{sl._R}"
+                 if total and shown_pieces.get(r["name"], 0) < total else "")
+        emph = f"{sl._BOLD}{sl._UNDER}" if r.get("current") else ""
+        # A repo with rows nested beneath it is not where the tree ends, so it keeps
+        # `├─` — `statusline._repo_rows`' own rule, and the reason `_TREE_WT` exists.
+        is_last = (not capped) and i == len(show) - 1 and not kids
+        tree = sl._TREE_END if is_last else sl._TREE_MID
+        lines.append(_table_row(f"  {sl._DIM}{tree}{sl._R}",
+                                f"{emph}{palette[r['name']]}{r['name']}{sl._R}{badge}",
+                                r, width))
 
     if capped:
-        shown = set(show)
-        hidden = [k for k in keys if k not in shown]
+        hidden = [k for k in keys if k not in set(show)]
         quiet = not any(_needs_attention(by_key[k]) for k in hidden)
-        # Same wording as `_repo_rows`' own overflow line (`statusline.py`) —
-        # this used to say bare ", clean", a needless divergence between the
-        # two surfaces for the exact same claim.
         note = ", all clean" if quiet else ""
-        lines.append(tui.truncate(f"{sl._DIM}…(+{len(hidden)} more{note}){sl._R}", w))
+        lines.append(tui.truncate(
+            f"  {sl._DIM}…(+{len(hidden)} more{note}){sl._R}", width))
 
-    if not terse:
-        for p in (data.get("worktrees") or []):
-            lines.append(_piece_line(p, w))
+    for j, p in enumerate(kids):
+        mark = sl._TREE_WT if j == len(kids) - 1 else sl._TREE_MID
+        emph = f"{sl._BOLD}{sl._UNDER}" if p.get("current") else ""
+        # `charter worktree add <repo> <piece>` names the branch after the piece, so by
+        # default these two columns print the same word twice — empty the branch cell
+        # when they agree, exactly as `statusline._repo_rows` does, so the column comes
+        # to mean "this piece is NOT on the branch you would assume". The markers still
+        # render: dirty and ahead/behind are true of the tree whatever its branch.
+        wb = p.get("branch") or "?"
+        lines.append(_table_row(f"  {sl._DIM}{sl._TREE_PIPE}{mark}{sl._R}",
+                                f"{emph}{sl._DIM}{p['name']}{sl._R}", p, width,
+                                branch_override="" if wb == p.get("name") else None))
+    return lines[:budget]
 
-    return "\n".join(lines)
+
+def bottom_rows_wanted(fid: str) -> int:
+    """How many rows `_bottom` would fill for this frame, given room for all of them.
+
+    **One answer to "how tall is `bottom`", read by both sides of the question.** The
+    renderer spends the pane it was given (:func:`_table_lines`' *budget*); the LAUNCHER
+    has to decide how tall to make that pane before any panel exists, and the
+    `window-resized` recompute has to decide again with the window's new size. If those
+    two disagreed, a frame would come up with a pane taller than its content (blank rows
+    the harness could have had) or shorter (a table cut off with nothing saying so).
+    Pinned by a test that renders `_bottom` into a pane of exactly this height and counts
+    the lines that come back.
+
+    `+ 1` is the attention row — the alert, the spinner, this session's news, the todo
+    count and the hotkey hint — which `_bottom` always draws and which #488 is explicit
+    that the table joins rather than evicts.
+
+    Capped at `statusline._MAX_REPO_LINES`, the same total-row budget the wide table
+    itself keeps (repo rows plus the `…(+N more)` line, not repo COUNT — see that
+    constant's own comment), so a workspace with forty clones asks for a fifteen-row
+    strip rather than a forty-one-row one.
+
+    `gather.row_count` is what makes this affordable at launch: it answers from the
+    frame's cache when there is one and from a plain directory listing when there is not,
+    and never runs a git sweep. See its own docstring.
+    """
+    from .. import statusline as sl
+    from . import gather
+    return 1 + min(gather.row_count(fid), sl._MAX_REPO_LINES)
 
 
 def _right(fid: str) -> str:
@@ -565,14 +561,13 @@ def _bottom(fid: str) -> str:
     `$CHARTER_SESSION_ID`/`$CLAUDE_CODE_SESSION_ID` a launched panel inherits whole from
     the harness (`_right`'s docstring makes the identical point for `_persona_chips`).
 
-    **Four candidate fields now, not three, each shown WHOLE or dropped WHOLE — never
-    one assembled string cut once from the right.** `bottom` is one fixed row
-    (`layout.SLOT_SIZE["bottom"] == 1`) but its WIDTH is the frame's own, not a narrow
-    side panel's, so ordinarily every field fits comfortably and this never has to choose.
-    But `layout.py`'s own module docstring records a REAL tmux 3.7c resize that
-    transiently starves a fixed-size pane before the corrective hook snaps it back — not
-    hypothetical, reachable by an ordinary window resize at any moment (Task 3's fix
-    round 2 pinned the identical shape for `left`). A naive single `tui.truncate` over the
+    **Four candidate fields on that row, each shown WHOLE or dropped WHOLE — never one
+    assembled string cut once from the right.** The attention row is one row whatever
+    this pane's height is, and its WIDTH is the frame's own, not a narrow side panel's,
+    so ordinarily every field fits comfortably and this never has to choose. But
+    `layout.py`'s own module docstring records a REAL tmux 3.7c resize that transiently
+    starves a pane before the corrective hook snaps it back — not hypothetical, reachable
+    by an ordinary window resize at any moment. A naive single `tui.truncate` over the
     joined line would risk Task 3's own Critical on perfectly ordinary data: an alert
     exists specifically to carry the command that fixes it, and slicing into that command
     mid-word reads as "no problem here" — the exact false-clean failure this plan's
@@ -606,6 +601,31 @@ def _bottom(fid: str) -> str:
     every operator the wrong key, on every repaint, forever. `config.FRAME` is the
     resolved value `commands_frame.conf_text` binds, so there is one source for what the
     panel says and what the frame actually does.
+
+    **Under it, the wide repo table — #488.** The frame suppresses the status line
+    (#386) and until now showed LESS of the plane's repo state than the line it replaced:
+    the only slot drawing repos was a 22-column `left` sidebar recomposing a table
+    designed for 66. `bottom` is the frame's full-width slot, so the table lives here
+    now, at `statusline.py`'s own column widths, and `left` is retired rather than left
+    drawing a lesser copy of its neighbour.
+
+    **The attention row is not evicted by it — it is the first line, always.** The alert
+    and the command that fixes it outrank any repo row; the table gets what is left of
+    the pane after it (`_table_lines`' own *budget*). On a plane with no clones there is
+    no table at all and this is exactly the one-row strip it always was.
+
+    **The pane is measured, not assumed.** :func:`_height` reads this pane's own tty the
+    way :func:`_width` reads its width; :func:`bottom_rows_wanted` is what told the
+    LAUNCHER how tall to make it, so on an untouched frame the two agree exactly and no
+    row is either blank or cut. A pane that is shorter anyway — a transient mid-resize
+    size, or a window with no rows to spare — costs the table its lowest-priority rows
+    through `_pick_rows`' ranking, never the attention row.
+
+    **One `gather.read`, and no repo directory touched.** #387 pinned a panel's idle tick
+    at exactly one `stat` and `bottom` is the ONE animated slot (:data:`ANIMATED`), so a
+    table that walked a directory per row would pay that back fourteen times over at five
+    repaints a second. Everything the table draws comes out of the cache; see
+    :func:`_table_row` for the one column that costs (presence) and is therefore absent.
     """
     from .. import config, session as _session, statusline as sl, workspace
     from . import state, tmuxctl
@@ -647,12 +667,25 @@ def _bottom(fid: str) -> str:
               "todo": todo_text, "hotkey": hotkey_text}
     parts = [fields[n] for n in ("todo", "alert", "inflight", "news", "hotkey")
              if n in keep]
-    return tui.truncate(" · ".join(parts), w)
+    lines = [tui.truncate(" · ".join(parts), w)]
+
+    # The table gets what is left of the pane below the attention row. At `terse` it is
+    # asked for fewer ROWS rather than sliced afterwards, so what survives is still
+    # `_pick_rows`' ranked subset (the repo you are standing in, the ones with something
+    # on them) rather than whichever happened to come first — the same discipline the
+    # `terse` chip list in `_right` keeps.
+    budget = _height() - len(lines)
+    if verbosity(fid) == "terse":
+        budget = min(budget, _TERSE_ROWS)
+    if budget > 0:
+        from . import gather
+        lines.extend(_table_lines(gather.read(fid), w, budget))
+    return "\n".join(lines)
 
 
 #: Every slot charter can draw. `panel.run` refuses a name that is not in here rather
 #: than painting an empty pane, because an empty pane reads as a broken frame.
-SLOTS = {"top": _top, "bottom": _bottom, "left": _left, "right": _right}
+SLOTS = {"top": _top, "bottom": _bottom, "right": _right}
 
 
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no
@@ -660,8 +693,8 @@ SLOTS = {"top": _top, "bottom": _bottom, "left": _left, "right": _right}
 #: is `_bottom` and only `_bottom` (through :func:`_inflight_field`).
 #:
 #: **This is what scopes the animation's cost to the pane that needs it.** `panel._watch`
-#: runs one process per slot, so an unscoped "is work in flight" would repaint all four at
-#: `panel.TICK` for the whole length of a dispatch — three of them redrawing byte-identical
+#: runs one process per slot, so an unscoped "is work in flight" would repaint every one of
+#: them at `panel.TICK` for the whole length of a dispatch — the rest redrawing byte-identical
 #: output. That is not free: measured on this project (8 personas, 6 repos), one
 #: `render("right")` costs 4 816µs, because `statusline._persona_chips` asks
 #: `persona.is_draft`, `structural_errors`, `_mem_count` twice and `_vault_dot` per
@@ -680,11 +713,13 @@ ANIMATED = frozenset({"bottom"})
 def unimplemented(configured) -> list[str]:
     """Which of *configured* charter sizes and accepts but has no renderer for.
 
-    Answers empty as of Task 3: `left`/`right` landed beside `top`/`bottom` in
-    :data:`SLOTS`, so every slot `instance.FRAME_SLOTS` accepts and
-    `layout.SLOT_SIZE` sizes now has a renderer. Kept rather than deleted —
+    Answers empty: every slot `instance.FRAME_SLOTS` accepts and `layout.SLOT_SIZE`
+    sizes has a renderer in :data:`SLOTS`. It stayed non-empty for a whole release
+    while `left`/`right` were sized but not drawn, and #488 closed the question from
+    the other end — `left` is retired from both registries at once rather than left
+    half-present in one. Kept rather than deleted —
     the next slot this frame grows will pass through here on day one exactly
-    the way `left`/`right` did until this task, and three callers need exactly
+    the way `left`/`right` did, and three callers need exactly
     this list and must agree — `commands_frame.cmd_launch` (to skip splitting a
     pane that would be permanently dead under `remain-on-exit on`),
     `commands_frame.frame_ready` (`--probe`) and `doctor.check_frame` (both to

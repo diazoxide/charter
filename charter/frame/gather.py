@@ -302,20 +302,78 @@ def read(fid: str, *, workspace: str | None = None, cwd: str | None = None) -> d
     all fall through to a fresh :func:`scan`, the same one a caller would
     otherwise have no data to draw from. This never returns anything but a dict
     carrying ``repos``/``worktrees`` as lists — never the raw, untrusted value a
-    corrupt or stale cache file happened to contain.
+    corrupt or stale cache file happened to contain. :func:`_cached` is where each of
+    those degradations actually lives; this is that plus the fallback.
     """
-    f = _cache_file(fid, create=False)
-    if f is not None:
-        try:
-            data = json.loads(f.read_text())
-        except (OSError, ValueError):
-            data = None
-        if _shaped_like_a_scan(data):
-            return data
+    data = _cached(fid)
+    if data is not None:
+        return data
     try:
         return scan(workspace=workspace, cwd=cwd)
     except Exception:
         return _empty(workspace)
+
+
+def _cached(fid: str) -> dict | None:
+    """Whatever *fid*'s cache file holds, if it holds something a renderer can index
+    into — ``None`` for every way that can fail.
+
+    The half of :func:`read` that does NOT fall back to a live :func:`scan`, split out
+    because :func:`row_count` needs exactly this and must not pay for the other half.
+    Degrades rather than raising at every stage: a hostile or never-bumped *fid* (no
+    directory at all — the ordinary cold-start case, not an error), a directory with no
+    cache file yet, a file that is not valid JSON (``json.JSONDecodeError``, a
+    ``ValueError`` subclass), and — because ``json.loads`` succeeding says nothing about
+    what it produced — one that parses to something not :func:`_shaped_like_a_scan`.
+    """
+    f = _cache_file(fid, create=False)
+    if f is None:
+        return None
+    try:
+        data = json.loads(f.read_text())
+    except (OSError, ValueError):
+        return None
+    return data if _shaped_like_a_scan(data) else None
+
+
+def row_count(fid: str) -> int:
+    """How many table rows this frame's repos and pieces would fill — **never a git
+    sweep**, on either path.
+
+    #488 made the `bottom` pane's HEIGHT a function of its content, which means somebody
+    outside a panel has to know how much content there is: the launcher, before any panel
+    exists, and `commands_frame.cmd_resize`, every time the window changes size. Both are
+    on paths where cost is felt directly — a launch the operator is waiting on, and a
+    hook that fires on every step of a terminal drag — so neither may call :func:`scan`.
+
+    Two sources, and the order is the point:
+
+    * **The cache, when there is one.** `notify.plane_changed` keeps it current, so a
+      running frame's count is exactly the count its panels are drawing from.
+    * **A directory listing, when there is not.** `cmd_launch` calls :func:`discard`
+      before it draws anything (a recycled pid must not adopt another frame's repos —
+      see that function), so the launch path reaches here with no cache BY DESIGN.
+      `statusline._repo_trees` and `_detail_worktrees` are the same two calls `scan`
+      itself starts with and both are filesystem-only — no subprocess, no network, no
+      `git status` — so this costs an `iterdir`, not a sweep. It is the SAME pair `scan`
+      uses, rather than a second way of counting repos that could disagree with the rows
+      the panel then draws.
+
+    Zero for anything that fails, which is the floor `layout.bottom_rows` already
+    handles: a frame whose repo count could not be established gets the one-row strip
+    `bottom` always was, never a taller pane full of nothing.
+    """
+    data = _cached(fid)
+    if data is not None:
+        return len(data.get("repos") or []) + len(data.get("worktrees") or [])
+    try:
+        from .. import statusline as sl
+        from .. import workspace as ws_mod
+        active = ws_mod.resolve()
+        dirs = sl._repo_trees(active)
+        return len(dirs) + len(sl._detail_worktrees(active, dirs))
+    except Exception:
+        return 0
 
 
 def discard(fid: str) -> None:

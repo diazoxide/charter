@@ -364,7 +364,14 @@ def drift(root: Path) -> list[str]:
 
 #: The edges a frame may occupy. A slot outside this set is a typo, and a typo must not
 #: reach a tmux argv — so an unknown one is dropped rather than passed through.
-FRAME_SLOTS = ("top", "bottom", "left", "right")
+#:
+#: **`left` is gone as of #488**, and that filter is what makes retiring it safe: a
+#: committed `charter.toml` still carrying `slots = ["top", "bottom", "left", "right"]`
+#: — from a plane that upgraded, or from a teammate's checkout — has the dead name
+#: dropped here and gets the other three, rather than a `KeyError` in a launcher or a
+#: pane split for a slot with no renderer. It drew repo rows recomposed for 22 columns;
+#: `bottom` now draws the same rows at the width the table was designed for.
+FRAME_SLOTS = ("top", "bottom", "right")
 
 #: How much frame there is, as a PRESET over :data:`FRAME_SLOTS` — never a second
 #: configuration system sitting beside `slots`.
@@ -385,22 +392,29 @@ FRAME_SLOTS = ("top", "bottom", "left", "right")
 #:
 #: **Every ``slots`` list here is in GEOMETRY order, not reading order — do not sort
 #: them.** `layout.panel_argvs` splits each slot off the harness pane in list order, so a
-#: slot listed after `left`/`right` gets only the width they left behind. Measured
-#: against tmux 3.7c in a 200x50 window (#386): `["top", "bottom", "left", "right"]`
-#: gives a **200-column** `bottom` with 46-row side panels between the two strips, while
-#: `["top", "left", "right", "bottom"]` gives a `bottom` of **154 columns**, inset
-#: between them. `bottom` is the row carrying the one alert and the command that fixes
-#: it, and `slots._bottom` drops whole fields when it runs out of width — so those 46
-#: columns belong to it rather than to two side panels already truncating their own 22.
-#: The shipped ``slots`` default above is in the same order for the same reason.
+#: slot listed after `right` gets only the width it left behind. Measured against tmux
+#: 3.7c in a 200x50 window (#386): `["top", "bottom", "right"]` gives a **200-column**
+#: `bottom`, while `["top", "right", "bottom"]` gives a `bottom` of **177 columns**,
+#: inset beside the side panel. `bottom` carries the one alert, the command that fixes
+#: it, and (since #488) the repo table whose four columns want 95 of them — and
+#: `slots._bottom` drops whole fields when it runs out of width — so they belong to it
+#: rather than to a side panel already truncating its own 22.
+#:
+#: **#488 re-derived these, it did not patch them.** `bottom` is no longer one row
+#: (`layout.bottom_rows`), so what separates the three levels is no longer only how many
+#: EDGES there are — the two that keep `bottom` differ in how many of its rows the table
+#: is allowed (`slots._TERSE_ROWS` at `terse`), and `full` is now "every edge charter
+#: has" with `left` retired out of it rather than "all four".
 FRAME_DENSITY = {
-    #: One-line top and bottom, each saying only the most important thing it has. For a
+    #: Top and bottom, each saying only the most important thing it has: one field on the
+    #: attention row, and at most `slots._TERSE_ROWS` rows of repo table under it. For a
     #: terminal where the harness's own rows are what you came for.
     "minimal": {"slots": ["top", "bottom"], "verbosity": "terse"},
-    #: The same two edges, saying everything they have.
+    #: The same two edges, saying everything they have — the whole repo table, as tall as
+    #: the window can spare it (`layout.HARNESS_MIN_ROWS` is what it may not take).
     "normal": {"slots": ["top", "bottom"], "verbosity": "normal"},
-    #: All four edges — the shipped frame since #386, and the same order it ships in.
-    "full": {"slots": ["top", "bottom", "left", "right"], "verbosity": "normal"},
+    #: Every edge charter draws, and the same order it ships in.
+    "full": {"slots": ["top", "bottom", "right"], "verbosity": "normal"},
 }
 
 #: What a panel falls back to for any level charter does not know — see
@@ -458,26 +472,29 @@ def verbosity_for(level) -> str:
 #: impossible by construction rather than merely unlikely. Only the ``toml_key`` spelling
 #: is ever honoured — the underscore form is not accepted as a second, undocumented alias.
 FRAME_FIELDS = {
-    #: All four edges, because the frame now OWNS the surface (ADR 0019): inside a frame
-    #: `charter statusline` draws nothing, so whatever the frame does not show is not
-    #: shown anywhere. Two one-line strips are not a frame — they are the status line
-    #: again, in a worse shape — and that is exactly how the first release of this was
-    #: reported: *"only top and bottom single lines added, no left right sidebar."*
-    #: `slots.SLOTS` has had `left` (repo rows) and `right` (persona chips) since #385;
-    #: they were built, tested and switched off. `layout.visible_slots` drops the two
-    #: side panels first on any shortage against `min_cols`/`min_rows`, so a narrow
-    #: terminal degrades to exactly the frame this default used to be.
+    #: Every edge charter draws, because the frame now OWNS the surface (ADR 0019):
+    #: inside a frame `charter statusline` draws nothing, so whatever the frame does not
+    #: show is not shown anywhere. Two one-line strips were not a frame — they were the
+    #: status line again, in a worse shape — and that is exactly how the first release of
+    #: this was reported: *"only top and bottom single lines added, no left right
+    #: sidebar."*
+    #:
+    #: **`left` is not on this list any more, and that is #488 rather than a retreat.**
+    #: The sidebar drew repo rows recomposed for 22 columns, which its own docstring
+    #: conceded was less than the status line it replaced. `bottom` is variable-height
+    #: now and draws the FULL table, so the sidebar's only remaining job was a lesser
+    #: copy of its neighbour's, at the cost of 22 columns of harness.
+    #: `layout.visible_slots` still drops `right` first on any shortage against
+    #: `min_cols`/`min_rows`, so a narrow terminal degrades to two strips as before.
     #:
     #: **The ORDER is the geometry, not a reading order.** `layout.panel_argvs` splits
-    #: each slot off the harness pane in list order, so a slot listed after `left`/`right`
-    #: gets only the width they left behind. Measured against tmux 3.7c in a 200x50
-    #: window: this order gives a 200-column `bottom`, with the side panels 46 rows tall
-    #: between the two strips; `["top", "left", "right", "bottom"]` instead gives 48-row
-    #: side panels and a `bottom` of **154 columns**, inset between them. `bottom` is the
-    #: row that carries the one alert and the command that fixes it, and `slots._bottom`
-    #: drops whole fields when it runs out of width — so the 46 columns belong to it and
-    #: not to two side panels that are already truncating their own 22.
-    "slots": (["top", "bottom", "left", "right"], "slots"),
+    #: each slot off the harness pane in list order, so a slot listed after `right` gets
+    #: only the width it left behind. Measured against tmux 3.7c in a 200x50 window: this
+    #: order gives a 200-column `bottom`; `["top", "right", "bottom"]` instead gives a
+    #: `bottom` of **177 columns**, inset beside the side panel. `bottom` carries the one
+    #: alert, the command that fixes it, and the repo table — so those columns belong to
+    #: it and not to a side panel already truncating its own 22.
+    "slots": (["top", "bottom", "right"], "slots"),
     #: A PRESET over the line above, not a rival to it (see :data:`FRAME_DENSITY`). The
     #: shipped value is the level that expands to EXACTLY the shipped `slots` above —
     #: same edges, same ORDER, and saying as much as a panel has — and that is not a
