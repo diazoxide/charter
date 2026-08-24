@@ -119,9 +119,10 @@ A **persona** is a small named scope with its own charter, its own committed mem
 vault, and a `delegate-when` line saying what should be handed to it. `charter persona
 sync-agents` turns each one into a real Claude Code sub-agent, so dispatching a role is
 ordinary delegation rather than a prompt trick. A persona whose `mcp.json` hands a vault
-value to a server names the command it would run and waits for `--approve-mcp` — the
-approval covers the command and its arguments, not the server's name, so a teammate
-re-pointing it lapses the approval rather than inheriting it.
+value to a server names the destination it would reach and waits for `--approve-mcp`, which
+asks about each server after showing it. The approval covers the whole entry — command,
+args, `url`, `env`, keys — not the server's name, so a teammate re-pointing it lapses the
+approval rather than inheriting it.
 
 They compose the way people do: `extends:` inherits a parent's charter, `uses:` says this
 role routes work to that one, and `agent-tools` narrows what the generated sub-agent may

@@ -433,6 +433,12 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     # `args`, so a list holding the launchers real servers use (`npx`, `uvx`, `docker`) is
     # walked straight past by `args` alone, and a list excluding them refuses every server
     # anyone actually runs. See `mcpseen` for the full argument.
+    #
+    # The digest covers the WHOLE entry, not the fields charter happens to know about.
+    # `out` above keeps every key it does not consume — `env` among them — and hands them
+    # to the harness, which sets them on this process before `secret exec` reaches
+    # `execvpe`; so a fingerprint over an allowlist of five fields let a committed edit
+    # re-point an approved server's PATH or NODE_OPTIONS with the approval intact (#426).
     if mcpseen.fingerprint(vault, entry) not in mcpseen.approved(name):
         return out
     args = ["secret", "exec", vault]
@@ -460,13 +466,17 @@ def mcp_credentialed(name: str) -> list[tuple[str, dict, str]]:
     The list `sync-agents --approve-mcp` records and the list it reports on are both
     derived from this one, so "what you were shown" and "what got approved" cannot drift
     apart — which is the failure mode of a consent prompt that computes its own list.
+
+    ``fingerprint`` may be ``None``: an entry `mcpseen.describe` cannot render is in scope
+    (it declares secrets against a vault) but can never be approved (#427). Membership is
+    decided by `mcpseen.needs_consent` rather than by the digest, so such an entry is
+    still REPORTED as withheld instead of vanishing from both lists at once.
     """
     vault = (resolve(name) or {}).get("meta", {}).get("vault")
     out = []
     for server, entry in sorted(mcp_servers(name).items()):
-        fp = mcpseen.fingerprint(vault, entry)
-        if fp:
-            out.append((server, entry, fp))
+        if mcpseen.needs_consent(vault, entry):
+            out.append((server, entry, mcpseen.fingerprint(vault, entry)))
     return out
 
 

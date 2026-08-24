@@ -124,7 +124,7 @@ may have *these* keys from *that* vault:
 
 ```bash
 charter persona sync-agents               # writes the agents; names anything unapproved
-charter persona sync-agents --approve-mcp # after reading the command it printed
+charter persona sync-agents --approve-mcp # asks about each one, after showing it
 ```
 
 Until then the server is still declared in the generated agent — unchanged, minus the
@@ -132,11 +132,27 @@ vault wrapper — so the persona keeps working and the server fails at authentic
 than silently running with a credential nobody sanctioned. `sync-agents` prints the exact
 command it withheld from, which is the thing worth looking at.
 
-The approval covers the vault, the command, its args and the `secrets`/`secret_files`
-mappings together. **Change any of them and it lapses**, because the approval is of a
-command and not of a server name — a teammate re-pointing an existing server at a new
-binary is the case this exists for. The record is machine-local under `.charter/`: if it
-travelled in git, the same commit that declares a server could declare it approved.
+`--approve-mcp` asks **per server**, and prints the entry before it asks:
+
+```
+  reddit/acme → http https://api.acme.example/mcp  (env: HTTPS_PROXY)
+    approve reddit/acme? [y/N]
+```
+
+Anything but an explicit yes withholds, and declining a server that was approved before
+revokes it. `--dry-run` shows the same lines and records nothing. `--yes` approves every
+credentialed server without asking, and is **required** off a terminal — a flag that means
+yes where nobody can be asked is not consent.
+
+The approval covers the **whole entry**, against the vault: command, args, `url`, `env`,
+the `secrets`/`secret_files` mappings, and any other key the entry carries. **Change any of
+them and it lapses**, because the approval is of a destination and not of a server name — a
+teammate re-pointing an existing server at a new binary, a new endpoint or a new `PATH` is
+the case this exists for. An entry that names neither a `command` nor a `url` has no
+destination to show, so it cannot be approved at all; it is reported as withheld.
+
+The record is machine-local under `.charter/`: if it travelled in git, the same commit that
+declares a server could declare it approved.
 
 There is deliberately no allowlist of permitted commands. An MCP `command` is an arbitrary
 binary followed by arbitrary args, so any list containing the launchers real servers use
