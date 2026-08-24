@@ -88,6 +88,13 @@ share = "local"                  # "local" | "commit" | "push". Default: "local"
 # no prior `charter workspace use`).
 [workspace]
 default = "default"              # Default: "default".
+
+# Which charter this plane tracks. Opt-in; absent, you track published releases.
+[update]
+channel = "stable"               # "stable" | "dev". Default: "stable". A CLOSED set:
+                                  # anything else is not sanitised, it is discarded, and
+                                  # the plane stays on "stable". See "The dev channel"
+                                  # below and docs/install.md.
 ```
 
 ### `group` vs `owner`
@@ -386,6 +393,43 @@ until it is resolved.
 verifies the target *before* writing the lock, so you cannot pin colleagues to a build you
 have not run; `--push` commits and pushes, and everyone conforms on their next session.
 charter only ever *shows* you that command — it never bumps on its own.
+
+## `[update].channel` — the dev channel
+
+**Opt-in.** Absent, this plane tracks published releases and nothing below applies.
+
+```toml
+[update]
+channel = "dev"
+```
+
+On `dev`, three things change and nothing else does:
+
+| | `stable` | `dev` |
+| --- | --- | --- |
+| "newer" means | a higher version is on PyPI | `main`'s head commit is not the one installed |
+| `charter update` installs | `charter-cp==<version>` | `git+https://github.com/diazoxide/charter@main` |
+| the status line's brand chip | `⬢ charter 0.51.0` | `⬢ charter 0.51.0 dev` |
+
+`charter update` on `dev` also force-refreshes the Claude Code plugin, because a
+version-keyed `claude plugin update` cannot see a change that does not move the version —
+see [install.md](install.md#the-plugin-needs-forcing-and-only-on-this-channel).
+
+**The value is a closed set of two, not a string.** `charter.toml` is committed: it arrives
+from a teammate's machine, and this key decides how charter installs itself. Anything that
+is not exactly `"stable"` or `"dev"` is discarded and the plane stays on `stable` — nothing
+you can write here is passed through to a URL, a command line, or an argv element. The
+repository charter installs from is a constant in charter's own source, and no `charter.toml`
+can name a different one.
+
+**Never both this and `[charter] version`.** A pin names a published release a whole team
+conforms to; a commit of `main` has no such number, and a dev build carries the *same*
+version number as the release it was built from — so a pin would silently reinstall the
+published wheel over it at every session start. Declare both and charter installs neither,
+and says which two keys disagree.
+
+**Nothing installs itself.** The status line nudges when `main` moves; you run `charter
+update`.
 
 ## Schema drift and healing
 

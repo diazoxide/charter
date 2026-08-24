@@ -23,7 +23,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import config, util
+from . import config, update as _update, util
 from .update import SHARED_INSTALL_NOTE, _parse
 
 #: The distribution, and the install commands that actually move it.
@@ -36,6 +36,33 @@ from .update import SHARED_INSTALL_NOTE, _parse
 _INSTALLERS = {
     "uv": ["uv", "tool", "install", "charter-cp=={version}", "--force", "--refresh"],
     "pipx": ["pipx", "install", "charter-cp=={version}", "--force"],
+}
+
+#: The requirement a dev install resolves — **a module constant, with no interpolation
+#: point in it at all**, and that is the security property this whole feature turns on.
+#:
+#: `charter.toml` is committed and arrives from someone else's machine. It decides WHETHER
+#: charter follows the dev channel (`instance.UPDATE_CHANNELS`, a closed set of two) and it
+#: never decides WHAT charter installs: this string is written here, joined from
+#: `update.DEV_REPO` and `update.DEV_BRANCH` which are also constants, and it reaches
+#: `util.run` as one element of a list argv — no shell, no format call, no value read from
+#: anywhere. The two incidents behind that rule are named in `instance.UPDATE_CHANNELS`.
+#:
+#: The literal spelling, so it can be typed by hand and be the same thing:
+#: ``uv tool install --force git+https://github.com/diazoxide/charter@main``.
+DEV_SPEC = f"git+https://github.com/{_update.DEV_REPO}@{_update.DEV_BRANCH}"
+
+#: The dev half of :data:`_INSTALLERS`, keyed the same way and moved by the same
+#: `installer_for` lookup.
+#:
+#: No ``--refresh``, unlike the pinned installers above: that flag exists to defeat a
+#: *PyPI index cache* that lags the metadata endpoint, and there is no index in this path —
+#: uv resolves a git ref and clones it. ``--force`` is what makes the install replace the
+#: charter already there, which for a spec whose resolved commit changes under a fixed name
+#: is the whole job.
+_DEV_INSTALLERS = {
+    "uv": ["uv", "tool", "install", "--force", DEV_SPEC],
+    "pipx": ["pipx", "install", "--force", DEV_SPEC],
 }
 
 #: How an install identifies its owner. Path-shaped rather than "which binary exists",
@@ -129,6 +156,128 @@ def _sync_to(version: str) -> tuple[bool, str]:
     return True, version
 
 
+def dev_install_argv() -> tuple[str, list[str] | None]:
+    """``(installer name, argv)`` for a dev install — a fresh list of module constants.
+
+    The mirror of :func:`installer_for`, and deliberately a separate function rather than a
+    ``{version}`` substituted into that one: :func:`_sync_to` builds its command with
+    ``a.format(version=…)``, and a dev spec run through the same line would put a
+    ``str.format`` call between a committed config file and an install command. There is no
+    format call on this path, so there is nothing to reach through.
+
+    A fresh list per call, never the table's own: the caller hands it to `util.run`, and a
+    module-level list handed out is a module-level list something can edit for the life of
+    the process (same reason `instance.density_slots` copies).
+    """
+    name, _pypi = installer_for(Path(sys.executable))
+    argv = _DEV_INSTALLERS.get(name)
+    return name, (list(argv) if argv else None)
+
+
+def _sync_dev() -> tuple[bool, str]:
+    """Install :data:`DEV_SPEC` through whichever tool owns this install."""
+    name, argv = dev_install_argv()
+    if argv is None:
+        return False, (f"charter was not installed by uv or pipx, so charter will not "
+                       f"guess how to move it — run the equivalent of: "
+                       f"uv tool install --force {DEV_SPEC}")
+    if not shutil.which(argv[0]):
+        return False, f"{name} owns this install but is not on PATH"
+    proc = util.run(argv, check=False)
+    if proc.returncode != 0:
+        why = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return False, (why[-1][:200] if why else f"exit {proc.returncode}")
+    return True, DEV_SPEC
+
+
+def _handoff_dev(baseline: str) -> tuple[bool, str]:
+    """The dev channel's :func:`_handoff`: verify the install took, then run the news phase.
+
+    The stable path proves an install by comparing ``charter --version``'s last word to the
+    version it asked for. A dev install cannot use that test — the version number does not
+    move, which is the entire reason dev builds are not published — so the proof is the
+    thing that DOES change: the new binary reports a PEP 610 dev build. A ``charter
+    --version`` still saying plain ``0.51.0`` means the PyPI wheel is still installed and
+    ``uv`` exited 0 against something else.
+
+    The news phase runs on the same terms and for the same reason (`_handoff`'s docstring
+    owns the loop story, including why `news._ENV` and not arithmetic is what bounds it).
+    Its range is empty here, because dev does not move the version — kept anyway rather
+    than special-cased away, so a dev build installed over an older CLI still reports what
+    the versions in between brought.
+    """
+    binary = shutil.which("charter")
+    if not binary:
+        return False, "the `charter` command is not on PATH from here"
+    got = util.run([binary, "--version"], check=False)
+    said = (got.stdout or got.stderr or "").strip()
+    if got.returncode != 0 or "+dev" not in said:
+        return False, (f"the installed `charter` reports {said or '?'}, which is not a dev "
+                       f"build — the install did not replace what is on PATH")
+    news = util.run([binary, "news", "--since", baseline], check=False)
+    out = (news.stdout or "").strip()
+    if out:
+        print(out)
+    return True, said
+
+
+def _move_harness() -> None:
+    """Move this harness's charter artifact, and say what happened. Never raises.
+
+    Shared by both channels because it is the same job on both: the artifact tracks the
+    CLI, and which channel the CLI came from is not something it has an opinion about.
+    Extracted when the dev path was added rather than copied — two copies of a block that
+    ends in `stale_wiring()` is two places for a status branch to be forgotten.
+    """
+    from . import harness
+
+    h = harness.get(harness.current())
+    if h is None:
+        # Never "nothing to do": absence of information is not evidence of health, and a
+        # terminal-run update is the likeliest place for that to mislead.
+        util.warn("no harness detected, so its charter artifact was not checked — "
+                  "`charter harness list`.")
+        return
+    status, detail = h.upgrade(config.ROOT)
+    if status == "moved":
+        util.ok(f"moved: {detail}")
+    elif status == "current":
+        util.ok(f"the {h.name} artifact is already on {detail}.")
+    elif status == "manual":
+        util.info(f"the {h.name} artifact is the host's to move:")
+        util.info(f"  run: {detail}")
+    else:
+        util.warn(detail)
+    stale = h.stale_wiring()
+    if stale:
+        util.warn(f"this plane's {h.name} wiring was written by {stale} — "
+                  f"`charter reinit` adds what is missing.")
+
+
+def _refresh_plugin() -> None:
+    """Force the Claude Code plugin back into step with the marketplace clone.
+
+    **Only on the dev channel, and only because a version-keyed update cannot do it.**
+    `claude plugin update charter@charter` compares version strings; charter's plugin
+    version moves once per release; so between releases it correctly answers *already at
+    the latest version* while the clone it came from has moved on. `plugincache` owns the
+    mechanism and the evidence.
+
+    Best-effort and loud about failing, never fatal: charter's CLI has just been replaced
+    successfully at this point, and a plugin that could not be refreshed is a smaller
+    problem than an update that reports failure over one.
+    """
+    from . import plugincache
+
+    if not plugincache.available():
+        return          # no Claude Code here — opencode and Codex have no plugin cache
+    ok, detail = plugincache.force_refresh(config.ROOT)
+    if ok:
+        util.ok(f"plugin: {detail} — it loads on the NEXT session.")
+    else:
+        util.warn(f"the plugin was not refreshed: {detail}")
+
+
 def _handoff(target: str, baseline: str) -> tuple[bool, str]:
     """Run the news phase in a fresh process of the NEWLY INSTALLED binary.
 
@@ -207,8 +356,61 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
     return installed, False, latest
 
 
+def _update_dev(args, installed: str) -> int:
+    """`charter update` on the dev channel: install from git, then the two artifacts.
+
+    The same command with the same shape as the stable path — CLI, then this harness's
+    artifact, then verification — with three differences, each forced by what a dev build
+    is rather than chosen:
+
+    * **No target resolution.** There is nothing published to resolve against; the target
+      is ``main``, which is what :data:`DEV_SPEC` says and all it says.
+    * **The plugin is force-refreshed.** On stable, `claude plugin update` handles it at
+      release time. On dev the version never moves, so a version-keyed update is a no-op
+      by construction and the only mechanism left is uninstall + reinstall. See
+      `_refresh_plugin`.
+    * **No pin.** ``[charter] version`` is a published version a team conforms to; a commit
+      of ``main`` is not one, and writing one into a committed file would put every
+      teammate onto an unreviewed merge. ``--bump`` says so rather than doing nothing.
+
+    **Nothing here installs by itself.** The status line nudges when ``main`` moves and the
+    operator types this command — auto-installing unreviewed merges is committed content
+    reaching execution without a moment of consent, which is the shape of #453.
+    """
+    from . import channel
+
+    # BEFORE anything moves, so an interrupted update still knows where it started.
+    _stamp_baseline(installed)
+    before = channel.installed_commit()
+
+    util.warn(SHARED_INSTALL_NOTE)
+    util.info(f"installing charter from {DEV_SPEC} …")
+    ok, detail = _sync_dev()
+    if not ok:
+        util.err(f"could not install the dev build: {detail}")
+        return 1
+
+    _move_harness()
+    _refresh_plugin()
+
+    ok, said = _handoff_dev(installed)
+    if not ok:
+        util.err(f"the install did not take: {said}")
+        util.info("  nothing was reported about the new build, because charter could not "
+                  "confirm it is the one running.")
+        return 1
+    util.ok(f"on the dev channel: {said}")
+    if before and before[:7] in said:
+        util.info("  same commit as before — main had not moved.")
+    if getattr(args, "bump", False):
+        util.warn("--bump moves this plane's `[charter] version` pin, which names a "
+                  "PUBLISHED release. A dev build has no such number, so the pin was left "
+                  "alone.")
+    return 0
+
+
 def cmd_update(args) -> int:
-    from . import doctor, harness, instance, news
+    from . import channel, doctor, instance, news
 
     if news.probing():
         # FIRST, before the checkout refusal below and before anything is read, because
@@ -235,6 +437,18 @@ def cmd_update(args) -> int:
         return 2
 
     installed = _installed_version()
+    explicit = (getattr(args, "to", None) or "").strip()
+    if channel.is_dev() and not explicit:
+        return _update_dev(args, installed)
+    if channel.is_dev():
+        # `--to X.Y.Z` names a PUBLISHED version, which is the one thing the dev channel
+        # does not have. Rather than refuse it, honour it and say what just happened: this
+        # is how somebody goes back to a release without first editing charter.toml, and
+        # an update that silently installed `main` because the plane said so would be
+        # ignoring the version the operator typed on the line in front of them.
+        util.info(f"this plane tracks the dev channel; --to {explicit} overrides it for "
+                  f"this run and installs the published release.")
+
     locked = instance.locked_version(instance.load(config.ROOT))
     target, proposed, latest = _resolve_target(args, installed, locked)
     if proposed:
@@ -258,27 +472,7 @@ def cmd_update(args) -> int:
             util.err(f"could not install {target}: {detail}")
             return 1
 
-    h = harness.get(harness.current())
-    if h is None:
-        # Never "nothing to do": absence of information is not evidence of health, and a
-        # terminal-run update is the likeliest place for that to mislead.
-        util.warn("no harness detected, so its charter artifact was not checked — "
-                  "`charter harness list`.")
-    else:
-        status, detail = h.upgrade(config.ROOT)
-        if status == "moved":
-            util.ok(f"moved: {detail}")
-        elif status == "current":
-            util.ok(f"the {h.name} artifact is already on {detail}.")
-        elif status == "manual":
-            util.info(f"the {h.name} artifact is the host's to move:")
-            util.info(f"  run: {detail}")
-        else:
-            util.warn(detail)
-        stale = h.stale_wiring()
-        if stale:
-            util.warn(f"this plane's {h.name} wiring was written by {stale} — "
-                      f"`charter reinit` adds what is missing.")
+    _move_harness()
 
     ok, why = _handoff(target, installed)
     if not ok:

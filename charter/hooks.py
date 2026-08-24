@@ -1952,10 +1952,25 @@ def _autosync_version_lock() -> str | None:
     to prevent.
     """
     try:
-        from . import __version__, commands, config, instance as _instance
+        from . import __version__, channel, commands, config, instance as _instance
         locked = _instance.locked_version(_instance.load(config.ROOT))
         if not locked or locked == __version__:
             return None
+        if channel.is_dev():
+            # A pin and the dev channel ask for two different charters, and this site is
+            # the one that would silently settle it — every session, in favour of the pin,
+            # by installing the PyPI wheel over a git build. Nothing would say so either:
+            # a dev build carries the SAME version number, so the equality above never
+            # catches it and the plane is quietly returned to stable at every session
+            # start after its one `charter update`.
+            #
+            # Reported, not resolved, for the reason this docstring already gives twice
+            # over: the choice replaces the binary that enforces the credential guard, and
+            # session start has nobody to ask.
+            return (f"⬢ charter: this control plane pins {locked} AND declares `[update] "
+                    f"channel = \"dev\"`. Those ask for two different charters, so nothing "
+                    f"was installed. Working on {__version__}; drop one of the two from "
+                    f"the plane's `charter.toml`.")
         if not _instance.version_ok(locked):
             return (f"⬢ charter: this control plane's `[charter] version` is not a "
                     f"version, so nothing was installed. "

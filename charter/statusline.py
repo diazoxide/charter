@@ -1747,15 +1747,34 @@ def _session_strip(payload: dict, sid: str | None) -> str:
 
 
 def _brand() -> str:
-    """`⬢ charter x.y.z`, plus `↑ a.b.c` when a newer release is cached.
+    """`⬢ charter x.y.z`, plus `dev` on the dev channel, plus `↑ a.b.c` when something
+    newer is cached.
 
     Read-only and offline: the version is this process's own, and the "newer?"
     answer comes from a cache another process fills. `update.maybe_spawn` may fork
     a detached child, but nothing here ever waits on the network — the status line
     renders on every turn.
+
+    **The `dev` chip is about the CHANNEL, not the build**, and that is what earns it a
+    place on a line this crowded. Which build is installed is already visible — `charter
+    --version` prints `0.51.0+dev (main @ abc1234)` — and it is visible on the one surface
+    nobody looks at during a session. What the operator cannot otherwise tell, at the
+    moment it matters, is which channel this plane is on: whether `↑` means *a release was
+    published* or *main moved*, and therefore what `charter update` is about to install.
+    Two different answers behind one arrow; the chip is what separates them.
+
+    It also names the state where channel and build disagree without needing a word for
+    it. A plane that declares dev while still running the PyPI wheel renders `dev ↑a1b2c3d`,
+    because `update.newer_head` counts "installed from no commit at all" as behind.
     """
-    from . import __version__, update
+    from . import __version__, channel, update
     out = f"{_DIM}⬢ charter {__version__}{_R}"
+    try:
+        dev = channel.is_dev()
+    except Exception:
+        dev = False
+    if dev:
+        out += f" {_DIM}dev{_R}"
     try:
         update.maybe_spawn()
         newer = update.newer_than(__version__)

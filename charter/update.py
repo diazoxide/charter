@@ -7,6 +7,16 @@ PyPI therefore costs a stale indicator, never a delayed prompt.
 
 The check is deliberately unauthenticated and read-only — one GET of the JSON
 metadata endpoint. Nothing is downloaded, installed or executed.
+
+**The dev channel changes what "newer" means, and nothing else here.** On a plane that
+declares ``[update] channel = "dev"`` there is no published version to compare against —
+dev builds are never published (see :mod:`charter.channel` for why) — so "newer" becomes
+*``main``'s head commit is not the commit this build was installed from*. That answer is
+fetched, cached, TTL'd, cooled down and read on exactly the same terms as the PyPI one:
+same cache file, same :data:`REFRESH_TTL`, same :data:`SPAWN_COOLDOWN`, same
+:data:`NET_TIMEOUT`, same unauthenticated read-only GET, and the same absolute rule that
+the render path only ever reads the cache. A second mechanism beside those brakes would
+be a second thing to keep honest; there is one.
 """
 
 from __future__ import annotations
@@ -23,6 +33,20 @@ from . import config, util
 #: (PyPI would not allow `charter`), so the metadata lives under the latter.
 DIST = "charter-cp"
 _URL = f"https://pypi.org/pypi/{DIST}/json"
+
+#: The repository the dev channel tracks, and the branch it tracks on it. **Constants,
+#: not configuration.** ``charter.toml`` decides *whether* charter follows the dev channel
+#: and never *what* it follows — a committed file that could name the repository would be
+#: a committed file that decides which code your machine installs. Written out in two
+#: pieces so the two URLs below are the only places they are joined, and so neither join
+#: ever has a runtime value in it.
+DEV_REPO = "diazoxide/charter"
+DEV_BRANCH = "main"
+
+#: One unauthenticated read-only GET, exactly like ``_URL`` above: the branch endpoint of
+#: the public GitHub REST API, which answers with the head commit and needs no token for a
+#: public repository. Nothing is downloaded, installed or executed by reading it.
+_BRANCH_URL = f"https://api.github.com/repos/{DEV_REPO}/branches/{DEV_BRANCH}"
 
 REFRESH_TTL = 24 * 3600   # re-check at most once a day — releases are not that frequent
 SPAWN_COOLDOWN = 3600     # and at most one background attempt per hour, success or not
@@ -108,8 +132,44 @@ def _parse(v: str) -> tuple:
     return tuple(out)
 
 
+def newer_head() -> str | None:
+    """The dev channel's answer to "is there anything newer?" — a short commit, or None.
+
+    Cache only. Like :func:`newer_than`, whose dev branch this is, it is called from the
+    status line's render path and must never reach the network; `maybe_spawn` is what
+    fills the cache, in a detached child.
+
+    Three states, and the middle one is the reason this is not a plain equality test:
+
+    * no cached head — nothing has been fetched yet, or the fetch failed. Say nothing.
+      An indicator that appears because a check did not happen is worse than no indicator.
+    * head equals the installed commit — current. Say nothing.
+    * anything else — behind, and that deliberately INCLUDES an install with no commit at
+      all. A plane that declares the dev channel while running the PyPI wheel has not got
+      what it asked for, and the nudge is how it finds out; ``charter update`` moves it.
+    """
+    from . import channel
+
+    head = (load().get("head") or "").strip()
+    if not head:
+        return None
+    mine = channel.installed_commit()
+    return None if mine and mine == head else head[:7]
+
+
 def newer_than(current: str) -> str | None:
-    """The cached latest version if it is strictly newer than *current*, else None."""
+    """The cached latest version if it is strictly newer than *current*, else None.
+
+    On the dev channel this hands off to :func:`newer_head` instead: there is no published
+    version to be newer than, so the comparison is against ``main``'s head commit. The
+    channel is read from `charter.channel`, which reads it from the config boundary where
+    it has already been clamped to a closed set — this function never sees an operator's
+    string, only a branch on one of two constants.
+    """
+    from . import channel
+
+    if channel.is_dev():
+        return newer_head()
     latest = (load().get("latest") or "").strip()
     if not latest or not current:
         return None
@@ -144,18 +204,70 @@ def latest_display(installed: str) -> str:
     return latest
 
 
-def fetch_and_store() -> str | None:
-    """Query PyPI and cache the result. Runs in the detached child, never inline."""
+def _fetch_latest() -> str | None:
+    """One unauthenticated GET of PyPI's JSON metadata endpoint."""
     import urllib.request
     try:
         with urllib.request.urlopen(_URL, timeout=NET_TIMEOUT) as r:
-            latest = json.load(r)["info"]["version"]
+            return json.load(r)["info"]["version"]
     except Exception:
         return None
+
+
+def _fetch_head() -> str | None:
+    """One unauthenticated GET of the public branch endpoint — ``main``'s head commit.
+
+    The URL is :data:`_BRANCH_URL`, built at import from two module constants. Nothing
+    from ``charter.toml`` reaches it, on any path: the channel decides *whether* this runs
+    and never *where* it points. Only a full 40-character hex commit id is accepted, so a
+    surprising response body cannot put arbitrary text into the cache that the status line
+    then renders.
+    """
+    import urllib.request
+    try:
+        with urllib.request.urlopen(_BRANCH_URL, timeout=NET_TIMEOUT) as r:
+            sha = json.load(r)["commit"]["sha"]
+    except Exception:
+        return None
+    if not isinstance(sha, str):
+        return None
+    sha = sha.strip()
+    return sha if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha.lower()) else None
+
+
+def fetch_and_store() -> str | None:
+    """Query PyPI — and on the dev channel, ``main``'s head — and cache the result.
+    Runs in the detached child, never inline. Returns the published version, as before.
+
+    **The record is merged, not replaced.** Two answers now live in one cache file, and a
+    write that rebuilt the dict from scratch would drop whichever of them this call could
+    not fetch: an offline moment on a dev plane would erase the published version the
+    version-lock rows read, for no better reason than that the other GET failed.
+
+    **``ts`` is stamped only when everything this channel asked for arrived.** ``ts`` is
+    what :func:`maybe_spawn` measures :data:`REFRESH_TTL` against, so stamping it after a
+    partial fetch would hold a half-filled cache for a day. On the stable channel that
+    condition reads exactly as it always did — the PyPI call succeeded — because the head
+    is not fetched there at all.
+    """
+    from . import channel
+
+    dev = channel.is_dev()
+    latest = _fetch_latest()
+    head = _fetch_head() if dev else None
+    if latest is None and head is None:
+        return None
+    record = dict(load())
+    if latest is not None:
+        record["latest"] = latest
+    if head is not None:
+        record["head"] = head
+    if latest is not None and (head is not None or not dev):
+        record["ts"] = time.time()
     try:
         p = _cache_file()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"latest": latest, "ts": time.time()}))
+        p.write_text(json.dumps(record))
     except OSError:
         return None
     return latest

@@ -1932,6 +1932,75 @@ def check_plugin_skew() -> Result:
                          f"plugin, dispatching every handler. Upgrade: {upgrade}")
 
 
+def check_plugin_freshness() -> Result:
+    """Is the INSTALLED plugin the same FILES as the marketplace clone it came from?
+
+    `check_plugin_skew` above compares version numbers, and between releases that number is
+    frozen by design — so it reports agreement it has not checked. Measured on one machine
+    while this was written: installed cache and marketplace clone both saying ``0.51.0``,
+    45 files apart, ``skills/secrets/SKILL.md`` and ``skills/browser/SKILL.md`` among them,
+    and `claude plugin update charter@charter` correctly answering *already at the latest
+    version*. Hooks are unaffected — they invoke the ``charter`` on ``PATH`` — but skills
+    are text the model loads, so a stale one is wrong instructions delivered confidently.
+
+    **The severity is different on the two channels, and that is not hedging.** The
+    marketplace clone tracks ``main``, which Claude Code re-fetches on its own, so *some*
+    drift is the steady state for every stable plane from the day after a release onward.
+    Warning about it would put a permanent yellow row in front of everyone whose only
+    honest fix is "wait for the next release" — the cry-wolf failure this module's
+    comments keep returning to, and the one that costs the rows that matter. So:
+
+    * **dev channel** — WARN. The plane asked to track ``main`` and its plugin is not; that
+      is a gap between what was declared and what is installed, with a command that closes
+      it.
+    * **stable channel** — OK, with the drift and the command named in ``detail``. Not
+      ``hint``: `Result.render` drops the hint entirely at OK, so guidance written there
+      would be invisible while looking shipped. The row still says the true thing, which is
+      the live gap — today nothing anywhere does.
+
+    Never FAIL. `cmd_doctor` exits non-zero only on FAIL, and that exit code is what makes
+    the SessionStart preflight print; a plugin whose skills are a week old is not a reason
+    to shout at every session start on every plane.
+    """
+    from . import channel, config as _config, plugincache
+
+    name = "plugin files"
+    dev = channel.is_dev()
+    if not plugincache.available():
+        return Result(name, OK, detail="no `claude` on PATH — no Claude Code plugin here")
+    entry = plugincache.installed_charter_plugin(_config.ROOT)
+    if entry is None:
+        return Result(name, OK, detail="the charter plugin is not installed here")
+    install_path = entry.get("installPath")
+    clone = plugincache.marketplace_clone(entry["id"].split("@", 1)[1])
+    if not isinstance(install_path, str) or clone is None:
+        return Result(name, WARN,
+                      detail="not checked (could not locate the install or its marketplace)",
+                      hint=_NOT_CHECKED_HINT)
+    mine = plugincache.content_hash(install_path)
+    theirs = plugincache.content_hash(clone)
+    if mine is None or theirs is None:
+        return Result(name, WARN, detail="not checked (the plugin surface is unreadable)",
+                      hint=_NOT_CHECKED_HINT)
+    if mine == theirs:
+        return Result(name, OK, detail=f"matches the marketplace clone ({mine[:7]})")
+    shown = plugincache.differing(install_path, clone)
+    which = ", ".join(shown) + (" …" if len(shown) >= 3 else "")
+    fix = "charter update" if dev else (
+        f"`charter update` on the dev channel refreshes it; on stable the released "
+        f"plugin is what pairs with the released CLI, so the fix is the next release")
+    if dev:
+        return Result(name, WARN,
+                      detail=f"installed {mine[:7]}, marketplace {theirs[:7]} — {which}",
+                      hint=f"this plane tracks the dev channel and its plugin does not. "
+                           f"A version-keyed `claude plugin update` cannot see this, "
+                           f"because both sides say v{entry.get('version')}. Run: {fix}")
+    return Result(name, OK,
+                  detail=f"installed {mine[:7]}, marketplace {theirs[:7]} — {which}. "
+                         f"Both say v{entry.get('version')}, so `claude plugin update` "
+                         f"reports nothing to do; {fix}")
+
+
 #: Launcher basenames charter itself removed, so it can name the replacement instead of
 #: merely reporting the absence. `bin/edm` and its `bin/charter` forwarding shim went with
 #: the rename; a `charter` on PATH is what took over from both.
@@ -2195,7 +2264,7 @@ def _checks():
                 check_ask_rules(),
                 check_shadowed_knowledge(),
                 check_credential_paths(),
-                check_mcp_launchers(), check_plugin_skew()]
+                check_mcp_launchers(), check_plugin_skew(), check_plugin_freshness()]
     return results
 
 
