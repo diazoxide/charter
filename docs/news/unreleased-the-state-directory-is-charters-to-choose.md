@@ -22,10 +22,33 @@ the trace and the reports. Each missing level is created individually and chmod-
 because `mkdir(parents=True, mode=0o700)` applies the mode to the leaf only and `mkdir`'s
 mode argument is masked by the umask anyway.
 
+**The fourth writer, and the one no reader of the package could have named.**
+`charter persona remember <persona> "…" --ephemeral` writes under
+`.charter/persona-state/ephemeral/`, and on a fresh clone — where `.charter/` is gitignored
+and absent — that write is what creates the state directory itself. It went through none of
+the above, and the static scan that was supposed to notice reported a clean package,
+because the directory does not reach the writer as anything the scan could read: it reaches
+`memstore.write(mem_dir, …)` as a **parameter**, and the same function is handed the
+committed `personas/<n>/memory` on the very next call. Only the caller knows which.
+
+So the question is now asked at runtime, by `config.mkdir_for`: a path under the state
+directory is created through the private walk, and a path outside it is created with a
+plain `mkdir` and left at the operator's umask. It is a dispatch, not a privatiser —
+committed persona directories keep their 0755, and a version of this that made everything
+private would have passed every mode test above while quietly tightening the plane's
+committed tree.
+
+The scan changed with it. It used to match a *spelling* — `.STATE_DIR` appearing in the
+path expression at the `mkdir` line — and now asks reachability: a call that passes a state
+path into a package function taints that parameter, transitively across modules, and a
+`mkdir` on a tainted parameter is a violation exactly as `config.STATE_DIR / "x"` is. Put
+`memstore`'s bare `mkdir` back and the scan names the file and line.
+
 `umask 000`, `umask 022`, `umask 077`: `.charter` comes out 0700 in all three, on `vault
-add`, on the SessionStart hook and on the PreToolUse hook. The property being tested is
-that the umask does not decide it — a fix that only held under the umask it was written for
-would satisfy "the mode is 0700" and nothing else.
+add`, on the SessionStart hook, on the PreToolUse hook and on `persona remember
+--ephemeral`. The property being tested is that the umask does not decide it — a fix that
+only held under the umask it was written for would satisfy "the mode is 0700" and nothing
+else.
 
 **A directory that was already there keeps its mode, and is still reported.**
 A `.charter/` that predates this, or one made by `mkdir -p` at the umask default, is 0755
@@ -57,6 +80,15 @@ but if that directory predates charter, neither `vault list` nor `doctor` says s
 plane whose only vaults are references. The base provider's honest answer is an empty list
 rather than a guess about a backend charter does not own; teaching the reference provider to
 answer properly is [#491](https://github.com/diazoxide/charter/issues/491).
+
+**Known remaining case: the files inside `.charter/` are still written at your umask.**
+Charter's own state directory is 0700, so nothing it creates is exposed. But charter
+deliberately leaves a `.charter/` it did not create exactly as it is, and on such a plane
+`guard-seen.json`, the trace log and the ephemeral persona store are all 0644 —
+`vaults.json` is 0600 only because the registry chmods it outright. That is the same
+property one surface over (the umask does not decide the mode of charter's own state), and
+answering it for files is [#505](https://github.com/diazoxide/charter/issues/505) rather
+than a wider version of this change.
 
 Two things this does not do. It does not read ACLs: on macOS `chmod +a` and on Linux
 `setfacl` grant another account access while `st_mode` still reads 0700, and a POSIX mode

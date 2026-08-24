@@ -285,6 +285,72 @@ def _mkdir_0700(d: "Path") -> None:
         pass
 
 
+def under_state(p) -> bool:
+    """Is *p* the state directory, or a path inside it?
+
+    Asked of two spellings of both sides, and answered "yes" if **either** says so: the
+    lexical one (``..`` collapsed, no link followed — the only answer available for a path
+    that does not exist yet) and the resolved one (``/tmp`` → ``/private/tmp`` — the only
+    answer available when the caller resolved first, which on macOS is most of them).
+    A disagreement is resolved towards "yes" on purpose. The cost of that error is a
+    directory that came out 0700 when 0755 would have done; the cost of the other one is
+    the exposure the walk exists to close.
+    """
+    p, state = Path(p), Path(STATE_DIR)
+    for a in {os.path.normpath(os.path.abspath(p)), str(_resolved(p))}:
+        for b in {os.path.normpath(os.path.abspath(state)), str(_resolved(state))}:
+            if a == b or a.startswith(b.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+
+def _resolved(p: "Path") -> "Path":
+    """*p* with links followed, falling back to the lexical form when it cannot be.
+
+    ``(OSError, RuntimeError)`` for the same reason :func:`worktrees_root_for` catches
+    both: a symlink loop is `RuntimeError` on some versions and `OSError` on others, and
+    this runs on the path of every state write.
+    """
+    try:
+        return p.resolve()
+    except (OSError, RuntimeError):
+        return Path(os.path.normpath(os.path.abspath(p)))
+
+
+def mkdir_for(p, parents: bool = True) -> None:
+    """Create *p* — **privately when it is charter's own state, ordinarily when it is
+    not** — for the writer that is *handed* its directory rather than deriving one.
+
+    `private_mkdir` closes the writers that name a state path themselves, and
+    `tests/_statedirscan.py` reads the package to prove none is left. Neither can see a
+    path that arrives as a **parameter**: `memstore.write(mem_dir, …)` is handed the
+    committed ``personas/<n>/memory`` on one call and the gitignored
+    ``PERSONA_STATE_DIR/ephemeral/<session>/<n>`` on the next, and which one it is a
+    question only the caller can answer. So the callee asks it at runtime, here (#470).
+
+    That mattered more than "a level below `.charter/` came out loose": on a fresh clone
+    ``.charter/`` is gitignored and absent, so ``charter persona remember … --ephemeral``
+    is what *creates the state directory itself* — at ``0o777 & ~umask``, i.e. 0755 for
+    everyone and 0777 under ``umask 000``. Every later file written straight into
+    ``.charter/`` — ``vaults.json``, ``guard-seen.json``, ``fingerprint.key`` — then sat
+    in a directory any account on the machine could list.
+
+    **The property is "the umask does not decide the mode of charter's state", not "this
+    call site is private".** Routing this one caller would leave the next writer handed a
+    state path exactly as exposed; the dispatch is on where the path *is*.
+
+    A path outside the state directory is created with a plain ``mkdir(exist_ok=True)``
+    and NOT tightened — committed directories are the operator's to mode, and charter
+    tightening one it merely wrote into is the same overreach as chmod-ing a pre-existing
+    ``.charter/`` (#331).
+    """
+    p = Path(p)
+    if under_state(p):
+        private_mkdir(p, parents=parents)
+        return
+    p.mkdir(parents=parents, exist_ok=True)
+
+
 def derive(root: Path, start: Path | None = None) -> dict:
     """Every setting that follows from *root*, as ``{NAME: value}``.
 
