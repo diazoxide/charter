@@ -44,6 +44,12 @@ charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl get pods
 charter secret cp <vault> <key> <dest>     # persist at 0600; prints only the path
 ```
 
+`<dest>` must be a **real file that does not exist yet**. A device, a FIFO, a directory
+or a symlink is refused, and so is an existing file (overwriting takes `--force`). This
+is not pedantry: `charter secret cp <vault> <key> /dev/stdout` would write the plaintext
+straight into this conversation — that is the one thing the vault exists to prevent, so
+do not go looking for a path that gets around the refusal.
+
 **As a dotenv file**, for a tool that reads one (this is how a browser driver gets a
 login without the password being typed into the page by you):
 

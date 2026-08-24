@@ -2,7 +2,7 @@
 
 `mcp_render_entry` emitted only `--env`, and `--exec` is mandatory for an MCP stdio server:
 it never returns, so the capturing form hangs holding output nobody reads. But `--exec`
-replaces charter, so nothing survives to shred a temp file — which is why it is incompatible
+replaces charter, so nothing survives to delete a temp file — which is why it is incompatible
 with `--file`.
 
 Google Application Default Credentials require a filesystem **path**
@@ -14,9 +14,14 @@ it had to keep a plugin purely to carry them.
 `exec` bought here** — a forked child inherits the parent's descriptors — so the only thing
 given up is replacing the process, which is exactly the thing that made cleanup impossible.
 
-The limit is stated rather than implied away: a `SIGKILL`ed charter runs no cleanup and the
-0600 file survives until it is removed. That is strictly better than every persona
-re-implementing the same `trap` in shell with the same hole, and it is not a guarantee.
+The limit is stated rather than implied away, and it is now the narrowest one available: a
+`SIGKILL`ed charter runs no cleanup and the 0600 file survives until it is removed. SIGKILL
+alone, because SIGTERM and SIGHUP are handled here — they used to be in the same sentence,
+and they should never have been. SIGKILL is what you reach for when something is already
+stuck; SIGTERM is what a supervisor, a `kill`, or a harness reaping a hung tool call sends
+at every ordinary shutdown, and `--stream` exists for exactly the long-running children that
+get SIGTERMed. Measured before the fix: SIGTERM at t+2s left `charter-<v>-<k>-…` at
+`-rw-------` holding the value.
 """
 
 from __future__ import annotations
@@ -151,6 +156,101 @@ class TestTheLimitIsStated(unittest.TestCase):
         import inspect
         src = inspect.getsource(cli)
         self.assertIn("SIGKILL", src)
+
+    def test_the_help_does_not_blame_sigterm_for_what_sigkill_does(self):
+        """The wording is the finding. "Only if someone SIGKILLs us" reads as vanishingly
+        rare; "any SIGTERM" is routine — and while both were named in one breath, the
+        sentence described a leak nobody would go looking for."""
+        import inspect
+
+        from charter import cli
+        src = inspect.getsource(cli)
+        stream_help = src[src.index('p.add_argument("--stream"'):]
+        stream_help = stream_help[:stream_help.index('p.add_argument("--exec"')]
+        self.assertIn("SIGTERM", stream_help)
+        self.assertIn("SIGKILL", stream_help)
+
+
+class TestTerminationStillCleansUp(StreamCase):
+    """SIGTERM and SIGHUP run no `finally` by default, so the 0600 file outlived the
+    process that owned it. The child here signals its own parent — the same shape as a
+    supervisor doing it, and it needs no timing guess."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A net under the test runner, and NOT a second implementation of the fix: it
+        # records and returns, so nothing unwinds and no `finally` runs through it. With
+        # the fix, charter's handler is installed over this one for the duration and this
+        # never fires. Without it, this is what stops a real SIGTERM from killing the
+        # whole suite — the case then fails on its assertions, which is the point.
+        import signal as _signal
+        self.caught: list[int] = []
+        for sig in (_signal.SIGTERM, _signal.SIGHUP):
+            prev = _signal.signal(sig, lambda n, f: self.caught.append(n))
+            self.addCleanup(_signal.signal, sig, prev)
+
+    def run_and_signal_self(self, signame: str):
+        """`--stream` a child that SIGTERMs (or SIGHUPs) this process and then sleeps.
+
+        The child writes the file's path out first, so the assertions below are about a
+        file that demonstrably existed — a test that signalled before `mkstemp` ran would
+        pass with nothing to clean up.
+        """
+        import signal as _signal
+
+        # `printenv F` is the tmpfile path charter created for --file F=k.
+        script = f'printenv F; kill -{signame} $PPID; sleep 5'
+        args = SimpleNamespace(vault="v", env=None, file=["F=k"], dotenv=None,
+                               exec_mode=False, stream_mode=True,
+                               command=["sh", "-c", script])
+        r, w = os.pipe()
+        saved = os.dup(1)
+        raised = None
+        try:
+            os.dup2(w, 1)
+            os.close(w)
+            try:
+                cs.cmd_secret_exec(args)
+            except SystemExit as e:
+                raised = e
+        finally:
+            os.dup2(saved, 1)
+            os.close(saved)
+        with os.fdopen(r) as fh:
+            path = fh.readline().strip()
+        self.assertTrue(path, "the child never reported the credential file")
+        expected = 128 + getattr(_signal, f"SIG{signame}").value
+        return path, raised, expected
+
+    def test_a_sigtermed_parent_still_cleans_up(self):
+        path, raised, expected = self.run_and_signal_self("TERM")
+        self.assertEqual(self.caught, [],
+                         "the signal reached the test's own net — charter installed no "
+                         "handler of its own")
+        self.assertIsNotNone(raised, "SIGTERM terminated without unwinding")
+        self.assertEqual(raised.code, expected)
+        self.assertFalse(os.path.exists(path),
+                         "the 0600 credential file survived a SIGTERM")
+
+    def test_a_sighupped_parent_still_cleans_up(self):
+        path, raised, expected = self.run_and_signal_self("HUP")
+        self.assertIsNotNone(raised, "SIGHUP terminated without unwinding")
+        self.assertEqual(raised.code, expected)
+        self.assertFalse(os.path.exists(path),
+                         "the 0600 credential file survived a SIGHUP")
+
+    def test_the_handlers_are_removed_again_afterwards(self):
+        """charter is a library as well as a CLI (`charter persona`, the hooks, the
+        tests themselves run in-process). A handler left installed after the command
+        returns would change how the whole host process dies."""
+        import signal as _signal
+        before = {s: _signal.getsignal(s)
+                  for s in (_signal.SIGTERM, _signal.SIGHUP)}
+        rc, _ = self.run_exec(["sh", "-c", "exit 0"], stream_mode=True, file=["F=k"])
+        self.assertEqual(rc, 0)
+        after = {s: _signal.getsignal(s)
+                 for s in (_signal.SIGTERM, _signal.SIGHUP)}
+        self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

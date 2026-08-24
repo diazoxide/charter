@@ -59,7 +59,7 @@ substitutes the value and redacts it from output, so it never reaches the transc
 
 > **`not open` is not a cue to re-open.** A second `open` with the same `-s=<name>` starts
 > a *new* browser and orphans the first — which is the one that is logged in. Worse, the
-> new one cannot be authenticated: `charter secret exec` shreds its dotenv on exit, so
+> new one cannot be authenticated: `charter secret exec` deletes its dotenv on exit, so
 > filling a secret into it means re-running the whole bridged flow. Check the session is
 > really gone first (a `snapshot` against it is cheap and answers the question); if it is,
 > re-run the flow rather than `open`.
@@ -75,7 +75,7 @@ substitutes the value and redacts it from output, so it never reaches the transc
 > identity provider afterwards. Filling immediately fails with
 > `"#username" does not match any elements`, which reads as a **wrong selector** and sends
 > you hunting for a better one when the flow was already right. It is not free to get wrong
-> here: `charter secret exec` shreds the dotenv file when it exits, so the still-open
+> here: `charter secret exec` deletes the dotenv file when it exits, so the still-open
 > session can no longer be filled with a secret, and recovering means re-running the whole
 > flow rather than the failed step. The example waits so it never needs to.
 
