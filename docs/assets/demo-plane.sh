@@ -127,6 +127,17 @@ printf 'demo-not-a-real-value\n' | charter secret set devops KUBECONFIG --stdin 
 printf 'demo-not-a-real-value\n' | charter secret set devops REGISTRY_TOKEN --stdin >/dev/null
 printf 'demo-not-a-real-value\n' | charter secret set qa E2E_PASSWORD --stdin >/dev/null
 
+# `.charter/` is created through a bare mkdir, so its mode is the umask's and not
+# charter's (#470). 0.52.0 started reporting the ones charter did not make private, and
+# the report lands in the vault column of `charter persona list` — so under the usual
+# umask 022 every vault row in the capture read "listed by other accounts: .charter 755
+# (want 700 — chmod 700)", wrapped over two lines, and personas.svg showed a complaint
+# about this throwaway directory instead of the roster it exists to show. The remedy
+# charter itself prints, applied: the plane is in the state a reader's plane should be
+# in, and the render is about the roster again. Not a workaround for the report — the
+# report is right, and the capture is not where that argument belongs.
+chmod 700 .charter
+
 # ── pieces (worktrees) ───────────────────────────────────────────────────────
 # The fleet story is invisible without these: nested worktree rows, a declared outcome,
 # and pieces that have said nothing for a while. Created through the real commands, AFTER

@@ -60,6 +60,41 @@ class TestEveryPublishedVersionHasNotes(unittest.TestCase):
             f'"No entry" and "forgot the entry" are indistinguishable from CI.')
 
 
+class TestNoTestPinsAStagedEntryByFilename(unittest.TestCase):
+    """A staged entry's *filename* is a release-time casualty. Its slug is not.
+
+    `news stamp` renames every `unreleased-<slug>.md` to `<version>-<slug>.md` as the
+    first step of a bump, so a test that opens one by its staged path goes red **in the
+    middle of the release** — on the one branch that has to be green before a tag, for a
+    document whose text never changed. 0.52.0 lost four cases exactly that way, in
+    `test_docs_claims_carry_their_residual.py`, which now resolves entries by slug.
+
+    Only a reference to a file that **exists** is flagged. A fabricated tree inside a
+    fixture may spell any path it likes (`test_plugin_freshness.py` writes an
+    `unreleased-x.md` into a temporary directory); what breaks a release is the pair
+    *real staged entry + a test that opens it by that name*, and the pair cannot be
+    assembled without this failing on the pull request that assembles it.
+    """
+
+    _REF = re.compile(r"docs/news/(unreleased-[A-Za-z0-9._-]+\.md)")
+
+    def test_no_test_opens_an_entry_by_its_staged_name(self):
+        offenders = []
+        for path in sorted((REPO_ROOT / "tests").glob("*.py")):
+            if path.name == Path(__file__).name:
+                continue          # the pattern above is a pattern, not a path
+            for name in set(self._REF.findall(path.read_text())):
+                if (REPO_ROOT / "docs" / "news" / name).is_file():
+                    offenders.append(f"{path.name} → docs/news/{name}")
+        self.assertEqual(
+            offenders, [],
+            "these tests name a staged news entry by a filename that `charter news "
+            "stamp` will rename during the next bump: " + "; ".join(offenders) +
+            ". Resolve the entry by its slug instead — everything after the first `-`, "
+            "which survives the stamp — the way `entries()` in "
+            "test_docs_claims_carry_their_residual.py does.")
+
+
 class StampDir(unittest.TestCase):
     """A throwaway checkout, so a stamp test never renames a file that really ships."""
 
