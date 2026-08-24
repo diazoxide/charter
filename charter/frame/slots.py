@@ -281,7 +281,11 @@ def _table_row(lead: str, name_markup: str, r: dict, width: int,
     from .. import statusline as sl
 
     marks_plain, marks_col, is_dirty = sl._markers(r)
-    text = r.get("branch") or "?" if branch_override is None else branch_override
+    # Parenthesised, though Python's precedence already reads it this way: the `or "?"`
+    # is the DEFAULT for a missing branch, not an alternative to the override — and an
+    # override of `""` (a piece whose branch restates its own name) must stay empty
+    # rather than turn into `?`.
+    text = (r.get("branch") or "?") if branch_override is None else branch_override
     branch_cell = sl._branch_cell_for(text, "", marks_plain, marks_col, is_dirty)
 
     change = r.get("change")

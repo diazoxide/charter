@@ -262,22 +262,35 @@ def _hits(rows: list[str]) -> list[int]:
     return out
 
 
-def _history(sid: str) -> list[tuple[int, int]]:
-    """The session's recorded (cache_read, cache_write) pairs.
+def _pairs(rows: list[str]) -> list[tuple[int, int]]:
+    """The ``(cache_read, cache_write)`` pairs out of raw rows.
 
     ``len(p) >= 3``, not ``== 3``: #413 appended a fourth field, and an exact-length check
     would have silently dropped every row this charter writes — leaving `_rebuilds` with
     an empty history and the `↻N` counter permanently absent, which reads as "no rebuilds
     have happened" rather than as "charter stopped reading its own file".
     """
+    out = []
+    for ln in rows:
+        p = ln.split(",")
+        if len(p) >= 3:
+            out.append((int(p[0]), int(p[1])))
+    return out
+
+
+def _usage_rows(sid: str) -> list[str]:
+    """The session's recorded rows, or ``[]`` for every way there are none."""
     try:
-        out = []
-        for ln in _usage_file(sid).read_text().splitlines():
-            p = ln.split(",")
-            if len(p) >= 3:
-                out.append((int(p[0]), int(p[1])))
-        return out
-    except (OSError, ValueError):
+        return [ln for ln in _usage_file(sid).read_text().splitlines() if ln.strip()]
+    except OSError:
+        return []
+
+
+def _history(sid: str) -> list[tuple[int, int]]:
+    """The session's recorded (cache_read, cache_write) pairs."""
+    try:
+        return _pairs(_usage_rows(sid))
+    except ValueError:
         return []
 
 
@@ -295,12 +308,11 @@ def _last_ctx(sid: str) -> int | None:
     beats blanking a gauge that was correct a moment ago. It cannot drift far — the ring
     buffer is `_TREND_KEEP` turns deep.
     """
-    if not sid:
-        return None
-    try:
-        rows = _usage_file(sid).read_text().splitlines()
-    except OSError:
-        return None
+    return _last_ctx_of(_usage_rows(sid)) if sid else None
+
+
+def _last_ctx_of(rows: list[str]) -> int | None:
+    """:func:`_last_ctx`, over rows a caller has already read."""
     for ln in reversed(rows):
         p = ln.split(",")
         if len(p) < 4:
@@ -530,15 +542,19 @@ def recorded_context_gauge(sid: str) -> list[str]:
     try:
         if not sid:
             return []
+        # ONE read, three answers. `_last_ctx`/`_history` each open the file themselves
+        # for callers that have nothing else to do with it; this one draws three fields
+        # off the same history, and a panel repainting is not the place to open the same
+        # file three times.
+        rows = _usage_rows(sid)
         out: list[str] = []
-        ctx = _ctx_part(_last_ctx(sid))
+        ctx = _ctx_part(_last_ctx_of(rows))
         if ctx:
             out.append(ctx)
-        hits = _hits([ln for ln in _usage_file(sid).read_text().splitlines()
-                      if ln.strip()])
+        hits = _hits(rows)
         if hits:
             out.append(_cache_part(hits[-1]))
-        n, cost = _rebuilds(_history(sid))
+        n, cost = _rebuilds(_pairs(rows))
         if n:
             col = _RED if cost >= _REBUILD_LOUD else _YELLOW
             out.append(f"{col}↻{n} {_fmt_tok(cost)}{_R}")
