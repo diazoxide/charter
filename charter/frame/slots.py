@@ -162,19 +162,35 @@ def _top(fid: str) -> str:
     Composing `_session_strip(payload, sid)` instead would not help: it is exactly
     `[*_context_gauge(payload), *_session_news(sid)]`, so with the gauge half structurally
     dead the call would only ever surface `_session_news`'s half — which is `bottom`'s
-    own, explicit assignment (see `_bottom`'s docstring), not `top`'s. Calling it here
-    too would either duplicate `bottom` byte-for-byte or (worse, since a panel's `sid` may
-    differ in nothing from `bottom`'s) read as two different panes agreeing by
-    coincidence. Per the task brief: "a gauge that silently reads zero is worse than no
-    gauge" — so this is left out, not stubbed in, until #386 (which owns the suppression
-    and recording question this finding feeds) decides a panel should have its own
-    persisted usage snapshot to read. Pinned by `tests.test_frame_slots.TopRenderer`.
+    own, explicit assignment (see `_bottom`'s docstring), not `top`'s.
+
+    **That argument stopped applying, and #413 is where it stopped.** Every word of it is
+    still true of `_context_gauge`, which is why this function still does not call it —
+    but its conclusion ("so the frame cannot have a gauge") rested on a premise that is no
+    longer the whole picture: a panel now has a FILE to read. The suppressing
+    `statusline.main` is the one process that sees both Claude Code's session id and this
+    frame's, so it writes the mapping down (`state.record_harness_session`), and
+    `record_usage` writes the numbers themselves — including, since #413, the context
+    percentage, which is the one figure nothing can re-derive. `statusline
+    .recorded_context_gauge` composes exactly what `_context_gauge` composes, from the
+    recorded history instead of a live payload, so the two surfaces cannot disagree about
+    a threshold or a label.
+
+    **What has NOT changed is the rule the old argument was built on**: a gauge that
+    silently reads zero is worse than no gauge. Every way of not knowing — a frame with no
+    recorded session (a harness that is not Claude Code is never handed a usage payload at
+    all), a session with no turns recorded yet, a history written entirely by a charter
+    that predates the fourth field — answers `[]` and draws nothing, rather than a
+    confident `ctx 0%`. Pinned by `tests.test_frame_slots.TopRenderer`.
 
     **At `terse` the version goes, and nothing else does.** `top` answers "where am I and
-    who am I being", and of the three things on it the charter version is the only one
-    that reads the same on every frame on this machine all day — it is a fact about the
+    who am I being", and of the things on it the charter version is the only one that
+    reads the same on every frame on this machine all day — it is a fact about the
     install, not about where you are standing. The workspace and the persona ARE the
-    answer, so a density that dropped either would leave a row not earning its line.
+    answer, so a density that dropped either would leave a row not earning its line. The
+    gauge stays for the opposite reason: it is the one field on this row that is different
+    every turn, and a density that buys back columns should not spend them on the field
+    that had something new to say.
 
     **The version carries the dev-channel chip, `statusline._dev_chip()` (#457).** #386
     made a frame suppress the status line entirely, and `_brand` is the only OTHER place
@@ -187,13 +203,20 @@ def _top(fid: str) -> str:
     whole line does not mean to keep half of it.
     """
     from .. import __version__, statusline, workspace
+    from . import state
     ws = workspace.resolve()
     src = workspace.source()
     pin = "*" if src == "$CHARTER_WORKSPACE" else ""
     persona = statusline._persona_line() or ""
+    # Two file reads on a slot that repaints only on a version bump (`top` is not in
+    # `ANIMATED`), and nothing is read at all for a frame with no recorded session —
+    # which is every frame whose harness is not Claude Code.
+    gauge = " ".join(statusline.recorded_context_gauge(
+        state.harness_session(fid) or ""))
     left = f" ⬢ {ws}{pin}"
-    right = (persona if verbosity(fid) == "terse"
-             else f"{persona}  charter {__version__}{statusline._dev_chip()} ")
+    tail = (persona if verbosity(fid) == "terse"
+            else f"{persona}  charter {__version__}{statusline._dev_chip()} ")
+    right = f"{gauge}  {tail}" if gauge else tail
     return tui.truncate(f"{left}  {right}", _width())
 
 

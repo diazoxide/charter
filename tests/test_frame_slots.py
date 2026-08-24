@@ -229,7 +229,14 @@ class TopRenderer(PersonaIso, unittest.TestCase):
     argument. These tests pin that finding as a regression rather than a one-time
     observation: a future edit that wires either call back into `_top` "because it
     compiles" must turn one of these red, since the call would return `[]` forever and
-    add nothing but a docstring gone stale."""
+    add nothing but a docstring gone stale.
+
+    **#413 gave `top` a gauge anyway, and none of that changed.** What changed is that a
+    panel now has a FILE to read (`statusline.recorded_context_gauge`), so the gauge is
+    composed from the recorded history rather than from a payload nobody hands it. The two
+    "never called" tests below are exactly as load-bearing as before: reaching for the
+    payload-gated helpers would still return `[]` forever, and now it would do it beside a
+    working gauge, which is harder to notice rather than easier."""
 
     def test_the_context_gauge_is_never_called_by_top(self):
         with mock.patch("charter.statusline._context_gauge") as gauge:
@@ -242,12 +249,128 @@ class TopRenderer(PersonaIso, unittest.TestCase):
         strip.assert_not_called()
 
     def test_context_gauge_confirmed_empty_with_no_payload_the_premise_top_relies_on(self):
-        """The load-bearing fact behind leaving the gauge out: with no live per-turn
-        payload — exactly what a panel process always has — `_context_gauge` produces
-        nothing, not a misleading zero. `tests/test_statusline_gauge.py` already pins
-        this generically (`test_silent_before_first_api_call`); repeated here because
+        """The load-bearing fact behind not reaching for the payload-gated helper: with no
+        live per-turn payload — exactly what a panel process always has — `_context_gauge`
+        produces nothing, not a misleading zero. `tests/test_statusline_gauge.py` already
+        pins this generically (`test_silent_before_first_api_call`); repeated here because
         it is the premise `_top`'s design decision rests on."""
         self.assertEqual(statusline._context_gauge(None), [])
+
+
+class TopDrawsTheRecordedGauge(PersonaIso, unittest.TestCase):
+    """#413: `ctx NN%` / `cache NN%` on `top`, out of the history the suppressed status
+    line records — the one capability a framed Claude Code session lost to #386 and the
+    thing 0.52.0's own news entry named as "genuinely lost".
+
+    Every test renders through the real `slots.render("top", …)`, because what #413
+    promises is that a PANEL shows this. And every "does not know" case is asserted to
+    draw NOTHING rather than a zero: that rule (`_top`'s own docstring, and the task
+    brief's) is what the whole design is built around, so it is pinned case by case
+    rather than once.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.fid = "gauge-frame"
+        self.sid = "cc-session-1"
+
+    def _usage(self, *rows: str) -> None:
+        f = statusline._usage_file(self.sid)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("\n".join(rows) + "\n")
+
+    def _render(self) -> str:
+        with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((200, 3))):
+            return tui.strip_ansi(slots.render("top", self.fid))
+
+    def test_a_recorded_session_puts_the_gauge_on_the_row(self):
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        out = self._render()
+        self.assertIn("ctx 42%", out)
+        self.assertIn("cache 90%", out)
+
+    def test_the_workspace_and_the_persona_are_not_pushed_off_by_it(self):
+        """The gauge JOINS `top`'s identity row; it does not replace it. `top` answers
+        "where am I and who am I being" first, and a session number that evicted either
+        would leave the row not earning its line."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        self.assertIn("⬢", self._render())
+
+    def test_a_frame_with_no_recorded_session_draws_no_gauge(self):
+        """Every frame whose harness is not Claude Code, and every frame launched by a
+        charter that predates the mapping. Nothing is handed a usage payload there, so
+        there is nothing to draw — and `ctx 0%` would be a claim about a session charter
+        has never seen a single number from."""
+        self._usage("900,100,90,42")
+        out = self._render()
+        self.assertNotIn("ctx", out)
+        self.assertNotIn("cache", out)
+
+    def test_a_recorded_session_with_no_turns_yet_draws_no_gauge(self):
+        """Early in a session, and right after `/compact`: the mapping is written on the
+        first render, the numbers only once the API has answered."""
+        state.record_harness_session(self.fid, self.sid)
+        out = self._render()
+        self.assertNotIn("ctx", out)
+        self.assertNotIn("cache", out)
+
+    def test_a_history_written_before_the_ctx_field_existed_draws_no_ctx(self):
+        """An upgrade mid-session is the ordinary case: three-field rows are what every
+        charter before #413 wrote. The cache half is still fully derivable from them and
+        is drawn; the context percentage was never recorded and is not guessed at."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90")
+        out = self._render()
+        self.assertNotIn("ctx", out)
+        self.assertIn("cache 90%", out)
+
+    def test_a_turn_recorded_without_a_percentage_falls_back_to_the_last_one_seen(self):
+        """A turn early in a session carries usage but no percentage, so its ctx field is
+        empty. Blanking a gauge that was correct one turn ago is worse than showing the
+        most recent figure charter actually saw — and the ring buffer is only
+        `_TREND_KEEP` turns deep, so it cannot drift far."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("800,200,80,37", "900,100,90,")
+        self.assertIn("ctx 37%", self._render())
+
+    def test_the_gauge_survives_a_terse_density(self):
+        """`terse` buys back columns by dropping the charter version — a standing fact
+        about the install. The gauge is the opposite: the one field on this row that is
+        different every turn."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        state.record_density(self.fid, "minimal")
+        self.assertIn("ctx 42%", self._render())
+
+    def test_it_reads_the_session_the_frame_recorded_and_not_some_other(self):
+        """The mapping is the whole mechanism, so this pins that it is actually followed
+        rather than the panel finding a usage file some other way: two sessions with
+        different numbers on disk, and the row must show the one this frame is mapped
+        to."""
+        other = statusline._usage_file("cc-session-2")
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text("100,900,10,99\n")
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        out = self._render()
+        self.assertIn("ctx 42%", out)
+        self.assertNotIn("99%", out)
+
+    def test_a_new_frame_claiming_a_recycled_pid_does_not_inherit_the_gauge(self):
+        """#383's recycled-pid adoption, applied to the sharpest of the three files it
+        clears. A frame id is `<workspace>-<launcher pid>`, and a launcher landing on a
+        pid an earlier launcher used adopts that frame's whole directory — so without
+        `clear_shape` taking `session` with it, a brand-new session's `top` row would
+        draw the PREVIOUS session's `ctx 42%` as its own, confidently, and forever: the
+        session that would correct it is over."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        state.clear_shape(self.fid)
+        self.assertNotIn("ctx", self._render())
         self.assertEqual(statusline._context_gauge({}), [])
 
 

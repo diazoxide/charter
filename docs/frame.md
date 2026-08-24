@@ -303,9 +303,21 @@ context**, which no panel can do, because a panel draws to a pane the model neve
 codex is unaffected in either direction — `charter statusline --watch` never consults any
 of this.
 
-The honest cost: `ctx NN%` and `cache NN%` lived on the status line, and no panel draws
-them yet, so a framed Claude Code session does not show them. codex and opencode never
-showed them at all — nothing feeds either one a per-turn usage payload to draw from.
+`ctx NN%` and `cache NN%` lived on the status line, and for one release a framed Claude
+Code session did not show them anywhere. It does now: the `top` row draws them, out of the
+history the suppressed status line goes on recording. The suppressed command is also what
+makes that possible at all — it is the one process that sees both this frame's id and
+Claude Code's session id, so it writes the mapping down; a panel reads it back and finds
+the numbers.
+
+The panel's gauge is not a second implementation: both surfaces share the colours and the
+labels, so a green 60% in a frame and a green 60% in a footer mean the same thing. What a
+panel cannot do is invent a figure it was never given — a frame whose harness has recorded
+no turns yet, or whose harness is not Claude Code at all, simply has no gauge on its top
+row rather than a `ctx 0%`.
+
+codex and opencode still show nothing, and for a harder reason that has not changed:
+nothing feeds either one a per-turn usage payload, so there is no history to read.
 (opencode's `/charter` is not a way around that: it renders the same status line, which
 has no numbers to show without a payload.)
 

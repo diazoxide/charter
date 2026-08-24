@@ -137,6 +137,74 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
         self._run(fid=self._a_live_frame(), payload={"session_id": "cc-session-1"})
         self.assertEqual(statusline._history("cc-session-1"), [])
 
+    # -- and telling the frame whose session this is (#413) ----------------------- #
+
+    def test_the_frame_learns_the_harnesss_own_session_id(self):
+        """#413's mapping, and the reason it is written HERE and nowhere else: the usage
+        history is keyed by Claude Code's session id, a panel knows only the FRAME's id,
+        and this process is the one place both are in scope at the same moment — the
+        frame id in its environment, Claude Code's in the payload on its stdin.
+
+        Without it a framed session has no `ctx`/`cache` gauge at all, which 0.52.0's own
+        news entry named as the one capability the frame genuinely lost."""
+        fid = self._a_live_frame()
+        self._run(fid=fid)
+        self.assertEqual(state.harness_session(fid), "cc-session-1")
+
+    def test_a_session_that_changed_under_the_frame_is_rewritten(self):
+        """One frame outlives several agent sessions — `/clear`, or a resume — and each
+        gets a new id. The mapping is rewritten every turn rather than written once, so a
+        panel's gauge follows the session actually running rather than the first one the
+        frame ever saw."""
+        fid = self._a_live_frame()
+        self._run(fid=fid)
+        self._run(fid=fid, payload={"session_id": "cc-session-2",
+                                    "context_window": {"used_percentage": 10}})
+        self.assertEqual(state.harness_session(fid), "cc-session-2")
+
+    def test_the_panels_are_woken_when_a_turn_is_recorded(self):
+        """A panel repaints on a version bump and on nothing else, and `record_usage`
+        bumps nothing — so without this, `top`'s gauge would sit on whatever it last drew
+        until some unrelated hook happened to fire, which on a turn that calls no tools is
+        never. A gauge showing last hour's number is worse than no gauge, which is the
+        rule this whole feature is built around."""
+        fid = self._a_live_frame()
+        before = state.version(fid)
+        self._run(fid=fid)
+        self.assertNotEqual(state.version(fid), before)
+
+    def test_a_rerender_of_the_same_turn_wakes_nobody(self):
+        """The other half, and the one that keeps this affordable: the status line renders
+        several times per turn, and each bump repaints every panel — `slots.ANIMATED`'s
+        own note measures one `render("right")` at 4.8ms. So the frame is woken only when
+        something it could draw actually changed. Asserted through TWO calls with the
+        identical payload, which is exactly what a re-render is."""
+        fid = self._a_live_frame()
+        self._run(fid=fid)
+        after_first = state.version(fid)
+        self._run(fid=fid)
+        self.assertEqual(state.version(fid), after_first)
+
+    def test_a_new_session_id_alone_is_enough_to_wake_them(self):
+        """The mapping changing is its own reason to repaint even when no new turn was
+        recorded: the panel is about to read a different session's history, so what it is
+        drawing is stale the moment the file changes. The second payload carries no usage
+        numbers at all, so the recorded turn cannot be what moved the version."""
+        fid = self._a_live_frame()
+        self._run(fid=fid)
+        after_first = state.version(fid)
+        self._run(fid=fid, payload={"session_id": "cc-session-2"})
+        self.assertNotEqual(state.version(fid), after_first)
+
+    def test_nothing_is_recorded_for_a_session_line_that_was_not_suppressed(self):
+        """The mapping is written on the suppressed branch alone. Outside a frame there is
+        no frame to tell, and `a_frame_owns_this_surface` has already settled the question
+        — a second, weaker check here is how the two would come to disagree about what
+        counts as being inside one."""
+        fid = self._a_live_frame()
+        self._run(fid=fid, tty=True)
+        self.assertIsNone(state.harness_session(fid))
+
     # -- and drawing everywhere else --------------------------------------------- #
 
     def test_a_human_asking_at_a_terminal_still_gets_the_line(self):

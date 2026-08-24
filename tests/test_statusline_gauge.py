@@ -13,6 +13,8 @@ import re
 import unittest
 from pathlib import Path
 
+from unittest import mock
+
 from charter import config, statusline
 from tests._isolation import PersonaIso, isolate_state_dir, pin_update_channel
 
@@ -342,3 +344,160 @@ class VaultHealthIsCachedOffTheRenderPath(PersonaIso):
         f.write_text(_json.dumps(doc))
         statusline._vault_health("v1")
         self.assertEqual(self.calls, ["v1", "v1"])
+
+
+class TheRecordedRowCarriesTheContextPercentage(unittest.TestCase):
+    """#413. `ctx NN%` is the one figure in the gauge that cannot be re-derived from
+    anything: the cache ratio and the rebuild history both come out of `read`/`write`,
+    and the percentage lives only in Claude Code's per-turn payload. Inside a frame the
+    status line draws nothing and a panel draws instead, out of this file — so a
+    percentage that was never written down is one the frame can never show.
+    """
+
+    def setUp(self):
+        isolate_state_dir(self)
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self._orig_sessions = config.SESSIONS_DIR
+        config.SESSIONS_DIR = Path(d)
+        self.addCleanup(lambda: setattr(config, "SESSIONS_DIR", self._orig_sessions))
+
+    def _rows(self, sid="s1"):
+        return [ln for ln in statusline._usage_file(sid).read_text().splitlines()
+                if ln.strip()]
+
+    def test_the_percentage_is_written_as_a_fourth_field(self):
+        statusline.record_usage(dict(_payload(pct=42, read=900, write=100),
+                                     session_id="s1"))
+        self.assertEqual(self._rows(), ["900,100,90,42"])
+
+    def test_a_turn_with_no_percentage_writes_an_empty_field_not_a_zero(self):
+        """Early in a session, and right after `/compact`. `ctx 0%` would be a claim; an
+        empty field is the absence of one, and `_last_ctx` skips it."""
+        statusline.record_usage(dict(_payload(read=900, write=100), session_id="s1"))
+        self.assertEqual(self._rows(), ["900,100,90,"])
+        self.assertIsNone(statusline._last_ctx("s1"))
+
+    def test_a_rerender_of_one_turn_is_still_one_row(self):
+        """The de-duplication rule this file has always claimed — an identical
+        `(read, write)` pair is the same API response re-rendered — asserted against a
+        payload whose PERCENTAGE moved. Comparing the whole assembled row (what the code
+        did while every field was derived from those two) would append a second row for
+        the same turn, spending a slot of the ring buffer and shifting the rebuild
+        history by one."""
+        statusline.record_usage(dict(_payload(pct=42, read=900, write=100),
+                                     session_id="s1"))
+        statusline.record_usage(dict(_payload(pct=43, read=900, write=100),
+                                     session_id="s1"))
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_a_real_new_turn_still_appends(self):
+        """The other direction, so the test above cannot be satisfied by a de-duplication
+        that never appends anything."""
+        statusline.record_usage(dict(_payload(pct=42, read=900, write=100),
+                                     session_id="s1"))
+        statusline.record_usage(dict(_payload(pct=44, read=1800, write=100),
+                                     session_id="s1"))
+        self.assertEqual(len(self._rows()), 2)
+
+    def test_the_hit_percentage_is_read_positionally_not_as_the_last_field(self):
+        """The trap the fourth field sets. `_hits` used to take the last field, which was
+        the hit rate; it is now the CONTEXT percentage — a plausible number in the same
+        0-100 range, so a trend reading it would have gone on rendering and quietly meant
+        something else entirely. The fixture makes the two differ so the mistake cannot
+        hide behind a coincidence."""
+        statusline._record_turn("s1", 90, 900, 100, 42)
+        self.assertEqual(statusline._hits(self._rows()), [90])
+
+    def test_a_three_field_row_from_an_older_charter_still_reads(self):
+        """The tracker keeps a session's history for its whole life, so an upgrade
+        mid-session is ordinary. A row written before #413 has no fourth field: its hit
+        rate and its `(read, write)` pair must both still be readable, or the rebuild
+        counter would silently report "no rebuilds" where it means "charter stopped
+        reading its own file"."""
+        f = statusline._usage_file("s1")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("900,100,90\n1000,90000,1\n")
+        self.assertEqual(statusline._hits(self._rows()), [90, 1])
+        self.assertEqual(statusline._history("s1"), [(900, 100), (1000, 90000)])
+        self.assertIsNone(statusline._last_ctx("s1"))
+
+    def test_the_last_recorded_percentage_wins_over_an_empty_later_one(self):
+        f = statusline._usage_file("s1")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("800,200,80,37\n900,100,90,\n")
+        self.assertEqual(statusline._last_ctx("s1"), 37)
+
+
+class ThePanelsGaugeReadsTheSameAsTheFooters(unittest.TestCase):
+    """#413's own correctness condition. `top` inside a frame and Claude Code's footer
+    outside one draw the same two numbers from two different sources — a live payload and
+    a recorded history. If the thresholds or the labels drifted apart, a green 60% on one
+    surface beside a yellow 60% on the other would be undebuggable from what is on screen.
+    Both go through `_ctx_part`/`_cache_part`, and these tests are what keeps that true.
+    """
+
+    def setUp(self):
+        isolate_state_dir(self)
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self._orig_sessions = config.SESSIONS_DIR
+        config.SESSIONS_DIR = Path(d)
+        self.addCleanup(lambda: setattr(config, "SESSIONS_DIR", self._orig_sessions))
+
+    def test_the_context_thresholds_are_the_ones_the_colours_are_chosen_from(self):
+        """Agreement between the two surfaces (below) cannot see a threshold that moved on
+        BOTH of them, since both go through one helper — so the thresholds themselves are
+        pinned here, at the boundaries rather than in the middle of each band. The colour
+        IS the fact: it is what turns a number into "this is fine" or "start a new
+        session", and it is the half of the gauge nobody reads consciously."""
+        cases = [(0, statusline._GREEN), (49, statusline._GREEN),
+                 (50, statusline._YELLOW), (79, statusline._YELLOW),
+                 (80, statusline._RED), (100, statusline._RED)]
+        for pct, want in cases:
+            with self.subTest(pct=pct):
+                self.assertIn(want, statusline._ctx_part(pct))
+
+    def test_the_cache_thresholds_are_pinned_the_same_way(self):
+        """<50% sustained means the prefix is churning, which is the expensive failure
+        mode this gauge was built to surface at all."""
+        cases = [(0, statusline._RED), (49, statusline._RED),
+                 (50, statusline._YELLOW), (79, statusline._YELLOW),
+                 (80, statusline._GREEN), (100, statusline._GREEN)]
+        for hit, want in cases:
+            with self.subTest(hit=hit):
+                self.assertIn(want, statusline._cache_part(hit))
+
+    def test_the_two_surfaces_produce_byte_identical_markup(self):
+        """Compared with the ANSI kept, not stripped: the colour IS the fact here — the
+        thresholds are what turn a number into "this is fine" or "this is expensive"."""
+        payload = dict(_payload(pct=85, read=400, write=600), session_id="s1")
+        live = statusline._context_gauge(payload)[:2]
+        panel = statusline.recorded_context_gauge("s1")[:2]
+        self.assertEqual(panel, live)
+
+    def test_the_rebuild_badge_reaches_the_panel_too(self):
+        """`↻N <tokens>` is the number the ratio cannot show — one measured rebuild cost
+        696k tokens and reads as a single dipped turn. It is computed from the recorded
+        history on both surfaces, so a panel has no excuse for missing it."""
+        f = statusline._usage_file("s1")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("900000,1000,99,40\n1000,600000,0,55\n")
+        out = _plain(statusline.recorded_context_gauge("s1"))
+        self.assertIn("↻1", out)
+
+    def test_an_unknown_session_draws_nothing_rather_than_zeros(self):
+        for sid in ("", "never-seen"):
+            with self.subTest(sid=sid):
+                self.assertEqual(statusline.recorded_context_gauge(sid), [])
+
+    def test_an_unreadable_history_draws_nothing_rather_than_raising(self):
+        """This is composed by a PANEL, where an exception is a hole in the frame rather
+        than a traceback anybody sees."""
+        with mock.patch("charter.statusline._usage_file",
+                        side_effect=RuntimeError("boom")):
+            self.assertEqual(statusline.recorded_context_gauge("s1"), [])
