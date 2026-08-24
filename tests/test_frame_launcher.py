@@ -1929,8 +1929,8 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         session_cmd = next(c for c in fake.calls if "new-session" in c)
         self.assertEqual(sorted(_carried_env(session_cmd)),
-                         ["CHARTER_HARNESS", "CHARTER_ROOT", "CHARTER_SESSION_ID",
-                          "CHARTER_WORKSPACE"],
+                         ["CHARTER_HARNESS", "CHARTER_PERSONA", "CHARTER_ROOT",
+                          "CHARTER_SESSION_ID", "CHARTER_WORKSPACE"],
                          "only charter's own identity may ride on a tmux command line")
 
     def test_an_identity_variable_the_launcher_lacks_is_carried_as_empty(self):
@@ -1976,8 +1976,8 @@ class Launch(PersonaIso, unittest.TestCase):
             carried = _carried_env(cmd)
             self.assertEqual(carried.get("CHARTER_SESSION_ID"), fake.fid)
             self.assertEqual(sorted(carried),
-                             ["CHARTER_HARNESS", "CHARTER_ROOT", "CHARTER_SESSION_ID",
-                              "CHARTER_WORKSPACE"],
+                             ["CHARTER_HARNESS", "CHARTER_PERSONA", "CHARTER_ROOT",
+                              "CHARTER_SESSION_ID", "CHARTER_WORKSPACE"],
                              "a panel's -e is argv too — identity only")
 
     def test_below_the_pane_env_floor_the_panels_carry_nothing(self):

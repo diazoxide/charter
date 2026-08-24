@@ -214,9 +214,19 @@ Two things it does anyway, and they are deliberate:
   invocation — which is how Claude Code calls it — goes blank, and only while a frame with
   this session's id is actually running.
 
+**Only Claude Code's footer goes quiet, because it is the only one being duplicated.**
+opencode has no status bar, so charter wires the plane in as an on-demand `/charter`
+command instead — and that renders in full inside a frame, as it does everywhere else.
+It is not a duplicate of anything: `/charter` puts the plane into the **agent's own
+context**, which no panel can do, because a panel draws to a pane the model never reads.
+codex is unaffected in either direction — `charter statusline --watch` never consults any
+of this.
+
 The honest cost: `ctx NN%` and `cache NN%` lived on the status line, and no panel draws
 them yet, so a framed Claude Code session does not show them. codex and opencode never
 showed them at all — nothing feeds either one a per-turn usage payload to draw from.
+(opencode's `/charter` is not a way around that: it renders the same status line, which
+has no numbers to show without a payload.)
 
 ## One frame, one charter session
 

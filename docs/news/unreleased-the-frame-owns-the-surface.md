@@ -20,7 +20,13 @@ cost are all reconstructed from what that command writes down. Unwiring `statusL
 would delete the record, silently, and nothing would notice until somebody went looking
 for a history that stopped months earlier.
 
-Three things have to be true before a line goes blank, and each one is guarding against a
+**Only Claude Code's footer is affected**, because it is the only one with a duplicate to
+remove. opencode has no status bar, so charter wires the plane in as an on-demand
+`/charter` command — that goes on rendering in full inside a frame, and it has to: it puts
+the plane into the agent's own context, which no panel can do, since a panel draws to a
+pane the model never reads. codex, which uses `charter statusline --watch`, is untouched.
+
+Four things have to be true before a line goes blank, and each one is guarding against a
 different way of getting it wrong:
 
 - **stdout is a pipe**, which is how Claude Code calls it. Run `charter statusline`
@@ -28,6 +34,7 @@ different way of getting it wrong:
   a frame elsewhere on your screen is no reason to answer you with a blank line.
 - **`$CHARTER_SESSION_ID` names a frame directory on this plane.** That variable is set by
   any harness that knows its own session, not only by a frame.
+- **the harness is Claude Code** — see above.
 - **the launcher named at the end of that id is still running.** A frame id ends in its
   launcher's pid, so `os.kill(pid, 0)` settles it with one syscall and no tmux call on a
   path that runs every time the footer repaints. Without it, a directory left behind by a

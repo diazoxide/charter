@@ -2106,8 +2106,8 @@ def a_frame_owns_this_surface() -> bool:
     test can pin. Everything below this line is `main`'s alone; `render` is unchanged and
     every test of it still means what it meant.
 
-    Two conditions, and both were measured rather than assumed (2026-08-24, Claude Code
-    2.1.241, darwin — see the module docstring):
+    Three conditions. The first two were measured rather than assumed (2026-08-24, Claude
+    Code 2.1.241, darwin — see the module docstring):
 
     * **stdout is not a tty.** Claude Code invokes this command with its stdout piped, so
       a tty means a human ran `charter statusline` by hand and wants to see the thing they
@@ -2131,6 +2131,31 @@ def a_frame_owns_this_surface() -> bool:
     Read with a ``""`` default rather than ``None``, deliberately: absent means "not in
     any pane", which is an answer — not a reason to stop asking the question.
 
+    * **the harness is Claude Code.** Suppression removes a DUPLICATE, and only Claude
+      Code has the surface being duplicated. **opencode has no status bar, so charter
+      wires the plane in as an on-demand slash command** whose body is
+      ``!`echo '{}' | charter statusline` `` (`harness/opencode.py`'s ``COMMAND``) — and
+      that invocation satisfies every other condition here perfectly: its stdout is a
+      pipe because it is a shell substitution, its `$CHARTER_SESSION_ID` is the live
+      frame's, and its `$TMUX_PANE` IS the recorded harness pane, because opencode is
+      what runs there. Without this rung `/charter` answered with a blank line inside a
+      frame (reproduced), and there is no duplicate anywhere for that to have removed:
+      `/charter` puts plane state into the **agent's context**, which no panel can do —
+      a panel draws to a pane the model never reads.
+
+      This is ADR 0019's own argument one step further, not a special case bolted on: the
+      ADR already holds that codex and opencode are different surfaces from Claude Code's
+      footer. The tty rung was built to protect "a human asked for this" and cannot cover
+      it, because opencode's own wiring makes the human's ask a pipe. (codex is untouched
+      either way — it uses `charter statusline --watch`, which returns before any of this.)
+
+      Asked LAST, and that ordering is the whole cost argument: inside a frame
+      `$CHARTER_HARNESS` is always set (`commands_frame._frame_env`, and
+      `_FRAME_IDENTITY` states it even when empty), so on the only path that reaches this
+      line `harness.current()` is one environment lookup. Every `detect()` fallback behind
+      it is an env lookup or a constant too — no subprocess on a path that runs every time
+      the footer repaints.
+
     Never raises. Everything it touches is ambient, and every failure means "no frame"
     (which renders) rather than a status line that vanished for a reason nobody can see.
     """
@@ -2141,7 +2166,10 @@ def a_frame_owns_this_surface() -> bool:
         if not fid:
             return False
         from .frame import state as frame_state
-        return frame_state.is_live(fid, pane=os.environ.get("TMUX_PANE", ""))
+        if not frame_state.is_live(fid, pane=os.environ.get("TMUX_PANE", "")):
+            return False
+        from . import harness
+        return harness.current() == harness.CLAUDE_CODE
     except Exception:
         return False
 

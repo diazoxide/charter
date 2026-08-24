@@ -4,8 +4,8 @@ Two properties, and the second is the one that will look like dead code to a fut
 reader: the command **keeps running**. Claude Code's per-turn payload is the only place
 this session's token usage exists (`hooks.py` has no reference to any usage field), so a
 suppression that unwired the command would delete the record rather than hide a
-duplicate. `RecordsWhileBlank` below is what a "this command prints nothing, remove it"
-change has to get past.
+duplicate. `FrameOwnsTheSurface.test_the_turn_is_still_recorded_while_the_line_is_blank`
+is what a "this command prints nothing, remove it" change has to get past.
 
 **Every fixture id ends in a pid that is really that pid.** `state.is_live` reads the
 number at the end of a frame id and asks whether that process exists, so `something-1`
@@ -75,10 +75,16 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
     _PANE = "%7"
 
     def _run(self, *, fid: str | None, tty: bool = False, pane: str = _PANE,
-             payload: dict | None = None) -> str:
+             harness: str = "claude-code", payload: dict | None = None) -> str:
         env = {"CHARTER_SESSION_ID": fid} if fid else {}
         if pane:
             env["TMUX_PANE"] = pane
+        if harness:
+            # Stated, never left to `harness.current()`'s detection fallback: suppression
+            # only ever applies to the harness whose surface the panels duplicate, so a
+            # test that did not say which harness it was would be asserting about
+            # whatever the developer's own terminal happened to look like.
+            env["CHARTER_HARNESS"] = harness
         out = _Tty() if tty else io.StringIO()
         with mock.patch.dict(os.environ, env, clear=True), \
              mock.patch("sys.stdin", io.StringIO(json.dumps(payload or _PAYLOAD))), \
@@ -198,6 +204,25 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
 
     def test_outside_a_frame_nothing_changes_at_all(self):
         self.assertIn("charter", self._run(fid=None))
+
+    def test_a_harness_with_no_status_bar_of_its_own_is_never_suppressed(self):
+        """opencode has no footer for a panel to duplicate, so charter wires the plane in
+        as an on-demand `/charter` slash command whose body is
+        ``!`echo '{}' | charter statusline` `` (`harness/opencode.py`'s `COMMAND`).
+
+        That invocation satisfies every OTHER condition perfectly — its stdout is a pipe
+        because it is a shell substitution, its `$CHARTER_SESSION_ID` is the live frame's,
+        and its `$TMUX_PANE` IS the recorded harness pane, because opencode is what runs
+        there. Suppressing it removed nothing and cost everything: `/charter` exists to put
+        plane state into the AGENT'S CONTEXT, which no panel can do — a panel draws to a
+        pane the model never reads. Reproduced as a blank line before this rung existed."""
+        self.assertIn("charter", self._run(fid=self._a_live_frame(), harness="opencode"))
+
+    def test_a_harness_charter_cannot_identify_is_not_suppressed_either(self):
+        """The safe direction, stated as a property rather than left to luck: an unknown
+        (or absent) harness answers "not the surface being duplicated", so the worst case
+        is the duplicate line this release removes — never a surface that vanished."""
+        self.assertIn("charter", self._run(fid=self._a_live_frame(), harness=""))
 
 
 class SuppressionSaysSoOnDemand(PersonaIso, unittest.TestCase):

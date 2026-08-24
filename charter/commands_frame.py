@@ -959,11 +959,18 @@ def _frame_env(fid: str, h) -> dict[str, str]:
 #:   other one's root writes into a control plane nobody in this frame chose.
 #: * ``CHARTER_WORKSPACE`` — `workspace.resolve` puts this above every pointer, so an
 #:   inherited pin outranks the frame's own answer and `charter ws use` cannot move it.
+#: * ``CHARTER_PERSONA`` — the same rung one module over: `persona._resolved` ranks it
+#:   above the per-session pointer, the per-terminal pointer AND the active-persona file.
+#:   An inherited pin therefore reaches the harness *and the frame's own `right` panel*,
+#:   which draws persona chips, and `charter persona use` cannot move either. It is here
+#:   because it meets the criterion above, not because anything was observed breaking —
+#:   the criterion is what this list is for, and applying it unevenly is how the next
+#:   variable gets forgotten.
 #:
-#: None of the four is ever a credential. That is the property that makes putting them on
+#: None of the five is ever a credential. That is the property that makes putting them on
 #: an argv acceptable at all — see :func:`_frame_identity_env`.
 _FRAME_IDENTITY = ("CHARTER_SESSION_ID", "CHARTER_HARNESS", "CHARTER_ROOT",
-                   "CHARTER_WORKSPACE")
+                   "CHARTER_WORKSPACE", "CHARTER_PERSONA")
 
 
 def _frame_identity_env(env: dict[str, str]) -> dict[str, str]:

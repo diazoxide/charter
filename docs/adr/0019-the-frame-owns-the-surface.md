@@ -60,15 +60,16 @@ Three conditions, all cheap enough for a path that runs every time the footer re
   statusline` and wants the thing they asked for; a frame elsewhere on the screen is no
   reason to answer them with a blank line. (Measured 2026-08-24, Claude Code 2.1.241: the
   command's stdout is a pipe, and its environment is Claude Code's own, passed intact.)
-* **`$CHARTER_SESSION_ID` names a directory under this plane's frame state.** Any harness
-  that knows its own session sets that variable, not only a frame; an id that never named
-  a frame directory here is not this plane's frame whatever it parses as.
 * **the launcher pid at the end of that id is still a running process.** A frame id is
   `<workspace>-<launcher pid>`, so `os.kill(pid, 0)` answers "is that frame alive" with
   one syscall and no tmux subprocess. Without it, a directory left behind by a crashed
   launcher would blank this plane's status line forever, with nothing on screen to say
   why. `state.reap` already asks the same question for the same reason.
-* **a server marker a LAUNCHER wrote.** A directory is not proof that a frame exists:
+* **`$CHARTER_SESSION_ID` names a frame directory here that a LAUNCHER wrote a server
+  marker into** — one read, not two, because the marker cannot exist without the
+  directory and a separate `is_dir()` would be a guard no mutation could turn red. Any
+  harness that knows its own session sets that variable, not only a frame. And a directory
+  alone is not proof that a frame exists:
   `state.bump` creates one on demand and `notify.plane_changed` calls it from seven hook
   sites for whatever id is in the environment — so an operator who exports
   `CHARTER_SESSION_ID` in a shell rc gets a directory minted by their first tool call,
@@ -81,6 +82,17 @@ Three conditions, all cheap enough for a path that runs every time the footer re
   there would take away the one correct surface that operator still had. tmux sets
   `$TMUX_PANE` in every process it starts in a pane, and it survives the harness's own
   spawning of this command (measured: a real `statusLine` invocation reported `PANE=[%0]`).
+
+* **the harness is Claude Code.** Suppression removes a duplicate, and only Claude Code
+  has the surface being duplicated. **A harness with no status bar of its own is never
+  suppressed**, which is this ADR's own premise applied one step further rather than an
+  exception to it: opencode has no footer, so charter wires the plane in as an on-demand
+  `/charter` slash command whose body pipes `charter statusline` through a shell
+  substitution. That invocation is piped, carries the live frame's id, and runs in the
+  recorded harness pane — every other condition here, satisfied perfectly — and blanking
+  it removes nothing, because `/charter` puts plane state into the **agent's context**,
+  which no panel can do: a panel draws to a pane the model never reads. codex is untouched
+  from either direction; `charter statusline --watch` returns before any of this.
 
 Every failure answers "not in a frame", which renders. A status line that vanished for a
 reason nobody can see is the worst outcome available here — which is also why `charter
