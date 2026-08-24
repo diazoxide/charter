@@ -1,8 +1,20 @@
 name: release
-# Publishes to PyPI via Trusted Publishing (OIDC) — there is no API token
+# Publishes to PyPI via Trusted Publishing (OIDC) — there is no PyPI API token
 # anywhere: not in the repo, not in Actions secrets, not on a laptop. PyPI
 # verifies GitHub's signed identity claim for this exact repo + workflow +
-# environment, so a leaked secret cannot be used to publish charter.
+# environment, so there is no publishing credential to leak.
+#
+# That moves the question rather than answering it, and this file has to answer
+# the moved one: what CAN publish charter is code running inside the `publish`
+# job, because the OIDC token is minted there on demand and the claim it carries
+# is genuine. Every `uses:` below is therefore pinned to a full commit SHA, with
+# the tag it resolved to in a trailing comment. A floating ref — `@v4`, or
+# `@release/v1`, which is a BRANCH head and not a tag — is a promise by whoever
+# can move it, and moving it is the whole of CVE-2025-30066 (#443).
+#
+# Bumping a pin: read the diff for the range, then put the new SHA and its tag
+# here. Dependabot opens that pull request (`.github/dependabot.yml`); it does
+# not merge it. `tests/test_workflows.py` fails on any ref that is not 40 hex.
 #
 # Trigger: push a version tag.
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -23,10 +35,10 @@ jobs:
     name: Verify the tag matches the packaged version, and that it has notes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Pinned rather than inherited: both steps below run charter itself, which needs
       # 3.11+ for tomllib. The runner's default `python` is a version nobody here chose.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Compare the git tag to pyproject.toml
@@ -63,8 +75,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Run the suite
@@ -75,15 +87,15 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Build
         run: pipx run build
       - name: Validate metadata renders on PyPI
         run: pipx run twine check dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
@@ -96,13 +108,18 @@ jobs:
       name: pypi
       url: https://pypi.org/p/charter-cp
     permissions:
+      # A job-level `permissions:` REPLACES the workflow's, it does not add to it — so
+      # this line is the whole grant: `contents` is `none` here, not the `read` above.
+      # That is deliberate and must stay. This job never checks the repository out; it
+      # downloads the artifact `build` produced, which `actions/download-artifact` reads
+      # from the same run with the runtime token, needing no `GITHUB_TOKEN` scope at all.
       id-token: write        # REQUIRED: mints the OIDC token PyPI verifies
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   announce:
     name: Create the GitHub Release from the shipped news entry
@@ -113,8 +130,8 @@ jobs:
       # `test` and `build` — which run the repository's own code — never hold write.
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Publish the notes charter already ships

@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+# Every `uses:` is pinned to a full commit SHA with its tag in a trailing comment, for the
+# reason `release.yml`'s header gives at length. It applies here too and for the same
+# reason: this workflow runs on every push and pull request, so a moved tag executes here
+# first and on the widest trigger — with a token that is read-only, which bounds the damage
+# without removing it. Dependabot moves these (`.github/dependabot.yml`);
+# `tests/test_workflows.py` refuses any ref that is not 40 hex characters.
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,8 +25,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Run the suite
@@ -36,8 +43,9 @@ jobs:
     # anything. Dev builds are never published: PyPI forbids local version identifiers, so
     # real dev releases would burn 0.52.0.dev1, .dev2, … permanently and irreversibly at a
     # rate of hundreds a month; and running the release workflow on every push to main
-    # would multiply exactly the `id-token: write`-with-unpinned-third-party-actions
-    # exposure #443 is open about.
+    # would run the job that holds `id-token: write` — the credential that can publish
+    # charter — on every merge. Its actions are SHA-pinned now (#443), which bounds what
+    # can run beside that token rather than making it a thing to do hundreds of times.
     #
     # So it holds NO id-token, writes nothing, and uses only first-party actions. `uv` is
     # installed with pip rather than through a setup action for that same reason: the
@@ -50,7 +58,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       # No checkout: the point is to install the way a user does — from the git URL — and

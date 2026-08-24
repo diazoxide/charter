@@ -18,12 +18,53 @@ goes through, and the tests assert on the argv it was handed.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from charter import __version__, commands_update, config, hooks, update, util
 from tests._isolation import PersonaIso
+
+
+@contextlib.contextmanager
+def exec_trap():
+    """Record every argv this process hands the operating system, however it is spelled.
+
+    Yields the list of argvs seen.
+
+    **Not a `util.run` counter.** Instrumenting one function pins that function's current
+    spelling, not the property — this suite has already watched a `Path.stat` counter miss
+    an `open()` and a `subprocess.run`. What has to be true here is about *execution*, so
+    the recorder sits where every way of starting a process arrives: `subprocess.run` is
+    recorded, and `Popen` plus the `os.exec*`/`spawn` family raise rather than run, so a
+    refactor onto one of them fails the test instead of slipping past it.
+
+    Residual, named rather than papered over: a C-level or `ctypes` spawn would still get
+    through, and no test in this suite can see one.
+    """
+    seen: list[list[str]] = []
+
+    def record(argv, *a, **kw):
+        assert not kw.get("shell"), "a shell was requested on a path that must not have one"
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+    def refuse(*a, **kw):
+        raise AssertionError(
+            "a process was started by a spelling this trap does not record — the argv it "
+            "was given is unexamined, which is the hole #455 was about")
+
+    with contextlib.ExitStack() as st:
+        st.enter_context(mock.patch.object(subprocess, "run", record))
+        st.enter_context(mock.patch.object(subprocess, "Popen", refuse))
+        for name in ("execv", "execve", "execvp", "execvpe", "posix_spawn",
+                     "posix_spawnp", "spawnv", "spawnvp", "system"):
+            if hasattr(os, name):
+                st.enter_context(mock.patch.object(os, name, refuse))
+        yield seen
 
 
 class Ran:
@@ -96,6 +137,70 @@ class TheDevRequirementIsAConstant(unittest.TestCase):
             name, argv = commands_update.dev_install_argv()
         self.assertEqual(name, "unknown")
         self.assertIsNone(argv)
+
+
+class TheRunSiteRunsTheArgvItWasHanded(unittest.TestCase):
+    """#455: the same claim, pinned at the site that actually executes.
+
+    `dev_install_argv`'s docstring says there is no format call on this path, and the canary
+    above proves it where the argv is BUILT. It says nothing about where the argv is RUN —
+    the reviewer of PR #454 put `.format()` back into `_sync_dev` and all 4415 tests stayed
+    green, because no test ever looked at what left that function.
+
+    So the property is stated as a property of the boundary rather than of a line of code:
+    **the argv charter hands the operating system on this path is, element for element, the
+    argv `dev_install_argv` returned.** That is one assertion and it forbids all of it —
+    interpolation, appending, re-splitting, joining into a shell string — including the
+    spellings nobody has thought of yet, which is the difference between this and a list of
+    forbidden characters.
+    """
+
+    def _run(self, argv):
+        with mock.patch.object(commands_update, "dev_install_argv",
+                               return_value=("uv", list(argv))), \
+                mock.patch.object(commands_update.shutil, "which",
+                                  return_value="/usr/bin/uv"), \
+                exec_trap() as seen:
+            commands_update._sync_dev()
+        return seen
+
+    def test_a_brace_bearing_argv_reaches_the_process_unchanged(self):
+        """The canary carries the placeholders a `str.format` would consume. A format call
+        added to `_sync_dev` either raises on the unknown key or rewrites the element, and
+        both are visible here — where today they are invisible, because `DEV_SPEC` has no
+        braces for one to bite on."""
+        canary = ["uv", "tool", "install", "--force",
+                  "git+https://example.invalid/{version}@{ref}"]
+        self.assertEqual(self._run(canary), [canary])
+
+    def test_nothing_is_appended_to_the_argv_on_the_way_out(self):
+        """Interpolation is one way for a value to enter this command; an extra element is
+        another, and the equality above forbids both. Spelled out separately because an
+        appended `--index-url` is the shape that would not look like a bug in review."""
+        canary = ["uv", "tool", "install", "--force", "git+https://example.invalid/x"]
+        self.assertEqual(self._run(canary), [canary])
+
+    def test_the_real_dev_install_argv_arrives_at_the_process_verbatim(self):
+        """End to end, with the module's own table, against the literal string `docs`
+        tells a person to type. Written out rather than compared to `DEV_SPEC` so this is
+        an independent statement of what runs, not the constant agreeing with itself."""
+        with mock.patch.object(commands_update, "installer_for", return_value=("uv", [])), \
+                mock.patch.object(commands_update.shutil, "which",
+                                  return_value="/usr/bin/uv"), \
+                exec_trap() as seen:
+            ok, detail = commands_update._sync_dev()
+        self.assertEqual(seen, [["uv", "tool", "install", "--force",
+                                 "git+https://github.com/diazoxide/charter@main"]])
+        self.assertTrue(ok)
+
+    def test_an_install_charter_does_not_own_starts_no_process_at_all(self):
+        """The refusal is a refusal, not a fallback into some other command."""
+        with mock.patch.object(commands_update, "dev_install_argv",
+                               return_value=("unknown", None)), \
+                exec_trap() as seen:
+            ok, detail = commands_update._sync_dev()
+        self.assertFalse(ok)
+        self.assertEqual(seen, [])
 
 
 class TheDevInstallRunsTheGitCommand(PersonaIso):
@@ -210,6 +315,11 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
     installing over the tree you are editing is never what "let me try the update command"
     meant, and it is *more* tempting to get wrong on a channel whose whole point is running
     unreleased code.
+
+    #456 split the checkout case in two without weakening it. The CLI install still never
+    happens on a checkout — that is what every test below asserts, on both channels and
+    with and without an explicit target. What changed is that the plugin half, which lives
+    outside the tree, is no longer refused along with it.
     """
 
     def setUp(self):
@@ -218,22 +328,88 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
         config.use(self.tmp)
         self.ran = Ran()
         self.enterContext(mock.patch.object(commands_update.util, "run", self.ran))
+        # The CLI half, watched by name as well as by argv. `self.ran.calls` says no
+        # command ran; this says the function that would have run one was never entered,
+        # so a failure names WHICH guard let go rather than only that something did.
+        self.sync = self.enterContext(mock.patch.object(commands_update, "_sync_dev"))
+        self.sync_to = self.enterContext(mock.patch.object(commands_update, "_sync_to"))
 
-    def _args(self):
-        return argparse.Namespace(to=None, bump=False)
+    def _args(self, **kw):
+        return argparse.Namespace(**{"to": None, "bump": False, **kw})
+
+    @contextlib.contextmanager
+    def _on_a_checkout(self, claude=True):
+        from charter import doctor, plugincache
+        with mock.patch.object(doctor, "_is_charter_checkout", return_value=True), \
+                mock.patch.object(plugincache, "available", return_value=claude), \
+                mock.patch.object(commands_update, "_refresh_plugin") as refresh, \
+                mock.patch.object(commands_update, "_move_harness") as harness_:
+            yield refresh, harness_
+
+    def _installed_nothing(self):
+        self.sync.assert_not_called()
+        self.sync_to.assert_not_called()
+        self.assertEqual(self.ran.calls, [])
 
     def test_a_news_probe_cannot_install_a_dev_build(self):
         from charter import news
         with mock.patch.object(news, "probing", return_value=True), \
                 mock.patch.object(news, "refuse_mutation"):
             self.assertEqual(commands_update.cmd_update(self._args()), 2)
-        self.assertEqual(self.ran.calls, [])
+        self._installed_nothing()
 
     def test_a_charter_checkout_cannot_install_over_itself(self):
-        from charter import doctor
-        with mock.patch.object(doctor, "_is_charter_checkout", return_value=True):
+        """The guard #456 says must stay. The CLI is the tree; nothing is installed on it,
+        on either channel and whatever else the command goes on to do."""
+        for channel in ("dev", "stable"):
+            with self.subTest(channel=channel):
+                (self.tmp / "charter.toml").write_text(
+                    f'schema = 1\n[update]\nchannel = "{channel}"\n')
+                config.use(self.tmp)
+                with self._on_a_checkout():
+                    commands_update.cmd_update(self._args())
+                self._installed_nothing()
+
+    def test_a_dev_checkout_still_gets_the_plugin_half(self):
+        """#456. `doctor`'s `plugin files` row names `charter update` as the fix and a
+        maintainer reads that row standing in a checkout — so the command has to do the
+        part that is safe here instead of refusing the whole thing."""
+        with self._on_a_checkout() as (refresh, harness_):
+            self.assertEqual(commands_update.cmd_update(self._args()), 0)
+        refresh.assert_called_once()
+        # NOT the harness artifact: `_move_harness` writes into the plane root, which on a
+        # charter checkout is the same tree the CLI refusal is protecting.
+        harness_.assert_not_called()
+        self._installed_nothing()
+
+    def test_an_explicit_target_on_a_checkout_is_still_refused_outright(self):
+        """`--to X.Y.Z` asks for a published CLI to be installed, which is exactly the half
+        that cannot happen here. Answering 0 and quietly doing something else would be a
+        command reporting success for a thing it did not do."""
+        with self._on_a_checkout() as (refresh, _):
+            self.assertEqual(commands_update.cmd_update(self._args(to="0.50.1")), 2)
+        refresh.assert_not_called()
+        self._installed_nothing()
+
+    def test_a_stable_checkout_is_refused_the_way_it_always_was(self):
+        """`_refresh_plugin` is the dev channel's mechanism — on stable the released plugin
+        is what pairs with the released CLI, which is what `doctor` says there. So this
+        path has nothing safe left to do and says so, exit code and all."""
+        (self.tmp / "charter.toml").write_text('schema = 1\n[update]\nchannel = "stable"\n')
+        config.use(self.tmp)
+        with self._on_a_checkout() as (refresh, _):
             self.assertEqual(commands_update.cmd_update(self._args()), 2)
-        self.assertEqual(self.ran.calls, [])
+        refresh.assert_not_called()
+        self._installed_nothing()
+
+    def test_with_no_claude_on_path_it_says_there_is_nothing_to_do(self):
+        """The honest end of the same branch. A plane with no Claude Code has no plugin to
+        refresh either, and reporting a refresh that did not happen is the overclaim this
+        repository keeps having to unwrite."""
+        with self._on_a_checkout(claude=False) as (refresh, _):
+            self.assertEqual(commands_update.cmd_update(self._args()), 0)
+        refresh.assert_not_called()
+        self._installed_nothing()
 
 
 class APinAndTheDevChannelAreNotSettledSilently(PersonaIso):

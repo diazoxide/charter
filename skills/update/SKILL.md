@@ -25,8 +25,11 @@ their next session, so get an explicit yes before running it.
 **A host's command.** Claude Code's plugin and Codex's belong to the host, so charter names
 the command rather than running it. Hand that command to the person and let them run it.
 
-**A charter checkout.** `update` refuses, because installing over the tree being edited is
-never what was meant. `charter version` is the read-only view.
+**A charter checkout.** The CLI there is the tree being edited, so `update` never installs
+over it — that refusal stays. What it does instead depends on what is left to do: on the
+**dev channel** it refreshes the Claude Code plugin, which lives outside the tree, and says
+that is all it did; on stable, and whenever `--to` names a version, it refuses outright.
+`charter version` is the read-only view either way.
 
 ## Adopt what the version brought
 

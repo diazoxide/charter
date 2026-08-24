@@ -29,10 +29,12 @@ Three things change on `dev` and nothing else does:
 identifiers, so real dev releases would have to burn `0.52.0.dev1`, `.dev2`, … permanently,
 at a rate of hundreds a month, irreversibly — a namespace you cannot take back. And
 publishing on every merge means running the release workflow on every merge, and that
-workflow holds `id-token: write` alongside unpinned third-party actions (#443). Publishing
-on every commit would multiply exactly the exposure that issue is open about. So nothing is
-published: CI installs `git+…@main` on every push to `main`, checks the installed `charter
---version` runs, and holds no `id-token` at all. The same coverage, without the artifact.
+workflow is the one that holds `id-token: write` — the credential that can publish charter.
+Its actions are now pinned to commit SHAs (#443, closed in this same release), which bounds
+what can run beside that token; it does not make running the job hundreds of times a month
+a good idea. So nothing is published: CI installs `git+…@main` on every push to `main`,
+checks the installed `charter --version` runs, and holds no `id-token` at all. The same
+coverage, without the artifact.
 
 **`charter --version` tells you which build you are on, and it is the install talking.**
 
