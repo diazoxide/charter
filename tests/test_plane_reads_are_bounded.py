@@ -145,6 +145,28 @@ class PlaneReadsAreBounded(PersonaIso):
         self.assertEqual("", self.completes(lambda: workspace.read_vision("other"),
                                             "read_vision on a FIFO workspace.md"))
 
+    def test_a_fifo_workspace_default_pointer_does_not_block(self):
+        """`workspaces/.default` is the workspace twin of `personas/.default` above, and it
+        is read by `workspace.resolve()` — which the status line calls on every paint to
+        answer "where am I". It was the last committed dotfile charter opened by name
+        without asking `contain` what it was (#442).
+
+        The manifest is here too because it is the other file a resolved workspace name
+        leads to, and `restore` reads it to decide which repos to clone.
+        """
+        workspace.ensure("other")
+        self.fifo(workspace.default_file())
+        self.assertIsNone(self.completes(workspace.declared_default,
+                                         "declared_default on a FIFO .default"))
+        self.completes(lambda: workspace.resolve(cwd=str(config.ROOT)),
+                       "workspace.resolve over a FIFO .default")
+
+        manifest = workspace.manifest_path("other")
+        manifest.unlink(missing_ok=True)
+        self.fifo(manifest)
+        self.assertEqual({}, self.completes(lambda: workspace.read_manifest("other"),
+                                            "read_manifest on a FIFO workspace.json"))
+
     def test_a_fifo_mcp_declaration_does_not_block_sync_agents(self):
         """`personas/<name>/mcp.json` is the third committed file `persona.py` opens by
         listing rather than by asking. `mcp_servers` already refuses to raise on a stray

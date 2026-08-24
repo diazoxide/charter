@@ -3,14 +3,23 @@
 Charter validated a name when a human typed it and never when it read one from a
 committed file (#328). `valid_name` lives in :mod:`charter.persona` and
 :mod:`charter.workspace` and is called from six places, all of them commands. The reading
-side — `extends:`, `uses:`, `[persona] default`, a `workspace.json` repo name, an
-`inventory/repos.json` name — joined the value onto a path with nothing in between, so a
-committed file could name a target outside the directory charter meant to look in.
+side — `extends:`, `uses:`, `[persona] default`, `[workspace] default`, a committed
+`workspaces/.default`, a `workspace.json` repo name, an `inventory/repos.json` name —
+joined the value onto a path with nothing in between, so a committed file could name a
+target outside the directory charter meant to look in.
+
+The last two arrived a round later (#442) and are the reason this list is written out
+rather than described. Every argument above had already been made and shipped for the
+*persona* default; the workspace twin, two rungs of the same precedence ladder, was simply
+not on anybody's list — so a plane's `[workspace] default` and its committed
+`workspaces/.default` reached `workspace_dir()` unchecked while the persona rung beside
+them was gated. A guard that covers "the sites we thought of" is a guard that grows a new
+hole every time a noun is added; the enumeration is what makes the omission visible.
 
 :mod:`charter.docsrc` already had the answer and it was never reused: a topic is matched
 against a shape before it becomes a page, because ``charter docs show ../../etc/passwd``
 "must not be a file-read primitive wearing a documentation command". This module is that
-idea, extracted so the five reading sites share one implementation instead of four
+idea, extracted so the reading sites share one implementation instead of four
 near-misses and a fifth that forgets.
 
 **Two questions, kept apart on purpose.**

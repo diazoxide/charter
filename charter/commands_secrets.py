@@ -5,6 +5,12 @@ The overriding rule here: **secret values must not leak into the model.**
 - ``list`` shows keys only, ``get`` is masked by default;
 - ``get --reveal`` refuses a non-interactive stdout (an agent) unless ``--force``;
 - the real consumption paths are ``exec`` (inject + redact) and ``cp`` (0600 file).
+
+And the rule's shadow: **every route by which a value leaves this process records that it
+did.** ``exec``, ``cp`` and ``get --reveal`` each write one ``charter trace`` event naming
+the vault, the key and the command — never a value (#441, and see
+:func:`_trace_secret_use`). A plane that hands out credentials and cannot say afterwards
+which command got which one has the audit half of the story missing.
 """
 
 from __future__ import annotations
@@ -433,6 +439,66 @@ def cmd_secret_audit(args) -> int:
     return 1 if stale else 0
 
 
+# --------------------------------------------------------------------------- #
+# the access record — WHICH command got WHICH credential (#441)                #
+# --------------------------------------------------------------------------- #
+# The vocabulary is `trace.SECRET_USE_EVENTS`, and there are exactly three routes by which
+# a plaintext leaves this process: a child's environment or a temp file (`exec`), a file on
+# disk (`cp`), and a terminal (`get --reveal`). All three record. `secret get` WITHOUT
+# `--reveal` does not, because nothing left — it prints a length and a digest.
+#
+# Recording two of the three would have been worse than recording none. An operator who
+# greps the trace for `secret-exec` and `secret-cp`, finds nothing, and concludes the token
+# never left the vault has been told something false by a record that looks complete.
+
+
+def _value_free(field, values: list[str]):
+    """*field* with every value in *values* replaced by ``***``, at any depth.
+
+    Recurses through dicts, lists and tuples rather than checking a list of field names
+    charter happens to record today: the next field added to a record is the one nobody
+    scrubs, and a rule about *shapes* covers a field that has not been written yet.
+    """
+    if isinstance(field, str):
+        return base.redact(field, values)
+    if isinstance(field, dict):
+        return {_value_free(k, values): _value_free(v, values) for k, v in field.items()}
+    if isinstance(field, (list, tuple)):
+        return [_value_free(v, values) for v in field]
+    return field
+
+
+def _trace_secret_use(event: str, resolved: list[str], **fields) -> None:
+    """Record that a credential was handed out — WHICH command, WHICH names, never a value.
+
+    `charter trace` knew about `secret-warn`, the scanner that notices a value in a file it
+    is about to commit, and about nothing charter itself handed out. So after the fact
+    there was no answer to *"which command received the prod token"* — the cheapest
+    observability a plane holding credentials can have, and the one it did not have (#441).
+
+    **Names, and one argv element.** `vault`, the key names, the environment variable names
+    they were bound to, and ``argv[0]``. Not the rest of argv: charter never substitutes a
+    value into a command line, but the caller may have *typed* one there, and a record
+    whose purpose is to hold no values must not copy a line that might.
+
+    *resolved* is the values this call actually read, and it is used for exactly one thing:
+    removing them from the fields above, at any depth, before anything is written. That is
+    belt and braces over the rule that only names are passed in — the half that still holds
+    when somebody adds a field here in a year. Its bound is stated rather than implied: it
+    can only remove values **this call resolved**, so it is not a filter that makes an
+    arbitrary payload safe to record, and nothing may be passed here on the strength of it.
+
+    Best-effort and silent, like every other trace site: observability must never break the
+    thing it observes, and a credential that was successfully delivered must not be turned
+    into a failure by the bookkeeping about it.
+    """
+    try:
+        from . import trace
+        trace.record(event, **{k: _value_free(v, resolved) for k, v in fields.items()})
+    except Exception:
+        pass
+
+
 def cmd_secret_get(args) -> int:
     try:
         value = _provider(args.vault).get(args.key)
@@ -455,6 +521,10 @@ def cmd_secret_get(args) -> int:
             "or pass --force if you truly intend to print it."
         )
         return 2
+    # Before the write, not after: the record of a credential leaving must not depend on
+    # the write that sends it away succeeding (a closed pipe, a full terminal).
+    _trace_secret_use("secret-reveal", [value], vault=args.vault, key_names=[args.key],
+                      forced=bool(args.force))
     util.warn("Revealing secret plaintext to this terminal.")
     sys.stdout.write(value if value.endswith("\n") else value + "\n")
     return 0
@@ -728,6 +798,12 @@ def cmd_secret_cp(args) -> int:
         util.err(str(e))
         return 1
 
+    # Before the write, and deliberately: from here on a plaintext is in this process with
+    # a descriptor open on its destination, so this is the last point at which the record
+    # is guaranteed to be made. Recorded after `f.write` returned, a partial write
+    # interrupted by ENOSPC or a signal would leave the value on disk and no trace of it.
+    _trace_secret_use("secret-cp", [value], vault=args.vault, key_names=[args.key],
+                      dest=str(dest), overwrote=bool(force and not created))
     with os.fdopen(fd, "w") as f:
         # fchmod, not chmod: the mode lands on the file this process opened, not on
         # whatever the path names by the time the write finishes.
@@ -846,6 +922,11 @@ def cmd_secret_exec(args) -> int:
 
     env = _child_env(args.vault)
     secret_values: list[str] = []
+    # The access record's payload, accumulated beside `secret_values` in the same three
+    # loops so a route that resolves a value and forgets to name it is a visible omission
+    # rather than a silent one (#441). Names only — see `_trace_secret_use`.
+    key_names: list[str] = []
+    env_names: list[str] = []
     tmpfiles: list[str] = []
     # Everything below that can create a tmpfile — --file, --dotenv, and the
     # subprocess.run call that consumes them — is one `try` with a single
@@ -879,6 +960,8 @@ def cmd_secret_exec(args) -> int:
                 val = prov.get(key)
                 env[name] = val
                 secret_values.append(val)
+                key_names.append(key)
+                env_names.append(name)
             for spec in args.file or []:
                 name, sep, key = spec.partition("=")
                 if not sep or not name:
@@ -886,6 +969,8 @@ def cmd_secret_exec(args) -> int:
                     return 2
                 val = prov.get(key)
                 secret_values.append(val)
+                key_names.append(key)
+                env_names.append(name)
                 fd, path = tempfile.mkstemp(prefix=f"charter-{args.vault}-{key}-")
                 # Register for cleanup *before* writing: a failure mid-write
                 # (ENOSPC, EIO, a lone surrogate in the value) would otherwise
@@ -916,9 +1001,11 @@ def cmd_secret_exec(args) -> int:
 
             for envvar, entries in grouped.items():
                 lines = []
+                env_names.append(envvar)
                 for name, key in entries:
                     val = prov.get(key)
                     secret_values.append(val)
+                    key_names.append(key)
                     # Tier 3 writes an escaped form; redaction must match what
                     # is actually in the file, not just the raw value.
                     escaped = val.replace("\r", "\\r").replace("\n", "\\n")
@@ -939,6 +1026,32 @@ def cmd_secret_exec(args) -> int:
         except base.VaultError as e:
             util.err(str(e))
             return 1
+
+        # ONE site, above the branch, and that placement is the whole of the guarantee.
+        # Three modes launch the child below — `execvpe`, a streaming `subprocess.run`, a
+        # capturing one — and a record placed inside them would be three records kept in
+        # step by hand, with a fourth mode arriving unrecorded. Everything that runs a
+        # command passes through here.
+        #
+        # Above `execvpe` for a second reason: exec REPLACES this process, so a record
+        # written after it is a record that is never written. And above all three because
+        # the event being recorded is "charter handed these credentials to this command",
+        # which is already true at this line — a child that segfaults on its first
+        # instruction still received them.
+        #
+        # A run that resolves NOTHING is still recorded, with empty name lists. `secret
+        # exec` with no `--env`/`--file`/`--dotenv` hands out no credential, but it does
+        # run a command inside charter's vault machinery, and a trace that showed the
+        # credentialed runs and hid the others would answer "what did this vault do" with
+        # a filtered list that looks whole.
+        _trace_secret_use(
+            "secret-exec", secret_values,
+            vault=args.vault,
+            key_names=sorted(set(key_names)),
+            env_names=sorted(set(env_names)),
+            argv0=command[0],
+            mode="exec" if exec_mode else ("stream" if stream_mode else "capture"),
+        )
 
         if exec_mode:
             # Replaces this process: stdio is inherited untouched, so a

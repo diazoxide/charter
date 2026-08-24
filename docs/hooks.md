@@ -297,4 +297,16 @@ that adds no handler behaves identically, so it says nothing — a row that fire
 version lag is a row people learn to scroll past.
 
 Seeing what actually happened: `charter trace` reports guard denials, tool approvals, secret
-warnings and memory writes for the session.
+warnings, **credential hand-outs** and memory writes for the session.
+
+The hand-outs are the three ways a value leaves charter's own process, one event each —
+`secret-exec` (a child's environment or a temp file), `secret-cp` (a file on disk) and
+`secret-reveal` (`secret get --reveal`, a terminal). Each row carries the vault, the key
+**names**, and for `exec` the environment variable names and `argv[0]`. It never carries a
+value, and never the rest of the command line: charter does not substitute a secret into
+argv, but a caller may have typed one there. `secret get` without `--reveal` records
+nothing, because nothing left — it prints a length and a digest.
+
+So the question `charter trace` can now answer is *which command received the prod token*.
+The one it cannot is what that command then did with it; a credential delivered to a
+process is that process's from then on.

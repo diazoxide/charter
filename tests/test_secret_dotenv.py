@@ -264,13 +264,21 @@ class _StubProvider:
         return self.values[key]
 
 
-class DotenvExec(unittest.TestCase):
+class DotenvExec(PersonaIso):
+    """`PersonaIso`, not a bare `TestCase`: `cmd_secret_exec` records the hand-out in the
+    session trace (#441), and a fixture that has not redirected `config` appends that row
+    to the plane the suite resolved to — the developer's own (#372, #402)."""
+
     def setUp(self) -> None:
+        super().setUp()
         self.provider = _StubProvider({"pw-user": "svc_qa",
                                        "pw-pass": 'p"ass\\word'})
-        self._orig = commands_secrets._provider
+        # NOT `self._orig`: `PersonaIso` keeps the config snapshot it restores under that
+        # name, and shadowing it made every test in this class error in teardown.
+        self._orig_provider = commands_secrets._provider
         commands_secrets._provider = lambda _name: self.provider
-        self.addCleanup(lambda: setattr(commands_secrets, "_provider", self._orig))
+        self.addCleanup(
+            lambda: setattr(commands_secrets, "_provider", self._orig_provider))
         self._td = tempfile.TemporaryDirectory()
         self.tmpdir = self._td.name
         self.addCleanup(self._td.cleanup)

@@ -13,6 +13,7 @@ import re
 import tomllib
 from pathlib import Path
 
+from . import contain
 from .root import MARKER
 
 #: Layout version this engine understands.
@@ -80,8 +81,53 @@ def exclude_of(cfg: dict, index: int = 0) -> set[str]:
     return set(_forge_at(cfg, index).get("exclude") or ())
 
 
+#: The alphabet ``charter workspace create`` mints workspace names in.
+#:
+#: Lives here, and not in :mod:`charter.workspace`, for one reason: ``charter.toml`` is
+#: parsed during ``config``'s own bootstrap, so a rung that asked ``workspace.valid_name``
+#: would be asking a module that ``config`` has not finished importing yet.
+#: :func:`charter.workspace.valid_name` delegates to :func:`workspace_name_ok` below, so
+#: the resolver and the creation-time check are one rule rather than two kept in step by
+#: hand — the divergence :mod:`charter.contain` exists to stop.
+WORKSPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def workspace_name_ok(name) -> bool:
+    """Can *name* name a workspace this plane contains?
+
+    Two questions, asked in :mod:`charter.contain`'s order and for its reasons.
+    :func:`contain.segment_ok` is *containment* — could this string name one entry in a
+    directory at all — and it is the half that still holds if the alphabet below is ever
+    widened. :data:`WORKSPACE_NAME_RE` is the *alphabet*, and it is the right rule here
+    because charter mints workspace names itself: a value outside it cannot name a
+    workspace ``workspace create`` produced, so the resolver and lint agree by
+    construction.
+
+    ``isinstance`` first because a hand-edited ``charter.toml`` can put a TOML array or
+    table where a name goes, and this module is imported by every command including
+    ``charter --version``.
+    """
+    return (isinstance(name, str) and contain.segment_ok(name)
+            and WORKSPACE_NAME_RE.match(name) is not None)
+
+
 def default_workspace_of(cfg: dict, fallback: str) -> str:
-    return (cfg.get("workspace") or {}).get("default") or fallback
+    """The workspace this plane lands on when nothing else decided — ``[workspace] default``.
+
+    **Validated, because ``charter.toml`` is committed.** The value used to be returned
+    verbatim, and `config.DEFAULT_WORKSPACE` is joined onto `WORKSPACES_DIR` by
+    `workspace.workspace_dir` and by `commands._first_clone_dest` — so
+    ``default = "../../esc"`` in a teammate's ``charter.toml`` made `workspace vision` and
+    `workspace current` read a `workspace.md` the plane does not contain, and pointed the
+    first clone of `charter init` outside it (#442). The write and listing sides already
+    refused; only the reading side was open, which is #328's shape one noun over.
+
+    Degrades to *fallback* rather than raising, the contract :func:`frame_of` keeps for
+    every key it cannot make sense of: a ``charter.toml`` charter disagrees with never
+    stops charter from running. A blank value is absence, like its persona twin below."""
+    val = (cfg.get("workspace") or {}).get("default")
+    val = str(val).strip() if isinstance(val, (str, int, float)) else ""
+    return val if workspace_name_ok(val) else fallback
 
 
 def default_persona_of(cfg: dict) -> str | None:

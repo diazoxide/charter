@@ -1378,6 +1378,18 @@ def cmd_trace(args) -> int:
         if warns:
             print(f"  secret warnings ({len(warns)}): "
                   + ", ".join(w.get("file", "") for w in warns[-5:]))
+        # Credential hand-outs get their own line rather than only a tally, for the same
+        # reason denials do: "which command received the prod token" is a question somebody
+        # asks under pressure, and an aggregate that hides the answer one `charter trace`
+        # invocation deeper is an aggregate they will not trust twice (#441).
+        uses = [e for e in events if e["event"] in trace.SECRET_USE_EVENTS]
+        if uses:
+            print(f"  credentials handed out ({len(uses)}):")
+            for e in uses[-5:]:
+                keys = ",".join(e.get("key_names") or ()) or "-"
+                where = e.get("argv0") or e.get("dest") or "this terminal"
+                print(f"    {e.get('ts', '')}  {e['event']:14} "
+                      f"{e.get('vault', '?')}/{keys} → {where}")
         return 0
     shown = events[-args.n:] if getattr(args, "n", 0) else events
     for e in shown:

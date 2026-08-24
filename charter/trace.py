@@ -37,6 +37,19 @@ import json
 from . import config, session as _sessions
 
 
+#: The events that record a credential leaving charter's own process, one per way out —
+#: a child's environment or a temp file, a file on disk, a terminal (#441).
+#:
+#: Here rather than in :mod:`charter.commands_secrets` because two readers need it: the
+#: writer, and ``charter trace --summary``, which gives hand-outs the same billing as guard
+#: denials. A summary that highlighted denials and warnings while leaving credential
+#: hand-outs to the generic per-event tally would imply they are the less notable thing.
+#:
+#: Every row is names only. A trace file sits inside the plane, readable by the agent whose
+#: behaviour it records, so the record of a secret must never become a second copy of it.
+SECRET_USE_EVENTS = ("secret-exec", "secret-cp", "secret-reveal")
+
+
 def _session(session: str | None = None) -> str:
     """Delegate to the ONE resolver (`session.bucket`) rather than re-deriving it.
 

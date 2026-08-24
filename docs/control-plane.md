@@ -330,6 +330,13 @@ session or terminal pane. Defaults to `"default"` (and `default` always exists �
 clone` creates it on first use). See `docs/personas.md`'s sibling in spirit, workspaces,
 for the full precedence chain.
 
+**A workspace name, not a path.** This file is committed, so the value is whoever last
+edited it — and charter joins it onto `workspaces/`. It must therefore be a name `charter
+workspace create` would mint (letters, digits, `.`, `_`, `-`; not starting with a dot).
+Anything else degrades to `"default"`, the same way a `[frame]` key charter cannot make
+sense of degrades to its shipped value. The committed `workspaces/.default` file, written
+by `charter workspace default`, is held to the identical rule.
+
 ## `[charter].version` — pinning the CLI
 
 **Opt-in.** Absent, charter does nothing: you track whatever you have installed. Present,

@@ -266,6 +266,17 @@ def cmd_workspace_default(args) -> int:
         workspace.clear_declared_default()
         util.ok("Cleared the declared default workspace.")
         return 0
+    # The name FIRST, and separately from "does it exist". `workspace_dir(name).exists()`
+    # accepted `../../esc` — the directory is really there, it is simply not a workspace —
+    # and wrote it into a committed file every future session reads (#442). "A path that
+    # exists" was never the question being asked (the same note `persona.py` keeps at
+    # #337). It is asked here as well as in `set_declared_default` because a refusal a user
+    # sees has to be a sentence rather than a traceback.
+    if not workspace.valid_name(name):
+        util.err(f"'{name}' is not a workspace name (letters, digits, '.', '_', '-'; "
+                 "must not start with a dot). This file is committed and read on every "
+                 "session start, so a value that is not a name is refused here.")
+        return 1
     if not workspace.workspace_dir(name).exists():
         util.err(f"no workspace '{name}' (create it: charter workspace create {name})")
         return 1
