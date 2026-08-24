@@ -143,10 +143,32 @@ class TestTheReadGuardAnswersThePathNotTheSpelling(PersonaIso):
                 self.assertIsNone(_decision(self.read(respell(REGISTRY))), name)
 
     def test_a_grep_rooted_at_the_state_directory_is_denied_in_every_spelling(self):
-        for path in (".charter", ".charter/", ".charter//", "./.charter"):
+        for path in (".charter", ".charter/", ".charter//", "./.charter",
+                     ".CHARTER", ".Charter/", "./.CHARTER"):
             with self.subTest(path=path):
                 self.assertEqual("deny",
                                  _decision(self.read(path, tool="Grep", pattern="token")))
+
+    def test_a_grep_rooted_at_the_vault_directory_is_denied_in_every_case(self):
+        """The composed decision, not the shared helper. `.charter/vaults` carries no
+        trailing slash and the pattern requires one, so this route only lands because
+        `pretooluse_read` retries the target with a `/` appended — and that retry has to keep
+        working through the case fold, on the exact operand a `Grep` names when an agent
+        points it at the directory holding every vault file."""
+        for path in (".charter/vaults", ".CHARTER/VAULTS", ".Charter/Vaults",
+                     ".charter/VAULTS", ".CHARTER/vaults"):
+            with self.subTest(path=path):
+                self.assertEqual("deny",
+                                 _decision(self.read(path, tool="Grep", pattern="token")),
+                                 f"{path} walks past the read guard")
+
+    def test_the_registry_stays_readable_through_the_read_guard_in_every_case(self):
+        """Boundary control for the pair above: the retry appends a slash to `vaults.json`
+        too, and `vaults.json/` still has no `vaults/` in it. If this ever denies, #443's
+        false positive is back and the case fold is what widened it."""
+        for path in (".charter/vaults.json", ".CHARTER/VAULTS.JSON", ".Charter/Vaults.Json"):
+            with self.subTest(path=path):
+                self.assertIsNone(_decision(self.read(path)), f"{path} is the registry")
 
 
 class TestEveryCaseSpellingOfTheGuardedPrefix(unittest.TestCase):
@@ -209,10 +231,18 @@ class TestThisBranchNeverDeniesLessThanMain(unittest.TestCase):
     block of ordinary paths. `test_the_corpus_actually_exercises_main` is the anti-vacuity
     assertion: a corpus main denies nothing in would make the containment trivially true."""
 
+    #: Includes the shapes where normalisation moves the answer, not only the ones where it
+    #: is a no-op. `.charter/vaults/../../elsewhere` matches main as written and normalises
+    #: OUT of the plane, so it is exactly the operand a branch that kept only the normalised
+    #: arm would hand back — the containment test is worthless without it, and dropping the
+    #: raw arm now reddens this class as well as its own.
     BASES = (VAULT, REGISTRY, ORDINARY, ".charter", ".charter/", ".charter/vaults/",
              ".charter/browser/profile", ".charter/active-persona", ".edm/vaults/db.json",
              "/home/me/plane/.charter/vaults/db.json", "charter/hooks.py",
-             "docs/charter.md", ".charterhouse/notes.md", "a/.charter/vaults/x.json")
+             "docs/charter.md", ".charterhouse/notes.md", "a/.charter/vaults/x.json",
+             ".charter/vaults/../../elsewhere", ".charter/vaults/../vaults/db.json",
+             ".charter/../.charter/vaults/db.json", ".charter/vaults/./db.json",
+             ".charter/..", ".charter/vaults/..")
 
     def corpus(self) -> list[str]:
         out = []
