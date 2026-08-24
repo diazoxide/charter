@@ -62,14 +62,33 @@ UNRENDERABLE = "(charter cannot show this entry in full — nothing to approve)"
 #: Longest single part — command, one arg, ``type``, ``url``, one ``env`` key — shown on a
 #: consent line. A part longer than this is CLIPPED with the cut announced; it is never
 #: dropped, so no part can push another part off the line. See :func:`describe`.
+#:
+#: :data:`MAX_LINE` still bounds how many such parts fit — and an entry that overflows it
+#: is refused whole rather than having a part dropped, so "no part pushes another off"
+#: holds in both directions.
 MAX_PART = 200
+
+#: The narrowest terminal charter assumes, and the most rows one consent line may take on
+#: it. Their product is the hard ceiling on the whole line.
+MAX_COLS = 80
+MAX_ROWS = 10
 
 #: Hard ceiling on the whole consent line. An entry with so many parts that even their
 #: clipped forms do not fit is one the operator cannot be shown in full, so it is not
 #: renderable and (via :func:`fingerprint`) not approvable. See :func:`describe`.
-MAX_LINE = 2000
+#:
+#: This is a SCREEN, not a byte count, and that is the whole reason it exists. The
+#: operator answers the prompt printed *under* this line, so a line taller than the
+#: terminal has already scrolled the command it names off the top by the time the
+#: question is asked. Round two set it to 2000 — twenty-five rows of an 80-column tty —
+#: and nine args of 200 padding columns each fit inside it with the destination out of
+#: view. Escaping (see :func:`_safe`) makes such padding visible; it does not make it
+#: short, so the ceiling has to be the screen itself.
+MAX_LINE = MAX_COLS * MAX_ROWS
 
-#: Two or more ASCII spaces — the one printable run :func:`_safe` must not pass through.
+#: Two or more ASCII spaces. After :func:`_safe` escapes every codepoint outside printable
+#: ASCII, the ASCII space is the ONLY character that can still reach a consent line and
+#: render as nothing — so collapsing this run is the whole blank class, not one member.
 _SPACE_RUN = re.compile(" {2,}")
 
 
@@ -126,7 +145,12 @@ def fingerprint(vault: str | None, entry: dict) -> str | None:
       at stake and requiring approval would be a prompt about nothing.
     * **Nothing to show** — :func:`describe` cannot render a destination for it, so the
       operator would be approving a blank line (#427). An entry nobody can be shown is not
-      an entry anybody can approve.
+      an entry anybody can approve. "Cannot be shown" is two properties and both are
+      decided on the ESCAPED line, not on the raw one: it renders as nothing (only ASCII
+      spaces survive :func:`_safe`), or it does not fit on the screen the question is
+      asked on (:data:`MAX_LINE`). Round two decided the first on ``str.isprintable``,
+      which is true of U+3164 HANGUL FILLER — so a line blank on every terminal got a
+      real digest and was approvable.
 
     **Every field of the entry is in here**, which is the point: approving a server by
     name — or by five of its fields — lets a later commit re-point the same name at a
@@ -169,20 +193,62 @@ def approve(persona_name: str, fingerprints) -> None:
     p.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
 
 
-def _safe(text: str) -> str:
-    """*text* with anything unprintable escaped and its whitespace flattened.
+def _escape(ch: str) -> str:
+    """One codepoint as an escape no other codepoint can also spell.
 
-    Every field here comes out of a committed file and the line IS the consent: a ``\\r``
-    or an ``ESC[2K`` in ``args`` repaints it, and a U+202E bidi override reverses it, so
-    what the operator reads stops being what would run. ``str.isprintable`` covers that
-    whole class in one call — it is false for every Other and Separator codepoint, **the
-    ASCII space excepted**, and that one exception was a hole: ``command`` of three spaces
-    rendered a consent line that was truthy to charter and blank to the reader, which is
-    the very thing :func:`describe` promises can no longer be approved. Runs of ASCII
-    space are collapsed and the ends stripped, so a part made only of spaces comes back
-    empty and drops out of the line rather than padding it.
+    Astral planes get the eight-digit ``\\U`` form rather than a long ``\\u``, because
+    ``\\u1f600`` is five hex digits: U+1F600 and the two characters U+1F60 + ``0`` would
+    render the same, and two different commands that read the same on a consent line is
+    the homoglyph finding with a different alphabet.
     """
-    out = "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in text)
+    cp = ord(ch)
+    return f"\\u{cp:04x}" if cp <= 0xFFFF else f"\\U{cp:08x}"
+
+
+def _safe(text: str) -> str:
+    """*text* as printable ASCII — every other codepoint shown as its ``\\uXXXX`` escape.
+
+    Every field here comes out of a committed file and the line IS the consent, so the
+    question this answers is not "is this character printable" but "does what the operator
+    reads still say what would run". Two earlier spellings of this guard each matched
+    something narrower than that question, and each was walked past — in order:
+
+    * a ``\\r`` or an ``ESC[2K`` in ``args`` repaints the line and a U+202E bidi override
+      reverses it — caught by ``str.isprintable``, which is where round one stopped;
+    * ``str.isprintable`` is nonetheless **true** for U+3164 HANGUL FILLER, U+2800 BRAILLE
+      PATTERN BLANK and U+115F/U+1160. All are ``isspace() == False``, survive ``strip``,
+      and render as nothing on every terminal, so a ``command`` of three of them was a
+      line blank to the reader and truthy to charter — round one's ``"   "`` one spelling
+      on, and round two's regex over the ASCII space did not reach it;
+    * a U+0301 combining acute is printable and is neither, and repaints the rows above
+      and below the line; Cyrillic ``а``/``с`` are printable and are neither, and spell an
+      endpoint that reads identically to the ASCII one it re-points to, so an operator
+      re-asked about a homoglyph cannot see what changed.
+
+    No list of codepoints answers that, because the next spelling is always one codepoint
+    further out. The class that does is the **complement**: printable ASCII is what a
+    consent line may contain, and everything outside it — any category, any plane, any
+    combining mark, any lookalike — is shown as its escape rather than its glyph. MCP
+    commands, args, urls and env keys are ASCII in practice; anything else on a consent
+    line is a reason to show the escape, not the glyph.
+
+    Emptiness is then decided on the **escaped** form, which is what turns "renders as
+    nothing" from a growing list into a decidable question: the escaped string holds only
+    U+0020..U+007E, and the ASCII space is the only member of that range that renders as
+    nothing. Collapsing runs of it and stripping the ends therefore returns ``""`` **if
+    and only if** the part was nothing but ASCII spaces. That is an argument about the
+    whole class, not a sample of it — and `tests/test_mcp_approval.py` checks it by
+    sweeping every codepoint Python can hold rather than by listing four.
+
+    The backslash escapes to ``\\\\`` for the same reason the astral form is eight digits:
+    so that **every** ``\\uXXXX`` on a consent line is a codepoint that was really there.
+    Without it, a committed ``command`` holding the six literal characters ``\\u3164``
+    reads exactly like one holding U+3164 — one more pair of different commands the
+    operator cannot tell apart by reading the line. A Windows path shows as
+    ``C:\\\\Users\\\\x``; that is the cost, and it is unambiguous.
+    """
+    out = "".join("\\\\" if c == "\\" else c if " " <= c <= "~" else _escape(c)
+                  for c in text)
     return _SPACE_RUN.sub(" ", out).strip()
 
 
@@ -212,12 +278,23 @@ def describe(entry: dict) -> str:
       server has no command, and building the line from ``command`` + ``args`` alone
       rendered it as an EMPTY string under the words *"Read the command above"* (#427).
       Falling back to ``url`` fixes the common case; ``""`` for the rest is the general
-      one. **Whitespace does not count as naming something**: every part goes through
-      :func:`_safe`, which strips it, so a ``command`` of three spaces is a blank line and
-      is refused rather than approved. Round one tested `""` and missed `"   "`.
+      one. **A part that renders as nothing does not count as naming something** — and
+      after :func:`_safe` that is decidable rather than enumerable: every part comes back
+      as printable ASCII with all else escaped, so it is blank exactly when it held
+      nothing but ASCII spaces. Round one tested ``""`` and missed ``"   "``; round two
+      tested ``"   "`` and missed U+3164 HANGUL FILLER, which is printable, is not
+      whitespace, survives ``strip``, and shows as nothing. Neither is a special case
+      now — they are the same case, asked of the escaped form.
     * **Too much named.** So many parts that even their clipped forms exceed
-      :data:`MAX_LINE`. Charter will not print a page of destination and call it a line
-      the operator read, and it will not print half of one either. Fail closed: withheld.
+      :data:`MAX_LINE` — :data:`MAX_ROWS` rows of an :data:`MAX_COLS`-column terminal.
+      Charter will not print a page of destination and call it a line the operator read,
+      and it will not print half of one either. Fail closed: withheld. The ceiling is a
+      screen because the operator answers the prompt printed UNDER this line: round two
+      set it to 2000 characters, twenty-five rows, and nine args of 200 padding columns
+      fit inside it with ``uvx evil-server`` scrolled off the top. Escaping makes padding
+      visible, which is necessary and not sufficient — visible padding scrolls a line just
+      as far as invisible padding does, so the length that is refused has to be the length
+      that does not fit.
 
     **Every part is named; only its contents can be shortened.** Round one clipped the
     FINISHED line at 600 characters, and both the ``[type url]`` and the ``(env: …)``
@@ -252,7 +329,7 @@ def describe(entry: dict) -> str:
         # is named as an empty string rather than left as an invisible gap in the list.
         keys = sorted(_clip(_safe(str(k)), MAX_PART) or '""' for k in env)
         dest += "  (env: " + ", ".join(keys) + ")"
-    # Not truncated: refused. A line this long is one no operator reads to the end, and
-    # cutting it would put us back where round one was — deciding which half of the
-    # destination the operator gets to see. The digest still covers every byte either way.
+    # Not truncated: refused. A line this long does not fit on the screen the question is
+    # asked on, and cutting it would put us back where round one was — deciding which half
+    # of the destination the operator gets to see. The digest covers every byte either way.
     return "" if len(dest) > MAX_LINE else dest

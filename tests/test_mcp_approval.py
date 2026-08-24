@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -237,27 +238,157 @@ class AnHttpServerHasAConsentLine(ApprovalBase):
         mcpseen.approve(name, ["deadbeef" * 8])
         self.assertWithheld(self._render())
 
-    def test_a_whitespace_only_destination_is_a_blank_line_and_is_refused(self):
-        """#427's guard tested `""` and let `"   "` through: `describe` returned three
-        spaces, which is truthy, so `fingerprint` produced a real digest and a visually
-        blank consent line was approvable — the exact property the docstring denies."""
-        for blank in ("   ", " " * 601, " ", "\u00a0"):
+    def test_a_consent_line_is_printable_ascii_and_nothing_else(self):
+        """The class, swept — not a list, sampled. This guard has now been walked past
+        twice by the same attack in a new spelling: round one matched a NAME (`""`),
+        round two matched a CHARACTER (`str.isprintable` plus a regex over the ASCII
+        space) and U+3164 HANGUL FILLER walked through, being printable, not whitespace,
+        `strip`-proof, and blank on every terminal.
+
+        So the assertion is over the COMPLEMENT rather than over examples: printable
+        ASCII is what a consent line may contain, and `_safe` must escape every one of
+        the 1,114,112 codepoints Python can hold that is not in it. The second assertion
+        is the one that makes "renders as nothing" decidable: on the escaped form, blank
+        means all-ASCII-spaces and nothing else can spell it.
+        """
+        for cp in range(0x110000):
+            out = mcpseen._safe(chr(cp) * 3)
+            if not all(" " <= c <= "~" for c in out):
+                self.fail(f"U+{cp:04X} reached the consent line unescaped: {out!r}")
+            if (out == "") != (cp == 0x20):
+                self.fail(f"U+{cp:04X} renders as {out!r}: blank must mean ASCII space "
+                          f"and only ASCII space, or the next codepoint is the next bypass")
+
+    def test_two_different_commands_never_read_the_same(self):
+        """The homoglyph finding, generalised and swept. A consent line is worth reading
+        only if reading it DISTINGUISHES what would run, so the escaping has to be
+        one-to-one. Two ways it was not, both closed here: `\\u1f600` is five hex digits,
+        so U+1F600 and U+1F60 followed by `"0"` spelled the same escape; and a committed
+        `command` holding the six LITERAL characters `\\u3164` spelled the same line as
+        one holding U+3164, so the escape could be forged in plain ASCII."""
+        # The structural property that makes one-to-one hold for inputs of ANY length:
+        # every escape is a fixed-width form, so no escape is a prefix of another with
+        # the next input character glued on. `\\u1f600` is what violating it looks like.
+        form = re.compile(r"\\u[0-9a-f]{4}|\\U[0-9a-f]{8}")
+        seen = {}
+        for cp in range(0x110000):
+            ch = chr(cp)
+            if not (" " <= ch <= "~"):
+                esc = mcpseen._escape(ch)
+                if not form.fullmatch(esc):
+                    self.fail(f"U+{cp:04X} escapes to {esc!r}, which is not a fixed-width "
+                              f"form — a shorter escape plus the next character spells it")
+            out = mcpseen._safe("x" + ch + "x")
+            prior = seen.setdefault(out, cp)
+            if prior != cp:
+                self.fail(f"U+{prior:04X} and U+{cp:04X} both read as {out!r}")
+
+        # And the two concrete pairs the structure rules out, spelled in full so the
+        # reason survives a rewrite of the loop above.
+        self.assertNotEqual(mcpseen._safe(chr(0x1F600)), mcpseen._safe(chr(0x1F60) + "0"))
+        for literal in ("\\u3164", "\\U0001f600", "\\\\"):
+            out = mcpseen._safe("x" + literal + "x")
+            if out in seen:
+                self.fail(f"the literal text {literal!r} reads as U+{seen[out]:04X} — a "
+                          f"forged escape is a command the operator cannot identify")
+            self.assertNotEqual(out, mcpseen._safe("x" + chr(0x3164) + "x"))
+
+    def test_a_destination_that_renders_as_nothing_is_refused(self):
+        """The end-to-end half of the sweep above, through the real approval path. The
+        listed spellings are illustrations of the class, not the guard — the guard is
+        the sweep. `\u00a0`, `\u3164`, `\u2800`, `\u115f` and `\u1160` are each here
+        because a previous round of this fix shipped while one of them worked."""
+        blanks = ("   ", " " * 601, " ")
+        for blank in blanks:
             with self.subTest(blank=repr(blank)):
                 entry = {"type": "stdio", "command": blank, "args": ["  ", ""],
                          "url": "  ", "secrets": {"ACME_TOKEN": "acme-token"}}
-                line = mcpseen.describe(entry)
-                if blank == "\u00a0":
-                    # A non-breaking space is Separator, not ASCII space: `_safe` escapes
-                    # it, so it shows as a destination rather than reading as blank.
-                    self.assertIn("00a0", line)
-                    continue
-                self.assertEqual(line, "", "a blank line is no line")
+                self.assertEqual(mcpseen.describe(entry), "", "a blank line is no line")
                 self.assertIsNone(mcpseen.fingerprint(VAULT, entry))
+
+        for shown in ("\u00a0", "\u3164", "\u2800", "\u115f", "\u1160", "\u0301"):
+            with self.subTest(shown=repr(shown)):
+                # Not blank: SHOWN. A codepoint outside printable ASCII is a destination
+                # the operator gets to see spelled out, which is the whole point of
+                # escaping rather than of stripping.
+                line = mcpseen.describe({"type": "stdio", "command": shown * 3,
+                                         "secrets": {"ACME_TOKEN": "acme-token"}})
+                self.assertEqual(line, f"\\u{ord(shown):04x}" * 3)
 
         name = self._persona({"type": "stdio", "command": "   ",
                               "secrets": {"ACME_TOKEN": "acme-token"}})
         mcpseen.approve(name, ["deadbeef" * 8])
         self.assertWithheld(self._render())
+
+    def test_a_homoglyph_repoint_reads_differently_from_what_it_replaced(self):
+        """The re-prompt already fires — the digest covers the url, so re-pointing
+        `api.acme.example` at Cyrillic `api.асme.example` lapses the approval and the
+        operator IS asked again. What was missing is that the two lines were byte-for-byte
+        different and pixel-for-pixel identical, so reading the line could not tell the
+        operator what had changed. Escaping is what makes the re-prompt answerable."""
+        ascii_url = "https://api.acme.example/mcp"
+        cyrillic = "https://api.\u0430\u0441me.example/mcp"
+        self.assertNotEqual(ascii_url, cyrillic, "precondition: different strings")
+
+        lines = [mcpseen.describe(dict(HTTP, url=u)) for u in (ascii_url, cyrillic)]
+        self.assertNotEqual(lines[0], lines[1], "the two lines must READ differently")
+        self.assertIn("acme.example", lines[0])
+        self.assertIn("\\u0430\\u0441me.example", lines[1], "the lookalike is spelled out")
+        self.assertNotIn("\u0430", lines[1], "and the glyph itself never reaches the tty")
+
+    def test_padding_cannot_scroll_the_destination_off_the_screen(self):
+        """Finding 2, and the next spelling of it. Nine args of 200 invisible columns fit
+        under the old 2000-character ceiling as a 1837-character line: 22 blank rows on an
+        80x24 tty, with `uvx evil-server` scrolled off the top by the time the prompt was
+        answered. Escaping makes that padding visible — and visible padding scrolls a line
+        exactly as far, so the ceiling has to be the SCREEN the question is asked on.
+        Every filler below is refused for the same reason and not for four reasons."""
+        # Deliberately NOT `mcpseen.MAX_LINE`: the budget this test defends is a screen,
+        # so it is spelled here in rows and columns. Half of an 80x24 terminal, which
+        # leaves the prompt, the answer and some of the sync output visible with it.
+        screen = 80 * 12
+
+        for filler in ("x", "\u3164", "\u2800", " ", "\u0301", "\U0001f600", "\t"):
+            with self.subTest(filler=repr(filler)):
+                entry = dict(STDIO, args=["evil-server"] + [filler * 200] * 9,
+                             env={"PATH": "/tmp/attacker-bin"})
+                line = mcpseen.describe(entry)
+                # Two acceptable outcomes and no third: the padding collapses to nothing
+                # (only the ASCII space does that) and the line is short, or the line does
+                # not fit the screen and there is no line and no digest. What is refused
+                # in every case is the middle: a line long enough to scroll the command
+                # it names off the top of the terminal the prompt is printed on.
+                self.assertLessEqual(len(line), screen,
+                                     f"{len(line) // 80} rows of destination is a page "
+                                     f"the operator scrolls, not a line they read")
+                if line:
+                    self.assertTrue(line.startswith("uvx evil-server"), line[:40])
+                    self.assertIn("PATH", line, "and the env still shows")
+                else:
+                    self.assertIsNone(mcpseen.fingerprint(VAULT, entry))
+        self.assertLessEqual(mcpseen.MAX_LINE, mcpseen.MAX_COLS * mcpseen.MAX_ROWS,
+                             "the ceiling and the screen it names must agree")
+
+        name = self._persona(dict(STDIO, args=["evil-server"] + ["\u3164" * 200] * 9,
+                                  env={"PATH": "/tmp/attacker-bin"}))
+        mcpseen.approve(name, ["deadbeef" * 8])
+        self.assertWithheld(self._render())
+
+    def test_a_real_entry_still_renders_under_the_screen_ceiling(self):
+        """The other direction of the ceiling: fail-closed is only acceptable if it does
+        not close on the servers people actually run. A fat-but-honest docker entry with
+        several env keys still fits."""
+        line = mcpseen.describe({
+            "type": "stdio", "command": "docker",
+            "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+                     "-e", "GITHUB_TOOLSETS", "ghcr.io/github/github-mcp-server", "stdio"],
+            "env": {"PATH": "/usr/local/bin:/usr/bin", "HTTPS_PROXY": "http://p.example:3128",
+                    "NODE_OPTIONS": "--max-old-space-size=4096"},
+            "secrets": {"GITHUB_PERSONAL_ACCESS_TOKEN": "gh-pat"}})
+        self.assertTrue(line.startswith("docker run -i --rm"), line[:40])
+        for named in ("ghcr.io/github/github-mcp-server", "PATH", "NODE_OPTIONS"):
+            self.assertIn(named, line)
+        self.assertLessEqual(len(line), mcpseen.MAX_LINE)
 
     def test_padding_with_spaces_cannot_indent_the_destination_out_of_view(self):
         line = mcpseen.describe(dict(STDIO, args=[" " * 600 + "--evil"]))
@@ -358,6 +489,51 @@ class ApproveMcpAsksBeforeItRecords(ApprovalBase):
         self.assertWrapped(rendered, "precondition: the operator did approve it")
         self.assertEqual(sorted(rendered.get("env") or {}), ["NODE_OPTIONS", "PATH"],
                          "what was approved is what the harness gets")
+
+    def test_the_operator_is_never_asked_under_a_line_that_prints_as_nothing(self):
+        """The reviewer's round-two input, end to end and in its own words. A committed
+        entry of `"\u3164" * 3` — HANGUL FILLER, printable, not whitespace, `strip`-proof,
+        blank on every terminal — produced `  reddit/reddit → ` and nothing else, a real
+        digest, and one prompt. Answering yes wrapped the entry in `charter secret exec`.
+
+        The fix is not "ask zero questions about it". It is that the line printed above
+        the question SAYS something, so that yes and no are both informed answers: the
+        codepoint is spelled out, the operator sees a command made of nothing but
+        escapes, and declining leaves the vault withheld."""
+        name = self._persona({"type": "stdio", "command": "\u3164" * 3,
+                              "args": ["\u3164" * 8],
+                              "secrets": {"ACME_TOKEN": "acme-token"}})
+        rc, err = self._sync(_Tty(), answers=["n"])
+        self.assertEqual(rc, 0)
+
+        # Two occurrences: the line above the prompt, and the same line in the withheld
+        # report afterwards. Both are read by a person, so both are asserted.
+        shown = [ln for ln in err.splitlines() if "reddit/reddit \u2192" in ln]
+        self.assertEqual(len(shown), 2, err)
+        for ln in shown:
+            dest = ln.split("\u2192", 1)[1].strip()
+            self.assertNotEqual(dest, "", "the operator was asked under a blank line")
+            self.assertTrue(all(" " <= c <= "~" for c in dest),
+                            f"a glyph the terminal gets to interpret reached it: {dest!r}")
+            self.assertIn("\\u3164", dest, "the codepoint is spelled out, not shown")
+        self.assertEqual(self.asked, 1, "and it was a real question, asked once")
+        self.assertEqual(mcpseen.approved(name), set(), "no is still no")
+        self.assertWithheld(self._render(name))
+
+    def test_invisible_padding_is_refused_before_anyone_is_asked(self):
+        """The other half of the same input: nine args of 200 blank columns fit under the
+        old 2000-character ceiling and pushed `uvx evil-server` off the top of an 80x24
+        screen. Over the screen ceiling there is no line, so there is no digest and no
+        question — the operator hears it was refused instead of answering blind."""
+        name = self._persona(dict(STDIO, command="uvx",
+                                  args=["evil-server"] + ["\u3164" * 200] * 9,
+                                  env={"PATH": "/tmp/attacker-bin"}))
+        rc, err = self._sync(_Tty(), answers=["y"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.asked, 0, "nothing showable, nothing to ask")
+        self.assertIn(mcpseen.UNRENDERABLE, err, "and the refusal is said out loud")
+        self.assertEqual(mcpseen.approved(name), set())
+        self.assertWithheld(self._render(name))
 
     def test_declining_revokes_an_approval_it_already_had(self):
         name = self._two_servers()

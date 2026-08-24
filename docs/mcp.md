@@ -153,10 +153,32 @@ the case this exists for.
 The printed line names every part of that destination, and **no part can push another one
 off it**. Each part — the command, each arg, the `url`, each `env` key — gets its own
 budget and is clipped on its own with the cut announced, so padding `args` in a committed
-file cannot scroll the `env` or the endpoint out of view. An entry charter cannot show in
-full cannot be approved at all and is reported as withheld: one that names no destination
-(no `command`, no `args`, no `url` — whitespace does not count as naming something), and
-one with so many parts that even their clipped forms would not fit on a line anybody reads.
+file cannot scroll the `env` or the endpoint out of view.
+
+**The line is printable ASCII, and everything else is spelled out as `\uXXXX`.** Not
+"unprintable characters are escaped" — every codepoint outside `U+0020..U+007E` is,
+whatever its category. A committed `args` can otherwise carry a `\r` that repaints the
+line, a bidi override that reverses it, a combining mark that repaints the rows around it,
+a U+3164 HANGUL FILLER that is printable and renders as nothing, or a Cyrillic `а` that
+makes `api.асme.example` indistinguishable from `api.acme.example` on the one line the
+decision rests on. MCP commands, args, urls and env keys are ASCII in practice, so
+anything else here is a reason to *show the escape* rather than the glyph. Escaping is
+also what makes "renders as nothing" answerable: charter decides it on the escaped line,
+where the ASCII space is the only character left that shows nothing.
+
+The escaping is one-to-one, which is the part that makes reading the line worth anything:
+astral codepoints use the eight-digit `\UXXXXXXXX` form (`\u1f600` is five hex digits and
+would also spell `U+1F60` followed by `0`), and a literal backslash is doubled, so every
+`\uXXXX` you see is a codepoint that was really there rather than six ASCII characters
+imitating one. A Windows path therefore shows as `C:\\Users\\x`.
+
+An entry charter cannot show in full cannot be approved at all and is reported as withheld.
+Two ways to get there: it names no destination (no `command`, no `args`, no `url` — a part
+that renders as nothing does not count as naming something), or it has so many parts that
+even their clipped forms **would not fit on one screen**. That ceiling is a screen and not
+a byte count on purpose: you answer the prompt printed *under* the line, so a line taller
+than the terminal has already scrolled the command it names off the top before the question
+reaches you.
 
 The record is machine-local under `.charter/`: if it travelled in git, the same commit that
 declares a server could declare it approved.
