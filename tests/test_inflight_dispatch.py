@@ -24,7 +24,13 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from charter import config, hooks, inflight
+import sys
+from types import SimpleNamespace
+from unittest import mock
+
+from charter import config, hooks, inflight, tui
+
+from tests._isolation import PersonaIso
 
 
 def _age(path: Path, seconds: float) -> Path:
@@ -298,3 +304,254 @@ class ManifestWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecordsSayWhatKindOfWorkTheyAre(unittest.TestCase):
+    """#420. #387 promised the frame "a spinner while a dispatch, clone or `gl-refresh`
+    runs" and shipped dispatches only, because `inflight.start` had exactly one caller.
+
+    Wiring the other two in was blocked on this: the SAME records feed the
+    dispatch-overlap nudge through `still_running`, which reads its answer back to an
+    operator as a sentence — so a record named `clone` would have produced *"`x` writes
+    code and `clone` are already running"*. Every test here is about which reader sees
+    which kind, because that is the whole of the design.
+    """
+
+    def setUp(self) -> None:
+        self._td = TemporaryDirectory()
+        self._orig = config.STATE_DIR
+        config.STATE_DIR = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+        self.addCleanup(lambda: setattr(config, "STATE_DIR", self._orig))
+
+    def test_a_clone_is_invisible_to_every_reader_that_names_what_is_running(self):
+        """The three that would put the word in front of an operator: the nudge's own
+        `still_running`, the aggregate `live` behind the status line's `⚡ N`, and
+        `live_records`, which `statusline._inflight_by_persona` groups BY PERSONA — a
+        clone landing there would invent a persona named after a repo."""
+        inflight.start("iam-service", kind=inflight.CLONE)
+        self.assertEqual(inflight.still_running(), [])
+        self.assertEqual(inflight.live(), [])
+        self.assertEqual(inflight.live_records(), [])
+
+    def test_a_dispatch_is_still_visible_to_all_three(self):
+        """The other direction, so the test above cannot be satisfied by a filter that
+        hides everything."""
+        inflight.start("coder")
+        self.assertEqual(inflight.still_running(), ["coder"])
+        self.assertEqual(inflight.live(), ["coder"])
+        self.assertEqual([n for n, _, _ in inflight.live_records()], ["coder"])
+
+    def test_asking_for_no_kind_at_all_sees_every_kind(self):
+        """`kind=None` is what the frame's spinner asks for — it counts records and never
+        names them, so a clone and a dispatch are both simply "running" there."""
+        inflight.start("coder")
+        inflight.start("iam-service", kind=inflight.CLONE)
+        inflight.start("demo", kind=inflight.REFRESH)
+        self.assertEqual(sorted(n for n, _, _ in inflight.live_records(kind=None)),
+                         ["coder", "demo", "iam-service"])
+
+    def test_the_default_is_dispatch_rather_than_everything(self):
+        """**The default is the guard, not a convenience.** A reader that must not see a
+        clone gets that by NOT asking, so the next kind somebody invents cannot leak into
+        the nudge by being forgotten at one call site. Asserted as a property of the
+        signature — every one of the three readers, unasked — rather than of one of them,
+        because a fix that changed only the one under test is exactly the shape that
+        would pass a single-reader check."""
+        inflight.start("iam-service", kind=inflight.CLONE)
+        for fn in (inflight.live, inflight.still_running, inflight.live_records):
+            with self.subTest(fn=fn.__name__):
+                self.assertEqual(list(fn()), [], f"{fn.__name__} defaulted to every kind")
+
+    def test_a_record_written_before_the_field_existed_reads_as_a_dispatch(self):
+        """A record on disk outlives the charter that wrote it — the tracker keeps one
+        for `PRUNE_SECONDS` (a day), so an upgrade mid-dispatch is the ORDINARY case, not
+        an edge one. A pre-#420 record has no `kind`, and it was a dispatch: reading it as
+        anything else would drop a genuinely running peer out of the overlap nudge, which
+        is the one thing that nudge exists to catch."""
+        inflight.start("coder")
+        p = _only_record()
+        rec = json.loads(p.read_text())
+        del rec["kind"]
+        p.write_text(json.dumps(rec))
+        self.assertEqual(inflight.still_running(), ["coder"])
+
+    def test_a_kind_that_is_not_a_string_reads_as_a_dispatch_too(self):
+        """Same reasoning, one step further: the file is on disk, so a truncated write or
+        a hand edit can put anything there. A value that can never match a filter would
+        hide a live record from every reader — including the nudge — which is a silent
+        failure in the direction that matters. Degrading to `dispatch` shows it to the
+        reader that would rather have a false positive than a miss."""
+        inflight.start("coder")
+        p = _only_record()
+        p.write_text(json.dumps({"agent": "coder", "kind": 7, "ts": time.time()}))
+        self.assertEqual(inflight.still_running(), ["coder"])
+
+    def test_finish_retires_only_its_own_kind(self):
+        """The file NAME carries the agent and not the kind, so a clone of a repo called
+        `steward` and a dispatch to a persona called `steward` glob identically. Without
+        a kind check inside `finish`, whichever finished first would retire the other's
+        record — clearing a true one and leaving a false live one behind, which is
+        exactly the state #308 built this tracker to make impossible."""
+        inflight.start("steward")
+        inflight.start("steward", kind=inflight.CLONE)
+        inflight.finish("steward", kind=inflight.CLONE)
+        self.assertEqual(inflight.still_running(), ["steward"])
+        self.assertEqual([n for n, _, _ in inflight.live_records(kind=inflight.CLONE)],
+                         [])
+
+    def test_an_unreadable_record_is_never_the_one_finish_deletes(self):
+        """`finish` deletes what the kind check admits, and a file charter cannot read is
+        one it cannot claim belongs to this caller. Left alone here; `live_records`
+        prunes it on its own horizon, which is where a stray belongs."""
+        inflight.start("coder")
+        p = _only_record()
+        p.write_text("{not json")
+        inflight.finish("coder")
+        self.assertTrue(p.exists(), "finish deleted a record it could not identify")
+
+
+class TheSpinnerFollowsEveryKindOfWork(PersonaIso, unittest.TestCase):
+    """#420's actual deliverable: a clone or a `gl-refresh` moves the frame's spinner,
+    and neither reaches the surfaces that would name it."""
+
+    def _field(self) -> str:
+        from charter.frame import slots
+        with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((200, 24))):
+            return tui.strip_ansi(slots._inflight_field())
+
+    def test_a_clone_in_flight_moves_the_spinner(self):
+        inflight.start("iam-service", kind=inflight.CLONE)
+        self.assertIn("1 running", self._field())
+
+    def test_a_gl_refresh_in_flight_moves_the_spinner(self):
+        inflight.start("demo", kind=inflight.REFRESH)
+        self.assertIn("1 running", self._field())
+
+    def test_a_clone_and_a_dispatch_are_counted_together(self):
+        """One count, not two fields: the row says how much work is in flight, and
+        splitting it by kind would put a taxonomy on a status row nobody asked for."""
+        inflight.start("coder")
+        inflight.start("iam-service", kind=inflight.CLONE)
+        self.assertIn("2 running", self._field())
+
+    def test_the_panels_own_gate_agrees_with_what_the_row_will_draw(self):
+        """`panel._running` decides whether the panel repaints often enough for the
+        spinner to MOVE; `_inflight_field` decides what it says. If the gate stayed
+        dispatch-only, a clone would leave the row showing a spinner frame frozen at
+        whichever instant the last version bump happened to be — a still picture of an
+        arbitrary frame, which is the exact thing `slots.SPINNER`'s own docstring says
+        the clock-driven design exists to avoid."""
+        from charter.frame import panel
+        inflight.start("iam-service", kind=inflight.CLONE)
+        self.assertEqual(panel._running(panel._new_inflight_cache()), 1)
+
+    def test_nothing_in_flight_is_still_perfect_stillness(self):
+        """The property #387 bought the whole gate for, re-asserted now that the gate
+        admits more: widening WHAT animates must not widen WHEN."""
+        from charter.frame import panel
+        self.assertEqual(self._field(), "")
+        self.assertEqual(panel._running(panel._new_inflight_cache()), 0)
+
+
+class CloneAndRefreshActuallyRecordThemselves(PersonaIso, unittest.TestCase):
+    """The wiring, not the mechanism: `inflight.start` having a second and third caller
+    is the entire content of #420, and a `kind` field nothing ever writes would be a
+    feature with no user."""
+
+    def test_a_clone_holds_a_record_for_as_long_as_git_runs(self):
+        """Observed from INSIDE the `git clone` call, which is the only moment it is
+        observable — and the only moment it matters, since that is when an operator is
+        looking at a frame wondering whether anything is happening. Asserted through the
+        real `_clone_one`, with only `git` itself stubbed."""
+        from charter import commands
+        seen = []
+
+        def fake_git(argv, **kw):
+            seen.append(inflight.live_records(kind=inflight.CLONE))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        wd = config.WORKSPACES_DIR / "demo"
+        wd.mkdir(parents=True, exist_ok=True)
+        repo = {"name": "iam-service", "default_branch": "main",
+                "http_url": "https://example.invalid/x/iam-service.git"}
+        with mock.patch.object(commands, "_git", side_effect=fake_git), \
+             mock.patch.object(commands, "_https_url",
+                               return_value="https://example.invalid/x.git"), \
+             mock.patch("charter.gitpolicy.apply"):
+            res = commands._clone_one(repo, wd)
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual([n for n, _, _ in seen[0]], ["iam-service"], seen)
+
+    def test_the_clones_record_is_released_when_git_returns(self):
+        from charter import commands
+        wd = config.WORKSPACES_DIR / "demo"
+        wd.mkdir(parents=True, exist_ok=True)
+        repo = {"name": "iam-service", "default_branch": "main"}
+        with mock.patch.object(commands, "_git",
+                               return_value=SimpleNamespace(returncode=0, stdout="",
+                                                            stderr="")), \
+             mock.patch.object(commands, "_https_url",
+                               return_value="https://example.invalid/x.git"), \
+             mock.patch("charter.gitpolicy.apply"):
+            commands._clone_one(repo, wd)
+        self.assertEqual(inflight.live_records(kind=None), [])
+
+    def test_a_clone_that_raises_still_releases_its_record(self):
+        """`finally`, not a trailing call: a record left behind by an exception would
+        spin an idle operator's frame until the presumed-dead threshold half an hour
+        later, and `git` shelling out is exactly where an unexpected `OSError` lives."""
+        from charter import commands
+        wd = config.WORKSPACES_DIR / "demo"
+        wd.mkdir(parents=True, exist_ok=True)
+        repo = {"name": "iam-service", "default_branch": "main"}
+        with mock.patch.object(commands, "_git", side_effect=OSError("no git")), \
+             mock.patch.object(commands, "_https_url",
+                               return_value="https://example.invalid/x.git"):
+            with self.assertRaises(OSError):
+                commands._clone_one(repo, wd)
+        self.assertEqual(inflight.live_records(kind=None), [])
+
+    def test_a_refused_clone_never_takes_a_record_at_all(self):
+        """The record is taken after the destination and the URL are settled, so a repo
+        charter refuses to clone leaves nothing behind to animate a frame over."""
+        from charter import commands
+        wd = config.WORKSPACES_DIR / "demo"
+        wd.mkdir(parents=True, exist_ok=True)
+        res = commands._clone_one({"name": "../escape", "default_branch": "main"}, wd)
+        self.assertEqual(res["status"], "refused")
+        self.assertEqual(inflight.live_records(kind=None), [])
+
+    def test_gl_refresh_holds_a_record_while_it_fetches(self):
+        """Observed from inside `glstate.refresh`, the call that actually goes to the
+        forge. The workspace is the name, not a repo: one refresh covers every tree in
+        it, and naming one of them would be a claim about which."""
+        from charter import commands
+        seen = []
+
+        def fake_refresh(dirs):
+            seen.append(inflight.live_records(kind=inflight.REFRESH))
+            return {}
+
+        with mock.patch("charter.workspace.repo_trees",
+                        return_value=[config.WORKSPACES_DIR / "demo" / "r"]), \
+             mock.patch("charter.worktree.dirs_for", return_value=[]), \
+             mock.patch("charter.glstate.refresh", side_effect=fake_refresh):
+            rc = commands.cmd_gl_refresh(SimpleNamespace(detach=False, workspace="demo"))
+        self.assertEqual(rc, 0)
+        self.assertEqual([n for n, _, _ in seen[0]], ["demo"], seen)
+        self.assertEqual(inflight.live_records(kind=None), [],
+                         "the refresh's record outlived the fetch")
+
+    def test_the_detach_branch_records_nothing(self):
+        """`--detach` returns before any work happens, in order to let the CHILD do it. A
+        record taken there would clear before the child had begun, and the frame would
+        blink rather than spin."""
+        from charter import commands
+        with mock.patch("charter.util.detach_self") as detach:
+            rc = commands.cmd_gl_refresh(SimpleNamespace(detach=True, workspace="demo"))
+        self.assertEqual(rc, 0)
+        detach.assert_called_once()
+        self.assertEqual(inflight.live_records(kind=None), [])

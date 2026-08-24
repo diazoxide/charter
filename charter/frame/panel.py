@@ -208,7 +208,7 @@ def _new_inflight_cache() -> dict:
 
 
 def _running(cache: dict) -> int:
-    """How many dispatches are in flight right now — one `stat` when nothing has changed.
+    """How much work is in flight right now — one `stat` when nothing has changed.
 
     The idle cost of the whole animation, and the reason it can be on by default. The
     expensive answer (`inflight.live_records()`: open the directory, read every entry,
@@ -221,8 +221,9 @@ def _running(cache: dict) -> int:
       consulted while something is actually running, so an idle panel never computes a
       deadline, never stores one, and never compares against one.
 
-    Counts RUNNING records only, presumed-dead ones excluded, and that is what stops a
-    killed dispatch from spinning a panel for the rest of the day: `inflight` keeps such a
+    Counts RUNNING records of EVERY kind — a clone and a `gl-refresh` move the spinner
+    exactly as a dispatch does (#420) — presumed-dead ones excluded, and that is what
+    stops a killed dispatch from spinning a panel for the rest of the day: `inflight` keeps such a
     record for `PRUNE_SECONDS` (24 hours) precisely so it stays visible, and
     `slots._inflight_field` does still draw it — statically, with `⋯`. Animating it would
     claim progress that stopped hours ago, on an otherwise idle machine.
@@ -238,7 +239,11 @@ def _running(cache: dict) -> int:
         stale = cache["running"] and time.time() >= cache["recheck"]
         if stamp == cache["stamp"] and not stale:
             return cache["running"]
-        records = inflight.live_records()
+        # `kind=None`: the gate has to agree with what `slots._inflight_field` will
+        # DRAW, or a clone would leave the row showing a spinner frame frozen at whatever
+        # instant the last version bump happened to be (#420). The nudge's dispatch-only
+        # view is a different question, asked elsewhere — see `inflight`'s own docstring.
+        records = inflight.live_records(kind=None)
         cache["stamp"] = stamp
         cache["running"] = sum(1 for _a, _t, dead in records if not dead)
         cache["recheck"] = min((t for _a, t, dead in records if not dead),

@@ -468,7 +468,7 @@ def _inflight_field() -> str:
     """`⠙ 2 running`, or nothing at all when nothing is.
 
     **The one moving thing in the frame, and it moves only while work is genuinely in
-    flight.** `inflight` records a dispatch when it STARTS and clears it when it ends (see
+    flight.** `inflight` records work when it STARTS and clears it when it ends (see
     that module's docstring — the completion tally cannot answer this), so "is anything
     running right now" is a question about files on disk rather than about anything
     charter has to keep in memory or poll for. `panel._running` is what decides whether the
@@ -476,6 +476,15 @@ def _inflight_field() -> str:
     the row says, and it says nothing when there is nothing to say. Empty means the field
     is dropped whole by `_fit_fields`, which is what makes idle completely still: no
     spinner, no zero, no furniture.
+
+    **`kind=None` — every kind of work, and #420 is the whole of it.** #387 promised a
+    spinner for "a dispatch, clone or `gl-refresh`" and delivered dispatches, because
+    `inflight.start` had one caller. It now has three, and this is the one reader that
+    asks for all of them: the row counts records and never names them, so a clone and a
+    dispatch are both simply "running" here. The readers that NAME what is running —
+    the dispatch-overlap nudge, the per-persona chips — keep `inflight`'s dispatch-only
+    default, which is what stopped this from being a one-line change (see that module's
+    own docstring for the sentence a `clone` record would otherwise have produced).
 
     Presumed-dead records get their own, DELIBERATELY STATIC piece. A record past
     `inflight.PRESUMED_DEAD_SECONDS` is one nobody should still be expecting (its process
@@ -491,7 +500,7 @@ def _inflight_field() -> str:
     both on the same row saying it twice.
     """
     from .. import inflight, statusline as sl
-    records = inflight.live_records()
+    records = inflight.live_records(kind=None)
     if not records:
         return ""
     running = sum(1 for _agent, _started, dead in records if not dead)

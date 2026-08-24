@@ -72,28 +72,37 @@ changed.
 shell's environment whole, so trusting `$COLUMNS` there would lay a panel out at the outer
 terminal's width and wrap inside its own much narrower one.
 
-**The frame animates only while a dispatch is in flight.** A dispatch that is still
-running puts a spinner and a count on the bottom row — `⠙ 2 running` — and the panel
-repaints often enough for it to turn. Only the bottom row moves; the other three panels
-repaint when something changes and not otherwise.
+**The frame animates only while work is in flight.** Work that is still running puts a
+spinner and a count on the bottom row — `⠙ 2 running` — and the panel repaints often
+enough for it to turn. Only the bottom row moves; the other panels repaint when something
+changes and not otherwise.
 
-**Dispatches, and nothing else.** A long `charter clone` or `gl-refresh` does *not* spin
-it: charter records a dispatch when it starts, which is what makes overlapping agents
-visible, and keeps no equivalent record for its own long commands. Covering them needs a
-second kind of record — putting a clone in the dispatch tracker would make the overlap
-nudge announce it as a peer agent — and that is filed as #420. The moment the last dispatch finishes, the frame goes completely
-still again and the panel goes back to waiting for a version bump. Nothing is polled to
-find this out: charter already records a dispatch when it *starts* (that is what makes
-overlapping agents visible at all), so the panel asks one question per tick — a single
-`stat` of that tracker's own directory — and reads the records themselves only when that
-answer moves. Measured on macOS/APFS: about 5µs per tick added to the ~26µs a panel
-already spends checking the version file, five times a second, or roughly 0.003% of one
-core while idle.
+**A dispatch, a `charter clone`, or a `gl-refresh`** — all three, since #420. Eight
+parallel clones read as eight, because each repo takes its own record. The row counts what
+is running and never names it, so the three are one number there.
 
-A dispatch charter has stopped believing in — no result after thirty minutes, so the
-process was probably killed — is still reported, and deliberately *not* animated: `⋯ 1
-stalled`. Charter keeps such a record for a day so a stuck dispatch stays visible, and a
-spinner turning next to it would be claiming progress that stopped half an hour ago.
+What they are is not lost, though: every record says which kind it is, and the surfaces
+that read a name back to you — the dispatch-overlap nudge, the `⚡` badge on a persona's
+chip, this session's own `⚡ N` — ask for dispatches and get only those. That was the whole
+reason the spinner shipped narrower than promised: put a clone in the same tracker without
+a kind on it, and the overlap nudge tells you *"`x` writes code and `clone` are already
+running"*. Every reader now says which kinds it means, and the default is dispatches, so
+the next kind of work charter learns to record cannot leak into a sentence by being
+forgotten at one call site.
+
+The moment the last of it finishes, the frame goes completely still again and the panel
+goes back to waiting for a version bump. Nothing is polled to find this out: charter
+records work when it *starts* (that is also what makes overlapping agents visible at all),
+so the panel asks one question per tick — a single `stat` of that tracker's own directory
+— and reads the records themselves only when that answer moves. Measured on macOS/APFS:
+about 5µs per tick added to the ~26µs a panel already spends checking the version file,
+five times a second, or roughly 0.003% of one core while idle.
+
+Work charter has stopped believing in — no result after thirty minutes, so the process was
+probably killed — is still reported, and deliberately *not* animated: `⋯ 1 stalled`.
+Charter keeps such a record for a day so a stuck dispatch (or a clone that was killed
+mid-fetch) stays visible, and a spinner turning next to it would be claiming progress that
+stopped half an hour ago.
 
 **A panel that fails says so in its own pane.** Anything charter's own code can see — an
 unknown slot, a renderer that raises, a crash in the panel's poll — is painted into the
