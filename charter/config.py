@@ -256,6 +256,11 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: `instance.FRAME_DEFAULTS`; an absent or malformed section yields them whole.
     d["FRAME"] = _instance.frame_of(cfg)
 
+    #: Which charter this plane tracks — see `charter.instance.UPDATE_CHANNELS` and
+    #: `charter.channel`. ``{"channel": "stable"}`` unless the plane opts in, and a value
+    #: charter does not recognise degrades to exactly that.
+    d["UPDATE"] = _instance.update_of(cfg)
+
     #: Root for worktrees, or ``None`` for the per-workspace ``.worktrees/`` default.
     d["WORKTREES_ROOT"] = worktrees_root_for(root, cfg)
 

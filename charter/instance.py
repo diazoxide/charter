@@ -579,3 +579,64 @@ def frame_of(cfg: dict) -> dict:
     if "density" in section and not took_slots:
         out["slots"] = density_slots(out["density"])
     return out
+
+
+#: The channels ``[update] channel`` may name, and a CLOSED set — the single most
+#: important property in this module's newest section.
+#:
+#: ``charter.toml`` is COMMITTED. It arrives from someone else's machine, which is what
+#: makes every value in it untrusted input (README.md's containment rule), and charter has
+#: already been bitten twice by exactly that: ``[frame] hotkey`` reached tmux CONFIG TEXT
+#: where a newline achieved code execution at launch (see :data:`_HOTKEY_RE`), and a
+#: committed ``mcp.json`` key currently injects YAML (#453). A channel decides how charter
+#: INSTALLS ITSELF, so a third door here would be the most expensive of the three.
+#:
+#: The defence is not a sanitiser. It is that a channel is one of two constants charter
+#: wrote itself, matched here, and nothing an operator can type is ever passed through —
+#: the same shape :data:`FRAME_DENSITY` chose for its level names, and stronger than any
+#: escaping, because there is no value that survives to be escaped. Downstream the channel
+#: is only ever COMPARED (``channel() == "dev"``); the repository URL and the installer
+#: argv are module constants in `charter.commands_update`, never assembled from this.
+UPDATE_CHANNELS = ("stable", "dev")
+
+#: Every ``[update]`` setting, in the shape :data:`FRAME_FIELDS` documents: keyed by the
+#: name :func:`update_of` returns it under, paired with ``(default, toml_key)``. One key
+#: today; the shape is the point, so a second one cannot be added to a defaults dict and
+#: forgotten in a spellings dict.
+#:
+#: ``stable`` is the default, and the default is what an unreadable, misspelt or hostile
+#: value degrades to. That direction is deliberate: stable installs a signed, published
+#: release, dev installs whatever ``main`` says this minute, so a plane that cannot be
+#: understood must land on the conservative one.
+UPDATE_FIELDS = {
+    "channel": ("stable", "channel"),
+}
+
+#: The plain ``{key: default}`` view of :data:`UPDATE_FIELDS`.
+UPDATE_DEFAULTS = {key: default for key, (default, _toml_key) in UPDATE_FIELDS.items()}
+
+
+def update_of(cfg: dict) -> dict:
+    """The ``[update]`` section merged over :data:`UPDATE_DEFAULTS`.
+
+    Same contract as :func:`frame_of`, for the same reason: this module is imported by
+    every command including ``charter --version``, so a hand-edited charter.toml must
+    degrade to the defaults rather than raise.
+
+    ``channel`` is matched against :data:`UPDATE_CHANNELS` and **the matched constant is
+    what is stored, never the object the file supplied**. Belt and braces — ``tomllib``
+    only ever produces a plain ``str`` — but it makes the guarantee structural rather than
+    dependent on the parser: no object originating in a committed file can reach a caller
+    of this function, so no caller can be the place that interpolates one.
+    """
+    out = dict(UPDATE_DEFAULTS)
+    section = cfg.get("update")
+    if not isinstance(section, dict):
+        return out
+    value = section.get(UPDATE_FIELDS["channel"][1])
+    if isinstance(value, str):
+        for known in UPDATE_CHANNELS:
+            if value == known:
+                out["channel"] = known       # the constant, not the file's string
+                break
+    return out

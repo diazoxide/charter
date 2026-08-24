@@ -8,7 +8,6 @@ import sys
 
 from . import (
     commands_update,
-    __version__,
     commands,
     commands_frame,
     commands_harness,
@@ -28,6 +27,36 @@ from .browser import PINNED as _PLAYWRIGHT_PIN
 from .forge.registry import KINDS as _FORGE_KINDS
 from .frame import panel as frame_panel
 from .secrets.registry import PROVIDERS
+
+
+class _VersionAction(argparse.Action):
+    """``--version``, resolved when it is asked for rather than when the parser is built.
+
+    argparse's own ``action="version"`` takes a finished string at ``add_argument`` time,
+    and this one is not free: `charter.channel.build_label` reads the dist-info to find
+    out whether this is a dev build (PEP 610), and `build_parser` runs on **every** charter
+    invocation — every hook, every status line render, several per turn. A lazy action
+    moves that read onto the one path that wants it and off the several hundred that do
+    not.
+
+    Prints to stdout and exits 0, which is what the builtin does and what
+    `commands_update._handoff` reads: it runs the newly installed `charter --version` and
+    compares the last word to the version it asked for. A stable install still prints one
+    word, so that comparison is untouched (see `channel.build_label`).
+    """
+
+    def __init__(self, option_strings, dest, **kw):
+        kw.setdefault("nargs", 0)
+        kw.setdefault("default", argparse.SUPPRESS)
+        kw.setdefault("help", "Show this charter's version and, on a dev build, the "
+                              "commit it was installed from.")
+        super().__init__(option_strings, dest, **kw)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        from . import channel
+
+        print(f"charter {channel.build_label()}")
+        parser.exit()
 
 
 class _NoAbbrev(argparse.ArgumentParser):
@@ -54,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="charter",
         description="charter — discover, clone, and track org repos on demand.",
     )
-    p.add_argument("--version", action="version", version=f"charter {__version__}")
+    p.add_argument("--version", action=_VersionAction)
     sub = p.add_subparsers(dest="command", required=True)
 
     ini = sub.add_parser(

@@ -125,7 +125,79 @@ run — charter fires twice on every SessionStart, UserPromptSubmit and Bash cal
 is wrong; everything is doubled, which is harder to notice. Delete charter's block from
 `config.toml` and keep the plugin.
 
-## First control plane## First control plane
+## 4. The dev channel — trying main without cutting a release
+
+**Opt-in, per control plane, one key.** Absent, nothing here happens and you track
+published releases as before.
+
+```toml
+[update]
+channel = "dev"     # "stable" (the default) | "dev"
+```
+
+A dev build is installed straight from git — never from PyPI:
+
+```bash
+uv tool install --force git+https://github.com/diazoxide/charter@main
+```
+
+`charter update` runs exactly that for you on a plane that declares the channel, and then
+does the two things a bare install does not: it moves this harness's charter artifact, and
+it force-refreshes the Claude Code plugin (see below for why that needs forcing).
+
+**Dev builds are never published, and that is the design rather than a limitation.** PyPI
+forbids local version identifiers, so a real dev release would have to burn `0.52.0.dev1`,
+`.dev2`, … permanently, at a rate of hundreds a month, irreversibly. And publishing on
+every push would mean running the release workflow — which holds `id-token: write` — on
+every merge, multiplying exactly the exposure that workflow is already being narrowed
+about. CI verifies the git install on every push to `main` instead: same coverage, no
+publish, no token.
+
+**Which channel you are on is on the status line.** The brand chip reads `⬢ charter 0.51.0
+dev`, so `↑a1b2c3d` beside it can only mean one thing — main moved. `charter --version`
+answers the other half, which is what you are actually running:
+
+```
+$ charter --version
+charter 0.51.0+dev (main @ a1b2c3d)      # a git install
+charter 0.51.0                            # a published one
+```
+
+That is read from the dist-info's PEP 610 `direct_url.json`, which a VCS install writes and
+a PyPI install does not — so it is the install itself talking, not a number somebody
+remembered to stamp.
+
+**Nothing installs itself.** When main is ahead, charter *nudges*; you run `charter
+update`. Auto-installing unreviewed merges is committed content reaching execution without
+a moment of consent, which is the one thing charter will not do to you.
+
+**A plane cannot ask for both a pin and the dev channel.** `[charter] version` names a
+published release the whole team conforms to; `main` has no such number. Declare both and
+charter installs neither, and says so at session start.
+
+**Going back** is one command — `charter update --to 0.51.0` installs the published release
+without editing anything — or delete the `[update]` block and run `charter update`.
+
+### The plugin needs forcing, and only on this channel
+
+`claude plugin update charter@charter` compares **version strings**, and the plugin's
+version moves once per release. The marketplace is a git clone of `main` that Claude Code
+re-fetches on its own, so between releases the clone moves and the installed copy does not,
+both still say `0.51.0`, and the update command correctly reports there is nothing to do.
+Measured on one machine: 45 files apart, `skills/secrets/SKILL.md` and
+`skills/browser/SKILL.md` among them.
+
+Hooks are unaffected — `hooks/hooks.json` invokes the `charter` on your `PATH`, so hook
+behaviour follows the CLI. **Skills are the part that goes stale**, and skills are text the
+model loads.
+
+So `charter update` on the dev channel uninstalls and reinstalls the plugin, which is the
+only mechanism that repopulates a version-keyed cache directory. And `charter doctor` now
+compares the two by **content** on *both* channels — a `plugin files` row that names the
+digests and the files that differ, because a version number that is frozen by design cannot
+answer the question.
+
+## First control plane
 
 ```bash
 mkdir my-control-plane && cd my-control-plane
