@@ -298,7 +298,19 @@ _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg 
 #: The vault FILES — note the trailing slash. `.charter/vaults.json` is the registry and
 #: holds provider config and paths, never values, so `grep -rn vaults .charter/vaults.json`
 #: is an ordinary read and was being hard-denied.
-_VAULT_PATH_RE = re.compile(r"\.charter/(?:vaults/|browser|active-)")
+#:
+#: The state DIRECTORY itself is the second alternative. `grep -r token .charter` walks
+#: every vault file inside it, and a pattern that required a trailing slash after
+#: `.charter` never saw the operand that named the directory (#443). Only at the end of
+#: the operand, so `.charter/vaults.json` and `.charter/state/…` are untouched, and
+#: `pretooluse_read`'s "test the target with a `/` appended too" still lands on `/?$`.
+#: `.edm` is the pre-rename spelling, kept for the reason :data:`_CHARTER_PROGS` keeps the
+#: old binary name.
+#:
+#: Known limit, and the reason the tool gate does NOT reuse this as its only answer: this
+#: is a name, and a plane with `$CHARTER_HOME` set keeps its vaults somewhere this pattern
+#: cannot spell. `toolgate._resolves_into` asks the filesystem instead.
+_VAULT_PATH_RE = re.compile(r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-)|/?$)")
 
 
 #: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost
@@ -1525,7 +1537,7 @@ def pretooluse() -> int:
         from . import toolgate
         # `sid` is what bounds the answer to the tools declared BEFORE this session could
         # rewrite them (#432) — without it the gate re-reads a model-writable file.
-        result = toolgate.decide(cmd, sid)
+        result = toolgate.decide(cmd, sid, cwd)
     except Exception:
         result = None
     if result:

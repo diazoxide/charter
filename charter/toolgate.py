@@ -24,10 +24,15 @@ smooth", never "deny":
 - :data:`_INTERPRETERS` — a binary whose *argument* is the real command (``bash``,
   ``python3``, ``xargs``, ``sudo``…) is a declaration of every command, so it is
   never smoothed. Declaring one has to stay a declaration of one thing.
-- :func:`_touches_control_surface` — whatever the binary, a command naming a vault
-  file or one of charter's own state/definition files is never smoothed. That is the
-  same rule the Bash leak guard applies to `cat`, applied to the argv rather than to
-  a list of programs charter happened to think of.
+- :func:`_touches_control_surface` — whatever the binary, an argument that reaches a
+  vault or charter's own state is never smoothed. That is the same rule the Bash leak
+  guard applies to `cat`, applied to the argv rather than to a list of programs charter
+  happened to think of. "Reaches" is decided against the FILE, not its spelling: each
+  token is split the way the shell splits it, resolved, and compared by
+  ``(st_dev, st_ino)`` to what :mod:`charter.config` says the state directory is. Round
+  one grepped the raw command string for a hardcoded ``.charter/`` and was defeated by a
+  quote character, a backslash, a `?`, the bare directory name, and every plane with
+  ``$CHARTER_HOME`` set (#443).
 - :func:`frozen_tools` — the answer is bounded by what ``tools:`` said when the session
   began. ``persona.md`` is a file the model can write; without this, one approved
   edit is unprompted execution for the rest of the session (#432).
@@ -39,9 +44,11 @@ cheap to run on every Bash call.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
+import shlex
 import sys
 
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -57,6 +64,12 @@ _DANGEROUS = {
         "replace", "exec", "attach", "cp", "port-forward", "proxy", "run",
     },
     "glab": {"delete", "remove"},
+    # `git clean -xfd` deletes every untracked file — which, in a control plane, is the
+    # gitignored `.charter/` state directory: the session ceiling below, the active-persona
+    # pointer, the vaults. Deleting it and re-snapshotting was an unprompted path from an
+    # edited `tools:` line to every tool it now names (#443). It is also destructive on its
+    # own terms — untracked work is unrecoverable — which is what `_DANGEROUS` is for.
+    "git": {"clean"},
     # AgentMail: reads (list/get/search) auto-approve; sending mail is an outward
     # action and deletes are destructive — those keep prompting.
     "agentmail": {"send", "reply", "forward", "delete", "remove"},
@@ -97,16 +110,28 @@ _VERSIONED = re.compile(
     r"^(?:python|pypy|node|deno|bun|perl|ruby|php|lua|bash|sh|zsh|ksh|tclsh|"
     r"julia|scala|pip|uv)[0-9]+(?:[._-][0-9]+)*$")
 
-#: charter's own control surface, in argv. Two kinds of file, one rule: a *vault*
-#: (the leak guard's :data:`charter.hooks._VAULT_PATH_RE`, imported rather than
-#: re-spelled), and the files that decide what this gate itself will answer — anything
-#: under `.charter/` (per-developer state: the active-persona pointer, session
-#: pointers, the tool ceiling below) and the persona definitions that carry `tools:`.
+#: charter's own control surface, by NAME — the cwd-independent half of the check below.
+#: Two kinds of file, one rule: a *vault* (the leak guard's
+#: :data:`charter.hooks._VAULT_PATH_RE`, imported rather than re-spelled), and the files
+#: that decide what this gate itself will answer — the state directory (the
+#: active-persona pointer, session pointers, the tool ceiling below) and the persona
+#: definitions that carry `tools:`.
 #:
-#: Scanned over the WHOLE command, not just the arguments after the binary, so a
-#: leading `VAULT=.charter/vaults/x.json` assignment cannot carry the path past it.
-_SELF_PATH_RE = re.compile(r"\.charter/|persona\.md|personas/\.default")
-
+#: `.edm` is charter's pre-rename state directory, kept for the reason
+#: `hooks._CHARTER_PROGS` keeps the old binary name. Both spellings match the DIRECTORY
+#: ITSELF as well as a path inside it: `tar -cf /tmp/o.tar .charter` archives every vault
+#: while naming no file, and a pattern that required a trailing slash never saw it (#443).
+#:
+#: A name is only ever the second answer here. `_resolves_into` below asks the
+#: filesystem, which is what covers `$CHARTER_HOME`, a legacy `.edm/` plane, a symlink
+#: and a case-folded spelling.
+#:
+#: The bare-directory alternative overlaps `hooks._VAULT_PATH_RE`, deliberately: they are
+#: read together, so no test can tell which one answered, and that is the point. That
+#: pattern states what the LEAK guard calls a vault and may be narrowed for the leak
+#: guard's own reasons; this one states what the TOOL GATE calls charter's state. The day
+#: those two diverge is the day the overlap is the only thing holding.
+_SELF_PATH_RE = re.compile(r"\.(?:charter|edm)(?:/|$)|persona\.md|personas/\.default")
 
 def _norm(text: str) -> str:
     """Fold the path spellings that mean the same file: `//`, `/./`, and case.
@@ -114,8 +139,20 @@ def _norm(text: str) -> str:
     `.charter//vaults/x.json` and `.Charter/vaults/x.json` name the same file on the
     filesystems charter runs on, and a guard that only knows the canonical spelling is
     one substitution away from silence.
+
+    It used to rewrite `\\` to `/` as well, on the theory that a backslash was a Windows
+    separator. That did not fold a spelling, it INVENTED one: `.chart\\er/vaults/x.json`
+    — which a POSIX shell hands to the program as `.charter/vaults/x.json` — came out of
+    here as `.chart/er/vaults/x.json` and matched nothing (#443). Quoting and escaping are
+    now undone by :func:`_tokens`, where the shell's own rules apply, and this function
+    folds only spellings the *filesystem* treats as equal.
+
+    Which is why the backslash is not handled here at all any more, rather than handled
+    correctly: after tokenising, the only backslash left in a token is one the shell
+    QUOTED, and `.chart\\er/x` in single quotes names a file whose name really does
+    contain a backslash — a different file, and not charter's.
     """
-    t = text.replace("\\", "/")
+    t = text
     for _ in range(4):                      # bounded: each pass strictly shortens
         n = re.sub(r"/(?:\./)+", "/", re.sub(r"/{2,}", "/", t))
         if n == t:
@@ -124,34 +161,246 @@ def _norm(text: str) -> str:
     return t.lower()
 
 
-def _touches_control_surface(command: str) -> bool:
-    """True when the command names a vault file or one of charter's own files.
+def _control_roots() -> list[str]:
+    """The paths a smoothed command may not reach, asked of :mod:`charter.config`.
+
+    Derived, never re-spelled. ``config.STATE_DIR`` is ``$CHARTER_HOME`` verbatim when the
+    operator set one, and the legacy ``.edm/`` directory on a plane whose migration failed
+    (`config._migrate_state_dir`) — so a check hardcoded to the literal `.charter/`
+    matched *nothing at all* on either plane and silently smoothed every vault path
+    (#443). `hooks._state_write_reason` already answers this question this way; two guards
+    answering one question two ways is how the gap gets in.
+    """
+    from . import config
+    out = []
+    for p in (config.STATE_DIR, config.VAULTS_DIR):
+        try:
+            out.append(os.path.realpath(str(p)))
+        except (OSError, ValueError):
+            continue
+    out.extend(_registered_vault_files())
+    return out
+
+
+def _registered_vault_files() -> list[str]:
+    """Every vault file the registry names, including the ones stored OUTSIDE the plane.
+
+    `vaults.json` can point a vault at any path on the machine, and
+    `commands_secrets` actively recommends that for a plain-file vault git would otherwise
+    commit (`base.vault_file_path`). A check that knew only `.charter/vaults/` was
+    therefore true of the default layout and false of the layout charter itself
+    recommends.
+
+    Asked of `secrets.registry` and resolved by `base.vault_file_path` — the same two
+    functions every other reader uses, because two answers to "where is this vault" is how
+    one of them quietly keeps resolving the old way.
+
+    The cost is one small JSON read, and only on the paths that would otherwise be
+    smoothed: `decide` has already established an active persona and a declared binary
+    before anything here runs, so an ordinary Bash call that this gate has no opinion about
+    never reaches it. Any failure reads as "no extra roots" — the state directory above is
+    unaffected, and this function can only ever ADD refusals.
+    """
+    try:
+        from .secrets import registry as _registry
+        from .secrets.base import vault_file_path
+        entries = (_registry.load_registry() or {}).get("vaults") or {}
+    except Exception:
+        return []
+    out = []
+    for entry in entries.values():
+        f = (entry.get("config") or {}).get("file") if isinstance(entry, dict) else None
+        if not isinstance(f, str) or not f:
+            continue
+        try:
+            out.append(os.path.realpath(str(vault_file_path(f))))
+        except Exception:
+            continue
+    return out
+
+
+def _ids(path: str):
+    """``(st_dev, st_ino)`` for *path*, or ``None`` when it does not exist.
+
+    The identity of the object, not its name: on a case-insensitive filesystem `.Charter`
+    stats to the same inode as `.charter`, and a symlink planted into the plane stats to
+    what it points at. That is the comparison a name-based guard keeps losing.
+    """
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _glob_match(name: str, pattern: str) -> bool:
+    """`fnmatch`, plus the shell's leading-dot rule: `*` never matches a dotfile.
+
+    Without that rule `ls *` would read as naming `.charter` and stop being smoothed,
+    which is a cost with no security in it — the shell does not expand `*` to a dotfile.
+    `.charte?` still matches, because it says the dot itself.
+    """
+    if name.startswith(".") and not pattern.startswith("."):
+        return False
+    return fnmatch.fnmatchcase(name.lower(), pattern.lower())
+
+
+def _chain_ids(roots: list[str]) -> set:
+    """Identities of every control root AND of every directory that CONTAINS one.
+
+    A command that names a containing directory reaches everything inside it:
+    `tar -cf /tmp/o.tar .` in the plane root archives every vault exactly as
+    `tar -cf /tmp/o.tar .charter` does, and the second spelling being the one the guard
+    knew about is how this class of hole keeps being spelled around (#443). Both are
+    "decline to smooth", which costs one prompt for `ls ~` and closes the archive.
+    """
+    out = set()
+    for root in roots:
+        cur, hops = root, 0
+        while hops < 64:
+            i = _ids(cur)
+            if i is not None:
+                out.add(i)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur, hops = parent, hops + 1
+    return out
+
+
+def _resolves_into(cand: str, base: str, roots: list[str],
+                   root_ids: set, chain_ids: set) -> bool:
+    """True when *cand*, as the shell would hand it to the program, reaches a control root
+    — by BEING one, by sitting under one, or by containing one.
+
+    Two answers, in order of strength:
+
+    1. **Identity.** Resolve against *base*, then compare ``(st_dev, st_ino)``, never
+       text: the path itself against *chain_ids* (is it a root, or a directory holding
+       one?) and each of its ancestors against *root_ids* (is it inside one?). That is one
+       answer for `.charter/vaults/x.json`, `./.charter/…`, `~/plane/.charter/…`,
+       `.Charter/…` on a case-insensitive filesystem, a symlink pointing into the state
+       directory, and the bare directory `.charter` itself.
+    2. **Pattern.** A path that does not exist has no identity — a write target, or a glob
+       like `.charte?/vaults/devops.json` that the shell will expand at run time. So the
+       resolved spelling is matched against each root component by component, with glob
+       metacharacters honoured, which answers those without pretending to know what the
+       expansion will find.
+    """
+    try:
+        c = os.path.expanduser(cand)
+        if "$" in c:
+            c = os.path.expandvars(c)
+        p = os.path.realpath(os.path.join(base, c))
+    except (OSError, ValueError):
+        return False
+    cur, hops = p, 0
+    while hops < 64:
+        i = _ids(cur)
+        if i is not None and (i in chain_ids if cur == p else i in root_ids):
+            return True
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur, hops = parent, hops + 1
+    cparts = p.split(os.sep)
+    for root in roots:
+        rparts = root.split(os.sep)
+        if len(cparts) < len(rparts):
+            continue
+        if all(_glob_match(r, c) for c, r in zip(cparts, rparts)):
+            return True
+    return False
+
+
+def _path_candidates(token: str):
+    """The path-shaped readings of one argv token.
+
+    A token is not always a bare path: `curl --data-binary @<path>` prefixes it, and
+    `VAULT=<path> gh api /x` (or `--output=<path>`) carries it after an `=`. Both prefixes
+    compose — `--data-binary=@<path>` is one token wearing both — so this strips to a
+    fixed point rather than one layer. It terminates because every step is strictly
+    shorter.
+    """
+    out, frontier = [token], [token]
+    while frontier:
+        t = frontier.pop()
+        for nxt in (t[1:] if t.startswith("@") else "",
+                    t.split("=", 1)[1] if "=" in t else ""):
+            if nxt and nxt not in out:
+                out.append(nxt)
+                frontier.append(nxt)
+    return out
+
+
+def _touches_control_surface(tokens: list[str], cwd: str | None = None) -> bool:
+    """True when any argv token names a vault file or one of charter's own files.
 
     The binary is not consulted on purpose. `_leak_reason` asks "is this program a
     reader?", which is answerable for `cat` and hopeless for `python3 -c …` or
     `curl --data-binary @…` — and this gate's job is narrower than denying: it only
     has to decline to *remove the prompt* from a command reaching for a credential.
+
+    Given TOKENS, not the raw command string. Grepping the raw string was the whole
+    defect: `--data-binary @".charter"/vaults/devops.json` is the same file with two
+    quote characters in it, and a substring search for `.charter/` does not see it
+    (#443). :func:`_tokens` applies the shell's own quoting and escaping rules first, so
+    every spelling that reaches the same file arrives here spelled the same way.
+
+    Scanned over the WHOLE argv including leading `VAR=value` assignments, so a
+    `VAULT=.charter/vaults/x.json` prefix cannot carry the path past it.
     """
     from .hooks import _VAULT_PATH_RE       # one regex for one question, not two
-    text = _norm(command)
-    return bool(_VAULT_PATH_RE.search(text) or _SELF_PATH_RE.search(text))
+    roots = _control_roots()
+    root_ids = {i for i in (_ids(r) for r in roots) if i is not None}
+    chain = _chain_ids(roots)
+    base = cwd or os.getcwd()
+    for tok in tokens:
+        for cand in _path_candidates(tok):
+            text = _norm(cand)
+            if _VAULT_PATH_RE.search(text) or _SELF_PATH_RE.search(text):
+                return True
+            if _resolves_into(cand, base, roots, root_ids, chain):
+                return True
+    return False
 
 
 def _is_interpreter(binary: str) -> bool:
     return binary in _INTERPRETERS or bool(_VERSIONED.match(binary))
 
 
-def _parse(command: str):
-    """(binary, arg_tokens) for a simple command, or (None, None) if not simple."""
+def _tokens(command: str) -> list[str] | None:
+    """The argv the shell would build, or ``None`` when this is not a simple command.
+
+    ``shlex.split(posix=True)`` — the same splitter `hooks._segment_argv` uses — so
+    quoting and backslash escapes are undone HERE, once, before any rule looks at a
+    token. Every rule below (the dangerous-subcommand scan, the control-surface check,
+    the provenance check) then reads what the program will actually receive rather than
+    what was typed.
+
+    Unbalanced quotes raise, and the answer to a command this function cannot parse is
+    the same as for every other doubt on this path: decline to smooth it, take the prompt.
+    """
     if not command or "$(" in command or any(ch in command for ch in _UNSAFE):
-        return None, None
-    tokens = command.strip().split()
+        return None
+    try:
+        toks = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+    return toks or None
+
+
+def _parse(command: str):
+    """(binary, arg_tokens, all_tokens) for a simple command, or a triple of None."""
+    tokens = _tokens(command)
+    if tokens is None:
+        return None, None, None
     i = 0
     while i < len(tokens) and _ENV_ASSIGN.match(tokens[i]):
         i += 1  # skip leading VAR=value assignments (e.g. KUBECONFIG=… kubectl …)
     if i >= len(tokens):
-        return None, None
-    return os.path.basename(tokens[i]), tokens[i + 1:]
+        return None, None, None
+    return os.path.basename(tokens[i]), tokens[i + 1:], tokens
 
 
 def _is_dangerous(binary: str, args: list[str]) -> bool:
@@ -167,6 +416,24 @@ def _is_dangerous(binary: str, args: list[str]) -> bool:
 def _ceiling_file(sid: str):
     from . import config
     return config.SESSIONS_DIR / f"{sid}.tools"
+
+
+def _marker_file(sid: str):
+    """The "a ceiling was taken for this session" marker — a different file on purpose.
+
+    "What the ceiling says" and "that a ceiling exists" are two facts, and storing them in
+    one file made the second deletable with the first: remove `<sid>.tools` and
+    :func:`frozen_tools` read a session it had never seen, re-snapshotted the working tree,
+    and granted the mid-session `tools:` edit in full (#443).
+
+    Keyed on the ceiling specifically rather than on "any `<sid>.*` record charter holds".
+    A per-session persona pointer is written by `charter persona use`, which under a
+    harness with no SessionStart hook happens BEFORE the first gated Bash call — so the
+    broader test would have read every opencode session as "already seen" and smoothed
+    nothing in it, for the rest of its life.
+    """
+    from . import config
+    return config.SESSIONS_DIR / f"{sid}.gate"
 
 
 def snapshot(session_id: str | None = None) -> dict:
@@ -185,9 +452,14 @@ def snapshot(session_id: str | None = None) -> dict:
     and is granted nothing.
 
     Returns ``{}`` when nothing could be persisted — including when there is no session
-    id. A ceiling that cannot be stored must not read as "no ceiling", which is why the
-    caller below treats an empty map as "approve nothing" rather than falling back to the
-    working tree.
+    id. A ceiling that cannot be stored must not read as "no ceiling", so :func:`frozen_tools`
+    reads an empty map as "approve nothing".
+
+    That sentence used to be written as an unconditional guarantee while `frozen_tools`
+    directly below re-read the working tree on ANY read failure — so deleting the ceiling
+    file restored the hole the ceiling exists to close (#443). The one remaining fallback
+    is now named where it lives, in `frozen_tools`, and is bounded to a session charter
+    has no other record of.
     """
     from . import persona, session as _session
     sid = _session.current(session_id)
@@ -200,6 +472,7 @@ def snapshot(session_id: str | None = None) -> dict:
     try:
         f = _ceiling_file(sid)
         f.parent.mkdir(parents=True, exist_ok=True)
+        _marker_file(sid).touch()   # before the ceiling: see `_marker_file`
         tmp = f.with_name(f.name + ".tmp")
         tmp.write_text(json.dumps(data, sort_keys=True))
         os.replace(tmp, f)
@@ -217,11 +490,29 @@ def frozen_tools(name: str, session_id: str | None = None):
     there would be a regression nobody could see. Every other outcome is a real set —
     possibly empty, which means "approve nothing", which costs a prompt.
 
-    Trust-on-first-use when no snapshot exists: opencode has no SessionStart hook
-    (`harness/opencode.py:160`), so its first gated Bash call takes the snapshot. That
-    freezes the session from that point rather than from its beginning — weaker, stated
-    rather than papered over, and still strictly better than re-reading the file every
-    call.
+    Trust-on-first-use when no snapshot exists, and ONLY then: opencode has no
+    SessionStart hook (`harness/opencode.py:160`), so its first gated Bash call takes the
+    snapshot. That freezes the session from that point rather than from its beginning —
+    weaker, stated rather than papered over, and still strictly better than re-reading the
+    file every call.
+
+    "No snapshot exists" is not the same question as "the read failed", and conflating
+    them is what made the ceiling optional (#443): it caught ``ValueError`` too, so
+    writing `not json` over the file re-read the working tree and granted the widened
+    `tools:` line in full. Two rules now bound the fallback, and both fail toward fewer
+    approvals:
+
+    * **A file that is there but unreadable is tampering, not a fresh session.** A
+      ``ValueError`` — the file exists and is not JSON — is ``set()``. So is a file whose
+      JSON is not an object.
+    * **A session that already took a ceiling is not first use.** :func:`snapshot` leaves
+      a marker beside the ceiling, so a *missing* ceiling next to a present marker means
+      one was removed rather than never taken → ``set()``.
+
+    What remains, stated: a harness with no SessionStart hook whose very first charter
+    interaction is a gated Bash call. That session is frozen from its first call. Wiping
+    the whole state directory reaches the same place — which is why `git clean` is in
+    :data:`_DANGEROUS` and why a command naming the state directory is never smoothed.
     """
     from . import session as _session
     sid = _session.current(session_id)
@@ -229,16 +520,39 @@ def frozen_tools(name: str, session_id: str | None = None):
         return None
     try:
         data = json.loads(_ceiling_file(sid).read_text())
-    except (OSError, ValueError):
-        data = snapshot(sid)
+    except ValueError:
+        return set()            # present and unparseable → tampering, approve nothing
+    except OSError:
+        if _ceiling_was_taken(sid):
+            return set()        # a ceiling was removed, not never taken
+        data = snapshot(sid)    # trust-on-first-use, for a harness with no SessionStart
     if not isinstance(data, dict):
         return set()
     vals = data.get(name)
     return set(vals) if isinstance(vals, list) else set()
 
 
-def decide(command: str, session_id: str | None = None):
-    """Return ``(persona, tool)`` if the active persona may run this, else None."""
+def _ceiling_was_taken(sid: str) -> bool:
+    """Whether a ceiling has ever been snapshotted for *sid* (see :func:`_marker_file`).
+
+    Errors read as "taken": a marker that cannot be checked is not evidence of a fresh
+    session, and the branch this feeds is the one that grants less.
+    """
+    try:
+        return _marker_file(sid).exists()
+    except (OSError, ValueError):
+        return True
+
+
+def decide(command: str, session_id: str | None = None, cwd: str | None = None):
+    """Return ``(persona, tool)`` if the active persona may run this, else None.
+
+    *cwd* is the directory the command will run in, as the harness reports it. It is what
+    lets :func:`_touches_control_surface` resolve a RELATIVE argument to the file it will
+    actually open; without it the check falls back to this process's own cwd, which is the
+    same directory in every harness charter supports but is an assumption rather than a
+    fact.
+    """
     from . import persona
 
     name = persona.resolve_active()
@@ -253,21 +567,21 @@ def decide(command: str, session_id: str | None = None):
         tools &= frozen
     if not tools:
         return None
-    binary, args = _parse(command)
+    binary, args, tokens = _parse(command)
     if not binary or binary not in tools:
         return None
     if _is_interpreter(binary):
         return None  # declaring an interpreter declares every command — keep the prompt
     if _is_dangerous(binary, args):
         return None  # declared, but a destructive subcommand → fall back to a prompt
-    if _touches_control_surface(command):
+    if _touches_control_surface(tokens, cwd):
         return None  # reaches a vault or charter's own state → keep the prompt
-    if not _provenance_ok(name, command, binary):
+    if not _provenance_ok(name, tokens, binary):
         return None  # a name charter owns, invoked from somewhere charter did not put it
     return name, binary
 
 
-def _provenance_ok(name: str, command: str, binary: str) -> bool:
+def _provenance_ok(name: str, tokens: list[str], binary: str) -> bool:
     """True unless *binary* names one of the persona's own scripts and the command is
     reaching a DIFFERENT file of that name.
 
@@ -289,7 +603,7 @@ def _provenance_ok(name: str, command: str, binary: str) -> bool:
     owned = scripts.get(binary)
     if owned is None:
         return True
-    token = next((t for t in command.strip().split() if os.path.basename(t) == binary), "")
+    token = next((t for t in tokens if os.path.basename(t) == binary), "")
     if os.path.basename(token) == token:
         return False  # a bare name resolves through PATH, which charter cannot vouch for
     try:
@@ -305,7 +619,8 @@ def main(argv=None) -> int:
         return 0
     command = ((data or {}).get("tool_input") or {}).get("command", "")
     try:
-        result = decide(command, (data or {}).get("session_id"))
+        result = decide(command, (data or {}).get("session_id"),
+                        (data or {}).get("cwd"))
     except Exception:
         result = None
     if result:

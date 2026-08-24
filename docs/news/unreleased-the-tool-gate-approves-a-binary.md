@@ -25,12 +25,27 @@ Python*. What it granted was `python3 -c "print(open('.charter/vaults/devops.jso
 with an affirmative `allow`, which is worse than silence: it removed the human prompt that
 was the last remaining control. If you want that, it is one prompt away, on purpose.
 
-**A command that names a vault file is never smoothed, whatever the binary is.** The Bash
-leak guard asks *is this program a reader?* — answerable for `cat`, hopeless for `curl
---data-binary @…`. This asks the other question, about the argv, and it folds the spellings
-that mean the same file: `.charter//vaults/x.json`, `.charter/./vaults/x.json` and
-`.Charter/vaults/x.json` are all the same answer. Charter's own state under `.charter/` and
-the persona definitions carrying `tools:` are in the same rule, for the reason below.
+**A command whose arguments reach a vault is never smoothed, whatever the binary is.** The
+Bash leak guard asks *is this program a reader?* — answerable for `cat`, hopeless for `curl
+--data-binary @…`. This asks the other question, about the argv.
+
+It asks it about the **file**, not about the text. Each argument is split the way the shell
+splits it, `~` and `$VAR` are expanded, and the result is compared by inode with the
+directory `charter` actually keeps its state in. So all of these are one answer:
+`@".charter"/vaults/x.json`, `.chart\er/vaults/x.json`, `.charte?/vaults/x.json`,
+`--data-binary=@…`, a symlink pointing into the state directory, `.Charter/…` on a
+case-insensitive filesystem, the bare directory `.charter` (which `tar` and `cp -R` are
+happy to take), and a directory that merely contains it — `tar -cf /tmp/o.tar .` in the
+plane root archives every vault without naming one. Because the question is put to
+`charter.config` instead of to a hardcoded name, this now also holds on a plane with
+`$CHARTER_HOME` set, on a plane still using the legacy `.edm/` directory, and for a vault
+whose `file` the registry points outside the plane — three planes where the first version of
+this check matched nothing at all. Charter's own state and the persona definitions carrying
+`tools:` are in the same rule, for the reason below.
+
+`git clean` joined the destructive subcommands in the same pass. The state directory is
+gitignored, so `git clean -xfd` deletes the session ceiling below while naming nothing —
+and untracked work is unrecoverable, which is reason enough on its own.
 
 **A tool added to `tools:` after the session started grants nothing until the next
 session.** `persona.md` and the active-persona pointer are read from the working tree on
@@ -40,6 +55,13 @@ now records what every persona declares, and the gate answers within that set. S
 persona mid-session still works: the snapshot holds the whole roster, not just the active
 one. Narrowing a `tools:` line still takes effect immediately — both directions fail toward
 fewer approvals.
+
+Deleting or corrupting that record does not lift it. A session whose snapshot is unreadable
+approves **nothing** for the rest of its life — not even what was declared before it began,
+because charter no longer knows what that was — and a new session takes a fresh snapshot in
+the ordinary way. The one place a snapshot is still taken mid-life is a harness with no
+SessionStart hook at all (opencode), on its first gated call and only if no snapshot was
+ever taken for that session.
 
 The cost lands on the person who edits a `tools:` line by hand and watches it keep
 prompting, so `charter persona use` now names it:

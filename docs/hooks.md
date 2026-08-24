@@ -58,12 +58,27 @@ rule while one who reads a bare refusal files an issue.
 A seventh path is not a guard but an allowance: a binary the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the
 **binary**, so every argument rides along — which is why four things are never smoothed
-whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`, …),
-interpreters and wrappers whose argument is the real command (`bash -c`, `python3 -c`,
-`env`, `xargs`, `npx`, …), any command naming a vault file or charter's own `.charter/`
-state, and any tool added to that line after the session started — the gate answers within
-the set declared before this session could rewrite it, and `persona.md` is a file the model
-can write. Each of those is a fall back to the normal prompt; this path never denies.
+whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`,
+`git clean`, …), interpreters and wrappers whose argument is the real command (`bash -c`,
+`python3 -c`, `env`, `xargs`, `npx`, …), any command whose arguments **reach** a vault or
+charter's own state, and any tool added to that line after the session started — the gate
+answers within the set declared before this session could rewrite it, and `persona.md` is a
+file the model can write. Each of those is a fall back to the normal prompt; this path never
+denies.
+
+*Reach* is decided about the file, not about the text of the command. Each argument is
+split the way the shell splits it (quotes and backslash escapes removed), `~` and `$VAR`
+expanded, and then compared by inode to where `charter` actually keeps its state — so
+`@".charter"/vaults/x.json`, `.chart\er/…`, a `?` glob, a symlink, a case-folded spelling,
+the bare directory name, and a directory that merely *contains* the state directory
+(`tar -cf /tmp/o.tar .` in the plane root) are all one answer. Because the question is asked
+of `charter.config` rather than of a hardcoded name, a plane with `$CHARTER_HOME` set, a
+plane still on the legacy `.edm/` directory, and a vault the registry points outside the
+plane are covered too. **What it cannot see**, stated rather than implied: a path this
+process cannot reconstruct — one assembled at run time from a variable set inside the
+command, or from a substitution. Those are not smoothed either, but for a different reason:
+the gate refuses to parse anything with a pipe, a redirect, a `;`, a `&&` or a `$( )` in it
+at all.
 
 ## When a guard is wrong
 
