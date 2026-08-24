@@ -18,7 +18,7 @@ from __future__ import annotations
 import unittest
 
 from charter import doctor, memstore, persona
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, pin_update_channel
 
 
 class IndexDrift(PersonaIso):
@@ -86,6 +86,10 @@ class DoctorCheck(unittest.TestCase):
     It shipped that way for a moment: a broad `except Exception` swallowed a
     NameError and returned OK, so it silently checked nothing.
     """
+
+    def setUp(self) -> None:
+        # `run_all` reaches `check_plugin_freshness`, and so the channel (#459).
+        pin_update_channel(self)
 
     def test_check_returns_a_named_result(self):
         r = doctor.check_memory_indexes()

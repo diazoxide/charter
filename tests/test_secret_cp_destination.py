@@ -152,9 +152,11 @@ class TestCharterOwnStreamsAreRefusedByIdentity(CpCase):
             self.saved[fd] = os.dup(fd)
             os.dup2(opened, fd)
             os.close(opened)
-        # NOT named `_restore`: `PersonaIso` has a method by that name and registers it
-        # as its own cleanup, so an override here would run twice (EBADF on the second)
-        # and the plane isolation would never be undone.
+        # Named for what it restores, which is now a style point rather than a trap:
+        # `PersonaIso` used to register a cleanup called `_restore`, so a subclass method
+        # of that name replaced it — this fixture would have run twice (EBADF on the
+        # second) and the plane isolation would never have been undone. That cleanup is
+        # name-mangled since #459 and cannot be shadowed.
         self.addCleanup(self._restore_streams)
 
     def _restore_streams(self) -> None:

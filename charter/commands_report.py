@@ -271,12 +271,26 @@ def _report_duplicates(dups: list[dict], rid: str) -> int:
 
 def _warn_if_stale() -> None:
     """Warn, never block. A bug that survives on an old charter is still worth having, and
-    "upgrade first, then report" is a reliable way to never get the report at all."""
+    "upgrade first, then report" is a reliable way to never get the report at all.
+
+    Carries the channel chip (#458). On the dev channel ``{latest}`` is not a published
+    release at all — `update.newer_than` hands off to `newer_head`, so the number beside
+    "is out" is `main`'s head commit — and "0.52.0 is out" read on a dev plane is ambiguous
+    between *a release was cut* and *main moved*. That is the exact ambiguity
+    `statusline._dev_chip` exists to resolve, and #457 already made it one function so a
+    third surface can call it rather than re-derive `channel.is_dev()` and its try/except.
+    """
     try:
-        from . import update
+        from . import statusline, update
         latest = update.newer_than(__version__)
         if latest:
-            util.warn(f"you are on charter {__version__}; {latest} is out — this may "
-                      "already be fixed. Reporting anyway is fine.")
+            # `util.color_enabled()`, not the chip's ANSI default: this is the one caller
+            # that is not a terminal surface, and `util.warn` gates its own glyph the same
+            # way. The call stays INSIDE the f-string on purpose — `test_version_shows_
+            # channel`'s AST property looks for it in the same `JoinedStr` as the version.
+            color = util.color_enabled()
+            util.warn(f"you are on charter {__version__}{statusline._dev_chip(color)}; "
+                      f"{latest} is out — this may already be fixed. Reporting anyway is "
+                      "fine.")
     except Exception:  # noqa: BLE001 - a staleness check must never block a report
         pass

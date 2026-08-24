@@ -50,9 +50,27 @@ class PersonaIso(unittest.TestCase):
         self._orig = config.use(self.tmp)
 
         config.PERSONAS_DIR.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(self._restore)
+        # PRIVATE, and name-mangled on purpose (`_PersonaIso__restore`). `addCleanup` binds
+        # a bound method by attribute lookup on the INSTANCE, so a subclass defining its own
+        # `_restore` — the obvious name for "put my stubs back" — replaced this one:
+        # `super().setUp()` registered the SUBCLASS's method, so NEITHER half below ran:
+        # config was never restored and the tmp tree was never removed. `config.ROOT` then
+        # pointed, for the rest of the run, at a directory that still EXISTS and is no
+        # longer a plane — it holds whatever the fixture wrote (`personas/`, `.charter/`)
+        # and never had a `charter.toml`, so `HAS_CONTROL_PLANE` is False and every setting
+        # derives to its default. Measured, because "deleted" would send the next reader
+        # hunting for ENOENT symptoms that never appear.
+        # `test_secret_exec.SecretExecMode` did exactly this, and because discovery runs
+        # alphabetically it left the 1186 tests that ran after it — 24.3% of the suite —
+        # reading that non-plane. It is also why the two classes #459 is about failed when
+        # run alone and passed in a full run: a root with no `charter.toml` derives
+        # `UPDATE` to the `stable` default, which is exactly what they assumed.
+        # `test_secret_cp_destination` had sidestepped the collision by hand, with a comment
+        # warning the next person; a hazard that needs a comment in every subclass is one
+        # the base class should have removed.
+        self.addCleanup(self.__restore)
 
-    def _restore(self) -> None:
+    def __restore(self) -> None:
         # An embedded plane's worktree root is a SIBLING of ROOT, so it survives the
         # rmtree below. Removed by name-prefix rather than by "is it outside tmp" — the
         # only path this ever creates is `<tmp>.worktrees`, and anything else sharing the
@@ -132,3 +150,34 @@ def isolate_state_dir(case) -> Path:
     case.addCleanup(lambda: (setattr(config, "STATE_DIR", orig),
                              shutil.rmtree(tmp, ignore_errors=True)))
     return config.STATE_DIR
+
+
+def pin_update_channel(case, channel: str = "stable") -> dict:
+    """Pin ``config.UPDATE`` for one test case, restoring after.
+
+    The companion to :func:`isolate_state_dir`, for the same shape of test and for the
+    reason `tests/_planeguard.py` sets out at length: a case that deliberately runs against
+    the REAL plane still may not read `[update] channel` off it, because that value belongs
+    to whoever is running the suite rather than to charter (#459). Without a pin, such a
+    case passes on a stable plane and fails on a dev one, and `tests._planeguard` refuses
+    the read rather than let it decide the assertion silently.
+
+    Defaults to ``"stable"`` — the channel almost every case here means when it means
+    nothing in particular, and the one `instance.UPDATE_DEFAULTS` gives a plane that
+    declares no ``[update]`` section at all. A case that is ABOUT the dev channel passes
+    ``"dev"`` and is then testing a fixture rather than an environment.
+
+    A misspelt channel is refused here rather than clamped. `channel.channel()` re-matches
+    whatever it is handed against `instance.UPDATE_CHANNELS` and falls back to ``stable``,
+    which is right for a committed file written by a human and wrong for a fixture: a case
+    that pinned ``"deb"`` would silently test the stable path while its own source says it
+    is testing dev, and pass for the wrong reason.
+    """
+    if channel not in instance.UPDATE_CHANNELS:
+        raise ValueError(f"{channel!r} is not a charter update channel; expected one of "
+                         f"{instance.UPDATE_CHANNELS}")
+    pinned = {"channel": channel}
+    patcher = mock.patch.object(config, "UPDATE", pinned)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return pinned
