@@ -65,9 +65,13 @@ user, and the shape of that limit is worth knowing rather than guessing at:
   all run. Widening the list does not fix this — the next name is always the missing one.
 - It reads the **argv it is given**, and does not re-parse a shell string, so
   `sh -c 'cat .charter/vaults/db.json'` is one opaque argument to it.
-- It matches a **path spelling**, so a vault registered outside `.charter/` (which is what
-  `charter vault add --file` offers when the default location would be committed) is not
-  covered, and neither is a file `charter secret cp` wrote somewhere you named.
+- It matches a **path**, canonicalised first — redundant separators and `.`/`..` segments
+  are collapsed, so `.charter//vaults/db.json` gets the same answer as
+  `.charter/vaults/db.json`. What it cannot know is a *different* path holding the same
+  bytes: a vault registered outside `.charter/` (which is what `charter vault add --file`
+  offers when the default location would be committed), a file `charter secret cp` wrote
+  somewhere you named, or a symlink you planted. Resolving those would mean a `stat` on
+  every operand of every command.
 
 None of that is a reason to switch the guard off, and none of it is a bug report: it is why
 the sentence above says *mistakes*. The boundary that does not depend on a name is that

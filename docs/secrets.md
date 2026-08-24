@@ -152,9 +152,11 @@ shell history**, while still letting an agent *use* the credential:
   `git show HEAD:.charter/vaults/db.json`), and a shell string (`sh -c 'cat …'`), which
   reaches the guard as a single opaque argument and is not re-parsed. Adding names does not
   close this: the missing one is always the next one, and a longer list starts denying
-  ordinary work. Two path-shaped gaps go with it — a vault registered outside `.charter/`
-  (see below), and a file `charter secret cp` materialised at a path you chose, which is an
-  ordinary file to every guard charter has. Treat all of it the way
+  ordinary work. The path side is canonicalised first — `.charter//vaults/db.json` and
+  `.charter/./vaults/db.json` answer the same as the plain form — so what is left there is a
+  *different* path holding the same bytes: a vault registered outside `.charter/` (see
+  below), a file `charter secret cp` materialised at a path you chose, or a symlink. Each is
+  an ordinary file to every guard charter has. Treat all of it the way
   [SECURITY.md](../SECURITY.md) frames it: the guard is against mistakes, and the property
   that does not depend on a name is that *charter* never prints the value.
 

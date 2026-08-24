@@ -40,9 +40,11 @@ rule while one who reads a bare refusal files an issue.
   the list (`base64`, `cp`, `jq`, `cut`, `git show HEAD:<path>`), or a shell string
   (`sh -c 'cat .charter/vaults/db.json'`, which is one argument here and is not re-parsed)
   is not covered. Widening the list is not the fix — the missing name is always the next
-  one, and false positives arrive immediately. Neither is a vault registered outside
-  `.charter/`, nor a file `charter secret cp` wrote to a path you named: both are spellings
-  this pattern cannot know. See [SECURITY.md](../SECURITY.md) for why that is the honest
+  one, and false positives arrive immediately. The **path** is canonicalised before the
+  match, so `.charter//vaults/db.json` and `.charter/./vaults/db.json` answer the same as
+  the plain form; what it cannot know is a *different* path holding the same bytes — a vault
+  registered outside `.charter/`, a file `charter secret cp` wrote to a path you named, or a
+  symlink. See [SECURITY.md](../SECURITY.md) for why that is the honest
   scope rather than a defect.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all — same path pattern, so the same limits.

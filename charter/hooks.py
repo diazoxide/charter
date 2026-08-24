@@ -427,6 +427,34 @@ _VAULT_PATH_RE = re.compile(
     r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-|fingerprint)|/?$)")
 
 
+def _names_a_vault_path(operand: str) -> bool:
+    """True when *operand* names a guarded path, in any spelling of the SAME path.
+
+    `_VAULT_PATH_RE` is a text match, so `.charter//vaults/db.json` and
+    `.charter/./vaults/db.json` — one keystroke apart from the denied form, identical to
+    the kernel, and not a wrapper or a clever program — walked straight past it. Testing
+    `os.path.normpath` as well collapses `//`, `/./` and `a/b/..` to the one canonical
+    spelling, which is the property the pattern was always reaching for.
+
+    Both forms are tested rather than only the normalised one, because `normpath` strips a
+    TRAILING slash and the pattern requires it: `grep -r . .charter/vaults/` must stay
+    denied. For the same reason the trailing slash is put back on the normalised form when
+    the operand carried one — without that, `grep -r . .charter//vaults//` normalises to a
+    form the pattern rejects and the doubled separator survives on the one operand that
+    walks EVERY vault file. A union can only widen, and it widens by exactly the spellings
+    that name the same path — it invents no new class of false positive, since every
+    operand whose normalised form matches has an unnormalised form naming the same path.
+
+    This does not become a resolver. `os.path.realpath` would follow symlinks and hit the
+    filesystem on every operand of every Bash call; a symlink someone planted at a path
+    they chose is the documented limit in `SECURITY.md`, not this function's job.
+    """
+    norm = os.path.normpath(operand)
+    if operand.endswith("/") and not norm.endswith("/"):
+        norm += "/"
+    return bool(_VAULT_PATH_RE.search(operand) or _VAULT_PATH_RE.search(norm))
+
+
 #: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost
 #: of an extra alternative is one string, while the cost of dropping it is a silent
 #: denial that stops happening on a machine where the old binary is still installed.
@@ -596,7 +624,7 @@ def _leak_reason(cmd: str) -> str | None:
                     "for a tool that needs a path; reading that file back is the same leak "
                     "by another road, and no guard covers a path you chose.)")
         if os.path.basename(prog).lower() in _READERS and any(
-                _VAULT_PATH_RE.search(a) for a in _file_operands(prog, args)):
+                _names_a_vault_path(a) for a in _file_operands(prog, args)):
             return ("reads a vault/secret file directly (would print plaintext). "
                     "Use `charter … secret exec --env NAME=<key> -- <cmd>`, or `--file "
                     "ENVVAR=<key>` for a tool that needs a path — and do not read a "
@@ -1986,7 +2014,7 @@ def pretooluse_read() -> int:
         # out of it — so a Grep rooted at the DIRECTORY `.charter/vaults` would otherwise
         # walk past a guard that stops every file inside it. Appending cannot create a false
         # positive: `.charter/vaults.json/` still has no `vaults/` in it.
-        hit = any(_VAULT_PATH_RE.search(t) or _VAULT_PATH_RE.search(t + "/")
+        hit = any(_names_a_vault_path(t) or _names_a_vault_path(t + "/")
                   for t in targets)
     except Exception:
         return 0

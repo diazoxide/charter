@@ -46,6 +46,20 @@ another road. `charter secret get`'s own masked-output hint and its non-interact
 `--reveal` refusal say the same. The first 70 characters of each denial are unchanged,
 because that prefix is the tally key `charter guard` counts by.
 
-**A new test file pins all of it.** `tests/test_documented_limits.py` asserts the limits as
-current behaviour, each with a positive control, so the day someone narrows or widens one
-of these guards the suite points at the paragraph that has to move with it.
+**One thing did change in code, because writing the limit down exposed it.** The sentence
+"a known reader pointed at a path under `.charter/`" turned out to be false for a path
+spelled with a redundant separator: `cat .charter/vaults/db.json` was denied and
+`cat .charter//vaults/db.json` was allowed — the same file, the same program, one keystroke
+apart, and nothing exotic about it. Both guards now canonicalise the operand before
+matching, so `//`, `/./` and `a/b/..` collapse to the one spelling. The trailing slash is
+put back afterwards, because `grep -r . .charter/vaults/` names the directory that holds
+every vault file and must stay denied. This is not a resolver: a symlink you planted, and a
+path outside the plane, are still the documented limit, because following them would mean a
+`stat` on every operand of every command.
+
+**Two new test files pin all of it.** `tests/test_documented_limits.py` asserts the limits
+as current behaviour, each class with a positive control, so the day someone narrows or
+widens one of these guards the suite points at the paragraph that has to move with it.
+`tests/test_vault_path_spellings.py` generates equivalent spellings of one path rather than
+listing bad strings, and asserts every one of them lands where the canonical form lands —
+denied for a vault file, allowed for the registry beside it.
