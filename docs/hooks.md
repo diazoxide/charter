@@ -34,10 +34,18 @@ A denial from these is **the rule working, not a bug** — the single most commo
 mistaken for a defect. Each prints why, because a developer who reads the reason learns the
 rule while one who reads a bare refusal files an issue.
 
-- **Secret leak.** A command whose argv would put a vault's contents into the transcript.
-  Needs argv *and* the plane's vault paths, so it cannot be expressed as a static rule.
+- **Secret leak.** A charter invocation carrying `--reveal`, or a **known** file-reading
+  program pointed at a path under `.charter/`. It is a name-based check on the argv it can
+  see, and that is its ceiling: an interpreter (`python3 -c`, `node -e`), a program not on
+  the list (`base64`, `cp`, `jq`, `cut`, `git show HEAD:<path>`), or a shell string
+  (`sh -c 'cat .charter/vaults/db.json'`, which is one argument here and is not re-parsed)
+  is not covered. Widening the list is not the fix — the missing name is always the next
+  one, and false positives arrive immediately. Neither is a vault registered outside
+  `.charter/`, nor a file `charter secret cp` wrote to a path you named: both are spellings
+  this pattern cannot know. See [SECURITY.md](../SECURITY.md) for why that is the honest
+  scope rather than a defect.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
-  matcher at all.
+  matcher at all — same path pattern, so the same limits.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
   with the plane's own default branch as the operand, which is the one spelling that used to

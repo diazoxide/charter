@@ -514,7 +514,8 @@ def cmd_secret_get(args) -> int:
         # this line into an offline verification oracle for a guessed value — see
         # `secrets/fingerprint.py` (#436).
         print(f"{args.vault}/{args.key}: present · {fingerprint.masked(value)}")
-        print("(value hidden — use `charter secret exec`/`cp` to consume it, or --reveal to print)")
+        print("(value hidden — use `charter secret exec` to hand it to a command, "
+              "`secret cp` for a tool that needs a file path, or --reveal to print)")
         return 0
 
     # --reveal: only for a human at an interactive terminal. Refuse the exact
@@ -522,8 +523,10 @@ def cmd_secret_get(args) -> int:
     if not sys.stdout.isatty() and not args.force:
         util.err(
             "Refusing to print a secret to non-interactive stdout — this is how it would "
-            "leak into an agent's context. Use `charter secret exec`/`cp` to consume it safely, "
-            "or pass --force if you truly intend to print it."
+            "leak into an agent's context. Use `charter secret exec` to hand it to a command "
+            "instead (`secret cp` materialises a 0600 file for a tool that needs a path — "
+            "reading that file back leaks the value just the same), or pass --force if you "
+            "truly intend to print it."
         )
         return 2
     # Before the write, not after: the record of a credential leaving must not depend on

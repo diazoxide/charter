@@ -69,6 +69,13 @@ shell history**, while still letting an agent *use* the credential:
   charter secret exec devops --env TOKEN=API_TOKEN -- curl -H "Authorization: Bearer $TOKEN" https://…
   ```
 
+  Redaction is a **net against an accidental echo, not a boundary** — it is a literal
+  search for the value's own bytes, so a command that *transforms* the value comes back
+  unscrubbed, and `--exec`/`--stream` capture nothing and therefore redact nothing. The
+  guarantee is that charter never prints the value into the conversation; where it goes
+  after that is a property of the command you chose. Details below, and in
+  [SECURITY.md](../SECURITY.md).
+
 - **`charter secret cp`** materializes a secret to a 0600 file (e.g. a kubeconfig) and
   prints only the path, never the contents. The destination has to be a **real file it
   creates**: a device, a FIFO, a directory or a symlink is refused, because
@@ -80,6 +87,12 @@ shell history**, while still letting an agent *use* the credential:
   `/dev/fd/1` are all the same one object and get the same answer. `--force` does not
   reach that check. An **existing** file is refused too — overwriting one destroys its
   contents and sets it to 0600, so it takes `--force` and says so afterwards.
+
+  What it cannot do is follow the file afterwards. Once written, that path is an ordinary
+  file: `cat`-ing it is not denied, because no guard knows charter put a credential there.
+  `cp` is for handing a **path** to a tool that needs one — a kubeconfig, a PEM — not for
+  getting at the value. Delete it when the tool is done; `secret exec --file` does that for
+  you and is the better shape whenever the tool's lifetime is one command.
 - **`charter secret get`** is masked by default — it prints a size band and a keyed
   fingerprint, never the value:
 
@@ -118,10 +131,10 @@ shell history**, while still letting an agent *use* the credential:
 - Values are always **written** via `--stdin` or `--from-file`, never as a bare CLI
   argument — an argument shows up in shell history and `ps` output for any other
   process on the machine to read.
-- A Claude Code guard hook denies `--reveal` outright, and denies reading a vault file
-  directly — both would print a secret straight into the conversation. **A denial here is
-  that guard working, not a bug** — see the README's "one credential" section for the same
-  idea applied to git auth.
+- A Claude Code guard hook denies `--reveal` on a charter invocation it can recognise, and
+  denies known reader programs pointed at a vault file — both would print a secret straight
+  into the conversation. **A denial here is that guard working, not a bug** — see the
+  README's "one credential" section for the same idea applied to git auth.
 
   "Directly" covers the shell (`cat`, `grep`, `head`, … on `.charter/vaults/…`) **and** the
   harness's own file-reading tools (`Read`, `Grep`). It used to mean only the shell, which
@@ -131,6 +144,19 @@ shell history**, while still letting an agent *use* the credential:
   `Glob` is not denied — it returns file *names*, and that a vault exists is not the secret.
   Neither is a search rooted far above `.charter/`, which reads vault files as collateral;
   denying every broad search is untenable, so the guard checks the path you actually named.
+
+  **What the guard does not catch, stated so you do not have to discover it.** It knows a
+  list of reader program names and one path pattern, and everything outside those two runs:
+  an interpreter (`python3 -c "print(open('.charter/vaults/db.json').read())"`), a program
+  that reads without being called a reader (`base64`, `cp`, `jq`, `cut`, `dd`,
+  `git show HEAD:.charter/vaults/db.json`), and a shell string (`sh -c 'cat …'`), which
+  reaches the guard as a single opaque argument and is not re-parsed. Adding names does not
+  close this: the missing one is always the next one, and a longer list starts denying
+  ordinary work. Two path-shaped gaps go with it — a vault registered outside `.charter/`
+  (see below), and a file `charter secret cp` materialised at a path you chose, which is an
+  ordinary file to every guard charter has. Treat all of it the way
+  [SECURITY.md](../SECURITY.md) frames it: the guard is against mistakes, and the property
+  that does not depend on a name is that *charter* never prints the value.
 
 ## Setting one up
 
@@ -236,6 +262,16 @@ status line ask a vault whether it is reachable and no longer touch it — but `
 secret get`/`set` against that vault name would. `doctor` names a shared vault whose file
 lands outside the plane on its vaults line, so the configuration is visible rather than
 merely legal.
+
+**A vault file outside `.charter/` is also outside the guard.** The leak guard and the
+`Read`/`Grep` guard both recognise a vault by its *path* — `.charter/vaults/…` — so a
+plain-file vault at `~/creds/devops.json` is an ordinary file to them, and `cat` on it is
+an ordinary read. That is the direct cost of the remedy in the paragraph above, and it is
+not hidden in the code: `charter/hooks.py` says so where the check is made, and explains
+why it is not fixed there — this runs on **every** Bash tool call, and consulting the vault
+registry per invocation is a real cost on a hot path. Prefer the default location under
+`.charter/`, which `charter init` gitignores; move the file out only when the alternative
+is committing plaintext, and know which property you traded for which.
 
 `--account` never travels, even with `--share`. It is the one field that genuinely differs
 per machine, so it is split off and written locally.
@@ -452,7 +488,10 @@ Deliberate properties:
   command injection whatever it contains.
 - **Redaction covers what comes back, not what the child does with it.** `secret exec`
   scrubs the value from captured output, so a `curl -v` that echoes an `Authorization`
-  header is masked. `--exec` and `--stream` capture nothing by design, and therefore redact
+  header is masked. It is `str.replace` over the value's own bytes, so a child that
+  *transforms* it — `printf %s "$T" | base64`, `rev`, `gzip`, a POST that never prints it —
+  comes back unscrubbed, and no scrubber can win that race: the next encoding is always
+  available. `--exec` and `--stream` capture nothing by design, and therefore redact
   nothing — that trade-off is the same for every scheme.
 - **`health()` never resolves.** `vault list` and `doctor` call it routinely; resolving
   there would hit 1Password on every listing and could prompt for re-auth.

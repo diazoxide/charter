@@ -29,9 +29,22 @@ This is the part most worth reading before you trust charter with anything real,
 
 **What a vault protects against — and this is the whole point:** a secret value reaching
 the model's context window, and from there the transcript, the logs, and any summary fed
-into a later prompt. `charter secret exec` resolves the value inside charter's own process,
-places it in a child command's environment, and redacts every occurrence of it from
-whatever that command prints. The model names the secret; it never sees it.
+into a later prompt. `charter secret exec` resolves the value inside charter's own process
+and places it in a child command's environment. **The model names the secret and never
+types it.**
+
+**What that depends on, and it is not a footnote.** The model chooses the command charter
+runs. Redaction scrubs the value out of *captured* output, so a `curl -v` that echoes an
+`Authorization` header is masked — that is a net against an accidental echo, not a
+boundary. It is `str.replace` over the bytes that came back
+([`charter/secrets/base.py`](charter/secrets/base.py)), so a command that *transforms* the
+value is not scrubbed and cannot be: `secret exec v --env T=K -- sh -c 'printf %s "$T" |
+base64'` returns the credential in full, and so does `rev`, `fold -w1`, or a `curl -d` that
+never prints it at all. `--exec` and `--stream` capture nothing and therefore redact
+nothing. So the guarantee is precisely this: **charter never prints the value into the
+conversation. Where the value goes after that is a property of the command you asked
+charter to run.** Read `charter secret exec <vault> -- <cmd>` with the same suspicion you
+would read `<cmd>` holding the credential directly, because that is what it is.
 
 **What a vault does not protect against.** The default provider stores values as
 **plaintext JSON at file mode 0600**. There is **no encryption at rest**. Anyone who can
@@ -41,9 +54,24 @@ warrant real custody, use the `1password` or `reference` providers, which keep t
 a system built for it and resolve it on demand.
 
 **Guard rails, not guarantees.** The Claude Code plugin's `PreToolUse` guard denies
-`--reveal` on a non-interactive stdout and denies file-reading tools pointed at a vault
-file. That closes the easy accidental paths. It is a guard against mistakes, not an attacker
-with shell access as your user.
+`--reveal` on a charter invocation it can recognise, and denies a known file-reading
+program — `cat`, `grep`, `head` and a dozen more — pointed at a path under `.charter/`. It
+does the same for the harness's own `Read` and `Grep` tools. That closes the easy
+accidental paths. It is a guard against mistakes, not an attacker with shell access as your
+user, and the shape of that limit is worth knowing rather than guessing at:
+
+- It matches **program names it knows**, so `python3 -c "print(open('.charter/vaults/db.json').read())"`,
+  `base64 .charter/vaults/db.json`, `cp … /tmp/x`, and `git show HEAD:.charter/vaults/db.json`
+  all run. Widening the list does not fix this — the next name is always the missing one.
+- It reads the **argv it is given**, and does not re-parse a shell string, so
+  `sh -c 'cat .charter/vaults/db.json'` is one opaque argument to it.
+- It matches a **path spelling**, so a vault registered outside `.charter/` (which is what
+  `charter vault add --file` offers when the default location would be committed) is not
+  covered, and neither is a file `charter secret cp` wrote somewhere you named.
+
+None of that is a reason to switch the guard off, and none of it is a bug report: it is why
+the sentence above says *mistakes*. The boundary that does not depend on a name is that
+charter itself never prints the value.
 
 ## The one-credential rule
 

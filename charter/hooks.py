@@ -381,6 +381,20 @@ def _secret_kind(text: str) -> str | None:
 # --------------------------------------------------------------------------- #
 # A: secret-leak guard — deny commands that would print a secret value          #
 # --------------------------------------------------------------------------- #
+#: Programs whose ordinary job is to print a file. A NAME check, and therefore an allowlist
+#: with a ceiling that cannot be raised by adding names: `python3 -c "print(open(p).read())"`,
+#: `node -e`, `perl -ne`, `base64`, `cp`, `dd`, `jq`, `cut`, `tr`, `curl --upload-file` and
+#: `git show HEAD:<path>` all read a file without appearing here, and `sh -c '<string>'`
+#: hands this guard one opaque argument it does not re-parse (`tests/test_documented_limits.py`
+#: pins every one of those as expected behaviour, not as a TODO — so a later widening
+#: fails the suite next to the paragraph it makes untrue).
+#:
+#: The list is deliberately NOT widened. The missing name is always the next one, while
+#: every added name buys immediate false positives on ordinary work — and a guard that
+#: denies real commands gets switched off, which costs more than the case it caught. What
+#: this list reliably catches is the accident: an agent reaching for `cat` on a vault file.
+#: `SECURITY.md` and `docs/hooks.md` state that scope in those words; keep them in step
+#: with this set, because a doc promising more than the set delivers is itself the defect.
 _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg ag awk "
                      "sed".split())
 #: The vault FILES — note the trailing slash. `.charter/vaults.json` is the registry and
@@ -560,6 +574,15 @@ def _leak_reason(cmd: str) -> str | None:
     runs on every Bash tool call, and a registry read per invocation is a real cost. A
     vault registered elsewhere is therefore still unguarded here — a separate finding,
     not something to half-fix on the hot path.
+
+    The same sentence covers a file `charter secret cp` wrote: the destination is a path
+    the caller named, it is an ordinary 0600 file afterwards, and nothing here knows a
+    credential is in it. Tracking those paths in a ledger and denying reads of them was
+    considered (#423) and is the same shape of guard as `_READERS` — it matches a spelling,
+    so `/tmp/./x`, a hardlink, a copy, or `python3 -c open(...)` walks past it, at the price
+    of a ledger read on this hot path. The denial texts above therefore stopped offering
+    `cp` as a way to *see* a value and say what it is for; `docs/secrets.md` and
+    `SECURITY.md` state the limit rather than implying it is covered.
     """
     for _toks in _segment_argv(_strip_reader_heredocs(cmd)):
         prog, _env, args = _split_env(_toks)
@@ -568,11 +591,16 @@ def _leak_reason(cmd: str) -> str | None:
         if _is_charter(prog, args) and any(
                 a == "--reveal" or a.startswith("--reveal=") for a in args):
             return ("would reveal a secret value into the conversation (--reveal). "
-                    "Use `charter … secret exec`/`cp` — never --reveal for an agent")
+                    "Use `charter … secret exec --env NAME=<key> -- <cmd>` — hand it to a "
+                    "command, never to this conversation. (`secret cp` writes a 0600 FILE "
+                    "for a tool that needs a path; reading that file back is the same leak "
+                    "by another road, and no guard covers a path you chose.)")
         if os.path.basename(prog).lower() in _READERS and any(
                 _VAULT_PATH_RE.search(a) for a in _file_operands(prog, args)):
             return ("reads a vault/secret file directly (would print plaintext). "
-                    "Use `charter … secret exec`/`cp` instead of catting `.charter/`")
+                    "Use `charter … secret exec --env NAME=<key> -- <cmd>`, or `--file "
+                    "ENVVAR=<key>` for a tool that needs a path — and do not read a "
+                    "materialised copy back either: no guard covers a path you chose.")
     return None
 
 
@@ -1965,7 +1993,9 @@ def pretooluse_read() -> int:
     if not hit:
         return 0
     reason = ("reads a vault/secret file directly (would print plaintext). "
-              "Use `charter … secret exec`/`cp` instead of reading `.charter/`")
+              "Use `charter … secret exec --env NAME=<key> -- <cmd>`, or `--file "
+              "ENVVAR=<key>` for a tool that needs a path — and do not read a "
+              "materialised copy back either: no guard covers a path you chose.")
     rc = _deny("PreToolUse", reason)
     _trace("deny", data.get("session_id"), reason=reason[:70],
            cmd=(data.get("tool_name") or "")[:40])
