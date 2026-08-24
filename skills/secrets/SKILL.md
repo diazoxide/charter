@@ -41,7 +41,7 @@ charter secret exec <vault> --env NAME=<key> -- <command...>
 
 ```bash
 charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl get pods
-charter secret cp <vault> <key> <dest>     # persist at 0600; prints only the path
+charter secret cp <vault> <key> <dest>     # persist at 0600; <dest> must be a real file
 ```
 
 `<dest>` must be a **real file that does not exist yet**. A device, a FIFO, a directory

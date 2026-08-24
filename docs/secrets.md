@@ -344,8 +344,10 @@ charter secret exec qa --env TOKEN=API_TOKEN -- \
   curl -sH "Authorization: Bearer $TOKEN" https://api.example.test/me
 ```
 
-charter never puts the value in your transcript. That matters more here than it looks,
-because the obvious alternative is the idiom Playwright's own reference documents:
+charter never puts the value in your transcript on this path, and prints it only into a
+destination you named — `secret get --reveal`, or `secret cp <dest>`. That matters more
+here than it looks, because the obvious alternative is the idiom Playwright's own reference
+documents:
 
 ```bash
 TOKEN=$(playwright-cli --raw cookie-get session_id)   # ← the leak

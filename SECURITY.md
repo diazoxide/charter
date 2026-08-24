@@ -38,10 +38,24 @@ runs. Redaction scrubs the value out of *captured* output, so a `curl -v` that e
 `Authorization` header is masked — that is a net against an accidental echo, not a
 boundary. A command that *transforms* the value (`base64`, `rev`, a POST to a URL) is not
 scrubbed and cannot be, and `--exec` and `--stream` capture nothing and therefore redact
-nothing. So the guarantee is precisely this: **charter never prints the value into the
-conversation. Where the value goes after that is a property of the command you asked
-charter to run.** Read `charter secret exec <vault> -- <cmd>` with the same suspicion you
-would read `<cmd>` holding the credential directly, because that is what it is.
+nothing. So the guarantee is precisely this, and it is narrower than one sentence: **on
+the paths that consume a value — `secret exec` with `--env`/`--file`/`--dotenv`, and the
+MCP launcher — charter never prints the value into the conversation, and everywhere else
+charter prints it only into a destination you named yourself.** Where the value goes after
+that is a property of the command you asked charter to run. Read `charter secret exec
+<vault> -- <cmd>` with the same suspicion you would read `<cmd>` holding the credential
+directly, because that is what it is.
+
+**And "a destination you named" is a weaker bound than it sounds, today.** Two commands
+print: `charter secret get --reveal` writes plaintext to your terminal, and `charter
+secret cp <vault> <key> <dest>` writes it to `<dest>`. Neither asks what `<dest>` *is*, so
+`charter secret cp <vault> <key> /dev/stdout` prints the credential onto stdout — into
+this transcript, in charter's own process, with no child command anywhere in it — and then
+reports `Value not shown.` `get --reveal` refuses a non-interactive stdout, but `--force`
+overrides that refusal. Both are open defects ([#421](https://github.com/diazoxide/charter/issues/421),
+[#422](https://github.com/diazoxide/charter/issues/422)); until they are fixed, the
+sentence above holds for the consuming paths and for nothing else. Do not hand either
+command a destination an agent chose.
 
 **What a vault does not protect against.** The default provider stores values as
 **plaintext JSON at file mode 0600**. There is **no encryption at rest**. Anyone who can

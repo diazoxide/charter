@@ -51,10 +51,12 @@ mcpServers:
 ```
 
 charter resolves each key from the `reddit` vault in its own process, puts the values in the
-child's environment, and hands over. The file names the *keys*, and **charter puts no
-value in a context window, a transcript, or a summary** — what the server does with the
-values it was handed is the server's own business, the same limit `secret exec` has
-everywhere else.
+child's environment, and hands over. The file names the *keys*, and on this path **charter
+puts no value in a context window, a transcript, or a summary** — what the server does with
+the values it was handed is the server's own business, the same limit `secret exec` has
+everywhere else. Nothing here calls the two commands that do print a value, `secret get
+--reveal` and `secret cp <dest>`; those print into the destination you named, and a device
+path is one.
 
 Two things that will bite:
 
