@@ -38,21 +38,34 @@ covered: `--detach` had rows and `main` had rows, but `git checkout --detach mai
 walked through the "returning to the default branch is always allowed" carve-out and past
 every line of the `--detach` handling — had none; `git switch` had rows and `--` had rows,
 but `git switch -- feature` had none, and `switch` has no path half for a separator to
-introduce. So the corpus is now the PRODUCT of its axes (`_generated_corpus`), a second one
-crosses commands with every ROUTE to the plane root — where a relative `git -C` was being
-resolved against the hook process's cwd rather than the shell's — and a third loads the
-guard as it stands on `origin/main` and requires that nothing it refuses is allowed here.
+introduce. So the corpus is now the PRODUCT of its axes (`_generated_corpus`), and a second
+one crosses commands with every ROUTE to the plane root — where a relative `git -C` was being
+resolved against the hook process's cwd rather than the shell's.
+
+**Round four: the baseline moved into the subject.** Round three added a third cross-check
+that loaded `charter/hooks.py` from `origin/main` at runtime and required that nothing the
+shipped guard refused was allowed here. It held exactly once. The moment the PR carrying it
+merged, `origin/main` *was* the code under test, baseline and subject became byte-identical,
+its "at least four relaxations" assertion could never be satisfied again, and `main` went red
+for every branch cut from it (#482).
+
+That is not a bug in the assertion; it is what a differential test against a MOVING
+reference always becomes. The property was worth keeping — *charter's plane-root guard must
+never become weaker than it was* — so it is expressed the way `test_vault_path_re_only_widens`
+expresses its own: as a VENDORED corpus (`PINNED` below). Every row is a real git invocation
+paired with the verdict the guard must give, checked in beside the code. Nothing resolves a
+ref, nothing reads git history, nothing leaves the process; the file IS the baseline, so it
+cannot drift into the thing it measures, and a relaxation flips a row red with a name that
+says which spelling regressed.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import itertools
 import os
 import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -696,81 +709,322 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                 self.assertIsNone(_decision(self.run_cmd(cmd, cwd=self.clone)), cmd)
 
 
-class TestNeverWeakerThanTheGuardThatShips(CheckoutCase):
-    """**Nothing `origin/main`'s guard denies may be allowed here** unless git itself shows
-    the command does not move HEAD.
+#: ---------------------------------------------------------------------------------------
+#: THE PINNED CORPUS — the baseline, vendored.
+#:
+#: `(verdict, where, command, note)`. The verdict is what the plane-root branch guard must
+#: answer for that exact command typed in that exact directory; `where` is one of `root`
+#: (the plane root), `clone` (a workspace clone outside it) or `above` (the root's parent);
+#: `{root}`, `{clone}`, `{up}` and `{name}` are filled in per run because absolute paths
+#: cannot be checked in.
+#:
+#: **This table is the baseline, and that is the whole point.** Its predecessor asked
+#: `origin/main` what the guard used to answer, which worked until the branch carrying it
+#: merged and `origin/main` became the code under test (#482). A reference that the subject
+#: can grow into is not a reference. So the answers live here, in the repository, next to
+#: the guard: nothing below resolves a ref, shells out for history, or reaches the network,
+#: and the file is as true in a tarball and a depth-1 CI checkout as it is in a full clone.
+#:
+#: Two directions, both load-bearing:
+#:
+#: * A `DENY` row that starts passing means the guard STOPPED refusing a command that moves
+#:   the plane root's HEAD — the regression this file exists to catch, named by spelling
+#:   rather than reported as a count.
+#: * An `ALLOW` row that starts failing means the guard started refusing something charter
+#:   promises works (`git checkout <path>` is the whole of #461) — or that one of the
+#:   KNOWN LIMITS below has been closed, which is good news that must be taken deliberately
+#:   rather than absorbed silently.
+#:
+#: Every `DENY` row's effect on HEAD was measured against real git 2.50 rather than reasoned
+#: about, and the argv-able ones are re-measured on every run by `TestGitItselfIsTheOracle`,
+#: which asks git for the verdict this table writes down. The two are meant to overlap: the
+#: oracle proves the answers here are git's, and this table keeps answering when the command
+#: is a shell form git cannot be handed, or a route that only means something relative to a
+#: plane root the oracle's scratch copy does not have.
+PINNED: tuple[tuple[str, str, str, str], ...] = (
 
-    Two rounds of this fix were strictly weaker than the code they replaced on inputs nobody
-    had a row for — round one on `git checkout --orphan README`, round three on
-    `git checkout --detach main` — and both times every test in the file passed. The reason
-    is structural: a fix that *narrows* a guard is reviewed by reading the narrowing, and the
-    narrowing is exactly where the accidental widening hides.
+    # --- checkout, the ref-move half. git moves HEAD for every row here. -----------------
+    ("DENY", "root", "git checkout feature", "git: Switched to branch 'feature'"),
+    ("DENY", "root", "git checkout 'feature'", "quoted: one word once the tokeniser is done"),
+    ("DENY", "root", 'git checkout "feature"', "the other quote, same word"),
+    ("DENY", "root", r"git checkout fea\ture", "escaped: still the branch `feature`"),
+    ("DENY", "root", "git checkout 'fea'ture", "quoting that closes mid-word"),
+    ("DENY", "root", "git checkout -", "`-` is @{-1}, the previous branch: a ref, never a path"),
+    ("DENY", "root", "git checkout HEAD~0", "a commit-ish that is not a branch detaches HEAD"),
+    ("DENY", "root", "git checkout nosuchthing", "neither ref nor path: git DWIMs a remote branch"),
+    ("DENY", "root", "git checkout feature --", "a TRAILING bare `--` still switches"),
+    ("DENY", "root", "git checkout $BRANCH", "charter cannot resolve it, and unreadable is not an allow"),
+    ("DENY", "root", 'git checkout "$(echo feature)"', "the same, through a substitution"),
+    ("DENY", "root", "git checkout -fq feature", "restore-only options do not make a ref operand a path"),
 
-    So the previous implementation is loaded and asked the same questions. It is a
-    REFERENCE, not a spec: where the two disagree, git breaks the tie. A disagreement is a
-    finding only when `origin/main` refused something this guard allows **and git moves HEAD
-    for it** — anything else is #461's false positive being removed on purpose, and those
-    are collected and asserted to be restores rather than waved through.
+    # --- checkout, creating a branch. `--orphan` was round one's bypass. -----------------
+    ("DENY", "root", "git checkout -b chore/x", "git: Switched to a new branch 'chore/x'"),
+    ("DENY", "root", "git checkout -B chore/x", "the force-create spelling"),
+    ("DENY", "root", "git checkout -b 'neu'", "a quoted name"),
+    ("DENY", "root", r"git checkout \-b neu", "an escaped dash is still `-b` after tokenising"),
+    ("DENY", "root", "git checkout -bREADME", "ATTACHED value: the branch name is inside the option"),
+    ("DENY", "root", "git checkout -BREADME", "the same, force-create"),
+    ("DENY", "root", "git checkout -qbREADME", "a cluster: `-q -b README`, read left to right"),
+    ("DENY", "root", "git checkout -b neu --", "git refuses this today; charter does not depend on that"),
+    ("DENY", "root", "git checkout -B README --", "a create whose operand is a tracked file"),
+    ("DENY", "root", "git checkout --orphan README", "round one's bypass: a create that reads as a restore"),
+    ("DENY", "root", "git checkout --orphan=README", "the attached long form of it"),
+    ("DENY", "root", "git checkout --orphan README --", "and with the separator as decoration"),
+    ("DENY", "root", "git checkout --orphan notes", "a directory pathspec as the new branch's name"),
 
-    This is a cross-check, not the property: `TestGitItselfIsTheOracle` and
-    `TestEveryRouteToThePlaneRootIsTheSameRoute` carry the property, and both run everywhere.
-    This one needs the repository's history, so it reports rather than runs where there is
-    none — an `actions/checkout` at depth 1 has no `origin/main` to load.
+    # --- checkout, detaching. No operand needed, which is why it was invisible. ----------
+    ("DENY", "root", "git checkout --detach", "git: HEAD is now at <sha> — with no operand at all"),
+    ("DENY", "root", "git checkout --detach feature", ""),
+    ("DENY", "root", "git checkout --detach main", "round three's bypass: the remedy's NAME beside a detach"),
+    ("DENY", "root", "git checkout --detach main --", "and with a trailing separator"),
+    ("DENY", "root", "git checkout -d", "git's own short form of --detach"),
+    ("DENY", "root", "git checkout -d feature", ""),
+    ("DENY", "root", "git checkout -qd main", "a cluster, restore letter first"),
+    ("DENY", "root", "git checkout -dq main", "the same cluster the other way round"),
+    ("DENY", "root", "git checkout --detach README",
+     "git errors here (README is no commit); charter refuses AHEAD of git, deliberately"),
+
+    # --- switch. It has no path half at all, so every row is a ref move. -----------------
+    ("DENY", "root", "git switch feature", ""),
+    ("DENY", "root", "git switch -", "the previous branch, again"),
+    ("DENY", "root", "git switch -c neu", ""),
+    ("DENY", "root", "git switch -cneu", "attached"),
+    ("DENY", "root", "git switch -Cneu", "the ATTACHED spelling of the one #483 misses"),
+    ("DENY", "root", "git switch --create neu", ""),
+    ("DENY", "root", "git switch --force-create neu", ""),
+    ("DENY", "root", "git switch --orphan neu", ""),
+    ("DENY", "root", "git switch -d", ""),
+    ("DENY", "root", "git switch -d main", "a detach whose operand is the default branch"),
+    ("DENY", "root", "git switch --detach feature", ""),
+    ("DENY", "root", "git switch -- feature", "round three's other bypass: `switch` has no paths for a `--`"),
+    ("DENY", "root", "git switch -q -- ambig", "the same, with an option and the ambiguous name"),
+    ("DENY", "root", "git switch --detach -- main", "and with the remedy's name after the separator"),
+
+    # --- the ambiguous case, which must STAY denied. -------------------------------------
+    ("DENY", "root", "git checkout ambig",
+     "both a tracked path and a ref; git breaks the tie for the REF and switches"),
+
+    # --- an option charter cannot place keeps the guard shut. ----------------------------
+    ("DENY", "root", "git checkout --guess README", "an allowlist, so an unplaced option refuses"),
+    ("DENY", "root", "git checkout --track README", ""),
+    ("DENY", "root", "git checkout -t README", ""),
+    ("DENY", "root", "git checkout -l README", ""),
+    ("DENY", "root", "git checkout --nonesuch-that-git-does-not-have README",
+     "stands for whatever option git adds after this commit"),
+    ("DENY", "root", "git checkout --nonesuch-that-git-does-not-have", "and with no operand to read"),
+
+    # --- aliases: another spelling of the same command. ----------------------------------
+    ("DENY", "root", "git co feature", "`co = checkout` in this fixture's config"),
+    ("DENY", "root", "git -c alias.zz=checkout zz feature", "defined and used in one command line"),
+    ("DENY", "root", "git -c alias.z='checkout feature' z", "#467's spelling: the operand is inside the alias"),
+    ("DENY", "root", "git -c commit.gpgsign=false checkout feature",
+     "a global `-c` VALUE is not a subcommand — this repo's own commit convention"),
+
+    # --- routes. The subject is a repository, not a directory. ---------------------------
+    ("DENY", "root", "git -C . checkout feature", "relative `-C`, standing in the root"),
+    ("DENY", "root", "git -C {root} checkout feature", "absolute `-C`, standing in the root"),
+    ("DENY", "root", "git -C {root} switch -d main", "and a detach by that route"),
+    ("DENY", "clone", "git -C {root} checkout feature", "absolute `-C`, from a workspace clone"),
+    ("DENY", "clone", "git -C {up} checkout feature",
+     "RELATIVE `-C` from outside: resolved against the shell, which is round three's fix"),
+    ("DENY", "clone", "git -C {up} -C . checkout feature", "two `-C`, each relative to the one before"),
+    ("DENY", "clone", "git -C {up} switch -c neu", "a create by that route"),
+    ("DENY", "clone", "git -C {up} -c alias.zz=checkout zz feature", "an alias by that route"),
+    ("DENY", "above", "cd {name} && git checkout feature", "a `cd` earlier in the SAME command"),
+    ("DENY", "above", "cd {name} && git switch feature", ""),
+    ("DENY", "root", "cd .. && git -C {name} checkout feature", "out and back in again"),
+
+    # --- ALLOW: the file-restore carve-out, which is the whole of #461. ------------------
+    ("ALLOW", "root", "git checkout README", "the reported case: git updates 1 path, HEAD unchanged"),
+    ("ALLOW", "root", "git checkout -- README", "the explicit spelling"),
+    ("ALLOW", "root", "git checkout -- README ambig", "after a `--` everything is a path"),
+    ("ALLOW", "root", "git checkout -- ambig", "the unambiguous spelling of the ambiguous name"),
+    ("ALLOW", "root", "git checkout -- .", ""),
+    ("ALLOW", "root", "git checkout .", "a pathspec that is no single file"),
+    ("ALLOW", "root", "git checkout notes", "a directory pathspec"),
+    ("ALLOW", "root", "git checkout notes/a.md", ""),
+    ("ALLOW", "root", "git checkout -- 'notes/a.md'", "quoted"),
+    ("ALLOW", "root", "git checkout feature README", "`<tree-ish> <paths…>`: HEAD stays put"),
+    ("ALLOW", "root", "git checkout HEAD -- README", ""),
+    ("ALLOW", "root", "git checkout main -- README", ""),
+    ("ALLOW", "root", "git checkout --ours README", "a restore-only option"),
+    ("ALLOW", "root", "git checkout -f README", ""),
+    ("ALLOW", "root", "git checkout -q README", ""),
+    ("ALLOW", "root", "git checkout -fq README", "a cluster of restore letters"),
+    ("ALLOW", "root", "git checkout -qf README", "and the other order"),
+    ("ALLOW", "root", "git checkout --conflict=merge README", "an attached long value"),
+    ("ALLOW", "root", "git checkout -p", "an interactive restore has no operand at all"),
+    ("ALLOW", "root", "git checkout", "bare: moves nothing"),
+    ("ALLOW", "root", "git restore README", "the modern spelling, always allowed"),
+    ("ALLOW", "root", "git restore ambig", "`restore` has no ref half, so there is no ambiguity to break"),
+    ("ALLOW", "root", "git restore --staged README", ""),
+    ("ALLOW", "root", "git restore --source=feature README", ""),
+    ("ALLOW", "clone", "git -C {up} checkout README", "the carve-out survives the route"),
+    ("ALLOW", "clone", "git -C {up} checkout -- README", ""),
+    ("ALLOW", "clone", "git -C {root} restore README", ""),
+
+    # --- ALLOW: the documented remedy stays runnable. ------------------------------------
+    ("ALLOW", "root", "git checkout main", "`doctor` prints this; a guard that blocks its own fix is bypassed"),
+    ("ALLOW", "root", "git checkout -f main", "options and all"),
+    ("ALLOW", "root", "git switch main", ""),
+
+    # --- ALLOW: a clone is not the root, and branch work belongs there. ------------------
+    ("ALLOW", "clone", "git -C . checkout -b feature/x", "the reach is not 'anything with a -C in it'"),
+    ("ALLOW", "clone", "git -C {clone} checkout -b feature/x", ""),
+    ("ALLOW", "clone", "cd .. && git -C svc checkout -b feature/x", ""),
+
+    # --- ALLOW, and every row a KNOWN LIMIT: a command that DOES move the plane root's
+    #     HEAD and is not refused. Pinned as facts rather than left as silent gaps, each
+    #     naming the issue that tracks it. Closing one turns its row RED, which is the
+    #     point: a limit should not disappear without somebody noticing and saying so.
+    ("ALLOW", "root", "git switch -C neu",
+     "LIMIT #483: `-C` is _git_target's change-directory global AND switch's --force-create; "
+     "the separated form is eaten as a directory. git: Switched to a new branch 'neu'"),
+    ("ALLOW", "clone", "git --git-dir={root}/.git checkout feature",
+     "LIMIT #477: --git-dir names the repository and _git_target does not read it"),
+    ("ALLOW", "clone", "git --git-dir {root}/.git checkout feature", "LIMIT #477: the separated form"),
+    ("ALLOW", "clone", "git --work-tree={root} --git-dir={root}/.git checkout feature",
+     "LIMIT #477: --work-tree names the tree directly"),
+    ("ALLOW", "root", "env git checkout feature",
+     "LIMIT #430: prog is taken from token 0, so a wrapper prefix hides the real program"),
+    ("ALLOW", "root", "/usr/bin/env git checkout feature", "LIMIT #430: the same by absolute path"),
+    ("ALLOW", "root", "command git checkout feature", "LIMIT #430"),
+    ("ALLOW", "root", "nohup git checkout feature", "LIMIT #430"),
+    ("ALLOW", "root", "if true; then git checkout feature; fi", "LIMIT #430: a shell keyword in token 0"),
+    ("ALLOW", "root", "( git checkout feature )", "LIMIT #430: _OPERATORS carries no grouping tokens"),
+    ("ALLOW", "root", "sh -c 'git checkout feature'",
+     "LIMIT #430 (named there as out of scope): an interpreter's argument is the command as "
+     "TEXT, and charter does not re-parse it — the same deliberate limit pinned in "
+     "tests/test_leak_guard_readers_that_write.py"),
+    ("ALLOW", "root", 'bash -c "git checkout feature"', "LIMIT #430: the same, another shell"),
+)
+
+#: Rows whose note names a tracking issue. Split out so the two halves can be counted
+#: separately: a corpus that quietly turned into limits would still pass a bare row count.
+_LIMIT = "LIMIT #"
+
+
+class TestThePinnedCorpusIsTheBaseline(CheckoutCase):
+    """**Every row of `PINNED` gets the verdict written beside it**, and the file is the
+    baseline.
+
+    This replaces a differential test that read the shipped guard out of `origin/main` at
+    runtime. It was right about the property and wrong about where to keep the reference:
+    the branch carrying it merged, `origin/main` became the subject, and the comparison
+    turned into `x == x` — an assertion that could not be satisfied again on `main` or on
+    anything cut from it (#482). Fixing the ref it read would only move the expiry date; a
+    baseline that lives anywhere the subject can reach expires by construction.
+
+    So the baseline is checked in, the way `test_vault_path_re_only_widens` keeps its own.
+    That trades one thing for another and the trade is worth naming: reading `origin/main`
+    covered whatever spellings the generated corpus produced, automatically, while this
+    covers the spellings written down here. What it buys is that it keeps answering — in a
+    tarball, in a shallow clone, on a detached CI tree, and next year — and that a
+    regression arrives as a NAMED row rather than as `0 not greater than or equal to 4`.
+
+    The unbounded half of the question is not this test's job and never was:
+    `TestGitItselfIsTheOracle` crosses the axes and lets real git supply the verdict, and
+    `TestEveryRouteToThePlaneRootIsTheSameRoute` crosses commands with routes. Those two
+    carry the property. This one pins the answers so they cannot quietly change.
     """
 
-    #: Refs to load the shipped guard from, in order. `main` is here for a clone whose
-    #: remote is not called `origin`.
-    BASELINE_REFS = ("origin/main", "main")
+    def setUp(self) -> None:
+        super().setUp()
+        # A clone outside the root, and the relative path back to the root from it: how a
+        # session standing in a workspace spells the plane root without naming it absolutely.
+        self.clone = config.WORKSPACES_DIR / "ws" / "svc"
+        self.clone.mkdir(parents=True, exist_ok=True)
+        self._git("init", "-q", "-b", "main", str(self.clone))
+        self.up = os.path.relpath(self.root, self.clone)
+        self.assertTrue(self.up.startswith(".."), self.up)
+        # `co = checkout` is on a large share of developer machines, and the corpus has a
+        # row for it. Configured here rather than assumed, so the row tests the guard's
+        # alias resolution rather than the machine the suite happens to run on.
+        self._in(self.root, "config", "alias.co", "checkout")
 
-    def shipped(self):
-        repo = Path(hooks.__file__).resolve().parent.parent
-        if not (repo / ".git").exists():
-            self.skipTest(f"no git history at {repo}: nothing to compare against")
-        for ref in self.BASELINE_REFS:
-            r = subprocess.run(["git", "-C", str(repo), "show", f"{ref}:charter/hooks.py"],
-                               capture_output=True, text=True)
-            if r.returncode == 0:
-                break
-        else:
-            self.skipTest(f"none of {self.BASELINE_REFS} resolves in {repo}")
-        # Loaded under a name INSIDE the package, so its `from . import config` binds the
-        # same, already-isolated `charter.config` this test is running against — the
-        # baseline judges the same fixture from the same `ROOT`.
-        src = Path(tempfile.mkdtemp(prefix="edm-shipped-")) / "shipped_hooks.py"
-        self.addCleanup(shutil.rmtree, src.parent, ignore_errors=True)
-        src.write_text(r.stdout)
-        spec = importlib.util.spec_from_file_location("charter._shipped_hooks", src)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = mod
-        self.addCleanup(sys.modules.pop, spec.name, None)
-        spec.loader.exec_module(mod)
-        return mod
+    def render(self, where: str, cmd: str) -> tuple[Path, str]:
+        """`(cwd, command)` for one row: the absolute paths a checked-in table cannot hold."""
+        cwd = {"root": self.root, "clone": self.clone, "above": self.root.parent}[where]
+        return cwd, cmd.format(root=self.root, clone=self.clone, up=self.up,
+                               name=self.root.name)
 
-    def test_no_input_the_shipped_guard_denies_is_allowed_here(self):
-        shipped = self.shipped()
-        root = str(self.root)
-        denied_by_shipped, relaxed, weaker = 0, [], []
-        for cmd in TestGitItselfIsTheOracle.CORPUS:
-            if shipped._plane_root_branch_reason(cmd, root) is None:
+    # --- the corpus ---------------------------------------------------------------------
+
+    def test_every_pinned_row_gets_its_pinned_verdict(self):
+        """The whole table, one subTest per row, so a failure names the spelling."""
+        wrong = []
+        for verdict, where, cmd, note in PINNED:
+            cwd, rendered = self.render(where, cmd)
+            with self.subTest(verdict=verdict, where=where, cmd=rendered):
+                got = _decision(self.run_cmd(rendered, cwd=cwd))
+                got = "DENY" if got == "deny" else "ALLOW"
+                if got != verdict:
+                    wrong.append(f"{cmd!r} in {where}: pinned {verdict}, got {got}"
+                                 + (f" — {note}" if note else ""))
+                self.assertEqual(got, verdict, f"{rendered}\n{note}")
+        self.assertEqual(wrong, [], wrong)
+
+    def test_a_denial_says_which_guard_refused(self):
+        """A `DENY` row that is refused by some OTHER guard would satisfy the row above
+        while the plane-root guard slept through it. Every denial here has to be this one,
+        and to carry the sentence an operator acts on."""
+        for verdict, where, cmd, _note in PINNED:
+            if verdict != "DENY":
                 continue
-            denied_by_shipped += 1
-            if hooks._plane_root_branch_reason(cmd, root) is not None:
-                continue
-            (weaker if self.moves_head(cmd) else relaxed).append(cmd)
-        # The finding. Named in full, because "the branch is weaker than main" is the one
-        # verdict that blocks unconditionally.
-        self.assertEqual(weaker, [], f"allowed here, denied by main, and git MOVES HEAD: "
-                                     f"{weaker}")
-        # Non-vacuity in both directions: a baseline that denied nothing would make the loop
-        # empty, and a fix that relaxed nothing would mean #461 is not fixed at all.
-        self.assertGreaterEqual(denied_by_shipped, 100, denied_by_shipped)
-        self.assertGreaterEqual(len(relaxed), 4, relaxed)
-        # Every relaxation is a restore charter can name, not merely "something that did not
-        # move HEAD this time": each is `git restore`-able, which is the sentence the news
-        # entry makes.
-        for cmd in relaxed:
+            cwd, rendered = self.render(where, cmd)
+            with self.subTest(cmd=rendered):
+                reason = _reason(self.run_cmd(rendered, cwd=cwd))
+                self.assertIn("PLANE ROOT", reason, rendered)
+                self.assertIn("charter workspace create", reason, rendered)
+
+    # --- the corpus's own shape ---------------------------------------------------------
+
+    def test_the_corpus_is_not_vacuous(self):
+        """Counts, so a table gutted down to the rows that happen to pass fails here rather
+        than shrinking quietly. The numbers are floors measured at the time of writing;
+        adding rows never breaks them."""
+        denies = [r for r in PINNED if r[0] == "DENY"]
+        allows = [r for r in PINNED if r[0] == "ALLOW"]
+        limits = [r for r in PINNED if _LIMIT in r[3]]
+        self.assertGreaterEqual(len(denies), 70, len(denies))
+        self.assertGreaterEqual(len(allows) - len(limits), 30, len(allows) - len(limits))
+        self.assertGreaterEqual(len(limits), 12, len(limits))
+        self.assertEqual(sorted({r[0] for r in PINNED}), ["ALLOW", "DENY"])
+
+    def test_no_row_is_written_twice(self):
+        """Two rows for one `(where, command)` are either a duplicate or a contradiction,
+        and a contradiction would make one of them unfalsifiable."""
+        seen: dict[tuple[str, str], str] = {}
+        for verdict, where, cmd, _note in PINNED:
+            key = (where, cmd)
+            self.assertNotIn(key, seen, f"{cmd!r} in {where} appears twice")
+            seen[key] = verdict
+
+    def test_every_known_limit_names_the_issue_that_tracks_it(self):
+        """A limit with no issue behind it is a gap somebody decided to live with and then
+        forgot. The `#nnn` is what makes the row a decision rather than an omission — and
+        what a reader follows when the row goes red because the limit was closed."""
+        limits = [r for r in PINNED if _LIMIT in r[3]]
+        for verdict, _where, cmd, note in limits:
             with self.subTest(cmd=cmd):
-                self.assertFalse(self.moves_head(cmd), cmd)
+                self.assertEqual(verdict, "ALLOW", "a LIMIT row records what is NOT refused")
+                self.assertRegex(note, r"LIMIT #\d+", cmd)
+
+    def test_the_axes_the_recent_work_established_all_have_rows(self):
+        """The spellings this guard was taught over four rounds, asserted to be PRESENT.
+
+        A regression can be introduced by deleting a row as easily as by relaxing the code,
+        and the row above only checks the rows that are there. So the axes are named: drop
+        every `--orphan` row, or every route row, and this fails with the axis's name.
+        """
+        commands = " || ".join(f"{w} {c}" for _v, w, c, _n in PINNED)
+        for axis in ("checkout -b", "checkout -B", "--detach", "--orphan", "git switch ",
+                     "switch -c", "switch -C", "switch -d", "checkout -d",
+                     "-qbREADME", "-qd", "-dq", "checkout -- ", "git restore ",
+                     "git -C .", "git -C {root}", "git -C {up}", "cd {name} &&",
+                     "alias", "ambig", "notes/a.md", "$(echo"):
+            with self.subTest(axis=axis):
+                self.assertIn(axis, commands, f"no row covers {axis!r} any more")
 
 
 class TestAnOptionCharterCannotPlaceKeepsTheGuardShut(CheckoutCase):
