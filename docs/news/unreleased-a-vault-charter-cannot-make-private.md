@@ -1,0 +1,40 @@
+---
+version: unreleased
+headline: A plain-file vault is 0600 before the plaintext goes in, not after
+---
+
+`charter secret set` on a plain-file vault opened it `O_CREAT|O_TRUNC, 0o600` and chmod-ed
+it to 0600 once the write returned. The comment above that line said the plaintext "is
+never briefly world-readable", and it was wrong about its own mechanism: the mode argument
+to `open(2)` applies **only when the call creates the inode**. For a vault someone had
+hand-authored — or restored from a backup, or copied off another machine, all of which
+land at the umask default — it was ignored outright. Measured on a 0644 vault: mode while
+the plaintext was on disk, 0644. Mode afterwards, 0600. Same inode throughout.
+
+The window is milliseconds and it takes an already-loose file to open it, so this is a
+small bug. The confident sentence explaining why it could not happen is the larger one.
+
+The order is now inverted, and the mode is settled on the **descriptor** rather than the
+path. charter opens the file without truncating it, `fchmod`s that descriptor, `fstat`s
+the same descriptor to read the mode back, and only then truncates and writes. Reading it
+back matters: a chmod that returns successfully is not evidence the bits moved — a mount
+with fixed permissions, exFAT or many network shares, accepts the call and reports the old
+mode. Working on the descriptor rather than the name matters for the usual reason: it is
+the object being written, not whatever the path happens to point at by the time the write
+lands.
+
+**If the file still cannot be made private, charter writes nothing and says so.** The
+previous contents survive, and the error names the file and why. The alternative — warn
+and write anyway — leaves the credential world-readable with the warning scrolled off the
+top of somebody's log, which is how this class of thing survives in the first place. A
+plain-file vault on a filesystem that cannot hold a mode was never storing a private file;
+now it says so instead of pretending.
+
+A vault directory charter creates for itself is 0700 rather than the umask default, so
+`.charter/vaults/` no longer lists every vault name you have to every account on the
+machine. The rotation sidecar goes through the same writer.
+
+None of this is about the plaintext. A plain-file vault stores values in the clear, that
+is documented in four places, and it remains the accepted trade-off for the provider whose
+entire job is "a JSON file you can also edit by hand". The fix is to the mode, and to the
+docstring that was sure the mode was already fine.

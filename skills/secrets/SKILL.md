@@ -68,8 +68,13 @@ so a command that echoes it still cannot leak it into the transcript.
 **Just checking one is present:**
 
 ```bash
-charter secret get <vault> <key>       # masked: length + sha256 prefix
+charter secret get <vault> <key>       # masked: size band + keyed fingerprint
 ```
+
+The fingerprint is keyed to this control plane, not a hash of the value, so it cannot be
+checked against a guess — and the size is a band, not a count. Compare two of them to ask
+"same value?"; there is nothing else to do with one, and nothing to be gained by
+recomputing it.
 
 ## Hard rules
 

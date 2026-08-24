@@ -53,15 +53,63 @@ class PlainFileProvider(VaultProvider):
             raise VaultError(f"vault file {p} must be a JSON object of key -> secret")
         return data
 
+    def _write_private(self, p: Path, payload: dict) -> None:
+        """Write *payload* as JSON into *p*, with *p* provably 0600 before a byte of it
+        lands — or write nothing at all.
+
+        `os.open(..., O_CREAT|O_TRUNC, 0o600)` does NOT do this, which is what the old
+        version of this method claimed (#437). The mode argument applies **only when the
+        call creates the inode**; for a file that already exists it is ignored entirely,
+        so a vault someone hand-authored at 0644 stayed 0644 for the whole of `json.dump`
+        and was chmod-ed to 0600 only afterwards. Measured: pre-existing 0644, mode while
+        the plaintext was on disk 0644, mode after `set` 0600, same inode throughout.
+
+        So the order is inverted, and the mode is settled on the **descriptor**, not the
+        path:
+
+        1. open ``O_WRONLY|O_CREAT`` *without* ``O_TRUNC`` — the file still holds only its
+           previous contents, which are no more exposed than they already were;
+        2. ``fchmod`` that descriptor to 0600 — the inode we hold, so nothing swapped at
+           the path in between is affected and nothing at the path can be affected instead;
+        3. ``fstat`` the same descriptor and **read the mode back**. A chmod that returned
+           successfully is not evidence the bits changed: a mount with fixed permissions
+           (exFAT, many SMB shares) accepts it and reports the old mode;
+        4. only then ``ftruncate`` and write.
+
+        If step 3 still shows a group- or other-accessible mode, this raises before the
+        truncate, so the previous contents survive and the plaintext never reaches a file
+        charter could not make private. Refusing is the only outcome that keeps the
+        sentence above true — warning and writing anyway leaves the value world-readable
+        with a warning scrolled off the top of somebody's log.
+        """
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                pass                      # report the mode we actually have, below
+            mode = stat.S_IMODE(os.fstat(fd).st_mode)
+            if mode & 0o077:
+                raise VaultError(
+                    f"refusing to write {_short(p)}: it is mode {oct(mode)[-3:]} and "
+                    f"charter could not make it 0600, so the plaintext would be readable "
+                    f"by other accounts on this machine. Nothing was written.\n"
+                    f"  Filesystems with fixed permissions (exFAT, many network mounts) "
+                    f"cannot hold a plain-file vault — point the vault at a path on a "
+                    f"filesystem that keeps modes, or use a provider that does not store "
+                    f"plaintext.")
+            os.ftruncate(fd, 0)
+            with os.fdopen(fd, "w") as f:
+                fd = -1                   # fdopen owns it now; closing twice is a bug
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
     def _save(self, data: dict) -> None:
-        p = self.path
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Create with 0600 from the start so the plaintext is never briefly world-readable.
-        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.chmod(p, 0o600)
+        self._write_private(self.path, data)
 
     @staticmethod
     def _tighten(p: Path) -> None:
@@ -80,8 +128,11 @@ class PlainFileProvider(VaultProvider):
 
         Moving it here keeps the protection where the plaintext actually is: `get` takes
         secret values out of the file, and a vault charter has read the secrets of is one
-        charter has to leave at 0600. `set`/`delete` need no call — `_save` recreates the
-        file at 0600 with `O_CREAT` and chmods it again.
+        charter has to leave at 0600. `set`/`delete` need no call for a different reason
+        than the one this used to give: not because `O_CREAT` "recreates the file at 0600"
+        — it does not, the mode argument is ignored for an inode that already exists
+        (#437) — but because :meth:`_write_private` settles the mode on the descriptor and
+        reads it back before it writes anything.
 
         The read-only paths — `health`, `keys`, `ages` — now REPORT a loose mode instead
         of silently fixing it. `health()` already had that branch; `_tighten` running
@@ -138,13 +189,9 @@ class PlainFileProvider(VaultProvider):
             return {}
 
     def _save_meta(self, meta: dict) -> None:
-        p = self._meta_path
-        p.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(meta, f, indent=2)
-            f.write("\n")
-        os.chmod(p, 0o600)
+        # Same writer as the vault itself. The sidecar holds key NAMES and dates, not
+        # values, but it sits in the same directory and had the same in-place bug.
+        self._write_private(self._meta_path, meta)
 
     def ages(self) -> dict:
         """key -> age in days since last set (None if set before tracking existed)."""

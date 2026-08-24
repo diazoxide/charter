@@ -15,7 +15,6 @@ which command got which one has the audit half of the story missing.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import signal
@@ -26,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 from . import config, util
-from .secrets import base, registry
+from .secrets import base, fingerprint, registry
 
 
 # --------------------------------------------------------------------------- #
@@ -393,7 +392,11 @@ def cmd_secret_set(args) -> int:
     except base.VaultError as e:
         util.err(str(e))
         return 1
-    util.ok(f"Set '{args.key}' in vault '{args.vault}' ({len(value)} bytes). Value not shown.")
+    # Banded, not counted, for the same reason `get` is (#436): this line is printed into
+    # whatever ran the command — an agent's transcript for `--from-file`, where the length
+    # of a value nobody in the conversation has seen is the one thing it would disclose.
+    util.ok(f"Set '{args.key}' in vault '{args.vault}' "
+            f"({fingerprint.size_band(value)}). Value not shown.")
     return 0
 
 
@@ -507,8 +510,10 @@ def cmd_secret_get(args) -> int:
         return 1
 
     if not args.reveal:
-        digest = hashlib.sha256(value.encode()).hexdigest()[:12]
-        print(f"{args.vault}/{args.key}: present · {len(value)} bytes · sha256:{digest}")
+        # NOT a hash of the value. `sha256(value)[:12]` plus the exact byte count turned
+        # this line into an offline verification oracle for a guessed value — see
+        # `secrets/fingerprint.py` (#436).
+        print(f"{args.vault}/{args.key}: present · {fingerprint.masked(value)}")
         print("(value hidden — use `charter secret exec`/`cp` to consume it, or --reveal to print)")
         return 0
 

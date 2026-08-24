@@ -50,8 +50,37 @@ shell history**, while still letting an agent *use* the credential:
   `/dev/fd/1` are all the same one object and get the same answer. `--force` does not
   reach that check. An **existing** file is refused too — overwriting one destroys its
   contents and sets it to 0600, so it takes `--force` and says so afterwards.
-- **`charter secret get`** is masked by default — it prints a byte count and a SHA-256
-  fingerprint, never the value.
+- **`charter secret get`** is masked by default — it prints a size band and a keyed
+  fingerprint, never the value:
+
+  ```
+  devops/API_TOKEN: present · 32–63 bytes · fp:9c41a0b7e5d2
+  ```
+
+  The fingerprint is `HMAC-SHA256(plane key, value)`, not a hash of the value, and the
+  plane key is 32 random bytes generated on first use and kept 0600 in `.charter/`. That
+  matters because this line travels: into an agent's transcript, a pasted terminal, a
+  ticket. An unkeyed digest plus an exact byte count — what charter printed before
+  0.51.x — is checkable **offline**, so a wordlist run against that line confirms a
+  guessed password with no further access to charter at all. Keyed, it is only comparable
+  to another fingerprint printed by this same plane, which is the only comparison anyone
+  actually makes: *is this still the value I set*, *does that vault hold the same one*.
+  The same value fingerprints differently on a different machine, deliberately. The size
+  is banded for the same reason — an exact length prefilters a wordlist; `32–63 bytes`
+  barely does.
+
+  If `.charter/` is read-only and no key can be made, the fingerprint is **omitted** —
+  never replaced by an unkeyed one.
+
+  The key is the whole strength of this, so `.charter/fingerprint.key` is denied to
+  file-reading tools on the same terms as `.charter/vaults/` — which matters most for a
+  1Password-backed vault, where there is no vault file on the machine and the key would
+  be the only readable thing between the printed line and the value. A shell running as
+  you reads it, as it reads everything else you own; this is a guard rail, not a
+  guarantee. And within one plane the fingerprint remains an equality oracle: anyone who
+  can `charter secret set` a guess can compare. They can also `--reveal --force`, so it
+  is not a step up for them — it is the reason the key is per-plane rather than
+  per-vault, which is what keeps "do these two vaults hold the same value" answerable.
 - **`charter secret get --reveal`** is the one path that *can* print plaintext, and it
   deliberately refuses to do so to a **non-interactive stdout** (the exact channel
   through which a value would leak straight into an agent's context) unless you pass
