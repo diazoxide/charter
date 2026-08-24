@@ -168,7 +168,7 @@ class DegradesCleanly(PersonaIso):
                 statusline.render(bad)
 
 
-class BrandFits(unittest.TestCase):
+class BrandFits(PersonaIso):
     """The brand must be present-and-correct or absent — never truncated.
 
     A real session rendered `⬢ charter 0.10…`: `_with_brand` fits-or-drops and never

@@ -27,7 +27,12 @@ command.
 
 - **Tests first, and they must fail first.** Every behavioural change lands with a test
   that fails without the fix. The suite is plain `unittest` — no fixtures framework, no
-  network, no writing outside a tempdir.
+  network, no writing outside a tempdir. That last one is enforced rather than asked for:
+  a checkout inside a control plane resolves to *that* plane, so `tests/_planeguard.py`
+  refuses any write into the real `.charter/` and fails the test that tried. Derive from
+  `tests._isolation.PersonaIso` and it never comes up; a test that spawns a subprocess has
+  to hand it the throwaway plane as `$CHARTER_ROOT`, which no guard in this process can do
+  for you.
 - **Comments explain *why*.** The codebase leans hard on this: a comment that restates the
   code earns nothing, one that records the failure a line prevents is worth several
   paragraphs of docs. Read a few modules before writing your first one.
