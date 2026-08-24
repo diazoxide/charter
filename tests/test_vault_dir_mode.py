@@ -572,8 +572,8 @@ class TheOrderTheCliActuallyUses(PersonaIso):
             seen[0o022], seen[0o077],
             f"`.charter/` came out {oct(seen[0o022])[-3:]} under both umasks. If charter "
             f"now chooses this mode itself, #470 is fixed — good news, and docs/secrets.md "
-            f"and docs/news/unreleased-a-vault-charter-cannot-make-private.md both still "
-            f"tell the reader it is open. Update them and delete this case.")
+            f"and the `a-vault-charter-cannot-make-private` news entry both still tell the "
+            f"reader it is open. Update them and delete this case.")
         self.assertEqual(seen[0o077], 0o700, "umask 077 masks the group and other bits")
         self.assertEqual(
             seen[0o022] & 0o077, 0o055,

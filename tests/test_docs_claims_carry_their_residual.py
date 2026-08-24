@@ -48,22 +48,49 @@ from tests._isolation import PersonaIso
 
 DOCS = Path(__file__).resolve().parent.parent
 
+
+def entries(slug: str) -> tuple[str, ...]:
+    """Every news entry carrying *slug*, whatever version prefix it wears today.
+
+    An entry is staged as ``unreleased-<slug>.md`` and renamed to ``<version>-<slug>.md``
+    by `charter news stamp` during the bump, so a path spelled here with the
+    ``unreleased-`` prefix is a path that **stops existing on the release that ships it**.
+    It cost 0.52.0 four red tests, on the one branch that has to be green before a tag,
+    for a document whose text never changed.
+
+    The slug is the half that survives, and it is split out the way `charter` itself
+    splits it (`news._read`): everything after the first ``-``, because a version prefix
+    contains dots and never a dash.
+
+    Raising on no match is the point. These constants feed ``for rel in …`` loops, and a
+    loop over an empty tuple is a green test that checked nothing — the exact bypass this
+    whole file exists to complain about.
+    """
+    found = tuple(str(p.relative_to(DOCS)) for p in sorted((DOCS / "docs" / "news").glob("*.md"))
+                  if "-" in p.stem and p.stem.split("-", 1)[1] == slug)
+    if not found:
+        raise AssertionError(
+            f"no docs/news entry has the slug {slug!r}. If the entry was renamed, rename "
+            f"it here; if it was deleted, the claim it qualifies went with it and this "
+            f"test should be moved to whatever document makes the claim now — do not "
+            f"drop the reference and leave the loop empty.")
+    return found
+
+
 #: Where the "not checkable against a guess" assurance is made. Each must carry the
 #: residual alongside it.
 CLAIM_DOCS = (
     "skills/secrets/SKILL.md",
     "docs/secrets.md",
     "charter/secrets/fingerprint.py",
-    "docs/news/unreleased-a-fingerprint-you-cannot-check-a-guess-against.md",
+    *entries("a-fingerprint-you-cannot-check-a-guess-against"),
 )
 
 #: Where the directory-mode claims are made — "every level is 0700" and "and charter
 #: reports the ones it did not create". Both overreached in round two: the first swallowed
 #: `.charter/` itself (#470), the second put the report in `doctor` (#471).
-DIR_CLAIM_DOCS = (
-    "docs/secrets.md",
-    "docs/news/unreleased-a-vault-charter-cannot-make-private.md",
-)
+DIR_CLAIM_ENTRIES = entries("a-vault-charter-cannot-make-private")
+DIR_CLAIM_DOCS = ("docs/secrets.md", *DIR_CLAIM_ENTRIES)
 
 #: The claim: some form of "this line cannot be checked against a guessed value".
 _CLAIM = re.compile(r"against a guess|checkable|not computable|not reproducible", re.I)
@@ -114,16 +141,18 @@ class EveryAssuranceCarriesItsResidual(unittest.TestCase):
             "it — the one document here that is acted on rather than believed")
 
     def test_the_directory_claim_is_scoped_to_what_charter_creates(self) -> None:
-        text = flat("docs/news/unreleased-a-vault-charter-cannot-make-private.md")
-        self.assertNotRegex(
-            text, r"`\.charter/vaults/` no longer lists every vault name",
-            "the unscoped claim is false for every plane that already exists")
-        self.assertRegex(
-            text, r"[Aa] directory that was already there keeps its mode",
-            "the entry must say what happens to a directory charter did not create")
-        self.assertIn(
-            "listed by other accounts", text,
-            "and must name the report that replaces the fix it cannot make")
+        for rel in DIR_CLAIM_ENTRIES:
+            with self.subTest(doc=rel):
+                text = flat(rel)
+                self.assertNotRegex(
+                    text, r"`\.charter/vaults/` no longer lists every vault name",
+                    "the unscoped claim is false for every plane that already exists")
+                self.assertRegex(
+                    text, r"[Aa] directory that was already there keeps its mode",
+                    "the entry must say what happens to a directory charter did not create")
+                self.assertIn(
+                    "listed by other accounts", text,
+                    "and must name the report that replaces the fix it cannot make")
 
     def test_the_directory_claim_does_not_swallow_the_state_directory(self) -> None:
         """"Every directory charter creates" is false one level up, and was shipped anyway.
