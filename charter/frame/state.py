@@ -36,6 +36,7 @@ aspirational.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -302,6 +303,213 @@ def frame_server(fid: str) -> str | None:
         return (d / "server").read_text().strip() or None
     except (OSError, ValueError):
         return None
+
+
+def record_density(fid: str, level: str) -> None:
+    """Write down the density THIS RUNNING FRAME is at, overriding `[frame] density`.
+
+    The whole of "a keypress overrides for the running frame only". charter.toml is
+    hand-maintained and committed, and charter's rule is that machine-written config
+    belongs somewhere a machine may rewrite whole — this directory is exactly that place
+    (`reap` deletes it entire when the frame is gone, which is the property a config file
+    a human edits can never have). So the menu writes here, the frame's panels read here,
+    and the operator's own file is left alone: relaunch and the configured default is back.
+
+    Same must-not-raise, atomic-write shape as :func:`bump` and :func:`record_server`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "density.tmp"
+    try:
+        tmp.write_text(f"{level}\n")
+        os.replace(tmp, d / "density")
+    except OSError:
+        return
+
+
+def density(fid: str) -> str | None:
+    """The density this frame was last set to by hand, or ``None`` for "never set".
+
+    ``None`` is the ordinary case, not a failure: every frame starts at whatever
+    `[frame] density` resolved to, and only a menu selection writes a file here. The
+    caller falls back to the configured value — see `frame/slots.py`'s `verbosity`.
+
+    The text is NOT validated here. `instance.density_level` is the one gate, and it sits
+    at the point of use so that a hand-edited or truncated file degrades to the configured
+    level in exactly the same way an unknown level in charter.toml does — one rule, one
+    place, rather than a second half-copy of the closed set living in this module.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "density").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def clear_shape(fid: str) -> None:
+    """Forget the density and the pane map recorded under *fid*, because a NEW frame is
+    claiming the id.
+
+    The fourth and fifth lines on :func:`clear_exit`'s bill, and the same recycled pid
+    underneath them (#383). A frame id is ``<workspace>-<launcher pid>``; :func:`reap`
+    keeps a directory while the pid in its name is live, and on a launch it is live
+    BECAUSE IT IS THE LAUNCHER'S OWN — so a launcher landing on a pid an earlier launcher
+    for the same workspace already used adopts that earlier frame's whole directory.
+
+    Both files inherited that way are actively wrong for the new frame, not merely stale:
+
+    * ``density`` is an override an operator pressed a key for once, in a frame that is
+      over. Left behind, a brand-new frame comes up at that level while `[frame] density`
+      says otherwise and nothing anywhere explains it — the config silently overridden by
+      a keypress from another session, which is the one thing "for the running frame only"
+      promises cannot happen.
+    * ``panes`` names tmux panes of a frame that no longer exists. `cmd_launch` rewrites
+      it as it draws, so this only matters when a launch dies before that — but then the
+      map survives pointing at nothing, and the next density change on the next frame to
+      claim the id would `kill-pane` ids that mean whatever tmux has since reused.
+
+    Never raises, and never creates, like everything else here.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return
+    for name in ("density", "panes"):
+        try:
+            (d / name).unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def record_identity(fid: str, values: dict[str, str]) -> None:
+    """Write down the charter identity this frame was LAUNCHED with.
+
+    **A frame's identity is not readable from the environment of everything that runs
+    inside it, and that is the whole reason this file exists (#411, again).** Charter puts
+    exactly four variables on a tmux SESSION (`commands_frame._session_id_env_argv` and
+    its three siblings), and only one of them is identity: `CHARTER_SESSION_ID`. Every
+    other name a frame cares about — `CHARTER_ROOT`, `CHARTER_WORKSPACE`,
+    `CHARTER_HARNESS`, `CHARTER_PERSONA` — reaches a `run-shell` child from the SERVER's
+    own environment, and charter's private server is SHARED: it belongs to whichever
+    launcher happened to start it, possibly days ago, in another plane.
+
+    Measured against tmux 3.7c, two frames on one private socket::
+
+        session one: CHARTER_WORKSPACE=first-ws   CHARTER_HARNESS=claude-code
+        session two: CHARTER_WORKSPACE=second-ws  CHARTER_HARNESS=codex
+        tmux run-shell -t two 'echo $CHARTER_WORKSPACE $CHARTER_HARNESS $CHARTER_SESSION_ID'
+          -> first-ws claude-code two
+
+    So a hotkey pressed on the second frame runs a `run-shell` child holding the SECOND
+    frame's id and the FIRST frame's plane. Anything that goes on to state that identity
+    to a new pane — which `commands_frame._relayout` does, and which nothing in charter
+    did before it — pins another frame's `$CHARTER_ROOT` and `$CHARTER_WORKSPACE` onto
+    that pane's argv, where both win outright over every other source
+    (`root.find_root`, `workspace.resolve`). The frame's new panels would draw a different
+    plane from the ones that survived.
+
+    The launcher is the one process that knows the answer, so it writes it here. Read back
+    by :func:`identity`. Same atomic-write, never-raise shape as :func:`record_server` —
+    a frame whose identity could not be recorded degrades to "charter does not know",
+    which :func:`identity` answers honestly rather than by guessing.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "identity.tmp"
+    try:
+        tmp.write_text(json.dumps({k: v for k, v in values.items()
+                                   if isinstance(k, str) and isinstance(v, str)}))
+        os.replace(tmp, d / "identity")
+    except (OSError, TypeError, ValueError):
+        return
+
+
+def identity(fid: str) -> dict[str, str]:
+    """The charter identity *fid* was launched with — ``{}`` when charter does not know.
+
+    ``{}`` is the migration case (a frame launched by a charter that predates
+    :func:`record_identity`) and the corrupt one, deliberately answered the same way:
+    both mean "do not take this frame's identity from here", and the caller
+    (`commands_frame._relayout_pane_env`) is what decides what to do instead. Answering
+    with a partial guess would be the same defect this file exists to close, one layer up.
+
+    Every value is shape-checked as it is read, like :func:`panes`: this is JSON on disk
+    and the values go straight into a tmux ``-e NAME=VALUE`` argv element.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return {}
+    try:
+        data = json.loads((d / "identity").read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def record_panes(fid: str, *, panels: dict[str, str]) -> None:
+    """Write down which tmux pane draws which SLOT, so the frame can be re-laid-out later.
+
+    A frame's shape is decided once at launch and then only ever re-asserted
+    (`commands_frame._resize_hook_argv`). Changing it while it runs — which is what the
+    density menu does — needs to know that `%3` is the `left` panel and not the `right`
+    one, because a slot being dropped means killing exactly that pane.
+
+    tmux cannot be asked later: `list-panes` reports ids and geometry but nothing that
+    says which pane charter MEANT as `left`, and inferring it from position is the same
+    "indices move" trap `frame/layout.py`'s module docstring measures.
+
+    **The harness pane is deliberately NOT in here.** :func:`record_harness_pane` already
+    owns that one fact — it is what `is_live` asks to tell a frame's own harness from a
+    process that merely inherited its id (ADR 0019) — and it is written on both launch
+    paths before any pane is split. A second copy in this file would be two records of
+    one fact, written at different moments, free to disagree; `commands_frame.cmd_density`
+    reads :func:`harness_pane` for it instead.
+
+    JSON, read back through :func:`panes` — same atomic write as everything else here, and
+    the same silence on failure: a frame whose pane map could not be written simply cannot
+    be re-laid-out, which is a menu entry doing nothing rather than a launch failing.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "panes.tmp"
+    try:
+        tmp.write_text(json.dumps(dict(panels)))
+        os.replace(tmp, d / "panes")
+    except (OSError, TypeError, ValueError):
+        return
+
+
+def panes(fid: str) -> dict[str, str]:
+    """``{slot: pane id}`` — empty when charter cannot tell.
+
+    Every value is shape-checked as it is read: this file is JSON on disk, so a truncated
+    write, a hand edit, or a charter that wrote a different shape all reach here, and the
+    ids come straight back out of it into a tmux argv. Checking that each is a `str` is
+    this function's half; `commands_frame._PANE_ID_RE` — which already guards the same ids
+    on the way IN from `split-window`'s stdout — is the half that decides a value really
+    looks like tmux's own `%N`, and it stays there rather than being copied here, because
+    it is the module that builds the argv that must not be handed a bad one.
+
+    An empty answer is the migration case as well as the corrupt one: a frame launched by
+    a charter that predates :func:`record_panes` has no file, and its density menu simply
+    cannot re-lay it out.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return {}
+    try:
+        data = json.loads((d / "panes").read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {s: v for s, v in data.items() if isinstance(s, str) and isinstance(v, str)}
 
 
 def exit_code(fid: str) -> int | None:

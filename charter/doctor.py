@@ -816,8 +816,19 @@ def check_frame() -> Result:
     `cmd_launch`, printed microseconds before tmux switched the operator's terminal to
     the alternate screen, where nobody could read them — see
     `commands_frame.frame_ready`'s own docstring for the measurement and the argument.
-    Both facts are answerable without starting anything: `tmuxctl.version()` and
+    Every fact is answerable without starting anything: `tmuxctl.version()` and
     `config.FRAME["slots"]`.
+
+    **Three ceilings, collected rather than branched (#387).** The third —
+    `tmuxctl.RESIZE_HOOK_FLOOR`, above `FLOOR` — was reported by neither this row nor
+    `frame_ready`, so an operator on tmux 3.2 passed the floor, read a green tick here,
+    and had no resize recovery. Written as one list because that is now three
+    independent conditions over two version thresholds and a config value, and the
+    nested-`if` shape this replaced already had to repeat the slot ceiling in two
+    branches to stay honest. `_statusline_suppressed_note` rides on the same hint but is
+    deliberately NOT one of them: every ceiling is a capability this machine does not
+    have, and a status line blanked because a frame is drawing instead is a capability
+    working exactly as designed (ADR 0019).
     """
     from . import config
     from .frame import slots as frame_slots, tmuxctl
@@ -829,26 +840,30 @@ def check_frame() -> Result:
                       hint="charter <harness> needs tmux to compose a frame — brew "
                            "install tmux (or your package manager). Without it, "
                            "charter <harness> --no-frame still runs the harness bare.")
-    missing = frame_slots.unimplemented(config.FRAME["slots"])
-    # A blank status line is the one frame behaviour that shows the operator NOTHING —
-    # ADR 0019's own rule is that a surface which vanished for an invisible reason is the
-    # worst outcome available, so the reason is said out loud on the surface built to
-    # answer on demand. Appended to whatever else this row reports rather than replacing
-    # it: it is a statement of fact about right now, never a warning.
-    quiet = _statusline_suppressed_note()
+    ceilings = []
     if v < tmuxctl.FLOOR:
         # Not "the hotkey menu is disabled" — nothing disables it. `cmd_launch` warns
         # and continues, and `conf_text` emits the bind unchanged; what is actually at
         # risk below the floor is that the bind opens nothing and that the pane-scoped
         # exit-code hooks may not install. `below_floor_message` is the one place that
         # sentence lives, so this row and `--probe` cannot drift apart.
-        hint = tmuxctl.below_floor_message(v)
-        if missing:
-            hint += " " + commands_frame_no_renderer(missing)
-        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}", hint=hint + quiet)
+        ceilings.append(tmuxctl.below_floor_message(v))
+    if v < tmuxctl.RESIZE_HOOK_FLOOR:
+        ceilings.append(tmuxctl.below_resize_hook_message(v))
+    missing = frame_slots.unimplemented(config.FRAME["slots"])
     if missing:
+        ceilings.append(commands_frame_no_renderer(missing))
+    # A blank status line is the one frame behaviour that shows the operator NOTHING —
+    # ADR 0019's own rule is that a surface which vanished for an invisible reason is the
+    # worst outcome available, so the reason is said out loud on the surface built to
+    # answer on demand. Appended to whatever else this row reports rather than replacing
+    # it: it is a statement of fact about right now, never a warning — which is also why
+    # it is not a `ceilings` entry: every one of those is a capability this machine does
+    # not have, and a suppressed status line is a capability working as designed.
+    quiet = _statusline_suppressed_note()
+    if ceilings:
         return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}",
-                      hint=commands_frame_no_renderer(missing) + quiet)
+                      hint=" ".join(ceilings) + quiet)
     return Result(name, OK, detail=f"tmux {v[0]}.{v[1]}",
                   hint=quiet.strip() or None)
 

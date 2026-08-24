@@ -1310,9 +1310,18 @@ def _persona_chips(session: str | None = None) -> list[str]:
         return []
 
 
-def _session_news(sid: str | None) -> list[str]:
+def _session_news(sid: str | None, *, inflight: bool = True) -> list[str]:
     """Counters for what has happened **in this session** — in flight, denied,
     recorded, dispatched.
+
+    *inflight* is opt-OUT, and has exactly one caller that opts out: the frame's bottom
+    panel (`frame/slots.py`), which draws the same tracker as a spinner that MOVES while
+    work is in flight. That panel repaints several times a second; this surface repaints
+    once per turn, where a spinner would be a still picture of an arbitrary frame — so the
+    two draw one fact two ways, and the panel asks this to leave its half out rather than
+    printing `⚡ 2 · ⠙ 2 running` on one row. Everything else here — the trace counters —
+    the panel still wants, which is why this is one flag rather than the panel building
+    its own copy of the whole function.
 
     Deliberately silent when nothing is happening. A counter that renders every turn
     becomes furniture within a day, and then a real guard denial appearing in it gets
@@ -1329,8 +1338,11 @@ def _session_news(sid: str | None) -> list[str]:
     """
     out: list[str] = []
     try:
-        from . import inflight
-        live = inflight.live()
+        # Guarded rather than filtered afterwards, so a caller that has said it does not
+        # want this piece does not pay for the tracker read either — the frame's bottom
+        # panel is about to do its own, and this one polls several times a second.
+        from . import inflight as _tracker
+        live = _tracker.live() if inflight else []
         if live:
             # A bare count. The names moved onto the persona chips, beside the personas
             # they are about — here they made the reader match a name against a roster

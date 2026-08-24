@@ -52,6 +52,33 @@ def _safe_name(agent: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in agent)[:64]
 
 
+def stamp() -> int | None:
+    """One ``stat`` that answers "has anything about the tracker changed?" — or ``None``.
+
+    A frame panel wants to ANIMATE while work is in flight and be perfectly still
+    otherwise (#387), which means asking this question several times a second, forever,
+    on an idle machine. :func:`live_records` is cheap but it is not free: it opens the
+    directory and reads every entry in it. This is the cheap half — a single ``stat`` of
+    the directory itself, whose mtime moves whenever a record is CREATED or REMOVED,
+    which is the only way the set of live records can change. `frame/panel.py` re-reads
+    the records only when this number moves.
+
+    ``None`` for "no such directory", which is the common case on a machine that has never
+    dispatched — and is a real answer, not an error: nothing can be in flight, and it costs
+    the same single failed ``stat`` to learn it.
+
+    The mtime is deliberately NOT enough on its own for one thing, and the caller owns
+    that half: a record crossing :data:`PRESUMED_DEAD_SECONDS` changes what a caller
+    should say about it while touching no file at all, so `panel._running` also re-reads
+    when the earliest such deadline passes. Splitting it that way keeps the IDLE path —
+    no records at all, so no deadline either — at exactly one syscall.
+    """
+    try:
+        return _dir().stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def live_records(exclude_token: str | None = None) -> list[tuple[str, float, bool]]:
     """``(agent, started_at, presumed_dead)`` per record, duplicates preserved.
 

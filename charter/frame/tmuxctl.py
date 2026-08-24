@@ -249,6 +249,30 @@ def below_floor_message(v: tuple[int, int]) -> str:
             f"so and declines to attach rather than risk a session nothing can end.")
 
 
+def below_resize_hook_message(v: tuple[int, int]) -> str:
+    """What an operator below :data:`RESIZE_HOOK_FLOOR` actually loses.
+
+    **This floor sits ABOVE `FLOOR`, which is why it needs its own sentence.** An operator
+    on tmux 3.2 passes `below_floor_message` cleanly — nothing warns, `charter doctor`'s
+    frame row is green, `--probe` is a tick — and still has no `window-resized` hook, so
+    every resize of their terminal leaves the panels stretched out of shape until the frame
+    is relaunched. Folding this into `FLOOR` was considered and rejected where that constant
+    is defined: raising it would refuse a frame that works over a gap that is cosmetic.
+    Leaving it unsaid was the actual bug (#387) — it was reported nowhere at all except a
+    `util.warn` printed 86 bytes before tmux switched the terminal to its alternate screen.
+
+    Named here beside `below_floor_message` rather than written out at each of its two
+    reading surfaces (`commands_frame.frame_ready`, `doctor.check_frame`), for the reason
+    that message's own history records: two copies of one standing fact drift into two
+    different facts.
+    """
+    return (f"tmux {v[0]}.{v[1]} predates the `window-resized` hook "
+            f"(tmux {RESIZE_HOOK_FLOOR[0]}.{RESIZE_HOOK_FLOOR[1]}+), which is what "
+            f"restores each panel's fixed size after the terminal is resized. Everything "
+            f"else in the frame works; resize this terminal and the panels stretch, and "
+            f"stay stretched until the frame is relaunched.")
+
+
 def report_failure(action: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:
     """Name the command that failed and tmux's own stderr. Never silent.
 

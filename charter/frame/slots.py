@@ -20,8 +20,70 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 from .. import tui
+
+#: The spinner's own frames, and how long each is held. Ten braille cells, each one
+#: column wide (`unicodedata.east_asian_width` is `N` for U+2800–U+28FF, so `tui.width`
+#: counts them as 1) — nothing here is drawn wider than the static `⋯` it falls back to.
+#:
+#: **Zero runtime dependencies, and no animation loop either.** The frame is chosen from
+#: the clock rather than advanced by a counter (:func:`spinner_frame`), so nothing has to
+#: own the spinner's state, nothing has to be reset when a panel repaints for an unrelated
+#: reason, and two panels drawing at the same moment necessarily draw the same frame.
+#:
+#: The period matches `panel.TICK`: a panel that is animating repaints once per tick, so a
+#: shorter period would name frames nobody ever sees and a longer one would repaint
+#: without changing anything.
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SPINNER_PERIOD = 0.2
+
+#: How many rows a full-height panel (`left`, `right`) draws at `terse`. The horizontal
+#: strips have no equivalent — `top` and `bottom` are one row at every density
+#: (`layout.SLOT_SIZE`), so what "less" means for them is FIELDS, not rows.
+_TERSE_ROWS = 4
+
+
+def spinner_frame(now: float | None = None) -> str:
+    """Which frame of :data:`SPINNER` this instant shows.
+
+    Read off `time.monotonic()` rather than advanced by a caller — see :data:`SPINNER`.
+    *now* is for tests, which need a specific frame rather than whichever one the clock
+    happened to be on.
+    """
+    t = time.monotonic() if now is None else now
+    return SPINNER[int(t / SPINNER_PERIOD) % len(SPINNER)]
+
+
+def verbosity(fid: str) -> str:
+    """How much this frame's panels say: ``"terse"`` or ``"normal"``.
+
+    Two sources, in one order that is the whole of #387's "the hotkey overrides for the
+    running frame only": the frame's OWN recorded density (`state.density`, written by
+    the density menu and by nothing else) first, and `[frame] density` from charter.toml
+    behind it. A frame nobody has touched reads the configured value; a frame whose
+    operator has pressed the hotkey reads their choice, for as long as that frame runs and
+    not one moment longer — `state.reap` deletes the file with the rest of the directory.
+
+    **The override is VALIDATED before it is allowed to win, not merely read.** A plain
+    `state.density(fid) or config.FRAME["density"]` looks equivalent and is not: the file
+    holds text, so a truncated write or a hand edit gives a non-empty value that is not a
+    level, which is truthy — it beats the configured value and then degrades to
+    `DEFAULT_VERBOSITY` at the last step. The operator's own `[frame] density = "minimal"`
+    would be silently discarded by a corrupt byte in a file they have never heard of.
+    Asking `density_level` first makes "not a level" and "nothing recorded" the same
+    thing, which is what they mean here.
+
+    `instance.verbosity_for` is what turns whichever survives into a verbosity, so an
+    unknown level from either source degrades identically. Read at call time, never
+    cached: a panel repaints on a version bump, and the density menu bumps the version
+    precisely so that this is re-read.
+    """
+    from .. import config, instance
+    from . import state
+    override = instance.density_level(state.density(fid))
+    return instance.verbosity_for(override or config.FRAME["density"])
 
 
 def _width() -> int:
@@ -78,6 +140,12 @@ def _top(fid: str) -> str:
     gauge" — so this is left out, not stubbed in, until #386 (which owns the suppression
     and recording question this finding feeds) decides a panel should have its own
     persisted usage snapshot to read. Pinned by `tests.test_frame_slots.TopRenderer`.
+
+    **At `terse` the version goes, and nothing else does.** `top` answers "where am I and
+    who am I being", and of the three things on it the charter version is the only one
+    that reads the same on every frame on this machine all day — it is a fact about the
+    install, not about where you are standing. The workspace and the persona ARE the
+    answer, so a density that dropped either would leave a row not earning its line.
     """
     from .. import __version__, statusline, workspace
     ws = workspace.resolve()
@@ -85,7 +153,7 @@ def _top(fid: str) -> str:
     pin = "*" if src == "$CHARTER_WORKSPACE" else ""
     persona = statusline._persona_line() or ""
     left = f" ⬢ {ws}{pin}"
-    right = f"{persona}  charter {__version__} "
+    right = persona if verbosity(fid) == "terse" else f"{persona}  charter {__version__} "
     return tui.truncate(f"{left}  {right}", _width())
 
 
@@ -278,6 +346,16 @@ def _left(fid: str) -> str:
     fix). `_repo_line` is handed `0` whenever every one of a repo's pieces
     already has its own row — the badge means "there is more you cannot see
     here," not "this repo has pieces."
+
+    **At `terse` the budget drops to :data:`_TERSE_ROWS` and piece rows go.** `_pick_rows`
+    is asked for fewer rows rather than the result being sliced afterwards, so the rows
+    that survive are still the ones worth keeping (the repo you are standing in, the ones
+    with something on them) rather than whichever happened to come first — the exact
+    lesson `statusline.py` paid for and this function already borrows. The `…(+N more)`
+    line and its "all clean" claim come along unchanged, so a terse panel still says how
+    much it is not showing, which is what makes showing less honest rather than
+    misleading. Pieces are dropped whole: they are DETAIL under a repo that still has its
+    own row, so losing them costs no repo its line.
     """
     from .. import statusline as sl
     from . import gather
@@ -306,7 +384,8 @@ def _left(fid: str) -> str:
         total = r.get("worktree_count") or 0
         return total if shown_pieces.get(r["name"], 0) < total else 0
 
-    budget = sl._MAX_REPO_LINES
+    terse = verbosity(fid) == "terse"
+    budget = _TERSE_ROWS if terse else sl._MAX_REPO_LINES
     capped = len(keys) > budget
     show = sl._pick_rows(keys, (budget - 1) if capped else budget,
                          cur_repo, by_key, by_key) if capped else keys
@@ -325,8 +404,9 @@ def _left(fid: str) -> str:
         note = ", all clean" if quiet else ""
         lines.append(tui.truncate(f"{sl._DIM}…(+{len(hidden)} more{note}){sl._R}", w))
 
-    for p in (data.get("worktrees") or []):
-        lines.append(_piece_line(p, w))
+    if not terse:
+        for p in (data.get("worktrees") or []):
+            lines.append(_piece_line(p, w))
 
     return "\n".join(lines)
 
@@ -355,6 +435,15 @@ def _right(fid: str) -> str:
     breaks the status line"), and `render`'s caller-side `try/except` covers
     whatever gets past that — the same trust `_top`/`_bottom` already place in
     it rather than each re-wrapping their own calls into `statusline.py`.
+
+    **At `terse` this keeps :data:`_TERSE_ROWS` chips and says so.** A slice, not a
+    narrower chip: `_persona_chips` builds one chip as `◆ name` plus its vault dot,
+    memory badge, health mark and in-flight badge all together, and dropping any of
+    those parts would mean reassembling the chip here out of the five helpers this
+    function exists specifically not to duplicate. So the panel drops whole personas
+    and adds `_left`'s own `…(+N more)` line, which is the honest way to show fewer of
+    a list — `_persona_chips` is already ordered, so what survives is the top of an
+    order rather than an arbitrary handful.
     """
     from .. import statusline as sl
 
@@ -362,10 +451,54 @@ def _right(fid: str) -> str:
     chips = sl._persona_chips()
     if not chips:
         return tui.truncate(f"{sl._DIM}no personas{sl._R}", w)
+    if verbosity(fid) == "terse" and len(chips) > _TERSE_ROWS:
+        hidden = len(chips) - (_TERSE_ROWS - 1)
+        chips = [*chips[:_TERSE_ROWS - 1], f"{sl._DIM}…(+{hidden} more){sl._R}"]
     return "\n".join(tui.truncate(c, w) for c in chips)
 
 
-def _fit_fields(priority: list[tuple[str, str]], width: int) -> set[str]:
+def _inflight_field() -> str:
+    """`⠙ 2 running`, or nothing at all when nothing is.
+
+    **The one moving thing in the frame, and it moves only while work is genuinely in
+    flight.** `inflight` records a dispatch when it STARTS and clears it when it ends (see
+    that module's docstring — the completion tally cannot answer this), so "is anything
+    running right now" is a question about files on disk rather than about anything
+    charter has to keep in memory or poll for. `panel._running` is what decides whether the
+    panel repaints often enough for the spinner to move; this function only decides what
+    the row says, and it says nothing when there is nothing to say. Empty means the field
+    is dropped whole by `_fit_fields`, which is what makes idle completely still: no
+    spinner, no zero, no furniture.
+
+    Presumed-dead records get their own, DELIBERATELY STATIC piece. A record past
+    `inflight.PRESUMED_DEAD_SECONDS` is one nobody should still be expecting (its process
+    was killed, or PostToolUse never fired), and animating it would claim progress that is
+    not happening — and would do it for up to `PRUNE_SECONDS`, a full day of a spinning
+    panel on an idle machine. `⋯` is the still glyph for exactly that, and it is also the
+    retreat the whole animation falls back to if it ever measures badly.
+
+    Not `statusline._session_news`'s job, which is why `_bottom` asks it for everything
+    EXCEPT this (`inflight=False`): that helper's `⚡ N` is the same fact drawn for a
+    surface that repaints once per turn, where a spinner would be a still picture of a
+    random frame. Two surfaces, two ways of drawing one fact, one place each — rather than
+    both on the same row saying it twice.
+    """
+    from .. import inflight, statusline as sl
+    records = inflight.live_records()
+    if not records:
+        return ""
+    running = sum(1 for _agent, _started, dead in records if not dead)
+    stalled = len(records) - running
+    parts = []
+    if running:
+        parts.append(f"{sl._YELLOW}{spinner_frame()} {running} running{sl._R}")
+    if stalled:
+        parts.append(f"{sl._DIM}⋯ {stalled} stalled{sl._R}")
+    return " ".join(parts)
+
+
+def _fit_fields(priority: list[tuple[str, str]], width: int,
+                limit: int | None = None) -> set[str]:
     """Which names among *priority* — an ordered list of ``(name, text)`` pairs, highest
     priority first — fit *width* once joined with `` · ``, decided one at a time in that
     order: each field's FULL text counted against what is left, included whole or
@@ -378,6 +511,13 @@ def _fit_fields(priority: list[tuple[str, str]], width: int) -> set[str]:
     exactly the fields a test wants, in isolation — `_bottom` also always carries a todo
     count and a hotkey hint that would otherwise compete for the same narrow budgets an
     adversarial test needs to construct.
+
+    *limit* caps how many fields survive REGARDLESS of width — how a `terse` density asks
+    for less on a row that has room for more. It reuses this one priority order rather
+    than `_bottom` keeping a second, shorter list of its own: "which field matters most"
+    is one question, and answering it twice is how the two answers come to disagree about
+    whether an alert outranks a todo count. ``None`` (the default) is "as many as fit",
+    which is exactly what every caller wanted before densities existed.
     """
     sep_w = tui.width(" · ")
     budget = width
@@ -385,6 +525,8 @@ def _fit_fields(priority: list[tuple[str, str]], width: int) -> set[str]:
     for name, text in priority:
         if not text:
             continue
+        if limit is not None and len(keep) >= limit:
+            break
         need = tui.width(text) + (sep_w if keep else 0)
         if need > budget and keep:
             continue          # doesn't fit and something already does — drop it whole
@@ -426,13 +568,27 @@ def _bottom(fid: str) -> str:
     Global Constraints call out by name.
 
     Priority order, highest first: the one alert (`_alerts()`'s own top pick — an
-    actionable control-plane problem, carrying its own fix); `_session_news` (this
-    session's own activity — silent unless it already has something to say, so its mere
-    presence is the signal); the todo count (persistent state, not urgent); the
-    configured hotkey hint (the one thing always rediscoverable another way, so it is
-    first to give up its columns). Once decided, the survivors are RE-JOINED in the
-    original reading order (todo, alert, news, hotkey) — priority governs only who is
-    dropped when the pane is starved, not how a healthy pane reads.
+    actionable control-plane problem, carrying its own fix); the in-flight spinner
+    (:func:`_inflight_field` — work happening RIGHT NOW, and the only thing on this row
+    that will be different in a second); `_session_news` (this session's own activity —
+    silent unless it already has something to say, so its mere presence is the signal);
+    the todo count (persistent state, not urgent); the configured hotkey hint (the one
+    thing always rediscoverable another way, so it is first to give up its columns). Once
+    decided, the survivors are RE-JOINED in the original reading order (todo, alert,
+    inflight, news, hotkey) — priority governs only who is dropped when the pane is
+    starved, not how a healthy pane reads.
+
+    **`_session_news` is asked to leave its own in-flight count out** (`inflight=False`).
+    Both would otherwise draw the same fact from the same tracker on the same row —
+    `⚡ 2 · ⠙ 2 running` — and the duplicate would be the one thing on the row a reader
+    could not explain. The status line keeps `⚡ 2` unchanged: it repaints once per turn,
+    where a spinner is a still picture of an arbitrary frame.
+
+    **At `terse` exactly one field survives** — the highest-priority one that has anything
+    to say. On a quiet plane that is the todo count, so the row is never blank; the moment
+    something is wrong or something is running, the row is that instead. `_fit_fields`
+    does it through the same priority order it already uses for width, so "less" and
+    "too narrow" cannot disagree about what matters.
 
     The hotkey is READ, not spelled out: `[frame] hotkey` is configurable, and this row
     used to hardcode `F2 menu` — so a plane on `hotkey = "F1"` had its own panel telling
@@ -445,7 +601,7 @@ def _bottom(fid: str) -> str:
     ws = workspace.resolve()
     todos = sl._todo_count(ws)
     alerts = sl._alerts(ws)
-    news = sl._session_news(_session.current())
+    news = sl._session_news(_session.current(), inflight=False)
     w = _width()
 
     # Unconditional, unlike `news` below — this predates Task 4 and stays exactly as it
@@ -464,23 +620,50 @@ def _bottom(fid: str) -> str:
     hotkey_text = ("" if tmuxctl.is_operator_socket(state.frame_server(fid))
                    else f"{config.FRAME['hotkey']} menu")
 
+    inflight_text = _inflight_field()
+
     # Decide who survives, highest priority first (see this function's own docstring
     # above for why); `_fit_fields` does the actual budgeting so it can be tested in
     # isolation.
     keep = _fit_fields(
-        [("alert", alert_text), ("news", news_text),
-         ("todo", todo_text), ("hotkey", hotkey_text)], w)
+        [("alert", alert_text), ("inflight", inflight_text), ("news", news_text),
+         ("todo", todo_text), ("hotkey", hotkey_text)], w,
+        limit=1 if verbosity(fid) == "terse" else None)
 
     # Re-assembled in the original reading order, not priority order — priority decided
     # only who was cut.
-    fields = {"alert": alert_text, "news": news_text, "todo": todo_text, "hotkey": hotkey_text}
-    parts = [fields[n] for n in ("todo", "alert", "news", "hotkey") if n in keep]
+    fields = {"alert": alert_text, "inflight": inflight_text, "news": news_text,
+              "todo": todo_text, "hotkey": hotkey_text}
+    parts = [fields[n] for n in ("todo", "alert", "inflight", "news", "hotkey")
+             if n in keep]
     return tui.truncate(" · ".join(parts), w)
 
 
 #: Every slot charter can draw. `panel.run` refuses a name that is not in here rather
 #: than painting an empty pane, because an empty pane reads as a broken frame.
 SLOTS = {"top": _top, "bottom": _bottom, "left": _left, "right": _right}
+
+
+#: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no
+#: resize behind it. Exactly the renderers that reach :func:`spinner_frame`, which today
+#: is `_bottom` and only `_bottom` (through :func:`_inflight_field`).
+#:
+#: **This is what scopes the animation's cost to the pane that needs it.** `panel._watch`
+#: runs one process per slot, so an unscoped "is work in flight" would repaint all four at
+#: `panel.TICK` for the whole length of a dispatch — three of them redrawing byte-identical
+#: output. That is not free: measured on this project (8 personas, 6 repos), one
+#: `render("right")` costs 4 816µs, because `statusline._persona_chips` asks
+#: `persona.is_draft`, `structural_errors`, `_mem_count` twice and `_vault_dot` per
+#: persona — a helper whose own docstring says "this renders on every single turn", written
+#: for once a turn and not five times a second. At 5Hz that one pane alone is ~2.4% of a
+#: core, for a picture that cannot change.
+#:
+#: Kept as data rather than inferred, and kept HONEST by
+#: `tests.test_frame_density.OnlyTheAnimatedSlotAnimates`, which renders every slot twice
+#: at two different clock readings with a record in flight and asserts the output differs
+#: for exactly the names in here — so a renderer that gains a spinner without joining this
+#: set, or leaves one behind without leaving it, is red rather than silently still.
+ANIMATED = frozenset({"bottom"})
 
 
 def unimplemented(configured) -> list[str]:

@@ -320,10 +320,90 @@ def drift(root: Path) -> list[str]:
 #: reach a tmux argv — so an unknown one is dropped rather than passed through.
 FRAME_SLOTS = ("top", "bottom", "left", "right")
 
+#: How much frame there is, as a PRESET over :data:`FRAME_SLOTS` — never a second
+#: configuration system sitting beside `slots`.
+#:
+#: Each level expands to two things: the ``slots`` an operator could have written by hand,
+#: and a ``verbosity`` naming how much each panel on them says (`frame/slots.py` owns what
+#: the two verbosities actually draw). `slots` stays the primitive, and an EXPLICIT
+#: `slots` overrides a declared `density` outright — see :func:`frame_of`. That ordering
+#: is what keeps this a preset: nothing here can express a frame `slots` could not, so an
+#: operator who outgrows the presets writes the list and loses nothing.
+#:
+#: **The level names are a closed set, which is stronger than sanitising them.** A density
+#: reaches tmux twice — as the slot list `layout.panel_argvs` splits panes for, and as a
+#: menu label — and both times it has already been matched against these three keys by
+#: :func:`frame_of` or by `instance.density_level`. Unlike ``hotkey`` (see
+#: :data:`_HOTKEY_RE`), there is no value an operator can write here that is passed
+#: through: it is either one of three constants charter wrote itself, or it is discarded.
+#:
+#: **Every ``slots`` list here is in GEOMETRY order, not reading order — do not sort
+#: them.** `layout.panel_argvs` splits each slot off the harness pane in list order, so a
+#: slot listed after `left`/`right` gets only the width they left behind. Measured
+#: against tmux 3.7c in a 200x50 window (#386): `["top", "bottom", "left", "right"]`
+#: gives a **200-column** `bottom` with 46-row side panels between the two strips, while
+#: `["top", "left", "right", "bottom"]` gives a `bottom` of **154 columns**, inset
+#: between them. `bottom` is the row carrying the one alert and the command that fixes
+#: it, and `slots._bottom` drops whole fields when it runs out of width — so those 46
+#: columns belong to it rather than to two side panels already truncating their own 22.
+#: The shipped ``slots`` default above is in the same order for the same reason.
+FRAME_DENSITY = {
+    #: One-line top and bottom, each saying only the most important thing it has. For a
+    #: terminal where the harness's own rows are what you came for.
+    "minimal": {"slots": ["top", "bottom"], "verbosity": "terse"},
+    #: The same two edges, saying everything they have.
+    "normal": {"slots": ["top", "bottom"], "verbosity": "normal"},
+    #: All four edges — the shipped frame since #386, and the same order it ships in.
+    "full": {"slots": ["top", "bottom", "left", "right"], "verbosity": "normal"},
+}
+
+#: What a panel falls back to for any level charter does not know — see
+#: :func:`verbosity_for`. Named rather than repeated as a bare string, because it is also
+#: the answer for "no density recorded at all", which is every frame launched by a charter
+#: that predates this feature.
+DEFAULT_VERBOSITY = "normal"
+
+
+def density_level(name) -> str | None:
+    """*name* if it names a :data:`FRAME_DENSITY` level, else ``None``.
+
+    The one place a density arriving from OUTSIDE charter's own constants — a menu action's
+    argv, a value read back out of a frame's state directory, a hand-edited charter.toml —
+    is admitted. ``isinstance`` first because ``value in FRAME_DENSITY`` raises
+    ``TypeError`` for an unhashable value (a TOML array, a table), and this module is
+    imported by every command including ``charter --version``: the same guard
+    :data:`_HOTKEY_RE`'s call site needs, for the same reason.
+    """
+    return name if isinstance(name, str) and name in FRAME_DENSITY else None
+
+
+def density_slots(level) -> list[str]:
+    """The slot list *level* expands to — a fresh list, never the table's own.
+
+    Callers hand this straight to `layout.visible_slots`, which filters it, and to
+    `frame_of`'s resolved config, which a caller may go on to patch; handing out the
+    module-level list would let either of them edit the preset itself for the life of the
+    process.
+    """
+    lv = density_level(level)
+    return list(FRAME_DENSITY[lv]["slots"]) if lv else []
+
+
+def verbosity_for(level) -> str:
+    """How much each panel says at *level*. :data:`DEFAULT_VERBOSITY` for anything else.
+
+    Anything else is a real case, not a defensive one: a frame's live density override is
+    read off disk (`frame.state.density`), and a frame started by an older charter has no
+    file there at all. Both answer ``None``, and a panel must draw the ordinary amount
+    rather than nothing.
+    """
+    lv = density_level(level)
+    return FRAME_DENSITY[lv]["verbosity"] if lv else DEFAULT_VERBOSITY
+
 #: Every ``[frame]`` setting, keyed by the name :func:`frame_of` returns it under
 #: (underscore — reads better at the call site, e.g. ``frame["history_limit"]``) and
 #: paired with ``(default, toml_key)``: the shipped default, and the name charter.toml
-#: actually spells it with. Three of the six differ — ``history-limit``, ``min-cols``,
+#: actually spells it with. Three of the seven differ — ``history-limit``, ``min-cols``,
 #: ``min-rows`` use a hyphen, per docs/frame.md — so the TOML spelling travels right next
 #: to the default it belongs to instead of living in a second dict a reader has to keep
 #: in sync by hand. Two dicts keyed apart, as an earlier draft of this had it, meant a key
@@ -352,6 +432,16 @@ FRAME_FIELDS = {
     #: drops whole fields when it runs out of width — so the 46 columns belong to it and
     #: not to two side panels that are already truncating their own 22.
     "slots": (["top", "bottom", "left", "right"], "slots"),
+    #: A PRESET over the line above, not a rival to it (see :data:`FRAME_DENSITY`). The
+    #: shipped value is the level that expands to EXACTLY the shipped `slots` above —
+    #: same edges, same ORDER, and saying as much as a panel has — and that is not a
+    #: coincidence to be re-checked by eye: `tests/test_frame_density.py`'s
+    #: `ShippedDefaultsAgree` asserts all three, so a change to either key that is not
+    #: matched by the other is red rather than a plane where `charter.toml`'s two ways of
+    #: asking for the same frame disagree about what the default is. This value moved
+    #: `normal` -> `full` when #386 raised the `slots` default above, and that test is
+    #: what made the move happen at merge time instead of being noticed later.
+    "density": ("full", "density"),
     #: Off by default: tmux's `set -g mouse on` takes over drag-select, so turning this on
     #: trades the operator's terminal text-selection for clickable panels. That trade
     #: belongs to a later release that actually ships clickable panels, not this one.
@@ -423,17 +513,37 @@ def frame_of(cfg: dict) -> dict:
     module is imported by every command, including ``charter --version``, so a
     hand-edited charter.toml must degrade to the defaults rather than raise.
 
-    Two keys need more than a type check, and both get it here rather than downstream:
-    ``slots`` is filtered against :data:`FRAME_SLOTS`, and ``hotkey`` against
-    :data:`_HOTKEY_RE` — see that constant for the injection a bare ``isinstance(value,
-    str)`` let through. Both degrade to the shipped default, which is the contract every
-    other key in this function already keeps: a charter.toml charter cannot make sense
-    of never stops charter from running.
+    Three keys need more than a type check, and all three get it here rather than
+    downstream: ``slots`` is filtered against :data:`FRAME_SLOTS`, ``density`` against
+    :data:`FRAME_DENSITY`, and ``hotkey`` against :data:`_HOTKEY_RE` — see that constant
+    for the injection a bare ``isinstance(value, str)`` let through. All three degrade to
+    the shipped default, which is the contract every other key in this function already
+    keeps: a charter.toml charter cannot make sense of never stops charter from running.
+
+    **`density` is expanded here, and only when it was actually declared.** A declared
+    level replaces ``slots`` with the list it expands to, so everything downstream —
+    `commands_frame._drawable_slots`, `frame_ready`, `doctor.check_frame`,
+    `layout.panel_argvs` — goes on reading one key and never learns that presets exist.
+    An explicit ``slots`` wins outright: it is the primitive, and an operator who wrote a
+    list meant that list.
+
+    Expanding ONLY on a declared level, rather than unconditionally from the shipped
+    default, is what keeps the `slots` default above load-bearing instead of dead. The two
+    say the same thing today (`FRAME_FIELDS`'s own comment, and the test it names), so an
+    unconditional expansion would behave identically right now — and would then silently
+    swallow the next change to the shipped `slots` list, which is exactly the drift that
+    comment exists to prevent.
+
+    An explicit ``slots`` that filters down to NOTHING (``slots = ["sideway"]``) is not
+    treated as having been written: the operator asked for a frame charter cannot build,
+    so a declared density is still the better answer than the shipped default, and with no
+    density declared the shipped default holds exactly as it did before.
     """
     out = dict(FRAME_DEFAULTS)
     section = cfg.get("frame")
     if not isinstance(section, dict):
         return out
+    took_slots = False
     for key, (default, toml_key) in FRAME_FIELDS.items():
         if toml_key not in section:
             continue
@@ -443,6 +553,11 @@ def frame_of(cfg: dict) -> dict:
                 kept = [s for s in value if s in FRAME_SLOTS]
                 if kept:
                     out[key] = kept
+                    took_slots = True
+            continue
+        if key == "density":
+            if density_level(value):
+                out[key] = value
             continue
         if key == "hotkey":
             if isinstance(value, str) and _HOTKEY_RE.fullmatch(value):
@@ -461,4 +576,6 @@ def frame_of(cfg: dict) -> dict:
             continue
         if isinstance(value, type(default)):
             out[key] = value
+    if "density" in section and not took_slots:
+        out["slots"] = density_slots(out["density"])
     return out
