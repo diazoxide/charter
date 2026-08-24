@@ -57,7 +57,9 @@ resizes refuses a bad id itself rather than trusting its caller.
 draws". `minimal` and `normal` still expand to the same two strips, but what separates
 them is no longer only how much each panel *says* — `minimal` also keeps at most four rows
 of table, and the four that survive are ranked (the repo you are standing in, the ones
-with something on them), with the `…(+N more)` line still saying how many it hid.
+with something on them), with the `…(+N more)` line still saying how many it hid. The pane
+is four rows shorter to match, so `minimal` actually gives your session the rows back
+rather than blanking them.
 
 **The panel's idle cost is unchanged, and that was a constraint rather than a hope.** A
 panel's idle tick is still exactly one `stat`. `bottom` is the one slot that animates, so a
@@ -70,8 +72,24 @@ the status line drops it on a pane too narrow to hold it.
 If the frame ends up narrower than the table's own 95 columns, the table is not drawn
 rather than drawn cut off. A row trimmed past the branch loses the CI glyph and the open
 change, and a failing repo then reads as a clean one — "no room to say" beats "nothing to
-say". The shipped `min-cols` is 100, so this only comes up on a hand-lowered floor or
-during a resize.
+say". **This is an ordinary width, not an exotic one**: the shipped `min-cols` of 100
+gates the `right` and `top` strips, never `bottom`, which is kept down to half of it — so
+any terminal from 50 to 94 columns wide, an 80-column one included, is a frame with the
+attention row and no table under it.
+
+The status line itself still takes the other choice at those widths — it composes a row for
+95 columns and crops it, so the CI mark and the open change go off the right-hand end and a
+failing repo reads as merely dirty. That is **#506**, with the measurement; it is the same
+question on the surface you see when you are *not* in a frame, and it is not fixed here.
+
+**And the pane is sized for that, at every width and every density.** The launcher, the
+`window-resized` recompute and the panel itself all ask one function how many table rows
+there are room for, and they ask it with the same width and the same density. Narrow your
+terminal below 95 columns and `bottom` shrinks back to its one row; switch to `minimal`
+and it shrinks to the four rows that level draws. Both used to be sized from the repo
+count alone, so a six-repo plane on an 80-column terminal got a seven-row pane to draw one
+line in, and `minimal` on a wide one got an eleven-row pane to draw five — up to fourteen
+blank rows taken off your agent session, and re-taken on every subsequent resize.
 
 Nothing to adopt: upgrading is the whole of it. A `charter.toml` still naming `left` in
 `[frame] slots` is not an error — the name is dropped the way any unknown slot always was,

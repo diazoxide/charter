@@ -1067,9 +1067,9 @@ def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
         time.sleep(_POLL_SECONDS)
 
 
-def _launch_sizes(fid: str, slots: list[str], rows: int) -> dict[str, int]:
-    """How big each of *slots* is split, in a *rows*-row window — the launch-time half of
-    `layout.slot_sizes`, shared by both launch paths so they cannot disagree.
+def _launch_sizes(fid: str, slots: list[str], cols: int, rows: int) -> dict[str, int]:
+    """How big each of *slots* is split, in a *cols* x *rows* window — the launch-time
+    half of `layout.slot_sizes`, shared by both launch paths so they cannot disagree.
 
     `bottom` is the only slot whose answer is not a constant (#488): it is sized to the
     repo table it is about to draw, floored at the one row it always was and capped so
@@ -1078,13 +1078,21 @@ def _launch_sizes(fid: str, slots: list[str], rows: int) -> dict[str, int]:
     coming up with a pane taller than its content or a table cut off with nothing saying
     so.
 
+    **`cols` is not decoration (#500).** The renderer draws NO table below
+    `statusline._LEFT_W` (95) and at most `slots._TERSE_ROWS` of one at a `terse`
+    density, and neither is a rare shape: `layout.visible_slots` keeps `bottom` down to
+    `min_cols // 2`, so an 80-column terminal is one, and `minimal` is a level the F2
+    menu offers. Sizing from the repo count alone gave both of them a pane sized for a
+    table the panel then refused to draw — up to fourteen blank rows taken off the
+    harness. `bottom` is split BEFORE `right`, so the window's width IS the pane's.
+
     Affordable at launch by construction, and that is not incidental: `cmd_launch` calls
     `gather.discard(fid)` before it draws anything, so this reaches `gather.row_count`
     with no cache and gets the directory-listing answer — an `iterdir`, never the git
     sweep `gather.scan` would run. See `gather.row_count`'s own docstring for both paths.
     """
     return layout.slot_sizes(slots, window_rows=rows,
-                             content_rows=frame_slots.bottom_rows_wanted(fid))
+                             content_rows=frame_slots.bottom_rows_wanted(fid, cols=cols))
 
 
 def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -> list[str]:
@@ -1501,7 +1509,7 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[
     # the whole environment here (#446): see `_guest_harness_env`.
     panes = _draw_panels(socket, slots=slots, fid=fid, harness_pane=harness_pane,
                          env=None, v=v, pane_env=_pane_identity_env(env, v),
-                         sizes=_launch_sizes(fid, slots, rows))
+                         sizes=_launch_sizes(fid, slots, cols, rows))
     _arm_panel_respawn(socket, fid=fid, panes=panes, env=None)
     tmuxctl.run("focusing the harness pane",
                 tmuxctl.server_argv(socket, "select-pane", "-t", harness_pane))
@@ -2221,7 +2229,7 @@ def cmd_launch(args) -> int:
             panes = _draw_panels(
                 SOCKET, slots=slots, fid=fid, harness_pane=harness_pane, env=env, v=v,
                 pane_env=_pane_identity_env(env, v),
-                sizes=_launch_sizes(fid, slots, rows))
+                sizes=_launch_sizes(fid, slots, cols, rows))
             _arm_panel_respawn(SOCKET, fid=fid, panes=panes, env=env)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
@@ -2407,7 +2415,7 @@ def _relayout_pane_env(fid: str, v: tuple[int, int]) -> dict[str, str] | None:
 
 def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str],
               want: list[str], v: tuple[int, int],
-              window_rows: int) -> dict[str, str]:
+              window_cols: int, window_rows: int) -> dict[str, str]:
     """Make the running frame's panes match *want*, and return the map that resulted.
 
     Kill what is no longer wanted, split what is newly wanted, re-arm the hooks, re-assert
@@ -2426,8 +2434,11 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
       engine the `window-resized` hook exists to correct after a window resize. The panes
       that merely SURVIVED a density change are the ones that get stretched by it, so
       they are exactly the ones a `-l` on the new pane cannot fix. :func:`_reassert_sizes`
-      does it, and *window_rows* is why it takes a measurement rather than a constant:
-      `bottom`'s height depends on the window it is in (#488).
+      does it, and *window_cols*/*window_rows* are why it takes a measurement rather
+      than a constant: `bottom`'s height depends on the window it is in — on its rows
+      (#488) and, since #500, on its columns and this frame's density too, because a
+      panel narrower than `statusline._LEFT_W` draws no table and `terse` draws at most
+      `slots._TERSE_ROWS` of one.
 
     Slots whose `split-window` fails are simply absent from the returned map, as at launch:
     a decorative panel that could not be drawn must not take down a frame that is running.
@@ -2475,14 +2486,16 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
         keep.update(_split_panels(
             socket, slots=missing, fid=fid, harness_pane=harness_pane, env=None,
             pane_env=pane_env,
-            sizes=layout.slot_sizes(want, window_rows=window_rows,
-                                    content_rows=frame_slots.bottom_rows_wanted(fid))))
+            sizes=layout.slot_sizes(
+                want, window_rows=window_rows,
+                content_rows=frame_slots.bottom_rows_wanted(fid, cols=window_cols))))
         _arm_panel_respawn(socket, fid=fid,
                            panes={s: keep[s] for s in missing if s in keep}, env=None)
 
     _install_resize_hook(socket, harness_pane=harness_pane, panes=keep, v=v,
                          env=None, fid=fid, replacing=True)
-    _reassert_sizes(socket, fid=fid, panes=keep, window_rows=window_rows)
+    _reassert_sizes(socket, fid=fid, panes=keep,
+                    window_cols=window_cols, window_rows=window_rows)
     # `split-window` makes each new pane the ACTIVE one, so without this the operator is
     # left typing into a panel. The same correction `cmd_launch` makes after its own
     # splits, for the same reason.
@@ -2492,9 +2505,9 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
 
 
 def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
-                    window_rows: int) -> None:
+                    window_cols: int, window_rows: int) -> None:
     """Re-apply every pane in *panes* the size `layout.slot_sizes` says it should have in
-    a *window_rows*-row window.
+    a *window_cols* x *window_rows* window.
 
     The one place a pane is told its size after it exists, shared by the two callers that
     need it and for two different reasons: :func:`_relayout`, because a `split-window -l`
@@ -2509,6 +2522,13 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     on tmux 3.7c, asserting `-y 40` in a 20-row window leaves the harness 1 row.
     *window_rows* is therefore a measurement the CALLER just took, not a remembered one.
 
+    **And *window_cols* alongside it (#500), for the same reason and a sharper one.** A
+    resize changes the window's WIDTH too, and how tall `bottom` should be depends on it:
+    below `statusline._LEFT_W` the panel draws no table, so it wants one row. Dropping the
+    width here — `cmd_resize` measured it and threw it away as `_cols` — is what made a
+    narrowed terminal keep a table-sized pane it could no longer draw a table in, on every
+    step of the drag rather than only at launch.
+
     Every pane id is checked before it is used, even though both callers already checked
     theirs. `_panel_died_hook_argv`'s own rule ("every value that reaches the text is
     what decides, never where it came from") applies to a `-t` argument too, and #475 was
@@ -2519,8 +2539,9 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     between the map being read and this running) makes `resize-pane` fail, and that is
     not an integration failure worth printing over the agent's own screen.
     """
-    sizes = layout.slot_sizes(list(panes), window_rows=window_rows,
-                              content_rows=frame_slots.bottom_rows_wanted(fid))
+    sizes = layout.slot_sizes(
+        list(panes), window_rows=window_rows,
+        content_rows=frame_slots.bottom_rows_wanted(fid, cols=window_cols))
     for slot, pane_id in panes.items():
         if slot not in _RESIZE_FLAG or slot not in sizes:
             continue
@@ -2560,13 +2581,22 @@ def cmd_resize(args) -> int:
     `cmd_respawn`: on the operator's own server there IS no `$CHARTER_SESSION_ID` to
     read, because that variable is a session option charter does not write there.
 
+    **Both dimensions are used, not just the rows (#500).** The window's WIDTH decides
+    whether `bottom` can draw its table at all (`statusline._LEFT_W`), so narrowing a
+    terminal below 95 columns has to shrink the pane to the one-row strip it can actually
+    fill. This measured the width and discarded it as `_cols`, which left a narrowed
+    frame re-asserting a table-sized pane it drew one line into — on every step of the
+    drag, so the harness stayed pinned at `layout.HARNESS_MIN_ROWS` for as long as the
+    terminal stayed narrow.
+
     **This is the hot path of the whole feature.** A terminal drag fires `window-resized`
     once per size change, so this runs repeatedly and in the background while the
     operator is still dragging. Everything it reads is cheap by construction:
     `state.harness_pane`/`state.panes` are two small files, `_window_size` is one
     `display-message`, and `frame_slots.bottom_rows_wanted` goes through
     `gather.row_count`, which answers from the frame's cache and never runs a git sweep
-    (see its own docstring).
+    (see its own docstring) — and at a width below `_LEFT_W` it does not even ask, since
+    the answer is one row whatever the count is.
     """
     fid = getattr(args, "frame", None) or os.environ.get("CHARTER_SESSION_ID", "")
     if not fid:
@@ -2578,8 +2608,8 @@ def cmd_resize(args) -> int:
     if not panes:
         return 0
     socket = state.frame_server(fid) or SOCKET
-    _cols, rows = _window_size(socket, harness_pane)
-    _reassert_sizes(socket, fid=fid, panes=panes, window_rows=rows)
+    cols, rows = _window_size(socket, harness_pane)
+    _reassert_sizes(socket, fid=fid, panes=panes, window_cols=cols, window_rows=rows)
     return 0
 
 
@@ -2641,7 +2671,7 @@ def cmd_density(args) -> int:
     cols, rows = _window_size(socket, harness_pane)
     want = _drawable_slots(cols, rows, instance.density_slots(level))
     panes = _relayout(socket, fid=fid, harness_pane=harness_pane, panels=panels,
-                      want=want, v=v, window_rows=rows)
+                      want=want, v=v, window_cols=cols, window_rows=rows)
     state.record_panes(fid, panels=panes)
     # Re-recorded so the menu's own mark moves with the frame. `menu.record` rewrites the
     # table whole, and every action id is minted from position, so the ids the operator's

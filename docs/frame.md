@@ -261,7 +261,12 @@ split.
 `bottom` is never dropped by those floors — it **shrinks** instead. Its height is its
 content's: one row per repo (and per worktree, in a single-repo workspace), plus the
 attention row, capped so the harness always keeps at least 12 rows and floored at the one
-row `bottom` has always been. A workspace with no clones gets exactly that one row. The
+row `bottom` has always been. A workspace with no clones gets exactly that one row — and
+so does a frame narrower than the table's own 95 columns, or one at `minimal`, because
+"its content" means *what the panel will actually draw*, not how many clones there are:
+the launcher and the resize hook ask the same function the panel asks, with the same width
+and the same density. Narrow your terminal below 95 columns and `bottom` gives its rows
+back rather than keeping them blank. The
 cap is recomputed on every terminal resize, not remembered from the launch — tmux does not
 refuse an over-large pane height, it takes the difference out of the neighbouring pane,
 and the neighbour is your agent session. Recomputing means charter runs for a moment on
@@ -273,8 +278,11 @@ properly.
 If the frame ends up narrower than the repo table's own columns (95), the table is not
 drawn rather than drawn with its right-hand columns cut off: a row trimmed past the branch
 loses the CI glyph and the open-change count, and a dirty, failing repo then reads as a
-clean one. The attention row above it is unaffected — it drops whole fields instead, in
-priority order.
+clean one. That is an ordinary width, not an exotic one — `min-cols` gates `right` and
+`top`, never `bottom` — so an 80-column frame is the attention row and nothing under it,
+and the pane is one row tall to match. The attention row itself is unaffected — it drops
+whole fields instead, in priority order. (The status line outside a frame still crops
+instead of refusing; that is #506.)
 
 If a future `[frame] slots` ever names an edge charter sizes but has no renderer for, that
 slot is skipped rather than drawn as a dead pane — the harness keeps the space — and
@@ -358,7 +366,7 @@ There are three levels:
 
 | level | edges | each panel says |
 |---|---|---|
-| `minimal` | `top` and `bottom` | one field on the attention row, four rows of repo table |
+| `minimal` | `top` and `bottom` | one field on the attention row, four rows of repo table — and a `bottom` pane that is four rows tall, so the difference goes to your session |
 | `normal` | `top` and `bottom` | everything they have, table as tall as the window can spare |
 | `full` | every edge | everything they have |
 
@@ -378,7 +386,9 @@ persona are what it exists to tell you), and `bottom` keeps only its highest-pri
 attention field (an alert if there is one, the spinner if work is running, otherwise the
 todo count, so the row is never blank) and at most four rows of repo table under it. The
 four that survive are the ones worth keeping — the repo you are standing in, and the ones
-with something on them — and the table still says how many it hid. If you have kept
+with something on them — and the table still says how many it hid. The pane is four rows
+shorter to match, which is the point of the level: `minimal` gives your session the rows
+back rather than blanking them. If you have kept
 `right` by writing `slots` yourself, `minimal` shows four chips in it and says the same.
 
 **The hotkey changes the density of the running frame, and nothing else.** `F2` opens the

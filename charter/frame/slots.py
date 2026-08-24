@@ -347,13 +347,14 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     # `charter  main`. Refusing to draw says "no room to say" where a trimmed row says
     # "nothing to say".
     #
-    # Reachable but not ordinary: `bottom` is split BEFORE `right` (the slot order IS
-    # the geometry — `instance.FRAME_FIELDS`), so its width is the whole WINDOW's, and
-    # `_LEFT_W` (95) is below the shipped `[frame] min-cols` (100) — every frame at or
-    # above its own floor draws the full table. What lands here is a frame on a
-    # hand-lowered `min-cols`, or the transient mid-resize starvation `layout.py`'s
-    # module docstring measures. The attention row above is unaffected either way; it
-    # does its own per-field budgeting (`_fit_fields`).
+    # **Ordinary, not exotic — an 80-column terminal lands here.** `bottom` is split
+    # BEFORE `right` (the slot order IS the geometry — `instance.FRAME_FIELDS`), so its
+    # width is the whole WINDOW's; and `[frame] min-cols` (100) gates `right` and `top`
+    # only — `layout.visible_slots` keeps `bottom` all the way down to `min_cols // 2`.
+    # So every frame between 50 and `_LEFT_W - 1` (94) columns draws the attention row
+    # and no table, which is why :func:`_table_cap` — not this function — is what the
+    # LAUNCHER asks, and why it asks with the same width. The attention row above is
+    # unaffected either way; it does its own per-field budgeting (`_fit_fields`).
     if width < sl._LEFT_W:
         return []
 
@@ -422,34 +423,80 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     return lines[:budget]
 
 
-def bottom_rows_wanted(fid: str) -> int:
-    """How many rows `_bottom` would fill for this frame, given room for all of them.
+def _table_cap(fid: str, width: int) -> int:
+    """The most rows of repo table `_bottom` will draw in a *width*-column pane —
+    **every reason the renderer draws fewer rows than there is content**, in one place.
+
+    Three of them, and until #500 only the first was written down where the LAUNCHER
+    could read it:
+
+    * **Too narrow is no table at all.** Below `statusline._LEFT_W` (95)
+      :func:`_table_lines` refuses outright rather than trimming a row into a false-clean
+      `charter  main`, and that is not an exotic width: `layout.visible_slots` keeps
+      `bottom` down to `min_cols // 2` (50), so every ordinary 80-column terminal is here.
+    * **`terse` keeps :data:`_TERSE_ROWS`.** A density that buys the harness back its
+      rows has to buy them from the slot that has rows to give, so `minimal` asks for a
+      SHORTER pane, not the same pane with more of it blank.
+    * **`statusline._MAX_REPO_LINES` bounds the rest**, the same total-row budget the
+      wide table keeps (repo rows plus the `…(+N more)` line, not repo COUNT — see that
+      constant's own comment), so a workspace with forty clones gets fourteen rows of
+      table under its attention row rather than forty.
+
+    **Both sides of "how tall is `bottom`?" call this, and that is the whole point.**
+    :func:`bottom_rows_wanted` asks it with the WINDOW's width to size the pane;
+    :func:`_bottom` asks it with the pane's own measured width to bound what it draws
+    into it. A cap applied on one side only is exactly the defect #500 fixes: the sizer
+    used to answer from the repo count alone, so an 80-column frame with six repos got a
+    seven-row pane to draw one line in, and `minimal` on a wide terminal got an
+    eleven-row pane to draw five — rows taken from the harness and left blank, and
+    re-taken by `cmd_resize` on every subsequent resize.
+
+    Takes *width* rather than measuring it: the renderer has a pane to measure and the
+    launcher has only the window it is about to split. Same number by construction —
+    `bottom` is split BEFORE `right` (`instance.FRAME_FIELDS`' order is the geometry), so
+    the pane's width IS the window's.
+    """
+    from .. import statusline as sl
+    if width < sl._LEFT_W:
+        return 0
+    cap = sl._MAX_REPO_LINES
+    if verbosity(fid) == "terse":
+        cap = min(cap, _TERSE_ROWS)
+    return cap
+
+
+def bottom_rows_wanted(fid: str, *, cols: int) -> int:
+    """How many rows `_bottom` would fill for this frame in a *cols*-column window.
 
     **One answer to "how tall is `bottom`", read by both sides of the question.** The
     renderer spends the pane it was given (:func:`_table_lines`' *budget*); the LAUNCHER
     has to decide how tall to make that pane before any panel exists, and the
     `window-resized` recompute has to decide again with the window's new size. If those
     two disagreed, a frame would come up with a pane taller than its content (blank rows
-    the harness could have had) or shorter (a table cut off with nothing saying so).
-    Pinned by a test that renders `_bottom` into a pane of exactly this height and counts
-    the lines that come back.
+    the harness could have had) or shorter (a table cut off with nothing saying so) —
+    and both were shipped by #488, because this asked the repo count and nothing else
+    while the renderer also asked the width and the density. Pinned by a test that
+    renders `_bottom` into a pane of exactly this height, at exactly this width and at
+    every density, and counts the lines that come back.
+
+    *cols* is required, and keyword-only so no caller can pass a row count by mistake.
+    A frame narrower than `statusline._LEFT_W` draws no table at all, so it wants the
+    one-row strip `bottom` always was — see :func:`_table_cap`, which is where every
+    reason the renderer draws fewer rows than there is content now lives.
 
     `+ 1` is the attention row — the alert, the spinner, this session's news, the todo
     count and the hotkey hint — which `_bottom` always draws and which #488 is explicit
     that the table joins rather than evicts.
 
-    Capped at `statusline._MAX_REPO_LINES`, the same total-row budget the wide table
-    itself keeps (repo rows plus the `…(+N more)` line, not repo COUNT — see that
-    constant's own comment), so a workspace with forty clones asks for a fifteen-row
-    strip rather than a forty-one-row one.
-
     `gather.row_count` is what makes this affordable at launch: it answers from the
     frame's cache when there is one and from a plain directory listing when there is not,
-    and never runs a git sweep. See its own docstring.
+    and never runs a git sweep. See its own docstring. It is asked SECOND, after the
+    width test that can answer zero, so a narrow frame does not pay for a count it is
+    about to discard.
     """
-    from .. import statusline as sl
     from . import gather
-    return 1 + min(gather.row_count(fid), sl._MAX_REPO_LINES)
+    cap = _table_cap(fid, cols)
+    return 1 + (min(gather.row_count(fid), cap) if cap > 0 else 0)
 
 
 def _right(fid: str) -> str:
@@ -659,8 +706,10 @@ def _bottom(fid: str) -> str:
 
     **The pane is measured, not assumed.** :func:`_height` reads this pane's own tty the
     way :func:`_width` reads its width; :func:`bottom_rows_wanted` is what told the
-    LAUNCHER how tall to make it, so on an untouched frame the two agree exactly and no
-    row is either blank or cut. A pane that is shorter anyway — a transient mid-resize
+    LAUNCHER how tall to make it, and both go through :func:`_table_cap` with the same
+    width and the same density — so on an untouched frame the two agree exactly and no
+    row is either blank or cut, at every width the frame is drawn at and at every level
+    the density menu offers. A pane that is shorter anyway — a transient mid-resize
     size, or a window with no rows to spare — costs the table its lowest-priority rows
     through `_pick_rows`' ranking, never the attention row.
 
@@ -712,14 +761,14 @@ def _bottom(fid: str) -> str:
              if n in keep]
     lines = [tui.truncate(" · ".join(parts), w)]
 
-    # The table gets what is left of the pane below the attention row. At `terse` it is
-    # asked for fewer ROWS rather than sliced afterwards, so what survives is still
-    # `_pick_rows`' ranked subset (the repo you are standing in, the ones with something
-    # on them) rather than whichever happened to come first — the same discipline the
-    # `terse` chip list in `_right` keeps.
-    budget = _height() - len(lines)
-    if verbosity(fid) == "terse":
-        budget = min(budget, _TERSE_ROWS)
+    # The table gets what is left of the pane below the attention row, bounded by
+    # `_table_cap` — the SAME call `bottom_rows_wanted` made to size this pane, with this
+    # pane's own measured width instead of the window's. Asked for fewer ROWS rather than
+    # sliced afterwards, so what survives at `terse` is still `_pick_rows`' ranked subset
+    # (the repo you are standing in, the ones with something on them) rather than
+    # whichever happened to come first — the same discipline the `terse` chip list in
+    # `_right` keeps.
+    budget = min(_height() - len(lines), _table_cap(fid, w))
     if budget > 0:
         from . import gather
         lines.extend(_table_lines(gather.read(fid), w, budget))

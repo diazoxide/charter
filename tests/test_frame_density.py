@@ -33,7 +33,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config, inflight, instance, tui, util
+from charter import (commands_frame, config, inflight, instance, statusline, tui,
+                     util)
 from charter.frame import gather, layout, menu, panel, slots, state
 
 from tests._isolation import PersonaIso
@@ -845,6 +846,38 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         self.assertEqual(state.panes(self.fid),
                          {"top": "%1", "bottom": "%2", "right": "%7"})
 
+    def _bottom_split_size(self, size):
+        """The `-l` a re-layout hands `split-window` for a `bottom` it has to create.
+
+        A density change can ADD `bottom` — a frame whose panel died and was reaped, or
+        one grown from a level that had none — and that split's own `-l` comes from
+        `layout.slot_sizes`, not from the `_reassert_sizes` that follows it. So it is a
+        second place the window's width has to reach, and the correction after it is
+        `report=False` best-effort rather than a guarantee.
+        """
+        state.record_panes(self.fid, panels={"top": "%1"})
+        rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
+                 "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
+                 "change": None, "sigil": "", "current": False, "worktree_count": 0}
+                for i in range(6)]
+        gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
+                               "current_repo": None, "repos": rows, "worktrees": []})
+        rc, fake = self._run("normal", _Tmux(size=size))
+        self.assertEqual(rc, 0)
+        split = next(c for c in fake.calls
+                     if "split-window" in c and "bottom" in c)
+        return int(split[split.index("-l") + 1])
+
+    def test_a_relayout_splits_bottom_for_the_table_a_wide_window_can_draw(self):
+        self.assertEqual(self._bottom_split_size("200:50"), 1 + 6)
+
+    def test_a_relayout_splits_bottom_for_one_row_on_a_narrow_window(self):
+        """#500's other call site. `_reassert_sizes` runs immediately after and would
+        correct it, but it is `report=False` best-effort against a pane that may already
+        be gone — the split has to ask for the right size in the first place, and a `-l`
+        that over-asks is granted by tmux out of the harness rather than refused."""
+        self.assertEqual(self._bottom_split_size("80:50"), 1)
+
     def test_shrinking_kills_the_panes_it_no_longer_wants(self):
         state.record_panes(self.fid, panels={"top": "%1", "right": "%3", "bottom": "%2"})
         rc, fake = self._run("minimal")
@@ -946,7 +979,8 @@ class LiveOverride(PersonaIso, unittest.TestCase):
                         side_effect=lambda a, argv, **k: calls.append(list(argv))):
             commands_frame._reassert_sizes(
                 "charter", fid=self.fid,
-                panes={"top": "%1", "bottom": "%2;kill-server"}, window_rows=50)
+                panes={"top": "%1", "bottom": "%2;kill-server"},
+                window_cols=200, window_rows=50)
         targets = [c[c.index("-t") + 1] for c in calls if "resize-pane" in c]
         self.assertEqual(targets, ["%1"], calls)
 
@@ -1223,6 +1257,67 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         rc, fake = self._run("full")
         self.assertEqual(rc, 0)
         self.assertEqual(fake.calls, [])
+
+
+class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
+    """#500: `charter frame-resize` re-applies a height that matches what the panel will
+    draw in the window it just measured — at that window's WIDTH and this frame's
+    DENSITY, not from the repo count alone.
+
+    This is the surface the operator actually hits, and it is not launch-only: the
+    `window-resized` hook fires on every step of a terminal drag, so a `bottom` sized for
+    a table it can no longer draw is re-asserted continuously for as long as the terminal
+    stays narrow — with the harness pinned at `layout.HARNESS_MIN_ROWS` the whole time
+    (measured on tmux 3.7c: a 26-row, 80-column window with 14 repos gave `bottom` 11
+    rows to draw one line in).
+
+    Driven through `cmd_resize` itself rather than through `_reassert_sizes`, because
+    what shipped broken was the call site: it measured the width into `_cols` and threw
+    it away.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.fid = f"rsz-{_a_dead_pid()}"
+        state.record_harness_pane(self.fid, "%0")
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
+                 "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
+                 "change": None, "sigil": "", "current": False, "worktree_count": 0}
+                for i in range(6)]
+        gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
+                               "current_repo": None, "repos": rows, "worktrees": []})
+
+    def _bottom_height(self, size):
+        fake = _Tmux(size=size)
+        with mock.patch("charter.frame.tmuxctl.run", side_effect=fake):
+            rc = commands_frame.cmd_resize(SimpleNamespace(frame=self.fid))
+        self.assertEqual(rc, 0)
+        sized = [c for c in fake.calls if "resize-pane" in c and "%2" in c]
+        self.assertEqual(len(sized), 1, fake.calls)
+        return int(sized[0][sized[0].index("-y") + 1])
+
+    def test_a_wide_window_keeps_the_table_sized_pane(self):
+        """The control. Without it the narrow assertion below would pass against a
+        function that always answered one."""
+        self.assertEqual(self._bottom_height("200:50"), 1 + 6)
+
+    def test_narrowing_the_terminal_shrinks_the_pane_back_to_its_one_row(self):
+        """The panel draws no table below `statusline._LEFT_W`, so every row past the
+        first was blank — and came out of the harness."""
+        for cols in (60, 80, statusline._LEFT_W - 1):
+            with self.subTest(cols=cols):
+                self.assertEqual(self._bottom_height(f"{cols}:50"), 1)
+
+    def test_the_density_the_operator_chose_is_read_here_too(self):
+        """`cmd_density` and `cmd_resize` are different processes minutes apart, so the
+        level has to come off the frame's own state directory on this path rather than
+        being remembered. A `minimal` frame that then gets resized must not be handed the
+        `normal` height back."""
+        state.record_density(self.fid, "minimal")
+        self.assertEqual(self._bottom_height("200:50"), 1 + slots._TERSE_ROWS)
+        state.record_density(self.fid, "normal")
+        self.assertEqual(self._bottom_height("200:50"), 1 + 6)
 
 
 class DensityIsWiredIntoTheCli(unittest.TestCase):

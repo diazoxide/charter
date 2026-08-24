@@ -39,7 +39,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests._isolation import PersonaIso
-from charter import commands_frame, config, instance, util
+from charter import commands_frame, config, instance, statusline, util
 from charter.frame import gather, layout, menu, slots, state, tmuxctl
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
@@ -2635,6 +2635,51 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(state.respawn_attempt(fake.fid, "top"), 1,
                          "this frame's first panel death was charged to a dead frame's "
                          "budget and would never be respawned")
+
+
+class BottomIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
+    """#500: the `-l` the launcher hands `split-window` for `bottom` is the number of
+    rows the PANEL will fill, not the number of repos there are.
+
+    `bottom`'s renderer draws no table below `statusline._LEFT_W` (95) and at most
+    `slots._TERSE_ROWS` of one at a `terse` density. #488 sized the pane from the repo
+    count alone, so both shapes came up with a pane taller than anything that would be
+    drawn into it — and `layout.HARNESS_MIN_ROWS` means those rows come straight off the
+    agent session. Asserted at the LAUNCHER rather than at `bottom_rows_wanted`, because
+    the defect was a call site that had the width and did not pass it.
+
+    `gather.row_count` is stubbed so the count is the same on every pass and the only
+    thing varying is what the test says varies. What is NOT stubbed is the arithmetic:
+    `_launch_sizes` and `layout.bottom_rows` run for real.
+    """
+
+    def _bottom_split_size(self, *, cols, rows=50, repos=6):
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
+        with mock.patch("charter.frame.gather.row_count", return_value=repos):
+            rc = _launch(fake, cols=cols, rows=rows)
+        self.assertEqual(rc, 0)
+        split = next(c for c in fake.calls
+                     if "split-window" in c and "bottom" in c)
+        return int(split[split.index("-l") + 1])
+
+    def test_a_wide_window_is_split_for_the_whole_table(self):
+        """The control, and it has to hold or the narrow assertion below is vacuous."""
+        self.assertEqual(self._bottom_split_size(cols=200), 1 + 6)
+
+    def test_a_window_too_narrow_for_the_table_is_split_for_one_row(self):
+        """`[frame] min-cols` (100) gates `right` and `top`; `layout.visible_slots` keeps
+        `bottom` down to `min_cols // 2`, so an 80-column terminal draws the attention
+        row and nothing else. It used to be split seven rows tall for it."""
+        for cols in (80, statusline._LEFT_W - 1):
+            with self.subTest(cols=cols):
+                self.assertEqual(self._bottom_split_size(cols=cols), 1)
+
+    def test_the_boundary_is_the_tables_own_width(self):
+        """Pinned from both sides at `_LEFT_W` itself, so an off-by-one in either
+        direction is red rather than absorbed by the two-column gap between the values
+        the test above happens to use."""
+        self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W), 1 + 6)
+        self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W - 1), 1)
 
 
 class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):

@@ -14,6 +14,7 @@ environment. `Width` below pins that a panel lays out against its own tty instea
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import unittest
@@ -705,19 +706,75 @@ class BottomTable(PersonaIso, unittest.TestCase):
         self.assertEqual(len(self._render(rows=20).split("\n")), 1 + 10)
 
     def test_the_height_the_launcher_asks_for_is_the_height_the_renderer_fills(self):
-        """The seam #488 turns on. `slots.bottom_rows_wanted` is what tells
-        `layout.slot_sizes` how tall to split the pane; `_bottom` is what fills it. If
-        the two disagreed, every frame would come up either padded with blank rows the
-        harness could have had, or with a table cut off and nothing saying so — and
-        neither is visible from either side alone. Rendered into a pane of EXACTLY the
-        height the sizer asked for, and counted."""
-        for n in (0, 1, 4, 9):
-            with self.subTest(repos=n):
-                fid = f"wanted-{n}"
-                _seed(fid, repos=[_row(f"repo{i}") for i in range(n)])
-                want = slots.bottom_rows_wanted(fid)
-                out = self._render(fid, rows=want)
-                self.assertEqual(len(out.split("\n")), want, out)
+        """The seam #488 turns on, over every input that changes either side's answer.
+
+        `slots.bottom_rows_wanted` is what tells `layout.slot_sizes` how tall to split the
+        pane; `_bottom` is what fills it. If the two disagreed, every frame would come up
+        either padded with blank rows the harness could have had, or with a table cut off
+        and nothing saying so — and neither is visible from either side alone.
+
+        **The PROPERTY is "the pane the launcher asks for is the pane the panel fills",
+        not "the row count matches".** #488 shipped a sizer that read the repo count and
+        a renderer that also read the WIDTH (no table below `statusline._LEFT_W`) and the
+        DENSITY (`_TERSE_ROWS` at `terse`), so the seam held only at the one shape the
+        original test used — wide, `normal`. Every input either side consults is varied
+        here: repo count across the cap, width across `_LEFT_W` and down to the smallest
+        `layout.visible_slots` still draws `bottom` at, and every level in
+        `instance.FRAME_DENSITY`. The next input to appear — a fourth density, a
+        `bottom`-specific `min-cols` — has to be added to this loop, and until it is, its
+        own dimension is unpinned rather than silently wrong.
+
+        Rendered into a pane of EXACTLY the height the sizer asked for, at EXACTLY the
+        width the sizer was asked about, and counted.
+        """
+        for level in (None, *sorted(instance.FRAME_DENSITY)):
+            for n in (0, 1, 4, 9, statusline._MAX_REPO_LINES + 3):
+                for cols in (50, 80, statusline._LEFT_W - 1, statusline._LEFT_W, 200):
+                    with self.subTest(density=level, repos=n, cols=cols):
+                        fid = f"wanted-{level}-{n}-{cols}"
+                        _seed(fid, repos=[_row(f"repo{i}") for i in range(n)])
+                        if level is not None:
+                            state.record_density(fid, level)
+                        want = slots.bottom_rows_wanted(fid, cols=cols)
+                        out = self._render(fid, cols=cols, rows=want)
+                        self.assertEqual(len(out.split("\n")), want, out)
+
+    def test_a_frame_too_narrow_for_the_table_is_sized_for_the_row_it_can_draw(self):
+        """The width half of the seam, stated as the number the LAUNCHER hands tmux.
+
+        `[frame] min-cols` (100) gates `right` and `top`; `layout.visible_slots` keeps
+        `bottom` down to `min_cols // 2`, so an 80-column terminal draws the attention row
+        and no table at all. Sized from the repo count alone it was given a pane for the
+        table anyway — six repos meant a seven-row pane holding one line, and the other
+        six rows came off the harness.
+
+        Asserted against a repo count large enough that the two answers cannot coincide,
+        and at `_LEFT_W` itself so the boundary is pinned from both sides rather than
+        only from the narrow one."""
+        _seed("narrow", repos=[_row(f"repo{i}") for i in range(6)])
+        for cols in (50, 80, statusline._LEFT_W - 1):
+            with self.subTest(cols=cols):
+                self.assertEqual(slots.bottom_rows_wanted("narrow", cols=cols), 1)
+        self.assertEqual(slots.bottom_rows_wanted("narrow",
+                                                  cols=statusline._LEFT_W), 1 + 6)
+
+    def test_a_terse_density_asks_for_a_shorter_pane_not_a_blanker_one(self):
+        """`minimal` exists to give the harness its rows back — `instance.FRAME_DENSITY`
+        says so in as many words. It shipped costing the harness exactly what `normal`
+        cost and drawing less in it: the renderer capped the TABLE at `_TERSE_ROWS`, the
+        sizer never read the density at all, so ten repos meant an eleven-row pane with
+        five lines in it and six blank.
+
+        Both levels asked for the same frame and the same width, so the only difference
+        between the two numbers is the one the level is for."""
+        _seed("dense", repos=[_row(f"repo{i}") for i in range(10)])
+        state.record_density("dense", "normal")
+        wide = slots.bottom_rows_wanted("dense", cols=200)
+        state.record_density("dense", "minimal")
+        terse = slots.bottom_rows_wanted("dense", cols=200)
+        self.assertEqual(wide, 1 + 10)
+        self.assertEqual(terse, 1 + slots._TERSE_ROWS)
+        self.assertLess(terse, wide)
 
     def test_a_pane_too_narrow_for_the_table_draws_no_table_rather_than_a_cut_one(self):
         """Every column after the branch sits at a fixed offset past
@@ -812,10 +869,86 @@ class BottomTable(PersonaIso, unittest.TestCase):
         self.assertEqual(opens, [], "composing the table opened a file")
         self.assertEqual(runs, [], "composing the table started a process")
 
+    def test_a_taller_pane_costs_the_same_syscalls_as_a_one_row_one(self):
+        """#387 pinned a panel's idle tick at exactly one `stat`, and #488 made `bottom`
+        the tall slot AND the one animated slot — so the question that budget does not
+        answer on its own is whether a REPAINT scales with the pane's height. At
+        `panel.TICK` a repaint that cost a syscall per row would pay fourteen times over,
+        five times a second, for the length of every dispatch.
+
+        The sibling test above bounds `_table_lines` in isolation, handed a dict; this
+        one bounds the whole `slots.render("bottom", …)` a panel actually calls — the
+        gather read, the workspace resolve, the alerts and the todo count included — and
+        it bounds it DIFFERENTIALLY. An absolute number would have to be revised every
+        time the attention row learns a new field, and a revised number is not a budget.
+        The claim is that the count does not depend on how many rows are drawn, so the
+        same count at one repo and at `_MAX_REPO_LINES` is exactly the claim.
+
+        Primed first: `workspace.resolve` and friends memoise, so the first render of the
+        process pays for caches every later one reuses, and comparing an unprimed render
+        against a primed one would measure the priming.
+
+        **Counted at every spelling a walk could arrive by, not at `os.stat` alone.** The
+        thing being kept out is "touch the filesystem once per row", and a directory walk
+        does not spell itself `stat`: `Path.iterdir` is `os.scandir`, `Path.resolve` is
+        `os.lstat`, `Path.read_text` is `io.open` and not `builtins.open`, and a `git`
+        call is `subprocess.Popen` under `run`. Each of those is the next spelling this
+        budget would otherwise miss, so each is counted.
+
+        Measured on this branch: 45 calls for a 2-line repaint and the same 45, in the
+        same order, for a 15-line one."""
+        import builtins
+        import io
+        import subprocess as _sp
+        watched = {"os": (os, ("stat", "lstat", "scandir", "listdir")),
+                   "io": (io, ("open",)), "builtins": (builtins, ("open",)),
+                   "subprocess": (_sp, ("run", "Popen"))}
+
+        def _count(fid, n):
+            _seed(fid, current_repo="r0",
+                  repos=[_row(f"r{i}", dirty=True, ci="failed", change=i, sigil="!",
+                              worktree_count=2) for i in range(n)])
+            self._render(fid, cols=200, rows=1 + n)          # prime
+            seen: list[str] = []
+            patches = []
+            for mod_name, (mod, fns) in watched.items():
+                for fn in fns:
+                    real = getattr(mod, fn)
+                    tag = f"{mod_name}.{fn}"
+                    patches.append(mock.patch(
+                        tag,
+                        (lambda r, t: lambda *a, **k: (seen.append(t), r(*a, **k))[1])(
+                            real, tag)))
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                out = self._render(fid, cols=200, rows=1 + n)
+            return len(out.split("\n")), seen
+
+        short_lines, short = _count("cost-1", 1)
+        tall_lines, tall = _count("cost-many", statusline._MAX_REPO_LINES)
+        self.assertEqual(short_lines, 2)
+        self.assertEqual(tall_lines, 1 + statusline._MAX_REPO_LINES,
+                         "the tall render drew no more rows — this proves nothing")
+        self.assertTrue(short, "nothing was counted at all — the budget is vacuous")
+        self.assertEqual(sorted(tall), sorted(short),
+                         f"a {tall_lines}-row repaint cost {len(tall)} filesystem calls "
+                         f"where a {short_lines}-row one cost {len(short)} — the table "
+                         f"is doing per-row filesystem work")
+        self.assertNotIn("subprocess.run", tall, "a repaint started a process")
+        self.assertNotIn("subprocess.Popen", tall, "a repaint started a process")
+
     def test_a_failing_gather_read_yields_a_line_rather_than_an_exception(self):
         """A panel that raises leaves a hole in the frame — `slots.render`'s own promise,
-        pinned against a renderer that reaches into a real dependency."""
-        with mock.patch.object(gather, "read", side_effect=RuntimeError("boom")):
+        pinned against a renderer that reaches into a real dependency.
+
+        Rendered at a width the table is actually attempted at: below
+        `statusline._LEFT_W` there is no table, so `gather.read` is never reached and the
+        test would pass by never running the code it claims to bound."""
+        with mock.patch.object(gather, "read", side_effect=RuntimeError("boom")), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((200, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
             self.assertIn("charter", slots.render("bottom", "f-1"))
 
 
@@ -824,20 +957,32 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
 
     def test_a_plane_with_no_repos_wants_exactly_the_attention_row(self):
         _seed("f-1")
-        self.assertEqual(slots.bottom_rows_wanted("f-1"), 1)
+        self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200), 1)
 
     def test_it_grows_with_the_repos_and_the_pieces_alike(self):
         _seed("f-1", repos=[_row("a"), _row("b")],
               worktrees=[_row("p", repo="a")])
-        self.assertEqual(slots.bottom_rows_wanted("f-1"), 1 + 3)
+        self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200), 1 + 3)
 
     def test_it_is_capped_at_the_wide_tables_own_row_budget(self):
         """A workspace with forty clones must ask for a fifteen-row strip, not a
         forty-one-row one — `_MAX_REPO_LINES` is the same total-row budget the wide table
         keeps, reused rather than invented fresh."""
         _seed("f-1", repos=[_row(f"r{i}") for i in range(40)])
-        self.assertEqual(slots.bottom_rows_wanted("f-1"),
+        self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200),
                          1 + statusline._MAX_REPO_LINES)
+
+    def test_the_width_is_required_and_cannot_be_confused_with_the_row_count(self):
+        """Keyword-only, so the launcher cannot hand it a window HEIGHT and get a
+        plausible-looking number back. #500's defect was a caller that had the width and
+        did not pass it (`cmd_resize` measured it into `_cols`); a positional parameter
+        would have turned that into the next one silently passing the wrong measurement.
+        A missing width is a `TypeError` at the call site, not a default of "wide"."""
+        _seed("f-1", repos=[_row("a")])
+        with self.assertRaises(TypeError):
+            slots.bottom_rows_wanted("f-1")
+        with self.assertRaises(TypeError):
+            slots.bottom_rows_wanted("f-1", 200)
 
     def test_it_never_runs_a_git_sweep(self):
         """It is called on a launch the operator is waiting on, and again on every step
@@ -847,7 +992,21 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         _seed("f-1", repos=[_row("a")])
         with mock.patch("charter.frame.gather.scan",
                         side_effect=AssertionError("row_count ran a scan")):
-            self.assertEqual(slots.bottom_rows_wanted("f-1"), 2)
+            self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200), 2)
+
+    def test_a_narrow_frame_does_not_even_ask_how_many_repos_there_are(self):
+        """The launch path reaches `gather.row_count` with no cache by design
+        (`cmd_launch` calls `gather.discard` first), where it costs a directory listing.
+        Below `statusline._LEFT_W` the answer is one row whatever the count is, so the
+        listing is work with no reader — and `cmd_resize` would pay it again on every
+        step of a drag that is narrowing the terminal.
+
+        `row_count` itself is made to raise, so an implementation that asks and then
+        discards is a loud failure rather than a slow success."""
+        _seed("f-1", repos=[_row(f"r{i}") for i in range(6)])
+        with mock.patch("charter.frame.gather.row_count",
+                        side_effect=AssertionError("counted rows it had no room for")):
+            self.assertEqual(slots.bottom_rows_wanted("f-1", cols=80), 1)
 
 
 class RightRenderer(PersonaIso, unittest.TestCase):

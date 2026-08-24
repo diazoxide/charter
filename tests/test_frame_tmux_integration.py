@@ -1252,7 +1252,7 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
             self.assertEqual(r.returncode, 0, r.stderr)
             with mock.patch("charter.frame.slots.bottom_rows_wanted", return_value=6):
                 commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
-                                               window_rows=rows)
+                                               window_cols=cols, window_rows=rows)
             want = layout.slot_sizes(["top", "bottom"], window_rows=rows,
                                      content_rows=6)
             if rows == 20:

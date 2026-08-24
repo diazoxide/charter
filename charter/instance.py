@@ -405,10 +405,17 @@ FRAME_SLOTS = ("top", "bottom", "right")
 #: EDGES there are — the two that keep `bottom` differ in how many of its rows the table
 #: is allowed (`slots._TERSE_ROWS` at `terse`), and `full` is now "every edge charter
 #: has" with `left` retired out of it rather than "all four".
+#:
+#: **And the PANE is that many rows, not just the table (#500).** `slots._table_cap` is
+#: read by the launcher and the resize hook as well as by the renderer, so `terse` makes
+#: `bottom` genuinely shorter and hands the difference to the harness. As #488 shipped it
+#: only the renderer knew: `minimal` cost the harness exactly the rows `normal` did and
+#: drew fewer of them, which is the opposite of what the level is for.
 FRAME_DENSITY = {
     #: Top and bottom, each saying only the most important thing it has: one field on the
-    #: attention row, and at most `slots._TERSE_ROWS` rows of repo table under it. For a
-    #: terminal where the harness's own rows are what you came for.
+    #: attention row, and at most `slots._TERSE_ROWS` rows of repo table under it — so the
+    #: pane is that much shorter and the harness keeps the rest. For a terminal where the
+    #: harness's own rows are what you came for.
     "minimal": {"slots": ["top", "bottom"], "verbosity": "terse"},
     #: The same two edges, saying everything they have — the whole repo table, as tall as
     #: the window can spare it (`layout.HARNESS_MIN_ROWS` is what it may not take).
