@@ -95,9 +95,9 @@ charter consumes it and emits the wrapper:
 ```yaml
 tools: Read, WebFetch, Bash, mcp__reddit__*
 mcpServers:
-  - reddit: {"type": "stdio", "command": "charter", "args": ["secret", "exec", "reddit",
+  - {"reddit": {"type": "stdio", "command": "charter", "args": ["secret", "exec", "reddit",
       "--env", "REDDIT_CLIENT_ID=client-id", "--env", "REDDIT_CLIENT_SECRET=client-secret",
-      "--exec", "--", "uvx", "some-reddit-mcp"]}
+      "--exec", "--", "uvx", "some-reddit-mcp"]}}
 ```
 
 Three things it does on your behalf:
@@ -115,6 +115,21 @@ Three things it does on your behalf:
 
 Servers are **inherited and unioned** along `extends:`, parent first, child winning a name
 collision — the rule `tools` and `uses` already follow.
+
+### A server name is an identifier, and charter enforces that
+
+Letters, digits, `_`, `.` and `-`; 64 characters; the first one alphanumeric or `_`. A name
+outside that alphabet is **refused**, the server is not declared, and `sync-agents` and
+`charter persona lint` both say which name and which file.
+
+That is narrower than JSON allows, on purpose. The name is emitted as a key in the
+generated agent's YAML and as `mcp__<server>__*` in `tools:`, and it used to be pasted into
+both rather than serialised — so a newline in a committed name ended the YAML line and
+declared a **second** server, entry and all, which could be `charter secret exec` against
+any vault on the machine. Nothing on the consent path saw it: the carrier server declared
+no `secrets`, so there was nothing to fingerprint and nothing to prompt about (#453). A
+name this refuses that your host would have accepted costs you a rename in one committed
+file; the other direction cost the vaults.
 
 ### The wrapper is emitted only for a command you approved
 

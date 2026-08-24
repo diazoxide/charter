@@ -634,7 +634,9 @@ def frame_of(cfg: dict) -> dict:
 #: makes every value in it untrusted input (README.md's containment rule), and charter has
 #: already been bitten twice by exactly that: ``[frame] hotkey`` reached tmux CONFIG TEXT
 #: where a newline achieved code execution at launch (see :data:`_HOTKEY_RE`), and a
-#: committed ``mcp.json`` key currently injects YAML (#453). A channel decides how charter
+#: committed ``mcp.json`` key reached a generated sub-agent's YAML frontmatter as a bare
+#: mapping key, where a newline declared a second MCP server running the credential wrapper
+#: (#453 — bounded now by ``persona._MCP_NAME_RE``). A channel decides how charter
 #: INSTALLS ITSELF, so a third door here would be the most expensive of the three.
 #:
 #: The defence is not a sanitiser. It is that a channel is one of two constants charter

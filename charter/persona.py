@@ -303,6 +303,47 @@ def _csv_list(v) -> list[str]:
 #: snippet unchanged, which is the form these arrive in.
 MCP_FILE = "mcp.json"
 
+#: The shape an MCP server NAME may have, and the reason a committed `mcp.json` can no
+#: longer choose what the generated sub-agent runs (#453).
+#:
+#: A server name is not inert. `commands_persona._render_agent` emitted it as a **bare key**
+#: in the agent's YAML frontmatter (``  - {name}: {json}``) — `json.dumps` quoted the entry
+#: and nothing quoted the key — so a newline in it ended that line and declared a SECOND
+#: server, entry and all. The injected entry could be `charter secret exec <any vault>
+#: --exec -- <anything>`, and nothing on the consent path fired: the carrier server need
+#: declare no `secrets`, so there was no fingerprint, no prompt, and no withheld line. The
+#: run printed `✓ Synced 1 persona sub-agent(s)`. The same name is also interpolated into
+#: the tool grant ``mcp__{name}__*``, where a comma buys a second grant.
+#:
+#: Bounded HERE, at the boundary that reads the committed file, rather than escaped at each
+#: place it is emitted — the rule `contain`'s own docstring states, and the one `[frame]
+#: hotkey` follows after the identical defect reached tmux config text. The emission is
+#: serialised as well (see `_render_agent`), so neither layer is the only thing standing
+#: between a commit and a vault; this one is what makes the name an identifier rather than
+#: leaving that a hope.
+#:
+#: Deliberately narrower than "anything JSON can hold": ASCII letters, digits, ``_``, ``.``
+#: and ``-``, first character alphanumeric or ``_``, and 64 of them. That is the alphabet a
+#: real server name already uses — it has to survive `mcp__<server>__<tool>` on the host
+#: side — and the asymmetry is the same one `_HOTKEY_RE` names: a name this refuses that
+#: the host would have accepted costs a rename in one committed file, while a name this
+#: accepted and the YAML parsed as a declaration costs the machine's vaults.
+#:
+#: A refusal is NOT silent, which is where `[frame] hotkey` stopped: `mcp_refused` carries
+#: the names, `persona lint` reports each as an error and `sync-agents` warns as it writes.
+_MCP_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
+
+
+def mcp_name_ok(name) -> bool:
+    """True when *name* may be used as an MCP server name — see :data:`_MCP_NAME_RE`.
+
+    ``fullmatch``, and the pattern carries no ``^``/``$`` of its own, because ``$`` matches
+    **before a trailing newline**: an anchored `re.match` would accept ``"ok\\n"``, which is
+    the one shape this exists to refuse. A test holds that case by name.
+    """
+    return isinstance(name, str) and _MCP_NAME_RE.fullmatch(name) is not None
+
+
 #: A persona's own executables. The fifth capability, alongside memory, refs, ephemeral
 #: scratch and `mcp.json` — and the one whose absence kept a whole Claude Code plugin alive
 #: as a file carrier (#283).
@@ -370,10 +411,39 @@ def mcp_servers(name: str) -> dict:
     a name collision. A child that silently lost the server its parent declared would be a
     surprise, and this is the rule the rest of the frontmatter already follows.
 
+    **Every name here has passed :func:`mcp_name_ok`.** This is the one function every
+    consumer goes through — the render, the tool grant, `lint`, `mcp_credentialed`, the
+    line `persona use` prints — so bounding it here bounds all of them, and a consumer
+    added tomorrow inherits the bound instead of having to remember it. What was refused is
+    :func:`mcp_refused`, never discarded silently.
+
     Never raises. The file is hand-edited, and a stray comma in it must not take down
     `sync-agents` for every persona in the plane.
     """
-    out = {}
+    return _mcp_declared(name)[0]
+
+
+def mcp_refused(name: str) -> list[str]:
+    """The server names in this persona's lineage that :func:`mcp_name_ok` refused.
+
+    Reported, not swallowed. A dropped server is a working persona losing a capability,
+    and the value that caused it is in a committed file somebody has to edit — so `lint`
+    raises it as an error and `sync-agents` says so on the run that wrote the agent. The
+    names come back RAW; every caller renders them through `contain.one_line`, because the
+    refused ones are exactly the names that can hold a newline.
+    """
+    return _mcp_declared(name)[1]
+
+
+def _mcp_declared(name: str) -> tuple[dict, list[str]]:
+    """``(kept, refused)`` — the lineage's declared servers, split by :func:`mcp_name_ok`.
+
+    One read, two answers, so `mcp_servers` and `mcp_refused` cannot disagree about what
+    was in the file. A name is refused for the WHOLE lineage's answer at the point it is
+    read, so an ancestor cannot smuggle one in on behalf of a child.
+    """
+    out: dict = {}
+    refused: list[str] = []
     # REVERSED, and that is the whole fix for #296. `lineage()` is child-first, so feeding it
     # straight into `dict.update` — last write wins — let the most distant ancestor overwrite
     # the child: the exact inversion of the rule stated above. Nothing surfaced it, because
@@ -388,9 +458,17 @@ def mcp_servers(name: str) -> dict:
             servers = doc.get("mcpServers") or {}
         except (OSError, ValueError, AttributeError):
             continue
-        if isinstance(servers, dict):
-            out.update(servers)
-    return out
+        if not isinstance(servers, dict):
+            continue
+        for server, entry in servers.items():
+            # The bound, at the boundary (#453). NOT `out.update(servers)` any more: that
+            # handed every consumer a key straight out of a committed file, and one of them
+            # wrote it into YAML as a key.
+            if mcp_name_ok(server):
+                out[server] = entry
+            elif server not in refused:
+                refused.append(server)
+    return out, refused
 
 
 def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
@@ -1171,7 +1249,19 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     # keys. The wrapper charter emits is correct either way — only the run would fail — and
     # refusing to render would break `sync-agents` on a fresh clone (ADR 0013: name the
     # divergence, do not resolve it).
-    servers = mcp_servers(name)
+    servers, refused_names = _mcp_declared(name)
+    # A name `mcp_name_ok` refused. An ERROR, and named on its own line rather than folded
+    # into the count above: the server is not declared at all — the persona lost a
+    # capability — and the value that caused it is a string in a committed file that
+    # somebody has to edit. Rendered through `contain.one_line`, because a refused name is
+    # precisely the one that may hold a newline and forge a second issue line (#453).
+    for bad in refused_names:
+        issues.append(("error",
+                       f"mcp: server name '{contain.one_line(bad)}' is refused and the "
+                       f"server is not declared — a name is emitted into the generated "
+                       f"agent's YAML and into `mcp__<server>__*`, so it may hold only "
+                       f"letters, digits, '_', '.' and '-' (64 max). Rename it in "
+                       f"`{MCP_FILE}`"))
     if servers:
         vault = (resolve(name) or {}).get("meta", {}).get("vault")
         needs_secrets = sorted(s for s, e in servers.items() if (e or {}).get("secrets"))

@@ -60,8 +60,8 @@ Anything that is not exactly `stable` or `dev` is discarded and the plane stays 
 `stable`; the repository charter installs from is a constant in charter's own source, and
 no `charter.toml` can name a different one. That is not caution for its own sake. `[frame]
 hotkey` reached tmux config text where a newline achieved code execution at launch, and a
-committed `mcp.json` key currently injects YAML (#453). This would have been the third
-door, and the one that installs software.
+committed `mcp.json` key injected YAML into a generated sub-agent (#453, fixed since). This
+would have been the third door, and the one that installs software.
 
 **A pin and the dev channel are refused together.** `[charter] version` names a published
 release the whole team conforms to, and a dev build carries the *same* version number as

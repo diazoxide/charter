@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import os
 import stat
+import unicodedata
 from pathlib import Path
 
 #: Said once, so every site refuses in the same words. A reader who hits this has a defect
@@ -141,6 +142,56 @@ def child(base, name: str) -> Path | None:
 def refusal(name: str) -> str:
     """The one sentence every site uses to say why *name* was refused."""
     return NOT_A_SEGMENT.format(name=name)
+
+
+# --------------------------------------------------------------------------- #
+# the display layer — a committed value charter PRINTS back (#453)             #
+# --------------------------------------------------------------------------- #
+
+#: How much of a committed value charter repeats back on one report line, and a FIXED
+#: marker rather than a counted one: a budget a longer input makes longer is not a budget.
+#: Wide enough for a server name or a short command, narrow enough that a committed value
+#: cannot own the terminal.
+DISPLAY_LIMIT = 160
+
+#: Unicode general categories with no glyph of their own, escaped by :func:`one_line`.
+#: Named by CATEGORY rather than by codepoint, because a list of bad codepoints is a list
+#: somebody adds one to: ``Cc`` is every control character (``\n``, ``\r``, ``\t``, NUL,
+#: and the escape that starts an ANSI sequence), ``Cf`` every format character (the
+#: bidirectional overrides, the zero-width joiners), ``Cs`` a lone surrogate, and
+#: ``Zl``/``Zp`` the two separators that are not ``\n``.
+_INVISIBLE = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+
+
+def one_line(value, limit: int = DISPLAY_LIMIT) -> str:
+    """*value* as one line of a report, with nothing in it that can forge another.
+
+    **The property is line structure, not trustworthiness.** Charter's own reports —
+    `sync-agents`'s withheld list, `lint`'s issues, the consent line an operator reads
+    before approving a credential hand-off — are lines of the form ``  <name> → <command>``,
+    and every field in them comes out of a committed file. A newline in one of those
+    fields writes a second line that looks exactly as much like charter's own output as
+    the first, which is #453's mechanism one surface over: a value crossing into a format
+    with structure without being escaped for it.
+
+    So every character that has no glyph — see :data:`_INVISIBLE` — is replaced by its own
+    escape, and the result is clipped. What this does **not** do is make the value
+    trustworthy to read: ``I`` and ``l``, or a Cyrillic ``а`` and a Latin ``a``, are
+    ordinary letters this returns unchanged and a reader cannot tell apart. Those cannot
+    forge a line, which is the whole of what is claimed here. Where a value must be
+    *bounded* rather than merely displayable — an MCP server name, which charter emits
+    into YAML and into a tool-grant pattern — the bound belongs at the boundary that reads
+    it, and this is what the refusal then uses to say which value it refused.
+    """
+    s = value if isinstance(value, str) else str(value)
+    out = []
+    for ch in s:
+        if unicodedata.category(ch) in _INVISIBLE or (ch.isspace() and ch != " "):
+            out.append(f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    rendered = "".join(out)
+    return rendered if len(rendered) <= limit else rendered[:limit] + "…"
 
 
 # --------------------------------------------------------------------------- #

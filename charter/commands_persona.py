@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import commands_secrets, config, mcpseen, persona, trace, util
+from . import commands_secrets, config, contain, mcpseen, persona, trace, util
 from .secrets import base, registry
 
 #: The scaffold a new persona starts from.
@@ -606,8 +606,14 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
         # Declaring a server grants its tools. Otherwise `tools:` and the server list are
         # two hand-kept lists that must agree, and disagreement surfaces at DISPATCH time
         # as "unresolved entries" — a message about the symptom, not the cause.
+        #
+        # `mcp_name_ok` asked again here, one frame from the interpolation, even though
+        # `mcp_servers` already bounded every key it returned. A comma or a newline in this
+        # position writes an extra tool grant into `tools:`, and unlike the block below
+        # there is no serialiser to reach for — a comma-joined list has no quoting. This is
+        # the layer that holds if that boundary is ever loosened for some new name (#453).
         grants = [f"mcp__{s}__*" for s in servers
-                  if f"mcp__{s}" not in tools]
+                  if persona.mcp_name_ok(s) and f"mcp__{s}" not in tools]
         fm.append(f"tools: {', '.join([tools, *grants]) if grants else tools}")
     # No `agent-tools` means the sub-agent inherits every tool, so adding a narrowing
     # `tools:` line here to carry the grant would be a downgrade rather than a grant.
@@ -648,7 +654,18 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
             entry = persona.mcp_render_entry(name, vault, servers[server_name])
             # JSON, because JSON is valid YAML — this emits a nested block without
             # hand-rolling a YAML writer or taking a dependency to do it.
-            fm.append(f"  - {server_name}: {json.dumps(entry, ensure_ascii=False)}")
+            #
+            # The whole single-key mapping is serialised, KEY INCLUDED, and that is #453.
+            # This line used to be `f"  - {server_name}: {json.dumps(entry)}"`: the
+            # serialiser quoted the entry and an f-string pasted in the key, so a newline in
+            # a committed `mcp.json` key ended the line and declared a second server —
+            # `charter secret exec <any vault> --exec -- <anything>` — that no consent path
+            # could see, because the carrier entry declared no `secrets` and so had no
+            # fingerprint to ask about. `mcp_servers` now bounds the key, and this asks the
+            # serialiser for the quoting rather than trusting that bound to be the only
+            # thing between a commit and a vault. A quoted key is the same YAML mapping a
+            # bare one was; there is no reading of `{"reddit": {…}}` that differs.
+            fm.append("  - " + json.dumps({server_name: entry}, ensure_ascii=False))
     for k in _AGENT_PASSTHROUGH_KEYS:  # pass through when the charter sets them
         if meta.get(k):
             fm.append(f"{k}: {meta[k]}")
@@ -1450,6 +1467,12 @@ def cmd_persona_sync_agents(args) -> int:
     drafts = [n for n, o in outcomes.items() if o == "draft"]
     withheld = {n: persona.mcp_withheld(n) for n in written}
     withheld = {n: v for n, v in withheld.items() if v}
+    # A server name the committed sidecar chose and `mcp_name_ok` refused. Said on the run
+    # that wrote the agent, not left to `lint`: the persona is now running without a server
+    # it declares, and `[frame] hotkey` is the standing lesson — a bound that degrades in
+    # silence renders a clean green tick over a file somebody needs to fix (#453).
+    refused = {n: persona.mcp_refused(n) for n in written}
+    refused = {n: v for n, v in refused.items() if v}
 
     removed = []
     if not one and _agents_dir().exists():  # full sync also prunes orphaned generated agents
@@ -1467,6 +1490,15 @@ def cmd_persona_sync_agents(args) -> int:
                   "Finish it, drop the `draft: true` line, then re-run.")
     if removed:
         util.info("Removed stale generated agents: " + ", ".join(removed))
+    if refused:
+        util.warn(f"Refused {sum(len(v) for v in refused.values())} MCP server name(s): a "
+                  f"name is emitted into the generated agent's YAML and into "
+                  f"`mcp__<server>__*`, so it may hold only letters, digits, '_', '.' and "
+                  f"'-' (64 max). These servers are NOT declared in the agent:")
+        for n, names in sorted(refused.items()):
+            for bad in names:
+                util.info(f"  {n}/{contain.one_line(bad)}")
+        util.info(f"  Rename them in the persona's `{persona.MCP_FILE}` and re-run.")
     if withheld:
         # A warning, not an error: the agents were written and the personas still work.
         # What did not happen is the credential hand-off, and saying so in the words of
