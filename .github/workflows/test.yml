@@ -16,7 +16,8 @@ permissions:
 # reason: this workflow runs on every push and pull request, so a moved tag executes here
 # first and on the widest trigger — with a token that is read-only, which bounds the damage
 # without removing it. Dependabot moves these (`.github/dependabot.yml`);
-# `tests/test_workflows.py` refuses any ref that is not 40 hex characters.
+# `tests/test_workflows.py` reads these files as YAML and refuses any ref that is not a
+# full commit SHA, an image digest, or a file tracked in this repository.
 
 jobs:
   test:

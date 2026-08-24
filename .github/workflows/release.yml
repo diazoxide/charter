@@ -14,7 +14,9 @@ name: release
 #
 # Bumping a pin: read the diff for the range, then put the new SHA and its tag
 # here. Dependabot opens that pull request (`.github/dependabot.yml`); it does
-# not merge it. `tests/test_workflows.py` fails on any ref that is not 40 hex.
+# not merge it. `tests/test_workflows.py` reads these files as YAML — not as lines of
+# text — and fails on any ref that is not a full commit SHA, an image digest, or a file
+# tracked in this repository.
 #
 # Trigger: push a version tag.
 #   git tag v0.1.0 && git push origin v0.1.0
