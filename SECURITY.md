@@ -29,9 +29,19 @@ This is the part most worth reading before you trust charter with anything real,
 
 **What a vault protects against — and this is the whole point:** a secret value reaching
 the model's context window, and from there the transcript, the logs, and any summary fed
-into a later prompt. `charter secret exec` resolves the value inside charter's own process,
-places it in a child command's environment, and redacts every occurrence of it from
-whatever that command prints. The model names the secret; it never sees it.
+into a later prompt. `charter secret exec` resolves the value inside charter's own process
+and places it in a child command's environment. **The model names the secret and never
+types it.**
+
+**What that depends on, and it is not a footnote.** The model chooses the command charter
+runs. Redaction scrubs the value out of *captured* output, so a `curl -v` that echoes an
+`Authorization` header is masked — that is a net against an accidental echo, not a
+boundary. A command that *transforms* the value (`base64`, `rev`, a POST to a URL) is not
+scrubbed and cannot be, and `--exec` and `--stream` capture nothing and therefore redact
+nothing. So the guarantee is precisely this: **charter never prints the value into the
+conversation. Where the value goes after that is a property of the command you asked
+charter to run.** Read `charter secret exec <vault> -- <cmd>` with the same suspicion you
+would read `<cmd>` holding the credential directly, because that is what it is.
 
 **What a vault does not protect against.** The default provider stores values as
 **plaintext JSON at file mode 0600**. There is **no encryption at rest**. Anyone who can

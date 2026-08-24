@@ -34,8 +34,10 @@ A denial from these is **the rule working, not a bug** — the single most commo
 mistaken for a defect. Each prints why, because a developer who reads the reason learns the
 rule while one who reads a bare refusal files an issue.
 
-- **Secret leak.** A command whose argv would put a vault's contents into the transcript.
-  Needs argv *and* the plane's vault paths, so it cannot be expressed as a static rule.
+- **Secret leak.** A known file-reading program pointed at a vault path, or a charter
+  invocation carrying `--reveal`. Needs argv *and* the plane's vault paths, so it cannot be
+  expressed as a static rule. It is a name-based check on the argv it can see: an
+  interpreter, a wrapper prefix, or a program not on the list is not covered.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there

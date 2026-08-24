@@ -1,6 +1,6 @@
 ---
 name: browser
-description: Drive a real browser for a task that needs one — a web login, an end-to-end check, verifying a UI, reaching something behind auth — with credentials pulled from a vault so the password never enters the conversation. Use when browser automation needs to authenticate, or when several workers each need their own logged-in session.
+description: Drive a real browser for a task that needs one — a web login, an end-to-end check, verifying a UI, reaching something behind auth — with credentials pulled from a vault so charter hands the password to the browser instead of you typing it into the conversation. Use when browser automation needs to authenticate, or when several workers each need their own logged-in session.
 ---
 
 # Driving a browser with vault credentials
@@ -55,7 +55,10 @@ cross directories; they do not cross versions.
 
 `charter secret exec --dotenv` resolves vault keys into one 0600 temp file and points
 `PLAYWRIGHT_MCP_SECRETS_FILE` at it. You then refer to a secret **by name**; Playwright
-substitutes the value and redacts it from output, so it never reaches the transcript.
+substitutes the value and scrubs it from the output it captures, so a step that
+accidentally echoes it is masked. That is the same net the vault has, with the same limit:
+it is not a boundary. A step that *transforms* or forwards the value — a screenshot, an
+`eval`, a POST — is not scrubbed, so the credential goes wherever you sent it.
 
 > **`not open` is not a cue to re-open.** A second `open` with the same `-s=<name>` starts
 > a *new* browser and orphans the first — which is the one that is logged in. Worse, the
@@ -151,5 +154,5 @@ reaches the API through the same bridge the password came in on. Reading it any 
 - Never commit a session directory or a storage-state file — they carry live cookies, which
   are the credential in another form. The same goes for traces: a trace records requests
   with their headers and bodies, so tracing a bridged login writes the credential to disk
-  even though it never reached your transcript. `charter browser install` gitignores
+  even though charter kept it out of your transcript. `charter browser install` gitignores
   `.playwright-cli/` for exactly this.
