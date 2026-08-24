@@ -80,8 +80,26 @@ on that side. Every table lookup now tests the property instead — own key, str
 are all simply "not in the table", with no list of them anywhere to go stale. The test asks
 the JS runtime for that list rather than keeping a copy.
 
-**To adopt it: update charter.** The plugin is stamped with the version that wrote it, so
-`charter init` / `charter update` replaces it. A plugin you edited yourself is left alone
-and reported, as always — move it aside and run `charter reinit` to take this.
+**The same defect one layer up: charter decided the installed plugin was its own by
+reading a version comment.** The shim carries `// charter-version: X` on its first line,
+and until now that stamp was the whole test — `charter doctor`, `charter update` and
+`charter harness list` all took it as the answer to "is this plane wired". Line 1 is the
+one line an edit leaves alone. Keep it and put back the single line #433 *was* —
+`const hook = own(PRE_HOOKS, tool) ?? DEFAULT_PRE_HOOK` becomes the literal
+`"pretooluse"` — and every `read` goes to the Bash guard again, the vault-read guard
+absent on the harness, under a green `doctor` row saying the plugin is current. Deleting
+the plugin's whole body scored the same. That is #433's shape exactly, moved from the
+routing table into the file the routing table lives in, and it was checked by a name both
+times. charter now compares the installed file to the one it generates, **byte for byte**,
+and takes every "yes, this is ours" from that. There is nothing in a byte-for-byte
+comparison to respell.
+
+**To adopt it: update charter.** A plugin an older charter wrote is replaced by
+`charter init` / `charter update` — charter cannot regenerate that version to compare
+against, so it treats it as its own artifact to move. A plugin that is *not* what this
+charter generates is left exactly as it is and named on the `harness` row, whether or not
+it carries a stamp: diff it, then move it aside and run `charter reinit` to take this. The
+cost of being strict is a `doctor` warning on a shim you re-indented; the cost of being
+loose is the paragraph above.
 
 Found in the 2026-08-24 security audit (#433).

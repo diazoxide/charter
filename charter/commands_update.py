@@ -277,7 +277,7 @@ def cmd_update(args) -> int:
             util.warn(detail)
         stale = h.stale_wiring()
         if stale:
-            util.warn(f"this plane's {h.name} wiring was written by {stale} — "
+            util.warn(f"this plane's {h.name} wiring is {stale} — "
                       f"`charter reinit` adds what is missing.")
 
     ok, why = _handoff(target, installed)

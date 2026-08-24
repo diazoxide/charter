@@ -196,6 +196,19 @@ That closes the loop the hint was already promising. `doctor` said "→ charter 
 before `reinit` could fix this, and a hint that does not fix what it points at spends the
 operator's trust while leaving the guard inert.
 
+**Amended by #433 (2026-08-24): a stamp is a name, and the name was the whole test.** The
+paragraph above describes what shipped, and its weakness is that line 1 is the one line an
+edit leaves alone. A shim whose first line still reads `// charter-version: 0.51.0` and
+whose body has had its routing replaced by the literal `charter hook pretooluse` is #433
+back in full — every `read` at the Bash guard, the vault-read guard absent — and `doctor`
+printed a clean row over it, `charter update` reported it current, and `refresh_shim`
+declined to touch it. So `shim_is_charters` now compares the installed file to the one this
+charter generates, **byte for byte**, and every "this is ours" answer takes its yes from
+that. The stamp survives for the one question content cannot answer: what wrote a shim this
+charter cannot regenerate, which is how an older one is still recognised and moved. The
+restraint is unchanged in the direction that protects work — a file charter did not write
+is still never overwritten. It is only no longer vouched for.
+
 ## What this is NOT
 
 It is not two implementations of charter. The opencode integration is written concretely and

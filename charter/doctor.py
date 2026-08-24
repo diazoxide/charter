@@ -775,11 +775,13 @@ def check_harness() -> Result:
         from . import __version__
 
         return Result(name, WARN,
-                      detail=f"{current} — its plugin was written by {stale}, charter is "
+                      detail=f"{current} — its plugin is {stale}; charter is "
                              f"{__version__}",
-                      hint=("A plugin an older charter wrote is still a file where a "
-                            "working one belongs — 0.40.0's guard never fired. → charter "
-                            "reinit (an edited plugin is reported, never overwritten)"))
+                      hint=("A plugin charter did not write is still a file where a "
+                            "working one belongs — 0.40.0's guard never fired, and a "
+                            "current stamp over a changed body is the same silence with a "
+                            "reassuring first line. → charter reinit (a plugin charter "
+                            "cannot vouch for is reported, never overwritten)"))
     gaps = _harness.deficits(current)
     if not gaps:
         return Result(name, OK, detail=current)
