@@ -56,7 +56,14 @@ rule while one who reads a bare refusal files an issue.
   me*, not *stop knowing things*, and a published version number can never be reused.
 
 A seventh path is not a guard but an allowance: a binary the **active persona** declares in
-`tools:` runs without a prompt while that persona is active, and only then.
+`tools:` runs without a prompt while that persona is active, and only then. It approves the
+**binary**, so every argument rides along — which is why four things are never smoothed
+whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`, …),
+interpreters and wrappers whose argument is the real command (`bash -c`, `python3 -c`,
+`env`, `xargs`, `npx`, …), any command naming a vault file or charter's own `.charter/`
+state, and any tool added to that line after the session started — the gate answers within
+the set declared before this session could rewrite it, and `persona.md` is a file the model
+can write. Each of those is a fall back to the normal prompt; this path never denies.
 
 ## When a guard is wrong
 

@@ -107,8 +107,17 @@ class TestTheGeneratedCharterSaysWhichIsWhich(BorrowsIso):
         text = self._charter("steward")
         self.assertIn("release", text)
         self.assertIn("forge", text)
-        route_line = [ln for ln in text.splitlines() if "`forge`" in ln and "vault" in ln]
-        self.assertEqual(route_line, [])
+        route_line = [ln for ln in text.splitlines() if "`forge`" in ln]
+        self.assertTrue(route_line, "the routed persona must still be named")
+        line = route_line[0]
+        # This used to assert the word "vault" was ABSENT from the line, as a proxy for
+        # "it does not grant vault access". The proxy stopped holding when the line
+        # started saying the opposite in as many words — a prohibition mentioning the
+        # vault reads identically to a grant when the test greps for the noun (#440). So
+        # the assertion now says what it always meant: no grant, and an explicit refusal.
+        self.assertNotIn("Read their vault", line)
+        self.assertIn("not auto-approved for you", line)
+        self.assertIn("not yours to open", line)
 
     def test_without_borrows_the_wording_is_unchanged(self):
         self.p("forge", tools="gh")

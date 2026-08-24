@@ -236,8 +236,41 @@ def cmd_persona_use(args) -> int:
     scope = persona.set_active(args.name)
     util.ok(f"Active persona set to '{args.name}'{_scope_note(scope)}.")
     _warn_env(args.name)
+    _say_tool_ceiling(args.name)
     _say_mcp_boundary(args.name)
     return 0
+
+
+def _say_tool_ceiling(name: str) -> None:
+    """Say so when this persona's ``tools:`` has grown since the session began (#432).
+
+    The tool-gate answers within the set declared *before* this session could rewrite it,
+    because `persona.md` is a file the model can write and re-reading it on every call
+    made one approved edit into unprompted execution for the rest of the session. The
+    price of that is real and lands on a person: an operator adds a tool by hand, watches
+    it keep prompting, and has nothing to read that explains why.
+
+    So charter names the boundary rather than moving it — the same call
+    :func:`_say_mcp_boundary` makes directly below, for the same reason: a scoping claim
+    that is not true of the session you are in is worse than a sentence saying when it
+    becomes true.
+    """
+    try:
+        from . import toolgate
+        frozen = toolgate.frozen_tools(name)
+        if frozen is None:                    # no session to freeze against
+            return
+        added = sorted(persona.effective_tools(name) - frozen)
+    except Exception:
+        return
+    if not added:
+        return
+    util.info(f"  {len(added)} tool(s) declared since this session started: "
+              f"{', '.join(added)}.")
+    util.info("  Those still prompt HERE. The tool-gate answers within the set that "
+              "existed at session start — `tools:` is read from a file this session can "
+              "write, and freezing it is what stops an edit from becoming an unprompted "
+              "command. A new session picks them up.")
 
 
 def _say_mcp_boundary(name: str) -> None:
@@ -672,10 +705,13 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
             # tools", the tool-gate would refuse and the agent would have no idea why.
             uses_note = (
                 f"\n- **You may delegate to these personas: {joined}.** Hand them a sub-task "
-                f"(Agent tool, `subagent_type: <name>`). You do NOT hold their credentials "
-                f"and their tools are not auto-approved for you — that is what `borrows:` is "
-                f"for, and it is deliberate: doing their work yourself should cost more than "
-                f"handing it over."
+                f"(Agent tool, `subagent_type: <name>`). Their tools are not auto-approved "
+                f"for you, and their vaults are not yours to open — do not name one to "
+                f"`charter secret …`. That second half is a rule you keep, not a wall "
+                f"charter holds: nothing refuses the vault name (`docs/personas.md` → "
+                f"Reusing another persona), which is exactly why it is written here. That is "
+                f"what `borrows:` is for, and it is deliberate: doing their work yourself "
+                f"should cost more than handing it over."
             )
     if borrows:
         joined_b = ", ".join(f"`{b}`" for b in borrows)
