@@ -93,6 +93,17 @@ class TestSwitchingBranchesInTheRootIsRefused(PlaneRootCase):
         self.assertEqual(_decision(self.run_cmd(f"git -C {self.root} checkout feature",
                                                 cwd=self.clone)), "deny")
 
+    def test_a_global_config_flag_does_not_walk_past_it(self):
+        """`git -c <key>=<value> <sub>` puts a non-flag token where the subcommand is
+        expected, and the guard read the FIRST non-flag argument as the subcommand — so it
+        saw `advice.detachedHead=false`, recognised nothing, and stood aside. A one-flag
+        bypass, in the form this repo's own commit convention teaches
+        (`git -c commit.gpgsign=false commit`). Found while giving `reset` a guard of its
+        own (#401), which would have inherited the same blind spot."""
+        self.assertEqual(
+            _decision(self.run_cmd("git -c advice.detachedHead=false checkout feature")),
+            "deny")
+
     def test_the_denial_names_the_alternative(self):
         """A refusal that only says no gets worked around. The remedy is the same one
         `doctor` prints: the work belongs in a workspace clone."""

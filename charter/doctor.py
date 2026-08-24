@@ -402,11 +402,13 @@ def _stranded_push(root) -> tuple[str, str] | None:
     # it deletes this commit without a trace — the specific way #373's memories were lost.
     # A reader told only "it is unpushed" runs exactly that command next.
     #
-    # Describing it is not preventing it. `hooks._plane_root_branch_reason` refuses a branch
-    # move in the root and could refuse this too — its docstring left `reset` out for want of
-    # evidence, and #373 is the evidence. That is #401, kept separate because it is a new
-    # REFUSAL on the Bash path with its own false-positive cost (`git reset HEAD -- <path>`
-    # is an unstage and must stay runnable), not a fix to this row.
+    # Describing it is not preventing it, and since #401 something does prevent it:
+    # `hooks._plane_root_reset_reason` refuses that command in the plane root while the
+    # commits it would delete are on no remote. This row stays exactly as it was. The guard
+    # only fires when someone types the command, and it deliberately measures a narrower
+    # thing than this row reports — `--soft`/`--mixed` and an unstage go through, and so
+    # does everything from a shell charter is not inside. Saying it here is still the only
+    # way the operator hears about a stranded commit BEFORE reaching for the reset.
     return ("a memory commit was committed but never pushed",
             f"Push it with `charter save` before anything runs `git reset --hard "
             f"origin/{branch}` in {root}, which would delete it silently.{where}")

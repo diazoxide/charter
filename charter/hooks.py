@@ -728,15 +728,44 @@ def _ssh_prefix_hosts(forges: dict[str, object]) -> dict[str, str]:
     return out
 
 
-#: git subcommands that move HEAD from one branch to another. Deliberately short: `reset`,
-#: `rebase` and `merge` also rewrite the shared tree, but the evidence in #157 is about
-#: SWITCHING, and ADR 0008 asked for the command set to follow evidence rather than
-#: imagination. Widening it later is cheap; a guard that over-blocks gets disabled once and
-#: then protects nothing.
+#: git subcommands that move HEAD from one branch to another. Deliberately short: `rebase`
+#: and `merge` also rewrite the shared tree, but the evidence in #157 is about SWITCHING,
+#: and ADR 0008 asked for the command set to follow evidence rather than imagination.
+#: Widening it later is cheap; a guard that over-blocks gets disabled once and then
+#: protects nothing. `reset` was on that list of maybes until #373 supplied its evidence —
+#: it now has its own guard, with its own subject and its own remedy (see
+#: :func:`_plane_root_reset_reason`), because "HEAD moved between branches" and "commits
+#: were destroyed" are two findings and only one sentence can be the denial.
 _BRANCH_MOVERS = ("checkout", "switch")
 
 #: Flags that make one of the above CREATE a branch rather than move to an existing one.
 _BRANCH_CREATORS = ("-b", "-B", "-c", "-C")
+
+#: `git reset` modes that overwrite the WORKING TREE as they move HEAD. These are the forms
+#: that DESTROY: reset off a commit with one of them and the files that commit introduced
+#: are deleted from disk, leaving the reflog as the only copy of content that was never
+#: pushed.
+#:
+#: `--soft` and `--mixed` (the default) are deliberately absent. They take the branch off
+#: the same commits, but every byte stays in the working tree — so the very next `charter
+#: save` commits and pushes that content again, which is a recovery charter performs by
+#: itself without anyone knowing a commit was ever dropped. Denying them would buy nothing
+#: and would cost `git reset --soft HEAD~1`, the ordinary amend.
+#:
+#: `--merge` and `--keep` are in for the reason `--hard` is: both reset the tree to the
+#: target, so the dropped commits' files leave the disk exactly as `--hard` leaves it.
+#: Listing only `--hard` would leave a five-character bypass on the one refusal that
+#: exists because content was lost.
+_RESET_TREE_MODES = ("--hard", "--merge", "--keep")
+
+#: Global git options that take a SEPARATE value token, so a guard reading "the first
+#: non-flag argument" as the subcommand must step over the value too. Without this,
+#: `git -c commit.gpgsign=false reset --hard origin/main` presents `commit.gpgsign=false`
+#: as its subcommand, every guard below reads an invocation it has never heard of and
+#: stands aside, and a refusal is one flag wide. Not hypothetical: this repo's own commit
+#: convention is `git -c commit.gpgsign=false commit`, so `git -c …` is a form agents type
+#: already.
+_GIT_VALUE_OPTS = ("-c", "--config-env", "--git-dir", "--work-tree", "--namespace")
 
 
 def _git_target(cwd: str, args: list[str]) -> tuple[Path, list[str]]:
@@ -759,6 +788,49 @@ def _git_target(cwd: str, args: list[str]) -> tuple[Path, list[str]]:
         rest.append(args[i])
         i += 1
     return target, rest
+
+
+def _plane_root_git(cmd: str, cwd: str, root: Path):
+    """Yield ``(subcommand, args-after-it)`` for every git invocation in *cmd* that acts on
+    the PLANE ROOT — the walk both plane-root guards share.
+
+    Factored out rather than copied when the reset guard arrived (#401). Everything in here
+    is a trap one of the two guards already fell into once, and a second hand-written copy
+    of it would fall into them again on its own schedule: the `cd` tracking is #183's fix,
+    the `-C` handling is what stops the guard being scoped to the cwd, and `_GIT_VALUE_OPTS`
+    is what stops `git -c x=y <sub>` reading as a subcommand nobody guards. A guard's blind
+    spot is invisible — it looks exactly like the guard being present and never firing — so
+    the two of them share one pair of eyes.
+
+    The subcommand is yielded raw; deciding which ones matter is each guard's own business.
+    """
+    here = cwd
+    for _toks in _segment_argv(cmd):
+        prog, _env, args = _split_env(_toks)
+        base = os.path.basename(prog or "")
+        # A `cd` earlier in the SAME command moves where the later segments run. Without
+        # this the guard refused `cd workspaces/<ws>/<repo> && git checkout -b x` — which is
+        # the workflow its own denial message recommends, so the first time someone obeyed
+        # the message they were told they were doing the forbidden thing (#183).
+        if base == "cd":
+            dest = next((a for a in args[1:] if not a.startswith("-")), None)
+            if dest:
+                here = str(Path(here or ".") / dest) if not os.path.isabs(dest) else dest
+            continue
+        if base != "git":
+            continue
+        target, rest = _git_target(here, args)
+        i = 0
+        while i < len(rest) and rest[i].startswith("-"):
+            i += 2 if rest[i] in _GIT_VALUE_OPTS else 1
+        if i >= len(rest):
+            continue                        # global options only: no subcommand to judge
+        try:
+            if target.resolve() != root:
+                continue
+        except OSError:
+            continue
+        yield rest[i], rest[i + 1:]
 
 
 def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
@@ -789,32 +861,9 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     except OSError:
         return None
 
-    here = cwd
-    for _toks in _segment_argv(cmd):
-        prog, _env, args = _split_env(_toks)
-        base = os.path.basename(prog or "")
-        # A `cd` earlier in the SAME command moves where the later segments run. Without
-        # this the guard refused `cd workspaces/<ws>/<repo> && git checkout -b x` — which is
-        # the workflow its own denial message recommends, so the first time someone obeyed
-        # the message they were told they were doing the forbidden thing (#183).
-        if base == "cd":
-            dest = next((a for a in args[1:] if not a.startswith("-")), None)
-            if dest:
-                here = str(Path(here or ".") / dest) if not os.path.isabs(dest) else dest
-            continue
-        if base != "git":
-            continue
-        target, rest = _git_target(here, args)
-        sub = next((a for a in rest if not a.startswith("-")), "")
+    for sub, post in _plane_root_git(cmd, cwd, root):
         if sub not in _BRANCH_MOVERS:
             continue
-        try:
-            if target.resolve() != root:
-                continue
-        except OSError:
-            continue
-
-        post = rest[rest.index(sub) + 1:]
         # `--` separates refs from PATHS, and only what follows it is a path. Treating the
         # token itself as proof of a file restore let two real branch moves through:
         # `git checkout <branch> --` and `git checkout -b <new> --` both switch — verified
@@ -851,6 +900,132 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
             f"symptom looks like an unrelated bug. Branch work belongs in a workspace "
             f"clone: `charter workspace create <task>`, then `charter clone <repo>`. "
             f"Returning the root to its default branch is always allowed.")
+    return None
+
+
+def _unpushed_at_risk(root: Path, target: str) -> tuple[int, str] | None:
+    """``(commits destroyed, upstream ref)`` if resetting *root* to *target* would take
+    commits off the branch that exist NOWHERE ELSE, else ``None``.
+
+    One question, one git call::
+
+        git rev-list --count HEAD --not <target> @{upstream} --
+
+    which counts commits reachable from HEAD but from neither the reset target nor the
+    tracked upstream — precisely "what this command would delete and no remote has a copy
+    of". Three things fall out of asking it that way rather than asking `doctor`'s
+    ``ahead`` count on its own:
+
+    * **`git reset --hard HEAD` stays allowed.** It destroys uncommitted work, which is a
+      different hazard with a different owner (`doctor` already counts dirty files), and it
+      takes no commit off the branch. The count comes back 0 and the guard says nothing.
+    * **A synced root stays unguarded.** `git reset --hard HEAD~1` over a commit that is on
+      the remote is recoverable in one fetch, so it is ordinary work and not this guard's
+      business.
+    * **A path is not a ref.** `git reset --hard <file>` is a thing people type, reaching for
+      "throw away my edit to this one". Left to itself git will read that operand as a
+      *pathspec* and answer with a count of the commits that touched the file — a denial
+      about a command that does nothing. Two things in the operand list stop it: the
+      trailing ``--`` marks everything before it as revisions, and `@{upstream}` cannot be a
+      path either, so git fails the whole call. The ``--`` is redundant against today's
+      operand list and stays anyway, because whether an unstage keeps working should not
+      depend on which other refs happen to be in it.
+
+    ``None`` on any non-zero exit, which is also the honest answer for a root with no
+    tracking branch: `@{upstream}` does not resolve, charter cannot say what is or is not
+    published, and a guard that fired on a plane `git init`-ed by hand would be refusing
+    on a fact it does not have. That is the same silence `doctor` keeps about drift there.
+
+    Never raises: this is on the ``PreToolUse`` path, where an exception is a broken turn.
+    """
+    from . import util as _util
+    from .doctor import _git_in
+    try:
+        r = _git_in(root, "rev-list", "--count", "HEAD", "--not", target, "@{upstream}", "--")
+        if r.returncode != 0:
+            return None
+        n = int(r.stdout.strip() or 0)
+        if n <= 0:
+            return None
+        up = _git_in(root, "rev-parse", "--abbrev-ref", "@{upstream}")
+        name = up.stdout.strip() if up.returncode == 0 else ""
+    except (_util.ProcTimeout, OSError, ValueError):
+        return None
+    return n, name or "its upstream"
+
+
+def _plane_root_reset_reason(cmd: str, cwd: str) -> str | None:
+    """Deny a `git reset` that would DESTROY unpushed commits in the plane root (#401).
+
+    #157 gave the branch guard its evidence and #373 gives this one its own: eleven memory
+    commits were destroyed in a single session by `git reset --hard origin/main` run in the
+    plane root. That is not an exotic command — it is the standard move on noticing a branch
+    is ahead of its remote for reasons you did not intend, which is exactly the state a
+    protected-branch rejection of the reactive memory push leaves behind. #373 taught
+    `doctor` and the status line to *name* the hazard every turn. Naming is not preventing,
+    and the plane root already had a guard one subcommand away from covering it.
+
+    Three narrowings keep it a guard rather than a cage. The first two are about commands
+    that must keep running; the third is about the denial not being a dead end:
+
+    * **Only the modes that destroy.** See `_RESET_TREE_MODES`: `--soft` and `--mixed` leave
+      the content on disk for the next `charter save` to re-land, so they are allowed.
+    * **Only a reset that actually drops something unpublished.** `_unpushed_at_risk` is the
+      whole condition — no ref (`git reset --hard` discards uncommitted work only), a path
+      (`git reset HEAD -- <file>`, the unstage, the commonest `reset` there is), a target of
+      `HEAD`, or a root already level with its remote — each of those leaves the guard
+      silent. In the ordinary case it never speaks.
+    * **The remedy stays executable, and the guard clears itself.** `charter save` pushes
+      the commits; the moment they land, the count is 0 and the same reset runs. The denial
+      says both that and how to see what would have been lost, because a refusal whose
+      subject you cannot inspect is one you route around.
+
+    Costs at most one `rev-list` per candidate, and a candidate needs a `reset`, a
+    tree-overwriting mode and a ref, all aimed at the plane root — so the Bash path's common
+    case still exits on a string comparison.
+    """
+    # This is the SECOND guard on the plane root, and it runs on every Bash call the first
+    # one let through, so it does not pay for a shell parse it cannot use. Sound rather than
+    # heuristic: the only thing below that can deny is a subcommand token equal to `reset`,
+    # and a token cannot be in the argv without its characters being in the string.
+    if "reset" not in cmd:
+        return None
+    from . import config as _cfg
+    try:
+        root = Path(_cfg.ROOT).resolve()
+    except OSError:
+        return None
+
+    for sub, post in _plane_root_git(cmd, cwd, root):
+        if sub != "reset":
+            continue
+        if not any(a in _RESET_TREE_MODES for a in post):
+            continue
+        # Same reading of `--` the branch guard settled on: what FOLLOWS the separator is
+        # what makes it a path form, not the token's presence. Anything after it and this
+        # is `git reset <ref> -- <paths>`, which rewrites the index for those paths and
+        # never moves HEAD.
+        if "--" in post:
+            cut = post.index("--")
+            if post[cut + 1:]:
+                continue
+            post = post[:cut]
+        target = next((a for a in post if not a.startswith("-")), None)
+        if target is None:
+            continue    # `git reset --hard` with no ref moves HEAD nowhere: no commit dies
+        at_risk = _unpushed_at_risk(root, target)
+        if not at_risk:
+            continue
+        n, upstream = at_risk
+        commits = "commit" if n == 1 else "commits"
+        return (
+            f"would delete {n} {commits} from the PLANE ROOT that {'is' if n == 1 else 'are'} "
+            f"not on {upstream}, and this reset overwrites the working tree — their content "
+            f"leaves the disk with the reflog as the only copy. An unpushed commit here is "
+            f"usually a memory commit whose push a protected branch refused, which is how "
+            f"eleven of them were lost. See exactly what would go: "
+            f"`git -C {root} log --oneline '@{{upstream}}..HEAD'`. Keep it: `charter save` "
+            f"pushes it, and this reset stops being refused the moment it lands.")
     return None
 
 
@@ -1324,6 +1499,15 @@ def pretooluse() -> int:
     if branch:
         _deny("PreToolUse", branch)
         _trace("deny", sid, reason="plane-root-branch", cmd=head)
+        return 0
+    # A3b: and refuse a `git reset` in the root that would destroy commits no remote has
+    # (#401). Same gate, a separate guard: A3's subject is "HEAD moved between branches"
+    # and this one's is "commits were destroyed" — different prose, different remedy, and
+    # this one only speaks when it has measured that something really would be lost.
+    wipe = _plane_root_reset_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
+    if wipe:
+        _deny("PreToolUse", wipe)
+        _trace("deny", sid, reason="plane-root-reset", cmd=head)
         return 0
     # A4: an unattended run may not publish (#299). It used to matter that this ran before
     # the clone nudge — that nudge matched `tag`/`push` and stopped releases by accident
