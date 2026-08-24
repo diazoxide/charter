@@ -1962,13 +1962,35 @@ def check_plugin_freshness() -> Result:
     the SessionStart preflight print; a plugin whose skills are a week old is not a reason
     to shout at every session start on every plane.
     """
+    name = "plugin files"
+    try:
+        return _plugin_freshness(name)
+    except Exception as e:
+        # The row-level guard every network-touching check here already has, for the
+        # reason `doctor._checks()` makes unavoidable: it is an eager list literal with no
+        # per-check guard, so one raising check returns NO rows at all — and
+        # `hooks/hooks.json` renders a non-zero `charter doctor` as "charter preflight
+        # failed - fix before working:" at every SessionStart. `plugincache` returns
+        # rather than raises on every path it owns; this is the belt for the paths it
+        # does not.
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+
+
+def _plugin_freshness(name: str) -> Result:
+    """The body of :func:`check_plugin_freshness`, which owns the story and the guard."""
     from . import channel, config as _config, plugincache
 
-    name = "plugin files"
     dev = channel.is_dev()
     if not plugincache.available():
         return Result(name, OK, detail="no `claude` on PATH — no Claude Code plugin here")
     entry = plugincache.installed_charter_plugin(_config.ROOT)
+    if entry is plugincache.UNKNOWN:
+        # NOT the green "not installed" below. An older `claude` that does not understand
+        # `--json` answers here, and that is the population most likely to be running a
+        # stale plugin — reporting a tick over it is the #171 defect exactly.
+        return Result(name, WARN,
+                      detail="not checked (could not read `claude plugin list --json`)",
+                      hint=_NOT_CHECKED_HINT)
     if entry is None:
         return Result(name, OK, detail="the charter plugin is not installed here")
     install_path = entry.get("installPath")

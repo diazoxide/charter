@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import __version__, commands_update, config, hooks, update
+from charter import __version__, commands_update, config, hooks, update, util
 from tests._isolation import PersonaIso
 
 
@@ -74,6 +74,21 @@ class TheDevRequirementIsAConstant(unittest.TestCase):
             first.append("--dangerous")
             second = commands_update.dev_install_argv()[1]
         self.assertNotIn("--dangerous", second)
+
+    def test_the_argv_comes_back_verbatim_with_no_format_call_on_the_path(self):
+        """`dev_install_argv`'s docstring says "there is no format call on this path", and
+        that claim is the whole reason it is a separate function from `_sync_to`.
+
+        Pinned with a canary, because `DEV_SPEC` deliberately carries no braces (asserted
+        above): a `str.format` added to this line would be a silent no-op TODAY and a live
+        interpolation point between a committed config file and an install command the day
+        the spec gains a placeholder. The canary makes the mutation visible now instead.
+        """
+        canary = "git+https://example.invalid/{version}@{ref}"
+        with mock.patch.dict(commands_update._DEV_INSTALLERS, {"uv": ["uv", canary]}), \
+                mock.patch.object(commands_update, "installer_for",
+                                  return_value=("uv", [])):
+            self.assertEqual(commands_update.dev_install_argv()[1], ["uv", canary])
 
     def test_an_install_charter_does_not_own_is_named_rather_than_guessed_at(self):
         with mock.patch.object(commands_update, "installer_for",
@@ -261,6 +276,63 @@ class APinAndTheDevChannelAreNotSettledSilently(PersonaIso):
     def test_a_dev_plane_with_no_pin_is_silent(self):
         self._declare('schema = 1\n[update]\nchannel = "dev"\n')
         self.assertIsNone(hooks._autosync_version_lock())
+
+    def test_a_pin_equal_to_the_running_version_is_silent_on_dev_too(self):
+        """The common shape of the conflict — *pin the current release AND opt into dev* —
+        and the one case the guard deliberately does not speak up about.
+
+        The dev check sits BELOW `locked == __version__`, so a plane in this state says
+        nothing. That is correct rather than a gap: a dev build carries the same version
+        number as the release it was built from, so while the two agree there is nothing to
+        install and nothing to undo. The moment the pin moves — a teammate bumps it after
+        the next release — the equality breaks, the guard fires, and it fires at exactly
+        the moment it would otherwise have reinstalled the wheel over the dev build.
+
+        The test above uses `9.9.9`, so it never reached this case; without this one,
+        moving the guard ABOVE the equality return (turning a benign state into a message
+        on every single session) would have been invisible.
+        """
+        self._declare(f'schema = 1\n[charter]\nversion = "{__version__}"\n'
+                      f'[update]\nchannel = "dev"\n')
+        from charter import commands
+        with mock.patch.object(commands, "sync_to") as sync:
+            self.assertIsNone(hooks._autosync_version_lock())
+        sync.assert_not_called()
+
+
+class TheRefreshIsNeverFatal(PersonaIso):
+    """`_refresh_plugin` promises "best-effort, never fatal", and by the time it runs the
+    CLI has already been replaced and the harness artifact already moved.
+
+    An exception escaping here ends a SUCCESSFUL update in a traceback — and `force_refresh`
+    calls `util.run` with a 120s timeout, so `ProcTimeout` was a live path, as was a
+    `claude` removed from PATH between `shutil.which` and the exec.
+    """
+
+    def _refresh_with(self, error):
+        from charter import plugincache
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                mock.patch.object(plugincache, "force_refresh", side_effect=error):
+            commands_update._refresh_plugin()      # must simply return
+
+    def test_a_timeout_out_of_force_refresh_does_not_escape(self):
+        self._refresh_with(util.ProcTimeout(["claude"], 120))
+
+    def test_a_missing_binary_does_not_escape(self):
+        self._refresh_with(FileNotFoundError("claude"))
+
+    def test_force_refresh_itself_returns_rather_than_raising_on_a_timeout(self):
+        """The layer below: the guard in `_refresh_plugin` is the belt, and this is the
+        braces. Both, because `plugincache.force_refresh` is also called directly."""
+        from charter import plugincache
+        rows = [{"id": "charter@charter", "scope": "user", "installPath": "/y"}]
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                mock.patch.object(plugincache, "_claude_json", return_value=rows), \
+                mock.patch.object(plugincache.util, "run",
+                                  side_effect=util.ProcTimeout(["claude"], 120)):
+            ok, detail = plugincache.force_refresh()
+        self.assertFalse(ok)
+        self.assertTrue(detail)
 
 
 class TheSharedInstallNoteStillApplies(unittest.TestCase):

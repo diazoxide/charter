@@ -38,12 +38,35 @@ from pathlib import Path
 
 from . import util
 
-#: How long any one `claude plugin …` call may take. `list` measured at ~0.2s; `install`
-#: fetches from the marketplace clone on disk but `marketplace update` reaches the network,
-#: so the budget is the network one. Bounded rather than open-ended because `doctor` runs
-#: as a SessionStart preflight with a 20s budget for every check it makes.
-LIST_TIMEOUT = 15
+#: How long a `claude plugin … --json` READ may take, in seconds.
+#:
+#: **Equal to `doctor.CHECK_TIMEOUT`, and a test pins the two together.** These reads run
+#: inside a `doctor` check, and `doctor` runs as a SessionStart preflight whose whole hook
+#: budget is 20s — so a per-call budget of 15s, made twice, was 30s against 20s. The first
+#: version of this constant cited that 20s budget in its own comment while exceeding it,
+#: which is exactly the mistake `CHECK_TIMEOUT` exists to make impossible. Measured cost is
+#: 0.22s and 0.27s; the number only matters in the pathological case, which is the only
+#: case it is for.
+LIST_TIMEOUT = 5.0
+
+#: The mutating half is a different budget because it is a different job: `marketplace
+#: update` fetches from GitHub and `install` copies a repository-sized tree. It runs from
+#: `charter update` — a command a person typed and is waiting on — never from a check.
 REFRESH_TIMEOUT = 120
+
+#: "I could not look", as distinct from "there is nothing installed".
+#:
+#: Not the same answer, and `doctor` renders them differently: an absent plugin is a green
+#: row (CLI-only is a supported install), while a `claude plugin list` that could not be
+#: read is a WARN carrying `_NOT_CHECKED_HINT`. Collapsing them into one ``None`` put a
+#: green *"the charter plugin is not installed here"* in front of anyone whose `claude` is
+#: too old to understand `--json` — precisely the population most likely to be running a
+#: stale plugin, and precisely the defect the #171 audit removed everywhere else ("a check
+#: that silently does nothing is worse than no check").
+#:
+#: A sentinel compared with ``is``, rather than a third return type: the same shape
+#: `hooks.dispatched_handlers` uses to keep the same distinction.
+UNKNOWN = object()
 
 #: The directories a Claude Code plugin actually LOADS, and therefore the only ones whose
 #: drift means anything.
@@ -78,6 +101,12 @@ _SCOPES = ("user", "project", "local")
 #: The marketplace-side half of the same rule.
 _MARKETPLACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
+#: The one plugin id charter recognises as its own — see :func:`installed_charter_plugin`
+#: for why this is exact rather than `charter@<any marketplace>`. Both halves are the
+#: ``name`` in charter's own ``.claude-plugin/plugin.json`` and ``marketplace.json``, and
+#: `tests/test_plugin.py` already pins those two to each other.
+PLUGIN_ID = "charter@charter"
+
 
 def available() -> bool:
     """True when the `claude` CLI is on PATH. False is an ordinary answer, not a fault —
@@ -91,12 +120,32 @@ def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT):
 
     ``None`` and ``[]`` are different answers and both are load-bearing downstream: "I
     could not look" must never render as "there is nothing installed", which is the
-    confidently-wrong output `hooks.dispatched_handlers` documents at length.
+    confidently-wrong output `hooks.dispatched_handlers` documents at length. See
+    :data:`UNKNOWN` for how the caller keeps that distinction.
+
+    **Every way out is a return, never a raise**, and that is not defensive padding — it
+    is what stops one row taking the whole preflight down. `doctor._checks()` builds its
+    results with an eager list literal and has no per-check guard, and `hooks/hooks.json`
+    renders a non-zero `charter doctor` as *"charter preflight failed - fix before
+    working:"* at every SessionStart. A `claude` that does not return therefore printed
+    **zero rows** and a scary line, which is the precise failure `iter_all`'s streaming and
+    :data:`~charter.doctor.CHECK_TIMEOUT` were introduced to prevent.
+
+    Two exceptions get out of `util.run` and both are real:
+
+    * `util.ProcTimeout` — a `claude` that hangs. `util.run` raises it regardless of
+      ``check``, so ``check=False`` does not cover it.
+    * `OSError` — `shutil.which` in :func:`available` and the exec here are two moments,
+      and a `claude` removed between them is a `FileNotFoundError` that would otherwise
+      reach the crash reporter.
     """
     if not available():
         return None
-    proc = util.run(["claude", "plugin", *args, "--json"], cwd=cwd, check=False,
-                    timeout=timeout)
+    try:
+        proc = util.run(["claude", "plugin", *args, "--json"], cwd=cwd, check=False,
+                        timeout=timeout)
+    except (util.ProcTimeout, OSError):
+        return None
     if proc.returncode != 0:
         return None
     try:
@@ -105,9 +154,18 @@ def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT):
         return None
 
 
-def installed_charter_plugin(prefer_project=None) -> dict | None:
-    """The installed charter plugin entry, or ``None`` when there is not exactly one to act
-    on.
+def installed_charter_plugin(prefer_project=None):
+    """The installed charter plugin entry — or :data:`UNKNOWN`, or ``None``.
+
+    **Three answers, because there are three states**, and the middle one is the whole
+    point:
+
+    * an entry — charter's plugin is installed and charter is willing to act on it;
+    * :data:`UNKNOWN` — `claude plugin list --json` could not be read. An older `claude`
+      that does not understand ``--json``, a hang, a `claude` removed from PATH mid-call,
+      malformed output. Nothing is known.
+    * ``None`` — the list was read and charter's plugin is not in it. CLI-only is a
+      supported install (`docs/install.md`), so this is an ordinary, green state.
 
     *prefer_project* picks between several. charter's plugin is normally installed at
     ``project`` scope, once per project, and every one of those installs points at the SAME
@@ -116,21 +174,36 @@ def installed_charter_plugin(prefer_project=None) -> dict | None:
     project's `claude plugin` invocation performs it, and running it against the plane you
     are standing in is the least surprising choice.
 
-    Returns the raw entry (``id``, ``scope``, ``installPath``, ``projectPath``) with the
-    two fields that reach an argv already validated — an entry charter would refuse to act
-    on is not returned at all, so no caller has to remember to check.
+    The returned entry has the two fields that reach an argv already validated — an entry
+    charter would refuse to act on is not returned at all, so no caller has to remember to
+    check.
+
+    **Only ``charter@charter``.** `docs/install.md` says `claude plugin marketplace add
+    diazoxide/charter`, and the name a marketplace registers under is the one its own
+    `marketplace.json` declares — ``charter`` — so that is the id anyone who followed the
+    documentation has. Matching `charter@<anything>` instead would let charter UNINSTALL a
+    plugin called `charter` published by somebody else's marketplace, which is not
+    charter's to touch. A plugin outside that id reads as "not installed" here, which is
+    the honest answer: charter cannot identify it as its own.
     """
     entries = _claude_json(["list"])
+    if entries is None:
+        return UNKNOWN
     if not isinstance(entries, list):
-        return None
+        return UNKNOWN          # `--json` answered something that is not a list of rows
     ours = []
     for e in entries:
         if not isinstance(e, dict):
             continue
         pid = e.get("id")
-        if not isinstance(pid, str) or not _PLUGIN_ID_RE.match(pid):
-            continue
-        if pid.split("@", 1)[0] != "charter":
+        # Equality against a module constant, and NOT also `_PLUGIN_ID_RE` — which used to
+        # sit on the line above and became dead the moment this narrowed to one id. An
+        # equality test against a constant is strictly stronger than any pattern: what
+        # survives it IS the constant. The regex was kept for a while as "defence in
+        # depth", which is the honest name for a check no test can distinguish from its own
+        # absence; `refresh_argvs` still applies it, because that function takes an id from
+        # a caller rather than producing one.
+        if pid != PLUGIN_ID:
             continue
         if e.get("scope") not in _SCOPES:
             continue
@@ -149,9 +222,10 @@ def installed_charter_plugin(prefer_project=None) -> dict | None:
 def marketplace_clone(name: str) -> Path | None:
     """Where the marketplace named *name* is cloned, or ``None``.
 
-    *name* comes from a plugin id charter has already matched against
-    :data:`_PLUGIN_ID_RE`; it is re-checked here because this function is also reachable
-    on its own, and a path built from an unchecked name is a path.
+    Its one caller in `doctor` splits *name* off :data:`PLUGIN_ID`, so it is a constant by
+    the time it arrives. Checked anyway, because that is a fact about today's callers and
+    not about this function: it is reachable on its own, and a path built from an unchecked
+    name is a path.
     """
     if not isinstance(name, str) or not _MARKETPLACE_RE.match(name):
         return None
@@ -270,13 +344,26 @@ def force_refresh(prefer_project=None) -> tuple[bool, str]:
     a `claude plugin` call that failed.
 
     **This is not a rollback-capable operation.** The uninstall step is what makes the
-    install step do anything, so a failure between them leaves the plugin uninstalled for
-    that scope — recoverable with the one command named in the returned detail, and named
-    there for exactly that reason.
+    install step do anything, so a failure between them leaves the plugin **uninstalled**
+    for that scope. That is the one outcome that must not be reported as a generic command
+    failure: the returned detail leads with what the operator now has and the command that
+    restores it, because by the time this runs the CLI has already been replaced and the
+    harness artifact already moved — the operator is several steps in, and a line naming
+    only the argv that failed leaves them to work out that a plugin went missing.
+
+    **It never raises.** `_refresh_plugin` promises "best-effort, never fatal", and that
+    promise was false while `util.run` here was unguarded: `ProcTimeout` at 120s, or a
+    `claude` removed from PATH between :func:`available` and the exec, propagated out
+    through `_update_dev` and `cmd_update` — turning a plugin that could not be refreshed
+    into an update that ends in a traceback, after the install it was reporting on
+    succeeded.
     """
     if not available():
         return False, "the `claude` CLI is not on PATH, so there is no plugin to refresh"
     entry = installed_charter_plugin(prefer_project)
+    if entry is UNKNOWN:
+        return False, ("could not read `claude plugin list --json`, so charter does not "
+                       "know what is installed and will not uninstall anything")
     if entry is None:
         return False, "no charter plugin is installed here (`claude plugin list`)"
     argvs = refresh_argvs(entry["id"], entry["scope"])
@@ -289,10 +376,30 @@ def force_refresh(prefer_project=None) -> tuple[bool, str]:
     cwd = entry.get("projectPath") if entry.get("scope") == "project" else None
     if cwd is not None and not Path(cwd).is_dir():
         cwd = None
+    uninstalled = False
     for argv in argvs:
-        proc = util.run(argv, cwd=cwd, check=False, timeout=REFRESH_TIMEOUT)
+        try:
+            proc = util.run(argv, cwd=cwd, check=False, timeout=REFRESH_TIMEOUT)
+        except (util.ProcTimeout, OSError) as e:
+            return False, _failed(argv, str(e) or type(e).__name__, uninstalled, argvs[2])
         if proc.returncode != 0:
             why = (proc.stderr or proc.stdout or "").strip().splitlines()
-            detail = why[-1][:200] if why else f"exit {proc.returncode}"
-            return False, f"`{' '.join(argv)}` failed: {detail}"
+            return False, _failed(argv, why[-1][:200] if why else f"exit {proc.returncode}",
+                                  uninstalled, argvs[2])
+        if argv is argvs[1]:
+            uninstalled = True
     return True, f"{entry['id']} reinstalled from the marketplace clone"
+
+
+def _failed(argv: list[str], why: str, uninstalled: bool, reinstall: list[str]) -> str:
+    """The detail line for a refresh that stopped part-way.
+
+    Two different sentences for two different states, because they need two different
+    things from the reader. Before the uninstall, nothing has changed and the failed
+    command is the whole story. After it, the plugin is GONE for that scope and the reader
+    needs the command that brings it back before they need to know which step broke.
+    """
+    if not uninstalled:
+        return f"`{' '.join(argv)}` failed: {why}"
+    return (f"the plugin is now UNINSTALLED — `{' '.join(argv)}` failed ({why}). "
+            f"Restore it: {' '.join(reinstall)}")

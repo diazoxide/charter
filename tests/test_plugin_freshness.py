@@ -30,7 +30,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import config, doctor, plugincache
+from charter import config, doctor, plugincache, util
 from tests._isolation import PersonaIso
 
 REPO = Path(__file__).resolve().parents[1]
@@ -43,6 +43,18 @@ def tree(root: Path, files: dict[str, str]) -> Path:
         p.write_text(body)
     return root
 
+
+#: Top-level directories this repo ships that a Claude Code plugin does NOT load.
+#:
+#: The other half of the classification `test_every_top_level_directory_is_classified`
+#: enforces. `.claude/` is here rather than in the surface on purpose: a plugin's agents
+#: live in `<plugin>/agents/`, and this repo's `.claude/agents/` is its OWN project
+#: configuration, which travels into the cache because the marketplace entry is
+#: `"source": "./"` and is not loaded as plugin content.
+_NOT_PLUGIN_SURFACE = {
+    ".git", ".github", ".claude", "charter", "docs", "tests", "personas", "workspaces",
+    "dist",
+}
 
 PLUGIN = {
     ".claude-plugin/plugin.json": '{"name": "charter", "version": "0.51.0"}',
@@ -113,18 +125,36 @@ class TheHashCoversWhatThePluginLoads(PersonaIso):
         left, _ = self._pair()
         self.assertNotEqual(plugincache.content_hash(empty), plugincache.content_hash(left))
 
-    def test_the_surface_names_every_plugin_directory_this_repo_actually_ships(self):
-        """The constant is a whitelist, so a directory missing from it is a category of
-        drift this module reports as clean. Asserted against the repo rather than against a
-        second hardcoded list — a plugin directory added to charter that nobody adds here
-        fails this, at the moment it is added."""
-        shipped = {name for name in (".claude-plugin", "hooks", "skills", "commands",
-                                     "agents")
-                   if (REPO / name).is_dir()}
-        self.assertTrue(shipped, "the repo ships no plugin directories at all?")
-        self.assertTrue(shipped <= set(plugincache.PLUGIN_SURFACE),
-                        f"not covered: {sorted(shipped - set(plugincache.PLUGIN_SURFACE))}")
-        self.assertIn("skills", shipped)
+    def test_every_top_level_directory_is_classified_one_way_or_the_other(self):
+        """The constant is a whitelist, so a plugin directory missing from it is a whole
+        category of drift this module reports as clean.
+
+        **Enumerated from the filesystem, and classified exhaustively.** The first version
+        of this test built its `shipped` set from a hardcoded literal identical to
+        `PLUGIN_SURFACE` and then asserted one was a subset of the other — true by
+        construction. It caught a *removal* from the constant and could not catch the
+        *addition* its own docstring claimed it caught.
+
+        This asks the repository what directories it has and requires every one of them to
+        be in exactly one of two lists. Add `mcp/` or `commands/` to charter tomorrow and
+        this fails until somebody decides which it is — which is the decision the check
+        needs made, and the only thing a test can usefully force.
+        """
+        tops = {p.name for p in REPO.iterdir()
+                if p.is_dir() and not p.name.startswith("__")}
+        unclassified = tops - set(plugincache.PLUGIN_SURFACE) - _NOT_PLUGIN_SURFACE
+        self.assertEqual(
+            unclassified, set(),
+            f"new top-level director{'y' if len(unclassified) == 1 else 'ies'} "
+            f"{sorted(unclassified)}: does a Claude Code plugin LOAD it? Add it to "
+            f"plugincache.PLUGIN_SURFACE, or to _NOT_PLUGIN_SURFACE in this file.")
+
+    def test_the_three_directories_the_plugin_loads_today_are_covered(self):
+        """The removal half, named concretely so the pair covers both directions."""
+        for name in (".claude-plugin", "hooks", "skills"):
+            with self.subTest(name=name):
+                self.assertTrue((REPO / name).is_dir(), f"{name}/ has moved")
+                self.assertIn(name, plugincache.PLUGIN_SURFACE)
 
     def test_the_repos_own_plugin_surface_hashes(self):
         """End-to-end against the real tree: whatever else is true, this must produce a
@@ -253,10 +283,75 @@ class ReadingTheInstalledPlugin(unittest.TestCase):
             got = plugincache.installed_charter_plugin("/here")
         self.assertEqual(got["projectPath"], "/here")
 
-    def test_a_failed_list_is_none_rather_than_nothing_installed(self):
-        with self._rows(None), mock.patch.object(plugincache, "available",
+    def test_a_list_that_could_not_be_read_is_unknown_and_not_nothing_installed(self):
+        """The distinction `_claude_json`'s docstring states as a rule and the caller used
+        to throw away one line later.
+
+        Both collapsed to `None`, and `doctor` renders `None` as a GREEN *"the charter
+        plugin is not installed here"* — so any `claude` too old to understand `--json`
+        got a tick over a plugin nobody had looked at, which is the population most likely
+        to be running a stale one. The previous version of this test asserted the collapse
+        rather than catching it.
+        """
+        for rows in (None, {}, "[]", 7):
+            with self.subTest(rows=rows):
+                with self._rows(rows), mock.patch.object(plugincache, "available",
+                                                         return_value=True):
+                    got = plugincache.installed_charter_plugin()
+                self.assertIs(got, plugincache.UNKNOWN)
+
+    def test_a_list_that_WAS_read_and_holds_no_charter_is_plainly_none(self):
+        """The other side of the same distinction: looked, and it is not installed. A
+        supported state (`docs/install.md` documents a CLI-only install), so it must NOT
+        report as unknown or the row warns forever on a plane with no plugin."""
+        with self._rows([]), mock.patch.object(plugincache, "available",
+                                               return_value=True):
+            self.assertIsNone(plugincache.installed_charter_plugin())
+
+    def test_the_reads_are_bounded_by_the_same_budget_every_other_check_uses(self):
+        """`doctor` runs as a SessionStart preflight with a 20s hook budget, and this check
+        makes two `claude plugin` reads. At 15s each that was 30s against 20s — and the
+        constant's own comment cited the 20s budget while exceeding it. Pinned to
+        `CHECK_TIMEOUT` rather than to a number, so the two cannot drift."""
+        self.assertEqual(plugincache.LIST_TIMEOUT, doctor.CHECK_TIMEOUT)
+
+    def test_a_claude_that_never_returns_does_not_take_the_preflight_down(self):
+        """`util.run` raises `ProcTimeout` regardless of `check=False`, and nothing caught
+        it: not `_claude_json`, not the check, and not `doctor._checks()` — an eager list
+        literal with no per-check guard. `hooks/hooks.json` renders a non-zero `charter
+        doctor` as "charter preflight failed - fix before working:" at EVERY SessionStart,
+        so a hanging `claude` printed zero rows and that line.
+
+        Demonstrated end to end before the fix: 27 rows on origin/main, zero rows and
+        EXIT=1 here.
+        """
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                mock.patch.object(plugincache.util, "run",
+                                  side_effect=util.ProcTimeout(["claude"], 5)):
+            self.assertIsNone(plugincache._claude_json(["list"]))
+
+    def test_a_claude_removed_between_the_which_and_the_exec_is_not_a_crash(self):
+        """`shutil.which` in `available()` and the exec in `util.run` are two moments. A
+        `FileNotFoundError` from the gap reached the crash reporter the same way a timeout
+        did."""
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                mock.patch.object(plugincache.util, "run",
+                                  side_effect=FileNotFoundError("claude")):
+            self.assertIsNone(plugincache._claude_json(["list"]))
+
+    def test_only_charters_own_marketplace_id_is_recognised(self):
+        """`charter@charter` exactly, not `charter@<anything>`.
+
+        `force_refresh` UNINSTALLS what this returns. A plugin called `charter` published
+        by somebody else's marketplace is not charter's to uninstall, and the id anyone who
+        followed `docs/install.md` has is this one — a marketplace registers under the name
+        its own `marketplace.json` declares.
+        """
+        rows = [{"id": "charter@someone-else", "scope": "user", "installPath": "/y"}]
+        with self._rows(rows), mock.patch.object(plugincache, "available",
                                                  return_value=True):
             self.assertIsNone(plugincache.installed_charter_plugin())
+        self.assertEqual(plugincache.PLUGIN_ID, "charter@charter")
 
     def test_a_marketplace_name_charter_would_not_build_a_path_from_is_refused(self):
         for name in ("../../etc", "char ter", "-x", "", None, 7, "a/b"):
@@ -309,6 +404,60 @@ class ReadingTheInstalledPlugin(unittest.TestCase):
             ok, _ = plugincache.force_refresh()
         self.assertTrue(ok)
         self.assertEqual([c[2] for c in calls], ["marketplace", "uninstall", "install"])
+
+    def test_a_failure_AFTER_the_uninstall_leads_with_what_the_operator_now_has(self):
+        """The one outcome that must not read as a generic command failure.
+
+        This is not rollback-capable: the uninstall is what makes the install do any work,
+        so a failure between them leaves the plugin GONE for that scope. By the time this
+        runs the CLI has already been replaced and the harness artifact already moved — the
+        operator is several steps into a successful update, and a line naming only the argv
+        that broke leaves them to work out on their own that a plugin went missing.
+        """
+        rows = [{"id": "charter@charter", "scope": "user", "installPath": "/y"}]
+
+        def run(cmd, cwd=None, check=True, **kw):
+            code = 1 if "install" in cmd and "uninstall" not in cmd else 0
+            return mock.Mock(returncode=code, stdout="", stderr="boom")
+
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                self._rows(rows), mock.patch.object(plugincache.util, "run", run):
+            ok, detail = plugincache.force_refresh()
+        self.assertFalse(ok)
+        self.assertIn("UNINSTALLED", detail)
+        self.assertIn("claude plugin install charter@charter", detail)
+
+    def test_a_failure_BEFORE_the_uninstall_does_not_claim_anything_was_removed(self):
+        """The counterpart. Saying "the plugin is now uninstalled" when it is not would be
+        the same defect pointing the other way."""
+        rows = [{"id": "charter@charter", "scope": "user", "installPath": "/y"}]
+
+        def run(cmd, cwd=None, check=True, **kw):
+            code = 1 if "marketplace" in cmd else 0
+            return mock.Mock(returncode=code, stdout="", stderr="offline")
+
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                self._rows(rows), mock.patch.object(plugincache.util, "run", run):
+            ok, detail = plugincache.force_refresh()
+        self.assertFalse(ok)
+        self.assertNotIn("UNINSTALLED", detail)
+        self.assertIn("marketplace", detail)
+
+    def test_force_refresh_will_not_uninstall_what_it_could_not_read(self):
+        """`UNKNOWN` must not fall through to the "nothing installed" branch, and above all
+        must not reach the uninstall: charter does not know what is there."""
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(list(cmd))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                self._rows(None), mock.patch.object(plugincache.util, "run", run):
+            ok, detail = plugincache.force_refresh()
+        self.assertFalse(ok)
+        self.assertEqual(calls, [])
+        self.assertIn("could not read", detail)
 
 
 class DoctorReportsFreshnessOnBothChannels(PersonaIso):
@@ -388,6 +537,47 @@ class DoctorReportsFreshnessOnBothChannels(PersonaIso):
             res = doctor.check_plugin_freshness()
         self.assertEqual(res.status, doctor.OK)
         self.assertIn("no `claude`", res.detail)
+
+    def test_a_list_that_could_not_be_read_is_a_warning_not_a_tick(self):
+        """The row an older `claude` gets — one that does not understand `--json`, i.e. the
+        population most likely to be running a stale plugin. It used to render:
+
+            ✓  plugin files     the charter plugin is not installed here
+
+        which is the #171 defect exactly: "a check that silently does nothing is worse than
+        no check". The sibling branch three lines below it (marketplace not located) always
+        got this right, which is what made the inconsistency visible.
+        """
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                mock.patch.object(plugincache, "installed_charter_plugin",
+                                  return_value=plugincache.UNKNOWN):
+            res = doctor.check_plugin_freshness()
+        self.assertEqual(res.status, doctor.WARN)
+        self.assertIn("not checked", res.detail)
+        self.assertEqual(res.hint, doctor._NOT_CHECKED_HINT)
+        # The REASON, not merely the status. Deleting the `is UNKNOWN` branch still yields
+        # a WARN — the sentinel falls through, `entry.get` raises on a bare object, and the
+        # row-level crash guard catches it — so a test that stopped at the status would
+        # accept "not checked ('object' object has no attribute 'get')" as though it were
+        # this branch working. That is a guard passing because a different guard caught it.
+        self.assertIn("claude plugin list", res.detail)
+
+    def test_a_raising_check_costs_one_row_and_not_the_whole_preflight(self):
+        """`doctor._checks()` is an eager list literal with no per-check guard, so one
+        raising check returns NO rows — and `hooks/hooks.json` renders a non-zero `charter
+        doctor` as "charter preflight failed - fix before working:" at every SessionStart.
+        `plugincache` returns rather than raises on every path it owns; this is the belt for
+        the paths it does not."""
+        with mock.patch.object(plugincache, "available",
+                               side_effect=RuntimeError("something unforeseen")):
+            res = doctor.check_plugin_freshness()
+        self.assertEqual(res.status, doctor.WARN)
+        self.assertIn("not checked", res.detail)
+        with mock.patch.object(plugincache, "available",
+                               side_effect=RuntimeError("something unforeseen")):
+            rows = doctor.run_all()
+        self.assertGreater(len(rows), 20, "one bad check must not empty the preflight")
+        self.assertIn("plugin files", [r.name for r in rows])
 
     def test_no_charter_plugin_installed_is_a_plain_green(self):
         """CLI-only is a supported install (`docs/install.md`), and a plane that never

@@ -54,6 +54,66 @@ def git_build(commit="abc1234def5678901234567890123456789abcde", ref="main"):
     return {"url": "https://github.com/diazoxide/charter", "vcs_info": info}
 
 
+class NetworkReached(BaseException):
+    """Raised by :class:`NoNetwork` when the code under test tries to reach the network.
+
+    **A `BaseException`, and that is the entire point of this class existing.**
+    `update._fetch_head` and `_fetch_latest` both catch bare ``Exception`` — deliberately,
+    because a failed background check must never break a render — and ``AssertionError``
+    *is* an ``Exception``. The first version of this guard raised one, so every refusal was
+    swallowed by the very code it was guarding: the guard reported green while the call
+    happened. What actually reddened the mutation that added a live GET to the render path
+    was a different test class making a REAL request to api.github.com, which means the
+    invariant was pinned by network access rather than by the guard, and would have gone
+    unpinned on an offline machine or a restricted runner.
+
+    Nothing in charter catches ``BaseException``, so nothing can swallow this.
+    """
+
+
+class NoNetwork:
+    """Mixin: for the length of every test in the class, the network refuses and records.
+
+    Both halves are load-bearing. The **raise** is what fails a test loudly at the moment
+    of the call. The **record** is what fails it even if some future ``except
+    BaseException`` swallowed the raise — belt and braces on a guard whose whole history is
+    a swallowed exception.
+
+    Blocking the network itself rather than counting calls to one function is deliberate:
+    a counter on `Path.stat` once missed an `open()`, a `subprocess.run` and the deletion
+    of the very gate it claimed to pin. Every route out is patched — both socket
+    constructors and both urllib entry points above them — so a call added anywhere under
+    the code under test, through any library, is caught.
+
+    `subprocess.Popen` is NOT blocked: the detached refresh is not a violation of the rule,
+    it is the mechanism that keeps it. Tests that care stub it themselves.
+    """
+
+    _ROUTES = ("socket.socket", "socket.create_connection",
+               "urllib.request.urlopen", "urllib.request.urlretrieve")
+
+    def setUp(self):
+        super().setUp()
+        #: Every network call ATTEMPTED, recorded before the refusal is raised.
+        self.requested: list[str] = []
+        for route in self._ROUTES:
+            self.enterContext(mock.patch(route, self._refuse(route)))
+        # Automatic, so a test added to one of these classes later is covered without
+        # anybody remembering to assert it. A test that legitimately provokes the block
+        # clears the list itself.
+        self.addCleanup(self._assert_quiet)
+
+    def _refuse(self, route):
+        def boom(*a, **kw):
+            self.requested.append(f"{route}({a[0] if a else ''})")
+            raise NetworkReached(route)
+        return boom
+
+    def _assert_quiet(self):
+        self.assertEqual(self.requested, [],
+                         "the code under test reached the network")
+
+
 class TheChannelIsAClosedSet(unittest.TestCase):
     """`instance.update_of` is the whole boundary. Everything downstream compares."""
 
@@ -273,6 +333,41 @@ class VersionAlwaysPrints(unittest.TestCase):
         self.assertIn("charter", p.stdout)
         self.assertIn(__version__, p.stdout)
 
+    def test_building_the_parser_does_not_read_the_dist_info(self):
+        """`--version` is a lazy argparse action, and this is the only thing pinning it.
+
+        `build_parser()` runs on EVERY charter invocation — every hook, every status line
+        render, several per turn. argparse's own `action="version"` takes a FINISHED string
+        at `add_argument` time, so resolving the build label there would put a dist-info
+        read on several hundred paths to serve one. Three separate docstrings claim this
+        laziness; nothing measured it, so reverting to `action="version"` was free.
+        """
+        from charter import cli
+        channel._reset_cache_for_tests()
+        self.addCleanup(channel._reset_cache_for_tests)
+        with mock.patch.object(channel, "_read_direct_url",
+                               return_value=git_build()) as reader:
+            cli.build_parser()
+        self.assertEqual(reader.call_count, 0,
+                         "building the parser read the dist-info — --version is not lazy")
+
+    def test_asking_for_the_version_does_read_it(self):
+        """The other half: lazy must not mean never. Without this, deleting the read
+        altogether would satisfy the test above."""
+        from charter import cli
+        parser = cli.build_parser()
+        channel._reset_cache_for_tests()
+        self.addCleanup(channel._reset_cache_for_tests)
+        out = io.StringIO()
+        with mock.patch.object(channel, "_read_direct_url",
+                               return_value=git_build()) as reader, \
+                contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit) as exit_code:
+                parser.parse_args(["--version"])
+        self.assertEqual(exit_code.exception.code, 0)
+        self.assertEqual(reader.call_count, 1)
+        self.assertIn("+dev (main @ abc1234)", out.getvalue())
+
     def test_a_stable_install_still_prints_exactly_one_word_after_the_name(self):
         """`commands_update._handoff` verifies an install by comparing `charter
         --version`'s LAST WORD to the version it asked for. A suffix on the stable path
@@ -281,8 +376,16 @@ class VersionAlwaysPrints(unittest.TestCase):
             self.assertEqual(f"charter {channel.build_label()}".split()[-1], __version__)
 
 
-class NewerMeansSomethingElseOnDev(PersonaIso):
-    """`update.newer_than` — the cache-only read the status line makes every turn."""
+class NewerMeansSomethingElseOnDev(NoNetwork, PersonaIso):
+    """`update.newer_than` — the cache-only read the status line makes every turn.
+
+    `NoNetwork` is on this class and not only on the render-path class below, and it was
+    added here for a specific reason: this class used to catch "a live GET was added to
+    `newer_head`" by **actually making the request**, returning a real commit from
+    api.github.com. That is not a test passing, it is a test being lucky in a machine with
+    a network. With the block installed the same mutation fails here offline, for the right
+    reason.
+    """
 
     def _cache(self, **record) -> None:
         p = update._cache_file()
@@ -336,31 +439,17 @@ class NewerMeansSomethingElseOnDev(PersonaIso):
             self.assertIsNone(update.newer_than(__version__))
 
 
-class TheRenderPathNeverReachesTheNetwork(PersonaIso):
+class TheRenderPathNeverReachesTheNetwork(NoNetwork, PersonaIso):
     """The rule `charter.update`'s module docstring opens with, enforced rather than read.
 
-    The bound is deliberately NOT a counter on one function. A counter on `Path.stat` once
-    missed an `open()`, a `subprocess.run` and the deletion of the very gate it claimed to
-    pin. What is blocked here is the network itself — every socket constructor and the
-    urllib entry point above them — so a call added ANYWHERE under `_brand()`, through any
-    library, fails loudly instead of quietly reaching PyPI or api.github.com from a test
-    run on somebody's laptop.
+    `NoNetwork` supplies the block and the automatic "nothing was requested" assertion; see
+    that class and :class:`NetworkReached` for why the refusal is a `BaseException`, which
+    is the difference between this guard working and this guard being decorative.
 
-    `subprocess.Popen` is stubbed rather than blocked: the detached refresh is not a
+    `subprocess.Popen` is stubbed here rather than blocked: the detached refresh is not a
     violation of the rule, it is the mechanism that keeps it. What the stub pins is that
     the refresh is the ONLY way out, and that it is never waited on.
     """
-
-    def _blocked(self):
-        def boom(*a, **kw):
-            raise AssertionError("the status line's render path made a network call")
-
-        return (
-            mock.patch("socket.socket", boom),
-            mock.patch("socket.create_connection", boom),
-            mock.patch("urllib.request.urlopen", boom),
-            mock.patch("urllib.request.urlretrieve", boom),
-        )
 
     def _render_brand(self, cache: dict, cfg: dict, doc):
         p = update._cache_file()
@@ -368,8 +457,6 @@ class TheRenderPathNeverReachesTheNetwork(PersonaIso):
         p.write_text(json.dumps(cache))
         spawned = []
         with contextlib.ExitStack() as stack:
-            for patcher in self._blocked():
-                stack.enter_context(patcher)
             stack.enter_context(mock.patch.object(
                 update.subprocess, "Popen",
                 side_effect=lambda *a, **kw: spawned.append(a) or mock.Mock()))
@@ -541,13 +628,58 @@ class TheBackgroundFetchIsWhereTheNetworkLives(PersonaIso):
         self.assertEqual(len(calls), 1)
 
 
-class NoTestHereOpensASocket(unittest.TestCase):
-    """A guard on the guards. If `socket.socket` is reachable in this module's tests, the
-    blocks above are patching something the code under test does not use."""
+class TheBlockItselfIsNotDecorative(NoNetwork, unittest.TestCase):
+    """A positive control on :class:`NoNetwork`. Without one, a guard that stopped guarding
+    reads exactly like a guard that has nothing to catch — which is what happened.
 
-    def test_socket_is_the_thing_being_blocked(self):
-        self.assertTrue(hasattr(socket, "socket"))
-        self.assertTrue(hasattr(socket, "create_connection"))
+    Every test here provokes the block deliberately and clears the record afterwards, so
+    the mixin's automatic "nothing was requested" cleanup does not fire on them.
+    """
+
+    def test_urlopen_is_refused_and_recorded(self):
+        import urllib.request
+        with self.assertRaises(NetworkReached):
+            urllib.request.urlopen("https://example.invalid/never")
+        self.assertTrue(self.requested)
+        self.requested.clear()
+
+    def test_an_except_exception_handler_cannot_swallow_the_refusal(self):
+        """The shape of `update._fetch_head`'s own guard, spelled out.
+
+        This is the assertion that would have failed on the first version of this block,
+        which raised `AssertionError`. `except Exception` caught it, `_fetch_head` returned
+        `None`, and the render-path class went green over a live GET.
+        """
+        import urllib.request
+        swallowed = True
+        try:
+            urllib.request.urlopen("https://example.invalid/never")
+        except Exception:                      # noqa: BLE001 — the point of the test
+            swallowed = True
+        except NetworkReached:
+            swallowed = False
+        self.assertFalse(swallowed, "`except Exception` swallowed the block — it is inert")
+        self.requested.clear()
+
+    def test_the_socket_constructors_are_refused_too(self):
+        """urllib is not the only way out. `http.client`, `ssl` and anything vendored
+        underneath them all end at a socket."""
+        for call in (lambda: socket.socket(), lambda: socket.create_connection(("x", 1))):
+            with self.assertRaises(NetworkReached):
+                call()
+        self.assertEqual(len(self.requested), 2)
+        self.requested.clear()
+
+    def test_the_recorder_runs_before_the_raise(self):
+        """The belt half of belt and braces: if some future `except BaseException` did
+        swallow the refusal, the recorded list is what still fails the test."""
+        import urllib.request
+        try:
+            urllib.request.urlopen("https://example.invalid/never")
+        except BaseException:                  # noqa: BLE001 — simulating the bad catcher
+            pass
+        self.assertEqual(len(self.requested), 1)
+        self.requested.clear()
 
 
 if __name__ == "__main__":

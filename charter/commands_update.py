@@ -271,7 +271,16 @@ def _refresh_plugin() -> None:
 
     if not plugincache.available():
         return          # no Claude Code here — opencode and Codex have no plugin cache
-    ok, detail = plugincache.force_refresh(config.ROOT)
+    try:
+        ok, detail = plugincache.force_refresh(config.ROOT)
+    except Exception as e:
+        # "Never fatal" has to be enforced, not asserted. `force_refresh` returns rather
+        # than raises on every path it owns; this keeps the promise true for the ones it
+        # does not — and the promise matters more here than anywhere else, because by this
+        # line the CLI has already been replaced and the harness artifact already moved.
+        # An exception escaping would end a SUCCESSFUL update in a traceback.
+        util.warn(f"the plugin was not refreshed: {e}")
+        return
     if ok:
         util.ok(f"plugin: {detail} — it loads on the NEXT session.")
     else:
