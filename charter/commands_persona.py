@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import commands_secrets, config, mcpseen, persona, trace, util
+from . import commands_secrets, config, contain, mcpseen, persona, trace, util
 from .secrets import base, registry
 
 #: The scaffold a new persona starts from.
@@ -606,8 +606,14 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
         # Declaring a server grants its tools. Otherwise `tools:` and the server list are
         # two hand-kept lists that must agree, and disagreement surfaces at DISPATCH time
         # as "unresolved entries" — a message about the symptom, not the cause.
+        #
+        # `mcp_name_ok` asked again here, one frame from the interpolation, even though
+        # `mcp_servers` already bounded every key it returned. A comma or a newline in this
+        # position writes an extra tool grant into `tools:`, and unlike the block below
+        # there is no serialiser to reach for — a comma-joined list has no quoting. This is
+        # the layer that holds if that boundary is ever loosened for some new name (#453).
         grants = [f"mcp__{s}__*" for s in servers
-                  if f"mcp__{s}" not in tools]
+                  if persona.mcp_name_ok(s) and f"mcp__{s}" not in tools]
         fm.append(f"tools: {', '.join([tools, *grants]) if grants else tools}")
     # No `agent-tools` means the sub-agent inherits every tool, so adding a narrowing
     # `tools:` line here to carry the grant would be a downgrade rather than a grant.
@@ -648,7 +654,27 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
             entry = persona.mcp_render_entry(name, vault, servers[server_name])
             # JSON, because JSON is valid YAML — this emits a nested block without
             # hand-rolling a YAML writer or taking a dependency to do it.
-            fm.append(f"  - {server_name}: {json.dumps(entry, ensure_ascii=False)}")
+            #
+            # The whole single-key mapping is serialised, KEY INCLUDED, and that is #453.
+            # This line used to be `f"  - {server_name}: {json.dumps(entry)}"`: the
+            # serialiser quoted the entry and an f-string pasted in the key, so a newline in
+            # a committed `mcp.json` key ended the line and declared a second server —
+            # `charter secret exec <any vault> --exec -- <anything>` — that no consent path
+            # could see, because the carrier entry declared no `secrets` and so had no
+            # fingerprint to ask about. `mcp_servers` now bounds the key, and this asks the
+            # serialiser for the quoting rather than trusting that bound to be the only
+            # thing between a commit and a vault. A quoted key is the same YAML mapping a
+            # bare one was; there is no reading of `{"reddit": {…}}` that differs.
+            #
+            # `contain.json_line`, not `json.dumps`, and the difference is the whole of
+            # this layer's independence. The first round of this fix wrote
+            # `ensure_ascii=False` here, which leaves U+2028, U+2029 and U+0085 RAW: three
+            # more spellings of "end this line" that JSON's own string rules say nothing
+            # about. A committed `args` entry holding one of them added a physical line to
+            # this block with no boundary bypass at all — the boundary bounds a NAME, and
+            # nothing bounds a value. The claim that this layer holds whatever reaches it
+            # was true for `\n` only, and is true as written now.
+            fm.append("  - " + contain.json_line({server_name: entry}))
     for k in _AGENT_PASSTHROUGH_KEYS:  # pass through when the charter sets them
         if meta.get(k):
             fm.append(f"{k}: {meta[k]}")
@@ -677,8 +703,16 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
     scripts = persona.bin_scripts(name)
     bin_note = ""
     if scripts:
+        # `contain.one_line`, because these are FILENAMES read off the disk, not names
+        # charter minted: `personas/<name>/bin/` is committed and a filesystem forbids only
+        # `/` and NUL. A script named with a U+2028 wrote a second bullet into the brief
+        # the sub-agent is given, formatted exactly like charter's own — #453's mechanism
+        # aimed at the model rather than at the YAML parser. Reproduced before it was
+        # bounded. A path is shown escaped rather than dropped: the agent still has to be
+        # able to run the ones that are fine.
         listed = "\n".join(
-            f"  - `{_rel(path)}`" for _n, path in sorted(scripts.items()))
+            f"  - `{contain.one_line(_rel(path), contain.PATH_DISPLAY_LIMIT)}`"
+            for _n, path in sorted(scripts.items()))
         bin_note = (
             f"\n- **You carry your own executables.** Run them by path, not by name:\n"
             f"{listed}\n"
@@ -1065,6 +1099,12 @@ def cmd_persona_lint(args) -> int:
     only = (getattr(args, "only", None) or "").strip()
     errors = 0
     for n in names:
+        # The ROW PREFIX, not just the message. `n` comes from `list_personas()`, which
+        # globs `personas/*/` and asks only for a leading underscore — so it is a directory
+        # name a commit chose, and a filesystem forbids only `/` and NUL. `persona.lint`
+        # bounds the message it returns; that left the `f"{n}: …"` around it as the
+        # remaining way to write a second physical row wearing charter's own ✗ glyph.
+        shown = contain.one_line(n)
         issues = list(persona.lint(n)) + _agent_sync_issues(n)
         if only:
             issues = [(lvl, msg) for lvl, msg in issues if only in msg]
@@ -1072,14 +1112,14 @@ def cmd_persona_lint(args) -> int:
             # "present but only as a warning" is still the answer "not adopted".
             issues = [("error", msg) for _lvl, msg in issues]
         if not issues:
-            util.ok(f"{n}: ok")
+            util.ok(f"{shown}: ok")
             continue
         for level, msg in issues:
             if level == "error":
                 errors += 1
-                util.err(f"{n}: {msg}")
+                util.err(f"{shown}: {msg}")
             else:
-                util.warn(f"{n}: {msg}")
+                util.warn(f"{shown}: {msg}")
     if errors:
         util.err(f"{errors} error(s) — dangling reuse or unloadable persona.")
         return 1
@@ -1450,6 +1490,12 @@ def cmd_persona_sync_agents(args) -> int:
     drafts = [n for n, o in outcomes.items() if o == "draft"]
     withheld = {n: persona.mcp_withheld(n) for n in written}
     withheld = {n: v for n, v in withheld.items() if v}
+    # A server name the committed sidecar chose and `mcp_name_ok` refused. Said on the run
+    # that wrote the agent, not left to `lint`: the persona is now running without a server
+    # it declares, and `[frame] hotkey` is the standing lesson — a bound that degrades in
+    # silence renders a clean green tick over a file somebody needs to fix (#453).
+    refused = {n: persona.mcp_refused(n) for n in written}
+    refused = {n: v for n, v in refused.items() if v}
 
     removed = []
     if not one and _agents_dir().exists():  # full sync also prunes orphaned generated agents
@@ -1467,6 +1513,15 @@ def cmd_persona_sync_agents(args) -> int:
                   "Finish it, drop the `draft: true` line, then re-run.")
     if removed:
         util.info("Removed stale generated agents: " + ", ".join(removed))
+    if refused:
+        util.warn(f"Refused {sum(len(v) for v in refused.values())} MCP server name(s): a "
+                  f"name is emitted into the generated agent's YAML and into "
+                  f"`mcp__<server>__*`, so it may hold only letters, digits, '_', '.' and "
+                  f"'-' (64 max). These servers are NOT declared in the agent:")
+        for n, names in sorted(refused.items()):
+            for bad in names:
+                util.info(f"  {n}/{contain.one_line(bad)}")
+        util.info(f"  Rename them in the persona's `{persona.MCP_FILE}` and re-run.")
     if withheld:
         # A warning, not an error: the agents were written and the personas still work.
         # What did not happen is the credential hand-off, and saying so in the words of

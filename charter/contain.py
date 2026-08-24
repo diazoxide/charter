@@ -74,8 +74,10 @@ has to fix it.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
+import unicodedata
 from pathlib import Path
 
 #: Said once, so every site refuses in the same words. A reader who hits this has a defect
@@ -140,7 +142,115 @@ def child(base, name: str) -> Path | None:
 
 def refusal(name: str) -> str:
     """The one sentence every site uses to say why *name* was refused."""
-    return NOT_A_SEGMENT.format(name=name)
+    return _sentence(NOT_A_SEGMENT, name=name)
+
+
+# --------------------------------------------------------------------------- #
+# the display layer — a committed value charter PRINTS back (#453)             #
+# --------------------------------------------------------------------------- #
+
+#: How much of a committed value charter repeats back on one report line, and a FIXED
+#: marker rather than a counted one: a budget a longer input makes longer is not a budget.
+#: Wide enough for a server name or a short command, narrow enough that a committed value
+#: cannot own the terminal.
+DISPLAY_LIMIT = 160
+
+#: Unicode general categories with no glyph of their own, escaped by :func:`one_line`.
+#: Named by CATEGORY rather than by codepoint, because a list of bad codepoints is a list
+#: somebody adds one to: ``Cc`` is every control character (``\n``, ``\r``, ``\t``, NUL,
+#: and the escape that starts an ANSI sequence), ``Cf`` every format character (the
+#: bidirectional overrides, the zero-width joiners), ``Cs`` a lone surrogate, and
+#: ``Zl``/``Zp`` the two separators that are not ``\n``.
+_INVISIBLE = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+
+
+def one_line(value, limit: int = DISPLAY_LIMIT) -> str:
+    """*value* as one line of a report, with nothing in it that can forge another.
+
+    **The property is line structure, not trustworthiness.** Charter's own reports —
+    `sync-agents`'s withheld list, `lint`'s issues, the consent line an operator reads
+    before approving a credential hand-off — are lines of the form ``  <name> → <command>``,
+    and every field in them comes out of a committed file. A newline in one of those
+    fields writes a second line that looks exactly as much like charter's own output as
+    the first, which is #453's mechanism one surface over: a value crossing into a format
+    with structure without being escaped for it.
+
+    So every character that has no glyph — see :data:`_INVISIBLE` — is replaced by its own
+    escape, and the result is clipped. What this does **not** do is make the value
+    trustworthy to read: ``I`` and ``l``, or a Cyrillic ``а`` and a Latin ``a``, are
+    ordinary letters this returns unchanged and a reader cannot tell apart. Those cannot
+    forge a line, which is the whole of what is claimed here. Where a value must be
+    *bounded* rather than merely displayable — an MCP server name, which charter emits
+    into YAML and into a tool-grant pattern — the bound belongs at the boundary that reads
+    it, and this is what the refusal then uses to say which value it refused.
+    """
+    s = value if isinstance(value, str) else str(value)
+    out = []
+    for ch in s:
+        if unicodedata.category(ch) in _INVISIBLE or (ch.isspace() and ch != " "):
+            out.append(f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    rendered = "".join(out)
+    return rendered if len(rendered) <= limit else rendered[:limit] + "…"
+
+
+#: How much of any ONE path a refusal sentence — or a generated brief — repeats back.
+#: Larger than `DISPLAY_LIMIT`, because these name a PATH and a plane's paths are
+#: legitimately long, and a clipped path is one the reader cannot act on. Still a fixed
+#: number, for the reason `DISPLAY_LIMIT` is one: a budget the input can grow is no budget.
+PATH_DISPLAY_LIMIT = 1024
+
+
+def _sentence(template: str, **fields) -> str:
+    """One refusal sentence, with every field bounded to one line.
+
+    A refusal is a report line **about** a value charter would not accept, and that value is
+    exactly the thing that must not be able to write a second line into the report. It is
+    also, on every path through this module, a value out of a committed file or a filesystem
+    somebody else's commit created.
+
+    Formatted here rather than at the twelve `.format` calls it replaces, because twelve is
+    how many places the thirteenth gets forgotten in — the same argument that put the name
+    bound inside `persona.mcp_servers` instead of at each of its consumers (#453).
+    """
+    return template.format(
+        **{k: one_line(v, limit=PATH_DISPLAY_LIMIT) for k, v in fields.items()})
+
+
+def json_line(obj, *, sort_keys: bool = False) -> str:
+    """*obj* as JSON on exactly **one physical line**, whatever strings it holds.
+
+    The property is ``len(json_line(x).splitlines()) == 1`` for every ``x``, and the thing
+    that delivers it is ``ensure_ascii=True``. That is why this is a named function rather
+    than a keyword remembered at each call site: on a line-delimited surface the flag is
+    not a formatting preference, it is the whole of the escaping, and `ensure_ascii=False`
+    reads like a harmless "keep the é" at every site where it is wrong.
+
+    **What JSON escapes on its own is not the set of line breaks.** ``\\n``, ``\\r`` and the
+    rest of the C0 controls are covered by the standard's own string rules and would
+    survive `ensure_ascii=False` — but U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR
+    and U+0085 NEL are none of those. They pass through raw, and each one is a line break
+    to `str.splitlines`, to a YAML 1.1 reader, and to a JavaScript parser before ES2019.
+    That is #453 with a different spelling of "newline": the boundary that bounds a server
+    NAME stops them, so the emission that is supposed to hold *on its own* was resting on
+    it, and a committed VALUE — which no boundary bounds — added a physical line to a
+    generated agent's frontmatter with no bypass needed at all.
+
+    Escaping every non-ASCII codepoint answers for all three without naming any of them,
+    and for the next codepoint some standard decides is a line break, because the answer
+    does not depend on knowing which codepoints those are. The residue is ASCII, where the
+    only line breaks are ``\\n`` and ``\\r`` and JSON already escapes both.
+
+    Round-trips exactly — ``json.loads(json_line(x)) == x`` for anything JSON can carry,
+    lone surrogates included, which `ensure_ascii=False` cannot even encode to UTF-8 to
+    write out. Escaped, never dropped: the reader of the file charter wrote gets the value
+    the committed file declared, spelled in a way that cannot restructure the file.
+
+    Compare :func:`one_line`, which bounds a value being **displayed** and mangles it to do
+    so. This one bounds a value being **serialised**, and preserves it exactly.
+    """
+    return json.dumps(obj, ensure_ascii=True, sort_keys=sort_keys)
 
 
 # --------------------------------------------------------------------------- #
@@ -271,7 +381,7 @@ def _not_plane_data(path, verb: str = "read") -> str:
         target = os.path.realpath(path)
     except (OSError, ValueError):
         target = path            # unresolvable — say what was asked for, never raise here
-    return NOT_PLANE_DATA.format(name=path, target=target, roots=roots, verb=verb)
+    return _sentence(NOT_PLANE_DATA, name=path, target=target, roots=roots, verb=verb)
 
 
 #: Said once, like the two above. Names the resolved target because that is the whole
@@ -328,7 +438,7 @@ def plane_adjacent_refusal(root, declared) -> str | None:
         target = os.path.realpath(p)
     except (OSError, ValueError):
         target = str(p)
-    return NOT_PLANE_ADJACENT.format(name=declared, target=target, root=root)
+    return _sentence(NOT_PLANE_ADJACENT, name=declared, target=target, root=root)
 
 
 def dir_refusal(directory, verb: str = "read") -> str | None:
@@ -441,20 +551,20 @@ def _path_refusal(path, *, missing_ok: bool, verb: str) -> str | None:
         # the empty path never can. Without this the write side answered "nothing to
         # object to" for it and handed the caller an unhandled `OSError` one line later —
         # a refusal turned back into a crash, which is the bug #348 shipped and fixed.
-        return UNREADABLE.format(name=path, error="empty path")
+        return _sentence(UNREADABLE, name=path, error="empty path")
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         if missing_ok:
             return None       # about to be created — there is nothing there to object to
-        return UNREADABLE.format(name=path, error="No such file or directory")
+        return _sentence(UNREADABLE, name=path, error="No such file or directory")
     except OSError as e:
-        return UNREADABLE.format(name=path, error=e.strerror or e)
+        return _sentence(UNREADABLE, name=path, error=e.strerror or e)
     except ValueError as e:
         # `os.lstat` raises ValueError, NOT OSError, on a path holding a NUL — the one
         # input shaped to get past a check (`segment_ok` refuses it for the same reason).
         # "Nothing here raises" is this module's promise; catching only OSError broke it.
-        return UNREADABLE.format(name=path, error=e)
+        return _sentence(UNREADABLE, name=path, error=e)
     if stat.S_ISLNK(st.st_mode):
         # Asked BEFORE `os.stat`, and that order is load-bearing on the write side: a
         # dangling link has no target to stat, so a containment check placed after the
@@ -468,14 +578,14 @@ def _path_refusal(path, *, missing_ok: bool, verb: str) -> str | None:
         except FileNotFoundError:
             if missing_ok:
                 return None   # a contained link naming a file charter is about to create
-            return UNREADABLE.format(name=path, error="No such file or directory")
+            return _sentence(UNREADABLE, name=path, error="No such file or directory")
         except OSError as e:
-            return UNREADABLE.format(name=path, error=e.strerror or e)
+            return _sentence(UNREADABLE, name=path, error=e.strerror or e)
         except ValueError as e:
-            return UNREADABLE.format(name=path, error=e)
+            return _sentence(UNREADABLE, name=path, error=e)
     if not stat.S_ISREG(st.st_mode):
         kind = next((k for test, k in _KINDS if test(st.st_mode)), "not a file")
-        return NOT_A_FILE.format(name=path, kind=kind, verb=verb)
+        return _sentence(NOT_A_FILE, name=path, kind=kind, verb=verb)
     if st.st_size > MAX_BYTES:
-        return TOO_LARGE.format(name=path, size=st.st_size, cap=MAX_BYTES)
+        return _sentence(TOO_LARGE, name=path, size=st.st_size, cap=MAX_BYTES)
     return None

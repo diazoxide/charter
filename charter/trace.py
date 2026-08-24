@@ -34,7 +34,7 @@ from __future__ import annotations
 import datetime
 import json
 
-from . import config, session as _sessions
+from . import config, contain, session as _sessions
 
 
 #: The events that record a credential leaving charter's own process, one per way out —
@@ -67,14 +67,24 @@ def _file(session: str | None = None):
 
 
 def record(event: str, session: str | None = None, **fields) -> None:
-    """Append one event to the current session's trace. Best-effort; swallows all errors."""
+    """Append one event to the current session's trace. Best-effort; swallows all errors.
+
+    One record, one line, via `contain.json_line` — this file is `\\n`-delimited and
+    :func:`read` splits it with `str.splitlines`, so a field carrying U+2028, U+2029 or
+    U+0085 used to write a record that read back as two unparseable halves and was
+    dropped by the `except` below. Fields are not all charter's own: `persona note` traces
+    the operator's message, and a committed value reaches this on the persona surfaces.
+    A trace that silently loses the event it was asked to record is worse than one that
+    was never written, because it still looks present. Same defect as #453's emission,
+    one surface over.
+    """
     try:
         f = _file(session)
         f.parent.mkdir(parents=True, exist_ok=True)
         rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), "event": event}
         rec.update({k: v for k, v in fields.items() if v is not None})
         with f.open("a") as fh:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            fh.write(contain.json_line(rec) + "\n")
     except Exception:
         pass
 

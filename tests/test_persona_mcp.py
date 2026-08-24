@@ -139,13 +139,17 @@ class TestTheGeneratedAgent(McpBase):
         self.assertIn("mcpServers:", self._rendered())
 
     def test_the_block_is_parseable_as_the_host_expects(self):
-        """A list whose entries are single-key maps. JSON is valid YAML, so the value is
-        emitted as JSON rather than by hand-rolling a YAML writer."""
+        """A list whose entries are single-key maps. JSON is valid YAML, so the whole
+        mapping — **key included** — is emitted as JSON rather than by hand-rolling a YAML
+        writer. The key used to be pasted in with an f-string while only the value was
+        serialised, which is what let a committed server name declare a second server
+        (#453, tests/test_a_server_name_cannot_declare_a_server.py)."""
         self._persona()
         out = self._rendered()
-        line = next(l for l in out.splitlines() if l.strip().startswith("- reddit:"))
-        payload = json.loads(line.split("- reddit:", 1)[1].strip())
-        self.assertEqual(payload["command"], "charter")
+        line = next(l for l in out.splitlines() if l.startswith("  - "))
+        payload = json.loads(line[4:])
+        self.assertEqual(list(payload), ["reddit"])
+        self.assertEqual(payload["reddit"]["command"], "charter")
 
     def test_declaring_a_server_grants_its_tools(self):
         """Two hand-kept lists that must agree is a divergence generator, and this one
