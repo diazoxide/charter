@@ -57,6 +57,15 @@ command.
   `charter news stamp <version>` to move it onto the version that ships it. Entries travel
   inside the wheel, so `charter news` works offline on any harness.
 
+  Two optional ordering fields, both `true`/`false` and both off by default. `security:
+  true` says this entry is a security fix: it sorts above the ordinary entries of its
+  version and renders as `security: <headline>`, in the Release body and in `charter news`
+  alike. Any number of entries may say it. `lead: true` says this entry goes first, and
+  only one entry per version may — a second is refused at the release gate rather than
+  resolved by a coin toss. Say `security:` if you know what your entry *is*; leave `lead:`
+  to the release, which is the only vantage point from which "first" means anything.
+  Without either, entries sort by filename as they always have.
+
   Write it in the PR that builds the thing: you are the only person who knows why it
   matters and what would prove somebody has taken it up, and reconstructing that from
   commit titles at release time is how notes become a changelog nobody reads. Nothing in CI

@@ -2425,8 +2425,10 @@ def _news_line(e, status: str) -> str:
     this text is the only thing an agent on another harness has — a machine surface would
     become the parsed one, and this the unchecked one.
     """
+    from . import news
+
     how = f"adopt: charter {e.adopt}" if e.adopt else "adopt: manual (see the entry)"
-    return f"  {e.slug} · {e.headline}\n      {how}"
+    return f"  {e.slug} · {news.marker(e)}{e.headline}\n      {how}"
 
 
 #: Said once, where a probe would otherwise be run against nothing.
@@ -2447,6 +2449,18 @@ def cmd_news(args) -> int:
 
     version = getattr(args, "for_version", None)
     if version:
+        # THE release gate. `release.yml`'s pre-publish check runs this and refuses to tag
+        # on a non-zero exit, and its `announce` job pipes this same stdout into
+        # `gh release create --notes-file`. So an ordering charter cannot honour is caught
+        # before a Release exists to be wrong, rather than after — which is the position
+        # #486 was filed from, with the notes already published.
+        problems = news.ordering_errors(news.for_version(version))
+        if problems:
+            util.err(f"the news entries for {version} declare an ordering charter cannot "
+                     f"honour:")
+            for why in problems:
+                util.info(f"  {why}")
+            return 1
         body = news.render_body(version)
         if not body:
             util.err(f"no news entry for {version}.")
@@ -2497,9 +2511,15 @@ def cmd_news(args) -> int:
         return 0
     if planeless:
         util.warn(_NO_PLANE)
+    # Warned, not refused. This view is a reader catching up, and withholding the range
+    # over a malformed `security:` line would lose them the other nineteen entries to
+    # protect them from one being in the wrong place. `--for` is where refusing belongs,
+    # because that is the call that becomes a published Release.
+    for why in news.ordering_errors(entries):
+        util.warn(why)
     for e in entries:
         status, _ = (news.INFORMATIONAL, "") if planeless else news.probe(e)
-        print(f"{e.version}  {e.headline}")
+        print(f"{e.version}  {news.marker(e)}{e.headline}")
         # Only an entry with something to DO gets the action line. An informational entry
         # — a patch note, usually — exists to say there is nothing to take up, so printing
         # "adopt: manual" beneath it invents a chore out of the line that denies one.

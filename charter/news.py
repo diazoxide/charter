@@ -4,7 +4,16 @@ A *news entry* is a shipped, per-item note that a version introduced something, 
 an optional probe for whether this plane has adopted it. Not a changelog: an entry exists
 to be **acted on**, and one with nothing to adopt is one line.
 
-Four properties are load-bearing.
+Five properties are load-bearing.
+
+**One entry, two consumers, one answer.** The GitHub Release body and the offline `charter
+news` suggestion are the same entries rendered twice — `release.yml`'s announce job pipes
+`charter news --for <version>` straight into `gh release create --notes-file`. So anything
+that decides how an entry is presented has to be decided once, where both reach it, and
+never at a call site. It was not, and #486 is what that cost: ORDER was left to
+`sorted(glob("*.md"))`, which for a stamped release is alphabetical by slug, so 0.52.0's
+vault-spending fix rendered eighth, under a docs correction. :func:`all` now applies the
+declared order and :func:`marker` the label, and both views come through them.
 
 **It ships in the wheel.** Entries travel with the code that implements them, resolved the
 way :mod:`charter.docsrc` resolves documentation — packaged copy first, the repo's
@@ -76,7 +85,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import NamedTuple
 
-from . import persona, update
+from . import contain, persona, update
 
 #: The version a staged entry carries until a release stamps it. A feature PR cannot know
 #: which version will ship it — the next release may be a patch, or the PR may sit through
@@ -131,6 +140,22 @@ _refused: str | None = None
 _ENV = "CHARTER_NEWS_PROBE"
 
 
+#: The two opt-in ordering fields, and the only two. `security:` is a CLASS — a version
+#: may ship any number of security entries, and they sort above everything else. `lead:`
+#: is a POSITION, so at most one entry per version may claim it; a second is a
+#: contradiction :func:`ordering_errors` reports rather than resolving.
+#:
+#: Split rather than collapsed into one `rank: <int>`, because the two answer different
+#: questions and only one of them can be answered by an author working alone. "Is this a
+#: security fix?" is a fact about the entry, knowable while writing it and true forever.
+#: "Does this go first?" is a fact about the RELEASE, which the author cannot know — 24
+#: entries were staged for 0.52.0 and none of their authors could see the other 23. A
+#: numeric rank would make every author guess at that, and guess wrong quietly; these two
+#: let an author state only what they actually know.
+LEAD, SECURITY = "lead", "security"
+_ORDERING_FIELDS = (LEAD, SECURITY)
+
+
 class Entry(NamedTuple):
     version: str
     slug: str
@@ -139,6 +164,17 @@ class Entry(NamedTuple):
     adopt: str
     body: str
     path: Path
+    #: Declared position and class. Both default False — 24 entries do not each need a
+    #: number, and an entry that says nothing sorts exactly where it always did.
+    lead: bool = False
+    security: bool = False
+    #: ``(field, raw)`` for every ordering field whose value was not understood. Carried
+    #: rather than raised, and rather than silently read as false, because false is the
+    #: answer that SINKS the entry — an author who wrote `security: yes` and got the
+    #: bottom of the release notes would have been failed by the field that was supposed
+    #: to help them. :func:`ordering_errors` turns these into sentences, and
+    #: `charter news --for` — which is the release workflow's own gate — refuses on them.
+    bad: tuple[tuple[str, str], ...] = ()
 
 
 def _is_checkout(d: Path) -> bool:
@@ -184,20 +220,175 @@ def _read(p: Path) -> Entry | None:
     # The slug is the filename's, the version is the frontmatter's. Two sources for one
     # fact would drift the moment `news stamp` renamed a file and missed the field.
     slug = p.stem.split("-", 1)[1] if "-" in p.stem else p.stem
+    flags: dict[str, bool] = {}
+    bad: list[tuple[str, str]] = []
+    for field in _ORDERING_FIELDS:
+        # `field in meta`, not `meta.get(field) or ""`: absent and present-but-empty are
+        # different facts, and `.get(…) or ""` is the line that made them one. See
+        # :func:`_flag` — a `security:` whose value went onto the continuation line is a
+        # declaration charter could not read, not a declaration that was never made.
+        raw = meta[field].strip() if field in meta else None
+        value = _flag(raw)
+        if value is None:
+            bad.append((field, raw or ""))
+        flags[field] = bool(value)
     return Entry(version=version, slug=slug,
                  headline=(meta.get("headline") or "").strip(),
                  check=(meta.get("check") or "").strip(),
                  adopt=(meta.get("adopt") or "").strip(),
-                 body=body, path=p)
+                 body=body, path=p,
+                 lead=flags[LEAD], security=flags[SECURITY], bad=tuple(bad))
+
+
+def _flag(raw: str | None) -> bool | None:
+    """An ordering field's declared value: True, False, or ``None`` for "not understood".
+
+    ``raw is None`` means **the key is not in the frontmatter at all**, and that is False —
+    the whole of what opt-in means, and why 24 entries needed no edit when this landed.
+    Absence is not a value, so it is spelled as the absence of one; every ``str`` reaching
+    here, ``""`` included, is something an author typed.
+
+    **Empty is a declaration charter could not read, not a declaration never made**, and
+    reading the two as one is how #486 came back through the field added to prevent it.
+    charter's frontmatter is flat ``key: value`` — `persona.parse` drops any line without a
+    colon — so the YAML habit of putting the value on the continuation line::
+
+        security:
+          true
+
+    leaves ``security`` present with nothing after it, and so does ``security:`` typed with
+    the value forgotten or with a trailing space. Folded into "absent", that entry declares
+    a security fix, renders below the ordinary ones, and `charter news --for` exits 0 with
+    an empty stderr: the exact silence #486 is about, from an author who did opt in. The
+    first cut of this function did fold them, by way of ``(meta.get(field) or "").strip()``
+    at the one call site — a spelling of "missing" that a present key also matches, which
+    is the failure this module's docstring names six times over.
+
+    Present-but-unrecognised is **None**, not False, and that distinction is the point of
+    this function. The obvious spelling of "is this true?" is a truthy set —
+    ``{"true", "yes", "1", "on"}`` — and it fails the way every other guard in this
+    codebase has failed: it matches a spelling. The next author writes ``security: Y``,
+    or ``yes  # per the security charter``, or a full-width ``ｔｒｕｅ``, and the set does
+    not hold it, so the entry reads as false and sinks to the bottom of the release notes
+    — silently, in exactly the position the field was added to prevent. Widening the set
+    only moves that edge somewhere less obvious.
+
+    So the property is not "which words mean yes" but **"was this value understood?"**.
+    Two literals are recognised, case-folded; every other string an author typed is
+    reported by :func:`ordering_errors` naming the value it could not read. An author who
+    writes something outside the pair is told so at the release gate rather than being
+    quietly overruled by it.
+
+    **The next spelling** is not in this function: it is the KEY. `persona.parse` matches
+    exactly and case-sensitively, so ``Security: true`` never arrives as ``security`` and
+    is genuinely absent here (#503); and it keeps the LAST of two lines with the same key,
+    so an entry declaring ``security:`` twice has one of them dropped without a word
+    (#509). Both are reached through the dict this function is handed, not through the
+    value it reads, and both change how every caller of `persona.parse` reads its result.
+    """
+    if raw is None:
+        return False
+    folded = raw.strip().casefold()
+    return folded == "true" if folded in ("true", "false") else None
+
+
+def rank(e: Entry) -> int:
+    """Where *e* sits among its own version's entries: 0 leads, 1 is a security fix, 2 is
+    everything else. Lower first."""
+    return 0 if e.lead else 1 if e.security else 2
+
+
+def marker(e: Entry) -> str:
+    """The word that precedes a security entry's headline, everywhere a headline is
+    rendered — ``""`` for an ordinary entry.
+
+    One function rather than a literal at each call site, for the same reason `_dev_chip`
+    is one function: the Release body and the offline `charter news` view are deliberately
+    the same answer printed twice (that is #486's whole premise), and two copies of the
+    label is how they start disagreeing. `lead:` gets no marker — it is a position, not a
+    kind, and "this was listed first" is already visible from being listed first.
+
+    ASCII, and a word rather than a glyph. It renders into a GitHub Release body, into a
+    `TERM=dumb` CI log, and into a terminal charter does not control.
+    """
+    return "security: " if e.security else ""
+
+
+def ordering_errors(entries: list[Entry]) -> list[str]:
+    """Why the declared ordering of *entries* cannot be honoured, as sentences.
+
+    Empty is the ordinary answer. Two failures are reported, and neither is resolved
+    quietly, because a quiet resolution is what #486 was about:
+
+    * an ordering field whose value was not understood (see :func:`_flag`), named with the
+      value, so an author who wrote ``security: yes`` learns which word charter reads —
+      and, when the field was declared with nothing after the colon, naming the shape
+      instead of the empty value, because the author who wrote it almost certainly put
+      the value on the next line and needs to be told that line is not read;
+    * two entries in one version both declaring ``lead: true``. One of them is not going
+      to be first, and picking silently would hand back the accident #486 already
+      diagnosed — a position decided by something other than a person deciding it.
+
+    Callers rather than this function decide the consequence: `charter news --for`, which
+    IS the release workflow's publish gate, refuses; the range view warns and prints on.
+    """
+    out: list[str] = []
+    for e in sorted(entries, key=lambda e: e.path.name):
+        for field, raw in e.bad:
+            if raw == "":
+                # Distinct from the sentence below, because the fix is different: there
+                # is no value to correct, and quoting one back ("`security: `") would
+                # read like a rendering bug. Name the shape that produces it instead —
+                # the value on the continuation line is the way this gets typed.
+                out.append(
+                    f"{e.path.name}: `{field}:` is declared with no value on that line "
+                    f"— a news ordering field is `true` or `false`, written after the "
+                    f"colon. charter's frontmatter is flat `key: value` and drops a line "
+                    f"without a colon, so a value indented onto the NEXT line never "
+                    f"reaches charter. Left unread, this entry sorts as though it never "
+                    f"declared anything.")
+                continue
+            out.append(
+                f"{e.path.name}: `{field}: {contain.one_line(raw)}` is not a value "
+                f"charter reads — a news ordering field is `true` or `false`. Left "
+                f"unread, this entry sorts as though it never declared anything.")
+    leads: dict[str, list[Entry]] = {}
+    for e in entries:
+        if e.lead:
+            leads.setdefault(e.version, []).append(e)
+    for version, claimants in sorted(leads.items()):
+        if len(claimants) > 1:
+            names = ", ".join(sorted(c.path.name for c in claimants))
+            out.append(
+                f"{version}: {len(claimants)} entries declare `lead: true` ({names}) — "
+                f"only one entry can be the one a reader sees first. Leave `lead:` off "
+                f"all but one; a security fix that need not be first can say "
+                f"`security: true` instead, which any number of entries may.")
+    return out
 
 
 def all() -> list[Entry]:
-    """Every entry that parses, oldest version first; staged entries last."""
+    """Every entry that parses, oldest version first; staged entries last, and within one
+    version: the entry that declared `lead:`, then security fixes, then the rest.
+
+    **This sort is the whole of #486.** Both public views of an entry come through here —
+    `render_body` (the GitHub Release body, via :func:`for_version`) and `charter news`
+    (via :func:`released`/:func:`between`) — so an ordering honoured by one is honoured by
+    the other by construction, rather than by two call sites agreeing to sort the same
+    way. The release engineer's charter says the shipped entry is the single source for
+    both and that hand-editing a Release forks them; a fix that taught only the Release
+    body to lead with a security note would be that same fork wearing a commit.
+
+    Within a rank the order is still the filename's, and `sorted` is stable, so an entry
+    that declares nothing lands exactly where it landed before this existed.
+    """
     d = _dir()
     if d is None:
         return []
     found = [e for e in (_read(p) for p in sorted(d.glob("*.md"))) if e is not None]
-    return sorted(found, key=lambda e: (e.version == UNRELEASED, update._parse(e.version)))
+    return sorted(found,
+                  key=lambda e: (e.version == UNRELEASED, update._parse(e.version),
+                                 rank(e)))
 
 
 def released() -> list[Entry]:
@@ -225,10 +416,13 @@ def render_body(version: str) -> str:
 
     The shipped entry is the single source for both the offline suggestion and the public
     notes, so the two cannot drift: one is printed from the other.
+
+    Order comes from :func:`all`, not from this function — see its docstring, and #486.
+    The label comes from :func:`marker`, which the offline view calls too.
     """
     parts = []
     for e in for_version(version):
-        parts.append(f"### {e.headline}\n\n{e.body}".rstrip())
+        parts.append(f"### {marker(e)}{e.headline}\n\n{e.body}".rstrip())
     return "\n\n".join(parts)
 
 

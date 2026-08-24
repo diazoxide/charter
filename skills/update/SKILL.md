@@ -37,8 +37,12 @@ that is all it did; on stable, and whenever `--to` names a version, it refuses o
 charter news --pending
 ```
 
-Each line is one entry: its slug, what it gives you, and how to take it up. Work them **one
-at a time**, and ask before each:
+Each line is one entry: its slug, what it gives you, and how to take it up. An entry
+prefixed `security:` is a security fix, and within its own version it is listed above the
+ordinary entries — take those up first rather than in list order, and say so when you
+offer them.
+
+Work them **one at a time**, and ask before each:
 
 1. Say what it is and why it matters — `charter news --for <version>` prints the entry.
 2. `adopt: charter <command>` → run it once they say yes.

@@ -90,7 +90,20 @@ A successful publish is followed by one more job, which creates the **GitHub Rel
 `gh release create v<X.Y.Z>` and a body generated from `charter news --for <X.Y.Z>`. Do not
 write release notes by hand: the shipped entry is the single source for both the public
 notes and the offline `charter news` suggestion, and hand-editing forks them. To change what
-a Release says, change the entry and the text follows. That job carries `contents: write`
+a Release says, change the entry and the text follows.
+
+**Including the order.** Entries sorted by filename until #486, so 0.52.0's security fix
+rendered eighth, under a docs correction — an ordering nobody chose. Two frontmatter
+fields now decide it, and they are entry text like everything else, so changing them is
+changing the source rather than forking it. `security: true` is the author's to write and
+sorts that entry above the ordinary ones. `lead: true` is **yours**, at stamp time: it is
+the only claim that needs the whole release in view, and only one entry per version may
+make it — `charter news --for` refuses a version where two do, which is the same call the
+pre-publish guard runs, so a contradiction stops the tag rather than the reader. After
+stamping, read `charter news --for <X.Y.Z>` and check the first entry is the one you would
+want a reader to see if they stopped after two screens.
+
+That job carries `contents: write`
 alone — the workflow's top-level grant stays `contents: read` — and it leaves an existing
 Release untouched, so a `workflow_dispatch` retry after a partial failure is safe to run.
 
