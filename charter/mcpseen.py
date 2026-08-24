@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from . import config
@@ -55,10 +56,21 @@ FILE_NAME = "mcp-approved.json"
 
 #: Printed in place of a consent line for an entry :func:`describe` cannot render. Such an
 #: entry is reported as withheld and refused for approval, rather than silently dropped.
-UNRENDERABLE = "(names neither a command nor a url — nothing to approve)"
+#: Covers both reasons: no destination at all, and a destination too big to show in full.
+UNRENDERABLE = "(charter cannot show this entry in full — nothing to approve)"
 
-#: Longest consent line printed. See :func:`describe`.
-MAX_LINE = 600
+#: Longest single part — command, one arg, ``type``, ``url``, one ``env`` key — shown on a
+#: consent line. A part longer than this is CLIPPED with the cut announced; it is never
+#: dropped, so no part can push another part off the line. See :func:`describe`.
+MAX_PART = 200
+
+#: Hard ceiling on the whole consent line. An entry with so many parts that even their
+#: clipped forms do not fit is one the operator cannot be shown in full, so it is not
+#: renderable and (via :func:`fingerprint`) not approvable. See :func:`describe`.
+MAX_LINE = 2000
+
+#: Two or more ASCII spaces — the one printable run :func:`_safe` must not pass through.
+_SPACE_RUN = re.compile(" {2,}")
 
 
 def path() -> Path:
@@ -158,15 +170,32 @@ def approve(persona_name: str, fingerprints) -> None:
 
 
 def _safe(text: str) -> str:
-    """*text* with anything unprintable escaped, for a line an operator must trust.
+    """*text* with anything unprintable escaped and its whitespace flattened.
 
     Every field here comes out of a committed file and the line IS the consent: a ``\\r``
     or an ``ESC[2K`` in ``args`` repaints it, and a U+202E bidi override reverses it, so
     what the operator reads stops being what would run. ``str.isprintable`` covers that
-    whole class in one call — it is false for every Other and Separator codepoint, the
-    ASCII space excepted.
+    whole class in one call — it is false for every Other and Separator codepoint, **the
+    ASCII space excepted**, and that one exception was a hole: ``command`` of three spaces
+    rendered a consent line that was truthy to charter and blank to the reader, which is
+    the very thing :func:`describe` promises can no longer be approved. Runs of ASCII
+    space are collapsed and the ends stripped, so a part made only of spaces comes back
+    empty and drops out of the line rather than padding it.
     """
-    return "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in text)
+    out = "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in text)
+    return _SPACE_RUN.sub(" ", out).strip()
+
+
+def _clip(text: str, budget: int) -> str:
+    """*text* cut to *budget* characters with the cut ANNOUNCED, never silently.
+
+    Used per part rather than on the finished line. Truncating the finished line is what
+    let a committed ``args`` of 600 characters produce a consent line naming neither the
+    ``env`` it sets nor the ``url`` it points at, because both are appended after ``args``
+    — so the important half of the line was the half that got cut.
+    """
+    return text if len(text) <= budget else (
+        text[:budget] + f"… (+{len(text) - budget} more chars)")
 
 
 def describe(entry: dict) -> str:
@@ -175,12 +204,31 @@ def describe(entry: dict) -> str:
     Names and keys only — a ``secrets`` map holds vault KEY names, never values, so this
     is safe to print and the operator needs to see it to judge the request.
 
-    ``""`` when the entry names neither a ``command`` nor a ``url``. An ``http``/``sse``
-    server has no command, and building the line from ``command`` + ``args`` alone
-    rendered it as an EMPTY string under the words *"Read the command above"* (#427).
-    Falling back to ``url`` fixes the common case; returning ``""`` for whatever is left
-    is the general one, and :func:`fingerprint` turns that into "not approvable", so a
-    blank consent line can never be consented to again.
+    ``""`` when the entry has no destination to show, which :func:`fingerprint` turns into
+    "not approvable" — so a line the operator cannot read is a line nobody can consent to.
+    Two ways to get there:
+
+    * **Nothing named.** No ``command``, no ``args``, no ``url``. An ``http``/``sse``
+      server has no command, and building the line from ``command`` + ``args`` alone
+      rendered it as an EMPTY string under the words *"Read the command above"* (#427).
+      Falling back to ``url`` fixes the common case; ``""`` for the rest is the general
+      one. **Whitespace does not count as naming something**: every part goes through
+      :func:`_safe`, which strips it, so a ``command`` of three spaces is a blank line and
+      is refused rather than approved. Round one tested `""` and missed `"   "`.
+    * **Too much named.** So many parts that even their clipped forms exceed
+      :data:`MAX_LINE`. Charter will not print a page of destination and call it a line
+      the operator read, and it will not print half of one either. Fail closed: withheld.
+
+    **Every part is named; only its contents can be shortened.** Round one clipped the
+    FINISHED line at 600 characters, and both the ``[type url]`` and the ``(env: …)``
+    suffixes are appended after ``args`` — so ~600 characters of plausible ``args`` in a
+    committed file produced a consent line naming neither the ``env`` it set nor the
+    ``url`` it pointed at, while the approved render still carried both to ``execvpe``.
+    The comment that stood here claimed this was impossible because "the destination is at
+    the FRONT of the line"; that was true only of ``command``, and false of every field
+    that decides where a url-transport entry connects or which binary ``PATH`` resolves.
+    Each part now gets its own :data:`MAX_PART` budget and the suffixes are built from
+    already-clipped parts, so nothing appended to this line can be pushed out of it.
 
     ``env`` keys are shown because they choose the destination as surely as ``command``
     does: ``PATH`` decides which binary ``execvpe`` finds, ``NODE_OPTIONS`` decides what
@@ -191,19 +239,20 @@ def describe(entry: dict) -> str:
     raw = entry.get("args")
     argv = list(raw) if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
     parts = [str(entry.get("command") or "")] + [str(a) for a in argv]
-    dest = " ".join(_safe(p) for p in parts if p)
-    url = str(entry.get("url") or "").strip()
+    dest = " ".join(p for p in (_clip(_safe(p), MAX_PART) for p in parts) if p)
+    url = _clip(_safe(str(entry.get("url") or "")), MAX_PART)
     if url:
-        shown = f"{_safe(str(entry.get('type') or 'http'))} {_safe(url)}"
+        shown = f"{_clip(_safe(str(entry.get('type') or 'http')), MAX_PART)} {url}"
         dest = f"{dest}  [{shown}]" if dest else shown
     if not dest:
         return ""
     env = entry.get("env")
     if isinstance(env, dict) and env:
-        dest += "  (env: " + ", ".join(sorted(_safe(str(k)) for k in env)) + ")"
-    # The destination is at the FRONT of the line, so a committed file padding `args` with
-    # a megabyte of text cannot scroll it off the operator's screen. The digest still
-    # covers every byte of the entry, truncated here or not.
-    if len(dest) > MAX_LINE:
-        dest = dest[:MAX_LINE] + f"… (+{len(dest) - MAX_LINE} more chars)"
-    return dest
+        # `or '""'`: a key that renders blank is still a key the harness would set, so it
+        # is named as an empty string rather than left as an invisible gap in the list.
+        keys = sorted(_clip(_safe(str(k)), MAX_PART) or '""' for k in env)
+        dest += "  (env: " + ", ".join(keys) + ")"
+    # Not truncated: refused. A line this long is one no operator reads to the end, and
+    # cutting it would put us back where round one was — deciding which half of the
+    # destination the operator gets to see. The digest still covers every byte either way.
+    return "" if len(dest) > MAX_LINE else dest

@@ -148,8 +148,15 @@ The approval covers the **whole entry**, against the vault: command, args, `url`
 the `secrets`/`secret_files` mappings, and any other key the entry carries. **Change any of
 them and it lapses**, because the approval is of a destination and not of a server name — a
 teammate re-pointing an existing server at a new binary, a new endpoint or a new `PATH` is
-the case this exists for. An entry that names neither a `command` nor a `url` has no
-destination to show, so it cannot be approved at all; it is reported as withheld.
+the case this exists for.
+
+The printed line names every part of that destination, and **no part can push another one
+off it**. Each part — the command, each arg, the `url`, each `env` key — gets its own
+budget and is clipped on its own with the cut announced, so padding `args` in a committed
+file cannot scroll the `env` or the endpoint out of view. An entry charter cannot show in
+full cannot be approved at all and is reported as withheld: one that names no destination
+(no `command`, no `args`, no `url` — whitespace does not count as naming something), and
+one with so many parts that even their clipped forms would not fit on a line anybody reads.
 
 The record is machine-local under `.charter/`: if it travelled in git, the same commit that
 declares a server could declare it approved.

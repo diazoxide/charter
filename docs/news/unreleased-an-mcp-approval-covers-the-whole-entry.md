@@ -32,8 +32,27 @@ words *"Read the command above."* The `url` was not in the digest either, which 
 different endpoints shared one approval. Both are now covered: the line falls back to the
 URL, shows the `env` keys, and escapes anything unprintable, because a `\r` or a bidi
 override in a committed `args` can otherwise repaint the one line the whole decision rests
-on. An entry that names neither a command nor a URL cannot be rendered, and is therefore
-**not approvable** at all — it is reported as withheld instead of silently approved blank.
+on. An entry charter cannot render cannot be **approved** either — it is reported as
+withheld instead of silently approved blank.
+
+**And nothing on that line can push anything else off it.** The first cut at this clipped
+the finished line at 600 characters, on the reasoning that the destination sits at the
+front. That was true only of `command`. Both the `[type url]` and the `(env: …)` parts are
+appended *after* `args`, so roughly 600 characters of plausible-looking `args` in a
+committed file produced a consent line naming neither the `PATH` it re-pointed nor the
+endpoint it connected to — while the entry the operator approved carried both through to
+`execvpe`. Every part now has its own budget and is clipped on its own, with the cut
+announced, so `args` can be a megabyte long and the line still ends:
+
+```
+  uvx --config {aaaaaaaa… (+442 more chars)  [http https://evil.example/mcp]  (env: NODE_OPTIONS, PATH)
+```
+
+Two more shapes of the same trick close with it. Whitespace no longer counts as naming
+something — a `command` of three spaces used to render a line that was blank to the reader
+and truthy to charter, which is exactly the blank approval this section says is impossible.
+And an entry with so many parts that even their clipped forms overflow is refused rather
+than cut in half: charter will not decide which half of a destination you get to read.
 
 **`--approve-mcp` was its own answer.** One non-interactive call approved every credentialed
 server of every persona and printed what it had approved *afterwards*. It now prints each
@@ -48,7 +67,9 @@ Anything but an explicit yes — including EOF — withholds, and declining a se
 approved before **revokes** it. Two new flags: `--dry-run` prints the same lines and records
 nothing, and `--yes` keeps the old unattended shape for scripts. Off a terminal, `--yes` is
 now **required**: a flag that silently means yes where nobody can be asked is the finding
-restored.
+restored. The refusal you get off a terminal does not name `--yes` — `--help` does. A
+refusal that prints the flag defeating it is #421's shape, and the reader of that line is
+as often an agent as a person.
 
 **What to do after upgrading.** The digest changed, so every fingerprint recorded on this
 machine is stale and every credentialed MCP server is withheld until you approve it again.

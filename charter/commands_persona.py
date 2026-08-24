@@ -1413,8 +1413,11 @@ def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
         util.err("--approve-mcp hands a persona's vault value to a command a COMMITTED "
                  "file names, so it asks before recording — and there is no terminal to "
                  "ask on.")
-        util.info("  Re-run in a terminal, add --dry-run to see what would be asked, or "
-                  "pass --yes to approve every credentialed server unread.")
+        # Deliberately does NOT name `--yes` here. The flag exists and `--help` documents
+        # it, but a refusal that prints the flag defeating it is #421's shape: the reader
+        # of this line is as often an agent as an operator, and it would simply add it.
+        util.info("  Re-run in a terminal, or add --dry-run to see what it would ask "
+                  "about without recording anything.")
         return 1
     for n in names:
         declared = persona.mcp_credentialed(n)
