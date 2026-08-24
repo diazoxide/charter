@@ -134,7 +134,8 @@ class FailureIsVisibleInThePane(PersonaIso, unittest.TestCase):
 class Height(unittest.TestCase):
     """Mirrors `test_frame_slots.py`'s own `Width` class: `_rows` must measure the
     pane's own tty, not assume one — `left`/`right` panels are full height while
-    `top`/`bottom` are one row (`layout.SLOT_SIZE`), and this is the one function that
+    `top` is one row (`layout.SLOT_SIZE`) and `bottom` is one on a plane with no clones
+    (its floor, since #488), and this is the one function that
     has to be right for both."""
 
     def test_rows_measures_the_panes_own_tty(self):

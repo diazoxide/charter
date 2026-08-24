@@ -1480,7 +1480,8 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         proves nothing at all about what an operator sees: the failure being fixed is
         specifically that the reason DID reach the pane and was then scrolled out of it
         by tmux's own dead-pane message. So this spawns the real `charter panel` argv
-        into a real ONE-ROW pane (`layout.SLOT_SIZE["bottom"]`) with `remain-on-exit`
+        into a real ONE-ROW pane (`layout.SLOT_SIZE["bottom"]` — `bottom`'s floor since
+        #488, and still the height a plane with no clones gets) with `remain-on-exit`
         armed exactly as a real frame arms it, and asserts on `capture-pane` — what is
         on the screen — not on a return code.
 
@@ -1560,7 +1561,8 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         to write a message about yet: this 74-column reason, `print`ed to a 40-column
         ONE-row pane, leaves the visible screen ALREADY blank — the wrap and the print's
         own trailing newline each scroll the pane's only row into history. So at the
-        size `top` and `bottom` actually are (`layout.SLOT_SIZE`: 1) the operator's
+        size `top` always is, and `bottom` is at its floor (`layout.SLOT_SIZE`: 1), the
+        operator's
         nothing does not wait for the death, and does not depend on which tmux is
         running: the dead-pane message, where a tmux writes one, lands on a row that was
         already empty. It is also why `panel._write` — the one path `_hold` paints

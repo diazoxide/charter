@@ -359,7 +359,14 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     palette = {r["name"]: sl._PALETTE[i % len(sl._PALETTE)] for i, r in enumerate(repos)}
 
     capped = len(keys) > budget
-    show = (sl._pick_rows(keys, max(1, budget - 1), cur_repo, by_key, by_key)
+    # `budget - 1` and no `max(1, …)` underneath it: the overflow line is reserved OUT of
+    # the budget rather than appended on top of it and trimmed off at the end. With a
+    # one-row budget the trimmed version showed a single repo row and dropped the
+    # `…(+N more)` line — a pane claiming that one clean repo is the whole plane, which is
+    # the false-clean reading this module refuses everywhere else. A budget of exactly one
+    # therefore spends it on the note, which is the honest half of the pair: "there is
+    # more here than fits" outranks "here is an arbitrary one of them".
+    show = (sl._pick_rows(keys, budget - 1, cur_repo, by_key, by_key)
             if capped else keys)
 
     pieces = list(data.get("worktrees") or [])

@@ -66,9 +66,9 @@ the reason to stderr does not fix that, and the measurement is why (real tmux 3.
 `remain-on-exit on`): tmux writes its own `Pane is dead (status N, <date>)` message by
 moving to the pane's LAST row and issuing a linefeed first, which scrolls the pane up by
 exactly one line — in a six-row pane the first of three stderr lines is lost and the
-rest survive, but `top` and `bottom` are ONE row (`layout.SLOT_SIZE`), so that one
-scrolled line is the whole pane and `Pane is dead (status 2)` is provably all that is
-left. It cost a real debugging session, whose only way through was running the panel's
+rest survive, but `top` is ONE row (`layout.SLOT_SIZE`) and `bottom` is one whenever the
+workspace holds no clones (its own floor, since #488), so that one scrolled line is the
+whole pane and `Pane is dead (status 2)` is provably all that is left. It cost a real debugging session, whose only way through was running the panel's
 argv by hand outside tmux. A pane whose process is still ALIVE keeps what it painted
 (measured the same way), so `_hold` paints the reason and then simply does not return.
 
@@ -163,8 +163,9 @@ def _hold(reason: str, *, once: bool, rc: int) -> int:
     The whole of this module's answer to a panel that cannot run: **returning is the
     bug**. A panel process that exits hands its pane to `remain-on-exit`, and tmux then
     scrolls the pane by exactly one line to write `Pane is dead (status N, <date>)` over
-    it — which in the one-row `top`/`bottom` panes is the entire pane (measured against
-    real tmux 3.7c; see the module docstring). So the reason is painted and the process
+    it — which in a one-row pane, which `top` always is and `bottom` is on a plane with
+    no clones, is the entire pane (measured against real tmux 3.7c; see the module
+    docstring). So the reason is painted and the process
     simply does not leave, which is the only state in which a pane keeps what was
     written to it.
 

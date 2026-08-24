@@ -676,6 +676,25 @@ class BottomTable(PersonaIso, unittest.TestCase):
         self.assertIn("more)", out)
         self.assertNotIn("all clean", out)
 
+    def test_a_one_row_budget_spends_it_on_saying_how_much_is_hidden(self):
+        """The narrowest overflow case, and a false-clean one until it was closed. The
+        note used to be appended on top of the budget and trimmed off at the end, so a
+        pane with room for exactly one table row showed one repo — clean, on main — and
+        nothing saying the other nine existed. A pane claiming one clean repo IS the plane
+        is the reading this module refuses everywhere else, so the row is spent on the
+        note instead: "there is more here than fits" outranks an arbitrary one of them."""
+        rows = [_row(f"repo{i}") for i in range(10)]
+        rows[3] = _row("the-dirty-one", dirty=True)
+        _seed("f-1", repos=rows)
+        # Split BEFORE stripping: `tui.strip_ansi` runs `tui.sanitize`, which replaces a
+        # newline like any other control character, so stripping the whole render first
+        # would fold every row onto one line and make a line-count assertion meaningless.
+        lines = [tui.strip_ansi(ln) for ln in self._render(rows=2).split("\n")]
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn("+10 more", lines[1])
+        self.assertNotIn("all clean", lines[1],
+                         "it is hiding a dirty repo and must not claim otherwise")
+
     def test_the_table_is_bounded_by_the_panes_own_measured_height(self):
         """The renderer must spend the pane it HAS, not the one the launcher intended:
         a resize changes the pane under a running panel and nothing bumps the frame's
