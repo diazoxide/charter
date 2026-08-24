@@ -8,6 +8,16 @@ in four of its last five releases, so `charter init` **writes** the plugin inste
 The shim carries no policy. It answers one question — which harness is this — by putting
 `$CHARTER_HARNESS` into every shell opencode spawns, so `harness.current()` has something
 to read. Decisions stay in Python, where they are tested.
+
+What the plugin is NOT is a boundary, and SECURITY.md's line is the honest one here:
+"guard rails, not guarantees … a guard against mistakes, not an attacker with shell access
+as your user". opencode imports every file in :data:`PLUGIN_DIR` into ONE module realm and
+gives them all the same globals, so anything that can write a file next to the shim can
+redefine what the shim calls — and nothing this module does changes that. What it can do
+is refuse to say the realm is charter's when it is not: :func:`shim_is_charters` compares
+the file charter wrote byte for byte, and :func:`foreign_plugins` names everything else
+opencode will load. Reporting, not containment. The three rounds before this one each
+closed one named way in and each reported a clean plane while the next one was open.
 """
 
 from __future__ import annotations
@@ -40,8 +50,45 @@ TOOL_NAMES = {
     "edit": "Edit",
     "glob": "Glob",
     "grep": "Grep",
+    "skill": "Skill",
     "webfetch": "WebFetch",
     "task": "Task",
+}
+
+#: ``opencode tool id -> the `charter hook` handler that guards it``, the PreToolUse half
+#: of what `hooks/hooks.json` spells as matchers for Claude Code.
+#:
+#: One entry point for every tool was the original design, on the theory that "every
+#: decision stays in Python, where it has tests". It was wrong, and #433 is what it cost:
+#: `pretooluse` reads ``tool_input["command"]`` and guards Bash — it never looks at
+#: `tool_name` — so the vault-read guard (`pretooluse_read`) was simply ABSENT here. The
+#: Bash denial still fired and still NAMED the path it refused, while opencode's own
+#: `read` on that same path was allowed. That is #90 verbatim, one harness over.
+#:
+#: The routing table is the manifest, in the one language that has both halves. A tool
+#: with no entry falls to :data:`DEFAULT_PRE_HOOK` — which is the Bash guard, and which
+#: ignores names it does not know.
+PRE_HOOKS = {
+    "read": "pretooluse-read",
+    "grep": "pretooluse-read",
+    "write": "pretooluse-edit",
+    "edit": "pretooluse-edit",
+    "task": "pretooluse-dispatch",
+}
+
+#: Where a tool with no :data:`PRE_HOOKS` entry goes. `hooks/hooks.json` registers this
+#: one against `Bash`; here it is also the catch-all, because the handler tests
+#: ``tool_input["command"]`` and a tool that carries none reaches nothing.
+DEFAULT_PRE_HOOK = "pretooluse"
+
+#: The PostToolUse half. No catch-all: unlike the pre hooks there is nothing safe to run
+#: for a tool nobody wrote a handler for, and every one of these spawns a process.
+POST_HOOKS = {
+    "bash": "posttooluse-bash",
+    "write": "posttooluse",
+    "edit": "posttooluse",
+    "skill": "posttooluse-skill",
+    "task": "posttooluse-dispatch",
 }
 
 #: opencode's OWN permission names — the table charter's rule joins, not a list charter
@@ -100,6 +147,11 @@ FLAT_ONLY_PERMISSIONS = ("doom_loop", "question", "todowrite", "webfetch", "webs
 #:
 #: Claude Code needs no such list — its `additionalContext` arrives BESIDE the result.
 #: This restriction is the price of opencode having no channel of its own.
+#:
+#: It gates the APPEND, not the dispatch — those became two questions when :data:`POST_HOOKS`
+#: grew entries for `skill` and `task`. Running the handler is how a tally gets recorded;
+#: writing into the result is what corrupts a record. Conflating them is what kept
+#: `posttooluse-skill` and `posttooluse-dispatch` from ever running here.
 EFFECTFUL_TOOLS = ("bash", "edit", "write")
 
 def _shadowed_builtins(name: str) -> tuple[str, ...]:
@@ -135,8 +187,26 @@ def global_dir() -> Path:
     return (Path(xdg) if xdg else Path.home() / ".config") / "opencode"
 
 
+#: The directory opencode loads plugins FROM, relative to :func:`global_dir`.
+#:
+#: The unit is the directory, not the file. opencode 1.18.21 imports every `.ts`/`.js`
+#: entry it finds here — dotfiles included, subdirectories not — into ONE module realm,
+#: verified against the installed binary by putting six differently-named probes in a
+#: temp `$XDG_CONFIG_HOME` and booting `opencode serve` (`.ts`, `.js` and `.hidden.ts`
+#: loaded; `.mjs`, `.txt` and `sub/nested.ts` did not). So "is charter's plugin the one
+#: charter wrote" is a question about this directory, and asking it of one filename is
+#: asking about a member of a set the loader does not treat as separable.
+PLUGIN_DIR = Path("plugin")
+
 #: Relative to :func:`global_dir`.
-SHIM_PATH = Path("plugin") / "charter.ts"
+SHIM_PATH = PLUGIN_DIR / "charter.ts"
+
+#: What charter writes into :data:`PLUGIN_DIR`. Exactly one name, and the point of
+#: spelling it as a set is that :func:`foreign_plugins` SUBTRACTS it: anything else in
+#: that directory is named, whatever it is called. A screen keyed on suspicious names
+#: would be the fourth round of a list that goes one entry short — the first three were a
+#: filename, a character class and a longer table of fields.
+CHARTER_WROTE = frozenset({SHIM_PATH.name})
 
 #: The on-demand status line. opencode has no status-bar socket, so the plane state is a
 #: command instead of an ambient row. `.opencode/command/<name>.md` is the location, from
@@ -166,19 +236,64 @@ CONTEXT_PATH = Path("charter-context.md")
 #: hook can run — a failure that would look like charter being broken.
 _SHIM_TEMPLATE = '''\
 // charter-version: %(version)s
-// Generated by `charter init`. Safe to edit: charter writes this file only when it is
-// absent and never repairs one it finds, so your changes survive (ADR 0015).
+// Generated by `charter init`. Yours to edit: charter never overwrites a file whose stamp
+// is the running version, so a change you make here survives every `init` and `reinit`
+// (ADR 0015). It is not silent about it — `charter doctor` compares this file's BYTES to
+// the ones charter generates, and names it as one charter cannot vouch for.
+//
+// It also names every other file in this directory, because opencode loads them all into
+// one realm with shared globals: a plugin beside this one can redefine what the guards
+// below call, and this file cannot defend itself against that. Charter reports the realm;
+// it does not contain it (SECURITY.md — guard rails, not guarantees).
+// `charter update` DOES rewrite a shim stamped with an older version: charter cannot
+// regenerate that version to compare against, so it treats it as its own artifact to move.
 //
 // Charter is a Python CLI. This plugin holds no policy of its own — it names the harness
-// to every shell, and forwards tool calls to `charter hook pretooluse`, which is the same
-// handler Claude Code calls. Every decision stays in Python, where it has tests.
+// to every shell, and forwards each tool call to the `charter hook` handler that guards
+// it, which is the same handler Claude Code's hooks.json dispatches for that tool. Every
+// decision stays in Python, where it has tests.
+//
+// The ROUTING is the part that has to be here, and forwarding everything to one handler
+// was the bug (#433): `pretooluse` guards Bash by reading `tool_input.command` and never
+// looks at the tool name, so `read` reached no guard at all while the Bash denial went on
+// naming the vault path it had just refused.
 //
 // `input` is read on every call rather than cached: one opencode server hosts many
 // sessions, so a module-level "current session" would have no correct value.
 
 const TOOL_NAMES = %(tool_names)s
 
+const PRE_HOOKS = %(pre_hooks)s
+
+const DEFAULT_PRE_HOOK = %(default_pre_hook)s
+
+const POST_HOOKS = %(post_hooks)s
+
 const EFFECTFUL = %(effectful)s
+
+// Every table above is indexed by a string opencode chose, and a plain `TABLE[key]` does
+// not ask the table — it asks the whole prototype chain. `PRE_HOOKS["constructor"]` is
+// `Object`, `["toString"]` is a function, and `??` never fires for either, so a tool with
+// one of those ids used to spawn `charter hook function Object() { [native code] }`,
+// charter exited non-zero, this shim failed OPEN, and the call reached no guard at all —
+// not even the Bash catch-all. On the after-block the same lookup walked past `if (!hook)
+// return`, the one gate that exists because there is no safe catch-all there.
+//
+// So ask the PROPERTY instead of screening names: is this an OWN key of this table, and is
+// what it holds a string this may put on a command line? That answers "not in the table"
+// for every inherited property name there is — `constructor`, `toString`, `valueOf`,
+// `__proto__`, and whichever ones a future runtime adds — without this file carrying a
+// list of them to go stale.
+const own = (table, key) => {
+  if (typeof key !== "string" || !Object.hasOwn(table, key)) return undefined
+  const value = table[key]
+  return typeof value === "string" ? value : undefined
+}
+
+// opencode's tool id, or "". Normalised ONCE per call so the routing lookup, the name
+// translation and the EFFECTFUL test all read the same value, and so a `tool` that is not
+// a string can never become a command-line word or a `tool_name` charter has to parse.
+const toolId = (input) => (typeof input?.tool === "string" ? input.tool : "")
 
 export const CharterPlugin = async ({ $, directory }) => {
   return {
@@ -190,11 +305,13 @@ export const CharterPlugin = async ({ $, directory }) => {
     // Awaited before the tool runs, and `Plugin.trigger` wraps each hook in
     // `Effect.promise` with no try/catch — so throwing here is what denial IS.
     "tool.execute.before": async (input, output) => {
+      const tool = toolId(input)
+      const hook = own(PRE_HOOKS, tool) ?? DEFAULT_PRE_HOOK
       const payload = {
         hook_event_name: "PreToolUse",
         session_id: input?.sessionID ?? "",
         cwd: directory,
-        tool_name: TOOL_NAMES[input?.tool] ?? input?.tool ?? "",
+        tool_name: own(TOOL_NAMES, tool) ?? tool,
         tool_input: output?.args ?? {},
       }
       let parsed
@@ -203,7 +320,7 @@ export const CharterPlugin = async ({ $, directory }) => {
         // METHOD on it. An earlier version called one, threw on every tool
         // call, and failed OPEN silently — the guard never fired while
         // everything looked wired. Verified against opencode 1.18.18.
-        const res = await $`charter hook pretooluse < ${new Blob([JSON.stringify(payload)])}`
+        const res = await $`charter hook ${hook} < ${new Blob([JSON.stringify(payload)])}`
           .env({ ...process.env, CHARTER_HARNESS: "opencode",
                  CHARTER_SESSION_ID: input?.sessionID ?? "" })
           .quiet()
@@ -224,16 +341,23 @@ export const CharterPlugin = async ({ $, directory }) => {
       }
     },
 
-    // charter's mid-session nudges. On Claude Code they arrive beside the result; here
-    // there is no such channel, so they ride the result itself — and only for EFFECTFUL
-    // tools, because a `read` carrying appended text is a false record of that file.
+    // charter's after-the-fact handlers: the tallies (skill use, dispatch) and the
+    // mid-session nudges. On Claude Code a nudge arrives beside the result; here there is
+    // no such channel, so it rides the result itself — and only for EFFECTFUL tools,
+    // because a `read` carrying appended text is a false record of that file.
+    //
+    // Two questions, not one. POST_HOOKS decides whether the handler RUNS; EFFECTFUL
+    // decides whether its answer may be written into the tool's output. Treating them as
+    // one is what kept `skill` and `task` from ever being tallied on this harness.
     "tool.execute.after": async (input, output) => {
-      if (!EFFECTFUL.includes(input?.tool)) return
+      const tool = toolId(input)
+      const hook = own(POST_HOOKS, tool)
+      if (!hook) return
       const payload = {
         hook_event_name: "PostToolUse",
         session_id: input?.sessionID ?? "",
         cwd: directory,
-        tool_name: TOOL_NAMES[input?.tool] ?? input?.tool ?? "",
+        tool_name: own(TOOL_NAMES, tool) ?? tool,
         tool_input: input?.args ?? {},
         tool_response: { output: String(output?.output ?? "") },
       }
@@ -243,7 +367,7 @@ export const CharterPlugin = async ({ $, directory }) => {
         // METHOD on it. An earlier version called one, threw on every tool
         // call, and failed OPEN silently — the guard never fired while
         // everything looked wired. Verified against opencode 1.18.18.
-        const res = await $`charter hook posttooluse < ${new Blob([JSON.stringify(payload)])}`
+        const res = await $`charter hook ${hook} < ${new Blob([JSON.stringify(payload)])}`
           .env({ ...process.env, CHARTER_HARNESS: "opencode",
                  CHARTER_SESSION_ID: input?.sessionID ?? "" })
           .quiet()
@@ -253,7 +377,7 @@ export const CharterPlugin = async ({ $, directory }) => {
       } catch (e) {
         return
       }
-      if (!note) return
+      if (!note || !EFFECTFUL.includes(tool)) return
       // Fenced, so nothing here can be read back as the tool's own output.
       output.output = `${output?.output ?? ""}\n\n--- charter ---\n${note}\n--- end charter ---`
     },
@@ -272,17 +396,32 @@ _STAMP = "// charter-version: "
 SHIM = _SHIM_TEMPLATE % {
     "version": __version__,
     "tool_names": json.dumps(TOOL_NAMES, indent=2, sort_keys=True),
+    "pre_hooks": json.dumps(PRE_HOOKS, indent=2, sort_keys=True),
+    "default_pre_hook": json.dumps(DEFAULT_PRE_HOOK),
+    "post_hooks": json.dumps(POST_HOOKS, indent=2, sort_keys=True),
     "effectful": json.dumps(list(EFFECTFUL_TOOLS)),
 }
 
+#: The bytes :func:`ensure_shim` writes, and the ONLY thing an installed file is compared
+#: against. UTF-8 explicitly, and bytes rather than `str`, because `Path.read_text()` is
+#: not a byte comparison in either direction: it decodes with the locale's encoding and
+#: translates ``\r\n`` and lone ``\r`` to ``\n``, so three files with three different
+#: SHA-256s all came back equal to this string and all four callers said "current".
+SHIM_BYTES = SHIM.encode("utf-8")
+
 
 def shim_version(tree: Path) -> str | None:
-    """Which charter wrote the shim in *tree*, or ``None``.
+    """What the shim in *tree* SAYS wrote it, or ``None``.
 
-    ``None`` covers three cases that must not be told apart optimistically: no shim, a
-    shim from before the stamp existed, and one somebody rewrote. Each means "not
+    A name the file carries, not a fact about the file. ``None`` means the first line
+    carries no stamp: no shim, or a shim from before the stamp existed. Both mean "not
     something this charter can vouch for", and the dangerous one — a 0.40.0 plugin whose
-    guard threw on every tool call and failed open — is exactly the middle case.
+    guard threw on every tool call and failed open — is the second.
+
+    What this does NOT answer is whether the body under the stamp is the program charter
+    generates. A stamp is line 1, and line 1 is the one line an edit leaves alone; keep it
+    and replace everything below it and this still reports the running version. That is
+    :func:`shim_is_charters`'s question, and it is the one every caller here needs.
     """
     p = Path(tree) / SHIM_PATH
     try:
@@ -292,26 +431,172 @@ def shim_version(tree: Path) -> str | None:
     return head[len(_STAMP):].strip() if head.startswith(_STAMP) else None
 
 
+def shim_is_charters(tree: Path) -> bool:
+    """Is the installed plugin the program charter generates — byte for byte?
+
+    The IDENTITY question, asked of the content. :func:`shim_version` answers a weaker one
+    that reads like this one: what the first line says. #433 shipped for four releases
+    because a routing table nobody dispatched through still looked like routing; the same
+    shape one layer up is a version comment over a body that guards nothing. Both were
+    checked by name.
+
+    Reproduced before this existed: install the shim, keep line 1, and replace
+    ``own(PRE_HOOKS, tool) ?? DEFAULT_PRE_HOOK`` with the literal ``"pretooluse"``. Every
+    `read` goes back to the Bash guard — #433 exactly, vault-read guard absent again —
+    while `shim_version` said 0.51.0, `refresh_shim` said "current", `stale_wiring` said
+    nothing and `doctor` printed a tick.
+
+    Byte-for-byte, deliberately. "Which differences are harmless" is a judgement charter
+    cannot make about JavaScript it did not write, and every looser rule is a list of
+    permitted edits that goes one entry short. The cost of being strict is bounded and
+    known: a re-indented shim earns a `doctor` WARN, and nothing overwrites it — charter
+    reports, never repairs.
+
+    And byte-for-byte is `read_bytes`, not `read_text`. The first spelling of this said
+    "byte for byte" in its own docstring while comparing DECODED text: `Path.read_text()`
+    picks the locale's encoding and applies universal-newline translation, so the same
+    source written LF, CRLF and CR-only produced three SHA-256s and three "yes, this is
+    charter's". Every guard in this audit so far has been a comparison in a space one
+    transformation away from the one that matters.
+
+    What this does NOT answer — and what :func:`foreign_plugins` exists for — is whether
+    this file is the only thing opencode loads. It is one member of a directory the loader
+    imports whole, and code beside it shares its globals.
+    """
+    try:
+        return (Path(tree) / SHIM_PATH).read_bytes() == SHIM_BYTES
+    except OSError:
+        return False
+
+
+def _configured_plugins(tree: Path) -> tuple[str, ...]:
+    """Whatever ``opencode.json``'s ``plugin`` key names, as written.
+
+    The second door into the same realm, and charter already has this file open — `init`
+    writes :data:`CONTEXT_PATH` into its ``instructions``. Reported verbatim rather than
+    resolved: an npm specifier, a relative path and a bare name all land here, resolving
+    them is opencode's job, and a resolver charter maintains would be a fourth thing to be
+    wrong about. The answer this needs is "charter did not write this", which the raw
+    entry already is.
+    """
+    try:
+        doc = json.loads((Path(tree) / "opencode.json").read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ()
+    entries = doc.get("plugin") if isinstance(doc, dict) else None
+    if isinstance(entries, str):        # opencode takes a bare string here too
+        entries = [entries]
+    if not isinstance(entries, list):
+        return ()
+    return tuple(str(e) for e in entries)
+
+
+def foreign_plugins(tree: Path) -> tuple[str, ...]:
+    """Everything in opencode's plugin realm under *tree* that charter did not write.
+
+    The property, not a list of names. charter wrote exactly :data:`CHARTER_WROTE` into
+    :data:`PLUGIN_DIR`; this enumerates what is actually there and subtracts that, so a
+    file called `aaa_boot.ts`, `.hidden.ts`, `zzz.js` or whatever the next one is called
+    all give the same answer, and so does an entry in ``opencode.json``'s ``plugin`` key.
+
+    Why this is a security answer and not tidiness. opencode imports the whole directory
+    into ONE realm and hands every plugin the same globals. Reproduced against opencode
+    1.18.21 and the real shim: leave `charter.ts` byte-for-byte identical, drop
+    `plugin/aaa_boot.ts` containing ``Object.hasOwn = () => false`` beside it, and the
+    shim's own `own()` helper returns `undefined` for every lookup — `read` on
+    `.charter/vaults/…` routes to `pretooluse` (the Bash guard, which never looks at
+    `tool_name`) and is ALLOWED, while the after-block's `if (!hook) return` swallows
+    every tally and the committed-secret scan. `shim_is_charters` said True throughout.
+
+    Deliberately a SUPERSET of what opencode loads. The probe says `.ts`/`.js`/dotfiles
+    yes, `.mjs`/`.txt`/subdirectories no — and charter reports every entry anyway, because
+    a filter written from today's probe is a list that goes stale the release opencode
+    accepts one more suffix. Over-reporting costs a `doctor` line about a stray README;
+    under-reporting costs the vault.
+
+    Naming is all this does. charter cannot stop a file it did not write from running —
+    see the module docstring — and does not try to.
+    """
+    d = Path(tree) / PLUGIN_DIR
+    try:
+        here = sorted(p.name for p in d.iterdir())
+    except OSError:
+        here = []
+    out = [str(PLUGIN_DIR / n) for n in here if n not in CHARTER_WROTE]
+    out += [f"opencode.json plugin: {e}" for e in _configured_plugins(tree)]
+    return tuple(out)
+
+
+def unvouched(tree: Path) -> tuple[str, ...]:
+    """Every reason charter cannot vouch for the plugin realm under *tree*, each a
+    sentence naming what to DO about it. Empty when charter can vouch for all of it.
+
+    One function with three callers — `upgrade`, `wire` and (through them) `init`,
+    `reinit` and `update` — because the round before this one had three renderers for one
+    question and they disagreed. `doctor` warned and ended "→ charter reinit"; `reinit`
+    printed "Up to date — nothing to do" and said nothing about the shim it had just
+    declined to touch; `init` listed that same shim under "already present"; `update`
+    printed the honest sentence and then contradicted it with "`charter reinit` adds what
+    is missing", when nothing was missing. A remedy that reports success and changes
+    nothing is worse than no remedy, because it ends the investigation.
+
+    An OLDER stamp is the one case with a remedy charter can carry out itself, so it says
+    so. The two WRITERS never see it: `refresh_shim` runs first in both of them and has
+    already replaced the file by the time this is asked. `doctor` does not write, so for
+    `doctor` it is live — and it is the state where "→ charter reinit" was true all along,
+    which is what made the invented hint plausible everywhere else.
+    """
+    g = Path(tree)
+    out: list[str] = []
+    p = g / SHIM_PATH
+    if p.is_file() and not shim_is_charters(g):
+        stamped = shim_version(g)
+        if stamped == __version__:
+            out.append(f"{p} is stamped {__version__} but is not what charter generates, "
+                       f"so charter will not overwrite it — diff it, then move it aside "
+                       f"and run `charter reinit`")
+        elif stamped is None:
+            out.append(f"{p} carries no charter stamp, so charter will not overwrite it — "
+                       f"move it aside and run `charter reinit`")
+        else:
+            out.append(f"{p} is stamped {stamped}; charter wrote that version and will "
+                       f"replace it — run `charter reinit`")
+    for entry in foreign_plugins(g):
+        out.append(f"{g}: `{entry}` is not charter's, and opencode loads it into the same "
+                   f"realm as charter's plugin, where it shares the globals every guard "
+                   f"call goes through — remove it, or keep it as code you trust with "
+                   f"this plane's vaults")
+    return tuple(out)
+
+
 def refresh_shim(tree: Path) -> str:
     """Regenerate the shim in *tree* when charter can still recognise it as its own.
 
-    ``"created"`` (absent), ``"refreshed"`` (charter's, replaced), ``"not-ours"`` (no
-    stamp — left untouched), ``"current"`` (already this version).
+    ``"created"`` (absent), ``"refreshed"`` (an older charter's, replaced), ``"not-ours"``
+    (no stamp — left untouched), ``"edited"`` (this version's stamp over a body charter
+    did not write — left untouched), ``"current"`` (byte-for-byte what charter generates).
 
-    The stamp is what makes this safe. `ensure_shim` may never repair, because it cannot
-    ask whether the file is charter's; this can, and still refuses the moment the answer
-    is no. An operator who edited the shim keeps their edit and gets told about it, which
+    ``"current"`` is decided by :func:`shim_is_charters` and not by the stamp, because the
+    stamp is a name and this answer is charter vouching for a file. `ensure_shim` may
+    never repair, because it cannot ask whether the file is charter's; this can, exactly
+    once — for the version it can regenerate. For an older stamp it cannot, so "somebody
+    edited a 0.40.0 shim" and "a 0.40.0 shim" are still one case, and the trade there is
+    unchanged: charter rewrites its own artifact on upgrade.
+
+    Either way an operator's edit to the CURRENT shim now survives and is reported, which
     is the same trade `_load_settings` makes for a file charter half-owns.
     """
     p = Path(tree) / SHIM_PATH
     if not p.exists():
         return ensure_shim(tree) and "created"
+    if shim_is_charters(tree):
+        return "current"
     stamped = shim_version(tree)
     if stamped is None:
         return "not-ours"
     if stamped == __version__:
-        return "current"
-    p.write_text(SHIM)
+        return "edited"
+    p.write_bytes(SHIM_BYTES)
     return "refreshed"
 
 
@@ -327,7 +612,7 @@ def ensure_shim(root: Path) -> str:
     if p.exists():
         return "present"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(SHIM)
+    p.write_bytes(SHIM_BYTES)
     return "created"
 
 
@@ -387,23 +672,80 @@ class OpenCodeHarness(Harness):
         Deficit("prompt-hook",
                 "no per-turn prompt hook: charter's mid-session nudges ride the output of "
                 "effectful tools (write/edit/bash) instead of arriving beside them."),
+        # DENIES are carried in full — `tool.execute.before` throwing is what denial IS,
+        # and that is the half the vault guard and the one-credential rule use. What has
+        # no spelling here is the middle answer: a hook that returns `ask` gets a decision
+        # and a sentence, and opencode's plugin API takes neither. Throwing would turn a
+        # question into a refusal, which is a different answer, so charter allows and says
+        # so here. Named rather than left implicit because #433 was precisely a guard that
+        # looked wired and was not — a routed handler whose answer is dropped is the same
+        # shape one layer down.
+        #
+        # Not `charter guard`'s asks: those become rules in `opencode.json` and opencode
+        # prompts for them itself. This is charter's own tool-time asks — the routing and
+        # overlapping-dispatch nudges.
+        Deficit("ask-decisions",
+                "no ask channel at tool time: opencode's `tool.execute.before` can allow "
+                "or throw, so charter's own tool-time asks (the routing and "
+                "overlapping-dispatch nudges) allow and are not shown. Denials are "
+                "unaffected — they throw, and every guard that refuses still refuses."),
     )
 
     cli_name = "opencode"
     binary = "opencode"
 
     def stale_wiring(self) -> str:
-        """The version that wrote the installed plugin, when it is not this one.
+        """What the installed plugin REALM is, when charter cannot vouch for all of it.
 
-        ``""`` when current or absent — absent is `harness`'s other sentence, and two rows
-        saying the plane is unwired teaches people to skim. ``"unstamped"`` for a plugin
-        charter cannot vouch for, which includes every one written before the stamp.
+        A phrase the caller drops into "its plugin is …", so every answer has to read as
+        one. ``""`` only when charter's file is byte-for-byte its own AND nothing else
+        loads beside it — or when the file is absent, which is `harness`'s other sentence
+        and two rows saying the plane is unwired teaches people to skim.
+
+        Two independent facts, joined, because they fail independently and each has been
+        reported clean while the other was false:
+
+        * the FILE. Decided by content (:func:`shim_is_charters`), not by the stamp — a
+          stamp is a name a file carries, and "the running version" was reported for a body
+          with every guard cut out of it, because line 1 is the one line an edit leaves
+          alone.
+        * the REALM (:func:`foreign_plugins`). Decided by what is in the directory, not by
+          which filename charter looked up. The file was byte-for-byte perfect and a
+          sibling in the same realm turned every routing lookup into `undefined`, sending
+          a vault `read` to the Bash guard, which allowed it.
+
+        Both are the same mistake at different scales — charter asked about a NAME it chose
+        instead of about the thing the loader actually acts on.
         """
         g = global_dir()
         if not (g / SHIM_PATH).is_file():
             return ""
-        got = shim_version(g)
-        return "" if got == __version__ else (got or "unstamped")
+        parts = []
+        if not shim_is_charters(g):
+            got = shim_version(g)
+            if got is None:
+                parts.append("unstamped")
+            elif got == __version__:
+                parts.append(f"stamped {got} but changed since charter wrote it")
+            else:
+                parts.append(got)
+        else:
+            parts.append("charter's own")
+        foreign = foreign_plugins(g)
+        if foreign:
+            n = len(foreign)
+            parts.append(f"opencode also loads {n} {'thing' if n == 1 else 'things'} "
+                         f"charter did not write into the same realm "
+                         f"({', '.join(foreign)}), sharing its globals")
+        elif parts == ["charter's own"]:
+            return ""
+        return "; ".join(parts)
+
+    def wiring_remedy(self) -> str:
+        """:func:`unvouched`, joined. The same sentences :meth:`upgrade` returns and
+        `wire` reports, so `doctor`, `init`, `reinit` and `update` cannot drift apart
+        again — they did, and the one that was right was the one nobody was sent to."""
+        return "; ".join(unvouched(global_dir()))
 
     def detect(self) -> bool:
         """Nothing native to detect.
@@ -423,17 +765,27 @@ class OpenCodeHarness(Harness):
         with a second writer would be two code paths for one question, which is the shape
         this whole member was added to remove.
 
-        ``not-ours`` becomes ``manual`` rather than ``absent``: charter knows exactly how
-        this moves, it is declining to overwrite an operator's edit (additive-only).
+        ``not-ours`` and ``edited`` become ``manual`` rather than ``absent``: charter knows
+        exactly how this moves, it is declining to overwrite an operator's edit
+        (additive-only). They are two different sentences because they are two different
+        files — one carries no stamp at all, the other carries this version's stamp over a
+        body charter did not write, and telling somebody their plugin "carries no charter
+        stamp" when it plainly does sends them looking for the wrong thing. Both sentences
+        live in :func:`unvouched`, which is also what `wire` reports and what `doctor`'s
+        hint used to paraphrase wrongly.
+
+        A realm charter cannot vouch for is ``manual`` too, and it is the case that makes
+        "current" a dangerous answer rather than a stale one: the shim can be on this
+        version, byte-for-byte, and still be neutered by whatever loaded beside it.
         """
         g = global_dir()
         got = refresh_shim(g)
+        blocked = unvouched(g)
+        if blocked:
+            return "manual", "; ".join(blocked)
         if got == "current":
             return "current", __version__
-        if got in ("refreshed", "created"):
-            return "moved", f"opencode {SHIM_PATH} → {__version__}"
-        return "manual", (f"{g / SHIM_PATH} carries no charter stamp, so charter will not "
-                          f"overwrite it — move it aside and run `charter reinit`")
+        return "moved", f"opencode {SHIM_PATH} → {__version__}"
 
     def wire(self, root: Path) -> list[tuple[str, str]]:
         """Install once, where opencode reads for every project.
@@ -451,7 +803,15 @@ class OpenCodeHarness(Harness):
         # one-shot, and a plugin an older charter wrote then survives every upgrade while
         # `doctor` reports it wired. That was #233's bug per tree; moving to one global
         # file took the refresh path with it and brought the bug back.
-        out = [(refresh_shim(g), f"opencode {SHIM_PATH}")]
+        #
+        # A shim charter cannot vouch for is NOT reported as an installed item. `init`
+        # used to list it under "already present", which is true about the filename and
+        # false about everything the reader takes from it; the reasons carry the sentence
+        # instead, and the caller renders them as warnings.
+        status = refresh_shim(g)
+        out: list[tuple[str, str]] = []
+        if status not in ("edited", "not-ours"):
+            out.append((status, f"opencode {SHIM_PATH}"))
         cmd = g / COMMAND_PATH
         if not cmd.exists():
             cmd.parent.mkdir(parents=True, exist_ok=True)
@@ -460,6 +820,7 @@ class OpenCodeHarness(Harness):
         write_context(g)
         if ensure_instructions(g) == "created":
             out.append(("created", "opencode opencode.json (instructions)"))
+        out += [("unvouched", why) for why in unvouched(g)]
         return out
 
     def ask_rule(self, pattern: str) -> tuple[str, str]:

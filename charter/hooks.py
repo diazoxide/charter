@@ -2799,7 +2799,17 @@ _CONTINUATIONS = ("resume", "clear", "compact")
 _CONTENT_TOOLS = frozenset(("Read", "Grep"))
 
 #: Where each of them carries the thing it will read.
-_PATH_KEYS = ("file_path", "path", "notebook_path")
+#:
+#: **Both spellings, because the key is the HARNESS's and not charter's.** Claude Code's
+#: `Read` takes `file_path`; opencode 1.18.21's `read` takes `filePath` — read off its own
+#: `/experimental/tool` schema, not guessed — and its `write`/`edit` do the same. A guard
+#: keyed on one spelling is a guard that is absent on the other harness, which is exactly
+#: how #433 shipped. `grep`'s `path` is already shared, so nothing there needed a twin.
+#:
+#: Extra keys cost nothing: a payload carries the ones its own tool defines, and a harness
+#: that never sends `filePath` never matches on it. The camelCase half is additive, so the
+#: day a third harness spells it a third way this stays the one place to say so.
+_PATH_KEYS = ("file_path", "path", "notebook_path", "filePath", "notebookPath")
 
 
 def pretooluse_read() -> int:
@@ -3776,7 +3786,10 @@ def posttooluse() -> int:
     if (data.get("tool_name") or "") not in ("Write", "Edit", "MultiEdit"):
         return 0
     ti = data.get("tool_input") or {}
-    fp = ti.get("file_path") or ""
+    # Both spellings — see :data:`_PATH_KEYS`. opencode's `write`/`edit` say `filePath`,
+    # and reading only Claude Code's spelling made every branch below (the secret scan
+    # included) a no-op on that harness while looking wired.
+    fp = ti.get("file_path") or ti.get("filePath") or ""
     if not fp:
         return 0
     norm = ("/" + fp.replace("\\", "/")).replace("//", "/")
@@ -4013,7 +4026,13 @@ def posttooluse_skill() -> int:
     try:
         if (data.get("tool_name") or "") != "Skill":
             return 0
-        name = ((data.get("tool_input") or {}).get("skill") or "").strip()
+        # Claude Code's `Skill` names its argument `skill`; opencode's names it `name`
+        # (its own `/experimental/tool` schema, 1.18.21). Same reason as `_PATH_KEYS`:
+        # the key belongs to the harness, so both spellings are read or the tally is
+        # silently empty on one of them. Reached only when the tool IS `Skill`, so the
+        # generic `name` cannot pick up somebody else's argument.
+        ti = data.get("tool_input") or {}
+        name = (ti.get("skill") or ti.get("name") or "").strip()
         if not name:
             return 0
         from . import persona as _persona, skilluse

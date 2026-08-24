@@ -63,8 +63,10 @@ beside it are ordinary reads, and so is `.charter/vaults.json`, the registry, wh
 provider config and file paths but never a value. That qualifier *as the model wrote it* is
 the whole of the guard's ceiling and is not decoration: it is a text match on a command
 line, run before any shell touches it. It
-does the same for the harness's own `Read` and `Grep` tools. That closes the easy
-accidental paths. It is a guard against mistakes, not an attacker with shell access as your
+does the same for the harness's own `Read` and `Grep` tools, on every harness charter
+supports: Claude Code and Codex dispatch both handlers from the plugin's `hooks/hooks.json`,
+and opencode from the plugin `charter init` generates. That closes the easy accidental
+paths. It is a guard against mistakes, not an attacker with shell access as your
 user, and the shape of that limit is worth knowing rather than guessing at:
 
 - It matches **program names it knows**, so `python3 -c "print(open('.charter/vaults/db.json').read())"`,
@@ -108,6 +110,15 @@ user, and the shape of that limit is worth knowing rather than guessing at:
 None of that is a reason to switch the guard off, and none of it is a bug report: it is why
 the sentence above says *mistakes*. The boundary that does not depend on a name is that
 charter itself never prints the value.
+
+**On opencode the ceiling is lower than that, and it is worth naming.** opencode loads
+every file in its `plugin/` directory into one JavaScript realm with shared globals, so a
+second plugin installed there can redefine what charter's plugin calls and silently disable
+its guards — verified against opencode 1.18.21 with a six-line neighbour that turned a
+`read` of a vault file into an allow. charter cannot prevent that from Python. What it does
+is report it: anything in that directory charter did not write is named on the `charter
+doctor` harness row and in `charter harness list`. Reporting the realm, not containing it.
+
 
 ## The one-credential rule
 
