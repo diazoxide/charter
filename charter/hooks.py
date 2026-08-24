@@ -395,10 +395,22 @@ _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg 
 #: `.edm` is the pre-rename spelling, kept for the reason :data:`_CHARTER_PROGS` keeps the
 #: old binary name.
 #:
+#: `fingerprint.key` is here because reading it un-does `secret get`'s masking (#436).
+#: The masked line carries `HMAC(plane key, value)` rather than a hash of the value, so a
+#: guess cannot be checked against it — *unless the reader also holds the key*, at which
+#: point the offline wordlist check is back exactly as it was. That file is the whole
+#: strength of the fingerprint, so it belongs on the same side of this guard as the vaults
+#: themselves. It matters most for the providers that have no vault file at all: a
+#: 1Password-backed secret has nothing here to deny, and the key would have been the one
+#: readable thing standing between a fingerprint and the value it describes.
+#:
 #: Known limit, and the reason the tool gate does NOT reuse this as its only answer: this
 #: is a name, and a plane with `$CHARTER_HOME` set keeps its vaults somewhere this pattern
-#: cannot spell. `toolgate._resolves_into` asks the filesystem instead.
-_VAULT_PATH_RE = re.compile(r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-)|/?$)")
+#: cannot spell. `toolgate._resolves_into` asks the filesystem instead — and `_control_roots`
+#: already derives the state directory from `config.STATE_DIR`, so the key file is inside
+#: the tool gate's surface on such a plane without being named there.
+_VAULT_PATH_RE = re.compile(
+    r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-|fingerprint)|/?$)")
 
 
 #: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost

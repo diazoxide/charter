@@ -171,12 +171,34 @@ def shared_files_outside_plane() -> list[str]:
 
 
 def _write(path, doc: dict, mode: int) -> None:
+    """Write *doc* to *path* at *mode*, with the mode in force before the content is.
+
+    The mode argument to `os.open` is ignored for an inode that already exists, so this
+    used to write the local registry into whatever mode the file already had and chmod it
+    afterwards — the same mistake `PlainFileProvider._write_private` documents at length
+    (#437). Settled on the descriptor, before the truncate, for the same reasons.
+
+    Unlike the vault writer this does not refuse a mode it could not set: *mode* is 0644
+    for the SHARED half, which is committed and meant to be world-readable, so "still has
+    group bits" is not an error condition here. This file carries provider config, paths
+    and environment variable NAMES — never a value — which is what makes the weaker
+    posture the right one rather than an oversight.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    with os.fdopen(fd, "w") as f:
-        json.dump(doc, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    os.chmod(path, mode)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, mode)
+    try:
+        try:
+            os.fchmod(fd, mode)
+        except OSError:
+            pass
+        os.ftruncate(fd, 0)
+        with os.fdopen(fd, "w") as f:
+            fd = -1
+            json.dump(doc, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def save_registry(doc: dict) -> None:

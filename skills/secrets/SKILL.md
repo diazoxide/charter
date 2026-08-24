@@ -68,8 +68,24 @@ so a command that echoes it still cannot leak it into the transcript.
 **Just checking one is present:**
 
 ```bash
-charter secret get <vault> <key>       # masked: length + sha256 prefix
+charter secret get <vault> <key>       # masked: size band + keyed fingerprint
 ```
+
+The fingerprint is `HMAC(plane key, value)`, not a hash of the value, and the size is a
+band, not a count. So the line is safe to *carry* — pasted into a ticket, left in a
+transcript, shipped in a log, it cannot be checked against a guess by anyone who does not
+hold this plane's key. Compare two of them to ask "same value?"; that is the only thing
+one is for.
+
+**Inside this plane it is still an equality oracle, and that is not closed.** Anyone who
+can run `charter secret set` here can store a guess in a vault of their own and compare
+its masked line to a target vault's — which confirms the guess. No guard denies that; it
+is a deliberate trade, because per-vault salting would close it and would also break the
+one comparison the fingerprint exists to serve. So: **never store a candidate value in
+order to compare fingerprints with another vault.** Confirming someone's password is
+exactly the outcome the masking exists to prevent, and doing it from inside the plane is
+the one route still open. If you need to know whether two vaults agree, compare the two
+vaults' own lines — never a line from a value you supplied.
 
 ## Hard rules
 
@@ -77,6 +93,9 @@ charter secret get <vault> <key>       # masked: length + sha256 prefix
   Forcing it puts the value in context, which is the one outcome the vault exists to
   prevent. Use `exec` or `cp`.
 - Never echo a secret, write it into a tracked file, or pass it as a literal argument.
+- **Never store a value in order to compare its fingerprint against another vault's.**
+  That confirms a guess, which is the one thing masking exists to stop, and it is the
+  route the keyed fingerprint does *not* close.
 - Never put a secret in memory, a persona charter, a workspace charter, or a commit
   message. The vault is the only place for one.
 - If the vault or key does not exist, say so and ask for it to be added — do not work
