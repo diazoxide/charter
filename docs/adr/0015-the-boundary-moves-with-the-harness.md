@@ -202,12 +202,28 @@ edit leaves alone. A shim whose first line still reads `// charter-version: 0.51
 whose body has had its routing replaced by the literal `charter hook pretooluse` is #433
 back in full — every `read` at the Bash guard, the vault-read guard absent — and `doctor`
 printed a clean row over it, `charter update` reported it current, and `refresh_shim`
-declined to touch it. So `shim_is_charters` now compares the installed file to the one this
-charter generates, **byte for byte**, and every "this is ours" answer takes its yes from
-that. The stamp survives for the one question content cannot answer: what wrote a shim this
-charter cannot regenerate, which is how an older one is still recognised and moved. The
-restraint is unchanged in the direction that protects work — a file charter did not write
-is still never overwritten. It is only no longer vouched for.
+declined to touch it. So `shim_is_charters` now compares the installed file's BYTES
+(`read_bytes`, not `read_text` — which decodes with the locale's encoding and folds `\r\n`
+and lone `\r` into `\n`) to the ones this charter generates, and every "this is ours"
+answer takes its yes from that. The stamp survives for the one question content cannot
+answer: what wrote a shim this charter cannot regenerate, which is how an older one is
+still recognised and moved. The restraint is unchanged in the direction that protects
+work — a file charter did not write is still never overwritten. It is only no longer
+vouched for.
+
+**Amended again (2026-08-24): the file was never the unit.** opencode loads every `.ts`
+and `.js` in its `plugin/` directory into ONE module realm with shared globals (verified
+against 1.18.21 with probes in a temp `$XDG_CONFIG_HOME`), so a byte-perfect
+`plugin/charter.ts` beside `plugin/aaa_boot.ts` containing `Object.hasOwn = () => false`
+routes every vault `read` to the Bash guard and is allowed. Charter therefore enumerates
+the directory and `opencode.json`'s `plugin` key and names everything it did not write —
+a subtraction from the single name it writes, not a screen for names that look dangerous.
+
+This bounds what ADR 0015 claims. Writing the plugin ourselves buys charter an artifact
+with one version number; it does not buy a boundary, because the plugin shares a realm
+with whatever else is installed there. What charter can do is decline to say a realm is
+its own when it is not. That is reporting, and SECURITY.md's "guard rails, not guarantees"
+is the ceiling for everything in this file.
 
 ## What this is NOT
 

@@ -93,11 +93,32 @@ class Harness:
         """
         return ""
 
+    def wiring_remedy(self) -> str:
+        """What an operator can DO about :meth:`stale_wiring`, or ``""``.
+
+        READ-ONLY. :meth:`upgrade` composes the same sentence, but writes on the way to it,
+        and `doctor` needs the sentence without the write.
+
+        It exists because the caller invented one. `doctor`'s harness row ended
+        "→ charter reinit" — a command it chose, not one any harness had named — and
+        `charter reinit` then printed "Up to date — nothing to do" over the very file the
+        row was warning about. A remedy the reporter makes up is a remedy nothing tests.
+        """
+        return ""
+
     def wire(self, root: Path) -> list[tuple[str, str]]:
         """Write what this harness needs under *root*, IF ABSENT.
 
-        Returns ``(status, label)`` pairs — ``"created"`` or ``"present"`` — so `init`
-        can report every harness the same way without knowing what any of them writes.
+        Returns ``(status, label)`` pairs so `init` can report every harness the same way
+        without knowing what any of them writes:
+
+        * ``"created"`` / ``"present"`` (and any other write status) — *label* is a PATH,
+          listed in the summary.
+        * ``"unvouched"`` — *label* is a SENTENCE, warned about. Something in this
+          harness's wiring that charter did not write and will not touch, plus what to do
+          about it. A path in this bucket used to be listed as "already present", which is
+          true about the filename and false about everything a reader takes from it: #433
+          shipped a shim with its routing cut out under exactly that line.
 
         The restraint is the contract, not an implementation detail: charter never
         repairs a file it finds, because the operator's content is in there and silently

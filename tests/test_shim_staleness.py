@@ -13,11 +13,17 @@ with `#433`'s single line put back, reported the running version and got a clean
 row. #433 was a routing table nothing dispatched through; this is a version comment over a
 program nothing guards.
 
-`shim_is_charters` asks the identity question instead — is this file byte-for-byte the
-program charter generates — and `refresh_shim`, `stale_wiring`, `upgrade` and `doctor`
-all take their "yes, this is ours" from it. The restraint is unchanged in the direction
-that matters: charter still never overwrites a shim carrying the running stamp. It stops
-vouching for it.
+`shim_is_charters` asks the identity question instead — are this file's BYTES the ones
+charter generates — and `refresh_shim`, `stale_wiring`, `upgrade` and `doctor` all take
+their "yes, this is ours" from it. `read_bytes`, not `read_text`: the first version of
+this compared decoded text under a docstring that said "byte for byte", and three files
+with three SHA-256s (LF, CRLF, CR-only) all came back as charter's own. The restraint is
+unchanged in the direction that matters: charter still never overwrites a shim carrying
+the running stamp. It stops vouching for it.
+
+What this module does NOT cover is the realm the file lives in — a byte-perfect shim can
+still be neutered by a plugin loaded beside it, which is
+`tests/test_opencode_plugin_realm.py`.
 """
 
 from __future__ import annotations
@@ -144,9 +150,13 @@ class TheStampIsANameNotAnIdentity(unittest.TestCase):
 
     Round one of this audit guarded by a NAME and round two by a CHARACTER, and both were
     walked past by the same attack respelled. A version comment is a name. So the question
-    every one of these answers now rests on is the file's IDENTITY — is this byte-for-byte
-    the program charter generates — which no respelling gets past, because there is
-    nothing in it to respell.
+    every one of these answers now rests on is the file's IDENTITY — are these the bytes
+    charter generates — which no respelling of the FILE gets past.
+
+    Round four found the next scale up rather than the next spelling: the file was the
+    wrong unit. opencode loads the whole `plugin/` directory into one realm, so a second
+    file beside a byte-perfect `charter.ts` scored the same five answers again. That is
+    `tests/test_opencode_plugin_realm.py`; this module still only speaks for the file.
     """
 
     def _installed(self) -> Path:
@@ -239,18 +249,24 @@ class TheStampIsANameNotAnIdentity(unittest.TestCase):
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_HARNESS": "opencode"}))
         self.assertEqual(doctor.check_harness().status, doctor.OK)
 
-    def test_no_single_changed_character_anywhere_survives(self):
+    def test_no_single_changed_byte_anywhere_survives(self):
         """The property, not a list of edits.
 
         Every previous round of this audit was defeated by one input the fix's list did not
         contain — one codepoint, one path spelling, one case change. So this does not
-        enumerate mutations: it changes ONE character at a spread of offsets across the
-        whole file, line 1 included, and asks the same question every time. There is no
-        entry to leave out.
+        enumerate mutations: it changes ONE byte at a spread of offsets across the whole
+        file, line 1 included, and asks the same question every time. There is no entry to
+        leave out.
+
+        Instrumented in the SAME space the check reads: `write_bytes` over
+        :data:`SHIM_BYTES`. The earlier spelling of this test mutated through `write_text`
+        and called itself byte-for-byte, which is exactly the gap it was meant to close —
+        `read_text` folds `\r\n` and lone `\r` into `\n`, so a whole class of byte
+        changes was invisible to a test written in decoded text.
         """
         g = self._installed()
         p = g / opencode.SHIM_PATH
-        src = opencode.SHIM
+        src = opencode.SHIM_BYTES
         offsets = list(range(0, len(src), 97))
         # A stride wider than a line would step over whole guards; a file that shrank to
         # nothing would make this vacuous. Both are the same failure — nothing tested.
@@ -258,18 +274,22 @@ class TheStampIsANameNotAnIdentity(unittest.TestCase):
         for i in offsets:
             with self.subTest(offset=i):
                 # `~` is not in the shim's alphabet anywhere, so this is a change at every
-                # offset rather than a no-op wherever the original character matched.
-                p.write_text(src[:i] + "~" + src[i + 1:])
+                # offset rather than a no-op wherever the original byte matched.
+                p.write_bytes(src[:i] + b"~" + src[i + 1:])
                 self.assertFalse(opencode.shim_is_charters(g))
                 self.assertNotEqual(opencode.refresh_shim(g), "current")
 
     def test_a_truncated_shim_is_not_charters_either(self):
-        """Byte-for-byte means length too. A half-written file — an interrupted copy, a
-        full disk — keeps line 1 and loses whichever guard was at the end."""
+        """Byte-for-byte means length too — asked one byte at a time, in bytes. A
+        half-written file — an interrupted copy, a full disk — keeps line 1 and loses
+        whichever guard was at the end."""
         g = self._installed()
-        (g / opencode.SHIM_PATH).write_text(opencode.SHIM[:len(opencode.SHIM) // 2])
-        self.assertFalse(opencode.shim_is_charters(g))
-        self.assertEqual(opencode.refresh_shim(g), "edited")
+        src = opencode.SHIM_BYTES
+        for cut in (len(src) // 2, len(src) - 1):
+            with self.subTest(length=cut):
+                (g / opencode.SHIM_PATH).write_bytes(src[:cut])
+                self.assertFalse(opencode.shim_is_charters(g))
+                self.assertEqual(opencode.refresh_shim(g), "edited")
 
 
 @unittest.skipIf(_RUNTIME is None, "neither bun nor node is installed")

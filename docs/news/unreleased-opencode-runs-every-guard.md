@@ -82,24 +82,50 @@ the JS runtime for that list rather than keeping a copy.
 
 **The same defect one layer up: charter decided the installed plugin was its own by
 reading a version comment.** The shim carries `// charter-version: X` on its first line,
-and until now that stamp was the whole test — `charter doctor`, `charter update` and
-`charter harness list` all took it as the answer to "is this plane wired". Line 1 is the
-one line an edit leaves alone. Keep it and put back the single line #433 *was* —
+and until now that stamp was the whole test — `charter doctor` and `charter update` took
+it as the answer to "is this plane wired". Line 1 is the one line an edit leaves alone.
+Keep it and put back the single line #433 *was* —
 `const hook = own(PRE_HOOKS, tool) ?? DEFAULT_PRE_HOOK` becomes the literal
 `"pretooluse"` — and every `read` goes to the Bash guard again, the vault-read guard
 absent on the harness, under a green `doctor` row saying the plugin is current. Deleting
 the plugin's whole body scored the same. That is #433's shape exactly, moved from the
 routing table into the file the routing table lives in, and it was checked by a name both
-times. charter now compares the installed file to the one it generates, **byte for byte**,
-and takes every "yes, this is ours" from that. There is nothing in a byte-for-byte
-comparison to respell.
+times. charter now compares the installed file's **bytes** to the ones it generates —
+`read_bytes`, not `read_text`, because `read_text` decodes with the locale's encoding and
+folds `\r\n` and lone `\r` into `\n`, and the first version of this fix called three files
+with three different SHA-256s "charter's own".
+
+**And a file is not the unit opencode loads.** opencode imports every `.ts`/`.js` in its
+`plugin/` directory — dotfiles included — into one module realm with shared globals. So
+leave `plugin/charter.ts` byte-for-byte perfect, drop `plugin/aaa_boot.ts` containing
+`Object.hasOwn = () => false` beside it, and every table lookup in the shim returns
+`undefined`: a vault `read` routes to the Bash guard, which never looks at `tool_name`,
+and charter's real handler allows it, while the after-block stops running entirely and
+takes the committed-secret warning with it. Vouching for one filename cannot see that, so
+charter now **enumerates the directory** (and `opencode.json`'s `plugin` key) and names
+everything in it charter did not write. Not a screen for suspicious names — a subtraction
+from the one name charter writes, so the next spelling is covered by construction.
+
+What this is not: a boundary. Charter cannot stop code in opencode's plugin realm from
+redefining what charter's own plugin calls, and it does not pretend to — SECURITY.md's
+line holds here exactly ("guard rails, not guarantees … a guard against mistakes, not an
+attacker with shell access as your user"). It reports the realm; a test runs the real shim
+under a hostile sibling and asserts the bypass, so nothing in this repo can quietly start
+claiming otherwise.
 
 **To adopt it: update charter.** A plugin an older charter wrote is replaced by
 `charter init` / `charter update` — charter cannot regenerate that version to compare
 against, so it treats it as its own artifact to move. A plugin that is *not* what this
 charter generates is left exactly as it is and named on the `harness` row, whether or not
 it carries a stamp: diff it, then move it aside and run `charter reinit` to take this. The
-cost of being strict is a `doctor` warning on a shim you re-indented; the cost of being
-loose is the paragraph above.
+cost of being strict is a `doctor` warning on a shim you re-indented, or on a second
+plugin you installed on purpose; the cost of being loose is the paragraphs above.
+
+The remedies were also wrong, in a way worth naming on its own: `doctor` warned and sent
+you to `charter reinit`, `charter reinit` answered "Up to date — nothing to do", `charter
+init` listed the unreadable shim under "already present", and `charter update` said
+"`charter reinit` adds what is missing" when nothing was missing. Four renderers, one
+question, and the one honest sentence was the one nobody was sent to. There is now a
+single function that composes it and every one of them prints what it says.
 
 Found in the 2026-08-24 security audit (#433).

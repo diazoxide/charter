@@ -47,6 +47,12 @@ every harness charter supports: Claude Code and Codex dispatch it from the plugi
 accidental paths. It is a guard against mistakes, not an attacker with shell access as your
 user.
 
+On opencode specifically, that ceiling is lower than it looks and is worth naming: opencode
+loads every file in its `plugin/` directory into one JavaScript realm with shared globals,
+so a second plugin installed there can redefine what charter's plugin calls and silently
+disable its guards. Charter cannot prevent that. It names anything in that directory it did
+not write, on the `charter doctor` harness row — reporting the realm, not containing it.
+
 ## The one-credential rule
 
 Every git operation charter performs authenticates with the forge CLI's token over HTTPS —
