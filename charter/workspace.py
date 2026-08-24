@@ -30,9 +30,8 @@ import re
 import time
 from pathlib import Path
 
-from . import config, contain, util
+from . import config, contain, instance, util
 
-_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SESSION_MAX_AGE = 30 * 86400  # prune per-session pointers older than this
 _LEGACY_ROOT = config.ROOT / "repos"  # the pre-rename clone root
 
@@ -79,7 +78,14 @@ def _read(f: Path) -> str | None:
 
 
 def valid_name(name: str) -> bool:
-    return bool(name) and name not in (".", "..") and _NAME_RE.match(name) is not None
+    """Can *name* name a workspace? **The one place that answers this.**
+
+    Delegates to :func:`instance.workspace_name_ok` rather than keeping a second regex
+    here, because ``[workspace] default`` is read during ``config``'s bootstrap — before
+    this module can be imported — and two copies of the rule are how a reading site and a
+    creation site come to disagree (:mod:`charter.contain`).
+    """
+    return instance.workspace_name_ok(name)
 
 
 def _unreadable(fn) -> bool:
@@ -202,21 +208,48 @@ def default_file() -> Path:
 
 
 def declared_default() -> str | None:
-    """The workspace nominated by `charter workspace default`, or ``None``."""
+    """The workspace nominated by `charter workspace default`, or ``None``.
+
+    **Gated like every other committed file charter reads a name out of.** This dotfile is
+    ordinarily committable (see :func:`set_declared_default`), so the value is a
+    teammate's, and `resolve()` hands whatever it returns to `workspace_dir()`, which joins
+    it onto ``workspaces/``. Unguarded, ``../../esc`` here made `workspace current`,
+    `workspace vision` and `read_manifest` report content from outside the plane (#442).
+    `valid_name` is the same rule `persona.default_persona` keeps for its own twin.
+
+    Two checks, not one, because they answer different questions. `file_refusal` is about
+    the *path*: this rung is read by `resolve()` on every status-line paint, so a FIFO
+    committed at ``workspaces/.default`` would hang the paint rather than cost it a value.
+    `valid_name` is about the *name* inside it. Neither stands in for the other.
+
+    Never raises: a hook may cost a session its briefing and never its turn.
+    """
+    f = default_file()
+    if contain.file_refusal(f):
+        return None
     try:
-        val = default_file().read_text().strip()
+        val = f.read_text().strip()
     except OSError:
         return None
-    return val or None
+    return val if val and valid_name(val) else None
 
 
 def set_declared_default(name: str) -> None:
+    """Nominate *name*. Raises ``ValueError`` for a name :func:`declared_default` would
+    refuse to read back — writing a value the reader discards is a setting that silently
+    does nothing, which is worse than an error."""
+    name = name.strip()
+    if not valid_name(name):
+        raise ValueError(
+            f"invalid workspace name '{name}' "
+            "(use letters, digits, '.', '_', '-'; must not start with a dot)"
+        )
     # A fixed name directly under `workspaces/`, which the default ignore rule
     # (`/workspaces/*/*`) does not match — so it is an ordinarily committable path, and a
     # link there redirects this write (#349).
     d = contain.writable(default_file())
     d.parent.mkdir(parents=True, exist_ok=True)
-    d.write_text(name.strip() + "\n")
+    d.write_text(name + "\n")
 
 
 def clear_declared_default() -> None:
@@ -674,9 +707,15 @@ def manifest_path(name: str) -> Path:
 
 
 def read_manifest(name: str) -> dict:
-    """The committed manifest ({name, description, repos:[{name,branch}], …}), or {}."""
+    """The committed manifest ({name, description, repos:[{name,branch}], …}), or {}.
+
+    Gated like :func:`read_charter`, and for the same reason: `workspace.json` is committed,
+    and this is where `restore` and `fork` learn which repos to clone."""
+    p = manifest_path(name)
+    if contain.dir_refusal(p.parent) or contain.file_refusal(p):
+        return {}
     try:
-        return json.loads(manifest_path(name).read_text())
+        return json.loads(p.read_text())
     except (OSError, ValueError):
         return {}
 
@@ -920,7 +959,20 @@ def read_charter(name: str) -> str:
     # `workspace.md` is committed, and the SessionStart digest reads one per workspace on
     # this plane for its vision line — so an entry that blocks costs every session its
     # briefing, and one that never ends costs more than that (#336).
-    if contain.file_refusal(cf):
+    #
+    # BOTH questions, which is `file_refusal`'s own stated precondition ("a path that is
+    # not a link cannot have moved relative to the directory it was listed from, which the
+    # caller checked once with `dir_refusal`") and what `persona.definition_refusal` has
+    # always asked. Asking only the file half left the variant the file half structurally
+    # cannot see: when the DIRECTORY is the link, `workspace.md` inside it is an ordinary
+    # regular file with nothing to object to. Measured on 0.51.0 — a committed
+    # `workspaces/evil -> ../../esc` with `[workspace] default = "evil"`, a legal workspace
+    # name, printed the outside charter through `workspace vision` (#442). Containing the
+    # NAME does not contain this; the name was never the wrong part.
+    #
+    # The fast path in `within_data` is one `lstat` here, because `workspaces/` is itself a
+    # data root — so the SessionStart digest pays a syscall per workspace, not a resolve.
+    if contain.dir_refusal(cf.parent) or contain.file_refusal(cf):
         return ""
     return cf.read_text() if cf.exists() else ""
 

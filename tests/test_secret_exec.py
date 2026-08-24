@@ -15,6 +15,7 @@ from contextlib import redirect_stderr
 from types import SimpleNamespace
 
 from charter import commands_secrets
+from tests._isolation import PersonaIso
 
 
 class _StubProvider:
@@ -29,8 +30,13 @@ class _StubProvider:
         return self.values[key]
 
 
-class SecretExecMode(unittest.TestCase):
+class SecretExecMode(PersonaIso):
+    """`PersonaIso`, not a bare `TestCase`: `cmd_secret_exec` records the hand-out in the
+    session trace (#441), and a fixture that has not redirected `config` appends that row
+    to the plane the suite resolved to — the developer's own (#372, #402)."""
+
     def setUp(self) -> None:
+        super().setUp()
         self.provider = _StubProvider({"kibana-user": "svc_logs",
                                        "kibana-pass": "s3cr3t-value"})
         self._orig_provider = commands_secrets._provider
