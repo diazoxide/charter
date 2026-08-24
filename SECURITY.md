@@ -56,8 +56,13 @@ a system built for it and resolve it on demand.
 **Guard rails, not guarantees.** The Claude Code plugin's `PreToolUse` guard denies
 `--reveal` on a charter invocation it can recognise, and denies a known file-reading
 program — `cat`, `grep`, `head` and a dozen more — whose argument, *as the model wrote it*,
-spells a path under `.charter/`. That qualifier is the whole of the guard's ceiling and is
-not decoration: it is a text match on a command line, run before any shell touches it. It
+spells one of the **guarded paths**: the state directory `.charter` itself, the vault
+directory `.charter/vaults` and anything inside it, `.charter/browser…` and
+`.charter/active-…`. Not every path under `.charter/` — `.charter/state/…` and the config
+beside it are ordinary reads, and so is `.charter/vaults.json`, the registry, which holds
+provider config and file paths but never a value. That qualifier *as the model wrote it* is
+the whole of the guard's ceiling and is not decoration: it is a text match on a command
+line, run before any shell touches it. It
 does the same for the harness's own `Read` and `Grep` tools. That closes the easy
 accidental paths. It is a guard against mistakes, not an attacker with shell access as your
 user, and the shape of that limit is worth knowing rather than guessing at:
@@ -67,15 +72,26 @@ user, and the shape of that limit is worth knowing rather than guessing at:
   all run. Widening the list does not fix this — the next name is always the missing one.
 - It reads the **argv it is given**, and does not re-parse a shell string, so
   `sh -c 'cat .charter/vaults/db.json'` is one opaque argument to it.
-- It matches the **text of the operand as written**, normalised first. Redundant
+- It matches the **text of the operand as written**, normalised first. Redundant `/`
   separators, `.`/`..` segments and letter case are all collapsed, so
   `.charter//vaults/db.json`, `.charter/./vaults/db.json` and `.CHARTER/vaults/db.json` get
   the same answer as `.charter/vaults/db.json` — the last of those matters because macOS and
-  Windows fold case in the filesystem, and it is the same file there. What it cannot know is
-  a *different* path holding the same bytes: a vault registered outside `.charter/` (which is
-  what `charter vault add --file` offers when the default location would be committed), a
-  file `charter secret cp` wrote somewhere you named, or a symlink you planted. Resolving
-  those would mean a `stat` on every operand of every command.
+  Windows fold case in the filesystem, and it is the same file there. The directory itself
+  counts, with or without a trailing slash, because `grep -r TOKEN .charter/vaults` walks
+  every vault file in it. Three things it does **not** know, and they are limits rather than
+  bugs:
+  - An operand that *contains* the vault directory without naming it. `grep -r TOKEN .`
+    from the plane root reads every vault file as collateral and names none of them.
+    Denying every broad search is untenable, so both guards check the path you actually
+    named — the same limit, stated the same way, on both routes. `charter init` gitignores
+    the whole of `/.charter/`, which is what actually keeps a vault out of a commit.
+  - A *different* path holding the same bytes: a vault registered outside `.charter/` (which
+    is what `charter vault add --file` offers when the default location would be committed),
+    a file `charter secret cp` wrote somewhere you named, or a symlink you planted. Resolving
+    those would mean a `stat` on every operand of every command.
+  - A separator that is not `/`. Normalisation is POSIX; a Windows-style
+    `.charter\vaults\db.json` is a different path on POSIX, where a backslash is an
+    ordinary filename character, so folding it here would deny real filenames.
 - **Anything a shell does to that text, it does after the guard has answered.** The hook is
   handed the command line before `sh` runs and never sees what `sh` turns it into, so every
   expansion reaches the file unguarded: a glob (`cat .charter/vault?/db.json`,

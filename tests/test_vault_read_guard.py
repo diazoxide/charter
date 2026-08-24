@@ -56,6 +56,11 @@ class TestReadingAVaultIsDenied(ReadGuardCase):
         self.assertIn("secret exec", _reason(r))
 
     def test_grep_into_the_vault_directory_is_denied(self):
+        """Denied by the shared predicate, not by a step this route adds. It used to be the
+        latter — an appended-slash retry that lived only here — and the Bash route, reaching
+        the same predicate with the same operand, answered ALLOW on the directory that holds
+        every vault (#462). `tests/test_vault_path_spellings.py` asserts the two routes
+        agree; this asserts the answer itself."""
         self.assertEqual(_decision(self.read(".charter/vaults", tool="Grep", pattern="token")),
                          "deny")
 
@@ -85,8 +90,9 @@ class TestReadingAVaultIsDenied(ReadGuardCase):
 class TestItDoesNotOverreach(ReadGuardCase):
     def test_the_registry_is_not_a_vault_file(self):
         """`.charter/vaults.json` holds provider config and paths, never values — the same
-        carve-out the Bash guard makes, and for the same reason. Note the regex's trailing
-        slash: `vaults/` is the directory of secrets, `vaults.json` is the map."""
+        carve-out the Bash guard makes, and for the same reason. The regex anchors `vaults`
+        to a path SEGMENT: `vaults` and `vaults/` are the directory of secrets, and
+        `vaults.json` — where `vaults` is only a prefix of the segment — is the map."""
         self.assertIsNone(_decision(self.read(".charter/vaults.json")))
 
     def test_an_ordinary_file_is_untouched(self):

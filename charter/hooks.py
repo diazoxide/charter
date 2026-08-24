@@ -397,17 +397,26 @@ def _secret_kind(text: str) -> str | None:
 #: with this set, because a doc promising more than the set delivers is itself the defect.
 _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg ag awk "
                      "sed".split())
-#: The vault FILES — note the trailing slash. `.charter/vaults.json` is the registry and
-#: holds provider config and paths, never values, so `grep -rn vaults .charter/vaults.json`
-#: is an ordinary read and was being hard-denied.
+#: The vault DIRECTORY and everything under it — `vaults` followed by a separator OR by the
+#: end of the operand. The boundary being expressed is a PATH SEGMENT boundary, not a
+#: literal slash: `.charter/vaults.json` is the registry (provider config and paths, never
+#: values), `vaults` there is not a whole segment, and `grep -rn vaults .charter/vaults.json`
+#: is an ordinary read that was once hard-denied.
 #:
-#: The state DIRECTORY itself is the second alternative. `grep -r token .charter` walks
-#: every vault file inside it, and a pattern that required a trailing slash after
-#: `.charter` never saw the operand that named the directory (#443). Only at the end of
-#: the operand, so `.charter/vaults.json` and `.charter/state/…` are untouched, and
-#: `pretooluse_read`'s "test the target with a `/` appended too" still lands on `/?$`.
-#: `.edm` is the pre-rename spelling, kept for the reason :data:`_CHARTER_PROGS` keeps the
-#: old binary name.
+#: The `$` half is the fix for #462's round-three finding, and it is the same defect twice.
+#: A pattern that demanded a literal trailing slash could not see the operand that names the
+#: directory *itself* — the one operand that walks EVERY vault file. `grep -rn TOKEN
+#: .charter/vaults` printed plaintext while `Grep(path=".charter/vaults")` refused it,
+#: because the read guard had papered over the same gap with a private "retry the target
+#: with a `/` appended" that the Bash guard did not have. One predicate, two answers, and
+#: the gap sat where `pretooluse_read`'s own docstring said it would. Anchoring the segment
+#: here gives both routes the same answer for the same reason, and that retry is gone.
+#:
+#: The state DIRECTORY itself is the last alternative, for the same segment reason:
+#: `grep -r token .charter` walks every vault file inside it while naming no file at all
+#: (#443). Only at the end of the operand, so `.charter/vaults.json` and `.charter/state/…`
+#: are untouched. `.edm` is the pre-rename spelling, kept for the reason
+#: :data:`_CHARTER_PROGS` keeps the old binary name.
 #:
 #: `fingerprint.key` is here because reading it un-does `secret get`'s masking (#436).
 #: The masked line carries `HMAC(plane key, value)` rather than a hash of the value, so a
@@ -434,7 +443,7 @@ _READERS = frozenset("cat less more head tail bat nl tac xxd od strings grep rg 
 #: check has always `.lower()`ed for the same reason; the path check was the half that did
 #: not.
 _VAULT_PATH_RE = re.compile(
-    r"\.(?:charter|edm)(?:/(?:vaults/|browser|active-|fingerprint)|/?$)",
+    r"\.(?:charter|edm)(?:/(?:vaults(?:/|$)|browser|active-|fingerprint)|/?$)",
     re.IGNORECASE)
 
 
@@ -447,14 +456,23 @@ def _names_a_vault_path(operand: str) -> bool:
     `os.path.normpath` as well collapses `//`, `/./` and `a/b/..` to the one canonical
     spelling, which is the property the pattern was always reaching for.
 
-    Both forms are tested rather than only the normalised one, because `normpath` strips a
-    TRAILING slash and the pattern requires it: `grep -r . .charter/vaults/` must stay
-    denied. For the same reason the trailing slash is put back on the normalised form when
-    the operand carried one — without that, `grep -r . .charter//vaults//` normalises to a
-    form the pattern rejects and the doubled separator survives on the one operand that
-    walks EVERY vault file. A union can only widen, and it widens by exactly the spellings
-    that name the same path — it invents no new class of false positive, since every
-    operand whose normalised form matches has an unnormalised form naming the same path.
+    Both forms are tested rather than only the normalised one because `normpath` can move
+    the answer in the permissive direction: `cat .charter/vaults/../../elsewhere` matches as
+    written and normalises OUT of the plane, and a guard under review does not hand back a
+    denial that already existed. A union can only widen, and it widens by exactly the
+    spellings that name the same path — it invents no new class of false positive, since
+    every operand whose normalised form matches has an unnormalised form naming the same
+    path.
+
+    There is deliberately NO third step here. An earlier version put a stripped trailing
+    slash back on the normalised form, because the pattern demanded a literal `vaults/` and
+    `grep -r . .charter//vaults//` normalises to a form without one. `_VAULT_PATH_RE` now
+    anchors `vaults` to a path SEGMENT (`/` or end of operand), which answers that operand
+    directly — so the restore became dead code, and it is gone. That matters beyond tidiness:
+    the same "patch it at the caller" instinct is what produced #462's bypass, where
+    `pretooluse_read` carried a private appended-slash retry and `_leak_reason` did not, and
+    the vault DIRECTORY was denied on one route and allowed on the other. One predicate, one
+    answer, and no caller-local or step-local repairs — a widening belongs in the pattern.
 
     **The property this function can hold, stated exactly, because the surrounding docs are
     only allowed to claim this much.** It decides on the TEXT OF THE OPERAND AS WRITTEN,
@@ -477,8 +495,6 @@ def _names_a_vault_path(operand: str) -> bool:
     they chose is the documented limit in `SECURITY.md`, not this function's job.
     """
     norm = os.path.normpath(operand)
-    if operand.endswith("/") and not norm.endswith("/"):
-        norm += "/"
     return bool(_VAULT_PATH_RE.search(operand) or _VAULT_PATH_RE.search(norm))
 
 
@@ -2012,11 +2028,19 @@ def pretooluse_read() -> int:
     registered matcher, so it reached none of that — while the Bash denial helpfully *named
     the path it refused*, making `Read` on that path the agent's obvious next move.
 
-    Same regex as the Bash guard on purpose (:data:`_VAULT_PATH_RE`), including its
-    carve-out: ``.charter/vaults.json`` is the registry — provider config and paths, never
-    values — and only ``.charter/vaults/`` holds secrets. Two guards that disagreed about
-    what counts as a vault would be worse than one, because the gap would sit exactly where
-    nobody looks.
+    Same PREDICATE as the Bash guard on purpose — :func:`_names_a_vault_path`, called with
+    the target exactly as the caller wrote it and with no extra step of its own. It shares
+    the carve-out too: ``.charter/vaults.json`` is the registry — provider config and paths,
+    never values — while ``.charter/vaults``, with or without a trailing slash, is the
+    directory that holds them.
+
+    That "and no extra step of its own" is load-bearing and was learned the expensive way.
+    This function used to append a ``/`` to each target before testing it, which made the
+    read route strictly stricter than the Bash route on exactly one operand: the vault
+    DIRECTORY named without a slash. ``Grep(path=".charter/vaults")`` was refused while
+    ``grep -rn TOKEN .charter/vaults`` printed plaintext — the gap sitting precisely where
+    the next paragraph said it would. Any future widening belongs in the shared predicate,
+    never in one caller.
 
     Known limit, shared with the Bash guard and stated rather than papered over: a `Grep`
     rooted at the repo top searches vault files as collateral. Denying every broad search is
@@ -2036,13 +2060,15 @@ def pretooluse_read() -> int:
             return 0
         ti = data.get("tool_input") or {}
         targets = [str(ti[k]) for k in _PATH_KEYS if ti.get(k)]
-        # Each target is tested with a trailing slash appended as well. `_VAULT_PATH_RE`
-        # requires `vaults/` — the slash is what keeps `.charter/vaults.json`, the registry,
-        # out of it — so a Grep rooted at the DIRECTORY `.charter/vaults` would otherwise
-        # walk past a guard that stops every file inside it. Appending cannot create a false
-        # positive: `.charter/vaults.json/` still has no `vaults/` in it.
-        hit = any(_names_a_vault_path(t) or _names_a_vault_path(t + "/")
-                  for t in targets)
+        # `_names_a_vault_path` and NOTHING ELSE. This used to retry each target with a
+        # `/` appended, because the pattern demanded a literal `vaults/` and a Grep rooted
+        # at the DIRECTORY `.charter/vaults` would otherwise walk past a guard that stops
+        # every file inside it. That retry lived only here, so the Bash route — where the
+        # same operand reaches the same predicate — kept answering ALLOW on the directory
+        # that holds every secret (#462). The segment anchor in `_VAULT_PATH_RE` covers the
+        # directory operand for both routes, so this route no longer needs a private half of
+        # the answer, and a repaired hole cannot be repaired in one caller again.
+        hit = any(_names_a_vault_path(t) for t in targets)
     except Exception:
         return 0
     if not hit:

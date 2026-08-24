@@ -52,8 +52,15 @@ rule while one who reads a bare refusal files an issue.
   turns it into, so each of those is `cat` on the same inode and allowed. See
   [SECURITY.md](../SECURITY.md) for why that is the honest scope rather than a defect.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
-  matcher at all — same path pattern, so the same limits. (No shell is involved on this
-  route, so only the path-spelling limits apply.)
+  matcher at all. It calls the **same predicate on the same operand and adds no step of its
+  own**, so one operand gets one answer whichever route it arrives on — asserted directly, in
+  both directions, by `tests/test_vault_path_spellings.py::TestTheTwoGuardsCannotDisagree`.
+  That sentence used to read "same path pattern, so the same limits", which was false: this
+  route carried a private trailing-slash retry that the Bash route did not, so
+  `Grep(path=".charter/vaults")` was refused while `grep -rn TOKEN .charter/vaults` printed
+  plaintext. The retry is gone and the pattern anchors `vaults` to a path segment instead.
+  No shell is involved on this route, so of the limits above only the path ones apply — the
+  shell-expansion family does not arise here.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
   with the plane's own default branch as the operand, which is the one spelling that used to

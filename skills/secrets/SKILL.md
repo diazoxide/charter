@@ -106,14 +106,23 @@ vaults' own lines — never a line from a value you supplied.
   transcript exactly as if you had run `--reveal`. Delete the file when the tool is done.
 - **"The guard allowed it" is not evidence that a command is safe.** The `PreToolUse` guard
   is a text match on a known program name and a path as you spelled it, run before any shell
-  touches the line. It therefore allows readers it does not know (`base64`, `jq`, `dd`,
-  `python3 -c`, `git show HEAD:<path>`), and it allows anything a shell rewrites for you: a
-  glob (`cat .charter/vault?/db.json`), a variable (`V=…; cat $V`), a command substitution,
-  brace expansion, or a `cd` into the vault directory followed by a bare filename. Each of
-  those reads the exact file the guard refuses when you spell it plainly. **Never read a
-  vault file, by any name, spelling or program.** A denial is charter noticing a mistake, not
-  charter's permission system — do not go looking for a form of the command it does not
-  notice, and do not treat an allowed command as cleared.
+  touches the line. It therefore allows:
+  - readers it does not know — `base64`, `jq`, `dd`, `cut`, `python3 -c`,
+    `git show HEAD:<path>`, `tar -cf … .charter`;
+  - anything a shell rewrites for you: a glob (`cat .charter/vault?/db.json`), a variable
+    (`V=…; cat $V`), a command substitution, brace expansion, or a `cd` into the vault
+    directory followed by a bare filename;
+  - **a search rooted above the vault directory.** `grep -rn TOKEN .` reads every vault file
+    and is allowed, because the operand you named is `.` and not a vault path. Naming the
+    directory — `grep -rn TOKEN .charter/vaults`, with or without a trailing slash — is
+    denied. The difference is what you typed, not what the command reads.
+
+  Each of those reaches the exact bytes the guard refuses when you spell the path plainly.
+  **Never read a vault file, by any name, spelling, program, or recursive walk that happens
+  to include it.** A denial is charter noticing a mistake, not charter's permission system —
+  do not go looking for a form of the command it does not notice, and do not treat an
+  allowed command as cleared. If you need to search the plane, exclude the vault directory
+  (`grep -rn TOKEN . --exclude-dir=vaults`) rather than relying on the guard to stop you.
 - Never echo a secret, write it into a tracked file, or pass it as a literal argument.
 - **Never store a value in order to compare its fingerprint against another vault's.**
   That confirms a guess, which is the one thing masking exists to stop, and it is the

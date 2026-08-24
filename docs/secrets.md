@@ -143,12 +143,20 @@ shell history**, while still letting an agent *use* the credential:
 
   `Glob` is not denied — it returns file *names*, and that a vault exists is not the secret.
   Neither is a search rooted far above `.charter/`, which reads vault files as collateral;
-  denying every broad search is untenable, so the guard checks the path you actually named.
+  denying every broad search is untenable, so both guards check the path you actually named.
+  What the two routes do **not** differ on is any spelling of a guarded path: they call one
+  predicate on the operand as written and neither adds a step of its own, which is asserted
+  in both directions rather than assumed — the one round where the read route carried an
+  extra step, the Bash route allowed `grep -rn TOKEN .charter/vaults` while `Grep` on the
+  same directory was refused.
 
   **What the guard does not catch, stated so you do not have to discover it.** The whole of
   it is one sentence: **the guard matches a known program NAME against a path SPELLED IN THE
-  COMMAND LINE, before any shell runs.** Three things fall out of that, and nothing else is
-  hiding behind them.
+  COMMAND LINE, before any shell runs.** Four things fall out of that sentence. It is a
+  claim about *that sentence's consequences*, not a promise that the list is exhaustive —
+  the review that produced this section found a fifth by re-reading the code, not the prose,
+  and the honest version of the promise is that each item below is pinned as behaviour in
+  `tests/test_documented_limits.py` or `tests/test_vault_path_spellings.py`.
 
   *The name.* Everything not on the reader list runs: an interpreter
   (`python3 -c "print(open('.charter/vaults/db.json').read())"`), a program that reads
@@ -158,12 +166,25 @@ shell history**, while still letting an agent *use* the credential:
   close this: the missing one is always the next one, and a longer list starts denying
   ordinary work.
 
-  *The path spelling.* Separators, `.`/`..` segments and letter case are normalised, so
-  `.charter//vaults/db.json`, `.charter/./vaults/db.json` and `.CHARTER/vaults/db.json`
-  answer the same as the plain form. What is left is a *different* path holding the same
-  bytes: a vault registered outside `.charter/` (see below), a file `charter secret cp`
-  materialised at a path you chose, or a symlink. Each is an ordinary file to every guard
-  charter has.
+  *The path spelling.* Redundant `/` separators, `.`/`..` segments and letter case are
+  normalised, so `.charter//vaults/db.json`, `.charter/./vaults/db.json` and
+  `.CHARTER/vaults/db.json` answer the same as the plain form — and so does the directory
+  itself, `.charter/vaults`, with or without the trailing slash. Two things are left. A
+  *different* path holding the same bytes: a vault registered outside `.charter/` (see
+  below), a file `charter secret cp` materialised at a path you chose, or a symlink — each
+  an ordinary file to every guard charter has. And a separator that is not `/`:
+  normalisation is POSIX, so a Windows-style `.charter\vaults\db.json` is not folded,
+  because on POSIX a backslash is an ordinary filename character and folding it would deny
+  real filenames.
+
+  *The path you actually named.* An operand that **contains** the vault directory without
+  naming it is not a vault path: `grep -rn TOKEN .` from the plane root reads every vault
+  file as collateral, names none of them, and is allowed. This is the one that ends up
+  mattering most in practice, and it is deliberate on both routes — denying every broad
+  search is untenable, so both the Bash guard and the `Read`/`Grep` guard check the path in
+  the operand rather than the files a recursive walk would reach. It is also the reason
+  `charter init` gitignores the whole of `/.charter/` rather than relying on the guard to
+  keep a vault out of a commit.
 
   *Before any shell runs.* This is the one people discover the hard way. The hook is handed
   the command line and never sees what the shell makes of it, so every expansion is a read

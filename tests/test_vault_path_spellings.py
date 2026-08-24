@@ -8,12 +8,29 @@ limit (a path *you* chose, outside the plane): it is the guard failing on the on
 claims to cover, which is what `SECURITY.md` and `docs/hooks.md` now promise it catches.
 
 **The property, stated no wider than what is tested here.** The guards answer on the TEXT
-OF THE OPERAND AS WRITTEN, and this file pins that they are complete over the three ways
-that text can vary while still naming the same file *without a shell's help*: redundant
-separators, dot segments, and LETTER CASE. So the tests generate those spellings
-mechanically and assert every one lands where the canonical form lands — denied for a vault
-file, allowed for the registry and for ordinary work. A new separator or case trick is a new
-element of `_RESPELLINGS`, not a new bypass.
+OF THE OPERAND AS WRITTEN, and this file pins that they are complete over four ways that
+text can vary while still naming the same path *without a shell's help*: redundant `/`
+separators, dot segments, LETTER CASE, and — for the vault DIRECTORY — the presence or
+absence of a trailing slash. So the tests generate those spellings mechanically and assert
+every one lands where the canonical form lands: denied for a vault file and for the
+directory that holds every vault file, allowed for the registry and for ordinary work. A
+new separator or case trick is a new element of `_RESPELLINGS`, not a new bypass.
+
+**And that the two routes agree.** The fourth item above was missing for a review round
+precisely because every test here asked ONE guard about the operands IT was written for.
+`grep -rn TOKEN .charter/vaults` printed a fabricated password through the Bash route while
+`Grep(path=".charter/vaults")` refused the identical target, because `pretooluse_read`
+carried a private "retry with a `/` appended" step and `_leak_reason` did not. Both this
+file and `tests/test_vault_read_guard.py` were green throughout. `TestTheTwoGuardsCannotDisagree`
+is the answer to that shape: one corpus, both routes, fails in either direction, so a repair
+made in one caller reddens it instead of hiding in it.
+
+**What is deliberately NOT closed, pinned as behaviour rather than left to be rediscovered.**
+`TestWhatStillWalksPastBothGuards` — an operand that merely CONTAINS the vault directory,
+e.g. `grep -rn TOKEN .` (#474). `TestSeparatorMeansTheForwardSlash` — a Windows-style
+backslash spelling (#476). Both are stated as limits in `SECURITY.md`, `docs/secrets.md` and
+`skills/secrets/SKILL.md`, and if either ever starts being denied these tests fail next to
+the paragraph that has to move with it.
 
 **What this file does NOT claim, because the first version of this docstring did and it was
 false.** It said the decision "depends on the path an operand names, not on how it is
@@ -74,6 +91,11 @@ _RESPELLINGS = (
 VAULT = ".charter/vaults/db.json"
 REGISTRY = ".charter/vaults.json"
 ORDINARY = "docs/secrets.md"
+#: The vault DIRECTORY named without a trailing slash — the operand that walks EVERY vault
+#: file, and the one the two guards disagreed about for a whole review round (#462). It is a
+#: constant rather than a literal in one test because both routes and the differential all
+#: have to answer for it.
+DIRECTORY = ".charter/vaults"
 
 
 def _decision(r) -> str | None:
@@ -114,12 +136,18 @@ class TestTheBashGuardAnswersThePathNotTheSpelling(unittest.TestCase):
         Without this test, deleting the raw arm passes the whole file."""
         self.assertIsNotNone(hooks._leak_reason("cat .charter/vaults/../../elsewhere"))
 
-    def test_a_directory_operand_keeps_its_trailing_slash_denial(self):
-        """`normpath` strips a trailing slash and `_VAULT_PATH_RE` requires it, so testing
-        only the normalised form would have quietly re-opened the recursive grep that walks
-        every vault file. Both forms are tested; this is the case that proves it."""
-        self.assertIsNotNone(hooks._leak_reason("grep -r . .charter/vaults/"))
-        self.assertIsNotNone(hooks._leak_reason("grep -r . .charter//vaults//"))
+    def test_a_directory_operand_is_denied_with_or_without_the_slash(self):
+        """The recursive grep that walks EVERY vault file, in both of its spellings.
+
+        `normpath` strips a trailing slash, so an earlier version put one back before
+        matching — and the pattern it was feeding demanded a literal `vaults/`, which is why
+        the slash mattered at all. Anchoring `vaults` to a path segment answers both
+        spellings from the pattern itself; the restore step is gone, and neither of these
+        may start passing for a reason other than the pattern."""
+        for cmd in ("grep -r . .charter/vaults/", "grep -r . .charter//vaults//",
+                    "grep -r . .charter/vaults", "grep -r . .charter//vaults"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(hooks._leak_reason(cmd))
 
 
 class TestTheReadGuardAnswersThePathNotTheSpelling(PersonaIso):
@@ -150,11 +178,11 @@ class TestTheReadGuardAnswersThePathNotTheSpelling(PersonaIso):
                                  _decision(self.read(path, tool="Grep", pattern="token")))
 
     def test_a_grep_rooted_at_the_vault_directory_is_denied_in_every_case(self):
-        """The composed decision, not the shared helper. `.charter/vaults` carries no
-        trailing slash and the pattern requires one, so this route only lands because
-        `pretooluse_read` retries the target with a `/` appended — and that retry has to keep
-        working through the case fold, on the exact operand a `Grep` names when an agent
-        points it at the directory holding every vault file."""
+        """The composed decision, not the shared helper — the exact operand a `Grep` names
+        when an agent points it at the directory holding every vault file, crossed with the
+        case fold. This route once landed via a slash-appending retry private to
+        `pretooluse_read`; it now lands via the segment anchor in the shared pattern, which
+        is what makes the Bash route answer the same way."""
         for path in (".charter/vaults", ".CHARTER/VAULTS", ".Charter/Vaults",
                      ".charter/VAULTS", ".CHARTER/vaults"):
             with self.subTest(path=path):
@@ -163,9 +191,9 @@ class TestTheReadGuardAnswersThePathNotTheSpelling(PersonaIso):
                                  f"{path} walks past the read guard")
 
     def test_the_registry_stays_readable_through_the_read_guard_in_every_case(self):
-        """Boundary control for the pair above: the retry appends a slash to `vaults.json`
-        too, and `vaults.json/` still has no `vaults/` in it. If this ever denies, #443's
-        false positive is back and the case fold is what widened it."""
+        """Boundary control for the pair above: `vaults` in `vaults.json` is a prefix of a
+        path segment, not a segment, so the anchor does not reach it. If this ever denies,
+        #443's false positive is back and the widening that did it is right above."""
         for path in (".charter/vaults.json", ".CHARTER/VAULTS.JSON", ".Charter/Vaults.Json"):
             with self.subTest(path=path):
                 self.assertIsNone(_decision(self.read(path)), f"{path} is the registry")
@@ -237,6 +265,7 @@ class TestThisBranchNeverDeniesLessThanMain(unittest.TestCase):
     #: arm would hand back — the containment test is worthless without it, and dropping the
     #: raw arm now reddens this class as well as its own.
     BASES = (VAULT, REGISTRY, ORDINARY, ".charter", ".charter/", ".charter/vaults/",
+             DIRECTORY, ".edm/vaults", ".charter/vaultsomething", ".charter/vaults.json.bak",
              ".charter/browser/profile", ".charter/active-persona", ".edm/vaults/db.json",
              "/home/me/plane/.charter/vaults/db.json", "charter/hooks.py",
              "docs/charter.md", ".charterhouse/notes.md", "a/.charter/vaults/x.json",
@@ -263,12 +292,139 @@ class TestThisBranchNeverDeniesLessThanMain(unittest.TestCase):
                          "this branch allows an operand `origin/main` denied")
 
     def test_the_read_guard_is_not_weaker_either(self):
-        """`pretooluse_read` shares the predicate but adds its own trailing-slash retry, so
-        the containment is asserted on the composed decision, not on the shared helper."""
+        """`pretooluse_read` calls the shared predicate with the target exactly as written
+        and adds nothing of its own, so this is the same containment reached the way that
+        route reaches it. If a caller-local step is ever reintroduced, this stops being a
+        transcription of `pretooluse_read` and `TestTheTwoGuardsCannotDisagree` below is the
+        one that fails."""
         weaker = [c for c in self.corpus()
-                  if _MAIN_VAULT_PATH_RE.search(c)
-                  and not (hooks._names_a_vault_path(c) or hooks._names_a_vault_path(c + "/"))]
+                  if _MAIN_VAULT_PATH_RE.search(c) and not hooks._names_a_vault_path(c)]
         self.assertEqual([], weaker)
+
+
+class TestTheTwoGuardsCannotDisagree(PersonaIso):
+    """The differential that was missing, and the one this round's bypass needed.
+
+    Every other test in this file asks each guard whether it denies the operands *it* was
+    written for. That cannot catch the defect that shipped: `grep -rn TOKEN .charter/vaults`
+    printed a fabricated password through the Bash route while `Grep(path=".charter/vaults")`
+    refused the identical target, because `pretooluse_read` carried a private
+    "retry with a `/` appended" step that `_leak_reason` did not. Both files were green. The
+    Bash suite had no directory operand; the read suite had one and passed *because of* the
+    step that made the two routes differ.
+
+    So this asserts the PROPERTY instead of either guard's own list: **one operand, one
+    answer, whichever route it arrives on.** It is deliberately direction-free — it fails on
+    a read-route denial the Bash route allows AND on the reverse — because either direction
+    is a gap, and the gap that shipped was the one nobody was looking for.
+
+    Anti-vacuity is `test_the_corpus_contains_both_answers`: a corpus that is all-deny or
+    all-allow makes agreement free.
+    """
+
+    #: Whole COMMANDS, so the Bash side is exercised through `_leak_reason` — shlex, argv
+    #: split, reader-name check, `_file_operands` — rather than through the predicate both
+    #: sides share. A test that called `_names_a_vault_path` twice would agree by
+    #: construction and could never have failed.
+    READER = "cat"
+
+    def corpus(self) -> list[str]:
+        out = []
+        for base in TestThisBranchNeverDeniesLessThanMain.BASES:
+            for _name, respell in _RESPELLINGS:
+                out.append(respell(base))
+        return out
+
+    def _bash_denies(self, operand: str) -> bool:
+        return hooks._leak_reason(f"{self.READER} {operand}") is not None
+
+    def _read_denies(self, operand: str) -> bool:
+        r = run_hook(hooks.pretooluse_read,
+                     {"tool_name": "Read", "tool_input": {"file_path": operand},
+                      "session_id": "s", "cwd": "/tmp"})
+        return _decision(r) == "deny"
+
+    def test_the_corpus_contains_both_answers(self):
+        answers = {self._bash_denies(c) for c in self.corpus()}
+        self.assertEqual({True, False}, answers,
+                         "agreement is vacuous unless the corpus is answered both ways")
+
+    def test_every_operand_gets_the_same_answer_on_both_routes(self):
+        split = [(c, self._bash_denies(c), self._read_denies(c)) for c in self.corpus()]
+        split = [(c, b, r) for c, b, r in split if b != r]
+        self.assertEqual([], split[:5],
+                         f"{len(split)} operands get two answers depending on the route")
+
+    def test_the_directory_operand_specifically(self):
+        """Named on its own, not left to the generated corpus, because it is the whole
+        finding: the operand that names the directory holding every vault file, spelled
+        without the trailing slash the pattern used to demand."""
+        for spelling in (DIRECTORY, ".charter//vaults", ".charter/./vaults",
+                         "./" + DIRECTORY, ".CHARTER/vaults", ".charter/x/../vaults",
+                         ".edm/vaults"):
+            with self.subTest(spelling=spelling):
+                self.assertTrue(self._bash_denies(spelling),
+                                f"`{self.READER} {spelling}` walks past the Bash guard")
+                self.assertTrue(self._read_denies(spelling),
+                                f"Read({spelling}) walks past the read guard")
+
+    def test_a_recursive_grep_of_the_directory_is_denied_by_name(self):
+        """The exact command the reviewer ran. `grep -rn <pat> <dir>` puts the directory in
+        the SECOND positional, so this also pins that `_file_operands` still hands it over
+        after consuming the pattern — a route the `cat` corpus above never takes."""
+        self.assertIsNotNone(hooks._leak_reason(f"grep -rn TOKEN {DIRECTORY}"))
+        self.assertIsNotNone(hooks._leak_reason(f"rg -n TOKEN {DIRECTORY}"))
+        self.assertIsNone(hooks._leak_reason(f"grep -rn {DIRECTORY} docs/"),
+                          "naming the directory as a PATTERN is not reading it")
+
+    def test_the_registry_is_the_boundary_control_on_both_routes(self):
+        """`vaults` anchored to a path SEGMENT, not to a prefix. If the anchor ever slips to
+        "starts with vaults", every one of these starts denying and #443's false positive is
+        back — on both routes at once, which is why it is asserted on both."""
+        for spelling in (REGISTRY, ".charter/vaults.json.bak", ".charter/vaultsomething",
+                         ".CHARTER/VAULTS.JSON"):
+            with self.subTest(spelling=spelling):
+                self.assertFalse(self._bash_denies(spelling), spelling)
+                self.assertFalse(self._read_denies(spelling), spelling)
+
+
+class TestWhatStillWalksPastBothGuards(unittest.TestCase):
+    """The limit this round did NOT close, pinned so the docs cannot quietly outgrow it.
+
+    Anchoring `vaults` to a segment closes every spelling of an operand that NAMES the vault
+    directory. It does nothing for an operand that merely CONTAINS it: `grep -r TOKEN .`
+    walks every vault file and names none of them. That is the same limit `pretooluse_read`'s
+    docstring already states for `Grep` — denying every broad search is untenable — and
+    `docs/secrets.md` now states it for the Bash route in the same words, where the
+    completeness claim is made.
+
+    Pinned as BEHAVIOUR, not as a wish: if someone later denies these, this test fails next
+    to the paragraph that has to change with it."""
+
+    def test_a_search_rooted_above_the_plane_is_allowed_on_both_routes(self):
+        for operand in (".", "..", "./", "/", "~", "$PWD"):
+            with self.subTest(operand=operand):
+                self.assertIsNone(hooks._leak_reason(f"grep -rn TOKEN {operand}"))
+                self.assertFalse(hooks._names_a_vault_path(operand))
+
+
+class TestSeparatorMeansTheForwardSlash(unittest.TestCase):
+    """`docs/` and `SECURITY.md` say "separators" — this pins which separator they mean.
+
+    `_VAULT_PATH_RE` and `os.path.normpath` are both POSIX `/`. A Windows-style
+    `.charter\\vaults\\db.json` names the same file on a Windows filesystem and a
+    DIFFERENT one on POSIX, where a backslash is an ordinary filename character. Charter
+    does not fold it, and the docs say `/` rather than "separators" for that reason. Filed
+    separately rather than closed here: folding `\\` on POSIX would deny real filenames.
+    """
+
+    def test_a_backslash_spelling_is_not_folded(self):
+        self.assertFalse(hooks._names_a_vault_path(".charter\\vaults\\db.json"))
+
+    def test_and_the_forward_slash_spelling_of_the_same_path_is_denied(self):
+        """Positive control: the assertion above is about the separator, not about the test
+        having mistyped the path."""
+        self.assertTrue(hooks._names_a_vault_path(".charter/vaults/db.json"))
 
 
 if __name__ == "__main__":
