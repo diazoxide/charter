@@ -55,17 +55,43 @@ rule while one who reads a bare refusal files an issue.
   push tags, or `gh release create` / `gh pr merge`. `bypassPermissions` means *stop asking
   me*, not *stop knowing things*, and a published version number can never be reused.
 
-A seventh path is not a guard but an allowance: a binary the **active persona** declares in
+A seventh path is not a guard but an allowance: a program the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the
-**binary**, so every argument rides along — which is why five things are never smoothed
+**program**, so every argument rides along — which is why six things are never smoothed
 whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`,
 `git clean`, …), interpreters and wrappers whose argument is the real command (`bash -c`,
 `python3 -c`, `env`, `xargs`, `npx`, …), any command whose arguments **reach** a vault or
 charter's own state, any tool added to that line after the session started — the gate
 answers within the set declared before this session could rewrite it, and `persona.md` is a
-file the model can write — and any command carrying a character the shell would rewrite
-before the program sees it. Each of those is a fall back to the normal prompt; this path
-never denies.
+file the model can write — any command carrying a character the shell would rewrite before
+the program sees it, and any command whose **command word is not the file the declared name
+refers to**. Each of those is a fall back to the normal prompt; this path never denies.
+
+That last one is newer than the rest and is the same mistake as the first version of the
+one before it. `tools: gh` was matched against `os.path.basename`, so `./gh` — a shell
+script the agent wrote a moment earlier — inherited the approval, as did `/tmp/gh`,
+`bin/kubectl` and `PATH=<a directory the agent wrote> gh`. That is arbitrary unprompted
+execution under any `tools:` line at all. A command word spelled as a path is now smoothed
+only when it is, by inode, either the persona's own `personas/<n>/bin/<name>` script or
+whatever a bare invocation of that name resolves to right now — so `/usr/bin/gh` and a
+symlink to it are still `gh`, and a file of the agent's own is not. A **bare** name is
+smoothed as before: it is the declaration exactly as written, and there is nothing else to
+check it against. What that cannot see is whether the file `PATH` resolves to is the real
+`gh` — an agent that can write into a directory already on `PATH` puts its program where
+bash and charter both find it and both agree.
+
+A leading `VAR=value` is refused for the same reason, all of them, not a list of the
+variables that matter: `PATH=/tmp gh` picks the file as surely as a `/` does, and there is
+no honestly inert subset to carve out — `KUBECONFIG=… kubectl …` was the shape the old
+exemption existed for, and a kubeconfig may name an `exec` credential plugin, which is a
+kubeconfig naming a program for kubectl to run. `KUBECONFIG=… kubectl get pods` is one
+prompt now.
+
+Destructive subcommands are read as **words** of `argv`, not as whole arguments:
+`git -c alias.z=clean z -xfd` defines the alias and runs it in one command, and really does
+delete every untracked file. A word ends where a word ends, so `kubectl describe pod
+my-run-1` is not `kubectl run` and `port-forward` is still one verb — but
+`git commit -m "clean up the tests"` is a prompt now, and that is the price.
 
 *Reach* is decided about the file, not about the text of the command. Each argument is
 resolved and compared by inode to where `charter` actually keeps its state — so
@@ -102,6 +128,16 @@ of is the shape that has already been bypassed three times here. There is no pro
 `argv` that separates a config file from any other argument. The same applies to a relative
 path hidden behind an unrecognised flag prefix on a plane whose state directory is named
 neither `.charter` nor `.edm`.
+
+Two more sit on that same floor, found in the fourth round and disclosed here for the same
+reason. A flag whose *value* is another program — `tar --use-compress-program=`,
+`git -c core.pager=` — runs it, and in `argv` it looks like any other `--flag=value`. And a
+verb can reach the command from a file: the gate reads every word of `argv`, so
+`git -c alias.z=clean z` is seen, but a `z = clean` alias already in `.git/config` — which
+takes a plain Edit and no Bash at all — makes `git z -xfd` a command whose every word is
+innocent. Both fall back to a prompt the moment anything else in the command is unusual,
+and both are one prompt away from being seen if you would rather not have the allowance at
+all: take the tool off the `tools:` line.
 
 None of that is a denial being dodged. This path is an *allowance*: the fallback is the
 normal prompt, and every guard above — the Bash leak guard, the state-write guard — applies

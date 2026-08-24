@@ -1,8 +1,8 @@
 """What the tool-gate refuses to smooth, and why each refusal is about a class.
 
-The gate approves a **binary** and every argument rides along with it (`docs/hooks.md`).
-That is the feature when an operator writes `tools: gh`. It is also where five holes lived,
-each one an argument that arrives under a name the declaration made look narrow:
+The gate approves a **program** and every argument rides along with it (`docs/hooks.md`).
+That is the feature when an operator writes `tools: gh`. It is also where six holes lived,
+each one arriving under a name the declaration made look narrow:
 
 * `charter secret exec|cp` and `charter secret get --reveal` under `tools: charter` — a
   shape `docs/personas.md` teaches, running the unredacted credential paths with no prompt
@@ -15,7 +15,15 @@ each one an argument that arrives under a name the declaration made look narrow:
   see :class:`TheSessionCeiling`.
 * a spelling the SHELL rewrites before `argv` exists, so that every rule above reads a word
   the program never receives — `.charte{r..r}`, `$'\\x2echarter'`, `charter secre*` (#450).
-  See :class:`TestTheShellRewritesWordsBeforeArgv`, and
+  See :class:`TestTheShellRewritesWordsBeforeArgv`.
+* the word in COMMAND position, still matched by ``os.path.basename`` after all of the
+  above — so `./gh` was a program the agent had just written wearing the name an operator
+  declared, and `PATH=<a directory the agent wrote> gh` reached the same file without a
+  slash in it (#450, round four). Destructive verbs were read the same way, as whole
+  tokens, so `git -c alias.z=clean z -xfd` ran `git clean` unprompted. See
+  :class:`TestTheProgramIsAFileNotAName`,
+  :class:`TestALeadingAssignmentDecidesWhichFileRuns` and
+  :class:`TestADangerousVerbPackedIntoAToken`, and
   :class:`TestTheGateReadsArgvAndNothingElse` for what is deliberately still open.
 
 Almost every case here asserts ``None`` — "no auto-approval, take the normal prompt". The
@@ -27,7 +35,9 @@ gap is disclosed rather than closed and a disclosure has to be pinned like anyth
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
 import unittest
 from unittest import mock
 
@@ -86,6 +96,15 @@ class TestCharterItself(GateCase):
         """`_parse` skips `VAR=value` prefixes to find the binary — the subcommand scan
         has to look at the same argv it produced, not at token 1."""
         self.assertIsNone(self.gate("CHARTER_HOME=/tmp/h charter secret list v"))
+
+    def test_the_subcommand_scan_is_pinned_where_only_it_can_answer(self):
+        """The two cases above are each now refused by a SECOND rule as well — a path in
+        command position, and a leading assignment, are both refusals of their own since
+        round four. So neither of them proves any more that `_DANGEROUS` saw `secret`, and
+        a mutant that deleted the whole carve-out would leave them green. Pinned one layer
+        down, where nothing else answers."""
+        self.assertTrue(toolgate._is_dangerous("charter", ["secret", "list", "v"]))
+        self.assertFalse(toolgate._is_dangerous("charter", ["persona", "list"]))
 
     def test_an_ordinary_charter_command_still_smooths(self):
         """The carve-out is two subcommands, not the binary. A persona that declared
@@ -159,6 +178,22 @@ class TestArgvReachingAVault(GateCase):
     def test_an_env_assignment_carrying_the_path_is_the_same_answer(self):
         """The scan is over the whole command, not over the arguments after the binary."""
         self.assertIsNone(self.gate("V=.charter/vaults/devops.json gh api /x"))
+
+    def test_the_assignment_scan_is_pinned_where_only_it_can_answer(self):
+        """The test above no longer proves what it was written to prove.
+
+        `_runs_the_declared_program` now refuses ANY command carrying a leading
+        `VAR=value`, so `decide` returns None for the command above whether or not
+        `_touches_control_surface` ever looks at the assignment — a new early refusal
+        standing in front of an older rule, which is the shape that has hidden a mutant
+        three times in this file's history. So the older rule is pinned one layer down,
+        where nothing else can answer for it.
+        """
+        vault = str(config.VAULTS_DIR / "devops.json")
+        self.assertTrue(toolgate._touches_control_surface(
+            ["V=" + vault, "gh", "api", "/x"], str(config.ROOT)))
+        self.assertFalse(toolgate._touches_control_surface(
+            ["V=/etc/hosts", "gh", "api", "/x"], str(config.ROOT)))
 
     def test_charters_own_state_is_not_smoothed_either(self):
         """The active-persona pointer, the per-session pointers and the tool ceiling all
@@ -929,6 +964,202 @@ class TestAPathBehindAnUnknownPrefix(GateCase):
         self.assertIsNotNone(self.gate("cat %s" % other))
 
 
+# --------------------------------------------------------------------------- #
+# #450 round four — the word in COMMAND position was still matched by name      #
+# --------------------------------------------------------------------------- #
+class TestTheProgramIsAFileNotAName(GateCase):
+    """Round four. Every rule above reads arguments; this one reads the word that decides
+    which program reads those arguments at all.
+
+    `_parse` reduced the command word to `os.path.basename` and asked whether that STRING
+    was declared. So an agent writes a program, names it `gh`, and runs it — and gets the
+    approval an operator granted to `gh`. Measured through the real `hooks.pretooluse`
+    before the fix, each of these was an affirmative `allow` for a shell script written
+    seconds earlier by the agent that then ran it, and each is arbitrary unprompted
+    execution under any `tools:` line at all:
+
+        ./gh          ./cat          /tmp/gh api /x         bin/kubectl get pods
+        PATH=<dir the agent wrote> gh api /x
+
+    Same shape as round one (a NAME), and the same answer as the group that passed:
+    compare the object — `(st_dev, st_ino)` — not the text. Which is why the last test
+    here matters more than the refusals: a rule that refused every path-spelled command
+    would pass all of them and be a different rule.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.activate("sre", "gh, cat, kubectl")
+        self.real_cat = shutil.which("cat")
+
+    def _agent_writes(self, path):
+        """A program of the agent's own, wearing a name the operator declared."""
+        p = self.tmp / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("#!/bin/sh\necho pwned\n")
+        p.chmod(0o755)
+        return p
+
+    def test_a_program_the_agent_wrote_does_not_inherit_the_name(self):
+        for spelling in ("./gh", "./cat", "bin/kubectl"):
+            with self.subTest(spelling=spelling):
+                self._agent_writes(spelling)
+                self.assertIsNone(
+                    toolgate.decide(f"{spelling} api /x", SID, str(self.tmp)))
+
+    def test_an_absolute_path_to_a_planted_program_is_the_same_answer(self):
+        p = self._agent_writes("planted/gh")
+        self.assertIsNone(toolgate.decide(f"{p} api /x", SID, str(self.tmp)))
+
+    def test_a_bare_name_is_still_smoothed(self):
+        """The declaration exactly as written. There is nothing else to check it against,
+        and refusing it would delete the feature rather than bound it."""
+        self.assertIsNotNone(toolgate.decide("gh api /x", SID, str(self.tmp)))
+
+    def test_the_answer_is_identity_and_not_the_presence_of_a_slash(self):
+        """The test that separates this rule from "refuse anything with a `/` in it".
+
+        A path that IS the declared program, spelled absolutely or reached through a
+        symlink, is the same file and is smoothed. If this ever fails alongside the
+        refusals above, the rule has become a spelling check again.
+        """
+        if not self.real_cat:
+            self.skipTest("no cat on PATH")
+        self.assertIsNotNone(
+            toolgate.decide(f"{self.real_cat} README.md", SID, str(self.tmp)))
+        link = self.tmp / "cat"
+        link.symlink_to(self.real_cat)
+        self.assertIsNotNone(toolgate.decide("./cat README.md", SID, str(self.tmp)))
+
+    def test_a_declared_name_that_resolves_to_nothing_is_not_smoothed_by_path(self):
+        """"Nothing to compare against" is a prompt, not a pass.
+
+        The name is one nothing resolves to, asserted rather than assumed — a test that
+        picked a real tool and skipped when it was installed would be green on the
+        machines that have it and silent on the ones that matter.
+        """
+        name = "charter-no-such-program-xyz"
+        self.assertIsNone(shutil.which(name), "pick a name nothing on PATH answers to")
+        self.activate("dev", name)
+        p = self._agent_writes("tools/" + name)
+        self.assertIsNone(toolgate.decide(f"{p} --x", SID, str(self.tmp)))
+        self.assertIsNotNone(toolgate.decide(f"{name} --x", SID, str(self.tmp)),
+                             "the bare name is the declaration as written")
+
+    def test_the_residual_is_a_program_already_sitting_on_path(self):
+        """The next spelling of this one, named because it is not closed.
+
+        This rule asks the filesystem which file a name resolves to. It cannot ask whether
+        that file is the *real* `gh`: an agent that can write into a directory already on
+        `PATH` puts its own program where bash and this check both look, and both agree.
+        Charter holds no notion of a canonical `gh` to compare against, so there is no
+        property here to test — what bounds it is that such a directory is outside the
+        plane, and that putting a file there is not something a smoothed Bash call does.
+
+        Pinned so it stays a disclosure rather than becoming a surprise; if it ever starts
+        returning None, something closed it and the docs have to say so.
+        """
+        d = self.tmp / "already-on-path"
+        d.mkdir()
+        (d / "gh").write_text("#!/bin/sh\necho pwned\n")
+        (d / "gh").chmod(0o755)
+        with mock.patch.dict(
+                os.environ, {"PATH": str(d) + os.pathsep + os.environ.get("PATH", "")}):
+            self.assertIsNotNone(toolgate.decide("gh api /x", SID, str(self.tmp)))
+
+    def test_the_docs_say_what_this_rule_cannot_see(self):
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[1]
+        text = " ".join((repo / "docs" / "hooks.md").read_text().split())
+        self.assertIn("an agent that can write into a directory already on `PATH`", text)
+
+
+class TestALeadingAssignmentDecidesWhichFileRuns(GateCase):
+    """`PATH=/tmp gh api /x` runs `/tmp/gh`. The assignment picks the file as surely as a
+    `/` in the command word does, and it was stepped over.
+
+    The refusal is of ALL leading assignments rather than of a list of variables that
+    matter, because that list cannot be written honestly. `KUBECONFIG=… kubectl …` is the
+    shape the skip existed for, and a kubeconfig may carry an `exec` credential plugin —
+    a kubeconfig naming a program for kubectl to run. There is no inert subset, and a list
+    of the variables somebody thought of is what this audit exists to remove.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.activate("sre", "gh, kubectl")
+
+    def test_a_path_assignment_is_not_smoothed(self):
+        d = self.tmp / "planted"
+        d.mkdir()
+        (d / "gh").write_text("#!/bin/sh\necho pwned\n")
+        (d / "gh").chmod(0o755)
+        self.assertIsNone(toolgate.decide(f"PATH={d} gh api /x", SID, str(self.tmp)))
+
+    def test_every_assignment_is_the_same_answer_including_the_useful_one(self):
+        """The cost, asserted rather than left to be discovered."""
+        for cmd in ("KUBECONFIG=/tmp/kc kubectl get pods",
+                    "GH_TOKEN=x gh api /x",
+                    "LD_PRELOAD=/tmp/x.so gh api /x"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(toolgate.decide(cmd, SID, str(self.tmp)))
+
+    def test_the_same_command_without_the_assignment_still_smooths(self):
+        self.assertIsNotNone(toolgate.decide("kubectl get pods", SID, str(self.tmp)))
+
+
+class TestADangerousVerbPackedIntoAToken(GateCase):
+    """`_DANGEROUS` matched a whole bare token, which is a LIST of the spellings somebody
+    thought of wearing a different hat.
+
+    `git -c alias.z=clean z -xfd` defines the alias and runs it in one command. The rule
+    saw `-c`, `alias.z=clean` and `z`, matched none of them, and answered `allow` — while
+    git deleted every untracked file, the gitignored state directory with the session
+    ceiling in it included. It reads WORDS now, which can only ever add refusals.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.activate("ops", "git, kubectl, charter")
+
+    def test_git_really_runs_the_alias_defined_in_the_same_command(self):
+        """Executed, not asserted: the claim above is about git's behaviour, and this file
+        has no standing to state it on git's behalf."""
+        git = shutil.which("git")
+        if not git:
+            self.skipTest("no git on PATH")
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        subprocess.run([git, "init", "-q", "."], cwd=repo, check=True,
+                       capture_output=True)
+        (repo / "untracked.txt").write_text("x")
+        subprocess.run([git, "-c", "alias.z=clean", "z", "-xfd"], cwd=repo,
+                       check=True, capture_output=True)
+        self.assertFalse((repo / "untracked.txt").exists(),
+                         "if this file survives, git changed and the case below is moot")
+
+    def test_the_verb_inside_the_token_is_seen(self):
+        for cmd in ("git -c alias.z=clean z -xfd",
+                    "git -c alias.z=clean z",
+                    "kubectl --delete pod x",
+                    "charter --config=secret persona show"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.gate(cmd))
+
+    def test_a_word_ends_where_a_word_ends_and_not_inside_one(self):
+        """The over-refusal has a boundary, or it is not a word rule. `my-run-1` is not
+        `run` and `--delete-source-branch` is not `delete`, while `port-forward` — a
+        dangerous verb that contains the separator most rules split on — still is."""
+        self.assertIsNotNone(self.gate("kubectl describe pod my-run-1"))
+        self.assertIsNotNone(self.gate("kubectl get pods -o json"))
+        self.assertIsNone(self.gate("kubectl port-forward svc/x 1:1"))
+
+    def test_the_price_of_reading_words(self):
+        """Stated here because `docs/hooks.md` states it: a message that happens to
+        contain a destructive verb now takes a prompt."""
+        self.assertIsNone(self.gate('git commit -m "clean up the tests"'))
+
+
 class TestTheGateReadsArgvAndNothingElse(GateCase):
     """The next spelling, named because it is not closed rather than because it is.
 
@@ -953,7 +1184,7 @@ class TestTheGateReadsArgvAndNothingElse(GateCase):
 
     def setUp(self):
         super().setUp()
-        self.activate("sre", "curl")
+        self.activate("sre", "curl, tar, git")
         (config.VAULTS_DIR).mkdir(parents=True, exist_ok=True)
         (config.VAULTS_DIR / "devops.json").write_text("{}")
 
@@ -964,6 +1195,36 @@ class TestTheGateReadsArgvAndNothingElse(GateCase):
             toolgate.decide("curl -K req.conf", SID, str(self.tmp)),
             "if this ever returns None the gap closed and the docs below must say so")
 
+    def test_a_flag_whose_value_is_another_program_is_the_same_boundary(self):
+        """Found in round four and disclosed rather than closed.
+
+        `tar --use-compress-program=X` runs `X`; measured, a script of the reviewer's own
+        printed to stderr from inside a smoothed `tar`. `git -c core.pager=X log` is the
+        same shape. Both are the binary's own documented feature, both are in `argv`, and
+        neither is distinguishable there from an ordinary argument — closing them is the
+        list of flags somebody thought of, one hat away from `curl -K`.
+        """
+        self.assertIsNotNone(toolgate.decide(
+            "tar --use-compress-program=/tmp/x -cf /tmp/o.tar f", SID, str(self.tmp)))
+        self.assertIsNotNone(toolgate.decide(
+            "git -c core.pager=/tmp/x log", SID, str(self.tmp)))
+
+    def test_a_verb_that_never_reaches_argv_is_the_same_boundary(self):
+        """`_is_dangerous` reads every word of `argv`, so `git -c alias.z=clean z` is seen
+        — the verb is in the command. An alias that was already DEFINED is not: `z = clean`
+        written into `.git/config`, which takes a plain Edit and no Bash at all, makes
+        `git z -xfd` a command whose every word is innocent. Nothing in `argv` recovers it,
+        which is the same floor `curl -K` sits on.
+
+        The half that IS in argv stays pinned above, so this is a statement about the
+        floor and not a claim that the rule does nothing.
+        """
+        (self.tmp / ".git").mkdir(exist_ok=True)
+        (self.tmp / ".git" / "config").write_text("[alias]\n\tz = clean\n")
+        self.assertIsNotNone(toolgate.decide("git z -xfd", SID, str(self.tmp)))
+        self.assertIsNone(toolgate.decide("git -c alias.z=clean z -xfd", SID,
+                                          str(self.tmp)))
+
     def test_the_docs_say_so_rather_than_implying_otherwise(self):
         """An overclaiming security document is the defect this audit was called to
         remove, so the sentence is asserted, not trusted."""
@@ -972,6 +1233,8 @@ class TestTheGateReadsArgvAndNothingElse(GateCase):
         text = " ".join((repo / "docs" / "hooks.md").read_text().split())
         self.assertIn("this gate reads `argv` and nothing else", text)
         self.assertIn("`curl -K req.conf` runs whatever `req.conf` says", text)
+        self.assertIn("`tar --use-compress-program=`", text)
+        self.assertIn("a `z = clean` alias already in `.git/config`", text)
 
 
 if __name__ == "__main__":

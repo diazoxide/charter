@@ -21,9 +21,9 @@ Two deliberate properties:
   one prompt. Admitting any of those characters back is what each earlier round did, and
   each time it was the bypass.
 
-The unit of approval is a **binary**, and every argument rides along with it. That
+The unit of approval is a **program**, and every argument rides along with it. That
 is the feature (an operator writing ``tools: gh`` means `gh`), and it is also where
-the whole class of holes lives, so five rules bound it — each of them "decline to
+the whole class of holes lives, so six rules bound it — each of them "decline to
 smooth", never "deny":
 
 - :func:`_shell_literal` — a command containing a character the shell would REWRITE is not
@@ -48,6 +48,12 @@ smooth", never "deny":
 - :func:`frozen_tools` — the answer is bounded by what ``tools:`` said when the session
   began. ``persona.md`` is a file the model can write; without this, one approved
   edit is unprompted execution for the rest of the session (#432).
+- :func:`_runs_the_declared_program` — the FILE that will execute has to be the one the
+  declared name refers to. Every rule above reads arguments; this one reads the word in
+  command position, which decides which program reads those arguments at all. A basename
+  is a name, and `./gh`, `/tmp/gh`, `bin/kubectl` and `PATH=/tmp gh` each wore a declared
+  name over a program the agent had just written, and each was answered ``allow`` (#450,
+  round four).
 
 Kept dependency-light (only imports :mod:`charter.persona`, plus a lazy
 :mod:`charter.hooks`/:mod:`charter.session` on the paths that need them) so it's
@@ -61,6 +67,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import string
 import sys
 
@@ -107,9 +114,14 @@ _QUOTING = frozenset("'\"" + chr(92))
 _SEPARATORS = frozenset(" \t")
 
 #: Even when a persona declares a tool, these subcommands are too destructive to
-#: auto-approve — they fall back to a normal prompt. A subcommand matches if it
-#: appears as a bare (non-flag) token anywhere in the command. Read-only verbs
-#: (kubectl get/describe/logs/…, glab … list/view) are unaffected.
+#: auto-approve — they fall back to a normal prompt. A subcommand matches if it appears as
+#: a WORD anywhere in the arguments (:func:`_words`), not as a whole token: `git -c
+#: alias.z=clean z -xfd` defines the alias and runs it in one command, and a rule reading
+#: whole bare tokens saw `-c`, `alias.z=clean` and `z`, matched none of them, and answered
+#: `allow` while git deleted every untracked file — the state directory included (#450,
+#: round four). Read-only verbs (kubectl get/describe/logs/…, glab … list/view) are
+#: unaffected; `kubectl describe pod my-run-1` is not `kubectl run`, because a word ends at
+#: a character a word cannot contain, not in the middle of one.
 _DANGEROUS = {
     "kubectl": {
         "delete", "drain", "cordon", "uncordon", "taint", "evict",
@@ -577,23 +589,62 @@ def _tokens(command: str) -> list[str] | None:
 
 
 def _parse(command: str):
-    """(binary, arg_tokens, all_tokens) for a simple command, or a triple of None."""
+    """(binary, arg_tokens, all_tokens) for a simple command, or a triple of None.
+
+    Leading ``VAR=value`` assignments are stepped over to FIND the command word, and that
+    is all this step does with them: they stay in *all_tokens*, so
+    :func:`_touches_control_surface` still scans them, and
+    :func:`_runs_the_declared_program` refuses the command outright for carrying one. Doing
+    that refusal here instead would make this function the only guard a
+    `VAR=… <cmd>` command ever reaches, which is how a new early refusal hides an older
+    rule's bug.
+    """
     tokens = _tokens(command)
     if tokens is None:
         return None, None, None
     i = 0
     while i < len(tokens) and _ENV_ASSIGN.match(tokens[i]):
-        i += 1  # skip leading VAR=value assignments (e.g. KUBECONFIG=… kubectl …)
+        i += 1
     if i >= len(tokens):
         return None, None, None
     return os.path.basename(tokens[i]), tokens[i + 1:], tokens
 
 
+#: One WORD of an argv token: a maximal run of the characters a subcommand can be spelled
+#: with. Everything else — `=`, `.`, `/`, `:`, `,`, `@`, whitespace — ends a word, because
+#: those are what a program uses to pack more than one word into one token
+#: (`alias.z=clean`, `--use-compress-program=curl`, `svc/x`).
+#:
+#: A `-` does NOT end a word, so `port-forward` stays one word and `my-run-1` never reads
+#: as `run`. The leading `-` of a flag is dropped by the "starts with an alphanumeric"
+#: anchor, so `--delete` reads as `delete` while `--delete-source-branch` does not.
+_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+def _words(token: str) -> list[str]:
+    return _WORD_RE.findall(token)
+
+
 def _is_dangerous(binary: str, args: list[str]) -> bool:
+    """True when a destructive verb of *binary* appears as a word anywhere in *args*.
+
+    Reading words rather than whole tokens can only ever ADD refusals, and a refusal here
+    costs one prompt. It buys the spellings that pack a verb into a larger token —
+    `git -c alias.z=clean z`, which really does run `git clean` — at the price of
+    `git commit -m "clean up the tests"` taking a prompt too. That trade is the same one
+    the rest of this module makes, and it is stated in `docs/hooks.md` rather than
+    discovered.
+
+    What it does not reach, said plainly because the sentence above would otherwise imply
+    it: a verb that is not in `argv` at all. `git config alias.z clean` followed by
+    `git z -xfd` runs `git clean -xfd` while neither command spells `clean` where this can
+    see it. That is the same boundary `curl -K req.conf` sits on — the meaning of the argv
+    lives in a file — and it is disclosed in `docs/hooks.md`, not closed here.
+    """
     bad = _DANGEROUS.get(binary)
     if not bad:
         return False
-    return any(tok in bad for tok in args if not tok.startswith("-"))
+    return any(w in bad for tok in args for w in _words(tok))
 
 
 # --------------------------------------------------------------------------- #
@@ -762,40 +813,82 @@ def decide(command: str, session_id: str | None = None, cwd: str | None = None):
         return None  # declared, but a destructive subcommand → fall back to a prompt
     if _touches_control_surface(tokens, cwd):
         return None  # reaches a vault or charter's own state → keep the prompt
-    if not _provenance_ok(name, tokens, binary):
-        return None  # a name charter owns, invoked from somewhere charter did not put it
+    if not _runs_the_declared_program(name, tokens, binary, cwd):
+        return None  # the file about to execute is not the one the declared name means
     return name, binary
 
 
-def _provenance_ok(name: str, tokens: list[str], binary: str) -> bool:
-    """True unless *binary* names one of the persona's own scripts and the command is
-    reaching a DIFFERENT file of that name.
+def _runs_the_declared_program(name: str, tokens: list[str], binary: str,
+                               cwd: str | None = None) -> bool:
+    """True when the FILE this command will execute is the one ``tools: <binary>`` names.
 
-    `_parse` reduces a command to `os.path.basename`, which is right for `gh` or `kubectl`:
-    they are system binaries, the plane does not own them, and their location is not
-    charter's business. For a persona's own script it inverts the guarantee — the
-    declaration looks specific and the check is not, so `/tmp/site-health.sh` inherits the
-    auto-approval of `personas/seo/bin/site-health.sh`, including a `/tmp` copy an agent
-    wrote seconds earlier.
+    Every other rule in this module reads arguments. This one reads the word in command
+    position, which decides which program reads those arguments at all — and until #450's
+    round four it was the last check still answering by NAME. `_parse` reduces the command
+    word to ``os.path.basename``, so an agent that writes a program and calls it `gh` gets
+    the auto-approval an operator granted to `gh`. Measured through the real
+    `hooks.pretooluse`, each of these was an affirmative `allow` for a script written
+    seconds earlier by the agent that then ran it:
 
-    Tightened only where charter has ground truth. A declared name with no script behind it
-    is left exactly as it was: charter has nothing to compare against, and inventing a
-    restriction would break planes that declare an ordinary binary with a script-shaped
-    name.
+        ./gh          ./cat          /tmp/gh api /x         bin/kubectl get pods
+
+    That is arbitrary unprompted execution under any `tools:` line at all, and it is the
+    same shape as every earlier round: a guard that matched a name rather than the thing
+    the name was supposed to refer to. The answer is the one that worked for `_cp_dest_refusal`
+    and for :func:`_resolves_into` — compare the OBJECT, ``(st_dev, st_ino)``, not the text.
+
+    Two things charter can point a declared name at, and nothing else:
+
+    * **A persona's own script.** ``personas/<n>/bin/<binary>`` is ground truth: the
+      operator committed it. The command word has to be that file, so `/tmp/site-health.sh`
+      does not inherit `personas/seo/bin/site-health.sh`'s approval, and a bare
+      `site-health.sh` does not either — that resolves through PATH, and PATH is precisely
+      what charter cannot vouch for when it holds a file of that name itself.
+    * **Whatever a bare invocation resolves to right now** (``shutil.which``). A command
+      word spelled as a path is smoothed only when it is, by identity, that same file — so
+      `/usr/bin/gh` and `gh` are one answer, `/bin/cat` and a symlink to it are one answer,
+      and `./gh` is not `gh`. When ``which`` finds nothing there is nothing to compare
+      against and the answer is a prompt.
+
+    A **bare** name with no persona script behind it is approved as before. That is the
+    declaration exactly as written, and there is nothing else to check it against.
+
+    A leading ``VAR=value`` assignment is refused for the same reason, and this is where
+    the refusal lives rather than in `_parse` — see there. `PATH=/tmp gh api /x` runs
+    `/tmp/gh`, so the assignment decides which file executes just as surely as a `/` in the
+    command word does. The refusal is of ALL assignments, not of a list of variables that
+    matter, because that list cannot be written honestly: `KUBECONFIG=…  kubectl get pods`
+    was the shape this skip existed for, and a kubeconfig may carry an `exec` credential
+    plugin, which is a kubeconfig naming a program for kubectl to run. There is no inert
+    subset to carve out, so the cost is one prompt for `VAR=… cmd` and the class is closed.
+
+    **The residual, stated rather than implied.** For a bare name this asks the filesystem
+    which file that name resolves to; it cannot ask whether that file is the *real* `gh`.
+    An agent that can write into a directory already on `PATH` puts its own program where
+    both bash and this check will find it, and both will agree. Charter has no notion of a
+    canonical `gh`, so nothing here closes that; what closes it is that the directory is
+    outside the plane and the write is not something a smoothed Bash call performs.
     """
     from . import persona
 
-    scripts = persona.bin_scripts(name)
-    owned = scripts.get(binary)
-    if owned is None:
-        return True
-    token = next((t for t in tokens if os.path.basename(t) == binary), "")
-    if os.path.basename(token) == token:
-        return False  # a bare name resolves through PATH, which charter cannot vouch for
-    try:
-        return os.path.realpath(token) == os.path.realpath(owned)
-    except OSError:
+    if tokens and _ENV_ASSIGN.match(tokens[0]):
+        return False        # the environment decides which file runs; see above
+    prog = tokens[0] if tokens else ""
+    owned = persona.bin_scripts(name).get(binary)
+    if os.path.basename(prog) == prog:
+        # A bare name is resolved by PATH at run time. Charter can only object when it
+        # holds a file of that name itself and this is therefore reaching past it.
+        return owned is None
+    ref = str(owned) if owned is not None else shutil.which(binary)
+    if not ref:
         return False
+    try:
+        here = os.path.realpath(os.path.join(cwd or os.getcwd(),
+                                             os.path.expanduser(prog)))
+    except (OSError, ValueError):
+        return False
+    a, b = _ids(here), _ids(ref)
+    return a is not None and a == b
 
 
 def main(argv=None) -> int:

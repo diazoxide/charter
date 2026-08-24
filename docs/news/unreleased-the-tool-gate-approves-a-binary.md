@@ -1,12 +1,12 @@
 ---
 version: unreleased
-headline: The tool-gate stopped smoothing five things a `tools:` line never meant to grant
+headline: The tool-gate stopped smoothing six things a `tools:` line never meant to grant
 ---
 
-`tools:` in a persona pre-approves a **binary**, and every argument rides along with it.
+`tools:` in a persona pre-approves a **program**, and every argument rides along with it.
 That is the feature — an operator who writes `tools: gh` means `gh` — and it is also where
-five holes lived, each one arriving under a name that made the declaration look narrower
-than it was. All five are now cases where the gate declines to smooth and you get the
+six holes lived, each one arriving under a name that made the declaration look narrower
+than it was. All six are now cases where the gate declines to smooth and you get the
 normal permission prompt. Nothing here denies anything; the gate still cannot block work,
 only fail to remove a prompt.
 
@@ -70,6 +70,33 @@ anything creates a file called `secret`, which an agent does with a plain Write.
 gitignored, so `git clean -xfd` deletes the session ceiling below while naming nothing —
 and untracked work is unrecoverable, which is reason enough on its own.
 
+**And the last rule still matching a name was the one deciding which program runs.** The
+command word was reduced to `os.path.basename` and compared to `tools:` as a string, so a
+shell script the agent wrote a moment earlier and called `gh` inherited everything an
+operator granted to `gh` — `./gh`, `/tmp/gh`, `bin/kubectl`, and `PATH=<a directory the
+agent wrote> gh api /x`, each an affirmative `allow` for arbitrary unprompted execution
+under any `tools:` line at all. Same mistake as the first version of the vault check, and
+the same answer: compare the object, not the text. A command word spelled as a path is
+smoothed only when it is, by inode, the persona's own `personas/<n>/bin/<name>` script or
+whatever a bare invocation of that name resolves to right now — so `/usr/bin/gh` and a
+symlink to it are still `gh`. A bare name is unchanged: it is the declaration as written.
+
+`VAR=value` prefixes go with it, all of them. `PATH=/tmp gh` picks the file as surely as a
+`/` does, and there is no honestly inert subset to keep: `KUBECONFIG=… kubectl …` was the
+shape the old exemption existed for, and a kubeconfig can name an `exec` credential plugin,
+which is a kubeconfig naming a program for kubectl to run. **`KUBECONFIG=… kubectl get
+pods` is one prompt now.** So is `git commit -m "clean up the tests"`, because destructive
+subcommands are read as *words* of the command rather than as whole arguments —
+`git -c alias.z=clean z -xfd` defines the alias and runs it in one command, and really does
+delete every untracked file.
+
+Two things that reading `argv` cannot reach are written down in `docs/hooks.md` rather than
+half-closed: a flag whose value is another program (`tar --use-compress-program=`,
+`git -c core.pager=`), and a verb that never appears in the command at all — a `z = clean`
+alias already sitting in `.git/config` makes `git z -xfd` a command whose every word is
+innocent. Closing either means a list of the flags somebody thought of, which is the shape
+that has been bypassed in every round of this so far.
+
 **A tool added to `tools:` after the session started grants nothing until the next
 session.** `persona.md` and the active-persona pointer are read from the working tree on
 every hook call, and they are files the model can write — so one approved edit was
@@ -123,6 +150,6 @@ wall charter holds.
 
 Nothing to adopt: upgrading is the whole of it. If a persona in your plane declares an
 interpreter, `charter`, or a shell, expect prompts where there were none — and expect them
-too wherever a command carries a `*`, a `~`, a `{`, a `$` or a `#`, however harmless it
-looks. That is the change, and `charter guard allow` is how you take a specific one back on
-purpose.
+too wherever a command carries a `*`, a `~`, a `{`, a `$` or a `#`, a `VAR=` prefix, or a
+declared tool invoked by path rather than by name, however harmless it looks. That is the
+change, and `charter guard allow` is how you take a specific one back on purpose.
