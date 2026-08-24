@@ -74,3 +74,34 @@ the reviewer and needs to know which criticisms do not stand.
 - CI is Ubuntu / tmux 3.4 / `TERM=dumb`; dev is macOS / tmux 3.7c. Probe
   capability, never presence. Never assert on tmux's own message prose.
 - Charter defects go upstream: file the issue, do not patch around it locally.
+
+
+## D. Merged this session, UNRELEASED (0.51.0 is the last tag)
+
+`#372` trace summary · `#373` remember on a protected branch · `#374` opencode MCP rules ·
+`#375` approval records what earned it · `#376` guard all-or-nothing · `#381` frame in the
+operator's tmux · `#382` dying panel says why · `#383` reap keeps a live frame · `#384`
+frame -- <cmd> · `#390` relaunch ignores cwd · `#395` guard rule read-back · `#399`
+read-back failure is not a missing secret · `#400` 1Password schema docs · `#401` plane-root
+reset guard · `#402` test isolation
+
+**Do not release alone** — Aaron cuts releases together. Accumulate and report.
+
+## E. Security audit outcome (2026-08-24, 30 agents)
+
+**Zero of the reviewer's 13 claims were refuted.** 12 CONFIRMED, 3 PARTIAL, 1
+ALREADY_DOCUMENTED. 8 independent findings survived adversarial refutation; 12 were killed.
+
+Full assessment: `docs/superpowers/specs/2026-08-24-security-assessment.md`.
+Issues filed: **#421-#444**.
+
+The headline: `charter secret cp <vault> <key> /dev/stdout` prints the plaintext into the
+agent's transcript and then prints "Value not shown." Redaction is `str.replace`, so base64
+defeats it on the ORDINARY path. And `charter` is absent from `toolgate._DANGEROUS`, so a
+persona declaring `tools: charter` auto-approves the unredacted modes with no prompt.
+
+Where the reviewer was wrong, for Aaron's reply: his 1/10 scores a guard layer charter never
+claimed was a boundary (SECURITY.md:43-46); his shred claim is refuted by a `finally` watched
+cleaning up under SIGINT; his contain.py fail-open claim is backwards; and one piece of his
+evidence is fabricated — one sha256 digest quoted for two different plaintexts of different
+lengths, which is arithmetically impossible.
