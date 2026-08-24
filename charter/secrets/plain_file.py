@@ -13,7 +13,7 @@ import os
 import stat
 from pathlib import Path
 
-from .base import SecretNotFound, VaultError, VaultProvider
+from .base import SecretNotFound, VaultError, VaultProvider, loose_dirs, make_private_dir
 
 
 def _short(p: Path) -> str:
@@ -82,7 +82,7 @@ class PlainFileProvider(VaultProvider):
         sentence above true — warning and writing anyway leaves the value world-readable
         with a warning scrolled off the top of somebody's log.
         """
-        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        make_private_dir(p.parent)
         fd = os.open(str(p), os.O_WRONLY | os.O_CREAT, 0o600)
         try:
             try:
@@ -221,4 +221,41 @@ class PlainFileProvider(VaultProvider):
             return False, str(e)
         mode = stat.S_IMODE(pp.stat().st_mode)
         perms = "" if mode == 0o600 else f", perms {oct(mode)[-3:]} (want 600)"
-        return True, f"{count} secret(s){perms}"
+        return True, f"{count} secret(s){perms}{self._loose_dir_note(pp)}"
+
+    @staticmethod
+    def _loose_dir_note(pp: Path) -> str:
+        """The other-readable directories holding this vault, named — never chmod-ed.
+
+        A directory charter creates is 0700 (:func:`base.make_private_dir`). One that was
+        already there when charter arrived keeps whatever mode it has, and the common case
+        is exactly the one that matters: a ``.charter/vaults/`` created before 0.51.x, or
+        by ``mkdir -p`` at the umask default, sits at 0755 and lists every vault name on
+        the plane to every account on the machine. `set` does not fix it, because a
+        vault's ``file`` can name any path on this machine and charter chmod-ing a
+        directory it did not create — a home directory, a shared team directory — is the
+        #331 defect over again.
+
+        So it is REPORTED. This is the same posture the file mode above already takes on
+        the read-only paths: `health`, `keys` and `ages` name a loose mode rather than
+        silently fixing it, because a health check that writes is the defect regardless of
+        what it writes.
+
+        Never raises: a health line that can throw is a `doctor` that cannot run. The
+        catch is `Exception`, not `BaseException`, deliberately — `tests/_planeguard.py`
+        signals a test reaching the real ``.charter/`` with a `BaseException` precisely so
+        that fallbacks like this one cannot turn it into a quiet empty string.
+        """
+        from .. import config
+
+        try:
+            loose = loose_dirs(pp.parent, config.STATE_DIR)
+        except Exception:
+            return ""
+        if not loose:
+            return ""
+        # Terse on purpose: this lands in a `charter vault list` table row, and the reason
+        # charter does not fix it itself is a paragraph, which belongs in `docs/secrets.md`
+        # and not in a column. The row carries what is wrong and what to type.
+        named = ", ".join(f"{_short(d)} {oct(m)[-3:]}" for d, m in loose)
+        return f", listed by other accounts: {named} (want 700 — chmod 700)"

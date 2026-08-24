@@ -54,6 +54,8 @@ import os
 import stat
 from pathlib import Path
 
+from .base import make_private_dir
+
 #: 256 bits, matching the HMAC's own block security. Read back and length-checked on
 #: every use, so a truncated file (a create interrupted midway) is regenerated rather
 #: than quietly used as a short key.
@@ -92,7 +94,7 @@ def _key() -> bytes | None:
         return existing
 
     try:
-        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        make_private_dir(p.parent)
         new = os.urandom(KEY_BYTES)
         # Same descriptor-first discipline as the vault writer (#437): the mode argument
         # to `os.open` is ignored for an inode that already exists, so a leftover

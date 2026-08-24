@@ -30,9 +30,25 @@ top of somebody's log, which is how this class of thing survives in the first pl
 plain-file vault on a filesystem that cannot hold a mode was never storing a private file;
 now it says so instead of pretending.
 
-A vault directory charter creates for itself is 0700 rather than the umask default, so
-`.charter/vaults/` no longer lists every vault name you have to every account on the
-machine. The rotation sidecar goes through the same writer.
+**Every directory charter creates** on the way to a vault file is 0700 rather than the
+umask default — not just the last one. The first cut of this said `mkdir(parents=True,
+mode=0o700)` and that is the same bug one level up: `pathlib` applies `mode` to the
+**leaf only**, and creates the missing parents at `0o777 & ~umask`. Measured on a plane
+where charter created every level itself, for a vault at `.charter/vaults/team/prod.json`:
+`.charter` 0755, `.charter/vaults` 0755, `.charter/vaults/team` 0700. The leaf was
+private and the directory the fix was *about* — the one holding the vault names — was
+world-listable. Each level is now created and chmod-ed individually.
+
+**A directory that was already there keeps its mode, and charter says so instead of
+fixing it.** A `.charter/vaults/` that predates this, or one made by `mkdir -p` at the
+umask default, is 0755 before `secret set` and 0755 after. That is deliberate: a vault's
+`file` can name any path on the machine, so "tighten whatever directory we land in" is how
+charter would come to chmod a home directory or a shared team directory unprompted, with
+nobody watching — the defect #331 was filed about. What charter does instead is name it,
+on the vault's health line and so in `doctor` and `charter vault list`: `listed by other
+accounts: .charter/vaults 755 (want 700)`. The remedy is one `chmod 700`, run by you.
+
+The rotation sidecar goes through the same writer.
 
 None of this is about the plaintext. A plain-file vault stores values in the clear, that
 is documented in four places, and it remains the accepted trade-off for the provider whose

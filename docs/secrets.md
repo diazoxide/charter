@@ -15,6 +15,21 @@ you, can read the file directly. `charter` does not pretend otherwise: the vault
 registry and every vault file live under `.charter/` (gitignored — never committed, never
 synced anywhere by `charter` itself).
 
+Every directory charter **creates** on the way to a vault file is 0700, each level of it,
+so the directory listing your vault *names* is not readable by other accounts either. A
+directory that **already existed** keeps the mode it has — a `.charter/vaults/` made by
+hand or by an older charter is 0755 before `secret set` and 0755 after. charter will not
+chmod a directory it did not create (a vault's `--file` can name any path on this machine,
+and silently tightening someone's home or a shared team directory is worse than the thing
+it fixes), so it reports it instead — on the vault's health line, and therefore in
+`charter doctor` and `charter vault list`:
+
+```
+devops: 3 secret(s), listed by other accounts: .charter/vaults 755 (want 700 — chmod 700)
+```
+
+One `chmod 700 .charter/vaults` clears it.
+
 If you want encryption at rest, use your **OS keychain** (macOS Keychain, a real
 password manager, or a proper secrets backend) to hold the credential, and treat
 `charter`'s vault as a *thin, disposable staging area* your agent reads from — or wait

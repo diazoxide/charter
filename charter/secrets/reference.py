@@ -42,7 +42,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import util
-from .base import SecretNotFound, VaultError, VaultProvider
+from .base import SecretNotFound, VaultError, VaultProvider, make_private_dir
 
 
 def _op_argv(uri: str, config: dict) -> tuple[list[str], str]:
@@ -158,7 +158,7 @@ class ReferenceProvider(VaultProvider):
 
     def _save(self, data: dict) -> None:
         p = self.path
-        p.parent.mkdir(parents=True, exist_ok=True)
+        make_private_dir(p.parent)
         p.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
         os.chmod(p, 0o600)
 
