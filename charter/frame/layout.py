@@ -155,14 +155,29 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     set is an OVERLAY on whatever the pane would have inherited anyway.
 
     That matters twice. It means a caller may carry only the variables that must differ
-    (which `session_argv` and `panel_argvs` on charter's own server now do — see
+    (which `session_argv` and `panel_argvs` on charter's own server already did — see
     `commands_frame._frame_identity_env`, and note that a `-e` is argv and argv is
-    world-readable). And it means this call site's full-environment pass is a CHOICE
-    rather than a requirement: on the operator's server the base the overlay lands on is
-    THEIR tmux server's environment, which may predate this plane entirely, so charter
-    states everything rather than trusting it. That choice keeps the operator's whole
-    environment on a tmux command line, which is a real exposure with a real reason and
-    is not this issue's to change unmeasured.
+    world-readable). And it meant this call site's full-environment pass was a CHOICE
+    rather than a requirement.
+
+    **That choice is gone, and #446 is why.** This call carried `dict(os.environ, …)`
+    whole into `/proc/<pid>/cmdline`: measured on one real environment, 129 argv elements,
+    7,773 bytes, four live 1Password service-account tokens and an npm auth token. What it
+    was buying was "the base the overlay lands on is THEIR tmux server's environment, which
+    may predate this plane entirely". Two things were then measured against tmux 3.7c and
+    settle it (`commands_frame._guest_harness_env` carries the numbers):
+
+    * a pane's `$PATH` is the INVOKING CLIENT's, not the server's — charter's own, the
+      one `cmd_launch`'s `shutil.which` resolved the harness against. An explicit
+      `-e PATH=…` does not even survive: tmux overwrites it afterwards.
+    * everything else a harness reads it reads for itself, from a server environment that
+      belongs to the same operator on the same machine.
+
+    So only `commands_frame._guest_harness_env` travels here. The cost is stated in
+    `docs/frame.md` beside the other named costs of being a guest: the harness inherits
+    the operator's TMUX SERVER environment rather than their current shell's — exactly
+    what already happens on charter's own shared server, and never worth a credential on a
+    world-readable command line.
 
     Every `-e` lands before the `--` — they are `respawn-pane`'s own options, and must
     never be grafted onto the harness's own argv.
@@ -222,6 +237,29 @@ def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
                 "--", *harness_argv)
 
 
+#: Every environment variable name charter will ever put on a tmux command line, and the
+#: whole of it.
+#:
+#: **The list is the promise, and it lives HERE because this is the only place a `-e`
+#: is built.** #412 narrowed one call site (`session_argv`) and #446 was the other one
+#: (`respawn_argv`) still passing `dict(os.environ, …)` whole — the same defect, found a
+#: release apart, because the rule was enforced at the call sites rather than at the
+#: single funnel every call site goes through. :func:`_env_argv` refuses anything else
+#: outright, so the next call site cannot quietly leak the way that one did: a wide
+#: environment is a loud `ValueError` in the test that first builds it, not 7,773 bytes
+#: of `/proc/<pid>/cmdline` on somebody's laptop.
+#:
+#: Names, never a `CHARTER_` prefix glob, for `commands_frame._FRAME_IDENTITY`'s own
+#: reason: a prefix would keep the promise for a variable nobody has invented yet.
+#: `PATH` is the one non-charter name and `commands_frame._guest_harness_env` is where
+#: its measurement is written down. Nothing here is ever a credential — that is the
+#: property that makes an argv acceptable at all.
+CARRIABLE = frozenset({
+    "CHARTER_SESSION_ID", "CHARTER_HARNESS", "CHARTER_ROOT", "CHARTER_WORKSPACE",
+    "CHARTER_PERSONA", "PATH",
+})
+
+
 def _env_argv(env: dict[str, str] | None) -> list[str]:
     """`-e NAME=VALUE` per entry, sorted so the command is the same on every launch.
 
@@ -229,7 +267,19 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
     these are tmux's own options, not something to graft onto the program's argv. Empty
     for an empty (or absent) *env*, so a call that has nothing to carry produces exactly
     the command it always did.
+
+    **Every name must be in :data:`CARRIABLE`.** Raising is the point: the alternative —
+    dropping the extras quietly — would let a caller believe it had handed the harness a
+    variable that never arrived, and would make the leak this guard exists to stop
+    invisible rather than impossible. Only NAMES appear in the message; a value that does
+    not belong on a command line does not belong in a traceback either.
     """
+    unlisted = sorted(set(env or {}) - CARRIABLE)
+    if unlisted:
+        raise ValueError(
+            f"tmux `-e` may only carry {sorted(CARRIABLE)} — refusing "
+            f"{len(unlisted)} other name(s): {unlisted}. A `-e` is argv, and argv is "
+            "world-readable; see frame/layout.CARRIABLE")
     return [x for name in sorted(env or {}) for x in ("-e", f"{name}={env[name]}")]
 
 
@@ -282,13 +332,17 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
     correct that (an index would renumber under the very next split, same failure the
     module docstring already measures for the harness pane).
 
-    *env* is `-e`. On somebody else's server it carries the launcher's environment whole,
-    because a pane created there inherits THAT SERVER's — whatever their shell had when
-    they first ran `tmux`, possibly days ago and in another plane — and a panel resolves
-    the plane it draws (`config.STATE_DIR` among it) from its own.
+    *env* is `-e`, and it carries charter's identity and nothing else on EITHER server.
+    The sentence here used to say that on somebody else's server it "carries the
+    launcher's environment whole", and #446 is that sentence: a panel needs the plane it
+    draws stated (`$CHARTER_ROOT`, `$CHARTER_WORKSPACE` — it inherits that server's
+    otherwise, whatever their shell had when they first ran `tmux`), and it needs nothing
+    else. A panel starts no subprocess at all — `frame/gather.py`, `frame/slots.py` and
+    `frame/panel.py` are pure file and state reads — so it has no use for `$PATH` either,
+    and its own interpreter is already absolute (`panel_command`, #390).
 
-    **On charter's own server it carries charter's identity and nothing else, and the
-    sentence that used to be here was wrong.** It said the panels inherit the launcher's
+    **On charter's own server it carried charter's identity and nothing else already, and
+    the sentence that used to be here was wrong.** It said the panels inherit the launcher's
     environment "because `new-session` is what starts that server" — true of the launch
     that starts it and of no other (#411; see :func:`session_argv`). Every later frame's
     panels inherited the FIRST launcher's, and `$CHARTER_WORKSPACE` is the sharp one:

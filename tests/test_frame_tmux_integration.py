@@ -120,13 +120,28 @@ def _importable_env(env: dict) -> dict:
                                  else str(_REPO_ROOT)))
 
 
+def _tmux_on(socket: str, *args: str,
+             env: dict | None = None) -> subprocess.CompletedProcess:
+    """`tmux -L <socket>`, for a test that has to say WHICH server it means.
+
+    There is more than one server in this module now: `SOCKET` is charter's own, set up
+    the way charter sets its own up, and `OP_SOCKET` stands in for a tmux the operator
+    already had open, left at tmux's own defaults. A helper hard-wired to one of them is
+    how the operator's server came to be charter's server under another name — see
+    `OP_SOCKET`'s own comment for what that cost.
+    """
+    return subprocess.run(["tmux", "-L", socket, *args], capture_output=True, text=True,
+                          timeout=10, env=env)
+
+
 def _tmux(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    """*env* is `None` by every existing call site (inherit this process's own
+    """`_tmux_on(SOCKET, …)` — charter's own server, the default for this module.
+
+    *env* is `None` by every existing call site (inherit this process's own
     environment, unchanged) — `PanelIntegration` is the one caller that needs a
     DIFFERENT environment for a `new-session` call, so tmux hands its spawned pane a
     throwaway plane's `$CHARTER_ROOT` rather than this test process's real one."""
-    return subprocess.run(["tmux", "-L", SOCKET, *args], capture_output=True, text=True,
-                          timeout=10, env=env)
+    return _tmux_on(SOCKET, *args, env=env)
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -284,7 +299,28 @@ def _refusal(fd: int) -> str:
     return out.decode("utf-8", "replace").strip()
 
 
-def _await_file(path: str, timeout: float = 5.0) -> bool:
+#: How long ANY one thing this module waits to happen gets to happen — #409.
+#:
+#: **One constant, because the flake was module-wide and the deadline was not.** Eleven
+#: separate waits carried 3, 5, 8 and 15 seconds apiece, each number picked where it was
+#: written and none of them re-examined after CI got slower; the signal-death test alone
+#: cost a re-run on five PRs, which is exactly the tax that teaches people to merge over
+#: red. A per-call number is a per-call judgement about a machine nobody who wrote it was
+#: running on.
+#:
+#: **Only POSITIVE waits use it** — "wait until X happens, then assert it did". A wait
+#: that exists to show something does NOT happen must keep its own short, deliberate
+#: number: raising one of those buys no reliability and spends the time on every single
+#: run. This one is spent only by a test that is already failing or skipping.
+#:
+#: Generous rather than tuned, for the reason `_ATTACH_TIMEOUT` gives: polling makes a
+#: slow machine slow instead of wrong, and every wait below returns the instant its
+#: condition holds, so the number is what a LOADED runner may take and never what a
+#: healthy one does.
+_DEADLINE = 20.0
+
+
+def _await_file(path: str, timeout: float = _DEADLINE) -> bool:
     """Wait for a hook-written file to appear, up to *timeout*.
 
     A fixed `time.sleep(1)` here was a guess about how long a `run-shell` takes to fork a
@@ -325,7 +361,7 @@ def _await_client(session: str, exclude: frozenset, pid: int) -> str:
     return ""
 
 
-def _await_dead(pane: str, timeout: float = 5.0) -> int | None:
+def _await_dead(pane: str, timeout: float = _DEADLINE) -> int | None:
     """Poll the launcher's OWN `_query_pane_dead_status` until *pane* is gone.
 
     Polled rather than slept for the same reason `_await_file` is: how long tmux takes to
@@ -410,6 +446,27 @@ class _TmuxServerFixture:
     class's own subclass listed `unittest.TestCase` here instead.
     """
 
+    #: Which server this class's tests stand up. `SOCKET` is charter's own; the class
+    #: that is about the tmux charter is a GUEST on overrides it, because a guest server
+    #: charter's own fixture has already configured is not a guest server (`OP_SOCKET`).
+    SOCKET_NAME = SOCKET
+
+    #: Whether `_new_pane` arms `remain-on-exit` server-globally, the way
+    #: `commands_frame._PLACEHOLDER_CONF` does on charter's own private server.
+    #:
+    #: **A class that is about somebody else's tmux must turn this OFF, and the whole of
+    #: #408's second half is why.** With it on, every pane on the server keeps its corpse
+    #: and therefore fires `pane-died` — including panes charter did nothing to. A test
+    #: for "charter makes a dying panel reachable" then passes on the FIXTURE's option
+    #: and cannot see charter failing to set one; measured, by deleting the production
+    #: call and watching the test stay green.
+    ARMS_REMAIN_ON_EXIT = True
+
+    def _srv(self, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+        """`tmux` against THIS class's own server — never the module-level `_tmux`, which
+        is `SOCKET` and `SOCKET` only."""
+        return _tmux_on(self.SOCKET_NAME, *args, env=env)
+
     def setUp(self) -> None:
         # FIRST, and cooperatively: `PersonaIso.setUp` is what repoints `config`, and it
         # only runs if this method hands control up the MRO. A `setUp` that quietly
@@ -438,35 +495,71 @@ class _TmuxServerFixture:
         running", yet the file stays in `/tmp/tmux-<uid>/`. A cleanup that only killed
         the server would still leak one stale entry per test run — which is exactly how
         this module's own hand-verification sessions left 52 of them behind before this
-        fix. tmux computes this path itself from `-L SOCKET`; matched here rather than
+        fix. tmux computes this path itself from `-L <socket>`; matched here rather than
         asked of tmux because there is no query command for it, only observed behaviour
         (`/tmp/tmux-<getuid()>/<socket name>` on every platform this repo runs on)."""
-        _tmux("kill-server")
-        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
+        self._srv("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / self.SOCKET_NAME).unlink(missing_ok=True)
 
     def _new_pane(self, dies_by: str = "exit 0") -> tuple[str, str, str]:
-        """A fresh session on `SOCKET`, `remain-on-exit` armed; its name, pane id and GATE.
+        """A fresh session on this class's server; its name, pane id and GATE.
 
         The pane runs a program that WAITS for its gate file and then dies by *dies_by* —
         the caller opens the gate (`_release`) when it wants the death. See `_gate_argv`
         for why the pane is never driven with `send-keys` instead, which is the shape this
         module used to use and the reason it failed roughly one CI run in ten.
+
+        `remain-on-exit` is armed globally here only when `ARMS_REMAIN_ON_EXIT` says so —
+        see that attribute for why a class about somebody else's tmux must not.
         """
         self._pane_counter += 1
         name = f"p{self._pane_counter}"
         gate = os.path.join(self._gate_dir, f"gate-{name}")
-        r = _tmux("new-session", "-d", "-s", name, "-x", "80", "-y", "24",
-                  "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, dies_by))
+        r = self._srv("new-session", "-d", "-s", name, "-x", "80", "-y", "24",
+                      "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, dies_by))
         self.assertEqual(r.returncode, 0, r.stderr)
-        # Global on this socket's server — cheap to repeat per pane, and every frame
-        # wants it regardless (see `commands_frame._PLACEHOLDER_CONF`'s own docstring).
-        _tmux("set", "-g", "remain-on-exit", "on")
+        if self.ARMS_REMAIN_ON_EXIT:
+            # Global on this socket's server — cheap to repeat per pane, and every frame
+            # on CHARTER'S OWN server wants it regardless (see
+            # `commands_frame._PLACEHOLDER_CONF`'s own docstring).
+            self._srv("set", "-g", "remain-on-exit", "on")
         return name, r.stdout.strip(), gate
 
     @staticmethod
     def _release(gate: str) -> None:
         """Open a pane's gate: its program stops waiting and dies the way it was built to."""
         Path(gate).touch()
+
+    def _hook_reaches_a_shim(self, *, socket, pane, gate, interpreter_dir,
+                             timeout=_DEADLINE):
+        """Arm *pane*'s respawn hook with a shim as charter's interpreter, open the gate,
+        and return whatever argv the shim recorded (``None`` if it never ran).
+
+        The shim stands in for `sys.executable`, so the argv it records is what charter
+        would REALLY have been invoked with — and *interpreter_dir* is how a caller
+        chooses what shape of path that is.
+
+        *timeout* is the full `_DEADLINE` for a caller expecting the hook to fire — a
+        slow machine must come back slow, never wrong. A caller expecting NOTHING passes
+        a shorter one and earns the right to by establishing separately that the pane is
+        GONE: once tmux has destroyed a pane, `pane-died` for it can no longer fire at
+        any deadline, so waiting longer proves nothing that the pane's absence does not.
+        """
+        os.makedirs(interpreter_dir, exist_ok=True)
+        marker = os.path.join(self._gate_dir, f"argv-{os.path.basename(pane)}")
+        shim = os.path.join(interpreter_dir, "fake charter py")
+        Path(shim).write_text(f'#!/bin/sh\nprintf "%s" "$*" > "{marker}"\n')
+        os.chmod(shim, 0o755)
+        with mock.patch("charter.commands_frame.util.self_relaunch_argv",
+                        side_effect=lambda *a: [shim, "-P", "-m", "charter", *a]):
+            argv = commands_frame._panel_died_hook_argv(
+                socket=socket, panel_pane=pane, slot="top", fid="demo-1")
+        self.assertIsNotNone(argv, f"charter refused to arm a hook for {shim!r}")
+        self.assertEqual(_run(argv).returncode, 0)
+        self._release(gate)
+        if not _await_file(marker, timeout):
+            return None
+        return Path(marker).read_text().split()
 
     def _require_pane_died_fires(self) -> None:
         """Skip unless a pane-scoped `pane-died` hook actually FIRES on this machine.
@@ -484,14 +577,23 @@ class _TmuxServerFixture:
 
         Probed once per process (`_PANE_DIED_FIRES`) — the answer is a property of this
         tmux and this environment, not of any one test, and each probe costs a pane.
+
+        **The probe sets `remain-on-exit` itself rather than inheriting it from the
+        fixture**, which it used to do and which made it a probe of the fixture as much
+        as of tmux: on a class with `ARMS_REMAIN_ON_EXIT` off it would answer "does not
+        fire" everywhere and skip every test that asks. Window-scoped, because that is
+        the scope with no version floor under it — `set-option -p` is tmux 3.0+, and a
+        probe that reported a capability missing because the SCOPE was unsupported would
+        skip tests for the wrong reason.
         """
         if not _PANE_DIED_FIRES:
             _, pane, gate = self._new_pane("exit 7")
             tmp = tempfile.mkdtemp(prefix="charter-integ-probe-")
             self.addCleanup(shutil.rmtree, tmp, True)
             marker = os.path.join(tmp, "fired")
-            _tmux("set-hook", "-p", "-t", pane, "pane-died",
-                  f'run-shell "touch {marker}"')
+            self._srv("set-option", "-w", "-t", pane, "remain-on-exit", "on")
+            self._srv("set-hook", "-p", "-t", pane, "pane-died",
+                      f'run-shell "touch {marker}"')
             self._release(gate)
             _PANE_DIED_FIRES.append(_await_file(marker))
         if not _PANE_DIED_FIRES[0]:
@@ -635,8 +737,12 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                            *_gate_argv(os.path.join(self._gate_dir, "never"), "exit 0")
                            ).stdout.strip()
         self.assertTrue(panel_pane.startswith("%"), panel_pane)
-        armed = _run(commands_frame._panel_died_hook_argv(
-            socket=SOCKET, panel_pane=panel_pane, slot="bottom"))
+        argv = commands_frame._panel_died_hook_argv(
+            socket=SOCKET, panel_pane=panel_pane, slot="bottom", fid="demo-1")
+        self.assertIsNotNone(argv, "this machine's own interpreter path cannot be "
+                                   "written into a hook action — see "
+                                   "`_action_word_is_safe`")
+        armed = _run(argv)
         self.assertEqual(armed.returncode, 0, armed.stderr)
 
         after = _tmux("show-hooks", "-p", "-t", harness_pane).stdout
@@ -657,34 +763,149 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         deliver the right argv?
 
         Four separate things have to hold at once and none of them can be checked by
-        reading the string: tmux must not eat the `$` before the shell sees it (the
-        failure `_pane_died_write_hook_argv`'s docstring measures for double quotes),
-        `$CHARTER_PY` must be resolvable from a `run-shell` spawned by a PANE-scoped
-        hook, `run-shell -b` must still run the command at all, and the slot and pane id
-        must arrive as separate argv words. `$CHARTER_PY` is pointed at a script that
-        records its own argv, so what is asserted is what charter would really have been
-        invoked with."""
+        reading the string: the interpreter path has to survive tmux's own parse of the
+        action (the failure `_pane_died_write_hook_argv`'s docstring measures for double
+        quotes, one layer over), `run-shell -b` must still run the command at all, the
+        slot and pane id must arrive as separate argv words, and — since #408 — the
+        frame id has to travel WITH them rather than out of band, because
+        `set-environment` is unavailable on the operator's own server.
+
+        The interpreter is a script that records its own argv, at a path holding a SPACE:
+        a bare interpolation would split it into two words and the shim would never run
+        at all."""
         self._require_pane_died_fires()
-        session, pane, gate = self._new_pane("exit 3")
-        tmp = tempfile.mkdtemp(prefix="charter-integ-respawn-")
-        self.addCleanup(shutil.rmtree, tmp, True)
-        marker = os.path.join(tmp, "argv")
-        fake_py = os.path.join(tmp, "fake-charter-py")
-        Path(fake_py).write_text(
-            f'#!/bin/sh\nprintf "%s" "$*" > {marker}\n')
-        os.chmod(fake_py, 0o755)
+        _, pane, gate = self._new_pane("exit 3")
+        seen = self._hook_reaches_a_shim(
+            socket=SOCKET, pane=pane, gate=gate,
+            interpreter_dir=os.path.join(self._gate_dir, "interp dir"))
+        self.assertIsNotNone(
+            seen, "the panel's own pane-died hook never reached a shell — "
+                  f"hooks: {_tmux('show-hooks', '-p', '-t', pane).stdout!r}")
+        self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
+                                "--pane", pane, "--frame", "demo-1"])
+
+    def test_an_awkward_interpreter_path_arrives_byte_for_byte(self):
+        """The property `_ACTION_QUOTE_BREAKERS` is derived from, measured rather than
+        argued: every ASCII punctuation character EXCEPT the six that mean something to
+        one of the three parsers involved is literal on the way through, so an
+        interpreter living behind one is armed rather than refused — and the argv that
+        comes out the far side is the one charter meant.
+
+        Without this the guard could be tightened to a paranoid allowlist and nothing
+        would notice; with it, a tightening that costs a real path its respawn fails
+        here."""
+        self._require_pane_died_fires()
+        _, pane, gate = self._new_pane("exit 3")
+        awkward = "a b;c&d(e)f*g-h,i=j+k@l:m[n]o{p}q!r%s^t~u"
+        seen = self._hook_reaches_a_shim(
+            socket=SOCKET, pane=pane, gate=gate,
+            interpreter_dir=os.path.join(self._gate_dir, awkward))
+        self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
+                                "--pane", pane, "--frame", "demo-1"])
+
+    def test_a_hook_action_really_is_format_expanded_before_any_shell_sees_it(self):
+        """The POSITIVE CONTROL for `_action_word_is_safe` refusing `#`, and the reason
+        that refusal exists at all rather than being tidiness about a harmless character.
+
+        tmux expands `#{…}` in a hook action before parsing it as a command — that is the
+        mechanism `_pane_died_write_hook_argv` relies on to get `#{pane_dead_status}` to a
+        shell, and it applies to every other character of the action equally. Measured
+        here in the shape an interpreter path would have: the literal text
+        `/opt/py#{pane_id}/x` reaches `/bin/sh` rewritten.
+
+        A first version of charter's guard looked only for quote characters and let this
+        through entirely. Without this control, tightening the guard would look like
+        caution rather than like the fix for a measured rewrite — and `#{pane_title}`
+        expands to text the program in that pane sets for itself."""
+        self._require_pane_died_fires()
+        _, pane, gate = self._new_pane("exit 3")
+        out = os.path.join(self._gate_dir, "expanded")
         self.assertEqual(
-            _run(commands_frame._charter_py_env_argv(socket=SOCKET, session=session)
-                 [:-1] + [fake_py]).returncode, 0)
-        self.assertEqual(
-            _run(commands_frame._panel_died_hook_argv(socket=SOCKET, panel_pane=pane,
-                                                      slot="top")).returncode, 0)
+            _tmux("set-hook", "-p", "-t", pane, "pane-died",
+                  f"""run-shell -b 'echo "/opt/py#{{pane_id}}/x" > "{out}"'""").returncode,
+            0)
         self._release(gate)
-        self.assertTrue(_await_file(marker),
-                        "the panel's own pane-died hook never reached a shell — "
-                        f"hooks: {_tmux('show-hooks', '-p', '-t', pane).stdout!r}")
-        self.assertEqual(Path(marker).read_text().split(),
-                         ["-m", "charter", "frame-respawn", "top", "--pane", pane])
+        self.assertTrue(_await_file(out), "the hook never reached a shell")
+        seen = Path(out).read_text().strip()
+        self.assertNotEqual(
+            seen, "/opt/py#{pane_id}/x",
+            "tmux no longer expands formats inside a hook action — if that is really "
+            "true, `_pane_died_write_hook_argv`'s `#{pane_dead_status}` has stopped "
+            "working too, which is a much larger thing than this test")
+        self.assertEqual(seen, f"/opt/py{pane}/x",
+                         "the text was rewritten, but not into the pane id — read what "
+                         "this tmux actually does before trusting the guard's reasoning")
+
+    #: How many deaths one exit-status test may spend before it gives up on this
+    #: machine — #409.
+    #:
+    #: **Not a retry for flakiness: a retry for a trial that measured nothing.** The
+    #: signal-death test was failing about one CI job in eight on tmux 3.4, and the
+    #: diagnosis in the ticket ("tmux marks the pane dead and THEN runs the hook; the
+    #: read lands in that window") predicts a longer wait would fix it. This module had
+    #: already measured otherwise, in `PanelIntegration`'s own docstring: pinned to one
+    #: cpu against four spin loops, 11 of 120 deaths on tmux 3.4 ended `#{pane_dead}` `1`
+    #: with an EMPTY status and the `pane-died` hook never firing — **permanently**,
+    #: polling a further 8 seconds never filled it in. tmux 3.4's `server_destroy_pane`
+    #: does not have the child's status when the pane's fd closes, and nothing arrives
+    #: later. So the deadline is not the knob for THIS one, and a bounded poll alone
+    #: would have re-shipped the same flake with a longer wait attached to it.
+    #:
+    #: What a death like that produces is not a wrong answer, it is no answer: the pane
+    #: is gone and tmux never ran charter's hook, so there is nothing for the test to be
+    #: about. :meth:`_a_death_the_hook_saw` detects exactly that — with a probe hook
+    #: beside charter's own, not by reading the empty status, which the healthy signal
+    #: death also has — and spends another pane on it.
+    _HOOK_TRIALS = 3
+
+    def _a_death_the_hook_saw(self, dies_by: str, status_path: str):
+        """One trial of "a pane dies, charter's write hook records its status".
+
+        Returns the status file's CONTENT, or ``None`` when tmux never ran this pane's
+        `pane-died` array at all — the tmux 3.4 window :data:`_HOOK_TRIALS` describes,
+        which is a trial that measured nothing rather than a result.
+
+        **The probe hook is what tells those apart, and it is a different question from
+        the one the test asks.** It is installed at `pane-died[1]` with a CONSTANT action
+        — `touch <marker>`, no `#{pane_dead_status}`, no `$CHARTER_FRAME_EXIT`, nothing
+        charter builds — so the only thing its marker can report is "tmux reached this
+        pane's hook array". tmux runs an array in index order, so the marker cannot
+        appear unless charter's own `[0]` was reached first. An INDEXED install beside an
+        existing `[0]` is safe: that is exactly what
+        `test_the_write_hook_must_be_installed_before_the_teardown_hook` measures, and it
+        is the same shape `cmd_launch` itself uses.
+
+        **A fired array with no file is a FAILURE, not a void trial**, and that is the
+        half that keeps this test able to fail. Delete the `${v:-N}` fallback and the
+        hook still fires and still writes — an empty line — so the file exists and its
+        content is asserted. Break the hook so nothing is written at all and the probe
+        still fires, so this says so rather than skipping.
+        """
+        session, pane, gate = self._new_pane(dies_by)
+        self.assertEqual(_run(commands_frame._exit_path_env_argv(
+            socket=SOCKET, session=session, status_path=status_path)).returncode, 0)
+        self.assertEqual(_run(commands_frame._pane_died_write_hook_argv(
+            socket=SOCKET, harness_pane=pane)).returncode, 0)
+        fired = os.path.join(self._gate_dir, f"array-ran-{pane.lstrip('%')}")
+        self.assertEqual(_tmux("set-hook", "-p", "-t", pane, "pane-died[1]",
+                               f'run-shell "touch {fired}"').returncode, 0)
+        self._release(gate)
+        if not _await_file(fired):
+            return None, pane
+        self.assertTrue(
+            _await_file(status_path),
+            "tmux ran this pane's `pane-died` array — a constant-action probe hook "
+            "beside charter's own fired — and charter's write hook produced no file at "
+            "all. That is charter, not the runner.")
+        return Path(status_path).read_text().strip(), pane
+
+    def _no_death_was_delivered(self):
+        self.skipTest(
+            f"none of {self._HOOK_TRIALS} deaths on this machine reached a `pane-died` "
+            "hook at all — tmux never had the child's status when the pane's fd closed "
+            "(measured on tmux 3.4 under load; see `_HOOK_TRIALS`). The capability this "
+            "test measures was not present to measure, and nothing here is widened to "
+            "pass without it.")
 
     # -- 2. Path delivery and injection ---------------------------------------------- #
 
@@ -693,9 +914,11 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         exit-status path reaches the write hook's shell — verified here against a path
         containing a space, a literal `'`, and a `$(touch ...)` injection attempt all at
         once: the file at that exact path must hold the harness's real exit code, and
-        nothing embedded in the path may execute."""
+        nothing embedded in the path may execute.
+
+        Tried up to `_HOOK_TRIALS` times, for #409's reason and not for flakiness'
+        sake: a death tmux never ran a hook for measured nothing about this path."""
         self._require_pane_died_fires()
-        session, pane, gate = self._new_pane("exit 42")
         tmp = tempfile.mkdtemp(prefix="charter-integ-inj-")
         self.addCleanup(shutil.rmtree, tmp, True)
         canary = os.path.join(tmp, "canary")
@@ -703,21 +926,15 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         os.makedirs(hostile_dir, exist_ok=True)
         status_path = os.path.join(hostile_dir, "exit")
 
-        env_cmd = commands_frame._exit_path_env_argv(socket=SOCKET, session=session,
-                                                      status_path=status_path)
-        self.assertEqual(_run(env_cmd).returncode, 0)
-        write_cmd = commands_frame._pane_died_write_hook_argv(socket=SOCKET, harness_pane=pane)
-        self.assertEqual(_run(write_cmd).returncode, 0)
-        teardown_cmd = commands_frame._pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=pane)
-        self.assertEqual(_run(teardown_cmd).returncode, 0)
-
-        self._release(gate)
-        _await_file(status_path)
-
-        self.assertFalse(os.path.exists(canary),
-                         "the $(touch ...) inside the plane path must never execute")
-        with open(status_path) as f:
-            self.assertEqual(f.read().strip(), "42")
+        for _ in range(self._HOOK_TRIALS):
+            content, _pane = self._a_death_the_hook_saw("exit 42", status_path)
+            if content is None:
+                continue   # tmux never ran the array — see `_HOOK_TRIALS`
+            self.assertFalse(os.path.exists(canary),
+                             "the $(touch ...) inside the plane path must never execute")
+            self.assertEqual(content, "42")
+            return
+        self._no_death_was_delivered()
 
     # -- 3. Signal death -------------------------------------------------------------- #
 
@@ -732,36 +949,44 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
 
         The pane's own program signals ITSELF once its gate opens, rather than the test
         typing the same thing at an interactive shell — see `_gate_argv` for the 30-trial
-        measurement that made the difference between the two shapes."""
+        measurement that made the difference between the two shapes.
+
+        **#409, and what it is NOT.** This failed about one CI job in eight on tmux 3.4
+        and cost a re-run on five PRs. Two fixes were rejected on the way to this one.
+        Accepting an empty `#{pane_dead_status}` as a pass would make the assertion
+        unfailable — the sentinel is the whole subject. And a longer wait would not have
+        worked either: the ticket reads the failure as a race against the hook, but this
+        module had already measured the opposite (`PanelIntegration`'s docstring, 11 of
+        120 deaths on a one-cpu 3.4), that in that window the hook never fires AT ALL and
+        never will. So the fix is to notice a death that carried no measurement and spend
+        another pane, while asserting every delivered death exactly as strictly as before
+        — see :meth:`_a_death_the_hook_saw` and :data:`_HOOK_TRIALS`."""
         self._require_pane_died_fires()
-        session, pane, gate = self._new_pane("kill -9 $$")
         tmp = tempfile.mkdtemp(prefix="charter-integ-sig-")
         self.addCleanup(shutil.rmtree, tmp, True)
-        status_path = os.path.join(tmp, "exit")
 
-        env_cmd = commands_frame._exit_path_env_argv(socket=SOCKET, session=session,
-                                                      status_path=status_path)
-        self.assertEqual(_run(env_cmd).returncode, 0)
-        write_cmd = commands_frame._pane_died_write_hook_argv(socket=SOCKET, harness_pane=pane)
-        self.assertEqual(_run(write_cmd).returncode, 0)
+        for attempt in range(self._HOOK_TRIALS):
+            # A fresh path per trial, so a file left by an earlier trial can never be
+            # what a later one reads back.
+            status_path = os.path.join(tmp, f"exit-{attempt}")
+            content, pane = self._a_death_the_hook_saw("kill -9 $$", status_path)
+            if content is None:
+                continue   # tmux never ran the array — see `_HOOK_TRIALS`
 
-        self._release(gate)
-        _await_file(status_path)
-
-        dead, _, status = _tmux("display-message", "-p", "-t", pane,
-                                "#{pane_dead}:#{pane_dead_status}").stdout.strip().partition(":")
-        self.assertEqual(dead, "1", "the pane must be confirmed dead before this test "
-                                    "means anything")
-        self.assertEqual(status, "", "this pins that tmux itself still reports an EMPTY "
-                                     "status for a signal death, not a negative number "
-                                     "— the wrong premise an earlier version of this "
-                                     "suite assumed")
-
-        with open(status_path) as f:
-            content = f.read().strip()
-        self.assertEqual(content, str(commands_frame._UNKNOWN_DEATH_CODE),
-                         f"expected the sentinel, got {content!r} (an empty string here "
-                         f"is exactly the bug: state.exit_code cannot parse it)")
+            dead, _, status = _tmux(
+                "display-message", "-p", "-t", pane,
+                "#{pane_dead}:#{pane_dead_status}").stdout.strip().partition(":")
+            self.assertEqual(dead, "1", "the pane must be confirmed dead before this "
+                                        "test means anything")
+            self.assertEqual(status, "",
+                             "this pins that tmux itself still reports an EMPTY status "
+                             "for a signal death, not a negative number — the wrong "
+                             "premise an earlier version of this suite assumed")
+            self.assertEqual(content, str(commands_frame._UNKNOWN_DEATH_CODE),
+                             f"expected the sentinel, got {content!r} (an empty string "
+                             f"here is exactly the bug: state.exit_code cannot parse it)")
+            return
+        self._no_death_was_delivered()
 
     # -- 4. Resize redistribution ----------------------------------------------------- #
 
@@ -975,7 +1200,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         r = _tmux("set", "-w", "-t", session, "remain-on-exit", "on")
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    def _wait_for(self, target: str, needle: str, timeout: float = 8.0) -> str:
+    def _wait_for(self, target: str, needle: str, timeout: float = _DEADLINE) -> str:
         """Poll `capture-pane` until *needle* is on the visible screen, returning the
         last capture either way — the same "poll for content, never sleep a guess"
         shape `_await_file` uses, so a slow runner is slow rather than wrong."""
@@ -1105,7 +1330,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         self._remain_on_exit("panel-oldshape")
         Path(gate).write_text("x")
 
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + _DEADLINE
         while time.monotonic() < deadline and self._dead("panel-oldshape") != "1":
             time.sleep(0.1)
         self.assertEqual(self._dead("panel-oldshape"), "1",
@@ -1144,7 +1369,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         todos.add("demo", "a fresh todo the live panel should pick up")
         state.bump(fid)
 
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _DEADLINE
         changed = False
         while time.monotonic() < deadline:
             if _tmux("capture-pane", "-p", "-t", "panel-live").stdout != first:
@@ -1191,7 +1416,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
             })
         self.assertIsNone(out, "posttooluse should emit nothing for a plain Read")
 
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _DEADLINE
         changed = False
         while time.monotonic() < deadline:
             if _tmux("capture-pane", "-p", "-t", "panel-hook-live").stdout != first:
@@ -1320,7 +1545,7 @@ class MenuIntegration(PersonaIso, unittest.TestCase):
         r = _tmux("run-shell", "-t", fid, action)
         self.assertEqual(r.returncode, 0, r.stderr)
 
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + _DEADLINE
         while time.monotonic() < deadline and not os.path.exists(canary):
             time.sleep(0.2)
 
@@ -1531,7 +1756,7 @@ class MenuFormatIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
                          "rendered")
 
         os.write(fd, b"1")
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + _DEADLINE
         while time.monotonic() < deadline and not os.path.exists(real_canary):
             time.sleep(0.2)
         self.assertTrue(os.path.exists(real_canary),
@@ -1770,7 +1995,7 @@ class MenuClientIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
                          "own hotkey opened — the menu did not open specifically on "
                          "A's screen (the exact regression this round fixes)")
         os.write(fdA, b"1")
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + _DEADLINE
         while time.monotonic() < deadline and not os.path.exists(canary_a):
             time.sleep(0.2)
         self.assertTrue(os.path.exists(canary_a),
@@ -1789,7 +2014,7 @@ class MenuClientIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
                          "client A's own keystream selected an item in the menu B's "
                          "own hotkey opened")
         os.write(fdB, b"1")
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + _DEADLINE
         while time.monotonic() < deadline and not os.path.exists(canary_b):
             time.sleep(0.2)
         self.assertTrue(os.path.exists(canary_b),
@@ -1965,7 +2190,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
     def _alive(self, pane: str) -> str:
         return _tmux("display-message", "-p", "-t", pane, "#{pane_dead}").stdout.strip()
 
-    def _wait_for(self, pane: str, needle: str, timeout: float = 5.0) -> str:
+    def _wait_for(self, pane: str, needle: str, timeout: float = _DEADLINE) -> str:
         """Poll `capture-pane` for *pane* until *needle* appears or *timeout*
         elapses, returning whatever was last captured either way.
 
@@ -2395,11 +2620,23 @@ class EarlyDeathIntegration(unittest.TestCase):
         self.assertIn(str(code), msg)
 
 
-#: The socket FILE tmux computes for `-L SOCKET` — the same path `_teardown_socket`
+#: A SECOND real server, standing in for the tmux the OPERATOR already had open.
+#:
+#: **Separate from `SOCKET`, and that separation is #408's second half.**
+#: `WindowInsideAnOperatorsTmux` used to run against `SOCKET` reached by PATH — the same
+#: server every other class here uses, under another name. `_TmuxServerFixture._new_pane`
+#: had already run `set -g remain-on-exit on` on it, so the "operator's" tmux arrived
+#: pre-configured the way only charter's own private server ever is, and a test asking
+#: whether charter makes a dead PANEL reachable was answered by the fixture. It stayed
+#: green with the production call deleted. This one is never configured by anything: what
+#: it does with a dying pane is tmux's own default, which is what an operator's tmux is.
+OP_SOCKET = f"charter-integration-operator-{os.getpid()}"
+
+#: The socket FILE tmux computes for `-L OP_SOCKET` — the same path `_teardown_socket`
 #: already has to know. Needed as a path (not a name) by `WindowInsideAnOperatorsTmux`,
 #: because the whole point of that class is exercising the `-S <socket path>` half of
 #: `tmuxctl.server_argv`, which is how charter reaches a server it did not start.
-SOCKET_PATH = str(Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET)
+OP_SOCKET_PATH = str(Path("/tmp") / f"tmux-{os.getuid()}" / OP_SOCKET)
 
 
 class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
@@ -2420,7 +2657,18 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
     real `cmd_launch`, which reaps and writes frame state under `config.STATE_DIR`. The
     tmux server this class stands up is a throwaway; without `PersonaIso` the PLANE it
     writes to would not be. See `_TmuxServerFixture`'s docstring for what that cost.
+
+    **The server is `OP_SOCKET`, not `SOCKET` reached by path, and nothing configures
+    it.** Those are the two halves of the same requirement and this class had neither
+    until #408's second round: it ran against the same server as every other class here,
+    which `_new_pane` had already given `set -g remain-on-exit on` — so a pane that
+    charter had done nothing to still kept its corpse and still fired `pane-died`, and
+    the test below could not tell charter arming a panel from the fixture having armed
+    the whole server. See `OP_SOCKET` and `ARMS_REMAIN_ON_EXIT` for the measurement.
     """
+
+    SOCKET_NAME = OP_SOCKET
+    ARMS_REMAIN_ON_EXIT = False
 
     def _operator_server(self, harness_dies_by="exit 0"):
         """A session standing in for one the operator already had open.
@@ -2429,15 +2677,31 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         harness will die by. The session's own pane runs a program that never exits on
         its own, so anything that quietly takes the operator's session down shows up as
         a missing session rather than as a race.
+
+        **The precondition is checked, not assumed, and that is the whole of #408's
+        second round.** "This is somebody else's tmux" is a claim about the SERVER'S
+        STATE, not about which constant names its socket — a separate socket that
+        something has already armed is charter's own server again, and a shared one that
+        nothing has armed is not. So the property is asserted here, on every test in the
+        class, against tmux's own answer: `remain-on-exit` is at the default an operator
+        would have. Every test below whose subject is a dying pane is measuring charter
+        only while this holds.
         """
         name, pane, gate = self._new_pane("exit 0")
-        sid = _tmux("display-message", "-p", "-t", pane, "#{session_id}").stdout.strip()
+        self.assertEqual(
+            self._srv("show-options", "-g", "remain-on-exit").stdout.strip(),
+            "remain-on-exit off",
+            "the server standing in for the operator's tmux is not at tmux's default — "
+            "something armed `remain-on-exit` on it before charter got there, and every "
+            "test in this class about a pane surviving its own death is now measuring "
+            "that instead of measuring charter (see `ARMS_REMAIN_ON_EXIT`)")
+        sid = self._srv("display-message", "-p", "-t", pane, "#{session_id}").stdout.strip()
         self.assertTrue(sid.startswith("$"), sid)
         return name, sid, pane, gate
 
     def _open_frame_window(self, sid, fid="charter-demo-1"):
         """`layout.window_argv`'s own bytes, run for real. Returns (window id, pane id)."""
-        r = _run(layout.window_argv(socket=SOCKET_PATH, session=sid, window=fid,
+        r = _run(layout.window_argv(socket=OP_SOCKET_PATH, session=sid, window=fid,
                                     cwd=self._gate_dir))
         self.assertEqual(r.returncode, 0, r.stderr)
         window_id, _, pane_id = r.stdout.strip().partition(" ")
@@ -2445,7 +2709,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         self.assertTrue(pane_id.startswith("%"), r.stdout)
         return window_id, pane_id
 
-    def _wait_until(self, predicate, timeout=5.0):
+    def _wait_until(self, predicate, timeout=_DEADLINE):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if predicate():
@@ -2461,7 +2725,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         window (see `commands_frame._remain_on_exit_argv`). A tmux without pane options
         cannot do the thing these tests measure, so they skip naming that rather than
         failing with tmux's own argument-parsing text."""
-        r = _run(commands_frame._remain_on_exit_argv(socket=SOCKET_PATH,
+        r = _run(commands_frame._remain_on_exit_argv(socket=OP_SOCKET_PATH,
                                                      harness_pane=pane_id))
         if r.returncode != 0:
             self.skipTest("this tmux does not accept a pane-scoped `remain-on-exit` "
@@ -2477,17 +2741,17 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         window_id, pane_id = self._open_frame_window(sid)
         self._require_pane_options(pane_id)
         gate = os.path.join(self._gate_dir, "harness-gate")
-        r = _run(layout.respawn_argv(socket=SOCKET_PATH, harness_pane=pane_id, env={},
+        r = _run(layout.respawn_argv(socket=OP_SOCKET_PATH, harness_pane=pane_id, env={},
                                      cwd=self._gate_dir,
                                      harness_argv=_gate_argv(gate, "exit 33")))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id),
+        self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id),
                          (commands_frame._ALIVE, None))
         self._release(gate)
         self.assertTrue(self._wait_until(
-            lambda: commands_frame._pane_state(SOCKET_PATH, pane_id)[0]
+            lambda: commands_frame._pane_state(OP_SOCKET_PATH, pane_id)[0]
             == commands_frame._DEAD), "the pane never came back dead")
-        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id),
+        self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id),
                          (commands_frame._DEAD, 33))
         del window_id
 
@@ -2499,7 +2763,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         _, sid, _, _ = self._operator_server()
         _, pane_id = self._open_frame_window(sid)
         time.sleep(0.4)
-        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id)[0],
+        self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id)[0],
                          commands_frame._ALIVE,
                          "the placeholder exited on its own")
 
@@ -2510,12 +2774,12 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         `#{pane_dead}` being `1` would poll a window nobody can bring back, forever."""
         _, sid, _, _ = self._operator_server()
         window_id, pane_id = self._open_frame_window(sid)
-        raw = _run(tmuxctl.server_argv(SOCKET_PATH, "display-message", "-p", "-t",
+        raw = _run(tmuxctl.server_argv(OP_SOCKET_PATH, "display-message", "-p", "-t",
                                        pane_id, commands_frame._DEAD_FORMAT))
         self.assertEqual(raw.returncode, 0)
         self.assertEqual(raw.stdout.strip(), "0:")
-        _run(tmuxctl.server_argv(SOCKET_PATH, "kill-window", "-t", window_id))
-        gone = _run(tmuxctl.server_argv(SOCKET_PATH, "display-message", "-p", "-t",
+        _run(tmuxctl.server_argv(OP_SOCKET_PATH, "kill-window", "-t", window_id))
+        gone = _run(tmuxctl.server_argv(OP_SOCKET_PATH, "display-message", "-p", "-t",
                                         pane_id, commands_frame._DEAD_FORMAT))
         self.assertEqual(gone.returncode, 0,
                          "tmux is expected to answer, not to refuse")
@@ -2523,7 +2787,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                          "both variables expand to nothing, and the format's own "
                          "literal `:` is all that is left — NOT an empty line, which "
                          "is what a guard written from memory assumed")
-        self.assertEqual(commands_frame._pane_state(SOCKET_PATH, pane_id),
+        self.assertEqual(commands_frame._pane_state(OP_SOCKET_PATH, pane_id),
                          (commands_frame._GONE, None))
 
     def test_closing_the_frames_window_leaves_the_operators_session_alone(self):
@@ -2531,14 +2795,14 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         up after itself and charter ending every window the operator had open."""
         name, sid, op_pane, _ = self._operator_server()
         window_id, _ = self._open_frame_window(sid)
-        before = _tmux("list-windows", "-a", "-F", "#{window_name}").stdout.split()
+        before = self._srv("list-windows", "-a", "-F", "#{window_name}").stdout.split()
         self.assertIn("charter-demo-1", before)
-        _run(tmuxctl.server_argv(SOCKET_PATH, "kill-window", "-t", window_id))
-        after = _tmux("list-windows", "-a", "-F", "#{window_name}").stdout.split()
+        _run(tmuxctl.server_argv(OP_SOCKET_PATH, "kill-window", "-t", window_id))
+        after = self._srv("list-windows", "-a", "-F", "#{window_name}").stdout.split()
         self.assertNotIn("charter-demo-1", after)
-        self.assertIn(name, _tmux("list-sessions", "-F", "#{session_name}").stdout.split(),
+        self.assertIn(name, self._srv("list-sessions", "-F", "#{session_name}").stdout.split(),
                       "the operator's own session went with charter's window")
-        self.assertEqual(_tmux("display-message", "-p", "-t", op_pane,
+        self.assertEqual(self._srv("display-message", "-p", "-t", op_pane,
                                "#{pane_dead}").stdout.strip(), "0",
                          "the operator's own pane died with it")
 
@@ -2553,8 +2817,9 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         out = os.path.join(self._gate_dir, "harness-env")
         env = commands_frame._frame_env("charter-demo-1", None)
         env["CHARTER_HARNESS"] = "claude-code"
+        env = commands_frame._guest_harness_env(env)
         r = _run(layout.respawn_argv(
-            socket=SOCKET_PATH, harness_pane=pane_id, env=env, cwd=self._gate_dir,
+            socket=OP_SOCKET_PATH, harness_pane=pane_id, env=env, cwd=self._gate_dir,
             harness_argv=["/bin/sh", "-c",
                           f'printf "%s\\n%s\\n%s\\n" "$CHARTER_SESSION_ID" '
                           f'"$CHARTER_HARNESS" "$TMUX_PANE" > "{out}"']))
@@ -2568,6 +2833,203 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                          "the harness must see its OWN pane, not the launcher's")
         self.assertNotEqual(pane_seen, op_pane)
 
+    def test_a_pane_here_gets_the_invoking_clients_path_not_the_servers(self):
+        """The measurement `_guest_harness_env` rests on, pinned against a real server so
+        charter is TOLD if tmux ever changes it.
+
+        `cmd_launch` resolves the harness binary with `shutil.which` against charter's own
+        `$PATH`; the pane it then respawns into lives on a server the operator started.
+        Measured against tmux 3.7c: the pane's `$PATH` is the one the CLIENT that issued
+        `respawn-pane` had — charter's — and an explicit `-e PATH=…` does not even
+        survive, tmux overwrites it after applying the `-e` set. So on this tmux carrying
+        `PATH` is redundant; if that ever stops being true, `_guest_harness_env` becomes
+        the only thing standing between an operator and a harness that cannot be executed,
+        and this test is where the change shows up.
+
+        `python3` reads the value, not a shell, so no shell's own `$PATH` normalisation
+        can be what is being measured.
+        """
+        _, sid, _, _ = self._operator_server()
+        _, pane_id = self._open_frame_window(sid)
+        self._require_pane_options(pane_id)
+        out = os.path.join(self._gate_dir, "harness-path")
+        mine = os.environ.get("PATH", "")
+        r = _run(layout.respawn_argv(
+            socket=OP_SOCKET_PATH, harness_pane=pane_id,
+            env={"PATH": "/charter/said/this", "CHARTER_SESSION_ID": "charter-demo-1"},
+            cwd=self._gate_dir,
+            harness_argv=[sys.executable, "-c",
+                          "import os,sys;open(sys.argv[1],'w')"
+                          ".write(os.environ.get('PATH',''))", out]))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(_await_file(out), "the harness never ran")
+        seen = Path(out).read_text()
+        self.assertNotEqual(seen, "", "the pane was handed no PATH at all")
+        self.assertEqual(seen, mine,
+                         "a pane on somebody else's server no longer gets the invoking "
+                         "client's PATH — `_guest_harness_env`'s `-e PATH` is now the "
+                         "only thing carrying it, and its 'redundant here' note is stale")
+        self.assertNotEqual(seen, "/charter/said/this",
+                            "`-e PATH=` now survives; the same note is stale the other "
+                            "way, and charter could state a PATH deliberately")
+
+    def _panel_funnel(self, harness_pane, slots=()):
+        """Run charter's OWN panel funnel against this server — the whole of what a
+        launch (and every density change) does around a `split-window`.
+
+        `slots=()` by default because a pane these tests can use has to be able to DIE ON
+        COMMAND and `charter panel` cannot: what they need from the funnel is the state
+        it leaves charter's WINDOW in before any panel is split, which is the half that
+        was missing. It is a shape the launcher really passes, not one invented here —
+        `_drawable_slots` answers `[]` below its size floors and `cmd_launch` calls
+        straight through with it.
+        """
+        return commands_frame._split_panels(
+            OP_SOCKET_PATH, slots=list(slots), fid="charter-demo-1",
+            harness_pane=harness_pane, env=None, pane_env=None)
+
+    def test_a_panels_respawn_hook_is_armed_against_this_server_and_fires(self):
+        """#408, end to end on the path it was broken on. `_arm_panel_respawn` refused
+        here outright, because `_panel_died_hook_argv` hand-built `["tmux", "-L", …]` and
+        would have aimed a `run-shell` at charter's private server — or started an empty
+        one named after a socket path.
+
+        Three things a mock cannot check: that `set-hook -p` is accepted on a pane charter
+        created inside somebody else's server at all, that the action reaches a real
+        shell with the frame id ON IT — there is no `set-environment` here to read
+        `$CHARTER_SESSION_ID` back out of, which is the reason `--frame` exists — and
+        that the pane the hook is armed on is STILL THERE to fire it.
+
+        **The third is #408's second half, and this test could not see it.** tmux runs
+        `pane-died` only for a pane that died and STAYED; the panel used to be handed
+        `set-option -p … remain-on-exit on` BY THIS TEST — a command production issues
+        nowhere — on a server the fixture had already set the same option on globally. So
+        the assertion below was about the test's own arming. Nothing here arms anything
+        now: the server is left at tmux's default and the only thing run against it is
+        charter's own panel funnel (`_panel_funnel`).
+
+        The property, stated so the next reader tests the property and not this spelling:
+        a panel is not covered because some function was called with its slot in a list —
+        it is covered because it was BORN INTO A WINDOW THAT KEEPS CORPSES. The pane below
+        is split in after the funnel has run and belongs to no slot the funnel was given,
+        which is the same shape a density change (`_relayout`) and any future
+        panel-creating path have. What it does NOT cover is a panel that leaves that
+        window: the coverage is the window's, so `break-pane`/`join-pane` on a panel would
+        silently undo it — charter issues neither today, and that is the next spelling of
+        this defect."""
+        self._require_pane_died_fires()
+        _, sid, _, _ = self._operator_server()
+        _, pane_id = self._open_frame_window(sid)
+        self._require_pane_options(pane_id)
+        self._panel_funnel(pane_id)
+        gate = os.path.join(self._gate_dir, "panel-gate")
+        panel = _run(tmuxctl.server_argv(
+            OP_SOCKET_PATH, "split-window", "-t", pane_id, "-v", "-l", "1",
+            "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, "exit 4"))).stdout.strip()
+        self.assertTrue(panel.startswith("%"), panel)
+        seen = self._hook_reaches_a_shim(
+            socket=OP_SOCKET_PATH, pane=panel, gate=gate,
+            interpreter_dir=os.path.join(self._gate_dir, "op interp"))
+        self.assertIsNotNone(
+            seen, "a panel that died inside the operator's own tmux reached nothing — "
+                  f"hooks: {_run(tmuxctl.server_argv(OP_SOCKET_PATH, 'show-hooks', '-p', '-t', panel)).stdout!r}")
+        self.assertEqual(seen, ["-P", "-m", "charter", "frame-respawn", "top",
+                                "--pane", panel, "--frame", "demo-1"])
+
+    def test_a_panel_dying_here_is_destroyed_unless_charter_arms_the_window(self):
+        """The NEGATIVE control for the test above, and the measurement #408's first
+        round was missing.
+
+        Same server, same window, same pane-scoped `pane-died` hook, same death — and
+        charter's panel funnel simply not run. tmux destroys the pane, the hook goes with
+        it, and nothing reaches a shell. Without this, "the hook fires" above could be
+        true of any pane on any server and nobody would know which fact was carrying it;
+        putting `ARMS_REMAIN_ON_EXIT` back to `True` is caught here and nowhere else.
+
+        Asserted on the RECORDED ARGV rather than on any exit status: every command
+        involved succeeds either way, which is exactly why this defect survived a round —
+        `set-hook -p` on a doomed pane returns 0."""
+        self._require_pane_died_fires()
+        _, sid, _, _ = self._operator_server()
+        _, pane_id = self._open_frame_window(sid)
+        self._require_pane_options(pane_id)
+        gate = os.path.join(self._gate_dir, "unarmed-gate")
+        panel = _run(tmuxctl.server_argv(
+            OP_SOCKET_PATH, "split-window", "-t", pane_id, "-v", "-l", "1",
+            "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, "exit 4"))).stdout.strip()
+        self.assertTrue(panel.startswith("%"), panel)
+        seen = self._hook_reaches_a_shim(
+            socket=OP_SOCKET_PATH, pane=panel, gate=gate,
+            interpreter_dir=os.path.join(self._gate_dir, "bare interp"), timeout=5.0)
+        # The DETERMINISTIC half, asserted first: the pane is gone. After that no
+        # deadline can change the answer below — tmux cannot fire `pane-died` for a pane
+        # it has already destroyed — which is what makes the short wait above sound.
+        self.assertTrue(self._wait_until(
+            lambda: _run(tmuxctl.server_argv(
+                OP_SOCKET_PATH, "display-message", "-p", "-t", panel,
+                "#{pane_id}")).stdout.strip() != panel),
+            "the pane was still there, so this is not the state the control is about")
+        self.assertIsNone(
+            seen, "a pane on a server at tmux's own default kept its corpse and fired "
+                  "`pane-died` with nothing having armed `remain-on-exit` — if that is "
+                  "now tmux's behaviour, the test above is no longer measuring charter")
+
+    def test_arming_the_frames_window_leaves_the_operators_own_windows_alone(self):
+        """The blast radius of the one option `_panel_remain_on_exit_argv` writes, read
+        back out of tmux rather than argued from its flags.
+
+        `-w` is a scope this module's own docstrings refused on the ground that it reaches
+        past charter's own window. It does not, when the target is a pane charter created
+        in a window charter opened — measured here in three directions: charter's window
+        comes back `on`, the operator's own window is still exactly where it was, the
+        SERVER is still at its default, and a pane of theirs that dies is still destroyed
+        rather than left as a corpse in their window list. `-g` fails the last three,
+        which is why the harness pane's own `remain-on-exit` is `-p` and this one is
+        `-w`."""
+        _, sid, op_pane, _ = self._operator_server()
+        window_id, pane_id = self._open_frame_window(sid)
+        default = self._srv("show-options", "-w", "-t", op_pane,
+                            "remain-on-exit").stdout.strip()
+        self._panel_funnel(pane_id)
+        self.assertEqual(self._srv("show-options", "-w", "-t", window_id,
+                                   "remain-on-exit").stdout.strip(), "remain-on-exit on")
+        self.assertEqual(self._srv("show-options", "-w", "-t", op_pane,
+                                   "remain-on-exit").stdout.strip(), default,
+                         "charter changed how the operator's OWN window treats a death")
+        self.assertEqual(self._srv("show-options", "-g", "remain-on-exit").stdout.strip(),
+                         "remain-on-exit off",
+                         "charter reached the whole server, not just its own window")
+        # And the operator's own pane still dies the way it did before charter arrived.
+        gate = os.path.join(self._gate_dir, "their-gate")
+        theirs = self._srv("split-window", "-t", op_pane, "-v", "-l", "1", "-P", "-F",
+                           "#{pane_id}", "--", *_gate_argv(gate, "exit 0")).stdout.strip()
+        self.assertTrue(theirs.startswith("%"), theirs)
+        self._release(gate)
+        self.assertTrue(self._wait_until(
+            lambda: self._srv("display-message", "-p", "-t", theirs,
+                              "#{pane_id}").stdout.strip() != theirs),
+            "a pane of the operator's own was left behind as a corpse")
+
+    def test_a_frame_here_is_live_by_its_window_never_by_a_session(self):
+        """`cmd_respawn` asked `_live_sessions(SOCKET)` unconditionally, which on this
+        server is a question about somebody else's sessions: it answers "gone" for a
+        frame that is on screen, so a panel could never have been brought back even once
+        the hook reached charter. `_frame_is_live` asks the right question per server.
+
+        Both directions against the same real server, so neither can pass by the answer
+        always being the same one."""
+        _, sid, _, _ = self._operator_server()
+        self._open_frame_window(sid, fid="charter-demo-1")
+        self.assertTrue(commands_frame._frame_is_live(OP_SOCKET_PATH, "charter-demo-1"))
+        self.assertFalse(commands_frame._frame_is_live(OP_SOCKET_PATH, "a-frame-that-ended"))
+        # And the operator's OWN session name is not a frame: a `list-sessions`-shaped
+        # answer here would report it live and respawn a panel into a window charter
+        # never opened.
+        sessions = self._srv("list-sessions", "-F", "#{session_name}").stdout.split()
+        self.assertTrue(sessions, "the fixture server reported no sessions at all")
+        for name in sessions:
+            self.assertFalse(commands_frame._frame_is_live(OP_SOCKET_PATH, name), name)
+
     def test_the_harness_starts_where_charter_was_typed(self):
         """A pane in a server charter did not start otherwise inherits the SESSION's
         working directory — wherever the operator was when they first ran `tmux`."""
@@ -2576,7 +3038,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         self._require_pane_options(pane_id)
         out = os.path.join(self._gate_dir, "harness-cwd")
         r = _run(layout.respawn_argv(
-            socket=SOCKET_PATH, harness_pane=pane_id, env={}, cwd=self._gate_dir,
+            socket=OP_SOCKET_PATH, harness_pane=pane_id, env={}, cwd=self._gate_dir,
             harness_argv=["/bin/sh", "-c", f'pwd > "{out}"']))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(_await_file(out), "the harness never ran")
@@ -2623,20 +3085,24 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                         f"({self.tmp}), so it belongs to somebody real")
 
         def _snapshot():
-            return tuple(_tmux(*args).stdout for args in (
+            return tuple(self._srv(*args).stdout for args in (
                 ("show-options", "-g"),
                 ("show-options", "-t", name),
                 ("show-options", "-g", "-w"),
+                # The operator's OWN window, added with #408's second half: charter now
+                # writes a WINDOW option (`_panel_remain_on_exit_argv`), and a scope slip
+                # from charter's window to theirs would otherwise be invisible here.
+                ("show-options", "-w", "-t", op_pane),
                 ("list-keys",)))
 
         before = _snapshot()
-        server_pid = _tmux("display-message", "-p", "#{pid}").stdout.strip()
+        server_pid = self._srv("display-message", "-p", "#{pid}").stdout.strip()
         args = SimpleNamespace(harness="frame", rest=["--", *_gate_argv(gate, "exit 21")],
                                no_frame=False)
         rc: list[int] = []
 
         def _run_launch():
-            env = dict(os.environ, TMUX=f"{SOCKET_PATH},{server_pid},{sid[1:]}",
+            env = dict(os.environ, TMUX=f"{OP_SOCKET_PATH},{server_pid},{sid[1:]}",
                        TMUX_PANE=op_pane)
             with mock.patch.dict(os.environ, env, clear=True), \
                  mock.patch("sys.stdout.isatty", return_value=True), \
@@ -2647,8 +3113,8 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         worker = threading.Thread(target=_run_launch, daemon=True)
         worker.start()
         self.assertTrue(self._wait_until(
-            lambda: "demo-" in _tmux("list-windows", "-a", "-F",
-                                     "#{window_name}").stdout, timeout=15),
+            lambda: "demo-" in self._srv("list-windows", "-a", "-F",
+                                     "#{window_name}").stdout),
             "the frame's own window never appeared in the operator's server")
         during = _snapshot()
         self._release(gate)
@@ -2658,8 +3124,8 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         self.assertEqual(before, during,
                          "charter wrote something on a server it is only a guest on")
         self.assertEqual(before, _snapshot())
-        self.assertIn(name, _tmux("list-sessions", "-F", "#{session_name}").stdout.split())
-        self.assertNotIn("demo-", _tmux("list-windows", "-a", "-F",
+        self.assertIn(name, self._srv("list-sessions", "-F", "#{session_name}").stdout.split())
+        self.assertNotIn("demo-", self._srv("list-windows", "-a", "-F",
                                         "#{window_name}").stdout,
                          "the frame's window was left behind")
         self.assertFalse(decoy.exists(),
@@ -2693,7 +3159,8 @@ class ASecondFrameOnTheSharedServer(_TmuxServerFixture, PersonaIso):
     _VAR = "CHARTER_INTEG_PROBE"
 
     def _session_reading_the_var(self, name: str, *, client_value: str,
-                                 carry: str | None = None) -> str:
+                                 carry: str | None = None,
+                                 carry_raw: str | None = None) -> str:
         """A session on `SOCKET` whose pane writes `$_VAR` out; returns what it wrote.
 
         *client_value* is what the tmux CLIENT process is started with — the thing a
@@ -2701,10 +3168,17 @@ class ASecondFrameOnTheSharedServer(_TmuxServerFixture, PersonaIso):
         passes none. The pane sleeps afterwards so the SERVER stays up for the next
         session: a server that empties shuts itself down, and a second `new-session`
         against a dead server would start a fresh one and quietly measure nothing.
+
+        *carry_raw* is the `-e` argument spelled by the CALLER rather than built from a
+        name and a value — the one way to ask tmux what it does with a spelling charter
+        never emits, which is the whole subject of
+        :meth:`test_a_bare_e_name_cannot_take_a_variable_away`.
         """
         out = os.path.join(self._gate_dir, f"env-{name}")
         args = ["new-session", "-d", "-s", name, "-x", "80", "-y", "24",
                 "-P", "-F", "#{pane_pid}"]
+        if carry_raw is not None:
+            args += ["-e", carry_raw]
         if carry is not None:
             args += ["-e", f"{self._VAR}={carry}"]
         args += ["--", "sh", "-c",
@@ -2757,6 +3231,38 @@ class ASecondFrameOnTheSharedServer(_TmuxServerFixture, PersonaIso):
         self.assertEqual(
             self._session_reading_the_var("second", client_value="two", carry="two"),
             "two", "`-e` did not reach the pane `new-session` itself creates")
+
+    def test_a_bare_e_name_cannot_take_a_variable_away(self):
+        """`-e NAME` with no `=` is not an unset, and tmux does not say so.
+
+        `commands_frame._frame_identity_env` emits `NAME=` for every name it has no value
+        for, and the obvious-looking alternative is to hand tmux the bare name and let it
+        REMOVE the inherited one. Measured here instead of assumed, because the two
+        failure modes are opposites and only one of them is visible: `-e` is purely
+        ADDITIVE — the bare form is accepted, returns 0, prints nothing, and leaves the
+        server's inherited value exactly where it was. A charter that reached for it would
+        have handed a second frame the first frame's workspace pin and had no error
+        anywhere to show for it.
+
+        Three sessions against one server, so the three answers can only differ by the
+        `-e`: the value the server was started with, the same value after a bare `-e`,
+        and the empty string after `-e NAME=` — which is the only spelling that shadows,
+        and the one charter emits.
+        """
+        self._require_new_session_env()
+        self.assertEqual(self._session_reading_the_var("first", client_value="one"),
+                         "one")
+        self.assertEqual(
+            self._session_reading_the_var("second", client_value="two",
+                                          carry_raw=self._VAR),
+            "one",
+            "`-e NAME` with no `=` removed an inherited variable — if tmux now supports "
+            "an unset, `_frame_identity_env` has a better option than shadowing with an "
+            "empty value and should be told about it")
+        self.assertEqual(
+            self._session_reading_the_var("third", client_value="three", carry=""),
+            "", "`-e NAME=` is the spelling charter relies on to shadow an inherited "
+                "value, and it did not")
 
 
 if __name__ == "__main__":
