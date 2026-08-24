@@ -16,8 +16,10 @@ permissions:
 # reason: this workflow runs on every push and pull request, so a moved tag executes here
 # first and on the widest trigger — with a token that is read-only, which bounds the damage
 # without removing it. Dependabot moves these (`.github/dependabot.yml`);
-# `tests/test_workflows.py` reads these files as YAML and refuses any ref that is not a
-# full commit SHA, an image digest, or a file tracked in this repository.
+# `tests/test_workflows.py` reads these files as YAML and refuses any ref written here that
+# is not a full commit SHA, an image digest, or a file tracked in this repository — a
+# `container:`/`services:` image included, in either of the two shapes GitHub accepts one.
+# It does not reach a pinned action's own refs; that boundary is stated in #473.
 
 jobs:
   test:

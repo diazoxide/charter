@@ -16,6 +16,15 @@ is a path in this tree that an `npm install` rewrites. `uses:` is not the only k
 names somebody else's code, so `container:`/`services:`/`runs.image` are held to the same
 rule: `image: node:18` runs third-party bytes inside the job exactly as a step does.
 
+**And a container key has two shapes, which is the spelling problem again one level in.**
+`container:` takes a mapping with an `image:` in it *or* a bare scalar — GitHub: "when you
+only specify a container image, you can omit the `image` keyword" — and `services:` gives
+every child the same pair. A key set of `("uses", "image")` knew the long form only, so
+`container: evil/img:latest` on the `publish` job read as no reference at all and left this
+whole file green. Both shapes are read now, and `Ref.kind` says what a reference *is*
+(`ACTION` or `IMAGE`) so the rule tests select on that rather than on the key that spelled
+it. The corpus below holds every shape, in both directions.
+
 **Why this reads YAML instead of grepping for `uses:`.** The first version of this file
 matched the key with `^\\s*(?:-\\s+)?uses\\s*:` and counted the literal bytes `uses:` as its
 fail-closed cross-check. Both are one spelling of the key. YAML has many, and GitHub loads
@@ -59,13 +68,26 @@ action stays benign — it is charter's own code, reviewed the way the rest of i
 nothing at all about a `run:` step that pipes a script off the internet: pinning is not a
 defence against one, and there is none in these files today.
 
-**The next place to look**, since that is the question this file exists to keep asking. Not
-another spelling of the key — those are now read structurally and the corpus holds them —
-but the two mismatches a reader like this always has with the real one: what counts as a
-line break (`ALineBreakIsTheOtherHalfOfTheSpellingProblem`, which shows the mismatch runs
-the safe way round), and a ref that is well formed here and means something else on the
-runner, such as a branch somebody named after a 40-character hex string. Both are stated
-above rather than quietly assumed.
+**What this checks is the refs written in this repository, one hop deep into local
+actions and no hops at all into remote ones** (#473). `uses: owner/action@<sha>` pins that
+action's tree; it does not pin what that tree then names. A Docker action builds from a
+`Dockerfile` whose `FROM` is a tag its publisher rewrites, and a composite action has its
+own `uses:` lines — neither is in this repository, neither can be read without the network,
+and both run in the job holding `id-token: write`. So the property this file enforces is
+"every reference charter *writes* is a content address", which is narrower than "every byte
+that runs in the publishing job is pinned", and the gap between those two sentences is
+where the next look goes.
+
+**The next place to look**, since that is the question this file exists to keep asking. The
+transitive hop above is the first. Then the two mismatches a reader like this always has
+with the real one: what counts as a line break — see
+`ALineBreakIsTheOtherHalfOfTheSpellingProblem`, which shows the mismatch runs the safe way
+round — and a ref that is well formed here and means something else on the runner, such as a
+branch somebody named after a 40-character hex string. And last, this reader judges a key by
+its **name**, not by its position in GitHub's workflow schema, so an action input that
+happens to be called `container:` reads here as a job container. That is a false alarm
+somebody resolves in one look, which is the direction this file always takes when it has to
+guess — all of it stated rather than quietly assumed.
 """
 
 from __future__ import annotations
@@ -93,6 +115,23 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 #: `image` is `jobs.<id>.container.image`, `services.<id>.image`, or a Docker action's
 #: `runs.image` — all of which run third-party bytes inside the job just as a step does.
 _CODE_KEYS = ("uses", "image")
+
+#: The key that introduces a job container. It takes **two shapes**, and that is the whole
+#: point of naming it separately: a mapping with an `image:` in it, which `_CODE_KEYS`
+#: already reads, or a bare scalar — `container: node:18` — which GitHub documents as the
+#: shorthand ("when you only specify a container image, you can omit the `image` keyword").
+#: A key set that knew only the long form knew one spelling of the key again.
+_CONTAINER = "container"
+
+#: The key whose every child is a container, in the same two shapes. `services.<id>.image`
+#: is the documented long form; `services:\n  redis: redis:7` is the string shorthand the
+#: workflow schema and the runner both accept, resolved exactly like `container:`.
+_SERVICES = "services"
+
+#: What a reference *is*, as opposed to what key spelled it. `immutable` judges an action
+#: ref; `immutable_image` judges an image. Tests select on this, not on the key name, so a
+#: new spelling of either kind is judged the moment the reader emits it.
+ACTION, IMAGE = "action", "image"
 
 #: A block-scalar header: `|`, `>`, with any chomping/indent indicator and a comment.
 _BLOCK_HEADER = re.compile(r"^[|>][-+0-9]*\s*(?:#.*)?$")
@@ -224,16 +263,27 @@ class Ref(NamedTuple):
     line: int
     key: str
     ref: str
+    kind: str   # ACTION or IMAGE — what it names, not which key spelled it
 
 
 def scan_text(text: str) -> list[Ref]:
-    """Every `uses:`/`image:` value in a YAML document written in the accepted subset.
+    """Every reference to somebody else's code in a YAML document written in the subset.
 
-    Raises `Unparsed` on the first construct outside it. There is no "skip what I do not
-    understand" path, by design: that path is the bypass.
+    An action ref (`uses:`) or an image, in each of the shapes GitHub accepts an image in:
+    `image:`, a scalar `container:`, and a scalar under `services:`.
+
+    Raises `Unparsed` on the first construct outside the subset. There is no "skip what I
+    do not understand" path, by design: that path is the bypass.
     """
     found: list[Ref] = []
     block_indent: int | None = None
+    #: The column of a `container:`/`services:`/`services.<id>:` key whose value is a
+    #: nested node, and the column of `services:`'s children. Both exist so a *scalar*
+    #: written under such a key — the shorthand, wrapped onto the following line — is seen
+    #: rather than dropped as an anonymous value.
+    image_block: int | None = None
+    services_col: int | None = None
+    service_id_col: int | None = None
 
     for line, raw in enumerate(text.splitlines(), 1):
         if block_indent is not None:
@@ -246,9 +296,20 @@ def scan_text(text: str) -> list[Ref]:
         if raw.strip() in ("---", "..."):
             raise Unparsed(line, "a document marker — this reader loads one document")
 
-        i = len(raw) - len(raw.lstrip(" "))
+        indent = i = len(raw) - len(raw.lstrip(" "))
         if i >= len(raw) or raw[i] == "#":
             continue                          # blank or whole-line comment
+
+        # A sequence item's scalar is a value, not the shorthand: `ports:\n  - 6379:6379`
+        # lives inside a service block and names no image.
+        had_dash = raw[i] == "-" and (i + 1 >= len(raw) or raw[i + 1] == " ")
+
+        # Close every container scope this line has stepped back out of, before anything
+        # in it is judged. Scope is indentation, which is what it is in the real parser.
+        if image_block is not None and indent <= image_block:
+            image_block = None
+        if services_col is not None and indent <= services_col:
+            services_col = service_id_col = None
 
         while raw[i] == "-" and (i + 1 >= len(raw) or raw[i + 1] == " "):
             i += 1
@@ -270,11 +331,25 @@ def scan_text(text: str) -> list[Ref]:
         while j < len(raw) and raw[j] == " ":
             j += 1
         if j >= len(raw) or raw[j] != ":" or (j + 1 < len(raw) and raw[j + 1] not in " \t"):
+            if image_block is not None and indent > image_block and not had_dash:
+                # A bare scalar inside a `container:`/`services:` node *is* the image —
+                # the shorthand, wrapped onto the next line. Dropping it as an anonymous
+                # value is how `container:\n  evil/img:latest` would walk past.
+                raise Unparsed(line, "a container image on a line of its own")
             _trailing(raw, i, line)           # a sequence item's own scalar value
             continue
 
         if name == "<<":
             raise Unparsed(line, "a merge key")
+
+        # Which of the two container shapes is this key in? `container:` and every direct
+        # child of `services:` take an image inline *or* a mapping holding `image:`, and
+        # both shapes have to be judged — knowing only the mapping was the last bypass.
+        is_service_id = (services_col is not None and key_col > services_col
+                         and (service_id_col is None or key_col == service_id_col))
+        if is_service_id:
+            service_id_col = key_col
+        names_image = name == _CONTAINER or is_service_id
 
         value = raw[j + 1:]
         k = len(value) - len(value.lstrip(" "))
@@ -283,13 +358,21 @@ def scan_text(text: str) -> list[Ref]:
         if not tail or tail.startswith("#"):
             if name in _CODE_KEYS:
                 raise Unparsed(line, f"a `{name}:` whose value is not on its own line")
+            if names_image or name == _SERVICES:
+                image_block = key_col         # a nested node: watch it for a bare scalar
+            if name == _SERVICES:
+                services_col, service_id_col = key_col, None
             continue                          # a nested block follows
         if _BLOCK_HEADER.match(tail):
-            if name in _CODE_KEYS:
+            if name in _CODE_KEYS or names_image or name == _SERVICES:
                 raise Unparsed(line, f"a `{name}:` written as a block scalar")
             block_indent = key_col
             continue
         if tail[0] == "[":
+            if name in _CODE_KEYS or names_image or name == _SERVICES:
+                # A flow sequence is not a shape any of these keys takes, so it is the
+                # third way to write a value this reader would otherwise walk past.
+                raise Unparsed(line, f"a `{name}:` whose value is a flow sequence")
             close = tail.find("]")
             if close < 0:
                 raise Unparsed(line, "a flow collection spanning lines")
@@ -300,10 +383,15 @@ def scan_text(text: str) -> list[Ref]:
         if tail[0] in _INDICATORS:
             raise Unparsed(line, _INDICATORS[tail[0]])
 
+        if name == _SERVICES:
+            raise Unparsed(line, "a `services:` whose value is not a mapping")
+
         ref, end = _scalar(tail, 0, line)
         _trailing(tail, end, line)
-        if name in _CODE_KEYS and ref:
-            found.append(Ref(line, name, ref))
+        if ref and name in _CODE_KEYS:
+            found.append(Ref(line, name, ref, IMAGE if name == "image" else ACTION))
+        elif ref and names_image:
+            found.append(Ref(line, name, ref, IMAGE))
 
     return found
 
@@ -489,15 +577,16 @@ class TheScannerSeesEverything(unittest.TestCase):
         actions = {r.ref.rpartition("@")[0] for r in refs}
         self.assertIn("pypa/gh-action-pypi-publish", actions)
         self.assertIn("actions/download-artifact", actions)
-        self.assertEqual([r for r in refs if not r.ref.rpartition("@")[1]], [],
-                         "a step in release.yml came out with no ref at all")
+        self.assertEqual(
+            [r for r in refs if r.kind == ACTION and not r.ref.rpartition("@")[1]], [],
+            "a step in release.yml came out with no ref at all")
 
 
 class EveryActionIsPinnedToSomethingImmutable(unittest.TestCase):
     def test_no_workflow_runs_a_ref_its_owner_can_move(self):
         found = closure()
         for name, ref in found.refs:
-            if ref.key == "image":
+            if ref.kind == IMAGE:
                 continue
             if is_local(ref.ref):
                 continue
@@ -509,8 +598,11 @@ class EveryActionIsPinnedToSomethingImmutable(unittest.TestCase):
                     f"header for why (#443).")
 
     def test_no_job_runs_a_container_image_its_publisher_can_move(self):
+        """Selected on what the ref *is*, not on the key that spelled it, so both shapes
+        of `container:`/`services:` — the `image:` mapping and the bare-scalar shorthand —
+        arrive here without this test naming either one."""
         for name, ref in closure().refs:
-            if ref.key != "image":
+            if ref.kind != IMAGE:
                 continue
             with self.subTest(file=name, line=ref.line):
                 self.assertTrue(
@@ -658,6 +750,23 @@ class TheKeyHasManySpellings(unittest.TestCase):
          _steps('      - uses: evil/action@main # v1\n'), "evil/action@main"),
         ("a container image",
          "jobs:\n  publish:\n    container:\n      image: node:18\n", "node:18"),
+        # The second shape of the same key, and the bypass this corpus grew for. GitHub:
+        # "when you only specify a container image, you can omit the `image` keyword".
+        ("a container image in the shorthand",
+         "jobs:\n  publish:\n    container: evil/img:latest\n", "evil/img:latest"),
+        ("a container image in the shorthand, quoted",
+         "jobs:\n  publish:\n    container: 'evil/img:latest'\n", "evil/img:latest"),
+        ("a container image in the shorthand, hex-escaped key",
+         'jobs:\n  publish:\n    "\\x63ontainer": evil/img:latest\n', "evil/img:latest"),
+        ("a container image in the shorthand, docker://",
+         "jobs:\n  publish:\n    container: docker://evil/img:latest\n",
+         "docker://evil/img:latest"),
+        ("a service image in the shorthand",
+         "jobs:\n  publish:\n    services:\n      redis: evil/redis:latest\n",
+         "evil/redis:latest"),
+        ("a service image in the long form",
+         "jobs:\n  publish:\n    services:\n      redis:\n        image: evil/redis:latest\n",
+         "evil/redis:latest"),
     ]
 
     REFUSED = [
@@ -694,6 +803,31 @@ class TheKeyHasManySpellings(unittest.TestCase):
         ("a second colon the reader would have to guess about",
          _steps('      - uses: evil/action@main: extra\n'),
          "two values on one line, or a scalar this reader misread"),
+        # The shorthand's own escape hatches: an image is still an image when YAML puts it
+        # on the following line or folds it, and neither shape is guessed at.
+        ("a shorthand image on the next line",
+         "jobs:\n  publish:\n    container:\n      evil/img:latest\n",
+         "a container image on a line of its own"),
+        ("a shorthand service image on the next line",
+         "jobs:\n  publish:\n    services:\n      redis:\n        evil/redis:latest\n",
+         "a container image on a line of its own"),
+        ("a shorthand image folded",
+         "jobs:\n  publish:\n    container: >-\n      evil/img:latest\n",
+         "a `container:` written as a block scalar"),
+        ("a shorthand image as a literal block",
+         "jobs:\n  publish:\n    services:\n      redis: |-\n        evil/redis:latest\n",
+         "a `redis:` written as a block scalar"),
+        ("a services node that is not a mapping of containers",
+         "jobs:\n  publish:\n    services: evil/redis:latest\n",
+         "a `services:` whose value is not a mapping"),
+        ("a services node folded",
+         "jobs:\n  publish:\n    services: >-\n      redis: evil/redis:latest\n",
+         "a `services:` written as a block scalar"),
+        ("a step ref in a flow sequence", _steps('      - uses: [evil/action@main]\n'),
+         "a `uses:` whose value is a flow sequence"),
+        ("a shorthand image in a flow sequence",
+         "jobs:\n  publish:\n    container: [evil/img:latest]\n",
+         "a `container:` whose value is a flow sequence"),
     ]
 
     def test_every_spelling_of_the_key_is_read_and_refused(self):
@@ -702,7 +836,7 @@ class TheKeyHasManySpellings(unittest.TestCase):
                 refs = scan_text(text)
                 self.assertEqual([r.ref for r in refs], [expected],
                                  f"{name}: the reader did not extract the value")
-                rule = immutable_image if refs[0].key == "image" else immutable
+                rule = immutable_image if refs[0].kind == IMAGE else immutable
                 self.assertFalse(rule(refs[0].ref),
                                  f"{name}: extracted but judged pinned")
 
@@ -714,6 +848,59 @@ class TheKeyHasManySpellings(unittest.TestCase):
                 self.assertEqual(caught.exception.what, expected,
                                  f"{name}: refused, but for a different reason than the "
                                  f"one this case exists to exercise")
+
+    def test_a_digest_pinned_container_survives_both_of_its_shapes(self):
+        """The other half for the image keys. `test_a_pinned_step_survives_every_spelling`
+        skips them because their rule is `immutable_image`, so without this a reader that
+        refused every `container:` outright would pass the corpus above and be useless.
+        Both shapes, plus the keys that sit beside an image and are not one."""
+        digest = "@sha256:" + "b" * 64
+        for name, text in (
+            ("the shorthand", f"jobs:\n  p:\n    container: node{digest}\n"),
+            ("the mapping", f"jobs:\n  p:\n    container:\n      image: node{digest}\n"),
+            ("a service, shorthand",
+             f"jobs:\n  p:\n    services:\n      redis: redis{digest}\n"),
+            ("a service, mapping and its neighbours",
+             f"jobs:\n  p:\n    services:\n      redis:\n        image: redis{digest}\n"
+             f"        ports:\n          - 6379:6379\n        env:\n          X: y\n"),
+            ("a container beside its options",
+             f"jobs:\n  p:\n    container:\n      image: node{digest}\n"
+             f"      options: --cpus 2\n      credentials:\n        username: u\n"),
+        ):
+            with self.subTest(shape=name):
+                refs = scan_text(text)
+                self.assertEqual([r.ref for r in refs], [
+                    ("node" if "service" not in name else "redis") + digest], name)
+                self.assertEqual(refs[0].kind, IMAGE, name)
+                self.assertTrue(immutable_image(refs[0].ref), name)
+
+    def test_the_scope_of_a_container_block_ends_where_its_indentation_does(self):
+        """Both container scopes close on dedent, and that is load-bearing in each
+        direction. A bare scalar *inside* a container node is the shorthand and stops the
+        suite; the same shape outside one is an ordinary wrapped value this reader has
+        always let through, and it must stay let through. A key at the column the service
+        ids used is a key, not a fourth service — scope is indentation here because it is
+        indentation in the real parser."""
+        sha, digest = "a" * 40, "@sha256:" + "b" * 64
+        text = (f"jobs:\n  p:\n    container:\n      image: node{digest}\n"
+                f"    steps:\n      - uses: actions/checkout@{sha}\n"
+                f"      - run: echo hi\n")
+        self.assertEqual([(r.kind, r.ref) for r in scan_text(text)],
+                         [(IMAGE, f"node{digest}"), (ACTION, f"actions/checkout@{sha}")])
+
+        wrapped = (f"jobs:\n  p:\n    container:\n      image: node{digest}\n"
+                   f"    name: a job name that\n      wraps onto a second line\n"
+                   f"    steps:\n      - uses: actions/checkout@{sha}\n")
+        self.assertEqual([r.ref for r in scan_text(wrapped)],
+                         [f"node{digest}", f"actions/checkout@{sha}"],
+                         "a wrapped value outside the container node was refused as if it "
+                         "were the image shorthand")
+
+        beside = (f"jobs:\n  p:\n    services:\n      redis:\n        image: r{digest}\n"
+                  f"    env:\n      TOKEN: not-an-image\n")
+        self.assertEqual([(r.key, r.ref) for r in scan_text(beside)],
+                         [("image", f"r{digest}")],
+                         "a key beside the services block was read as another service")
 
     def test_a_pinned_step_survives_every_spelling_too(self):
         """The corpus above would pass against a reader that refused everything. This is

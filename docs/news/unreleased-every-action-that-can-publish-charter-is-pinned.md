@@ -60,14 +60,31 @@ operator, for the same reason.
 
 The same rule now covers `container:` and `services:` images, which were never in these
 files and were never checked either: `image: node:18` runs a third party's bytes inside the
-job exactly as a step does, and a tag is a tag.
+job exactly as a step does, and a tag is a tag. **In both shapes GitHub writes one**, which
+is where the first version of this stopped: `container:` takes a mapping with an `image:`
+in it *or* a bare scalar — "when you only specify a container image, you can omit the
+`image` keyword" — and `services:` gives every child the same pair. A key list of `uses`
+and `image` knew the long form only, so `container: evil/img:latest` added to the `publish`
+job read as no reference at all and left the whole suite green. It is the spelling problem
+one level in, and the answer is the same one: a reference now carries what it *is* — an
+action or an image — and the rules select on that rather than on the key that spelled it.
 
-Two things this deliberately does not claim. It cannot check that a pinned SHA is a real
+Three things this deliberately does not claim. It cannot check that a pinned SHA is a real
 commit of the repo beside it, or that its `# v1.14.2` comment is honest — both need the
 network, and no test in this suite makes a network call; a wrong-but-well-formed SHA fails
-in CI on the next run, loudly. And pinning says nothing about a `run:` step that pipes a
+in CI on the next run, loudly. Pinning says nothing about a `run:` step that pipes a
 script off the internet. There is none in these files, and pinning would not save you from
 one if there were.
+
+And — the known remaining case, filed as **#473** rather than quietly assumed — what is
+enforced here is *every reference charter writes*, which is narrower than *every byte that
+runs in the publishing job*. `uses: owner/action@<sha>` pins that action's tree; it does not
+pin what that tree then names, and a Docker action's `Dockerfile` starts `FROM` a tag its
+publisher rewrites. A **local** `uses: ./x` is followed into its `action.yml` and its refs
+checked like the caller's; a remote one is not followed at all, because that tree is not in
+this repository and reading it needs the network. Closing that needs a different mechanism
+than a unit test — a scheduled job that resolves the pins, or vendoring the actions that
+stand next to `id-token: write`. #473 holds the reproduction and the options.
 
 `release.yml`'s header used to end *"so a leaked secret cannot be used to publish charter"*
 — true, and answering the smaller question. It now says which question is the real one and
