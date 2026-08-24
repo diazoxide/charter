@@ -574,16 +574,94 @@ class PanelRespawnHook(unittest.TestCase):
                             side_effect=lambda *a, h=hostile: [h, "-P", "-m", "charter", *a]):
                 self.assertIsNone(self._argv(), hostile)
 
-    def test_a_pane_a_slot_or_a_frame_id_that_is_not_charters_own_is_not_armed(self):
-        """Every value that reaches the action text is checked HERE, not trusted for
-        having come from `cmd_launch`. `_arm_panel_respawn` has a second caller
-        (`_relayout`) whose pane ids and frame id are read back off DISK, which is not
-        tmux's own word for them any more."""
-        self.assertIsNone(self._argv(panel_pane="%11; kill-server"))
-        self.assertIsNone(self._argv(panel_pane="all"))
-        self.assertIsNone(self._argv(slot="top; kill-server"))
-        self.assertIsNone(self._argv(fid="demo-1234 ; kill-server"))
+    def _refused_by_the_guard_under_test(self, **kw):
+        """*kw* is not armed — and no OTHER clause of the guard could have been what
+        refused it.
+
+        Asserting the reason, not the status. `_panel_died_hook_argv` refuses on four
+        separate clauses, and a hostile value that trips several of them tests none of
+        them: delete the clause the case is named for and the case still passes, because
+        a different one caught it. So every value handed here is checked to be a single
+        bare word (nothing for the bare-word clause to refuse) that passes
+        :func:`_action_word_is_safe` (nothing for the metacharacter clause to refuse),
+        which leaves only the shape guard the case is about.
+        """
+        self.assertIsNone(self._argv(**kw), kw)
+        for value in kw.values():
+            self.assertEqual(value.split(), [value],
+                             f"{value!r} is not one bare word, so the bare-word clause "
+                             "would refuse it whichever guard this case is about")
+            self.assertTrue(commands_frame._action_word_is_safe(value),
+                            f"{value!r} holds an _ACTION_METACHARACTERS character, so "
+                            "that clause would refuse it whichever guard this is about")
+
+    def test_a_pane_that_is_not_tmuxs_own_word_for_a_pane_is_not_armed(self):
+        """`_arm_panel_respawn` has a second caller (`_relayout`) whose pane ids are read
+        back off DISK, which is not tmux's own `-P -F '#{pane_id}'` any more.
+
+        `%11;kill-server` is the whole point of the shape check: `;` is a tmux command
+        separator and is NOT in `_ACTION_METACHARACTERS`, which is the complete set of
+        characters that change what the text SAYS on the way to `/bin/sh` — a `;` inside
+        the single-quoted action is literal, so nothing else in this function objects to
+        it. Only "that is not a pane id" does.
+        """
+        for hostile in ("all", "%11;kill-server", "%11x", "11", "%"):
+            self._refused_by_the_guard_under_test(panel_pane=hostile)
+        self.assertIsNone(self._argv(panel_pane=""))
+
+    def test_a_pane_id_of_unicode_digits_is_not_tmuxs_own_and_is_not_armed(self):
+        """The property is "tmux's own `%<digits>`", and Python's `\\d` is not that:
+        `re.fullmatch(r"%\\d+", "%١٢")` matches, as does the fullwidth `%１１`. tmux has
+        never minted either. Neither is dangerous by itself — a Unicode digit means
+        nothing to any of the three parsers — which is exactly why the class was `\\d`
+        for as long as it was: nothing failed. Pinned so the next reader cannot widen it
+        back by writing the shorthand."""
+        for hostile in ("%١٢", "%１１", "%۵"):
+            self._refused_by_the_guard_under_test(panel_pane=hostile)
+
+    def test_a_slot_that_is_not_one_of_charters_own_is_not_armed(self):
+        """A key of `frame_slots.SLOTS`, checked rather than assumed: the slot is
+        interpolated into the action as a bare word, and `_relayout` reads it back off
+        disk."""
+        for hostile in ("top;kill-server", "middle", "TOP", "top."):
+            self._refused_by_the_guard_under_test(slot=hostile)
+        self.assertIsNone(self._argv(slot=""))
+
+    def test_a_frame_id_outside_the_alphabet_state_mints_is_not_armed(self):
+        """`_FRAME_ID_RE` is `frame.state._UNSAFE`'s complement, asked here rather than
+        assumed: the id reaching this function may have come from `$CHARTER_SESSION_ID`
+        or off disk rather than from `state.frame_id`, and `cmd_respawn` reads it back
+        off the argv this action carries.
+
+        Measured on a real tmux 3.7c with this guard widened to `re.compile(r".+")`, and
+        with a frame id holding NO whitespace at all so that no other clause could have
+        stood in for it: `fid='demo-1;>/…/CANARY'` armed the `pane-died` hook, the panel
+        pane died, and the canary FILE EXISTED — tmux keeps the `;` literal inside the
+        action's single quotes and hands the whole string to `/bin/sh`, which does not.
+        As shipped the same input is not armed at all and no canary appears. So this is
+        a guard and not a formality, and `;` is the shape of the attack even though
+        `_ACTION_METACHARACTERS` correctly does not list it."""
+        for hostile in ("demo-1;kill-server", "demo/1", "demo:1", "demo|1"):
+            self._refused_by_the_guard_under_test(fid=hostile)
         self.assertIsNone(self._argv(fid=""))
+
+    def test_a_word_after_the_interpreter_that_is_not_one_bare_word_is_not_armed(self):
+        """The fourth clause, and the only one no argument of this function can reach:
+        every word after `words[0]` goes into the action UNQUOTED, so a word carrying a
+        space is two words by the time tmux parses the command line. The three shape
+        guards above already forbid whitespace in the pane, slot and frame id, so this
+        one is reached only through `util.self_relaunch_argv` itself — which is where it
+        has to live, because `words[0]` is the ONE word allowed a space (it is inside
+        `"…"`) and the rule is different on either side of that boundary.
+
+        Mocked for that reason and not for convenience, with the positive control beside
+        it: the same argv without the space IS armed, so what this pins is the space and
+        not the mock."""
+        for argv1, armed in ((["-P", "-m", "charter x"], False),
+                             (["-P", "-m", "charter"], True)):
+            with mock.patch("charter.commands_frame.util.self_relaunch_argv",
+                            side_effect=lambda *a, w=argv1: [sys.executable, *w, *a]):
+                self.assertEqual(self._argv() is not None, armed, argv1)
 
 
 class _RespawnTmux:

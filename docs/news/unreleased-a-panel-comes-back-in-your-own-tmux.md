@@ -48,3 +48,15 @@ quote characters and would have shipped: a hook action passes through **three** 
 and the first is tmux's own `#{…}` format expansion — measured rewriting a literal
 `/opt/py#{pane_id}/x` into `/opt/py%1/x` before any shell saw it, with `#{pane_title}`
 expanding to text the program in that pane sets for itself. `#` is refused with the rest.
+
+The same treatment now covers the other three values that reach that text — the pane, the
+slot and the frame id — and each is checked against the shape tmux or charter actually
+mints rather than trusted for having come from a launch. What decides is the value, never
+where it came from: the second caller reads its pane ids and frame id back off **disk**,
+which is not tmux's own word for them any more.
+
+One neighbour is knowingly left for its own fix: the `window-resized` hook builds its
+action the same way and still trusts its caller for the pane ids in it, and on the
+density-change path one of those ids comes off disk unchecked
+([#475](https://github.com/diazoxide/charter/issues/475)). That is not new here — it
+predates this work and is unchanged by it.

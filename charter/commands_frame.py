@@ -740,6 +740,19 @@ def _panel_died_hook_argv(*, socket: str, panel_pane: str, slot: str,
     it — a frame without panel respawn is a frame that still works, and an operator told
     why beats a hook that quietly runs something else.
 
+    **Four clauses, and each is on its own.** `;` is deliberately NOT in
+    :data:`_ACTION_METACHARACTERS` — it changes nothing inside the action's single quotes
+    — so a `;` in the pane, the slot or the frame id is caught by that value's own shape
+    check and by nothing else. Measured on tmux 3.7c with `_FRAME_ID_RE` widened to
+    `re.compile(r".+")` and a frame id carrying no whitespace anywhere,
+    ``demo-1;>/…/CANARY``: the hook armed, the panel died, and the canary file existed —
+    tmux keeps the `;` literal and `/bin/sh` does not. As shipped that input is not armed
+    and no canary appears. The clauses are pinned one at a time in
+    `tests/test_frame_launcher.py::PanelRespawnHook`, each case built so that no OTHER
+    clause could be what refused it; a first version of those tests used hostile values
+    that all carried a SPACE, and three of the four clauses could then be deleted outright
+    with the whole suite still green.
+
     **Single-quoted for tmux, double-quoted for the shell.** `_pane_died_write_hook_argv`'s
     docstring measures the opposite case — an unescaped `$` inside a tmux DOUBLE-quoted
     argument is consumed by tmux's own parsing before any shell sees it. Single quotes are
@@ -777,7 +790,16 @@ _RESIZE_FLAG = {"top": "-y", "bottom": "-y", "left": "-x", "right": "-x"}
 #: the same as `split-window` reporting no id at all (see the empty-string check right
 #: below this) — that one panel simply gets no resize-hook entry, rather than gambling
 #: that whatever the string actually was cannot corrupt the action tmux re-parses.
-_PANE_ID_RE = re.compile(r"%\d+")
+#:
+#: **`[0-9]`, not `\d`, and the difference is the property.** Python's `\d` is Unicode by
+#: default: `re.fullmatch(r"%\d+", "%١٢")` is a MATCH, and so is the fullwidth `"%１１"`.
+#: Neither is a pane id tmux ever minted, and neither is dangerous on its own — a
+#: Unicode digit carries no meaning to any of the three parsers a hook action passes
+#: through — but the check is here to say "this is tmux's own word for a pane", and a
+#: class that also admits Arabic-Indic digits is answering a different question. The
+#: same spelling-instead-of-the-property gap this module keeps paying for, caught before
+#: it cost anything rather than after.
+_PANE_ID_RE = re.compile(r"%[0-9]+")
 
 #: tmux's own answer, verbatim, for a `set-hook` call naming an event this binary does
 #: not recognise at all — confirmed by hand against a real tmux 3.7c with a fabricated
