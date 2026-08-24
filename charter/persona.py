@@ -441,7 +441,7 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     for env_name, key in files.items():
         args += ["--file", f"{env_name}={key}"]
     # `--stream` whenever a file is involved: `--exec` replaces charter, so nothing would
-    # survive to shred the tempfile. Streaming is unaffected — a forked child inherits this
+    # survive to delete the tempfile. Streaming is unaffected — a forked child inherits this
     # process's descriptors — so the only thing given up is process replacement, which is
     # precisely what made cleanup impossible.
     args += ["--stream" if files else "--exec", "--"]

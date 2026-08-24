@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -468,21 +470,326 @@ def cmd_secret_rm(args) -> int:
     return 0
 
 
+#: What a destination turned out to be, for the refusal message. Same table and same
+#: wording as `contain._KINDS`, because "that is not a file" is one question and the
+#: operator should not have to learn two vocabularies for it.
+_DEST_KINDS = ((stat.S_ISDIR, "a directory"), (stat.S_ISFIFO, "a FIFO"),
+               (stat.S_ISSOCK, "a socket"), (stat.S_ISCHR, "a character device"),
+               (stat.S_ISBLK, "a block device"))
+
+#: charter's own three streams, by descriptor, for the refusal message.
+_OWN_STREAMS = ((0, "standard input"), (1, "standard output"), (2, "standard error"))
+
+
+def _own_stream_identities() -> dict[tuple[int, int], str]:
+    """``(st_dev, st_ino) -> "standard output"`` for this process's own three streams.
+
+    IDENTITY, not name. The first version of this guard asked what a path was *called*
+    and `/dev/fd/1` walked straight through it: on macOS `/dev/fd/N` is neither a symlink
+    nor a device but the underlying object re-opened, so `os.lstat` reported a plain
+    regular file and the "already exists" arm took over — an arm `--force` switches off.
+    `charter secret cp v k /dev/fd/1 --force` then wrote the credential into charter's own
+    captured stdout and printed "Value not shown." on top of it. That is issue #421's
+    symptom with a different spelling, and no list of spellings closes it: `/dev/stdout`,
+    `/dev/fd/1`, `/proc/self/fd/1`, the path `readlink` gives for the transcript log, and
+    any hardlink to it are five names for one inode.
+
+    So the question asked here is "is this object the same object as one of my streams",
+    which has exactly one answer per object however it is spelled.
+
+    A stream charter cannot stat (a closed descriptor) contributes nothing rather than
+    raising: the caller's other arms still apply.
+    """
+    out: dict[tuple[int, int], str] = {}
+    for fd, name in _OWN_STREAMS:
+        try:
+            st = os.fstat(fd)
+        except OSError:
+            continue
+        out.setdefault((st.st_dev, st.st_ino), name)
+    return out
+
+
+def _own_stream_refusal(dest, which: str) -> str:
+    """The refusal for "that destination IS one of charter's own streams".
+
+    Deliberately names no flag. The refusal this replaced ended "Pass --force to
+    overwrite it deliberately" — and `--force` was the bypass, which is the exact
+    pattern #421 filed against hooks.py's `--reveal` text. A guard that prints its own
+    way around itself is a signpost, not a guard.
+    """
+    return (f"{dest} is charter's own {which} — the channel this conversation is read "
+            f"from, whatever it is called here. Writing a credential to it puts the "
+            f"plaintext straight into the transcript, which is the leak `secret cp` "
+            f"exists to avoid. Name a real file that is not one of these streams.")
+
+
+def _identify_dest(raw: str):
+    """`fstat` of *raw* opened for writing without creating or truncating anything.
+
+    `os.lstat` is not enough: on macOS it answers about the devfs entry for `/dev/fd/N`,
+    whose `st_dev` is devfs's and NOT the underlying file's, so a `(st_dev, st_ino)`
+    comparison against `os.fstat(1)` does not match. Measured on this platform::
+
+        lstat /dev/fd/1  dev=18446744071623019954 ino=202112957
+        fstat(1)         dev=16777234             ino=202112957
+        fstat(open('/dev/fd/1', O_WRONLY))  dev=16777234 ino=202112957
+
+    Only the descriptor tells the truth, so this opens one. The open is deliberately
+    harmless — no ``O_CREAT``, no ``O_TRUNC``, ``O_NOFOLLOW`` so a symlink is not
+    traversed, ``O_NONBLOCK`` so a FIFO planted since the `lstat` cannot block the
+    process with the answer half-computed. Callers must have refused every non-regular
+    kind *before* calling: opening a device is not free of side effects, and this must
+    never be the thing that opens one.
+
+    Returns ``None`` when the destination cannot be opened at all (it does not exist, or
+    is not writable) — nothing to compare, and the real open below will say so.
+    """
+    flags = os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(raw, flags)
+    except OSError:
+        return None
+    try:
+        return os.fstat(fd)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _cp_dest_refusal(dest: Path, force: bool) -> str | None:
+    """Why *dest* is not somewhere a secret may be materialised — or ``None``.
+
+    `secret cp` is documented as the *safe* consumption path: "prints only the path,
+    never the contents" (`docs/secrets.md`). That sentence was true of the command and
+    false of the destination, because the destination decided what "writing a file"
+    meant:
+
+    * **A non-regular destination writes the plaintext to whatever is on the other end.**
+      `charter secret cp <v> <k> /dev/stdout` printed the credential onto charter's own
+      stdout — the agent's captured pipe — and then printed `Value not shown.` on the
+      same stream. `/dev/stderr` and `/dev/fd/N` are the same channel by another name,
+      and a FIFO is worse: the open blocks with the value already resolved. This is the
+      exact channel `cmd_secret_get --reveal` refuses (`sys.stdout.isatty()` above);
+      `cp` refused nothing.
+    * **A symlink writes through to its target**, which is how a "regular file" check
+      gets walked past — so the link is refused here *and* the open below carries
+      ``O_NOFOLLOW``, which also closes the swap between this `lstat` and that `open`.
+    * **An existing file was truncated and chmodded 0600 with no warning and no flag.**
+      A pre-existing `~/.ssh/config` came back as the credential at 0600. Overwriting is
+      now `--force`, and the default is ``O_EXCL``.
+
+    Ordered so the *most specific* thing true of the path is what gets said: a symlink to
+    a character device reads as a symlink, not as a device. The stream-identity arm sits
+    AHEAD of the "already exists" arm on purpose — the exists arm names `--force`, and
+    `--force` must never be the suggested next step for one of charter's own streams.
+    """
+    raw = str(dest)
+    if not raw:
+        return "the destination path is empty."
+    try:
+        st = os.lstat(raw)
+    except FileNotFoundError:
+        return None                       # nothing there yet — the ordinary case
+    except (OSError, ValueError) as e:
+        # `os.lstat` raises ValueError, not OSError, on a path holding a NUL.
+        return f"{dest} cannot be inspected ({getattr(e, 'strerror', None) or e})."
+    if stat.S_ISLNK(st.st_mode):
+        return (f"{dest} is a symlink, and charter will not follow one to write a "
+                f"credential — the link decides where the plaintext lands, not you. "
+                f"Name the real path.")
+    if not stat.S_ISREG(st.st_mode):
+        kind = next((k for test, k in _DEST_KINDS if test(st.st_mode)), "not a file")
+        return (f"{dest} is {kind}, not a regular file. `secret cp` materialises a "
+                f"credential *to a file*; writing it to a device or a pipe puts the "
+                f"plaintext on whatever is reading that — and /dev/stdout, /dev/stderr "
+                f"and /dev/fd/* are this agent's own transcript.")
+    streams = _own_stream_identities()
+    # Two lookups because they answer different questions. The `lstat` pair catches a
+    # second *name* for the same inode — a hardlink, or the path `readlink` gives for the
+    # transcript log — without opening anything. The descriptor pair catches `/dev/fd/N`,
+    # where `lstat`'s `st_dev` is devfs's rather than the file's. Neither is a spelling.
+    which = streams.get((st.st_dev, st.st_ino))
+    if which is None:
+        opened = _identify_dest(raw)
+        if opened is not None:
+            which = streams.get((opened.st_dev, opened.st_ino))
+    if which:
+        return _own_stream_refusal(dest, which)
+    if not force:
+        return (f"{dest} already exists. Writing would destroy its contents and set it "
+                f"to 0600. Pass --force to overwrite it deliberately, or choose a path "
+                f"that does not exist.")
+    return None
+
+
 def cmd_secret_cp(args) -> int:
-    """Materialize a secret to a file at 0600 (e.g. a kubeconfig). Prints path only."""
+    """Materialize a secret to a real file at 0600 (e.g. a kubeconfig). Prints path only.
+
+    The destination is checked BEFORE the value is resolved: a refused path never causes
+    a vault read, so the plaintext is never in this process at all for the case that was
+    about to print it.
+    """
+    dest = Path(args.dest).expanduser()
+    force = bool(getattr(args, "force", False))
+
+    refusal = _cp_dest_refusal(dest, force)
+    if refusal:
+        util.err(f"Refusing to write a secret: {refusal}")
+        return 2
+
+    # ADR-0017, the same rule `vault add` applies to a plain-file vault: a credential
+    # written somewhere git tracks is committed by the next `charter save`. `vault add`
+    # refused this and `cp` did not, which is one door checked and its twin left open.
+    # Absolute, because a relative destination is CWD-relative for the open below while
+    # `_unignored_plaintext` resolves a relative path against the plane root.
+    unignored = _unignored_plaintext(os.path.abspath(dest))
+    if unignored:
+        util.err(f"Refusing to write a secret: '{unignored}' is inside the control plane "
+                 f"and NOT gitignored — the next `charter save` would commit it.")
+        util.info("  Add it to .gitignore, write it under .charter/, or pick a path "
+                  "outside the plane.")
+        return 2
+
+    parent = dest.parent
+    if not parent.is_dir():
+        # One missing level, not a tree: `mkdir -p` on a caller-supplied path builds
+        # arbitrary directories anywhere the user can write, and a typo'd destination
+        # should read as a typo rather than silently materialise.
+        try:
+            os.mkdir(parent, 0o700)
+        except FileExistsError:
+            pass                          # a race, or a non-directory — the open answers
+        except OSError as e:
+            util.err(f"Refusing to write a secret: cannot create {parent} "
+                     f"({e.strerror or e}). charter creates at most one missing "
+                     f"directory level; create the parent yourself if you meant this.")
+            return 2
+
+    # O_EXCL by default so an existing file is never clobbered; O_NOFOLLOW so a symlink
+    # planted between the check above and this open cannot redirect the write; O_NONBLOCK
+    # so a FIFO planted there cannot block the open with the destination undecided.
+    # NOT O_TRUNC, even under --force: truncation is destruction, and nothing may be
+    # destroyed until the descriptor has been asked what it actually is. `--force` on
+    # `/dev/fd/1` used to truncate the transcript before writing the credential into it.
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    if not force:
+        flags |= os.O_EXCL
+    # Only what THIS call brought into existence may be removed on the way out. A
+    # destination that was already there is someone else's file even when charter is
+    # about to refuse it — and for the case that matters most, `/dev/fd/1`, unlinking
+    # would delete the transcript charter is refusing to write into.
+    created = not os.path.lexists(str(dest))
+    try:
+        fd = os.open(str(dest), flags, 0o600)
+    except OSError as e:
+        util.err(f"Refusing to write a secret: cannot open {dest} ({e.strerror or e}).")
+        return 2
+
+    def _abandon() -> None:
+        os.close(fd)
+        if created:
+            _safe_unlink(str(dest))
+
+    # The guarantee, as opposed to the courtesy. Everything above inspects a PATH, and a
+    # path is a name that something else may be holding or may swap. This asks the open
+    # descriptor what it is, which is the one question with a single answer, and it runs
+    # BEFORE the vault is read — so a destination refused here still never resolves the
+    # plaintext, and a `--force` aimed at charter's own stdout writes nothing and
+    # truncates nothing.
+    try:
+        opened = os.fstat(fd)
+    except OSError as e:
+        _abandon()
+        util.err(f"Refusing to write a secret: cannot inspect {dest} "
+                 f"({getattr(e, 'strerror', None) or e}).")
+        return 2
+    # Same order as `_cp_dest_refusal`: the most specific true thing gets said, so a
+    # device reads as a device rather than as "charter's stdin" on the many runs whose
+    # stdin happens to be /dev/null.
+    if not stat.S_ISREG(opened.st_mode):
+        kind = next((k for test, k in _DEST_KINDS if test(opened.st_mode)), "not a file")
+        _abandon()
+        util.err(f"Refusing to write a secret: {dest} is {kind}, not a regular file — "
+                 f"whatever the path looked like before it was opened.")
+        return 2
+    which = _own_stream_identities().get((opened.st_dev, opened.st_ino))
+    if which:
+        _abandon()
+        util.err(f"Refusing to write a secret: {_own_stream_refusal(dest, which)}")
+        return 2
+
     try:
         value = _provider(args.vault).get(args.key)
     except base.VaultError as e:
+        _abandon()
         util.err(str(e))
         return 1
-    dest = Path(args.dest).expanduser()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+
     with os.fdopen(fd, "w") as f:
+        # fchmod, not chmod: the mode lands on the file this process opened, not on
+        # whatever the path names by the time the write finishes.
+        os.fchmod(f.fileno(), 0o600)
+        # O_TRUNC's job, done late: an overwrite of a longer file would otherwise leave
+        # the tail of the old contents behind the new value.
+        os.ftruncate(f.fileno(), 0)
         f.write(value)
-    os.chmod(dest, 0o600)
+    if force and not created:
+        util.warn(f"Overwrote {dest} and set it to 0600.")
     util.ok(f"Wrote '{args.vault}/{args.key}' to {dest} (0600). Value not shown.")
     return 0
+
+
+def _identity_vars(doc: dict | None = None) -> dict[str, set[str]]:
+    """Every environment-variable name a registered vault uses as an identity, by vault.
+
+    A vault may bind the identity it is read through (`VaultProvider.env_overlay`)::
+
+        "env": {"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_DEVOPS_SERVICE_ACCOUNT_TOKEN"}
+
+    BOTH halves are identity variables: the value is where this machine carries the
+    credential, and the key is the variable the vault's CLI reads it out of. Names only
+    — the registry never holds a value, and neither does this.
+    """
+    out: dict[str, set[str]] = {}
+    for name, vc in (registry.vaults(doc) or {}).items():
+        mapping = (vc or {}).get("config", {}).get("env") or {}
+        if not isinstance(mapping, dict):
+            continue                       # a committed registry is untrusted input
+        names = {str(k) for k in mapping} | {str(v) for v in mapping.values()}
+        out[name] = {n for n in names if n}
+    return out
+
+
+def _child_env(vault: str) -> dict:
+    """The environment a `secret exec` child gets: this process's, minus every OTHER
+    vault's declared identity variables.
+
+    ``dict(os.environ)`` handed the child every credential on the machine. Measured, with
+    fabricated values, `charter secret exec <v> --env T=K -- /usr/bin/env` returned the
+    one secret the model named as ``***`` and every other vault's service-account token
+    in the clear — into the caller's captured output. `base.redact` cannot help: it only
+    knows the values *this* call resolved.
+
+    `VaultProvider.env_overlay` sells the binding as least-privilege — "without this the
+    mapping lives in every caller's shell… which is the property the vault abstraction
+    otherwise removes." Inheriting the whole environment put it straight back.
+
+    The vault being read keeps its own names, so `charter secret exec devops -- charter
+    secret get devops K` still works; no other vault's identity crosses. Nothing here
+    can break a working setup: a child was never meant to hold another vault's identity,
+    and this removes nothing else — the resolution of THIS vault happens in charter's own
+    process, before and independently of this dict.
+    """
+    declared = _identity_vars()
+    # No `try` here on purpose. `_provider()` loads the same registry a few lines before
+    # this is called and raises if it cannot, so there is no state in which this is asked
+    # of a registry that failed to load — and an `except: return dict(os.environ)` would
+    # be a fallback that quietly restores the exact behaviour this removes.
+    strip = set().union(set(), *declared.values()) - declared.get(vault, set())
+    return {k: v for k, v in os.environ.items() if k not in strip}
 
 
 def cmd_secret_exec(args) -> int:
@@ -513,7 +820,7 @@ def cmd_secret_exec(args) -> int:
 
     exec_mode = bool(getattr(args, "exec_mode", False))
     dotenv_specs = list(getattr(args, "dotenv", None) or [])
-    # `--exec` REPLACES this process, so nothing survives to shred a temp file. A
+    # `--exec` REPLACES this process, so nothing survives to delete a temp file. A
     # long-running child whose credential must be a FILE — every Google-ADC server, since
     # GOOGLE_APPLICATION_CREDENTIALS takes a path and not a value — therefore fitted neither
     # mode: --file was the only way to materialise it and --exec the only way to run it
@@ -533,11 +840,11 @@ def cmd_secret_exec(args) -> int:
                                              ("--dotenv", dotenv_specs)) if on)
         util.err(f"{flags} cannot be combined with --exec: exec replaces this "
                  "process, so the temp file would never be cleaned up. "
-                 "Use --stream instead — it forks, inherits stdio, and shreds the file "
+                 "Use --stream instead — it forks, inherits stdio, and deletes the file "
                  "when the child exits.")
         return 2
 
-    env = dict(os.environ)
+    env = _child_env(args.vault)
     secret_values: list[str] = []
     tmpfiles: list[str] = []
     # Everything below that can create a tmpfile — --file, --dotenv, and the
@@ -549,6 +856,19 @@ def cmd_secret_exec(args) -> int:
     # ENOSPC, KeyboardInterrupt, ...) unwinds through the same `finally` and
     # unlinks every tmpfile created so far. No call site below needs its own
     # cleanup loop; do not add one.
+    #
+    # The `finally` unwinds an EXCEPTION. A signal whose default action is "terminate"
+    # unwinds nothing at all, and Python installs a handler for exactly one of them
+    # (SIGINT -> KeyboardInterrupt). So SIGTERM and SIGHUP used to kill charter with the
+    # 0600 file still on disk — measured: `--stream --file F=K -- sh -c 'sleep 30'`,
+    # SIGTERM at t+2s, survivor `charter-<v>-<k>-…` at `-rw-------` holding the value.
+    # SIGTERM is the ORDINARY termination (a supervisor, a `kill`, a harness reaping a
+    # hung tool call) and `--stream` exists for long-running children, which are exactly
+    # what gets SIGTERMed at shutdown. `sys.exit` turns the signal back into an exception
+    # so the `finally` below runs; `subprocess.run` kills and reaps its child on the way
+    # out. Installed before the first tmpfile is created and restored after the last one
+    # is gone, so charter's signal behaviour outside this block is unchanged.
+    restore_signals = _exit_on_termination()
     try:
         try:
             for spec in args.env or []:
@@ -637,15 +957,29 @@ def cmd_secret_exec(args) -> int:
         if stream_mode:
             # Fork rather than exec, and do NOT capture: the child inherits this process's
             # stdio, so an MCP stdio server streams exactly as it does under --exec. This
-            # process stays alive for one reason — the `finally` that shreds the temp files
+            # process stays alive for one reason — the `finally` that deletes the temp files
             # once the child exits.
             #
-            # The honest limit, stated here and in --help rather than implied away: a
-            # SIGKILLed parent runs no cleanup, so the 0600 file survives in the system temp
-            # directory until it is removed or the machine reboots. That is strictly better
-            # than the alternative it replaces (every persona re-implementing the same trap
-            # in shell, with the same hole) but it is not a guarantee, and describing it as
+            # The honest limit, stated here and in --help rather than implied away. Exit,
+            # an exception, and every terminating signal charter may catch all clean up:
+            # SIGINT via KeyboardInterrupt, and SIGTERM, SIGHUP, SIGQUIT, SIGUSR1/2,
+            # SIGXCPU and the rest via the handlers installed above (see
+            # `_SIGNALS_LEFT_ALONE` for what is excluded and why).
+            #
+            # Two things still leave the 0600 file in the system temp directory until it
+            # is removed or the machine reboots. SIGKILL, which no process can catch. And
+            # a fault — SIGSEGV, SIGBUS, SIGABRT — which charter deliberately does not
+            # intercept, because a handler running on a process whose state is already
+            # wrong can turn a crash into a hang. That is strictly better than the
+            # alternative it replaces (every persona re-implementing the same trap in
+            # shell, with the same hole) but it is not a guarantee, and describing it as
             # one would fail silently at the moment something has already gone wrong.
+            #
+            # This sentence has been wrong twice. First it said SIGKILL when SIGTERM leaked
+            # too; then it said SIGKILL again once SIGTERM and SIGHUP were handled, while
+            # SIGQUIT — Ctrl-\ — still leaked. Both times the list was of signals to catch.
+            # It is now a list of signals to leave alone, which is why this text can name
+            # the limit as a category rather than as three examples.
             #
             # Output is NOT redacted, for the same reason as --exec: nothing is captured.
             try:
@@ -672,9 +1006,94 @@ def cmd_secret_exec(args) -> int:
     finally:
         for p in tmpfiles:
             _safe_unlink(p)
+        restore_signals()
+
+
+#: Signals charter deliberately does NOT take over, and why. Everything else in
+#: `signal.Signals` defaults to terminating the process without unwinding, which is the
+#: property that leaves a 0600 credential file behind.
+#:
+#: Written as an EXCLUSION list, not as a list of signals to handle. The first version
+#: handled SIGTERM and SIGHUP and the docs then called SIGKILL the whole of the limit —
+#: false, because SIGQUIT (Ctrl-\), SIGUSR1, SIGXCPU and the rest each left the file
+#: exactly as SIGTERM had. A hand-written list of what to catch is a list of spellings,
+#: and the next signal nobody thought of is not on it; a list of what to leave alone is
+#: a list of reasons, and anything new lands on the safe side of it by default.
+_SIGNALS_LEFT_ALONE = frozenset(
+    name for name in (
+        # Cannot be caught at all. SIGKILL is the honest limit; SIGSTOP only suspends.
+        "SIGKILL", "SIGSTOP",
+        # Default action is ignore or resume — nothing to unwind.
+        "SIGCHLD", "SIGCLD", "SIGCONT", "SIGURG", "SIGWINCH", "SIGINFO",
+        # Default action suspends the process. Taking these over would break job
+        # control: Ctrl-Z would kill the command instead of backgrounding it.
+        "SIGTSTP", "SIGTTIN", "SIGTTOU",
+        # Python already ignores SIGPIPE (`cli` turns BrokenPipeError into 141), and
+        # Python's own SIGINT handler raises KeyboardInterrupt, which unwinds `finally`
+        # already. Both are handled; neither should be handled twice.
+        "SIGPIPE", "SIGINT",
+        # Faults. The handler would run on a process whose state is already wrong, and
+        # intercepting a crash to tidy up risks turning it into a hang. These are named
+        # in the stated limit alongside SIGKILL rather than quietly caught.
+        "SIGSEGV", "SIGBUS", "SIGILL", "SIGFPE", "SIGSYS", "SIGTRAP", "SIGEMT",
+        "SIGABRT", "SIGIOT",
+    )
+)
+
+#: Terminating signals whose default action skips every `finally` in this process.
+_TERMINATION_SIGNALS = tuple(
+    s for s in getattr(signal, "Signals", ()) if s.name not in _SIGNALS_LEFT_ALONE
+)
+
+
+def _exit_on_termination():
+    """Turn every catchable terminating signal into ``SystemExit``; return its undo.
+
+    A default-action termination runs no `finally`, so a 0600 credential file outlives
+    the process that owns it. Raising `SystemExit` from the handler puts the death back
+    on the ordinary exception path — including out of a blocking `subprocess.run`, whose
+    own `except BaseException: process.kill()` reaps the child before re-raising — so the
+    cleanup that runs is the same cleanup a normal exit runs.
+
+    Exit code 128+N, the shell's convention for "died on signal N", so a supervisor still
+    reads the death as a signal rather than as a clean exit.
+
+    Not installable off the main thread (`signal.signal` raises `ValueError` there), and
+    charter's own callers are free to embed it, so that case restores nothing rather than
+    failing the command.
+    """
+    previous: list[tuple] = []
+    for sig in _TERMINATION_SIGNALS:
+        try:
+            previous.append((sig, signal.signal(sig, _terminate_now)))
+        except (ValueError, OSError):
+            pass
+
+    def restore() -> None:
+        for sig, handler in previous:
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
+
+    return restore
+
+
+def _terminate_now(signum, _frame):
+    raise SystemExit(128 + signum)
 
 
 def _safe_unlink(path: str) -> None:
+    """Delete *path*, ignoring "already gone".
+
+    It deletes. It does not overwrite, and no comment, help string or doc may imply that
+    it does — the word for the stronger thing was used in six places and this function
+    never did it (`tests/test_wording.py` keeps it that way). Do not add the overwrite
+    pass either: it is meaningless on a copy-on-write filesystem (APFS, ext4 with a
+    journal, any SSD doing wear levelling), where the bytes it rewrites land in a NEW
+    block and the old one stays wherever the drive left it. The properties that do hold
+    are that the file is 0600 and that it is short-lived.
+    """
     try:
         os.unlink(path)
     except OSError:

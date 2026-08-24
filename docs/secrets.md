@@ -40,7 +40,16 @@ shell history**, while still letting an agent *use* the credential:
   ```
 
 - **`charter secret cp`** materializes a secret to a 0600 file (e.g. a kubeconfig) and
-  prints only the path, never the contents.
+  prints only the path, never the contents. The destination has to be a **real file it
+  creates**: a device, a FIFO, a directory or a symlink is refused, because
+  `/dev/stdout`, `/dev/stderr` and `/dev/fd/*` are the agent's own transcript and
+  writing there is the leak this command exists to avoid. A destination that turns out
+  to **be** one of charter's own streams is refused whatever it is called — the test is
+  `(st_dev, st_ino)` from an `fstat` of the descriptor charter opened, compared against
+  its own stdin, stdout and stderr, so a hardlink, a `readlink`'d log path and
+  `/dev/fd/1` are all the same one object and get the same answer. `--force` does not
+  reach that check. An **existing** file is refused too — overwriting one destroys its
+  contents and sets it to 0600, so it takes `--force` and says so afterwards.
 - **`charter secret get`** is masked by default — it prints a byte count and a SHA-256
   fingerprint, never the value.
 - **`charter secret get --reveal`** is the one path that *can* print plaintext, and it
@@ -126,6 +135,16 @@ about the vault:
 
 A read that fails anyway names the identity in play, so a permission error points at the
 credential rather than reading as an empty vault.
+
+**A declared identity does not travel to someone else's child.** `charter secret exec`
+runs the command with this shell's environment **minus every identity variable declared
+by a vault other than the one being read** — both halves of each binding, the variable
+the CLI reads and the variable this machine carries it in. Without that, one binding is
+least-privilege and the process it starts is not: `charter secret exec qa -- <cmd>` used
+to hand `<cmd>` the devops *and* marketing *and* personal service-account tokens, in the
+clear, while redacting the single value the model actually named. The vault being read
+keeps its own names, so `charter secret exec devops -- charter secret get devops K`
+still works, and a vault that declares no identity is untouched.
 
 ### Where a registration is recorded: two files, one view
 

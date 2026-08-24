@@ -932,7 +932,12 @@ def _sa_key(p):
 
 def _sa_cp(p):
     p.add_argument("key")
-    p.add_argument("dest")
+    p.add_argument("dest",
+                   help="Path of a REAL FILE to create. A device, FIFO, directory or "
+                        "symlink is refused — /dev/stdout is this conversation.")
+    p.add_argument("--force", action="store_true",
+                   help="Overwrite an existing file (destroying its contents and "
+                        "setting it to 0600). Refused without this.")
 
 
 def _sa_exec(p):
@@ -947,12 +952,15 @@ def _sa_exec(p):
                         "dotenv secrets file, e.g. PLAYWRIGHT_MCP_SECRETS_FILE.")
     p.add_argument("--stream", dest="stream_mode", action="store_true",
                    help="Run the command as a CHILD with stdio inherited, wait for it, then "
-                        "shred any --file/--dotenv temp files. For a long-running child "
+                        "delete any --file/--dotenv temp files. For a long-running child "
                         "whose credential must be a FILE (Google ADC's "
                         "GOOGLE_APPLICATION_CREDENTIALS takes a path, not a value) — the "
                         "case --exec cannot serve, because exec leaves nothing alive to "
-                        "clean up. Output is NOT redacted (nothing is captured). Note: a "
-                        "SIGKILLed charter runs no cleanup and the 0600 file survives.")
+                        "clean up. Output is NOT redacted (nothing is captured). Cleanup "
+                        "survives every terminating signal charter may catch — SIGINT, "
+                        "SIGTERM, SIGHUP, SIGQUIT and the rest. It does not survive "
+                        "SIGKILL, which cannot be caught, or a fault (SIGSEGV, SIGABRT), "
+                        "which charter does not intercept; then the 0600 file survives.")
     p.add_argument("--exec", dest="exec_mode", action="store_true",
                    help="Replace this process with the command (os.exec) instead of capturing "
                         "it, so stdio streams through — required for a long-running child such "
