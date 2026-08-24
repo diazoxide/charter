@@ -47,10 +47,14 @@ rule while one who reads a bare refusal files an issue.
   redirection `>&` is not the control operator `&` (`cat 2>&1 <vault>` is one command);
   while a newline *is* a boundary exactly as `;` is — every line of a multi-line command is
   its own command, `bash <<'EOF'` bodies included — and `#` starts a comment only where a
-  word starts. Beyond that: an unparseable quote does
-  not hide the commands after it, a `$( … )` substitution is read both as the command it
-  runs and as the word it becomes, a relocation counts however it is spelled (`cd`, `pushd`,
-  `env -C`, `sudo --chdir`), and `//`, `/./` and a different case are the same path.
+  word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
+  plain arguments anywhere but command position and `cat { <vault>` is one command that
+  reads the vault. Beyond that: an unparseable quote does
+  not hide the commands after it, an **unquoted** `$( … )` substitution is read both as the
+  command it runs and as the word it becomes, a relocation counts however it is spelled
+  (`cd`, `pushd`, `env -C`, `sudo --chdir`), and `//`, `/./` and a different case are the
+  same path. **What it does not catch is written down** — see *Where the secret-leak guard
+  stops*, below.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all. Both sides share one predicate, so they cannot come to disagree about
   what counts as a vault — and both cover a file `charter secret cp` materialized, wherever
@@ -74,6 +78,44 @@ rule while one who reads a bare refusal files an issue.
 
 A seventh path is not a guard but an allowance: a binary the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then.
+
+## Where the secret-leak guard stops
+
+SECURITY.md gives charter's position and this section is the local, specific version of it:
+**guard rails, not guarantees — a guard against mistakes, not an attacker with shell access
+as your user.** The secret-leak guard is worth having because an agent reaching for a vault
+file by name is a real and frequent event, and the guard catches those spellings reliably.
+It is not a sandbox, and the list above is not a claim of completeness.
+
+**It is defeated by deliberate obfuscation.** One example, so nobody has to guess where the
+line is:
+
+```bash
+echo $(cat .charter/vaults/x.json)      # DENIED
+echo "$(cat .charter/vaults/x.json)"    # ALLOWED — one pair of quotes, and it prints
+```
+
+Four rounds of adversarial review have now been run against this guard, and each round's fix
+was defeated by the next spelling — `$( … )`, `env -C`, a quoted `)`, a bare `{`, a leading
+fd digit. That pattern is the finding. Deciding what a shell will execute, without executing
+it, is not winnable in a Python tokeniser, so the honest move is to say what is open:
+
+- **a quoted command substitution** — the example above, and `` "`cat <vault>`" ``,
+  `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`;
+- **any expansion between the guard and `open()`** — globs (`.charter/vault?/x.json`,
+  `.charter/*/x.json`), brace expansion (`.charter/{vaults,}/x.json`), `$'\x73'` quoting,
+  and a path that arrives in a variable (`V=<vault>; cat $V`). The path check matches text,
+  not resolved files;
+- **a shell that runs a string** — `sh -c '…'`, `eval`;
+- **a vault registered outside `.charter/`**, which the Bash guard does not look up (a
+  registry read on every Bash call is a cost the hot path will not carry);
+- **anything that reads the file without naming a known reader** — an editor, a language
+  runtime, a copy followed by a read of the copy.
+
+There is no second line of defence behind it: nothing scans Bash *output*. What actually
+makes a vault not worth reading is the provider — `1password` and `reference` keep the value
+in a system built for custody and resolve it on demand, so there is no plaintext on disk for
+any of the above to print. That is the control; the hook is the guard rail.
 
 ## When a guard is wrong
 

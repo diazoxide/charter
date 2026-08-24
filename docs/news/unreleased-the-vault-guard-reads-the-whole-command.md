@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: The vault guard now reads the whole command, every spelling of a path, and the file `secret cp` wrote
+headline: The vault guard now reads the whole command, and says where it stops
 ---
 
 Fourteen ways past the secret-leak guard, all found by the same question: not *can the rule be
@@ -45,9 +45,10 @@ boundaries. That covered `echo $(cat <vault>)` — where the substitution is the
 opened `cat $(echo <vault>)`, where the substitution is the *operand*: the reader lost its
 argument, the argument lost its reader, and neither half named a guarded path.
 `git push $(echo git@host:o/r.git)`, `head $(ls .charter/vaults/*.json)` and an unattended
-`git tag $(cat VERSION)` all went from deny to allow with it. A `$( … )` run now yields an
-additional INNER segment while the enclosing segment keeps accumulating, so both readings
-exist at once. Backticks are normalised to `$( … )` before tokenizing — the same construct,
+`git tag $(cat VERSION)` all went from deny to allow with it. An **unquoted** `$( … )` run
+now yields an additional INNER segment while the enclosing segment keeps accumulating, so
+both readings exist at once. A quoted one is a single word to the tokenizer and is not
+covered — see *Where the secret-leak guard stops*. Backticks are normalised to `$( … )` before tokenizing — the same construct,
 older punctuation — process substitution `<( … )` is handled the same way, and where a
 substitution's output is spliced into a longer word (`cat $(echo .charter)/vaults/x.json`)
 the neighbouring operands are re-joined before matching.
@@ -134,10 +135,35 @@ the denial's own `print` returned an allow. Its Bash sibling has no such wrapper
 the two vault guards failing in opposite directions. The parsing may fail open; the verdict
 may not. Only the parse is inside the handler now.
 
+**And the round that added `{` and `}` to the operator table shipped a regression with
+them.** They are reserved *words*, and a shell recognises a reserved word only where a
+command word is expected; bash passes them through as ordinary arguments anywhere else. So
+`cat { .charter/vaults/x.json` is one command that prints the vault — and reading that `{`
+as a boundary made it a reader with no operand plus a path with no reader, which `main`
+denies and this branch allowed. A boundary is now decided by POSITION as well as by
+quoting, and the thing that catches this class rather than this instance is a **differential
+test**: `tests/fixtures/guard_denied_by_main.txt` records every command, out of ~5,100
+generated spellings, that `origin/main`'s own `hooks.py` refuses, and
+`tests/test_guard_differential.py` fails if this branch allows any of them. A security change
+that denies less than the code it merges into is a regression whatever else it fixes, and
+nothing before this could see one.
+
+**Where it stops is now written down, in [docs/hooks.md](../hooks.md).** Four rounds of
+review, four fixes, four defeats by the next spelling: that pattern is itself the result.
+Deciding what a shell will execute, without executing it, is not winnable in a Python
+tokeniser, so the guard's documentation no longer implies otherwise. One pair of quotes
+still gets past it — `echo "$(cat .charter/vaults/x.json)"` is allowed where the unquoted
+form is denied — as do glob and brace spellings of the path, a path arriving in a variable,
+and `sh -c`. Those are listed rather than fixed, deliberately: each previous round's added
+parsing bought one instance and introduced a regression of its own. SECURITY.md's position
+holds — guard rails, not guarantees; a guard against mistakes, not an attacker with shell
+access as your user — and the way to make a vault not worth reading is a provider
+(`1password`, `reference`) that keeps no plaintext on disk.
+
 Nothing to adopt: upgrading is the whole of it. If you have used `secret cp`, the first
 `cp` after upgrading starts the ledger — files materialized before then are not in it, and
 re-running the `cp` records them.
 
-Found in the 2026-08-24 security audit (#429, #430, #431, #423, #438); the rest in three
+Found in the 2026-08-24 security audit (#429, #430, #431, #423, #438); the rest in four
 rounds of adversarial review of the fix for them, each round finding the previous round's
 answer written one spelling wider.

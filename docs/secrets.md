@@ -85,7 +85,11 @@ shell history**, while still letting an agent *use* the credential:
   boundary and the `&` in a `2>&1` belongs to the redirection, while an interpreted newline
   is a boundary like `;` and `#` opens a comment only at a word start; and a file
   `charter secret cp` materialized is covered wherever it was put. Each of those was a
-  verified bypass, and each is now a test.
+  verified bypass, and each is now a test. What it does **not** cover is written down in
+  [hooks.md](hooks.md#where-the-secret-leak-guard-stops) — a quoted `"$(cat …)"`, a glob or
+  brace spelling of the path, `sh -c`. It is a guard against mistakes, not against someone
+  deliberately spelling around it; for values that warrant real custody the provider, not
+  the hook, is the control.
 
   `Glob` is not denied — it returns file *names*, and that a vault exists is not the secret.
   Neither is a search rooted far above `.charter/`, which reads vault files as collateral;

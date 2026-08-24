@@ -114,20 +114,45 @@ class TestAQuotedOperatorIsAWord(unittest.TestCase):
 class TestABareOperatorIsStillABoundary(unittest.TestCase):
     """The other direction, generated from the same table. A fix that stopped splitting on
     real operators would hide every command after the first — which is the failure the
-    quoting fix must not buy."""
+    quoting fix must not buy.
 
-    def test_every_operator_in_the_table_ends_a_segment(self):
-        for op in hooks._OPERATORS:
+    These two tests used to run over the whole of `_OPERATORS`, grouping tokens included,
+    and that is how this file shipped a REGRESSION while looking covered: `cat a { echo b`
+    is one command to bash, not two, and asserting the split made the guard strand a
+    reader's operand (see `tests/test_guard_differential.py`). They now generate from
+    `_CONTROL_OPERATORS` — the tokens that really are a boundary wherever they stand — and
+    the grouping tokens are asserted below in the position a shell actually recognises.
+    """
+
+    def test_every_control_operator_ends_a_segment(self):
+        for op in hooks._CONTROL_OPERATORS:
             with self.subTest(operator=op):
                 segs = hooks._segment_argv(f"cat a {op} echo b")
                 self.assertGreater(len(segs), 1, f"{op!r} -> {segs!r}")
                 self.assertNotIn(VAULT, [t for seg in segs for t in seg])
 
     def test_a_real_second_command_after_a_real_operator_is_still_seen(self):
-        for op in hooks._OPERATORS:
+        for op in hooks._CONTROL_OPERATORS:
             with self.subTest(operator=op):
                 cmd = f"echo hi {op} cat {VAULT}"
                 self.assertIsNotNone(hooks._leak_reason(cmd), cmd)
+
+    def test_a_grouping_token_is_a_boundary_where_a_shell_recognises_one(self):
+        """In COMMAND POSITION the group is stripped and the real program is named."""
+        for cmd in (f"echo hi; {{ cat {VAULT}; }}", f"echo hi; ( cat {VAULT} )",
+                    f"{{ cat {VAULT}; }}", f"( cat {VAULT} )",
+                    f"echo hi | {{ cat {VAULT}; }}"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(hooks._leak_reason(cmd), cmd)
+
+    def test_a_grouping_token_mid_command_is_an_argument(self):
+        """And nowhere else. `cat a { echo b` is one command to bash — `bash -n` accepts
+        it — so the segment stays whole and `cat` keeps every operand it was given."""
+        self.assertEqual(hooks._segment_argv("cat a { echo b"),
+                         [["cat", "a", "{", "echo", "b"]])
+        for op in hooks._GROUPING:
+            with self.subTest(operator=op):
+                self.assertIsNotNone(hooks._leak_reason(f"cat {op} {VAULT}"))
 
 
 class TestTheLexerIsWhereQuotingIsKnown(unittest.TestCase):
@@ -371,8 +396,17 @@ class TestNothingThatWorkedStoppedWorking(unittest.TestCase):
         self.assertEqual(hooks._segment_argv("( true );cat v"), [["true"], ["cat", "v"]])
 
     def test_an_escaped_dollar_does_not_make_a_substitution(self):
-        """The `$` that turns `(` into a substitution has to be interpreted too."""
-        self.assertEqual(hooks._segment_argv(r"cat \$(echo v)"), [["cat", "$"], ["echo", "v"]])
+        """The `$` that turns `(` into a substitution has to be interpreted too — there is
+        no inner `echo` segment here.
+
+        The whole line stays ONE segment, which is what bash's own answer deserves: `bash
+        -n -c 'cat \\$(echo v)'` is a syntax error, so nothing about it runs, and holding
+        `cat`'s operands together is the conservative reading of a line no shell accepts.
+        This used to assert a two-segment split — a boundary the shell never draws, and the
+        same fiction that let `cat { <vault>` through."""
+        segs = hooks._segment_argv(r"cat \$(echo v)")
+        self.assertNotIn(["echo", "v"], segs)
+        self.assertEqual(segs, [["cat", "$", "(", "echo", "v", ")"]])
 
     def test_prose_in_a_quoted_argument_is_still_prose(self):
         self.assertEqual(hooks._segment_argv("echo " + repr("a ; b")), [["echo", "a ; b"]])
