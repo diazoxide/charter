@@ -132,6 +132,12 @@ rename a server you cannot see the name of, one row above a withheld row that ha
 been hardened against exactly that. Both rows now use the same escape, and so does
 `charter persona lint`.
 
+Known remaining, and filed rather than folded in here:
+[#498](https://github.com/diazoxide/charter/issues/498). Three other places still print a
+committed name through `contain.one_line` and want readability from a function that
+promises line-safety — `persona lint`'s row prefix, its `does not load` sentence, and the
+script paths in the brief a sub-agent reads. Same class, different report.
+
 **And the line says which credential, not only which command.** `secrets` and
 `secret_files` map an environment variable to a *vault key*, and that key is what decides
 which of the vault's values the command receives. They were in the digest and not on the
