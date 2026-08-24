@@ -39,7 +39,11 @@ rule while one who reads a bare refusal files an issue.
 - **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
   matcher at all.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
-  is almost always meant for a clone. `--detach` counts, with or without an operand.
+  is almost always meant for a clone. `--detach` counts — with an operand, without one, and
+  with the plane's own default branch as the operand, which is the one spelling that used to
+  slip past. What is always allowed is putting the root back **on** its default branch
+  (`git checkout main`), which is a different thing from naming that branch:
+  `git checkout --detach main` names it and leaves HEAD attached to nothing.
   Restoring a file does **not**: `git checkout` is two commands wearing one name, and which
   one you typed is settled by asking git whether the operand resolves as a revision or names
   a path it tracks — so `git checkout <path>` and `git checkout <tree-ish> -- <paths>` run
@@ -56,7 +60,11 @@ rule while one who reads a bare refusal files an issue.
   feature` the same branch move — including chains, aliases carrying their own options,
   `!git checkout`, and `git -c alias.co=checkout co …`. A `!`-alias that is not a plain
   `git …` is not read (refusing every shell alias here would refuse `s = !git status`), and
-  neither is `--config-env`.
+  neither is `--config-env`. The **route** does not change the verdict either: the cwd, a
+  `cd` earlier in the same command, and `git -C <path>` — absolute or relative, and relative
+  now means *relative to the shell*, which is the fix for `git -C ../../.. checkout <branch>`
+  reaching the root from a clone. `git --git-dir=<plane>/.git` is a route this guard does
+  **not** yet follow ([#477](https://github.com/diazoxide/charter/issues/477)).
 - **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root
   that would take commits off the branch which no remote has a copy of — the command that
   destroyed eleven memory commits in one session. Only that: the unstage

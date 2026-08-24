@@ -30,13 +30,29 @@ had thought of, so a spelling nobody thought of had no row at all, and that is t
 `TestGitItselfIsTheOracle` closes: it runs each spelling against real git in a throwaway
 copy of this fixture and requires that anything which MOVED HEAD is denied. The expected
 verdict is not written down; git supplies it.
+
+**Round three, and the same shape one level up.** Asking git for the verdict fixed who
+decides; it did not fix who chooses the questions, and the corpus was still 41 rows a person
+had typed. Both holes round three found are COMBINATIONS of axes that were each already
+covered: `--detach` had rows and `main` had rows, but `git checkout --detach main` — which
+walked through the "returning to the default branch is always allowed" carve-out and past
+every line of the `--detach` handling — had none; `git switch` had rows and `--` had rows,
+but `git switch -- feature` had none, and `switch` has no path half for a separator to
+introduce. So the corpus is now the PRODUCT of its axes (`_generated_corpus`), a second one
+crosses commands with every ROUTE to the plane root — where a relative `git -C` was being
+resolved against the hook process's cwd rather than the shell's — and a third loads the
+guard as it stands on `origin/main` and requires that nothing it refuses is allowed here.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import itertools
+import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +60,47 @@ from unittest import mock
 
 from charter import config, hooks
 from tests._isolation import PersonaIso, run_hook
+
+
+#: ---------------------------------------------------------------------------------------
+#: The corpus, as a PRODUCT of axes rather than a list somebody typed.
+#:
+#: Every bypass this guard has had was a spelling nobody thought to type: `--orphan README`,
+#: `-bREADME`, `-fq`, `git checkout --detach main`, `git switch -- feature`. A written list
+#: is only ever as long as the last audit, and round two's oracle inherited that shape — it
+#: asked real git for the verdict, which was the right idea, but it asked about 41 rows a
+#: person had chosen. Two of the three holes round three found are combinations of axes that
+#: were each already present: `--detach` had rows, `main` had rows, and `--detach main` had
+#: none.
+#:
+#: So the axes are named and crossed. Adding one option or one operand adds every
+#: combination of it, and no combination can be added with the wrong expected answer,
+#: because the expected answer is not written down at all — git supplies it.
+_SUBS = ("checkout", "switch")
+
+#: One witness per option CLASS the rule knows — none, restore-only, detach, create, and an
+#: option charter cannot place — in each spelling git's parser accepts: long, short, and a
+#: cluster in BOTH orders, since a cluster is read left to right and `-qd` meets a different
+#: letter first than `-dq`.
+_OPTS = ("", "-q", "--ours", "--detach", "-d", "-qd", "-dq", "-b", "--orphan")
+
+#: One witness per operand CLASS: the plane's DEFAULT BRANCH — the remedy's name, and the
+#: one the carve-out used to hand a free pass to whatever stood beside it — another branch,
+#: a name that is both a branch and a tracked file, and a tracked file.
+_OPERANDS = ("main", "feature", "ambig", "README")
+
+#: Where `--` goes. It is an axis and not a footnote because it does not mean the same thing
+#: on both subcommands: `checkout` has a path half for a separator to introduce and `switch`
+#: has none, so `git switch -- feature` is a branch move wearing a restore's punctuation.
+_SHAPES = ("git {sub} {opt} {op}", "git {sub} {opt} {op} --", "git {sub} {opt} -- {op}")
+
+
+def _generated_corpus() -> tuple[str, ...]:
+    """Every ``{sub} × {opt} × {operand} × {shape}``, deduplicated, order preserved."""
+    out: dict[str, None] = {}
+    for sub, opt, op, shape in itertools.product(_SUBS, _OPTS, _OPERANDS, _SHAPES):
+        out[" ".join(shape.format(sub=sub, opt=opt, op=op).split())] = None
+    return tuple(out)
 
 
 def _decision(r) -> str | None:
@@ -131,14 +188,21 @@ class CheckoutCase(PersonaIso):
             self._oracle_n = 0
             # A copy of the live fixture, so any per-class setUp (aliases, extra branches)
             # is part of what git is asked about.
-            shutil.copytree(self.root, self._oracle_base / "template")
+            tpl = self._oracle_base / "template"
+            shutil.copytree(self.root, tpl)
+            # `git init`'s sample hooks are most of the bytes in a fixture this small and
+            # nothing here runs one. Dropping them is what keeps a generated corpus of a
+            # couple of hundred spellings affordable — the copy below happens once per row.
+            shutil.rmtree(tpl / ".git" / "hooks", ignore_errors=True)
+            # Read once, not once per row: every scratch below is a fresh copy of this
+            # template, so they all start from the same HEAD.
+            self._oracle_before = self._head(tpl)
         self._oracle_n += 1
         scratch = self._oracle_base / f"run-{self._oracle_n}"
         shutil.copytree(self._oracle_base / "template", scratch)
-        before = self._head(scratch)
         subprocess.run(shlex.split(cmd), cwd=scratch, capture_output=True, text=True,
                        timeout=60)
-        return self._head(scratch) != before
+        return self._head(scratch) != self._oracle_before
 
 
 class TestRestoringAFileIsNotABranchSwitch(CheckoutCase):
@@ -210,6 +274,28 @@ class TestARefMoveIsStillRefused(CheckoutCase):
         """`git switch` takes branches and nothing else — it exists because this overload
         is confusing — so the operand rule is asked of `checkout` only."""
         self._denied_as_the_branch_guard("git switch feature")
+
+    def test_a_separator_does_not_give_switch_a_path_half_it_does_not_have(self):
+        """Found by the generated corpus, not by anyone reading the code.
+
+        `--` introduces PATHS on a `checkout`, and the rule reads "something after the
+        separator, therefore a restore". `git switch` has no path half for a separator to
+        introduce — that is most of why it exists — so on `switch` the same three characters
+        are punctuation in front of a branch name. Measured against git 2.50:
+        `git switch -- feature` and `git switch -q -- ambig` both answer "Switched to
+        branch", and both were allowed in the plane root.
+        """
+        for cmd in ("git switch -- feature", "git switch -q -- ambig",
+                    "git switch -- ambig", "git switch --detach -- main"):
+            with self.subTest(cmd=cmd):
+                self._denied_as_the_branch_guard(cmd)
+
+    def test_but_the_remedy_survives_the_separator(self):
+        """`git switch -- main` puts the root back on its default branch, separator and all
+        — verified, "Switched to branch 'main'" — and the line above must not have turned
+        every `switch --` into a refusal."""
+        self._in(self.root, "checkout", "-q", "feature")
+        self.assertIsNone(_decision(self.run_cmd("git switch -- main")))
 
     def test_a_commit_ish_that_is_not_a_branch_is_still_a_ref_move(self):
         """git: `git checkout HEAD~0` detaches. Resolving as a COMMIT is the test, not
@@ -358,6 +444,42 @@ class TestDetachWasTheOtherHalfOfTheMisreading(CheckoutCase):
         would be a two-word bypass on the case above."""
         self.assertEqual(_decision(self.run_cmd("git checkout --detach README")), "deny")
 
+    def test_the_default_branch_beside_a_detach_does_not_excuse_it_either(self):
+        """Round three's hole, by name.
+
+        The remedy carve-out — "returning the root to its default branch is always allowed"
+        — gated on `not creating` and the operand's spelling, so `main` standing beside a
+        `--detach` reached `continue` and skipped every line of the `--detach` handling
+        above. Measured against git 2.50: each of these answers "HEAD is now at <sha>" and
+        HEAD goes from `branch:main` to detached. The remedy is a command that leaves HEAD
+        ATTACHED to the default branch, not one with the default branch's name in it.
+        """
+        for cmd in ("git checkout --detach main", "git switch -d main",
+                    "git checkout -qd main", "git checkout -dq main",
+                    "git checkout --detach main --", "git switch --detach -- main",
+                    "git checkout --detach=main main"):
+            with self.subTest(cmd=cmd):
+                r = self.run_cmd(cmd)
+                self.assertEqual(_decision(r), "deny", cmd)
+                self.assertIn("PLANE ROOT", _reason(r), cmd)
+
+    def test_a_detach_with_an_operand_is_described_as_a_detach(self):
+        """Not "switch to 'main'". A refusal that is right and a sentence that is wrong about
+        what the command does is the other half of #461 — and here the wrong sentence would
+        name the exact command the denial's own last line promises is allowed."""
+        r = self.run_cmd("git checkout --detach main")
+        self.assertIn("detach HEAD at 'main'", _reason(r))
+        self.assertNotIn("switch to", _reason(r))
+
+    def test_the_denial_names_the_spelling_it_promises_rather_than_a_category(self):
+        """The closing sentence used to read "Returning the root to its default branch is
+        always allowed", printed underneath a refusal of `git checkout --detach main` —
+        which is a command that returns the root to its default branch by name and is
+        refused. It now names the spelling that is actually allowed, and the test asserts
+        that spelling really is."""
+        self.assertIn("`git checkout main`", _reason(self.run_cmd("git checkout --detach main")))
+        self.assertIsNone(_decision(self.run_cmd("git checkout main")))
+
 
 class TestTheRemedyAndTheRestOfTheGuardAreUnchanged(CheckoutCase):
     def test_returning_to_the_default_branch_is_still_allowed(self):
@@ -408,7 +530,13 @@ class TestGitItselfIsTheOracle(CheckoutCase):
 
     #: Argv-able only: the shell forms (`$(…)`, `2>/dev/null`) belong to the tokeniser
     #: tests above, where the point is what charter sees rather than what git does.
-    CORPUS = (
+    #:
+    #: **Named rows, and the smaller half of the corpus.** Each one is a spelling that was
+    #: once a live bypass or is a promise charter makes in prose, kept by name so a
+    #: regression reads as itself in the failure output. The bulk of the coverage is
+    #: `_generated_corpus()` below, because a hand-written list is only ever as long as the
+    #: last audit — every bypass this guard has had was a spelling nobody typed here.
+    NAMED = (
         # Ref moves, in every spelling of the value that git accepts.
         "git checkout feature", "git checkout ambig", "git checkout HEAD~0",
         "git checkout -b chore/x", "git checkout -b README", "git checkout -bREADME",
@@ -430,6 +558,8 @@ class TestGitItselfIsTheOracle(CheckoutCase):
         "git checkout --conflict=merge README", "git restore README",
     )
 
+    CORPUS = NAMED + _generated_corpus()
+
     #: What charter PROMISES is allowed. Every one is also run past git below, so the
     #: promise and the behaviour cannot drift apart silently.
     PROMISED_RESTORES = ("git checkout README", "git checkout .", "git checkout notes",
@@ -450,9 +580,16 @@ class TestGitItselfIsTheOracle(CheckoutCase):
         # "test that cannot fail" shape. These are the counts and the names measured
         # against git 2.50, so a fixture that stops reproducing the conditions (no branch
         # to switch to, say) fails here rather than passing silently.
-        self.assertGreaterEqual(len(movers), 20, movers)
+        self.assertGreaterEqual(len(movers), 90, len(movers))
+        # Named witnesses, one per bypass this guard has actually had, so a fixture that
+        # stops producing that shape fails loudly instead of quietly covering less. The
+        # last two are round three's: a detach whose operand is the default branch walked
+        # through the remedy carve-out, and `--` on a `switch` — which has no path half for
+        # a separator to introduce — was read as "paths follow, so this is a restore".
         for must in ("git checkout --orphan README", "git checkout -bREADME",
-                     "git switch -cneu", "git checkout -d feature"):
+                     "git switch -cneu", "git checkout -d feature",
+                     "git checkout --detach main", "git switch -d main",
+                     "git switch -- feature", "git switch -q -- ambig"):
             self.assertIn(must, movers)
 
     def test_no_promised_restore_moves_head_and_every_one_is_allowed(self):
@@ -462,6 +599,178 @@ class TestGitItselfIsTheOracle(CheckoutCase):
             with self.subTest(cmd=cmd):
                 self.assertFalse(self.moves_head(cmd), cmd)
                 self.assertIsNone(_decision(self.run_cmd(cmd)), cmd)
+
+
+class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
+    """A command that moves the plane root's HEAD is denied **however the root is reached**.
+
+    The guard's subject is a repository, not a directory, and there is more than one way for
+    one shell command to name it: the cwd, `git -C <path>`, a `cd` earlier in the same
+    command, and every combination. The oracle above holds the command still and varies its
+    spelling; this holds the command still and varies the ROUTE — and it is where the second
+    of round three's holes lived.
+
+    `_git_target` read `git -C <path>` as ``Path(args[i + 1])``, so a RELATIVE `-C` was
+    resolved against the directory the hook process happened to be started in rather than
+    against the shell's. Measured end to end against git 2.50 from a workspace clone:
+    `git -C ../../.. checkout feature` answers *"Switched to branch 'feature'"* and the
+    plane root's `symbolic-ref` follows it — while the guard was looking three levels above
+    the hook's cwd, finding something that was not the plane root, and standing aside.
+    `git -C . checkout feature` typed in the root itself, and `cd .. && git -C <root>
+    checkout feature`, landed the same way.
+
+    So the routes are an axis too, crossed with commands whose effect **git decides** — the
+    same oracle as above, run on the bare command once, because a route cannot change what a
+    command does to HEAD.
+    """
+
+    #: `(subcommand, rest)`, kept split so the alias route can put the subcommand inside
+    #: `-c alias.…=` where no `checkout` token survives in the argv at all.
+    COMMANDS = (
+        ("checkout", "feature"), ("switch", "feature"), ("checkout", "-b chore/x"),
+        ("checkout", "--detach main"), ("switch", "-d main"), ("checkout", "--orphan README"),
+        ("switch", "-- feature"), ("checkout", "ambig"),
+        # Not movers — carried through the same loop so the routes are exercised on the
+        # allowed half too, and a route that started refusing every restore fails here.
+        ("checkout", "README"), ("restore", "README"), ("checkout", "main"),
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.clone = config.WORKSPACES_DIR / "ws" / "svc"
+        self.clone.mkdir(parents=True, exist_ok=True)
+        self._git("init", "-q", "-b", "main", str(self.clone))
+        # How a session in the clone spells the plane root without naming it absolutely.
+        self.up = os.path.relpath(self.root, self.clone)
+        self.assertTrue(self.up.startswith(".."), self.up)
+
+    def routes(self, sub: str, rest: str):
+        """``(label, cwd, command)`` for every way one shell command reaches the root."""
+        tail = f"{sub} {rest}".strip()
+        yield "cwd is the root", self.root, f"git {tail}"
+        yield "-C, absolute", self.clone, f"git -C {self.root} {tail}"
+        yield "-C, relative", self.clone, f"git -C {self.up} {tail}"
+        yield "-C .", self.root, f"git -C . {tail}"
+        yield "-C, relative, twice", self.clone, f"git -C {self.up} -C . {tail}"
+        yield "cd into the root", self.root.parent, f"cd {self.root.name} && git {tail}"
+        yield ("cd out, -C back in", self.root,
+               f"cd .. && git -C {self.root.name} {tail}")
+        yield ("an alias, from the clone", self.clone,
+               f"git -C {self.up} -c alias.zz={sub} zz {rest}".strip())
+
+    def test_a_head_move_is_denied_by_every_route(self):
+        movers = []
+        for sub, rest in self.COMMANDS:
+            bare = f"git {sub} {rest}".strip()
+            if not self.moves_head(bare):
+                continue
+            movers.append(bare)
+            for label, cwd, cmd in self.routes(sub, rest):
+                with self.subTest(route=label, cmd=cmd):
+                    r = self.run_cmd(cmd, cwd=cwd)
+                    self.assertEqual(_decision(r), "deny", f"{label}: {cmd}")
+                    self.assertIn("PLANE ROOT", _reason(r), cmd)
+        # Non-vacuity: if git stopped moving HEAD for these — a fixture with no second
+        # branch, say — the loop above would assert nothing and still pass.
+        self.assertGreaterEqual(len(movers), 7, movers)
+
+    def test_a_restore_is_allowed_by_every_route(self):
+        """The routes do not become a way to refuse what charter permits. Widening the
+        guard's reach and narrowing what it refuses are the two halves of this change, and a
+        route that only ever denied would look like the first while undoing the second."""
+        for sub, rest in (("checkout", "README"), ("restore", "README")):
+            bare = f"git {sub} {rest}"
+            self.assertFalse(self.moves_head(bare), bare)
+            for label, cwd, cmd in self.routes(sub, rest):
+                with self.subTest(route=label, cmd=cmd):
+                    self.assertIsNone(_decision(self.run_cmd(cmd, cwd=cwd)), f"{label}: {cmd}")
+
+    def test_a_route_that_does_not_reach_the_root_is_still_not_the_root(self):
+        """The reach is not "anything with a `-C` in it". A relative `-C` that lands in the
+        clone is a clone command, and branch work in a clone is the thing charter tells
+        people to do."""
+        for cmd in ("git -C . checkout -b feature/x",
+                    f"git -C {self.clone} checkout -b feature/x",
+                    "cd .. && git -C svc checkout -b feature/x"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(_decision(self.run_cmd(cmd, cwd=self.clone)), cmd)
+
+
+class TestNeverWeakerThanTheGuardThatShips(CheckoutCase):
+    """**Nothing `origin/main`'s guard denies may be allowed here** unless git itself shows
+    the command does not move HEAD.
+
+    Two rounds of this fix were strictly weaker than the code they replaced on inputs nobody
+    had a row for — round one on `git checkout --orphan README`, round three on
+    `git checkout --detach main` — and both times every test in the file passed. The reason
+    is structural: a fix that *narrows* a guard is reviewed by reading the narrowing, and the
+    narrowing is exactly where the accidental widening hides.
+
+    So the previous implementation is loaded and asked the same questions. It is a
+    REFERENCE, not a spec: where the two disagree, git breaks the tie. A disagreement is a
+    finding only when `origin/main` refused something this guard allows **and git moves HEAD
+    for it** — anything else is #461's false positive being removed on purpose, and those
+    are collected and asserted to be restores rather than waved through.
+
+    This is a cross-check, not the property: `TestGitItselfIsTheOracle` and
+    `TestEveryRouteToThePlaneRootIsTheSameRoute` carry the property, and both run everywhere.
+    This one needs the repository's history, so it reports rather than runs where there is
+    none — an `actions/checkout` at depth 1 has no `origin/main` to load.
+    """
+
+    #: Refs to load the shipped guard from, in order. `main` is here for a clone whose
+    #: remote is not called `origin`.
+    BASELINE_REFS = ("origin/main", "main")
+
+    def shipped(self):
+        repo = Path(hooks.__file__).resolve().parent.parent
+        if not (repo / ".git").exists():
+            self.skipTest(f"no git history at {repo}: nothing to compare against")
+        for ref in self.BASELINE_REFS:
+            r = subprocess.run(["git", "-C", str(repo), "show", f"{ref}:charter/hooks.py"],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                break
+        else:
+            self.skipTest(f"none of {self.BASELINE_REFS} resolves in {repo}")
+        # Loaded under a name INSIDE the package, so its `from . import config` binds the
+        # same, already-isolated `charter.config` this test is running against — the
+        # baseline judges the same fixture from the same `ROOT`.
+        src = Path(tempfile.mkdtemp(prefix="edm-shipped-")) / "shipped_hooks.py"
+        self.addCleanup(shutil.rmtree, src.parent, ignore_errors=True)
+        src.write_text(r.stdout)
+        spec = importlib.util.spec_from_file_location("charter._shipped_hooks", src)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_no_input_the_shipped_guard_denies_is_allowed_here(self):
+        shipped = self.shipped()
+        root = str(self.root)
+        denied_by_shipped, relaxed, weaker = 0, [], []
+        for cmd in TestGitItselfIsTheOracle.CORPUS:
+            if shipped._plane_root_branch_reason(cmd, root) is None:
+                continue
+            denied_by_shipped += 1
+            if hooks._plane_root_branch_reason(cmd, root) is not None:
+                continue
+            (weaker if self.moves_head(cmd) else relaxed).append(cmd)
+        # The finding. Named in full, because "the branch is weaker than main" is the one
+        # verdict that blocks unconditionally.
+        self.assertEqual(weaker, [], f"allowed here, denied by main, and git MOVES HEAD: "
+                                     f"{weaker}")
+        # Non-vacuity in both directions: a baseline that denied nothing would make the loop
+        # empty, and a fix that relaxed nothing would mean #461 is not fixed at all.
+        self.assertGreaterEqual(denied_by_shipped, 100, denied_by_shipped)
+        self.assertGreaterEqual(len(relaxed), 4, relaxed)
+        # Every relaxation is a restore charter can name, not merely "something that did not
+        # move HEAD this time": each is `git restore`-able, which is the sentence the news
+        # entry makes.
+        for cmd in relaxed:
+            with self.subTest(cmd=cmd):
+                self.assertFalse(self.moves_head(cmd), cmd)
 
 
 class TestAnOptionCharterCannotPlaceKeepsTheGuardShut(CheckoutCase):

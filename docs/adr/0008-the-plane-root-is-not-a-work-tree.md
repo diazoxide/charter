@@ -64,9 +64,12 @@ answered as narrowly as the evidence supports:
   over-blocks is disabled once and then protects nothing.
 * **`git commit` is untouched.** `charter save` commits here by design, and advancing HEAD
   along the branch you are on was never the failure.
-* **Returning to the default branch is always allowed.** The warning's own remedy is
-  `git -C <plane> checkout main`; a guard that blocks the fix it recommends is a trap, and
-  would be routed around within a session.
+* **Putting the root back ON its default branch is always allowed.** The warning's own
+  remedy is `git -C <plane> checkout main`; a guard that blocks the fix it recommends is a
+  trap, and would be routed around within a session. *On*, not *named*: the carve-out asked
+  only whether the operand was the default branch, and `git checkout --detach main` names it
+  while leaving HEAD attached to nothing — a detach that walked straight through the remedy.
+  What earns the carve-out is the whole command, options included.
 
 What does **not** change: the warning stays, because it is what explains the denial when one
 arrives, and because it still covers the states prevention cannot — a root left dirty, or

@@ -969,6 +969,21 @@ def _git_target(cwd: str, args: list[str]) -> tuple[Path, list[str]]:
     `git -C <path>` is how a session standing in a workspace reaches the shared tree, so a
     guard that only looked at the cwd would leave the door open from every clone.
 
+    **A `-C` is resolved against the SHELL's directory**, which is what *cwd* carries. It
+    used to be `Path(args[i + 1])`, so a relative one resolved against whatever directory
+    the hook process happened to be started in — a directory the command being judged has
+    nothing to do with. `git -C ../../.. checkout feature` from a workspace clone moves the
+    PLANE ROOT's HEAD (verified end to end against git 2.50: *"Switched to branch
+    'feature'"*, and the root's `symbolic-ref` follows), and the guard was reading it as a
+    command against a path three levels above the hook's cwd, found something that was not
+    the plane root, and stood aside. `git -C . checkout feature` typed in the root itself
+    landed the same way, and so did `cd .. && git -C <root-name> checkout feature`.
+
+    Joining onto the running *target* rather than onto *cwd* is also what git itself does
+    when a command carries several: *"each subsequent non-absolute `-C <path>` is
+    interpreted relative to the preceding one"* — verified, `git -C ../.. -C .` from a
+    subdirectory answers the top level.
+
     *args* is `_invocation`'s argv, which INCLUDES the program — dropping it here is what
     lets the caller take "the first non-flag token" as the subcommand rather than as `git`.
     """
@@ -976,8 +991,11 @@ def _git_target(cwd: str, args: list[str]) -> tuple[Path, list[str]]:
     rest: list[str] = []
     i = 1 if args else 0
     while i < len(args):
+        # Only the separated form: git rejects the attached one outright ("unknown option:
+        # -C.", verified), so reading `-C.` as a directory would be inventing a command.
         if args[i] == "-C" and i + 1 < len(args):
-            target = Path(args[i + 1])
+            val = args[i + 1]
+            target = Path(val) if os.path.isabs(val) else target / val
             i += 2
             continue
         rest.append(args[i])
@@ -1237,8 +1255,12 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
     * **Only the root.** A workspace clone is where branch work belongs, so it is never
       touched, whether reached by cwd or by ``git -C``.
     * **The remedy stays executable.** `doctor` prints *"Put the root back:
-      `git -C <plane> checkout main`"*, so returning to the plane's default branch is
-      always allowed. A guard that blocks the fix it recommends teaches people to bypass it.
+      `git -C <plane> checkout main`"*, and that command is always allowed. A guard that
+      blocks the fix it recommends teaches people to bypass it. What earns the carve-out is
+      the command leaving HEAD ATTACHED to the default branch, not the default branch's
+      name appearing in the argv: `git checkout --detach main` names it too and takes the
+      root off every branch, and while the carve-out gated on the operand alone that
+      spelling walked past all of the `--detach` handling below.
     * **A file restore is not a branch move** (#461). `git checkout <path>` restores a path
       and never touches HEAD — the same operation `git restore <path>` performs, which this
       guard has always allowed. Refusing one spelling of an operation charter permits is a
@@ -1304,13 +1326,24 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
         # git today ("fatal: 'README' is not a commit and a branch 'neu' cannot be created
         # from it"), and a carve-out that depends on git continuing to refuse something is a
         # bypass waiting for a release note.
-        if "--" in post:
+        #
+        # And `sub == "checkout"` gates it, because **`git switch` has no path half for a
+        # `--` to introduce**. That is the whole reason `switch` exists, and it makes the
+        # separator mean the opposite thing there: `git switch -- feature` and
+        # `git switch -q -- feature` answer "Switched to branch 'feature'" — verified
+        # against git 2.50 — so reading "something follows the separator" as "these are
+        # paths" turned a three-character token into a bypass of the branch guard on the one
+        # subcommand that can only ever move HEAD. Found by generating the corpus rather
+        # than listing it; no hand-written row had this shape.
+        if sub == "checkout" and "--" in post:
             cut = post.index("--")
             if post[cut + 1:]:
                 if restore_shaped:
                     continue                # paths follow: a restore, HEAD does not move
             else:
                 post = post[:cut]           # a trailing bare `--` still switches
+        # A `switch` needs no rewriting here: `wants` already drops the separator, so
+        # `git switch -- feature` arrives at the rest of the rule as the branch move it is.
         # A bare `-` is a REF (the previous branch), not a flag — and `git checkout -` is
         # what makes a six-switch session cheap to repeat, so reading it as a flag would
         # leave the guard blind to the cheapest form of the thing it exists to stop.
@@ -1318,18 +1351,34 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
         if not wants and not (creating or detaching) and restore_shaped:
             continue  # bare `git checkout` moves nothing
 
-        if not creating and wants:
-            from . import util as _util
-            from .doctor import _plane_default_branch
-            try:
-                default = _plane_default_branch(root)
-            except (_util.ProcTimeout, OSError):
-                # A git that will not answer is not a licence to skip the guard — and it
-                # used to be worse than that: this raised straight out of a `PreToolUse`
-                # handler, which is a broken turn rather than a verdict.
-                default = None
-            if default is not None and wants[0] == default:
-                continue  # the documented remedy — must stay runnable
+        from . import util as _util
+        from .doctor import _plane_default_branch
+        try:
+            default = _plane_default_branch(root)
+        except (_util.ProcTimeout, OSError):
+            # A git that will not answer is not a licence to skip the guard — and it
+            # used to be worse than that: this raised straight out of a `PreToolUse`
+            # handler, which is a broken turn rather than a verdict.
+            default = None
+        # The documented remedy — `doctor` prints `git -C <plane> checkout main` — has to
+        # stay runnable. What makes a command that remedy is not the NAME beside it: it is
+        # that the command leaves HEAD **attached to the default branch**. The carve-out
+        # used to gate on `not creating` and the operand's spelling alone, so every detach
+        # that happened to name the default branch walked through it — and past every piece
+        # of `--detach` handling above. Measured against git 2.50, all of these answer
+        # "HEAD is now at <sha>" and take the root off `main`: `git checkout --detach main`,
+        # `git switch -d main`, `git checkout -qd main`, `git checkout -dq main`,
+        # `git checkout --detach main --`, `git switch --detach -- main`, and the same
+        # through an alias.
+        #
+        # `restore_shaped` is the whole gate, and it is the property rather than a longer
+        # list of spellings: it holds only when EVERY option present is one charter can
+        # place as restore-only, so an option classed `create` or `detach` fails it, and so
+        # does one charter has never heard of. What is left is a plain attach —
+        # `git checkout main`, `git switch main`, `git checkout -f main`, `git checkout -q
+        # main` — which is exactly what `doctor` recommends, options and all.
+        if restore_shaped and wants and default is not None and wants[0] == default:
+            continue  # the documented remedy — must stay runnable
 
         # Is this `checkout` the RESTORE half of the overload (#461)? Only `checkout` is
         # asked: `git switch` takes branches and nothing else, which is why it exists.
@@ -1401,17 +1450,31 @@ def _plane_root_branch_reason(cmd: str, cwd: str) -> str | None:
                    f"`git checkout -- {wants[0]}` are both allowed.) " if wants else ""))
         else:
             created = _created_branch(opts, classes, wants) if creating else None
+            # `--detach <ref>` is a DETACH and not a switch, however ordinary the ref beside
+            # it looks. Saying "switch to 'main'" for `git checkout --detach main` would be
+            # #461's other half again: a refusal that is right and a sentence that is wrong
+            # about what the command does — and here it would read as a denial of the one
+            # command the last sentence promises is allowed.
             moving = (f"create '{created}'" if created
                       else "create a branch" if creating
-                      else "detach HEAD" if detaching and not wants
+                      else f"detach HEAD at '{wants[0]}'" if detaching and wants
+                      else "detach HEAD" if detaching
                       else f"switch to '{wants[0]}'" if wants else "switch branches")
             opening = f"would {moving} in the PLANE ROOT. "
+        # Name the spelling rather than promising a category. "Returning the root to its
+        # default branch is always allowed" is not true of every command with the default
+        # branch in it — `git checkout --detach main` is refused three lines up — and a
+        # closing sentence that overclaims is how the carve-out came to be read as being
+        # about the operand.
+        back = (f"`git checkout {default}` — putting the root back on its default branch — "
+                f"is always allowed." if default else
+                "Putting the root back on its default branch is always allowed.")
         return (
             f"{opening}The plane root is one working tree every session "
             f"shares — two agents here silently clobber each other's branches, and the "
             f"symptom looks like an unrelated bug. Branch work belongs in a workspace "
             f"clone: `charter workspace create <task>`, then `charter clone <repo>`. "
-            f"Returning the root to its default branch is always allowed.")
+            f"{back}")
     return None
 
 

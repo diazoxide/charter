@@ -72,4 +72,36 @@ where the branch name is inside the option token and the operand list is empty. 
 now, and the denial names the branch it would create rather than falling back to "switch
 branches".
 
+**And the carve-out that keeps the remedy runnable was reading a name, not a command.**
+`doctor` prints *"Put the root back: `git -C <plane> checkout main`"*, so the guard has
+always stood aside when the operand is the plane's default branch. It stood aside for
+`git checkout --detach main` too — which names that branch and leaves HEAD attached to
+nothing at all. `git switch -d main`, `git checkout -qd main`, `git checkout --detach main
+--` and the same through an alias all went the same way, straight past every line of the
+`--detach` handling above. What earns the carve-out now is the command leaving HEAD
+**attached** to the default branch, which is a property of the whole invocation rather than
+of one token in it, and the closing line of the denial names the spelling it promises
+(`git checkout main`) instead of promising a category. In the same sweep: `git switch --
+feature` switched branches and was read as a restore, because `--` introduces paths on a
+`checkout` and `git switch` has no path half for it to introduce.
+
+**The route to the plane root is part of the command.** A relative `git -C` was resolved
+against the directory the *hook process* was started in rather than the shell's, so
+`git -C ../../.. checkout feature` from a workspace clone moved the plane root's HEAD and
+was allowed — verified end to end, "Switched to branch 'feature'" and the root's HEAD
+follows. So did `git -C . checkout feature` typed in the root, and `cd .. && git -C <root>
+checkout feature`. The cwd, a `cd` earlier in the same command and `-C` in every combination
+now name the same repository the shell would name. One route is still open and is filed
+rather than fixed here: `git --git-dir=<plane>/.git checkout <branch>` reaches the root's
+refs and neither plane-root guard follows it —
+[#477](https://github.com/diazoxide/charter/issues/477).
+
+**How the last three of those were found.** Not by reading the code: the corpus that judges
+this guard is now the PRODUCT of its axes — subcommand × option × operand × where the `--`
+goes — rather than a list somebody typed, and each row's expected verdict comes from running
+it against real git and watching HEAD. `--detach` had rows and `main` had rows;
+`--detach main` had none, and neither did `switch --`. Alongside it, a second corpus crosses
+commands with every ROUTE to the root, and a third loads the guard as it stands on `main` and
+requires that nothing it refuses is allowed here.
+
 Nothing to adopt: upgrading is the whole of it.
