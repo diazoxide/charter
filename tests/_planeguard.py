@@ -1,5 +1,6 @@
-"""Suite-wide tripwires: no test may WRITE into the developer's real ``.charter/``, and
-none may READ a setting off the developer's real ``charter.toml``.
+"""Suite-wide tripwires: no test may WRITE into the developer's real ``.charter/``, none
+may READ a setting off the developer's real ``charter.toml``, and none may SPAWN a charter
+that would resolve it.
 
 `PersonaIso` isolates a test that remembers to derive from it. Nothing made the
 *forgetting* visible, so the same defect kept arriving in a new file: the suite wrote
@@ -56,12 +57,30 @@ everything so a malformed `charter.toml` cannot break import, `root.find_root` s
 instead of failing. `unittest` still records a `BaseException` against the test that raised
 it, so the failure keeps its name.
 
-**What this cannot see: a subprocess.** A `tmux run-shell` hook, or any spawned `charter`,
-resolves its own plane from its own environment, so isolating this process does nothing for
-it — the parent must hand the throwaway plane across the boundary with ``$CHARTER_ROOT`` on
-the child's (or the tmux server's) environment, the way `PanelIntegration` and
-`MenuIntegration` in `test_frame_tmux_integration.py` do. This guard is silent about that
-half by construction, and saying so here is the point: it is not a licence to skip the env.
+**The subprocess half, which this used to say it could not see.** A `tmux run-shell` hook,
+or any spawned `charter`, resolves its own plane from its own environment and its own cwd,
+so isolating THIS process does nothing for it — the parent must hand the throwaway plane
+across the boundary with ``$CHARTER_ROOT`` on the child's (or the tmux server's)
+environment, the way `PanelIntegration` and `MenuIntegration` in
+`test_frame_tmux_integration.py` do. That paragraph stood here as a warning for as long as
+it took someone to measure it, and the measurement (#527) was 131 detached
+``charter _version-check`` / ``charter gl-refresh`` children in one run, every one of them
+carrying no ``$CHARTER_ROOT`` and therefore landing on the operator's live plane —
+refreshing its forge state and rewriting its caches, from a suite that had isolated
+everything it could see.
+
+So the warning is now a tripwire: :class:`RealPlaneSpawn`. Before any `subprocess.Popen`
+that launches charter itself, this asks `root.find_root` **the child's** question — with
+the child's environment and the child's cwd — and refuses if the answer is the real plane.
+Asking `find_root` rather than re-deriving the walk is deliberate: the walk is where the
+subtleties live (a linked worktree redirects to the tree it was cut from, a plane inside a
+plane's ``workspaces/`` hops outward), and a guard with its own private copy of that logic
+is a guard that stops agreeing with the thing it guards.
+
+**Charter's own spawners now hand the plane over** (`util.child_env`), so an isolated case
+satisfies this without knowing it exists. What is left for the tripwire is the case that
+was never covered: a test that spawns charter by hand, and a test that never isolated
+`config.ROOT` in the first place.
 """
 
 from __future__ import annotations
@@ -70,8 +89,10 @@ import builtins
 import io
 import os
 import shutil
+import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 #: The state directory of the plane this test PROCESS resolved at import — before any
 #: `setUp` could repoint `charter.config`, so unavoidably the developer's real one.
@@ -298,6 +319,138 @@ def _guard_reads(config) -> None:
             setattr(config, name, _RefusesToBeRead(name, value))
 
 
+class RealPlaneSpawn(BaseException):
+    """A test spawned a charter that would resolve the developer's own control plane."""
+
+
+def _charter_argv(args) -> list[str] | None:
+    """*args* as a list of strings when it launches charter itself, else ``None``.
+
+    Two spellings, because charter is reached two ways and a guard that knew one would be
+    silent about the other: ``[sys.executable, "-P", "-m", "charter", ...]``
+    (`util.self_relaunch_argv`, which every self-relaunch site goes through) and a bare
+    ``charter`` resolved from ``PATH`` (what `hooks/hooks.json` invokes, and what a test
+    driving the installed CLI would write).
+
+    A ``str`` command line -- ``shell=True`` -- is answered ``None`` rather than parsed. No
+    charter spawn site uses one, and a guard that half-parses shell syntax would refuse the
+    wrong calls while still missing the interesting ones; if such a site ever appears, it
+    should stop using a shell rather than teach this to lex.
+    """
+    if args is None or isinstance(args, (str, bytes)):
+        return None
+    try:
+        parts = [os.fsdecode(a) if isinstance(a, (bytes, os.PathLike)) else str(a)
+                 for a in args]
+    except TypeError:
+        return None
+    if not parts:
+        return None
+    if os.path.basename(parts[0]) == "charter":
+        return parts
+    for i in range(len(parts) - 1):
+        if parts[i] == "-m" and parts[i + 1] == "charter":
+            return parts
+    return None
+
+
+def _explain_spawn(parts: list[str], plane) -> str:
+    return (
+        f"REFUSED: spawning charter against the real control plane\n"
+        f"{_current_test()} is about to run `{' '.join(parts)}`, and that child would "
+        f"resolve its plane as {plane} \u2014 the developer's REAL one. It is a separate "
+        f"process: nothing this suite patches in memory reaches it, so it would refresh "
+        f"that plane's forge state, rewrite its caches, and (for `persona _gc`) collect "
+        f"against it. Two ways out. (1) If the test is not about the spawn, stub it \u2014 "
+        f"`mock.patch.object(charter.update, \"maybe_spawn\", lambda: None)`, or patch "
+        f"`subprocess.Popen` where the code under test looks it up. (2) If the test really "
+        f"wants a child, hand it the throwaway plane as $CHARTER_ROOT: "
+        f"`tests._isolation.child_plane_env(self)` returns exactly that environment, and "
+        f"`PanelIntegration` in `test_frame_tmux_integration.py` does the same by hand. "
+        f"charter's own spawners already do this for you (`util.child_env`), so a case "
+        f"whose `config.ROOT` is isolated never gets here.")
+
+
+def _child_plane(kwargs: dict):
+    """The plane the child described by *kwargs* would resolve -- or ``None`` for none.
+
+    `root.find_root` is asked the child's question directly, with the child's environment
+    (``env=None`` means it inherits ours) and the child's cwd. That is what `find_root`'s
+    ``env`` parameter is for: the alternative is a second copy of the walk living here,
+    quietly disagreeing with the real one the day a worktree rule changes.
+
+    When `find_root` raises, the child is not left with nothing: `find_root_or_cwd` -- what
+    `charter.config` actually calls at import -- falls back to the child's own working
+    directory, unwalked. So does this. A `charter init` in an empty temp directory takes
+    exactly that path, and answering ``None`` there would be the guard waving through the
+    one case the fallback makes dangerous: a bad ``$CHARTER_ROOT`` and a cwd of the
+    checkout.
+    """
+    from charter import root as _root
+
+    env = kwargs.get("env")
+    cwd = kwargs.get("cwd")
+    try:
+        start = Path(os.fsdecode(cwd)) if cwd is not None else Path.cwd()
+    except (TypeError, ValueError, OSError):
+        return None
+    try:
+        return _root.find_root(start, env=os.environ if env is None else env)
+    except _root.ControlPlaneNotFound:
+        try:
+            return start.resolve()        # what `find_root_or_cwd` hands `config`
+        except (OSError, RuntimeError):
+            return None
+    except Exception:
+        return None
+
+
+#: Whether :func:`_guard_spawns` has already wrapped ``Popen.__init__``. Separate from
+#: :data:`_REAL` because `install` gives up early on a machine with no resolvable state
+#: directory, and the spawn tripwire is armed before that point -- it keys off
+#: :data:`_REAL_ROOT`, which `_guard_reads` fills in first.
+_SPAWN_GUARDED = False
+
+
+def _guard_spawns() -> None:
+    """Refuse a charter child that would resolve the real plane. Idempotent.
+
+    Wrapped on ``subprocess.Popen.__init__``, the CLASS, rather than on the
+    ``subprocess.Popen`` module attribute. Two reasons, and both are holes the attribute
+    version would leave open: `subprocess.run`, `check_output` and `check_call` construct
+    the class directly, and so does any module that did ``from subprocess import Popen``.
+
+    The other half of that choice is what makes it correct rather than merely thorough: a
+    test that patches the module attribute -- `test_hooks_need_no_async` and
+    `test_self_relaunch_argv` both do, around real `detach_self` calls -- never reaches the
+    class at all, so it is never refused. That is the right answer, because nothing is
+    spawned. This fires on spawns that really happen, which is the only kind that can touch
+    a plane.
+    """
+    global _SPAWN_GUARDED
+    if _SPAWN_GUARDED:
+        return
+    _SPAWN_GUARDED = True
+    original = subprocess.Popen.__init__
+
+    def __init__(self, args=None, *rest, **kw):
+        parts = _charter_argv(args)
+        if parts is not None and _REAL_ROOT:
+            plane = _child_plane(kw)
+            if plane is not None:
+                try:
+                    here = os.path.abspath(str(plane))
+                except (OSError, TypeError, ValueError):
+                    here = None
+                if here is not None and (here in _REAL_ROOT
+                                         or os.path.realpath(here) in _REAL_ROOT):
+                    raise RealPlaneSpawn(_explain_spawn(parts, plane))
+        return original(self, args, *rest, **kw)
+
+    __init__.__module__ = __name__
+    subprocess.Popen.__init__ = __init__
+
+
 def install() -> None:
     """Wrap every write primitive. Idempotent; called once at `tests` package import."""
     global _REAL
@@ -305,6 +458,7 @@ def install() -> None:
         return
     from charter import config
     _guard_reads(config)
+    _guard_spawns()
     try:
         written = os.path.abspath(str(config.STATE_DIR))
         resolved = os.path.realpath(written)

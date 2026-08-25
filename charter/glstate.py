@@ -202,6 +202,15 @@ def maybe_spawn(dirs, workspace: str | None = None) -> None:
     row it is refreshing is the defect; an environment variable was never what stood
     between them.
     """
+    if not config.HAS_CONTROL_PLANE:
+        # A third brake, and the one that is about WHERE rather than how often. Outside a
+        # plane `config.STATE_DIR` is `<cwd>/.charter`, so a spawn here would scatter
+        # charter's caches into whatever directory the render happened to run in — and the
+        # child, having no plane handed to it (`util.child_env` has none to hand), would go
+        # looking for one of its own. That is how a status line rendered for a throwaway
+        # root came to refresh the operator's live plane (#527): from a linked worktree the
+        # child's walk redirects to the main tree. No plane, no background refresh.
+        return
     now = time.time()
     try:
         state = _read_lock()
@@ -242,7 +251,7 @@ def maybe_spawn(dirs, workspace: str | None = None) -> None:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
+            stdin=subprocess.DEVNULL, start_new_session=True, env=util.child_env(),
         )
     except Exception:
         # Spawn never happened — don't start the cooldown, so a transient failure

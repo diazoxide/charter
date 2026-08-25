@@ -32,6 +32,7 @@ import unittest
 from pathlib import Path
 
 from charter import docsrc
+from tests._isolation import child_plane_env
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = REPO_ROOT / "docs"
@@ -107,8 +108,16 @@ class TestDocsCli(unittest.TestCase):
     the part that can silently break an existing caller."""
 
     def _run(self, *args: str) -> subprocess.CompletedProcess:
+        """A real child, pointed at a throwaway plane.
+
+        `cwd=REPO_ROOT` is what `-m` needs to import the tree under test; it is also what
+        used to resolve the developer's own plane, so `charter docs` regenerated that
+        plane's topology from a test that never mentioned it (#527).
+        """
+        _plane, env = child_plane_env(self)
         return subprocess.run([sys.executable, "-m", "charter", "docs", *args],
-                              cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+                              cwd=REPO_ROOT, env=env,
+                              capture_output=True, text=True, timeout=60)
 
     def test_show_prints_the_page(self):
         r = self._run("show", "git-policy")
@@ -134,8 +143,7 @@ class TestDocsCli(unittest.TestCase):
         """`charter docs` regenerated the plane's topology long before it grew
         subcommands, and Makefiles in the wild call it that way. Turning it into a
         group that demands a subcommand would break them at a distance."""
-        r = subprocess.run([sys.executable, "-m", "charter", "docs", "--help"],
-                           cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+        r = self._run("--help")
         self.assertEqual(r.returncode, 0, r.stderr)
         from charter import cli
 

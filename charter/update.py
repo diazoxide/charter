@@ -280,6 +280,8 @@ def maybe_spawn() -> None:
     TTL, and a spawn cooldown that also covers *failed* attempts — otherwise an
     offline machine would fork a doomed child on every single render.
     """
+    if not config.HAS_CONTROL_PLANE:
+        return                # see `glstate.maybe_spawn` — no plane, nowhere to cache
     now = time.time()
     lock = _lock_file()
     try:
@@ -299,7 +301,7 @@ def maybe_spawn() -> None:
         subprocess.Popen(
             util.self_relaunch_argv("_version-check"),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
+            stdin=subprocess.DEVNULL, start_new_session=True, env=util.child_env(),
         )
     except Exception:
         return

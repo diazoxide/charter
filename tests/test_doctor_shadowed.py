@@ -17,6 +17,7 @@ serves. A naive check flags it as shadowing itself, on the one machine most like
 """
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,15 +91,46 @@ class TestCharterDoesNotShadowItself(unittest.TestCase):
         self.assertEqual(hit, {"skills": [], "docs": []})
 
 
+def tracked_skills(repo: Path = REPO_ROOT) -> set[str]:
+    """Every skill this repository SHIPS — read from the index, not from the disk (#532).
+
+    The question is about the repository: which skills does charter ship, and does
+    `SHIPPED_SKILLS` still name them. `skills/*/SKILL.md` on a working copy is whatever
+    the person running the suite happens to have there, and anyone drafting a skill drafts
+    it where skills live — so an untracked `skills/my-draft/SKILL.md` turned this red with
+    a message about a constant being out of sync, when neither adding the draft to the
+    constant nor deleting the draft is the right answer. Same for a `git stash` that left a
+    directory behind, or a copy someone made to diff against.
+
+    The same seam and the same argument as `test_plugin_freshness.tracked_top_level_
+    directories` (#529) and `test_workflows.tracked`: a denylist of local artefacts is a
+    guess at where untracked content lives, and the index is the answer. The property this
+    test was written for survives intact — a skill added without updating the constant
+    still fails on the PR that COMMITS the skill, which is when the decision is due.
+
+    `check=True` on purpose: if the index cannot be read this test has nothing to say, and
+    an empty set would say it vacuously and green.
+    """
+    out = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "-z", "--", "skills/*/SKILL.md"],
+        capture_output=True, check=True, text=True)
+    return {p.split("/")[1] for p in out.stdout.split("\0") if p.count("/") == 2}
+
+
 class TestShippedSkillsStayInSync(unittest.TestCase):
     def test_the_constant_matches_the_shipped_directory(self):
         """The CLI ships in a wheel with no `skills/` — that directory belongs to the
         plugin — so the check carries a constant. Adding a skill without updating it would
         leave the new skill shadowable and unreported, which is this check's own failure
-        mode turned inward."""
-        on_disk = {d.name for d in (REPO_ROOT / "skills").iterdir()
-                   if d.is_dir() and (d / "SKILL.md").is_file()}
-        self.assertEqual(set(doctor.SHIPPED_SKILLS), on_disk)
+        mode turned inward.
+
+        **The equality runs both ways on purpose.** `SHIPPED_SKILLS` naming a skill that no
+        longer exists is as much a defect as a skill missing from it, and `doctor`'s shadow
+        check reports on both. Weakening this to a subset assertion to make a local draft
+        stop turning it red would give the removal half away — and a subset assertion here
+        would be nearly true by construction, which is how #529's first attempt went.
+        """
+        self.assertEqual(set(doctor.SHIPPED_SKILLS), tracked_skills())
 
 
 class TestCharterItselfIsExemptHoweverItWasInstalled(PersonaIso):

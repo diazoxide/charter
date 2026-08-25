@@ -29,7 +29,7 @@ import unittest
 from unittest import mock
 
 from charter import __version__, channel, config, instance, statusline, update
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, child_plane_env, make_plane
 
 
 @contextlib.contextmanager
@@ -325,10 +325,25 @@ class TheBuildSaysWhatItIs(unittest.TestCase):
 
 class VersionAlwaysPrints(unittest.TestCase):
     def test_the_cli_prints_a_version_line(self):
+        """A REAL child, in a THROWAWAY plane.
+
+        The child is a separate process: nothing this suite patches reaches it, and it
+        resolves its own plane. Run bare, it resolved the developer's — and `--version`
+        prints the build label, which on a dev-channel plane says something different, so
+        this case's outcome depended on the operator's own `charter.toml` in a way
+        `_planeguard`'s `RealPlaneRead` cannot see across a fork (#459, #527).
+
+        `PYTHONPATH` because the cwd is no longer the checkout: `-m` would otherwise have
+        nothing to import.
+        """
         import subprocess
         import sys
+        from pathlib import Path
+
+        plane, env = child_plane_env(
+            self, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
         p = subprocess.run([sys.executable, "-m", "charter", "--version"],
-                           capture_output=True, text=True)
+                           cwd=plane, env=env, capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("charter", p.stdout)
         self.assertIn(__version__, p.stdout)
@@ -501,6 +516,7 @@ class TheBackgroundFetchIsWhereTheNetworkLives(PersonaIso):
 
     def setUp(self):
         super().setUp()
+        make_plane(self)      # `maybe_spawn` refuses to fork without one (#527)
         #: Every URL the code under test asked for. RECORDED rather than merely refused:
         #: `_fetch_head` catches `Exception`, so a stub that raised on an unexpected GET
         #: would have the raise swallowed and the test would pass while the call happened.

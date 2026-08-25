@@ -25,7 +25,7 @@ from unittest import mock
 
 from charter import glstate
 
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, make_plane
 
 
 def _fake_popen(pid):
@@ -48,6 +48,10 @@ def _a_definitely_dead_pid() -> int:
 
 
 class RespawnTests(PersonaIso):
+    def setUp(self):
+        super().setUp()
+        make_plane(self)      # `maybe_spawn` refuses to fork without one (#527)
+
     def _dirs(self):
         d = self.tmp / "somerepo"
         d.mkdir(parents=True, exist_ok=True)

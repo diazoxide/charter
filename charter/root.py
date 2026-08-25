@@ -10,6 +10,7 @@ commands simply work.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 #: The file whose presence marks a directory as a control plane.
@@ -28,22 +29,32 @@ def _explain(where: str) -> str:
             f"here, or set ${ENV_VAR} to point at an existing one.")
 
 
-def find_root(start: Path | None = None) -> Path:
+def find_root(start: Path | None = None, env: Mapping[str, str] | None = None) -> Path:
     """The control plane's directory. Raises :class:`ControlPlaneNotFound`.
 
     ``$CHARTER_ROOT`` wins outright when set — and a bad value raises rather than falling
     back to a walk, because silently operating on a *different* control plane than the one
     the user named is worse than failing.
+
+    *env* answers the question for a process that is **not this one**: given THIS
+    environment, standing HERE, which plane would it resolve? Defaults to this process's
+    own, so every existing caller is unchanged. It exists because charter spawns copies of
+    itself (`util.detach_self`, `glstate.maybe_spawn`, `update.maybe_spawn`) and the answer
+    for the child is decided by the environment the parent is about to hand it — which the
+    parent can then check, or correct, *before* the fork. The suite's spawn tripwire
+    (``tests/_planeguard.py``) is the caller that needs it, and asking here rather than
+    re-deriving the walk there is what keeps the two from drifting apart: the walk below is
+    where every subtlety lives (the worktree redirect, the ``workspaces/`` hop outward).
     """
-    env = os.environ.get(ENV_VAR)
-    if env:
-        p = Path(env).expanduser()
+    named = (os.environ if env is None else env).get(ENV_VAR)
+    if named:
+        p = Path(named).expanduser()
         try:
             p = p.resolve()
         except OSError:
-            raise ControlPlaneNotFound(_explain(f"at ${ENV_VAR}={env}")) from None
+            raise ControlPlaneNotFound(_explain(f"at ${ENV_VAR}={named}")) from None
         if not (p / MARKER).is_file():
-            raise ControlPlaneNotFound(_explain(f"at ${ENV_VAR}={env}"))
+            raise ControlPlaneNotFound(_explain(f"at ${ENV_VAR}={named}"))
         return p
 
     cur = (start or Path.cwd()).resolve()

@@ -57,6 +57,13 @@ class ContextGaugeCase(unittest.TestCase):
         config.SESSIONS_DIR = self.tmp / "sessions"
         self.addCleanup(lambda: (setattr(config, "SESSIONS_DIR", self._orig),
                                  shutil.rmtree(self.tmp, ignore_errors=True)))
+        # Never fork a network child from the suite. This case renders against the REAL
+        # plane on purpose, so `_brand`'s background version check would be spawned
+        # against it, and `tests._planeguard.RealPlaneSpawn` refuses that outright (#527).
+        # In `setUp` rather than in the one case that first needed it: three of the cases
+        # below call `render`, and the precaution had been remembered in exactly one.
+        from charter import update
+        self.enterContext(mock.patch.object(update, "maybe_spawn", lambda: None))
 
     def test_shows_context_percentage(self):
         self.assertIn("ctx 37%", _plain(statusline._context_gauge(_payload(pct=37.4))))
@@ -122,10 +129,7 @@ class ContextGaugeCase(unittest.TestCase):
         when the chip column is cropped away. Two of them on one line, told apart only
         by a `%`, and neither reads as anything.
         """
-        from charter import inflight, update
-        spawn = update.maybe_spawn          # never fork a network child from the suite
-        update.maybe_spawn = lambda: None
-        self.addCleanup(lambda: setattr(update, "maybe_spawn", spawn))
+        from charter import inflight
         inflight.start("coder")
         out = statusline.render({"session_id": "t", **_payload(pct=42, read=900, write=100)})
         lines = [re.sub(r"\033\[[0-9;]*m", "", l) for l in out.splitlines() if l.strip()]

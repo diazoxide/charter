@@ -148,10 +148,19 @@ class TheCliDecidesIt(unittest.TestCase):
     def child_env() -> dict:
         """The child's environment: this checkout on the path, and every charter variable
         that could redirect the state directory removed, so the plane under test is the
-        temp one and nothing reaches the developer's own."""
+        temp one and nothing reaches the developer's own.
+
+        ``CHARTER_ROOT`` belongs on that list and was missing from it. Isolation here is by
+        ``cwd`` — each case runs the CLI standing inside its own copied plane — and
+        ``$CHARTER_ROOT`` wins outright over that walk (`root.find_root`). Every charter
+        frame exports it, so on the machine most likely to run these, `setUpClass` ran
+        ``charter init`` against the operator's own control plane. It never showed up
+        because nobody ran the suite from inside a frame with the variable set; the suite's
+        spawn tripwire refuses it now (#527), which is how it was found.
+        """
         env = dict(os.environ)
         env["PYTHONPATH"] = str(REPO_ROOT)
-        for var in ("CHARTER_HOME", "CHARTER_PERSONA", "CHARTER_WORKSPACE",
+        for var in ("CHARTER_ROOT", "CHARTER_HOME", "CHARTER_PERSONA", "CHARTER_WORKSPACE",
                     "CHARTER_WORKTREES", "CHARTER_CONFIG_HOME"):
             env.pop(var, None)
         return env
