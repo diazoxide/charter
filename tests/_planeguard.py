@@ -758,7 +758,12 @@ def _explain_spawn(parts: list[str], plane) -> str:
         f"`tests._isolation.child_plane_env(self)` returns exactly that environment, and "
         f"`PanelIntegration` in `test_frame_tmux_integration.py` does the same by hand. "
         f"charter's own spawners already do this for you (`util.child_env`), so a case "
-        f"whose `config.ROOT` is isolated never gets here.")
+        f"whose `config.ROOT` is isolated never gets here. One child is the exception to "
+        f"(2), and it is the child that imports the `tests` package: `_envguard` scrubs "
+        f"$CHARTER_ROOT at import of that package, BEFORE `charter.config` loads, so the "
+        f"pointer is gone by the time the plane is resolved and only the child's cwd "
+        f"decides. Give that one a cwd inside a throwaway plane, with $PYTHONPATH carrying "
+        f"the tree — `test_no_test_reads_the_operators_shell` does exactly that.")
 
 
 def _child_plane(opts: dict):

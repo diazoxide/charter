@@ -284,8 +284,13 @@ class EverySpellingThatReachesCharter(_FakePlane):
         cwd is what decides. `test_no_test_reads_the_operators_shell` runs from a throwaway
         plane with ``$PYTHONPATH`` for exactly that reason.
         """
-        self.refuse([sys.executable, "-c",
-                     f"open({str(self.canary)!r}, 'w').close()\nimport tests"])
+        msg = self.refuse([sys.executable, "-c",
+                           f"open({str(self.canary)!r}, 'w').close()\nimport tests"])
+        # And the message has to SAY so. A refusal whose stated remedy does not work for
+        # the case it just refused is the shape this round was sent back over: a docstring
+        # pointing at something the code cannot see.
+        self.assertIn("cwd inside a throwaway plane", msg)
+        self.assertIn("PYTHONPATH", msg)
 
     def test_a_shell_string_that_will_not_lex(self):
         """Undecidable, and refusal is the direction that is safe to be wrong in."""
