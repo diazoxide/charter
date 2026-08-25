@@ -13,10 +13,18 @@ and therefore the geometry — see `instance.FRAME_FIELDS`.
 
 from __future__ import annotations
 
+import pathlib
+import tomllib
 import unittest
 from unittest import mock
 
 from charter import instance
+
+#: This repo's own committed `charter.toml` — see
+#: :class:`CharterOwnPlaneDrawsEveryEdgeItShips`. Read off disk rather than through
+#: `config`, which resolves a WORKTREE back to the main tree it was cut from
+#: (`root._plane_of`) and would therefore test the operator's checkout, not this one.
+_COMMITTED = pathlib.Path(__file__).resolve().parents[1] / "charter.toml"
 
 
 class FrameDefaults(unittest.TestCase):
@@ -146,6 +154,40 @@ class FrameDefaults(unittest.TestCase):
         default holds."""
         f = instance.frame_of({"frame": {"history_limit": 999}})
         self.assertEqual(f["history_limit"], 50000)
+
+
+class CharterOwnPlaneDrawsEveryEdgeItShips(unittest.TestCase):
+    """The repo's OWN committed `charter.toml`, read off disk — the one file in this
+    project a slot rename can silently break.
+
+    `slots` is the primitive and an explicit list wins over the default outright, which
+    is the compatibility promise `instance.FRAME_SLOTS` makes to operators. It cuts
+    charter itself too: this repo IS a control plane, and the frame the maintainers run
+    while working on the frame is drawn from this file. A release that adds a slot and
+    leaves this line alone hands every other plane the new edge and takes it away from
+    charter's own, with nothing on screen saying why — which is exactly what #515 did
+    before this test existed. `origin/main` drew the repo table from this file; the first
+    version of the branch that split `repos` out of `bottom` did not.
+
+    Asserted through `instance.frame_of` rather than against the raw TOML list, because
+    the failure is about what charter RESOLVES: a list naming a slot charter no longer
+    has is filtered to nothing here, which reads on screen the same way as a list missing
+    one. And the whole set is required rather than a membership check on today's newest
+    name — the next slot has the same problem and should not need a new test.
+    """
+
+    def test_the_committed_slots_line_names_every_slot_charter_can_draw(self):
+        got = instance.frame_of(tomllib.loads(_COMMITTED.read_text()))["slots"]
+        self.assertEqual(sorted(got), sorted(instance.FRAME_SLOTS), got)
+
+    def test_the_committed_order_is_the_one_the_geometry_wants(self):
+        """The list is the SPLIT order, so it is the geometry (#488/#500): a slot listed
+        later sits higher, and a `repos` listed after `right` is inset by the sidebar's
+        23 columns and needs a 118-column terminal before it draws a table at all. The
+        shipped default is the order charter measured; this file having the same set in a
+        different order would be a frame nobody chose."""
+        got = instance.frame_of(tomllib.loads(_COMMITTED.read_text()))["slots"]
+        self.assertEqual(got, instance.frame_of({})["slots"])
 
 
 class HotkeyIsNotAFreeString(unittest.TestCase):
