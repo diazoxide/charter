@@ -79,7 +79,7 @@ charter's own output as the first.
 **And the charter version moved to the top bar's right-hand end.**
 
 ```
- ⬢ demo*  ◆ steward · ◇ agents forge · reddit · release           charter 0.53.0
+ ⬢ demo*  ◆ steward · ◇ personas forge · reddit · release        charter 0.53.0
 ```
 
 The left of that bar answers *where am I and who am I being*; the version answers *which
@@ -92,6 +92,7 @@ row to degrade.
 
 Nothing to adopt. Upgrading is the whole of it.
 
-One thing to know if you are watching a frame come up: the gather cache is not populated at
-launch, so the todo list — like the repo table beside it — is empty on the very first paint
-and fills in on the first plane-state bump. That is **#512**, and it is not fixed here.
+One thing to know if you are watching a frame come up: a launch deliberately starts with no
+gather cache — a recycled pid must not inherit another frame's repos — and the sidebar's
+first paint falls through to a live gather rather than drawing an empty list. The cache is
+what makes every repaint *after* that one free; it is not what fills the first one.

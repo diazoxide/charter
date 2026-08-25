@@ -1422,6 +1422,40 @@ class TheSidebarListsTheWorkspacesTodos(PersonaIso, unittest.TestCase):
             lines = _plain_lines(self._render(cols=40))
         self.assertIn("- from the cache", lines)
 
+    def test_a_frames_first_paint_lists_the_todos_rather_than_an_empty_column(self):
+        """**The cache makes every repaint after the first one free; it is not what
+        makes the first one right.**
+
+        A launch DISCARDS the gather cache on purpose (`gather.discard` — a recycled pid
+        must not adopt a dead frame's repos), so the very first paint of a new frame
+        reaches this section with no cache file at all. `gather.read` falls through to a
+        live `scan()` exactly there, which is the path that `discard`'s own docstring
+        says deleting the file restores — so the first frame an operator sees carries
+        their todos.
+
+        Written because the round-1 news entry claimed the opposite, and the claim was
+        never executed. It is also the guard against the cheap-looking simplification of
+        `read` — answering `_empty()` on a cold cache rather than scanning — which would
+        make a new frame's first impression a confident "this workspace has no todos".
+        The seeded sibling above pins the other half: with a cache present, the todo
+        directory is never touched at all.
+
+        WHICH workspace that live gather is for is a separate question and a real one —
+        `gather.scan` resolves it from the panel process, which #512 showed reaches none
+        of the rungs that speak for the frame. Filed as **#526** rather than fixed here:
+        the mechanism it wants (`state.workspace_for`) arrives with #525.
+        """
+        from charter import todos, workspace
+        todos.add(workspace.resolve(), "written before the frame ever launched")
+        gather.discard("f-cold")            # what `cmd_launch` runs before it draws
+        with mock.patch.object(gather, "scan", wraps=gather.scan) as scanned:
+            lines = _plain_lines(self._render(cols=50, fid="f-cold"))
+        self.assertIn(f"{statusline._HEAD_PAD}todos 1", lines)
+        self.assertIn("- written before the frame ever launched", lines)
+        # And the cache really was cold: the rows came from the live fallback, not from
+        # a file some earlier assertion had quietly left behind.
+        self.assertTrue(scanned.called)
+
 
 if __name__ == "__main__":
     unittest.main()
