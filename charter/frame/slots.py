@@ -543,10 +543,11 @@ def bottom_rows_wanted(fid: str, *, pane_cols: int) -> int:
 #: of their own — the two-cell marker plus enough of a name to tell two personas apart.
 #:
 #: The badge column is sized from the WIDEST badge on screen, so without a floor one
-#: persona holding three dispatches (`⚡3 2h?` — eleven columns) would take that width off
-#: every name in a 22-column sidebar and leave `▸ ste…` down the whole list. Past this
-#: point the BADGE column is what gives way, and a badge that no longer fits is cut by its
-#: own cell rather than by pushing a name out of the pane.
+#: persona holding three dispatches — ` ✎47 ⚡3 2h?`, twelve columns once `⚡`'s two cells
+#: are counted — would take all twelve off every NAME in a 22-column sidebar, leaving ten
+#: for the marker and the name together (`▫ reddit-o…`). Past this point the BADGE column
+#: is what gives way, and a badge that no longer fits is cut by its own cell rather than
+#: by pushing a name out of the pane.
 _NAME_MIN_W = 12
 
 #: The most rows the sidebar's todo section may occupy — its heading, its items and its
