@@ -26,6 +26,8 @@ own plugin installation.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -44,6 +46,32 @@ def tree(root: Path, files: dict[str, str]) -> Path:
     return root
 
 
+def tracked_top_level_directories(repo: Path = REPO) -> set[str]:
+    """Every top-level directory this repository TRACKS — read from the index, not the disk.
+
+    The question the classification below asks is about the repository: what does charter
+    ship, and does a plugin load it. A directory that is not in the index is not shipped, so
+    it cannot be an answer to that question — it is an artefact of whoever is running the
+    suite. `git ls-files` is the same seam `tests/test_workflows.tracked` uses, and for the
+    same reason: a denylist of local artefacts (`.venv`, `dist`, `.pytest_cache`) is a guess
+    at where untracked content lives, and the index is the answer.
+
+    `check=True` on purpose. If the index cannot be read this test has nothing to say, and
+    saying nothing quietly — an empty set, which classifies vacuously — is the shape of guard
+    that reports green forever.
+
+    **What this does not see**, stated because a guard that overclaims is the defect twice
+    over: a top-level *submodule*. `git ls-files` prints a gitlink as a bare path with no
+    slash, indistinguishable here from a tracked top-level file, so one would be classified
+    as neither. charter has no submodules and `dependencies = []`; adding one at the top
+    level would need `ls-files -s` and a mode-160000 check here.
+    """
+    out = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "-z"],
+        capture_output=True, check=True, text=True)
+    return {p.split("/", 1)[0] for p in out.stdout.split("\0") if p and "/" in p}
+
+
 #: Top-level directories this repo ships that a Claude Code plugin does NOT load.
 #:
 #: The other half of the classification `test_every_top_level_directory_is_classified`
@@ -51,9 +79,14 @@ def tree(root: Path, files: dict[str, str]) -> Path:
 #: live in `<plugin>/agents/`, and this repo's `.claude/agents/` is its OWN project
 #: configuration, which travels into the cache because the marketplace entry is
 #: `"source": "./"` and is not loaded as plugin content.
+#:
+#: **Every name here must be a tracked directory**, and a test holds it to that. `.git` and
+#: `dist` used to be listed, back when the classification enumerated the filesystem; they
+#: are not repo content, and keeping untracked names here is how the list would grow one
+#: developer's machine at a time — `.charter`, `.superpowers`, `.venv`, `.idea` — until it
+#: classified nothing.
 _NOT_PLUGIN_SURFACE = {
-    ".git", ".github", ".claude", "charter", "docs", "tests", "personas", "workspaces",
-    "dist",
+    ".github", ".claude", "charter", "docs", "tests", "personas", "workspaces",
 }
 
 PLUGIN = {
@@ -129,25 +162,89 @@ class TheHashCoversWhatThePluginLoads(PersonaIso):
         """The constant is a whitelist, so a plugin directory missing from it is a whole
         category of drift this module reports as clean.
 
-        **Enumerated from the filesystem, and classified exhaustively.** The first version
-        of this test built its `shipped` set from a hardcoded literal identical to
+        **Enumerated from the index, and classified exhaustively.** The first version of
+        this test built its `shipped` set from a hardcoded literal identical to
         `PLUGIN_SURFACE` and then asserted one was a subset of the other — true by
         construction. It caught a *removal* from the constant and could not catch the
         *addition* its own docstring claimed it caught.
 
-        This asks the repository what directories it has and requires every one of them to
-        be in exactly one of two lists. Add `mcp/` or `commands/` to charter tomorrow and
-        this fails until somebody decides which it is — which is the decision the check
-        needs made, and the only thing a test can usefully force.
+        The second version enumerated `REPO.iterdir()`, which is the developer's filesystem
+        rather than the repository. It passed in CI, in a `git archive` extraction and in a
+        linked worktree, and failed on the one machine charter is actually used from: a real
+        plane has a gitignored `.charter/` (its state) and a gitignored `.superpowers/` (SDD
+        workspaces), and neither is an answer to "does a plugin load it" — they are not
+        shipped at all.
+
+        So this asks the *index* what directories the repository has, and requires every one
+        of them to be in exactly one of two lists. Add `mcp/` or `commands/` to charter
+        tomorrow and this fails on the PR that commits it, until somebody decides which it
+        is — which is the decision the check needs made, and the only thing a test can
+        usefully force. A directory that exists only on one machine is not that decision.
         """
-        tops = {p.name for p in REPO.iterdir()
-                if p.is_dir() and not p.name.startswith("__")}
+        tops = tracked_top_level_directories()
         unclassified = tops - set(plugincache.PLUGIN_SURFACE) - _NOT_PLUGIN_SURFACE
         self.assertEqual(
             unclassified, set(),
             f"new top-level director{'y' if len(unclassified) == 1 else 'ies'} "
             f"{sorted(unclassified)}: does a Claude Code plugin LOAD it? Add it to "
             f"plugincache.PLUGIN_SURFACE, or to _NOT_PLUGIN_SURFACE in this file.")
+
+    def test_the_classification_reads_the_index_and_not_the_working_directory(self):
+        """The property #529 is about, held directly rather than left to CI's clean tree.
+
+        An untracked directory — `.charter/`, `.superpowers/`, `.venv/`, a scratch dir — must
+        not reach the classification, and a tracked one must. Both halves against a real
+        throwaway git repository, because the seam being tested *is* git: asserting against a
+        faked `subprocess.run` would only prove the parsing, and the parsing was never the
+        defect.
+        """
+        repo = self.tmp / "planeish"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "skills" / "SKILL.md").write_text("# x\n")
+        for local in (".charter", ".superpowers", ".venv"):
+            (repo / local).mkdir()
+            (repo / local / "junk.json").write_text("{}\n")
+        # A throwaway index, not the developer's: every GIT_* the ambient environment
+        # carries is dropped, and both config files are pointed at nothing.
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                   HOME=str(self.tmp))
+
+        def run(*args):
+            subprocess.run(["git", "-C", str(repo), *args], check=True,
+                           capture_output=True, text=True, env=env)
+
+        run("init", "-q")
+        run("add", "skills/SKILL.md")
+
+        self.assertEqual(tracked_top_level_directories(repo), {"skills"},
+                         "an untracked directory reached the classification")
+
+        (repo / "commands").mkdir()
+        (repo / "commands" / "go.md").write_text("# go\n")
+        run("add", "commands/go.md")
+        self.assertEqual(tracked_top_level_directories(repo), {"skills", "commands"},
+                         "a committed directory did NOT reach the classification")
+
+    def test_nothing_untracked_can_be_parked_in_the_not_plugin_surface_list(self):
+        """The workaround #529 forbids, refused mechanically.
+
+        The cheap fix for "`.charter/` fails the classification" is to write `.charter` into
+        `_NOT_PLUGIN_SURFACE` — green on that machine, and the list then grows by one name
+        per developer while the check quietly stops classifying anything. Every name in that
+        constant is a directory this repository *ships*, so every name must be in the index.
+
+        `PLUGIN_SURFACE` is deliberately not held to this: it names what a plugin loads *if
+        present*, and `commands/` and `agents/` are two Claude Code surfaces charter does not
+        use yet.
+        """
+        tracked = tracked_top_level_directories()
+        stale = _NOT_PLUGIN_SURFACE - tracked
+        self.assertEqual(
+            stale, set(),
+            f"_NOT_PLUGIN_SURFACE names {sorted(stale)}, which this repository does not "
+            f"track. This list classifies directories charter SHIPS; a local artefact "
+            f"belongs in .gitignore, not here (see #529).")
 
     def test_the_three_directories_the_plugin_loads_today_are_covered(self):
         """The removal half, named concretely so the pair covers both directions."""
