@@ -43,6 +43,7 @@ from unittest import mock
 
 from charter import __version__, commands, config, doctor, hooks
 from charter.harness import opencode, registry
+from tests import _envguard
 from tests._isolation import PersonaIso, run_hook
 
 _RUNTIME = shutil.which("bun") or shutil.which("node")
@@ -57,6 +58,11 @@ class _Realm(unittest.TestCase):
     """A temp ``$XDG_CONFIG_HOME`` with charter's plugin installed into it."""
 
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.home = Path(tempfile.mkdtemp(prefix="charter-realm-")).resolve()
         self.addCleanup(lambda: shutil.rmtree(self.home, True))
         self.enterContext(mock.patch.dict(os.environ,

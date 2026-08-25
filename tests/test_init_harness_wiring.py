@@ -17,10 +17,16 @@ from unittest import mock
 
 from charter import commands, config
 from charter.harness import opencode
+from tests import _envguard
 
 
 class InitWiresBothHarnesses(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.root = Path(tempfile.mkdtemp(prefix="charter-init-h-")).resolve()
         self.addCleanup(lambda: __import__("shutil").rmtree(self.root, True))
         import os

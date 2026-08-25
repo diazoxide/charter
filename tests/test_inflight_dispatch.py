@@ -30,6 +30,7 @@ from unittest import mock
 
 from charter import config, hooks, inflight, tui
 
+from tests import _envguard
 from tests._isolation import PersonaIso
 
 
@@ -208,6 +209,11 @@ class PresumedDead(unittest.TestCase):
 
 class DispatchNudge(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self._td = TemporaryDirectory()
         root = Path(self._td.name)
         # `config.use`, not three named attributes. The nudge these cases drive calls

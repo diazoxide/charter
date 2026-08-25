@@ -17,6 +17,7 @@ from unittest import mock
 
 from charter import commands, config
 from charter.harness import base, registry
+from tests import _envguard
 
 
 class Registry(unittest.TestCase):
@@ -41,6 +42,12 @@ class Registry(unittest.TestCase):
 
 
 class InitIsHarnessAgnostic(unittest.TestCase):
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
     def test_a_newly_registered_harness_is_wired_without_touching_init(self):
         """The Codex test. `cmd_init` must not name a harness; it must ask the registry."""
 

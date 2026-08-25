@@ -24,10 +24,16 @@ from pathlib import Path
 from unittest import mock
 
 from charter.harness import opencode, registry
+from tests import _envguard
 
 
 class WhereItInstalls(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.home = Path(tempfile.mkdtemp(prefix="charter-ocglobal-"))
         self.addCleanup(lambda: shutil.rmtree(self.home, True))
         self.env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.home)})

@@ -32,11 +32,18 @@ command.
   refuses any write into the real `.charter/` and fails the test that tried. The same file
   refuses one kind of *read*: a setting your own `charter.toml` declares — today
   `[update] channel` — because a test that reads it is asserting against a fixture written
-  by whoever happens to run the suite. Derive from `tests._isolation.PersonaIso` and
-  neither ever comes up; a case that runs against the real plane on purpose calls
-  `isolate_state_dir(self)` and `pin_update_channel(self)`; a test that spawns a subprocess
-  has to hand it the throwaway plane as `$CHARTER_ROOT`, which no guard in this process can
-  do for you.
+  by whoever happens to run the suite. `tests/_envguard.py` is the third of the same
+  shape, for the third fixture a test can inherit without noticing: **the shell you
+  launched the suite from.** Charter's own variables are removed from the environment
+  before charter is imported, so the answer is identical inside a live frame and on a CI
+  runner; and a test that then *reads* one of the identity variables a session
+  exports — `$CHARTER_SESSION_ID`, `$CHARTER_WORKSPACE`, `$TMUX` and their kin — without
+  saying what it holds is refused by name. Derive from `tests._isolation.PersonaIso` and
+  none of the three ever comes up; a case that runs against the real plane on purpose calls
+  `isolate_state_dir(self)` and `pin_update_channel(self)`; a plain `TestCase` says it is
+  outside a frame with `_envguard.unset_all()`, or states the value it needs with
+  `mock.patch.dict(os.environ, …)`; a test that spawns a subprocess has to hand it the
+  throwaway plane as `$CHARTER_ROOT`, which no guard in this process can do for you.
 - **Comments explain *why*.** The codebase leans hard on this: a comment that restates the
   code earns nothing, one that records the failure a line prevents is worth several
   paragraphs of docs. Read a few modules before writing your first one.
@@ -91,6 +98,14 @@ describing something that only existed on one machine.
 The others: `seq 1 0` counts *down* on BSD and prints nothing on GNU, so a "zero iterations"
 loop silently ran twice on macOS. And `/tmp` is a symlink to `/private/var/...` on macOS, so
 a path comparison that passes locally fails on Linux unless both sides are `.resolve()`d.
+
+The fourth was charter's own environment, and it ran both ways. Inside a live charter
+frame — where anyone working on charter actually runs the suite — sixteen tests failed that
+fail nowhere else, reading `$CHARTER_SESSION_ID`, `$TMUX` and `$TMUX_PANE` out of the
+developer's terminal. And once, more quietly, both sides of an assertion collapsed to an
+ambient `$CHARTER_WORKSPACE` and the test agreed with itself: a mutation that dies with a
+clean environment survived under the pin. `tests/_envguard.py` closes both directions, but
+it only knows about charter's own names; yours is still yours to pin.
 
 **So: a test pins what it depends on.** Anything that changes behaviour and comes from
 outside the test — git config, `$PATH`, locale, the default shell, an env var, the

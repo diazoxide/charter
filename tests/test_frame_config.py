@@ -19,6 +19,7 @@ import unittest
 from unittest import mock
 
 from charter import instance
+from tests import _envguard
 
 #: This repo's own committed `charter.toml` — see
 #: :class:`CharterOwnPlaneDrawsEveryEdgeItShips`. Read off disk rather than through
@@ -206,6 +207,11 @@ class HotkeyIsNotAFreeString(unittest.TestCase):
     `slots` is set-filtered here, `mouse` is a bool here, the three numbers are
     int-checked here — this was the fifth input arriving through a fifth door.
     """
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
 
     def test_a_newline_bearing_hotkey_degrades_to_the_default(self):
         """The exploit itself, as an assertion. Fails if `_HOTKEY_RE` is deleted or

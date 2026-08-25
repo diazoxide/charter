@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import config, doctor
+from tests import _envguard
 from tests._isolation import pin_update_channel
 
 _ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
@@ -166,6 +167,11 @@ class TestDoctorChecksDeclaredForgesOnly(unittest.TestCase):
     none are declared (a fresh `charter init`, or a legacy single-forge control plane)."""
 
     def setUp(self):
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.root = Path(tempfile.mkdtemp(prefix="edm-doctor-forgecli-"))
         self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
         self._orig = (config.CONFIG_ERROR, config.HAS_CONTROL_PLANE, config.ROOT)

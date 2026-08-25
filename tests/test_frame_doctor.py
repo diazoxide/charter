@@ -15,9 +15,16 @@ from unittest import mock
 
 from charter import config, doctor
 from charter.frame import slots
+from tests import _envguard
 
 
 class FrameRow(unittest.TestCase):
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
     def test_a_present_tmux_reports_its_version(self):
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)):
             r = doctor.check_frame()

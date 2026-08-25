@@ -19,10 +19,16 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands, config, instance
+from tests import _envguard
 
 
 class InitFrontDoorIso(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.root = Path(tempfile.mkdtemp(prefix="charter-fd-")).resolve()
 
     def _init(self, **kw):

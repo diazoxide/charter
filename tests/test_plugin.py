@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from charter import __version__, hooks
+from tests import _envguard
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -292,6 +293,11 @@ class TestSkewReachesTheUser(unittest.TestCase):
     # through `workspaces/` (0.37.0) is the developer's own control plane. A test must not
     # be able to touch it; `config.use` is the seam the rest of the suite already uses.
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         import tempfile
         from charter import config as _config
         self._tmp = tempfile.mkdtemp(prefix="charter-skew-")

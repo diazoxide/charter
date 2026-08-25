@@ -1,0 +1,54 @@
+---
+version: unreleased
+headline: charter's own test suite gives the same answer inside a frame as it does in CI — the shell it was launched from is no longer a fixture
+---
+
+Run charter's suite from inside a live charter frame — which is where anyone working on
+charter actually runs it — and sixteen tests failed that fail nowhere else. Unset four
+variables and the same tree, on the same commit, was green. `$CHARTER_SESSION_ID` held the
+frame's id, `$TMUX` and `$TMUX_PANE` said a tmux was real, and each of those reached a test
+that had never said whether it was inside a frame. A green run meant "green on this
+machine, this minute, in this shell".
+
+**The direction that mattered more was the quiet one.** The same leak had already produced
+a false GREEN: both sides of one assertion collapsed to an ambient `$CHARTER_WORKSPACE`, so
+a mutation that dies with a clean environment survived under the pin. A test that stops
+testing when a variable happens to be set is worse than one that fails, and that one hid a
+real defect through two separate investigations. Behind it sat the measurement: 108 of the
+suite's 168 `patch.dict(os.environ, …)` calls omit `clear=True`, across 38 unrelated files,
+so whatever the developer's shell holds reaches the code under test.
+
+**Fixed as a class, the way the plane guards were.** 0.52.0 refused writes into your real
+`.charter/`; 0.53.0 refused reads of the `[update] channel` your own `charter.toml`
+declares. This is the third of the same shape, for the third fixture a test can inherit
+without noticing:
+
+* Charter's variables are **removed from the suite's environment** before charter is first
+  imported. What is gone cannot leak — not into a bulk `dict(os.environ)`, not into a
+  subprocess that inherits this process, not into any of those 108 call sites. That alone
+  is what makes the answer identical in a frame and on a CI runner.
+* A **targeted read of one of them is refused** while a test runs, unless that test said
+  what it holds. Removal on its own would only silence the red: the test would still be
+  asserting against a value it never chose, and the day its expectation coincides with the
+  ambient one it goes quietly green for the wrong reason. The refusal is what makes the
+  109th instance fail on the pull request that introduces it, on a runner that never had
+  the variable set.
+
+The refusal names the test that made the read, the variable, and both ways out —
+`PersonaIso`, which now declares the whole charter environment unset in one call the way it
+already re-derives every config setting, or stating the value with `patch.dict`. Which
+variables are loud is derived rather than listed: the frame's own identity set, the pane
+variables `charter.session` walks, and the session-id rung below the frame. A variable a
+frame learns to export next is guarded on the commit that teaches it, not on the commit
+that debugs it.
+
+Turning it on found the sixteen and 115 more, in `init`, `doctor`, `statusline`, `root`,
+the workspace lock and the opencode plugin realm — every one of them a test whose answer
+depended on the terminal it ran in. Each now states, once per fixture, that it is outside a
+frame with no session id and no pinned workspace.
+
+The suite now reports the same result in four environments that used to disagree: a fresh
+checkout with the variables cleared, a plane that has been used, inside a live charter
+frame, and with `CHARTER_WORKSPACE` pinned to a name no fixture uses.
+
+None of this reaches you unless you run charter's own test suite. Nothing to adopt.

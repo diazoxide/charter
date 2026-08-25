@@ -16,10 +16,17 @@ import unittest
 from unittest import mock
 
 from charter import config, persona, session, workspace
+from tests import _envguard
 from tests._isolation import PersonaIso
 
 
 class AbsenceIsRepresentable(unittest.TestCase):
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
     def test_current_is_none_when_there_is_no_session(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(session.current())

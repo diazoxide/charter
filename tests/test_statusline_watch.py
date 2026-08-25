@@ -16,6 +16,7 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 from charter import statusline
+from tests import _envguard
 
 
 class Watch(unittest.TestCase):
@@ -70,6 +71,12 @@ class Watch(unittest.TestCase):
 
 
 class WatchIsReachableFromTheCli(unittest.TestCase):
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
     def test_the_flag_routes_to_the_loop(self):
         with mock.patch.object(statusline, "watch", return_value=0) as w:
             self.assertEqual(statusline.main(["--watch"]), 0)

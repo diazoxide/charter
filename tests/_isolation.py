@@ -21,6 +21,8 @@ from unittest import mock
 
 from charter import config, instance, persona, root
 
+from . import _envguard
+
 #: Snapshotted so a test can still hand-patch one value; `config.DERIVED` is the source
 #: of truth for WHICH values exist, so a setting added to `config.derive` is isolated the
 #: day it is added rather than the day someone remembers this file.
@@ -41,6 +43,15 @@ class PersonaIso(unittest.TestCase):
         self.enterContext(redirect_stdout(io.StringIO()))
         self.enterContext(redirect_stderr(io.StringIO()))
         self.tmp = Path(tempfile.mkdtemp(prefix="edm-test-"))
+
+        # The environment, on the same terms as the plane below: ONE call, and the guard
+        # is the only thing that knows WHICH names charter reads out of the shell. This
+        # says "no session id, not inside a frame, not inside a tmux" — the answer CI
+        # gives, and the one every assertion here was written against. A test that needs
+        # a different answer states it with `patch.dict(os.environ, …)`, which wins.
+        # Without this, `$CHARTER_SESSION_ID` from the operator's own frame reached
+        # sixteen tests and failed them (#519, #521, #528).
+        _envguard.unset_all()
 
         # ONE call. This used to re-implement all twenty-five derivations line for line,
         # and four of them were missing — so the suite wrote fixture data into the
