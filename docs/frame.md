@@ -148,9 +148,10 @@ when the harness exits, charter closes the window, tmux puts you back where you 
 Charter is a guest there, and behaves like one — it writes **nothing** of yours. Not a
 server option, not a session option, not a key binding. What it does write is scoped to the
 window it opened and the panes it created inside that window: those keep their dead panes so
-charter can read an exit code and bring a dead panel back. Your other windows are not
-touched by it, and the setting goes when the window does. That boundary has costs, and they
-are the honest price of the sentence above:
+charter can read an exit code and bring a dead panel back, and that window draws its pane
+borders charter's way rather than yours. Your other windows are not touched by it, and the
+settings go when the window does. That boundary has costs, and they are the honest price of
+the sentence above:
 
 - **Your scrollback limit and your mouse setting apply, not charter's.** `history-limit`
   and `mouse` are session options in tmux; setting them for the frame would set them for
@@ -162,6 +163,16 @@ are the honest price of the sentence above:
   entry is "Detach" and your own prefix key already does that better. The bottom panel
   drops its hotkey hint to match rather than advertising a key that does nothing.
 - **Your status bar stays.** The frame gets the window, not the screen.
+- **Your pane-border styling does not apply inside the frame's window.** Charter pins all
+  five of the options tmux draws a border from — both border styles, plus
+  `pane-border-lines`, `pane-border-indicators` and `pane-border-status` — so every rule in
+  the frame is one colour and the frame looks the same in your tmux as in charter's own.
+  This is the one place charter overrides a preference of yours rather than deferring to
+  it, and the reason is that two of those options make one rule differ from its neighbour:
+  the active-pane colour and the arrow indicators mark some borders and not others, and
+  `pane-border-status top` writes your hostname into every rule and takes a row the
+  frame's height arithmetic never budgeted for. Window-scoped, so your own windows keep
+  your own values.
 - **The harness inherits your tmux SERVER's environment, not your current shell's.**
   Charter states its own five identity variables and `$PATH` on the pane it creates, and
   nothing else. Anything you exported in the shell you typed `charter claude` in — a key

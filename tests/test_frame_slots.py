@@ -123,6 +123,65 @@ class Render(PersonaIso, unittest.TestCase):
         self.assertIn("sideways", out)
 
 
+class NoPanelDrawsItsOwnChrome(PersonaIso, unittest.TestCase):
+    """tmux borders the pane; the panel fills it. #514's second candidate cause.
+
+    A panel that drew its own box inside a pane tmux is already bordering gives a DOUBLE
+    line by construction, and the two can never agree on colour — one comes from
+    `commands_frame._CHROME`, the other from whatever the renderer chose. `statusline
+    ._boxed` is the one thing in charter that draws such a box (`┌─┐│└┘` around its whole
+    output), and inside a frame the status line it belongs to is suppressed outright
+    (`statusline.a_frame_owns_this_surface`, ADR 0019) — so the frame is clean today, and
+    this is what keeps it clean when a renderer next reaches for a helper.
+
+    **Asked as "is this line ENCLOSED", never as "does it contain a box character".**
+    Panels legitimately draw box-drawing glyphs: `statusline._TREE_MID`/`_TREE_END`/
+    `_TREE_WT` are `├─ `, `└─ ` and `╰─ `, and the repo table is made of them. What
+    `_boxed` does and a tree marker never does is put a glyph hard against BOTH edges of
+    the same line. That is the property; the glyph is only a spelling.
+    """
+
+    #: `_boxed`'s own left and right edges — the top/bottom/rule rows (`┌ ┐`, `└ ┘`,
+    #: `├ ┤`) and the body rows (`│ … │`) it wraps every line in.
+    _LEFT = "┌│└├"
+    _RIGHT = "┐│┘┤"
+
+    def test_no_slot_returns_a_line_boxed_at_both_edges(self):
+        for slot in slots.SLOTS:
+            out = slots.render(slot, "f-1")
+            for line in out.splitlines():
+                bare = tui.strip_ansi(line).rstrip()
+                if not bare:
+                    continue
+                with self.subTest(slot=slot, line=bare[:40]):
+                    self.assertFalse(
+                        bare[0] in self._LEFT and bare[-1] in self._RIGHT,
+                        f"{slot} drew its own box inside a pane tmux already "
+                        f"borders — a double rule, in two colours: {bare!r}")
+
+    def test_the_check_would_catch_the_box_the_status_line_draws(self):
+        """The control this file cannot do without: every assertion above is a NEGATIVE,
+        and a negative passes just as well when the check is broken as when the code is
+        right. `statusline._boxed` is the exact thing being excluded, so it is what the
+        check is proved against — using the real function, not a hand-typed imitation of
+        its output."""
+        boxed = statusline._boxed("hello\nworld", 40).splitlines()
+        self.assertTrue(boxed, "`_boxed` drew nothing to check against")
+        for line in boxed:
+            bare = tui.strip_ansi(line).rstrip()
+            self.assertTrue(bare[0] in self._LEFT and bare[-1] in self._RIGHT,
+                            f"the enclosure check does not recognise `_boxed`: {bare!r}")
+
+    def test_a_tree_marker_is_not_mistaken_for_a_box(self):
+        """The other control. `├─ ` opens a repo row and `╰─ ` opens a worktree's, so a
+        check that merely looked for box characters would condemn the repo table — which
+        is the panel's whole content."""
+        for marker in (statusline._TREE_MID, statusline._TREE_END, statusline._TREE_WT):
+            bare = f"{marker}charter".rstrip()
+            self.assertFalse(bare[0] in self._LEFT and bare[-1] in self._RIGHT,
+                             f"a tree row reads as a box: {bare!r}")
+
+
 class Unimplemented(unittest.TestCase):
     """Which configured slots charter sizes but cannot draw — asked in one place because
     three callers need the same answer and must not drift: `cmd_launch` (to skip

@@ -342,6 +342,116 @@ class Conf(unittest.TestCase):
         self.assertIn("bind -n M-m run-shell", text)
 
 
+class Chrome(unittest.TestCase):
+    """The frame's own pane-border settings (#514) — the builder alone; the launch paths
+    that issue them are pinned in `Launch` and `LaunchInsideTmux` below, and what tmux
+    actually DRAWS from them is in `tests/test_frame_tmux_integration.py`.
+
+    The defect these close is not "the border was the wrong colour" — it is that charter
+    never gave tmux an answer, so tmux used two of its own: `pane-active-border-style`
+    ships `fg=green` and `pane-border-style` ships `default`, and a rule that runs past
+    the active pane's corner changes colour in the middle of the line. Every assertion
+    here is therefore about SAMENESS and SCOPE, never about which shade charter picked.
+    """
+
+    def _argvs(self, **kw):
+        """The real builder, with the arguments a launch would hand it."""
+        return commands_frame._chrome_argvs(
+            **{"socket": "charter", "harness_pane": "%7", **kw})
+
+    def test_both_border_styles_are_given_the_same_answer(self):
+        """#514 itself. Setting one and leaving the other is what makes a rule change
+        colour halfway along it — so the property is that the two AGREE, which is a
+        different (and stronger) statement than either of them equalling a constant this
+        test could just as easily read out of the module it is testing."""
+        styles = {cmd[-2]: cmd[-1] for cmd in self._argvs()
+                  if cmd[-2].endswith("border-style")}
+        self.assertEqual(set(styles), {"pane-border-style", "pane-active-border-style"},
+                         f"one of the two border styles is not set at all: {styles}")
+        self.assertEqual(len(set(styles.values())), 1,
+                         f"the active and inactive borders disagree: {styles}")
+
+    def test_the_active_border_is_not_left_at_tmuxs_own_green(self):
+        """The companion the test above cannot make on its own: two styles that agree
+        would still satisfy it if both were set to tmux's own `fg=green` default, which
+        is the colour the operator's screenshot is OF. Charter's chrome is one shade of
+        the terminal's own palette, never a hue charter imposes."""
+        styles = [cmd[-1] for cmd in self._argvs()
+                  if cmd[-2].endswith("border-style")]
+        for style in styles:
+            self.assertNotIn("green", style, f"tmux's own default colour: {style}")
+            self.assertIn("fg=default", style,
+                          f"the border names a colour rather than the terminal's: {style}")
+
+    def test_every_setting_is_window_scoped_to_charters_own_window(self):
+        """`-w -t <a pane id>` resolves to that pane's window — charter's own on either
+        server. The scope IS the boundary on the operator's server: a pane border is a
+        window option, so `-g` here would restyle every window they have open, and the
+        operator's own `.tmux.conf` would be overwritten by charter's taste in chrome."""
+        for cmd in self._argvs():
+            self.assertIn("-w", cmd, cmd)
+            self.assertEqual(cmd[cmd.index("-t") + 1], "%7", cmd)
+            self.assertEqual(cmd[cmd.index("set-option") + 1], "-w", cmd)
+            for scope in ("-g", "-s", "-p"):
+                self.assertNotIn(scope, cmd, f"{scope} reaches past charter's window: {cmd}")
+
+    def test_the_harness_pane_is_named_rather_than_a_hardcoded_index(self):
+        """The same rule `layout.py`'s docstring measures for every split: tmux renumbers
+        pane INDICES on every split, so a `session:0.0` here would name whichever pane
+        happened to land at that index. The pane id the launcher read off tmux's own
+        stdout is what gets named."""
+        for cmd in self._argvs(harness_pane="%42"):
+            self.assertEqual(cmd[cmd.index("-t") + 1], "%42", cmd)
+            self.assertNotIn("0.0", " ".join(cmd))
+
+    def test_the_operators_socket_is_reached_by_path_and_never_by_name(self):
+        """`tmuxctl.server_argv` is the one place that knows `-L` from `-S`. Hand-built
+        `["tmux", "-L", socket, ...]` was #408's own defect at the arming end: handed the
+        operator's socket PATH it aims at a server NAMED by that path, which does not
+        exist — and a chrome setting that lands on a server nobody is looking at is the
+        quietest possible way for this fix to do nothing."""
+        for cmd in self._argvs(socket="/private/tmp/tmux-502/default"):
+            self.assertEqual(cmd[:3], ["tmux", "-S", "/private/tmp/tmux-502/default"])
+            self.assertNotIn("-L", cmd)
+        for cmd in self._argvs(socket="charter"):
+            self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+
+    def test_each_setting_is_a_clean_argv_never_a_joined_string(self):
+        """`layout.py`'s never-join-argv rule, which this module is a second citizen of:
+        one option, one value, each its own element, nothing tmux re-parses."""
+        for cmd in self._argvs():
+            self.assertTrue(all(isinstance(a, str) for a in cmd), cmd)
+            self.assertEqual(cmd[3:7], ["set-option", "-w", "-t", "%7"], cmd)
+            self.assertEqual(len(cmd), 9,
+                             f"not `tmux -L X set-option -w -t %7 <opt> <val>`: {cmd}")
+            for a in cmd:
+                self.assertNotIn(";", a, cmd)
+                self.assertNotIn(" ", a, cmd)
+
+    def test_no_option_is_set_twice_with_two_different_answers(self):
+        """Last write wins in tmux, so a duplicated name with a different value would
+        make the frame's chrome depend on the order this list happens to be in."""
+        names = [cmd[-2] for cmd in self._argvs()]
+        self.assertEqual(len(names), len(set(names)), f"an option is set twice: {names}")
+
+    def test_the_three_inherited_border_settings_are_pinned_too(self):
+        """Colour is not the only thing an operator's own `.tmux.conf` hands charter's
+        window. Measured on a real 3.7c with a hostile config: `pane-border-indicators
+        arrows` marks the ACTIVE pane's borders and no others (one rule with a glyph, its
+        neighbour without); `pane-border-lines double` redraws every rule in a different
+        weight, and `number` writes pane numbers into them; and `pane-border-status top`
+        turns every border into a title bar carrying the machine's hostname AND adds a
+        border row above the topmost pane — a row `layout._BORDER_ROWS` never budgeted.
+
+        Named here, and derived from tmux's own option table in
+        `tests/test_frame_tmux_integration.py`, so a border option tmux grows later is
+        caught by the second even though this one names today's."""
+        pinned = {cmd[-2]: cmd[-1] for cmd in self._argvs()}
+        self.assertEqual(pinned.get("pane-border-indicators"), "off")
+        self.assertEqual(pinned.get("pane-border-lines"), "single")
+        self.assertEqual(pinned.get("pane-border-status"), "off")
+
+
 class PaneDiedHooks(unittest.TestCase):
     """The exit-status hook is now TWO separate tmux commands, not one — see
     `commands_frame.py`'s module docstring ("Teardown is its own hook") for why a
@@ -1275,7 +1385,7 @@ class _FakeTmux:
                 panel_pane_ids=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
-                kill_rc=0, arm_rc=0, resize_hook_rc=0, capture_rc=0,
+                kill_rc=0, arm_rc=0, chrome_rc=0, resize_hook_rc=0, capture_rc=0,
                 respawn_hook_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
@@ -1301,6 +1411,7 @@ class _FakeTmux:
         self.dm_rc = dm_rc
         self.kill_rc = kill_rc
         self.arm_rc = arm_rc
+        self.chrome_rc = chrome_rc
         self.resize_hook_rc = resize_hook_rc
         self.capture_rc = capture_rc
         self.respawn_hook_rc = respawn_hook_rc
@@ -1333,6 +1444,10 @@ class _FakeTmux:
             # file, never as a bare tmux argv command).
             return subprocess.CompletedProcess(cmd, self.arm_rc, stdout="",
                                                stderr="" if self.arm_rc == 0 else "cannot set")
+        if _is_chrome(cmd):
+            return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
+                                               stderr="" if self.chrome_rc == 0
+                                               else "invalid option")
         if "set-environment" in cmd:
             return subprocess.CompletedProcess(cmd, self.env_set_rc, stdout="",
                                                stderr="" if self.env_set_rc == 0 else "bad session")
@@ -1390,6 +1505,29 @@ class _FakeTmux:
                 live = {self.fid} if self.still_live else set()
             return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
         raise AssertionError(f"unexpected tmux command in test: {cmd}")
+
+
+def _is_chrome(cmd: list[str]) -> bool:
+    """Is *cmd* one of the frame's own pane-border settings (#514)?
+
+    Matched by what tmux itself calls the family — a `set-option` naming an option whose
+    name begins `pane-border`/`pane-active-border` — rather than by the exact five names
+    `commands_frame._CHROME` happens to hold today, so a sixth border option added there
+    tomorrow is answered by these fakes instead of raising "unexpected tmux command" in
+    forty unrelated tests. The tests that are ABOUT the chrome read the real constant.
+    """
+    return "set-option" in cmd and any(
+        a.startswith(("pane-border", "pane-active-border")) for a in cmd)
+
+
+def _chrome_values(calls: list[list[str]]) -> dict[str, str]:
+    """`{option: value}` for every chrome setting in *calls* — last write wins, exactly
+    as tmux itself resolves them."""
+    out: dict[str, str] = {}
+    for cmd in calls:
+        if _is_chrome(cmd):
+            out[cmd[-2]] = cmd[-1]
+    return out
 
 
 def _arms_remain_on_exit(cmd: list[str], scope: str) -> bool:
@@ -1838,6 +1976,33 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(armed[0][armed[0].index("-t") + 1], fake.pane_id,
                          "the frame's window was named by something other than the pane "
                          "id tmux reported for this launch")
+
+    def test_the_frame_styles_its_own_rules_on_charters_private_server(self):
+        """#514, on the path that reproduced it. Charter's private server runs at tmux's
+        own defaults — `pane-active-border-style fg=green` beside `pane-border-style
+        default` — so a frame that sets neither draws a rule that changes colour at the
+        active pane's corner. Every setting `_CHROME` names must actually reach tmux,
+        and must name the pane id THIS launch read off `new-session`.
+
+        Asserted against the whole of `commands_frame._CHROME` rather than a copy of it:
+        the risk this guards is an option being added to the constant and never issued,
+        which a hand-written list here would not notice."""
+        fake = _FakeTmux(exit_code=0)
+        self.assertEqual(_launch(fake), 0)
+        self.assertEqual(_chrome_values(fake.calls), dict(commands_frame._CHROME))
+        for cmd in [c for c in fake.calls if _is_chrome(c)]:
+            self.assertEqual(cmd[cmd.index("-t") + 1], fake.pane_id, cmd)
+            self.assertNotIn("-g", cmd, cmd)
+
+    def test_a_chrome_setting_tmux_refuses_is_reported_but_not_fatal(self):
+        """A frame whose borders kept tmux's own colours is a frame that looks wrong, not
+        one that failed — the same rule the splits themselves follow. An old tmux that
+        does not know one of these option names must not cost the operator their
+        session."""
+        fake = _FakeTmux(exit_code=0, chrome_rc=1)
+        with mock.patch("charter.util.err") as err:
+            self.assertEqual(_launch(fake), 0)
+        self.assertTrue(err.called, "a refused chrome setting was swallowed silently")
 
     def test_a_still_live_session_after_attach_is_a_detach_not_a_silent_zero(self):
         """The spec's own words: "Detach is allowed and prints how to reattach...
@@ -3536,7 +3701,7 @@ class _FakeOperatorTmux:
     def __init__(self, *, window_id="@3", pane_id="%7", polls_alive=1, exit_code=0,
                  pane_vanishes=False, window_size=(200, 50),
                  pre_existing_windows=("zsh",), list_windows_rc=0,
-                 new_window_rc=0, arm_rc=0, respawn_rc=0, panel_rc=0,
+                 new_window_rc=0, arm_rc=0, chrome_rc=0, respawn_rc=0, panel_rc=0,
                  panel_pane_ids=None, resize_hook_rc=0, select_rc=0, kill_rc=0,
                  pane_capture="", capture_rc=0):
         self.window_id = window_id
@@ -3555,6 +3720,7 @@ class _FakeOperatorTmux:
         self.list_windows_rc = list_windows_rc
         self.new_window_rc = new_window_rc
         self.arm_rc = arm_rc
+        self.chrome_rc = chrome_rc
         self.respawn_rc = respawn_rc
         self.panel_rc = panel_rc
         self.panel_pane_ids = panel_pane_ids or {}
@@ -3588,6 +3754,10 @@ class _FakeOperatorTmux:
         if "remain-on-exit" in cmd:
             return subprocess.CompletedProcess(cmd, self.arm_rc, stdout="",
                                                stderr="" if self.arm_rc == 0 else "cannot set")
+        if _is_chrome(cmd):
+            return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
+                                               stderr="" if self.chrome_rc == 0
+                                               else "invalid option")
         if "respawn-pane" in cmd:
             self.respawn_env = {a.split("=", 1)[0]: a.split("=", 1)[1]
                                 for i, a in enumerate(cmd)
@@ -3758,6 +3928,39 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertLess(armed[0], splits[0],
                         f"the first panel was split (call {splits[0]}) before its window "
                         f"was armed to keep it (call {armed[0]})")
+
+    def test_the_frame_styles_its_own_rules_on_the_operators_server_too(self):
+        """#514's second half, and the half the issue says charter's assumptions do not
+        reach: here the borders are drawn from the OPERATOR'S `.tmux.conf`, not from
+        tmux's defaults, so charter inherits whatever they chose — a `pane-border-status
+        top` that writes their hostname into every rule, a `pane-border-lines double`,
+        an active-border colour that has nothing to do with the frame.
+
+        The same settings as the private-server path, from the same constant, through
+        the same `_split_panels` funnel — which is the fix. Two call sites with two
+        answers is the shape that produced a two-coloured rule in the first place."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        self.assertEqual(_launch_inside(fake), 0)
+        self.assertEqual(_chrome_values(fake.calls), dict(commands_frame._CHROME))
+
+    def test_the_chrome_here_is_window_scoped_and_reaches_no_window_of_theirs(self):
+        """The boundary, stated where it costs something. Every option in `_CHROME` is a
+        WINDOW option, so `-g` would restyle every window the operator has open — and a
+        pane-scoped `-p` would style nothing at all, because a border belongs to the
+        window rather than to a pane. `-w -t <the harness pane>` resolves to charter's
+        own window and no other (measured on 3.7c; see `_chrome_argvs`)."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        _launch_inside(fake)
+        chrome = [c for c in fake.calls if _is_chrome(c)]
+        self.assertTrue(chrome, "no chrome was set at all, so this test measured nothing")
+        for cmd in chrome:
+            self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET], cmd)
+            self.assertEqual(cmd[cmd.index("set-option") + 1], "-w", cmd)
+            self.assertEqual(cmd[cmd.index("-t") + 1], "%7",
+                             "the window was named through a pane that is not the "
+                             f"harness's: {cmd}")
+            self.assertNotIn("-g", cmd, cmd)
+            self.assertNotIn("-p", cmd, cmd)
 
     def test_nothing_of_the_operators_is_written(self):
         """Their config untouched, in the spec's own words. Every one of these would

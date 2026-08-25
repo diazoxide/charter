@@ -1321,6 +1321,87 @@ def _remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
                                "remain-on-exit", "on")
 
 
+#: The style every rule in the frame is drawn in — both borders, on both servers.
+#:
+#: `dim` over the terminal's own default foreground, which is `statusline._boxed`'s own
+#: `\033[2m` said in tmux's style language: charter's chrome is one shade of the
+#: operator's own palette everywhere it is drawn, never a colour charter picked out of
+#: the 256 and imposed on a theme it cannot see. A terminal too old to honour SGR 2
+#: renders both borders in the plain default instead, which is still ONE colour — the
+#: property here is sameness, and it survives the attribute being dropped.
+_CHROME_STYLE = "fg=default,dim"
+
+#: Every window option tmux consults to draw a pane border, pinned to charter's own
+#: answer. #514: the frame's rules came out in two colours, and neither of them was
+#: charter's choice — tmux's own `pane-active-border-style` default is `fg=green` while
+#: `pane-border-style` is `default`, so a rule running past the active pane's corner
+#: changed colour mid-line (measured on 3.7c: `\033[32m` for the 77 cells over the
+#: harness, `\033[39m` for the 22 over the sidebar, in one horizontal rule).
+#:
+#: **Both styles, and that is the whole first half of the fix**: setting one leaves the
+#: other at tmux's default, which is how the two came to disagree in the first place.
+#:
+#: The other three are the same defect wearing different options, and they bite on the
+#: OPERATOR'S server where their own `.tmux.conf` is what charter would otherwise
+#: inherit (measured, with a hostile config on a real 3.7c): `pane-border-indicators
+#: arrows` puts `↑`/`←` glyphs on the active pane's borders and no others, so one rule
+#: carries a glyph its neighbour does not; `pane-border-lines double`/`heavy`/`number`
+#: redraws every rule in a different weight (`number` writes pane NUMBERS into them);
+#: and `pane-border-status top` is the worst of the three — it turns every border into a
+#: title bar carrying `#{pane_title}` (the machine's hostname, by default) AND adds a
+#: border row above the topmost pane, a row `layout._BORDER_ROWS` never budgeted for.
+#:
+#: `pane-border-format` is deliberately NOT here: it is inert while `pane-border-status`
+#: is `off`, and pinning a format nothing renders would be pinning a spelling rather than
+#: the property.
+_CHROME: tuple[tuple[str, str], ...] = (
+    ("pane-border-style", _CHROME_STYLE),
+    ("pane-active-border-style", _CHROME_STYLE),
+    ("pane-border-indicators", "off"),
+    ("pane-border-lines", "single"),
+    ("pane-border-status", "off"),
+)
+
+
+def _chrome_argvs(*, socket: str, harness_pane: str) -> list[list[str]]:
+    """`set-option -w`: charter's own answer for every option tmux draws a border from.
+
+    **Charter owns the frame's chrome, and tmux draws all of it.** #514 named two
+    candidate causes — tmux's own two-colour default, and a panel drawing its own box
+    inside a pane tmux is already bordering. Only the first is real: no frame renderer
+    draws a box, because `statusline._boxed` is the only thing in charter that does and
+    `statusline.a_frame_owns_this_surface` suppresses the whole status line inside a
+    frame (ADR 0019). So the fix is not to make a second drawer stop; it is to stop
+    tmux drawing charter's chrome from an answer charter never gave.
+
+    **WINDOW-scoped, targeting the harness pane, exactly as `_panel_remain_on_exit_argv`
+    is** — `-w -t <a pane id>` resolves to that pane's window, which is charter's own on
+    either server. Measured on 3.7c with a hostile global config in place: after this
+    runs, charter's window reads its own five values back and the operator's own windows
+    still resolve to theirs. Every one of these is a window option, so there is no
+    session- or server-scoped form that could reach past charter's window even by
+    mistake, and `-g` never appears here for the reason `_remain_on_exit_argv`'s
+    docstring gives.
+
+    **One place, both servers, and that is the point rather than a convenience.** The
+    defect this closes is chrome styled in two places that could never agree; a fix that
+    put the private server's answer in `conf_text` (which `_launch_in_operator_tmux` must
+    never `source-file`) and the operator server's answer here would rebuild exactly that
+    shape one layer down. `_split_panels` is the one funnel every panel pane charter
+    creates comes out of — both launch paths and every density change — which is why
+    `remain-on-exit` is already armed there, and it is where these go too.
+
+    Five `set-option` calls rather than one config file, and the cost is measured: 22.2ms
+    per launch on this machine (ten runs against a real 3.7c), alongside the roughly
+    fifteen tmux calls a launch already makes. Nothing here runs on a panel's repaint —
+    the idle tick this must not touch is `panel.py`'s one `stat`, and these are issued at
+    launch and at a density change, never per paint.
+    """
+    return [tmuxctl.server_argv(socket, "set-option", "-w", "-t", harness_pane, name,
+                                value)
+            for name, value in _CHROME]
+
+
 def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`set-option -w`: keep dead panes in CHARTER'S OWN WINDOW, and in no other.
 
@@ -1387,15 +1468,25 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[
     every window on their server to reach a redundant menu is a worse trade than no key
     — `frame/slots.py` drops the hotkey hint from the bottom panel to match.
 
-    Three things that ARE written are charter's own and reach nothing of theirs, because
+    Four things that ARE written are charter's own and reach nothing of theirs, because
     every one of them is scoped to a pane charter created or to the window charter
     created: `remain-on-exit` on the harness pane (`_remain_on_exit_argv`, PANE-scoped);
     `remain-on-exit` on the frame's own window, so a dead PANEL stays long enough for its
     hook to run (`_panel_remain_on_exit_argv`, WINDOW-scoped — measured to leave the
-    operator's own windows at their own default); and each panel pane's own `pane-died`
+    operator's own windows at their own default); each panel pane's own `pane-died`
     respawn hook (`_arm_panel_respawn`, PANE-scoped, #408 — it refused here until the
     hook could name this server rather than charter's, and then never fired here until
-    the window kept the corpse it has to fire from).
+    the window kept the corpse it has to fire from); and the frame's own pane-border
+    chrome (`_chrome_argvs`, WINDOW-scoped, #514).
+
+    **That fourth one is here BECAUSE this is somebody else's server, not in spite of
+    it.** On charter's private server the borders came out in tmux's own two default
+    colours; here they come out in whatever the operator's `.tmux.conf` says, which
+    measurably includes a `pane-border-status top` that writes their hostname into every
+    rule and costs the frame a row. Charter's window is charter's to draw, and pinning
+    five window options on it is the same WINDOW-scoped move `_panel_remain_on_exit_argv`
+    already makes — measured the same way, and leaving their own windows at their own
+    values.
 
     **The harness's exit code travels without hooks here, and that is a real
     difference.** The private-server path needs `pane-died[0]`/`pane-died[1]` because it
@@ -1632,6 +1723,12 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     reach panels through this function; arming at the call sites instead is what left the
     operator's server covered on one of two.
 
+    **The frame's own chrome is armed at the same point, for that same reason** (#514,
+    `_chrome_argvs`). A pane border belongs to the window, not to the pane that was just
+    split off, so every rule in the frame is drawn from one set of window options — and
+    the only way for the two servers to agree about them is for one call site to set them
+    on both.
+
     Reported but not fatal, like the splits themselves: a frame whose panels cannot be
     respawned is still a frame, and the harness pane's own `remain-on-exit` was armed
     separately and earlier (`_remain_on_exit_argv`), so the exit code does not ride on
@@ -1640,6 +1737,14 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     tmuxctl.run("keeping the frame's own dead panes long enough to bring them back",
                 _panel_remain_on_exit_argv(socket=socket, harness_pane=harness_pane),
                 env=env)
+    # And the chrome those panes will be bordered with, armed at the same moment and for
+    # the same reason: this is the one funnel both launch paths and every density change
+    # reach panels through, so a rule cannot come out styled one way on charter's own
+    # server and another way on the operator's (#514, `_chrome_argvs`). Reported but not
+    # fatal, like the splits themselves — a frame whose borders kept tmux's own colours
+    # is a frame that looks wrong, not one that fails.
+    for chrome in _chrome_argvs(socket=socket, harness_pane=harness_pane):
+        tmuxctl.run("styling the frame's own rules", chrome, env=env)
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
                                     harness_pane=harness_pane, env=pane_env,
                                     sizes=sizes)

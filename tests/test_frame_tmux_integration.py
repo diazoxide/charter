@@ -55,8 +55,10 @@ from __future__ import annotations
 
 import os
 import pty
+import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -3720,6 +3722,367 @@ class ASecondFrameOnTheSharedServer(_TmuxServerFixture, PersonaIso):
             self._session_reading_the_var("third", client_value="three", carry=""),
             "", "`-e NAME=` is the spelling charter relies on to shadow an inherited "
                 "value, and it did not")
+
+# --- The frame's own chrome (#514) ------------------------------------------------- #
+
+#: Every code point tmux can draw a pane border with — the whole Box Drawing block, so a
+#: rule is recognised whatever `pane-border-lines` is set to (`single`, `double`, `heavy`
+#: and `number` all draw from it, and charter pins `single`).
+#:
+#: A GLYPH set rather than a coordinate calculation, deliberately: charter has no
+#: business re-deriving tmux's own pane geometry inside a test, and every pane in these
+#: tests runs `cat`, which draws nothing — so every box-drawing cell on the screen is a
+#: cell tmux drew as chrome.
+#:
+#: **`pane-border-lines simple`'s own `+`/`-`/`|` are deliberately NOT here.** They are
+#: ordinary ASCII, indistinguishable from text, and including them made this set match
+#: the hyphens in the HOST tmux's status line — which is that server's chrome, drawn in
+#: its own colours, and counted as a second rule colour in a frame that had exactly one.
+#: `_screenshot` turns that status line off as well; a match that cannot happen for two
+#: independent reasons is the right number of reasons for this one.
+_RULE_GLYPHS = frozenset(chr(c) for c in range(0x2500, 0x2580))
+
+_SGR_RE = re.compile("\x1b\\[([0-9;]*)m")
+
+
+def _sgr_runs(text: str) -> list[tuple[frozenset, str]]:
+    """`(appearance, character)` for every printable cell of *text*.
+
+    The appearance is NORMALISED, not the raw escape bytes, because two spellings of one
+    look must not read as two colours: `\\x1b[39m` and a line that never issued an escape
+    at all are both "the terminal's own foreground", and a test comparing escape STRINGS
+    would call those different — then pass on a frame that looks perfectly uniform. That
+    is the spelling-versus-property trap this repo keeps paying for, so the property
+    (what a cell LOOKS like) is what gets compared.
+
+    Line-scoped: `capture-pane -e` re-states a line's attributes at its start, and a run
+    carried across a newline would attribute one row's colour to the next.
+    """
+    out: list[tuple[frozenset, str]] = []
+    for line in text.split("\n"):
+        fg: object = "default"
+        bg: object = "default"
+        attrs: set[int] = set()
+        i = 0
+        while i < len(line):
+            m = _SGR_RE.match(line, i)
+            if m:
+                params = [int(p or 0) for p in m.group(1).split(";")]
+                j = 0
+                while j < len(params):
+                    p = params[j]
+                    if p == 0:
+                        fg, bg, attrs = "default", "default", set()
+                    elif p in (38, 48):
+                        # 38;5;N or 38;2;R;G;B — consume the whole colour, whichever form
+                        take = 3 if j + 1 < len(params) and params[j + 1] == 5 else 5
+                        value = tuple(params[j:j + take])
+                        if p == 38:
+                            fg = value
+                        else:
+                            bg = value
+                        j += take
+                        continue
+                    elif 30 <= p <= 37 or 90 <= p <= 97:
+                        fg = p
+                    elif p == 39:
+                        fg = "default"
+                    elif 40 <= p <= 47 or 100 <= p <= 107:
+                        bg = p
+                    elif p == 49:
+                        bg = "default"
+                    elif p in (1, 2, 3, 4, 5, 7, 9):
+                        attrs.add(p)
+                    elif p == 22:
+                        attrs -= {1, 2}
+                    elif p in (23, 24, 25, 27, 29):
+                        attrs.discard(p - 20)
+                    j += 1
+                i = m.end()
+                continue
+            out.append((frozenset({("fg", fg), ("bg", bg),
+                                   *(("attr", a) for a in sorted(attrs))}), line[i]))
+            i += 1
+    return out
+
+
+def _rule_states(text: str) -> set:
+    """The distinct appearances every pane-border cell in *text* is drawn with.
+
+    One entry means every rule in the frame looks the same, which IS #514's property.
+    """
+    return {state for state, ch in _sgr_runs(text) if ch in _RULE_GLYPHS}
+
+
+def _rule_glyphs(text: str) -> set:
+    """Which border characters *text* is drawn with — `─│┬┴` for `pane-border-lines
+    single`, `═║╦╩` for `double`, and so on. What a rule is made OF, beside
+    `_rule_states`' what it looks like."""
+    return {ch for ch in text if ch in _RULE_GLYPHS}
+
+
+#: What `pane-border-indicators arrows` marks the ACTIVE pane's borders with, and only
+#: the active pane's — so an inherited `arrows` puts a glyph on one rule that its
+#: neighbour does not carry. Outside the Box Drawing block, which is why `_rule_glyphs`
+#: cannot see them and they are asked about by name.
+_INDICATOR_GLYPHS = frozenset("←→↑↓")
+
+
+class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
+    """#514, asked of the SCREEN: charter's own frame must draw every rule the same.
+
+    **The only tests in this suite that look at what an operator looks at.** A pane
+    border belongs to no pane, so `capture-pane` cannot see one — it captures a pane's
+    CONTENT, and the chrome lives in the gaps between panes. So the frame is rendered
+    inside a second tmux: an OUTER server holds one pane whose program is a client
+    attached to the frame's own (inner) server, which makes that pane's content the
+    frame's entire screen, borders and all. `capture-pane -e` on the outer pane then
+    hands the rules back with their colour escapes still attached — as close to the
+    operator's own screenshot as a test gets without a camera.
+
+    **Every test here renders the defect first, as a control.** Not decoration: without
+    it, "every rule is one colour" is equally satisfied by a machine that rendered no
+    rules at all, or by a capture this parser happened to read as one long run — and a
+    harness that cannot see the two-coloured frame cannot testify about the one-coloured
+    one. The control is a live render on this machine at this moment, never a baseline
+    read out of another branch. A machine whose control comes back uniform SKIPS, naming
+    what it could not measure.
+    """
+
+    #: The frame's own shape, in the order the shipped `slots` produces it: a one-row
+    #: `top`, a `bottom`, and a `right` column beside the harness — every split off the
+    #: harness pane, exactly as `layout.panel_argvs` does it.
+    #:
+    #: Three panels rather than one, because the defect needs a rule that runs PAST the
+    #: active pane's corner: with the harness and a single neighbour, every border cell
+    #: touches the active pane and the frame comes out uniform by accident.
+    _SPLITS = (("-v", "-b", "1"), ("-v", "", "3"), ("-h", "", "22"))
+
+    def _outer(self, *args: str) -> subprocess.CompletedProcess:
+        return _tmux_on(self._outer_socket, *args)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._outer_socket = f"{self.SOCKET_NAME}-host"
+        self.addCleanup(self._teardown_outer)
+
+    def _teardown_outer(self) -> None:
+        """The same two-step `_teardown_socket` does, for the second server these tests
+        need — `kill-server` ends it, and the socket FILE it leaves behind is removed by
+        hand because tmux does not."""
+        self._outer("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / self._outer_socket).unlink(missing_ok=True)
+
+    def _hostile(self) -> None:
+        """Somebody else's `.tmux.conf`, applied the way theirs is: `-wg`, reaching every
+        window on the server charter is a guest on."""
+        for name, value in (("pane-border-style", "fg=blue"),
+                            ("pane-active-border-style", "fg=red,bold"),
+                            ("pane-border-indicators", "arrows"),
+                            ("pane-border-lines", "double"),
+                            ("pane-border-status", "top")):
+            self.assertEqual(self._srv("set", "-wg", name, value).returncode, 0)
+
+    def _screenshot(self, *, arm: bool, hostile: bool = False) -> str:
+        """Build the frame on the inner server, show it through the outer one, and return
+        what the outer pane holds — the frame's whole screen, escapes and all."""
+        session = f"f{int(arm)}{int(hostile)}-{self._pane_counter}"
+        self._pane_counter += 1
+        r = self._srv("new-session", "-d", "-s", session, "-x", "100", "-y", "24",
+                      "-P", "-F", "#{pane_id}", "--", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness = r.stdout.strip()
+        # `conf_text`'s own first line, so this screenshot is of a real frame rather than
+        # of a bare tmux session. It is also load-bearing for the hostname assertion in
+        # `test_the_frame_draws_every_rule_the_same_inside_the_operators_own_tmux`: tmux's
+        # DEFAULT `status-right` carries `#{=21:pane_title}`, which is this machine's
+        # hostname truncated to 21 cells — so on a machine whose hostname is 21
+        # characters or shorter that assertion would fail on the status line and never
+        # reach the borders it is about, and on this developer's 24-character hostname it
+        # would have passed by truncation. Neither is a measurement.
+        self.assertEqual(self._srv("set", "-t", session, "status", "off").returncode, 0)
+        if hostile:
+            self._hostile()
+        if arm:
+            # The production argv, never a hand-retyped `set-option` — see `_run`.
+            for cmd in commands_frame._chrome_argvs(socket=self.SOCKET_NAME,
+                                                    harness_pane=harness):
+                self.assertEqual(_run(cmd).returncode, 0, cmd)
+        for direction, before, size in self._SPLITS:
+            args = ["split-window", "-t", harness, direction]
+            if before:
+                args.append(before)
+            args += ["-l", size, "--", "cat"]
+            self.assertEqual(self._srv(*args).returncode, 0, args)
+        self.assertEqual(self._srv("select-pane", "-t", harness).returncode, 0)
+        host = f"host-{session}"
+        r = self._outer("new-session", "-d", "-s", host, "-x", "100", "-y", "24",
+                        "--", "tmux", "-L", self.SOCKET_NAME, "attach", "-t", session)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # The HOST's own status line is not part of the frame, and leaving it on puts a
+        # second server's chrome — its own colours, and this machine's hostname — into
+        # the bottom row of every screenshot. Off, so the capture is the frame and
+        # nothing else. (`charter` turns its own off the same way, in `conf_text`.)
+        self._outer("set", "-t", host, "status", "off")
+        # Polled rather than slept: the inner client has to connect, resize and paint
+        # before there is anything to read, and how long that takes is the machine's
+        # business. Gives up quietly — `_control` is what turns "nothing rendered" into a
+        # skip that says so.
+        deadline = time.time() + 10
+        shot = ""
+        while time.time() < deadline:
+            got = self._outer("capture-pane", "-p", "-e", "-t", host)
+            if got.returncode == 0:
+                shot = got.stdout
+            if _rule_states(shot):
+                break
+            time.sleep(0.1)
+        self._outer("kill-session", "-t", host)
+        self._srv("kill-session", "-t", session)
+        return shot
+
+    def _control(self, **kw) -> str:
+        """The frame as it renders UNFIXED — and the proof these tests can see the defect
+        at all. Skips (never fails, and never passes quietly) on a machine whose render
+        this harness cannot read."""
+        shot = self._screenshot(arm=False, **kw)
+        states = _rule_states(shot)
+        if not states:
+            raise unittest.SkipTest(
+                "this machine rendered no pane borders through a nested tmux client at "
+                "all, so there is nothing here to measure the colour of")
+        if len(states) == 1:
+            raise unittest.SkipTest(
+                "the unfixed frame already renders every rule identically on this tmux "
+                f"({states}) — the two-colour defect #514 is about does not reproduce "
+                "here, so a fixed frame rendering uniformly would prove nothing")
+        return shot
+
+    def test_the_unfixed_frame_really_does_draw_its_rules_in_two_colours(self):
+        """The defect itself, named rather than only used as a control. tmux ships
+        `pane-active-border-style fg=green` beside `pane-border-style default` and picks
+        per BORDER CELL — so one horizontal rule is green for the cells above the active
+        pane and the terminal's own default for the cells above its neighbour."""
+        states = _rule_states(self._control())
+        self.assertGreater(len({dict(s)["fg"] for s in states}), 1,
+                           f"the rules differ, but not in colour: {states}")
+
+    def test_the_frame_draws_every_rule_the_same_on_charters_own_server(self):
+        self._control()
+        states = _rule_states(self._screenshot(arm=True))
+        self.assertTrue(states, "the armed frame rendered no rules at all")
+        self.assertEqual(len(states), 1,
+                         f"charter's own frame still draws its rules two ways: {states}")
+
+    def test_the_frame_draws_every_rule_the_same_inside_the_operators_own_tmux(self):
+        """The second server path, where charter's assumptions do not hold: the borders
+        are not tmux's defaults here, they are the operator's own config, which charter
+        would otherwise inherit whole. All five settings, because colour is only the most
+        visible of them — their `pane-border-status top` writes this machine's hostname
+        into every rule and takes a row the frame's own arithmetic never budgeted for."""
+        self._control(hostile=True)
+        shot = self._screenshot(arm=True, hostile=True)
+        states = _rule_states(shot)
+        self.assertTrue(states, "the armed frame rendered no rules at all")
+        self.assertEqual(len(states), 1,
+                         "the operator's own border styling still reaches charter's "
+                         f"window: {states}")
+        self.assertNotIn(socket.gethostname().split(".")[0], shot,
+                         "`pane-border-status` is still on, so the frame's rules are "
+                         "carrying this machine's hostname")
+        self.assertEqual(set(shot) & _INDICATOR_GLYPHS, set(),
+                         "`pane-border-indicators` is still theirs, so charter's frame "
+                         "marks its active pane's borders and not its others")
+        # The whole property in one line: the frame drawn inside their tmux is the same
+        # frame, cell for cell of chrome, as the one drawn on charter's own server.
+        # Colour alone would not catch a `pane-border-lines double` — every rule would
+        # still be one colour, and the frame would still not be charter's.
+        own = self._screenshot(arm=True)
+        self.assertEqual((_rule_glyphs(shot), states),
+                         (_rule_glyphs(own), _rule_states(own)),
+                         "charter's frame is drawn differently on the operator's server "
+                         "than on charter's own")
+
+    def test_charters_chrome_reaches_charters_own_window_and_no_other(self):
+        """The boundary the `-w` scope is for, measured on a real server rather than
+        argued from the flag: after charter styles its own window, a window the operator
+        already had still resolves to the value THEIR config set."""
+        theirs = self._srv("new-session", "-d", "-s", "theirs", "-x", "80", "-y", "24",
+                           "--", "cat")
+        self.assertEqual(theirs.returncode, 0, theirs.stderr)
+        self.assertEqual(self._srv("set", "-wg", "pane-border-style",
+                                   "fg=blue").returncode, 0)
+        ours = self._srv("new-session", "-d", "-s", "ours", "-x", "80", "-y", "24",
+                         "-P", "-F", "#{pane_id}", "--", "cat")
+        self.assertEqual(ours.returncode, 0, ours.stderr)
+        for cmd in commands_frame._chrome_argvs(socket=self.SOCKET_NAME,
+                                                harness_pane=ours.stdout.strip()):
+            self.assertEqual(_run(cmd).returncode, 0, cmd)
+        # `-A` so tmux reports the value the window RESOLVES to (inherited included), not
+        # only what was set on it locally — the second would answer "nothing" for their
+        # window whether charter had reached it or not.
+        resolved = self._srv("show-options", "-w", "-A", "-v", "-t", "theirs:0",
+                             "pane-border-style")
+        self.assertEqual(resolved.stdout.strip(), "fg=blue",
+                         "charter restyled a window that is not its own")
+        mine = self._srv("show-options", "-w", "-A", "-v", "-t", "ours:0",
+                         "pane-border-style")
+        self.assertEqual(mine.stdout.strip(),
+                         dict(commands_frame._CHROME)["pane-border-style"],
+                         "charter's own window did not take charter's own style")
+
+
+class EveryBorderOptionThisTmuxHasIsPinned(_TmuxServerFixture, PersonaIso,
+                                           unittest.TestCase):
+    """Asked of tmux's own option table, never of a list somebody remembered to update.
+
+    #514 was one option charter never set. The CLASS of defect is "tmux decides part of
+    charter's chrome and charter never gave an answer", and a hand-written list of five
+    names cannot see the sixth option a later tmux adds. `show-options -wg` is tmux
+    itself saying what it draws a border from.
+    """
+
+    def _window_options(self) -> dict[str, str]:
+        # A server has to exist for `show-options -g` to answer; `_new_pane` starts one
+        # the way every other class here does.
+        self._new_pane()
+        r = self._srv("show-options", "-wg")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = {}
+        for line in r.stdout.splitlines():
+            name, _, value = line.partition(" ")
+            out[name] = value
+        return out
+
+    def test_no_pane_border_option_is_left_for_the_operators_config_to_decide(self):
+        """Every `pane-*border*` window option this tmux has, pinned by `_CHROME`.
+
+        `pane-border-format` is the one exclusion, and it is CONDITIONAL rather than
+        permanent: it decides what `pane-border-status` draws, and charter pins that to
+        `off`, so nothing renders it. The first assertion re-establishes that condition
+        instead of trusting it — turn the status on and this test starts demanding the
+        format be pinned too.
+        """
+        pinned = dict(commands_frame._CHROME)
+        self.assertEqual(pinned.get("pane-border-status"), "off",
+                         "`pane-border-status` is no longer off, so `pane-border-format` "
+                         "renders and must be pinned as well")
+        inert = {"pane-border-format"}
+        theirs = {name for name in self._window_options()
+                  if name.startswith("pane-") and "border" in name} - inert
+        self.assertTrue(theirs, "this tmux reported no pane-border options at all")
+        self.assertEqual(theirs - set(pinned), set(),
+                         "this tmux draws pane borders from an option charter never "
+                         "answers, so the operator's own config decides part of the "
+                         "frame's chrome")
+
+    def test_every_option_charter_pins_is_one_this_tmux_actually_has(self):
+        """The other direction. A misspelt option name is refused by `set-option`, and a
+        launch treats that refusal as non-fatal — so the typo would leave the real option
+        inherited and the frame wrong, with nothing but a warning to show for it."""
+        theirs = self._window_options()
+        for name in dict(commands_frame._CHROME):
+            self.assertIn(name, theirs, f"{name} is not a window option on this tmux")
 
 
 if __name__ == "__main__":
