@@ -476,7 +476,10 @@ session · the repo table · what wants attention**.
 
 `top` is a one-line strip — the workspace and the persona on the left, the charter version
 (and the `dev` chip, if you are on that channel) at the far right, so identity and build
-are not read as one sentence. `repos` is the repo table in a bordered component of its
+are not read as one sentence. The persona there is the *active* one, always; the roster of
+every other persona joins it only when `right` is not on screen, since the sidebar draws
+that same list with more on each row. Drop the sidebar — a narrow terminal, or a density
+that does not include it — and the roster comes back to this row. `repos` is the repo table in a bordered component of its
 own, headed `▪ repos 6` and as many rows tall as the plane and the terminal allow (see
 above). `bottom` is the attention strip on the terminal's last row — one alert and the
 command that fixes it, the in-flight spinner, this session's news, the todo count and the

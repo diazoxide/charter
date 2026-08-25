@@ -1160,12 +1160,71 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[t
     return rows
 
 
+class PersonaLine(NamedTuple):
+    """The persona row, split where a SURFACE can drop half of it.
+
+    :func:`_persona_line` is exactly :meth:`rendered`, so the flat row and a surface that
+    draws only part of it cannot come to disagree about what either one says. That is the
+    whole reason this type exists: `frame/slots.py`'s `_top` must stop drawing the roster
+    when the frame's sidebar is already drawing the same personas with strictly more on
+    them (#530), and the only other way to get that is for `_top` to recompose the row out
+    of `persona.resolve_active`, `persona.vault_of` and `_vault_dot` — precisely the drift
+    `slots._right`'s own docstring says it delegates in order to avoid. Same shape, and
+    same argument, as :class:`PersonaChip` one function down.
+
+    *head* is **identity**: the active persona and the vault it can reach. `slots._right`
+    marks the active one with `▸` in a column of names, but "who am I being" is read on
+    the identity row, so it stays there whatever else is on screen.
+
+    *roster* is the OTHER personas — the half the sidebar redraws with a heading, memory
+    badges, health marks and in-flight badges, and the only half that is ever duplicated.
+
+    *tail* is what trails the roster without belonging to it. Today that is exactly one
+    thing: on the no-active branch, `charter persona use <name>` — the command that gets
+    you a persona, which no other surface says, so it survives the roster being dropped.
+    It is a separate field rather than folded into *head* because it renders AFTER the
+    roster, and the order of the flat row is not this split's to change.
+
+    Every part carries its own leading separator — the same contract :class:`PersonaChip`
+    keeps for its badges — so any subset joined in order needs nothing between the pieces
+    and a caller dropping one is never left holding a dangling ` · `.
+    """
+
+    head: str
+    roster: str
+    tail: str = ""
+
+    def rendered(self, *, roster: bool = True) -> str:
+        """The row as one string, with or without its roster half.
+
+        The join lives here rather than at each surface, so the ORDER of the three parts
+        is written once: a surface decides whether the roster is one of its pieces and
+        never how the pieces go together.
+        """
+        return self.head + (self.roster if roster else "") + self.tail
+
+
 def _persona_line() -> str | None:
     """Footer rows for personas: the *active* (adopted) persona with its vault,
     then a roster of every persona — each is also dispatchable as a sub-agent.
 
     Returns None when no personas are defined, so non-persona projects stay to
     one line.
+
+    Composed from :func:`_persona_line_parts` rather than built alongside it — one
+    builder, two shapes. See :class:`PersonaLine`.
+    """
+    parts = _persona_line_parts()
+    return None if parts is None else parts.rendered()
+
+
+def _persona_line_parts() -> PersonaLine | None:
+    """:func:`_persona_line`, with the row still in the parts it is made of.
+
+    Everything :func:`_persona_line` promises is decided here — both branches, their
+    shared vocabulary, ``None`` for a plane with no personas, and never raising. See
+    :class:`PersonaLine` for where the split falls and why the vault sits on identity's
+    side of it while the `charter persona use` tip sits on neither.
     """
     try:
         from . import persona
@@ -1175,8 +1234,13 @@ def _persona_line() -> str | None:
         names = sorted(names)
         active = persona.resolve_active()
         if not active:
+            # No active persona: the roster is the only list, and the tip is what turns
+            # one of its names into an answer. The tip is the TAIL rather than part of
+            # the roster because it survives the roster being dropped — a sidebar full
+            # of persona names still never says how to adopt one.
             avail = f"{_DIM} · {_R}".join(f"{_DIM}{n}{_R}" for n in names)
-            return f"{_DIM}◆ persona none{_R} · {avail}{_DIM} · charter persona use <name>{_R}"
+            return PersonaLine(f"{_DIM}◆ persona none{_R}", f" · {avail}",
+                               f"{_DIM} · charter persona use <name>{_R}")
         # Active (adopted) persona: name + vault health (the role reads as noise —
         # the name already says it).
         seg = f"{_MAGENTA}◆{_R} {_BOLD}{active}{_R}"
@@ -1195,10 +1259,11 @@ def _persona_line() -> str | None:
         # `personas` is the word `charter persona`, `personas/`, the ADRs and the
         # no-active branch above all already use.
         others = [n for n in names if n != active]
+        roster = ""
         if others:
             chips = f"{_DIM} · {_R}".join(f"{_DIM}{n}{_R}" for n in others)
-            seg += f"{_DIM} · ◇ personas {_R}{chips}"
-        return seg
+            roster = f"{_DIM} · ◇ personas {_R}{chips}"
+        return PersonaLine(seg, roster)
     except Exception:
         return None
 
