@@ -824,6 +824,15 @@ def _guard_spawns() -> None:
     class at all, so it is never refused. That is the right answer, because nothing is
     spawned. This fires on spawns that really happen, which is the only kind that can touch
     a plane.
+
+    **What it does NOT watch, stated rather than left to be discovered.** `os.execv*`,
+    `os.posix_spawn*`, `os.spawn*` and `os.system` start a process without going anywhere
+    near this class. They are not wrapped, and the reason is not that they are unreachable
+    — it is that nothing reaches CHARTER through them, which is a checkable claim rather
+    than an assumption: `NoCharterEscapesThroughTheExecFamily` in
+    `test_plane_spawn_guard.py` parses every module in `charter/` and `tests/` and fails on
+    a call to one of them that is not the two known non-charter uses. The day a charter
+    spawn is written that way, that case turns red and this docstring is what it points at.
     """
     global _SPAWN_GUARDED
     if _SPAWN_GUARDED:

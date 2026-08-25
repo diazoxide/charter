@@ -394,6 +394,77 @@ class SpellingsThatAreNotASpawn(_FakePlane):
                          str(self.real.resolve()))
 
 
+class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
+    """The guard watches `subprocess.Popen.__init__`, and nothing else starts a process.
+
+    `os.execv*`, `os.posix_spawn*`, `os.spawn*` and `os.system` all go around it. Wrapping
+    them too would be the obvious move and the wrong one: `execvp` REPLACES this process,
+    so a wrapper that refused would be refusing something that cannot be a child of the
+    suite at all, and `os.system` is not used here.
+
+    What makes "nothing reaches charter that way" a fact rather than an assumption is this
+    case. Every module in `charter/` and `tests/` is parsed, every call to one of those
+    functions is found, and each has to be one this file has already looked at and written
+    down. A fourth appears the day somebody writes one, named by file and line.
+
+    Parsed rather than grepped, so that ``mock.patch("os.execvp")`` — which
+    `test_frame_launcher` writes fifteen times — is what it is: a string, not a call.
+    """
+
+    #: ``module:function`` → why this one cannot start a charter. Frozen deliberately: the
+    #: point is that a NEW exec is noticed, and a set that grew by itself would notice
+    #: nothing.
+    KNOWN = {
+        "charter/commands_frame.py:execvp":
+            "`bypass` hands this process to the HARNESS (`claude`), and replaces it. The "
+            "thing that runs afterwards is not charter and has no plane to resolve.",
+        "charter/commands_secrets.py:execvpe":
+            "`secret exec` replaces this process with the operator's own command. If they "
+            "type `charter`, the process that becomes charter is the one that was already "
+            "running — a test doing this by accident loses the runner, not a plane.",
+        "tests/test_frame_tmux_integration.py:execvp":
+            "`tmux attach` inside a `pty.fork` child, which `os._exit`s in its `finally`.",
+    }
+
+    _WATCHED = ("execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp",
+                "execvpe", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp",
+                "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "system")
+
+    def test_every_exec_in_the_tree_is_one_that_cannot_become_charter(self):
+        import ast
+
+        tree = Path(__file__).resolve().parent.parent
+        found = {}
+        for path in sorted((*tree.glob("charter/**/*.py"), *tree.glob("tests/**/*.py"))):
+            try:
+                parsed = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):       # not this case's business
+                continue
+            for node in ast.walk(parsed):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if (isinstance(func, ast.Attribute) and func.attr in self._WATCHED
+                        and isinstance(func.value, ast.Name) and func.value.id == "os"):
+                    key = f"{path.relative_to(tree)}:{func.attr}"
+                    found.setdefault(key, node.lineno)
+
+        unexpected = {k: v for k, v in found.items() if k not in self.KNOWN}
+        self.assertEqual(
+            unexpected, {},
+            f"a process is started by a call `tests._planeguard` does not watch: "
+            f"{unexpected}. `RealPlaneSpawn` wraps `subprocess.Popen.__init__` only, so a "
+            f"charter started this way reaches the operator's plane unseen. Either it "
+            f"cannot become charter — say why, and add it to "
+            f"`NoCharterEscapesThroughTheExecFamily.KNOWN` — or it can, and it should go "
+            f"through `subprocess` instead.")
+
+        gone = set(self.KNOWN) - set(found)
+        self.assertEqual(gone, set(),
+                         f"{gone} is written down here and no longer exists — an "
+                         f"allow-list nobody prunes stops being read")
+
+
 class HowTheChildsPlaneIsResolved(_FakePlane):
     def test_it_asks_find_root_with_the_childs_environment_and_cwd(self):
         """Not with this process's. The whole defect is that the child's answer differs
