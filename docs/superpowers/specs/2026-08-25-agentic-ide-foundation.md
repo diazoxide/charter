@@ -1,0 +1,278 @@
+# charter as an agentic IDE — foundation spec
+
+**Date:** 2026-08-25 · **Status:** approved in outline, unimplemented
+**Supersedes in part:** the density presets shipped in #387
+
+---
+
+## 1. What this is for
+
+charter today is a control plane with a TUI attached. The goal is a **harness-agnostic
+agentic IDE**: the place a person works when the work spans many repositories, several
+agents, and more state than one status line can hold.
+
+The distinction that matters: an IDE is not a status display with more panels. It is a
+surface where you *do* things — switch context, hide what is irrelevant, start work, see
+what agents are doing, act on what they found. Everything below follows from that.
+
+---
+
+## 2. Where we actually are
+
+Honest assessment, because the plan depends on it.
+
+**What works.** The frame runs a harness inside a tmux-composed layout with charter panels
+around it, on charter's own server or the operator's. Panels repaint from a cache on a
+version bump, at a measured idle cost of one `stat` per tick. Identity travels explicitly.
+Chrome is charter's own. The repo table renders at the width it was designed for.
+
+**What does not.** Three things, and they are the reason this spec exists:
+
+1. **There is no model of what the frame is made of.** Slots are a list of four strings
+   whose ORDER is load-bearing geometry. There is nothing that knows a component has an
+   identity, a visibility, a size policy, or a key. Every feature that wants to *change what
+   is on screen* has had to invent its own mechanism — and three have: `[frame] slots`,
+   `[frame] density`, and `cmd_density`'s live re-layout.
+
+2. **Density is the wrong abstraction, and it shipped anyway.** `minimal` / `normal` /
+   `full` are bundles somebody else chose. The operator's actual request is per-component:
+   *hide the repo table, keep the sidebar.* A preset cannot express that, and adding levels
+   does not fix it — it multiplies it.
+
+3. **`display-menu` is not a command surface.** It was the cheapest thing that worked when
+   the frame had two slots. It has since produced: a `-` key that silently ran a command
+   because tmux treats it as a real key; a nine-row cap with no way to page; no filtering,
+   no live state, no way to show *why* an action is unavailable. It is a confirm dialog
+   being asked to be a command palette.
+
+**And a fourth thing, which is not the frame's fault but blocks everything:** the test suite
+reads the developer's machine. Ambient environment (#519, #521, #528 — 108 call sites), the
+real plane (#527), the filesystem (#532), wall-clock sleeps (#494). A green suite currently
+means "green on this machine, this minute, in this shell". Nothing built on top of that is
+trustworthy.
+
+---
+
+## 3. Three decisions
+
+Taken deliberately, with their reasoning, so they can be argued with later.
+
+### 3.1 tmux stays for panes. Charter draws its own overlays.
+
+The engine choice was made on measurement — tmux at 25.2 MB/s end-to-end against
+Textual+pyte at 1.85, with a 13 MB log freezing the latter for ~7s versus 0.51s. That
+result is about *throughput of harness output*, and it has not changed.
+
+What has changed is that everything *interactive* has been a fight with `display-menu`. So
+the split moves:
+
+- **tmux owns panes** — splitting, sizing, resize hooks, the harness's own terminal.
+- **charter owns overlays** — menus, pickers, palettes, confirmations, anything with
+  selection, filtering, or state. Rendered by charter into a pane charter controls.
+
+This keeps the property the engine was chosen for (the harness's output path is untouched)
+and removes the constraint that has cost us most. `display-menu` may remain for a
+two-option confirm; nothing richer.
+
+### 3.2 The IDE's unit of work is a change that spans repos
+
+Today the model is: a plane holds workspaces; a workspace holds repo clones. That is a
+*place to work*, not a *piece of work*.
+
+For "monorepo on top of many repos", the missing concept is a **cross-repo change**: one
+intent, several repositories, several branches, several PRs — tracked as one thing, with
+one status. It is what a person means when they say "the auth migration": not a branch, not
+a PR, but the whole of it across four services.
+
+This is a data-model addition, not a UI feature, and the UI follows from it: the frame's job
+becomes showing *the change you are in* and what it touches, rather than a flat list of
+repositories that happen to be cloned.
+
+### 3.3 The test cluster is paid down first, alone
+
+Seven issues, one structural shape. Until it is done, neither an operator nor an agent can
+distinguish a real failure from an ambient one — and the evidence is concrete: a false green
+hid a real defect through two separate investigations, and a suite run inside a frame
+reports ~17 failures that do not exist.
+
+Everything in this spec is verified by that suite. Building on it before it is trustworthy
+means every later result carries an asterisk.
+
+---
+
+## 4. The component model
+
+The core new concept. Everything in §5 is a view over it.
+
+Today a slot is a string in a list. A **component** is a named thing the frame can show,
+with:
+
+| property | meaning |
+|---|---|
+| `id` | stable, e.g. `repos`, `personas`, `todos`, `attention`, `identity` |
+| `title` | what a menu calls it |
+| `edge` | which side it attaches to, and in what order |
+| `size` | fixed rows/cols, or content-sized with a floor and a cap |
+| `visible` | per-frame runtime state, not config |
+| `key` | its own toggle binding |
+| `renderer` | the function that draws it |
+| `needs` | what it reads (the gather cache, personas, todos) — so cost is declarable |
+
+From that registry, three things that are currently three mechanisms become one:
+
+- **`[frame] slots`** becomes the *initial visibility* of components, not a geometry list.
+- **Density** becomes a **named arrangement** — a saved set of visibilities — rather than a
+  bundle with its own expansion rules. `minimal` and `full` survive as conveniences; they
+  stop being the only way to change the layout.
+- **Live re-layout** becomes "set `visible`, recompute, apply", once, instead of a
+  special-cased command.
+
+**Order is geometry and must stay explicit.** The measurement that produced the current
+layout — a 200-column bottom row versus 154, depending only on split order — is a property
+of tmux splitting, not a detail. The registry stores the edge and the split order; nothing
+derives it from list position by accident.
+
+**Cost is declarable.** `needs` exists so the idle-tick property survives growth: a
+component that reads nothing new adds no filesystem work, and one that does is visible as
+such rather than discovered by a reviewer counting `stat`s.
+
+---
+
+## 5. The command surface
+
+One mechanism, three faces.
+
+### 5.1 The palette
+
+A charter-drawn overlay, opened by one key. It lists **actions**, filtered as you type:
+
+```
+  switch workspace …          W
+  switch persona …            P
+  toggle repo table           T
+  toggle personas             E
+  hide everything but harness Z
+  reload plane                R
+```
+
+An action has an id, a title, an optional direct key, an availability predicate, and a
+reason it is unavailable. That last field matters: the session lock refuses a workspace
+switch today, and a menu that silently fails is worse than no menu.
+
+### 5.2 Direct keys
+
+Every action may bind a key, and toggles get first-class ones because that is the request:
+show and hide components individually, without opening anything.
+
+Keys are validated at the config boundary the way `[frame] hotkey` already is — that
+constant is the single guard between a committed config value and tmux config text, and a
+newline in it achieved code execution at launch once already.
+
+### 5.3 Pickers
+
+A list-selection overlay for workspaces, personas, and later changes. Same rendering as the
+palette; the difference is the source of rows.
+
+**Containment is not optional here.** Workspace names, persona names, repo names and todo
+text are committed values — untrusted input from someone else's machine. Every row goes
+through `contain.one_line` **before** any width arithmetic, and the bound is on the property
+"renders as one line", not on a list of characters known to be bad. That distinction is what
+#498 is about, and what U+2028 taught us after `\n` was handled.
+
+---
+
+## 6. Phases
+
+Sequenced so each phase can be verified with the tools the previous one made trustworthy.
+
+### Phase 0 — make the suite mean something
+*Blocks everything. Do it alone.*
+
+#519, #521, #528 (108 unisolated `patch.dict` sites), #527 (real detached children against
+the developer's plane), #532 (skills read off the filesystem), #494 (a fixed 0.8s sleep
+standing in for a condition), #507 (the tmux module's remaining flake), #531 (dead code
+after `__main__`).
+
+Prefer **one structural guard** over 100+ edits, matching how #402 (`RealPlaneWrite`) and
+#492 (`RealPlaneRead`) were solved: make the unisolated case fail loudly and name itself.
+
+**Exit test:** the full suite gives the same answer inside a frame, outside one, on a used
+plane and on a fresh checkout.
+
+### Phase 1 — the component registry
+*The foundation. No new features.*
+
+Introduce the registry; express today's four components in it; make `[frame] slots`,
+density and live re-layout read from it. Ship with behaviour unchanged — this phase is
+provably a refactor.
+
+Absorbs #501, #510, #524, #526, #536 — the layout cluster — because each is a place that
+recomputes geometry independently, and after this there is one place.
+
+**Exit test:** the frame renders identically before and after, and the three mechanisms that
+change what is on screen all route through one function.
+
+### Phase 2 — the command surface
+*The visible payoff.*
+
+The overlay renderer, the action registry, the palette, per-component toggle keys, and
+pickers for workspace and persona. Retire `display-menu` for everything but a plain confirm.
+
+Absorbs #530 (the top bar stops duplicating the sidebar — a component that knows whether its
+sibling is visible can answer this properly), and the `-` key class of bug disappears with
+the mechanism that caused it.
+
+**Exit test:** every action reachable in ≤2 keystrokes; every unavailable action says why;
+a hostile workspace name renders as one line and runs nothing.
+
+### Phase 3 — containment and honesty, once
+*The cluster, paid down together.*
+
+#498 (`contain.one_line` deciding on a category list rather than the property), #502, #503,
+#505, #508, #509. One reviewer, one shape: a committed value crossing into structured
+output.
+
+**Exit test:** a name containing a newline, U+2028, an escape sequence, a duplicate key or a
+mis-cased key produces exactly one row, and never a second command.
+
+### Phase 4 — the cross-repo change
+*The IDE's actual subject.*
+
+The data model, then the surface: create a change, add repos to it, see its branches and
+PRs as one status, act on it. This is where "monorepo on top of many repos" stops being a
+description of the file layout and becomes something the tool understands.
+
+Needs its own spec. Phases 0–3 are what make it buildable.
+
+---
+
+## 7. Backlog, beyond the phases
+
+Things worth wanting, not yet designed. Recorded so they are not rediscovered as surprises.
+
+- **Focus and mouse.** Once charter draws overlays, click-to-focus a component and
+  scroll-in-place become reachable. Deliberately after Phase 2.
+- **A component that shows what agents are doing.** `inflight` already tracks dispatches;
+  #420 established the record has no *kind*, which is what makes clones and refreshes
+  invisible. A real "work in flight" panel needs that field first.
+- **The context gauge inside a frame.** #413's blocker stands: a panel knows the frame id,
+  the usage file is keyed by the harness's session id, and only the suppressing
+  `statusline.main` sees both. Needs a persisted mapping and a decision about what it shows
+  before the first turn.
+- **Search across the plane.** Not grep-in-a-repo — find a persona's memory, a workspace's
+  todos, a change's PRs, from one place.
+- **Layout persistence per workspace.** Different work wants different components visible.
+  The registry makes this a small addition; do not build it before the registry.
+- **A second harness in the same frame.** The layout can hold it; nothing else can yet.
+
+---
+
+## 8. What this spec deliberately does not do
+
+- **It does not replace tmux.** That decision was made on measurement and stands.
+- **It does not add a config key per component.** The registry is code; `[frame]` gains
+  initial visibility, not thirty knobs.
+- **It does not promise the guards become boundaries.** `SECURITY.md`'s position — "guard
+  rails, not guarantees" — is unchanged. Four rounds of adversarial review established that
+  deciding what a shell will execute, without executing it, is not winnable in a Python
+  tokeniser. The honest limits stay documented rather than half-parsed.

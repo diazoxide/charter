@@ -30,3 +30,8 @@ default = "steward"
 # that the slot is dropped and the harness keeps the rows (#500). There is no `left` any
 # more — it drew a 22-column copy of the rows `repos` now draws at full width.
 slots = ["top", "bottom", "repos", "right"]
+
+[update]
+# Track main instead of the last release. `charter update` installs straight from git;
+# nothing is published, and PEP 610 gives `charter --version` the exact commit.
+channel = "dev"
