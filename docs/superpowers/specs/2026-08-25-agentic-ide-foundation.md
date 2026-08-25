@@ -243,6 +243,79 @@ is a component model with a private back door, and the back door is where the dr
 
 ---
 
+## 4c. Interactivity — components receive input
+
+**Decided 2026-08-25: components are input-capable, not render-only.** Clicks, scroll, keys,
+focus — whatever a terminal can deliver, a component may receive. This is the decision that
+makes the difference between a dashboard framework and an IDE, and it was taken deliberately
+in the knowledge that it is the harder of the two.
+
+### What it costs, stated up front
+
+Render-only would have been simpler and could have been widened later; input-capable cannot
+be narrowed later without breaking people. Two consequences follow and neither is optional:
+
+1. **Third-party code receives keystrokes and pointer events**, not just a chance to draw
+   text. That is a materially larger trust surface than §4b's rendering contract, and the
+   containment rules there (charter contains the output) do not cover it — the input path
+   needs its own.
+2. **Focus becomes a real concept.** Something must own "where does this keystroke go", and
+   it must be answerable at every moment, including while an overlay is open and while a
+   re-layout is in flight.
+
+### The routing question charter already anticipated
+
+`instance.FRAME_FIELDS` carries `mouse: (False, …)` with this note, written before any of
+this was planned:
+
+> Off by default: tmux's `set -g mouse on` takes over drag-select, so turning this on trades
+> the operator's terminal text-selection for clickable panels. That trade belongs to a later
+> release that actually ships clickable panels, not this one.
+
+That release is this one, and the trade it names is the design problem: **with tmux's mouse
+mode on, tmux consumes pointer events itself** — pane select, border drag, its own copy-mode
+scroll — and charter's panels never see them. With it off, sequences pass through to each
+pane's program.
+
+Charter's panels **are** charter processes with their own tty. So the shape to measure first
+is: leave tmux's mouse mode off, and have each panel enable SGR mouse reporting on its own
+terminal, so pointer events in a charter pane reach charter and pointer events in the
+harness pane reach the harness — which also preserves the drag-select the comment worried
+about losing.
+
+**That is a hypothesis, not a finding.** It must be measured against real tmux on both the
+private server and the operator's own before anything is built on it, the way the engine
+choice and the `-e` overlay behaviour were measured rather than assumed. Record what tmux
+actually does with: pointer events in a pane whose program requested them; scroll in a pane
+with a scrollback; a click on a pane border; and the same three inside the operator's own
+tmux where their `.tmux.conf` may already set `mouse on`.
+
+### What the model needs, whatever the routing turns out to be
+
+- **A focus owner**, and a rule for how focus moves — by click, by key, and what happens when
+  the focused component is hidden or its pane is killed mid-re-layout.
+- **An event contract** parallel to the render contract: a component declares which event
+  kinds it accepts, and receives only those. A component that never asked for pointer events
+  should not be reachable by one.
+- **Scroll that means something per component.** A repo table scrolls its rows; the harness
+  pane scrolls its own scrollback. These are different operations that look identical to the
+  wheel, and conflating them is how a scroll in the wrong place loses someone's place.
+- **An escape hatch that always works.** One key that returns focus to the harness
+  unconditionally, from any component, overlay, or wedged state. If a third-party component
+  can capture input, it can capture input badly.
+- **Input isolation matching §4b's four properties.** A component that raises while handling
+  an event costs its own pane, never the session — and never the keystroke, which must still
+  reach the escape hatch.
+
+### Sequencing
+
+Interactivity is **Phase 2**, alongside the command surface, and depends on Phase 1's
+registry existing. But the routing measurement above should happen **during Phase 1**,
+because if the hypothesis is wrong the overlay design changes, and it is cheaper to learn
+that before the palette is written than after.
+
+---
+
 ## 5. The command surface
 
 One mechanism, three faces.
