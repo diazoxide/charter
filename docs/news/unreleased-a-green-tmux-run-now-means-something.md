@@ -29,6 +29,21 @@ Two tests whose only assertion was that a hostile `#(…)` label creates no cana
 precondition they never had: the label has to be observed on screen first. A menu that never
 rendered used to satisfy them.
 
+One test resisted the whole approach, and it is worth naming because the first fix for it was
+wrong. `-` is not tmux's spelling for "no shortcut" — it is an ordinary key, which is why rows
+past the ninth are keyed with the empty string — and the test that measures this presses `-` on
+a rendered eleven-row menu and requires that nothing ran. Waiting for tmux to repaint proves
+the `-` was *read*; it does not bound the `run-shell` → `charter frame-action` → `subprocess`
+chain whose absence is the whole assertion, and a repaint arrives two orders of magnitude
+sooner than that chain finishes. Swapping the sleep for the repaint made the test pass whether
+or not `-` fired the row — the same defect as the sleep, wearing a fix's clothes. An assertion
+about an absence needs a *bound*, not a readiness signal, so it now gets one from a pacing
+control: the eleventh row's own action, dispatched to the same tmux server only after the
+repaint proves the `-` was consumed. Identical work, started strictly later — so when the
+pacer's canary lands, anything `-` could have started has had longer, and the absence is
+measured. Restoring the constant `-` that this row exists to refuse fails the test again;
+without the pacer it did not.
+
 **A death tmux never had the status of, read as an exit code.** On a loaded tmux 3.4 about one
 pane death in seventeen closes the pane's fd before tmux has the child's status, and never
 gets it — `pane_dead=1`, an empty status, the `pane-died` hook array never run, permanently.

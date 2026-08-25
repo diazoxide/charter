@@ -2324,6 +2324,12 @@ class MenuFormatIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
         Enter must reach the SAME row on the SAME still-open menu. A row with no shortcut
         that the arrow keys could not reach either would be a row that does nothing at
         all — which is the failure the `-` was reached for in the first place.
+
+        The `-` half is the hard one to time, because it asserts an ABSENCE: it needs a
+        bound on how long a row's action takes, not a signal that the key was read. It
+        gets one from a pacing control that runs the same action shape, dispatched later
+        — see the block that builds it for the argument, and for the two ways of getting
+        this wrong that both already shipped here.
         """
         fid = f"menu-fmt-integ4-{os.getpid()}"
         self._new_session(fid)
@@ -2336,29 +2342,65 @@ class MenuFormatIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
         tmp = tempfile.mkdtemp(prefix="charter-integ-fmt4-")
         self.addCleanup(shutil.rmtree, tmp, True)
         canary = os.path.join(tmp, "TENTH_ROW")
+        control = os.path.join(tmp, "PACER")
         # Eleven rows: nine that take the digits, then the two that do not. The canary
         # hangs off the TENTH — the first row past the ninth, and the one that used to be
-        # keyed `-`.
+        # keyed `-`. The ELEVENTH is never selected by this test; its argv exists only so
+        # that the row owns a real `frame-action` id, which the pacing control below
+        # fires directly. See that block for why the two must be the same shape.
         entries = [(f"row {i}", ["true"]) for i in range(11)]
         entries[9] = ("row 9", [sys.executable, "-c",
                                 f"open({canary!r}, 'w').close()"])
+        entries[10] = ("row 10", [sys.executable, "-c",
+                                  f"open({control!r}, 'w').close()"])
         menu.record(fid=fid, entries=entries)
         cmd = menu.menu_argv(fid, SOCKET, client=client)
         self.assertEqual(cmd[10:][1::3][9:], ["", ""], cmd)
         self._drive_menu(fd, cmd, screen=screen, drawn="row 10")
 
-        # `-`, then the FIRST of the nine Downs, then wait for tmux to repaint. The wait
-        # replaces a `time.sleep(0.8)` that assumed `-` had been consumed by then: on a
-        # loaded machine it had not, and the assertion below then passed because the key
-        # was still in flight rather than because it fired nothing. A pty is a FIFO, so
-        # tmux cannot have painted a response to the Down without having already read
-        # past the `-`; there is no new TEXT to wait for, because moving a menu's
-        # selection repaints labels that are already on screen.
+        # `-`, then the FIRST of the nine Downs, then wait for tmux to repaint. A pty is
+        # a FIFO, so tmux cannot have painted a response to the Down without having
+        # already read past the `-`; there is no new TEXT to wait for, because moving a
+        # menu's selection repaints labels that are already on screen.
         mark = screen.drawn_so_far()
         os.write(fd, b"-\x1b[B")
         self.assertTrue(screen.await_more_drawn(mark),
                         "the menu never repainted after a Down, so nothing here shows "
                         "the `-` before it was ever read")
+
+        # **The repaint alone would not license the assertion below, and an earlier
+        # version of this test made exactly that mistake.** It says the `-` has been
+        # READ; the thing being asserted absent is a whole `run-shell` -> `sh` ->
+        # `"$CHARTER_PY" -m charter frame-action a9` -> `subprocess.run` chain, ~0.7 s of
+        # it on this machine, and a repaint arrives 0-50 ms in. Asserting "no canary" at
+        # that point passes whether or not `-` fires the row — the same defect as the
+        # `time.sleep(0.8)` it replaced (#494: a readiness condition standing in for a
+        # settling condition), only quieter, because it looks like a wait.
+        #
+        # So: a PACING CONTROL. The eleventh row's own action string, lifted verbatim out
+        # of the argv `menu_argv` just built and handed straight back to the same tmux
+        # server, differs from the tenth row's by one character — the action id — and so
+        # costs the identical interpreter start, the identical `charter` import and the
+        # identical `subprocess.run`. It is dispatched only AFTER the repaint above
+        # proves tmux consumed the `-`, and tmux is single-threaded: if `-` were bound to
+        # row 10, tmux forked that item's job inside the key event, which it finishes
+        # before it comes back to the command socket to read this one. Same work, started
+        # strictly later — so when the pacer's canary lands, any run the `-` could have
+        # started has had at least as long, and `TENTH_ROW`'s absence is a measurement
+        # rather than a formality. Asserted positively first, so a pacer that never ran
+        # fails loudly instead of licensing the negative for free.
+        actions = cmd[10:][2::3]
+        self.assertTrue(actions[10].startswith("run-shell '")
+                        and actions[10].endswith("'"), actions[10])
+        self.assertEqual(actions[9], actions[10].replace("a10", "a9"), actions)
+        r = _tmux("run-shell", "-t", fid, actions[10][len("run-shell '"):-1])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        deadline = time.monotonic() + _DEADLINE
+        while time.monotonic() < deadline and not os.path.exists(control):
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(control),
+                        "the pacing control never ran, so nothing below bounds how long "
+                        "a row's action takes and 'no canary' would mean nothing")
         self.assertFalse(os.path.exists(canary),
                          "`-` fired the tenth row — it is a real tmux key, not tmux's "
                          "spelling for 'no shortcut'")
