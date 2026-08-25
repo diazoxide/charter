@@ -101,6 +101,49 @@ class TestTheRightChipsSurvive(ColumnCase):
         self.assertLess(len(shown), len(names))
 
 
+class TestTheFlatChipIsItsOwnPartsJoined(ColumnCase):
+    """#516 split a chip into `PersonaChip(name, head, badges)` so `frame/slots.py` can
+    give the badges a column of their own. The split is only safe while the two shapes
+    are ONE builder: the moment `_persona_chips` composes anything of its own, a fix to a
+    vault dot or a memory badge can land on one surface and not the other — which is the
+    drift `_right`'s docstring says it delegates in order to avoid.
+
+    Asserted as an identity over real personas rather than by reading the source, because
+    the property is what the two functions RETURN, not how they are written.
+    """
+
+    def test_every_chip_is_exactly_its_head_and_its_badges(self):
+        self.make_many(6)
+        persona.set_active("p03")
+        cells = statusline._persona_chip_cells(None)
+        self.assertEqual(self.chips(), [c.head + c.badges for c in cells])
+        self.assertTrue(cells, "the roster produced no cells to compare")
+
+    def test_the_split_survives_the_truncation_notice(self):
+        """The `…(+N more)` row is not a persona: it names none and carries no badges,
+        and a caller drawing columns has to be able to tell. Its hidden COUNT rides with
+        it as data, so a heading can add it back without parsing the sentence."""
+        self.make_many(30)
+        cells = statusline._persona_chip_cells(None)
+        note = cells[-1]
+        self.assertIsNone(note.name)
+        self.assertEqual(note.badges, "")
+        self.assertGreater(note.hidden, 0)
+        named = sum(1 for c in cells if c.name is not None)
+        self.assertEqual(named + note.hidden, 30)
+
+    def test_the_vault_dot_travels_with_the_name_and_not_with_the_badges(self):
+        """It is absent on almost every row, so in a badge column its width would be
+        paid by every persona for a fact about one of them."""
+        self.make_persona("vaulted", role="R", vault="nowhere-registered")
+        cells = statusline._persona_chip_cells(None)
+        cell = next(c for c in cells if c.name == "vaulted")
+        dot = statusline._vault_dot("nowhere-registered").strip()
+        self.assertTrue(dot, "the fixture produced no vault dot to place")
+        self.assertIn(dot, cell.head)
+        self.assertNotIn(dot, cell.badges)
+
+
 class TestItNeverBreaksTheRender(ColumnCase):
     def test_a_broken_roster_still_returns_a_list(self):
         """`_persona_chips` runs on every turn and its own contract is to degrade to an
@@ -109,6 +152,14 @@ class TestItNeverBreaksTheRender(ColumnCase):
         persona.list_personas = lambda: (_ for _ in ()).throw(OSError("nope"))
         self.addCleanup(setattr, persona, "list_personas", real)
         self.assertEqual(self.chips(), [])
+
+    def test_the_parts_degrade_the_same_way_the_flat_chips_do(self):
+        """Both shapes answer empty, because both are the same function — a `_right`
+        that got `None` here would need a guard its docstring says it does not have."""
+        real = persona.list_personas
+        persona.list_personas = lambda: (_ for _ in ()).throw(OSError("nope"))
+        self.addCleanup(setattr, persona, "list_personas", real)
+        self.assertEqual(statusline._persona_chip_cells(None), [])
 
 
 if __name__ == "__main__":

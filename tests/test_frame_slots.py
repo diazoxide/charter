@@ -41,6 +41,19 @@ def _row(name, *, branch="main", dirty=False, tracked_dirty=False, ahead=0, behi
     return d
 
 
+def _plain_lines(out: str) -> list[str]:
+    """*out* as the plain rows a terminal would show, split BEFORE the colour is stripped.
+
+    The order is load-bearing and the obvious spelling is wrong: `tui.strip_ansi` runs
+    `tui.sanitize` first, which turns a newline into a SPACE (it must — a wrapped line
+    shears every column below it). So `strip_ansi(out).split("\\n")` returns ONE row
+    however many the renderer emitted, and a test written that way cannot tell "the
+    heading is the first line" from "the heading is somewhere in the pane" — which is
+    exactly the difference every assertion about a multi-section sidebar is making.
+    """
+    return [tui.strip_ansi(ln) for ln in out.split("\n")]
+
+
 def _seed(fid: str, **overrides) -> dict:
     data = {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
            "repos": [], "worktrees": []}
@@ -1091,7 +1104,7 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
 
 
 class RightRenderer(PersonaIso, unittest.TestCase):
-    """`right`: `statusline._persona_chips` called, not reassembled — each chip
+    """`right`: `statusline._persona_chip_cells` called, not reassembled — each chip
     already carries its own memory badge, in-flight badge and vault dot."""
 
     def test_lists_a_persona_chip(self):
@@ -1106,12 +1119,19 @@ class RightRenderer(PersonaIso, unittest.TestCase):
     def test_calls_persona_chips_rather_than_reassembling_it(self):
         """A fix to a chip (its vault dot, its memory badge, its in-flight badge)
         must land here the moment it lands in the status line — pinned by handing
-        `_persona_chips` a value nothing in `_right` could have produced on its
-        own, and requiring it survive to the pane byte-for-byte."""
-        with mock.patch("charter.statusline._persona_chips",
-                        return_value=["SENTINEL-CHIP-0xF00D"]):
+        `_persona_chip_cells` values nothing in `_right` could have produced on its
+        own, and requiring BOTH halves survive to the pane byte-for-byte.
+
+        Both halves, because #516 is exactly the change that could have lost one: the
+        badges now go into a column of their own, and a `_right` that recomposed them
+        out of `_mem_badge`/`_health_mark`/`_inflight_badge` itself would still print a
+        persona's name."""
+        with mock.patch("charter.statusline._persona_chip_cells",
+                        return_value=[statusline.PersonaChip(
+                            "alice", "SENTINEL-HEAD-0xF00D", "SENTINEL-BADGE-0xBEEF")]):
             out = slots.render("right", "f-1")
-        self.assertIn("SENTINEL-CHIP-0xF00D", out)
+        self.assertIn("SENTINEL-HEAD-0xF00D", out)
+        self.assertIn("SENTINEL-BADGE-0xBEEF", out)
 
     def test_never_exceeds_the_pane_width(self):
         self.make_persona("a-persona-with-quite-a-long-descriptive-name")
@@ -1132,14 +1152,309 @@ class RightRenderer(PersonaIso, unittest.TestCase):
             self.assertLessEqual(tui.width(line), 20)
 
     def test_a_failing_persona_chips_call_yields_a_line_rather_than_an_exception(self):
-        """`_right` carries no guard of its own around the call (`_persona_chips`
-        already swallows its own failures) — this pins `render`'s own outer
-        `try/except` as the thing that actually catches whatever gets past that,
-        the same generic promise `Render.test_a_failing_renderer_yields_a_line...`
-        pins for an arbitrary slot, exercised here through a real dependency."""
-        with mock.patch("charter.statusline._persona_chips",
+        """`_right` carries no guard of its own around the call
+        (`_persona_chip_cells` already swallows its own failures) — this pins
+        `render`'s own outer `try/except` as the thing that actually catches whatever
+        gets past that, the same generic promise
+        `Render.test_a_failing_renderer_yields_a_line...` pins for an arbitrary slot,
+        exercised here through a real dependency."""
+        with mock.patch("charter.statusline._persona_chip_cells",
                         side_effect=RuntimeError("boom")):
             self.assertIn("charter", slots.render("right", "f-1"))
+
+
+class TheSidebarHasHeadings(PersonaIso, unittest.TestCase):
+    """#516's first ask: a bare column of names told a newcomer nothing about what it was.
+
+    The headings are `statusline.py`'s own (`_HEAD_PAD`, which carries `_MARK_HEAD`), so
+    the frame's chrome and the status line's persona column cannot drift apart — asserted
+    against that constant rather than against the literal `▪ `, which would pass a change
+    that moved only one of the two surfaces.
+    """
+
+    def _render(self, *, cols=22, rows=26, fid="f-1") -> str:
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, rows))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return slots.render("right", fid)
+
+    def test_the_persona_list_is_headed(self):
+        self.make_persona("alice")
+        self.assertEqual(_plain_lines(self._render())[0],
+                         f"{statusline._HEAD_PAD}personas 1")
+
+    def test_the_heading_counts_every_persona_not_only_the_rows_that_fit(self):
+        """The number and the `…(+N more)` line beneath it come from the same data
+        (`PersonaChip.hidden`), so a truncated column cannot end up headed with the
+        count of what survived truncation — which is the number a reader would take
+        for "how many personas does this plane have"."""
+        for i in range(9):
+            self.make_persona(f"p{i:02d}")
+        lines = _plain_lines(self._render(rows=6))
+        self.assertEqual(lines[0], f"{statusline._HEAD_PAD}personas 9")
+        self.assertTrue(any("…(+" in ln for ln in lines),
+                        "it hid personas without a heading that says so")
+
+    def test_a_plane_with_no_personas_still_says_so_rather_than_heading_nothing(self):
+        lines = _plain_lines(self._render())
+        self.assertIn("no personas", lines[0])
+        self.assertFalse(any("personas 0" in ln for ln in lines), lines)
+
+
+class TheSidebarBadgesFormAColumn(PersonaIso, unittest.TestCase):
+    """#516's comment: the badges start wherever a name ends, so the column is ragged
+    and a longer name pushes its badge past every other.
+
+    The property is the SCREEN COLUMN the badge starts in, measured with `tui.width` on
+    the plain text — not the character offset, which is what `len()` would give and what
+    a wide glyph makes wrong. A test asserting the rendered string would pass on a row
+    that merely happened to line up.
+    """
+
+    def _rows(self, cells, width=22):
+        return slots._persona_rows(cells, width)
+
+    def _badge_col(self, line: str, badge: str) -> int:
+        plain = tui.strip_ansi(line)
+        return tui.width(plain[:plain.index(badge)])
+
+    def test_two_names_of_different_lengths_put_their_badges_in_one_column(self):
+        cells = [statusline.PersonaChip("steward", "▸ steward", " A"),
+                 statusline.PersonaChip("statusline", "▫ statusline", " B")]
+        a, b = self._rows(cells)
+        self.assertEqual(self._badge_col(a, "A"), self._badge_col(b, "B"))
+
+    def test_a_row_with_no_badge_at_all_leaves_the_column_where_it_was(self):
+        """The vault dot is present on some rows and absent on others, and so is every
+        badge — a column sized per row would move under the rows that have one."""
+        cells = [statusline.PersonaChip("steward", "▸ steward", " A"),
+                 statusline.PersonaChip("quiet", "▫ quiet", ""),
+                 statusline.PersonaChip("forge", "▫ forge ◦", " B")]
+        a, _quiet, b = self._rows(cells)
+        self.assertEqual(self._badge_col(a, "A"), self._badge_col(b, "B"))
+
+    def test_the_vault_dot_stays_on_the_names_side_of_the_column(self):
+        """`_vault_dot` speaks only when a vault cannot be used, so it is absent on
+        almost every row: in the badge column its width would be paid by every persona
+        for a fact about one of them."""
+        cells = [statusline.PersonaChip("forge", "▫ forge ◦", " A"),
+                 statusline.PersonaChip("reddit", "▫ reddit", " B")]
+        a, b = self._rows(cells)
+        self.assertEqual(self._badge_col(a, "A"), self._badge_col(b, "B"))
+        self.assertIn("◦", tui.strip_ansi(a).split("A")[0])
+
+    def test_a_wide_glyph_in_a_badge_is_measured_in_cells_not_characters(self):
+        """`⚡` is East-Asian Wide — two cells, one character — so `len()` under-counts
+        the widest badge and the column comes out a cell too narrow. The tell is not
+        misalignment (every row is padded to the same wrong number, so they still line
+        up) but SILENT LOSS: the badge that is actually the widest gets truncated inside
+        its own cell, and `⚡2 4m` becomes `⚡2 4…`. That is the drift
+        `_persona_chip_cells`' own comment says has broken this layout twice."""
+        cells = [statusline.PersonaChip("a", "▫ a", " ⚡2 4m"),
+                 statusline.PersonaChip("b", "▫ b", " ✎7")]
+        a, b = self._rows(cells)
+        self.assertEqual(self._badge_col(a, "⚡"), self._badge_col(b, "✎"))
+        self.assertIn("⚡2 4m", tui.strip_ansi(a),
+                      "the widest badge was cut by a column sized in characters")
+
+    def test_a_name_too_long_for_its_cell_loses_its_own_tail_and_moves_nothing(self):
+        """The whole defect, stated as a property: a longer name must cost ITS OWN row
+        columns, never the column every other row's badge sits in."""
+        cells = [statusline.PersonaChip("short", "▫ short", " A"),
+                 statusline.PersonaChip("l" * 60, "▫ " + "l" * 60, " B")]
+        a, b = self._rows(cells)
+        self.assertEqual(self._badge_col(a, "A"), self._badge_col(b, "B"))
+        self.assertLessEqual(tui.width(b), 22)
+
+    def test_the_more_row_spans_the_pane_rather_than_being_padded_into_a_name_cell(self):
+        """It names no persona and carries no badge — it is a sentence about the list,
+        so lining it up with a column it has no entry in would only indent it."""
+        cells = [statusline.PersonaChip("a", "▫ a", " ✎40"),
+                 statusline.PersonaChip(None, "  …(+7 more)", "", 7)]
+        _, note = self._rows(cells)
+        self.assertEqual(tui.strip_ansi(note), "  …(+7 more)")
+
+    def test_a_badge_column_never_squeezes_the_names_below_the_floor(self):
+        """One persona holding three dispatches (`⚡3 2h?`) must not take twelve columns
+        off every NAME in a 22-column sidebar — past `_NAME_MIN_W` the badge column is
+        what gives way, not the names.
+
+        The fixture is a LITERAL ten-character name rather than one built from
+        `_NAME_MIN_W`, and that is deliberate: a fixture derived from the constant under
+        test moves with it, so setting the floor to zero would shorten the name to
+        nothing and the test would pass having asserted that the empty string survives.
+        A concrete name that a real 22-column sidebar has to hold is what actually
+        exercises the floor."""
+        cells = [statusline.PersonaChip("reddit-ops", "▫ reddit-ops", " ✎47 ⚡3 2h?"),
+                 statusline.PersonaChip("reddit", "▫ reddit", " ✎7")]
+        rows = self._rows(cells)
+        self.assertIn("reddit-ops", tui.strip_ansi(rows[0]),
+                      "a wide badge took the name's own columns")
+        self.assertIn("reddit", tui.strip_ansi(rows[1]))
+
+
+class TheSidebarListsTheWorkspacesTodos(PersonaIso, unittest.TestCase):
+    """#516's second ask. `_bottom` renders a COUNT; the items were visible nowhere in
+    the frame.
+
+    Every test renders through the real `slots.render("right", …)` rather than calling
+    `_todo_rows`, for the reason `BottomTable` gives for the same choice: a helper
+    returning perfect rows that `_right` never asks for satisfies a unit test of the
+    helper and none of the promise.
+    """
+
+    def _render(self, *, cols=22, rows=26, fid="f-1") -> str:
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, rows))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return slots.render("right", fid)
+
+    def _seed_todos(self, titles, *, total=None, fid="f-1"):
+        _seed(fid, todos=[{"title": t} for t in titles],
+              todo_count=len(titles) if total is None else total)
+
+    def test_a_todo_reaches_the_pane(self):
+        self._seed_todos(["ship the sidebar"])
+        self.assertIn("- ship the sidebar", _plain_lines(self._render(cols=40)))
+
+    def test_the_todos_sit_beneath_the_personas(self):
+        """The order is the ask, and a membership check would pass with them on top."""
+        self.make_persona("alice")
+        self._seed_todos(["ship the sidebar"])
+        lines = _plain_lines(self._render(cols=40))
+        self.assertLess([i for i, ln in enumerate(lines) if "alice" in ln][0],
+                        [i for i, ln in enumerate(lines) if "ship the sidebar" in ln][0])
+
+    def test_they_are_headed_with_the_open_count(self):
+        self._seed_todos(["one", "two"])
+        self.assertIn(f"{statusline._HEAD_PAD}todos 2", _plain_lines(self._render(cols=40)))
+
+    def test_a_workspace_with_nothing_open_draws_no_section_at_all(self):
+        """Not `todos 0`. A heading over an empty space is furniture within a day, and
+        then a real todo appearing under it draws no more attention than the zero did.
+        `_bottom` keeps its unconditional count; this is the column, not the strip."""
+        self.make_persona("alice")
+        self._seed_todos([])
+        self.assertNotIn("todos", "\n".join(_plain_lines(self._render(cols=40))))
+
+    def test_more_todos_than_fit_are_counted_rather_than_silently_dropped(self):
+        self._seed_todos([f"todo number {i}" for i in range(30)], total=30)
+        lines = _plain_lines(self._render(cols=40))
+        shown = sum(1 for ln in lines if ln.startswith("- todo number"))
+        self.assertGreater(shown, 0, lines)
+        self.assertIn(f"  …(+{30 - shown} more)", lines)
+
+    def test_the_hidden_count_is_the_true_total_not_the_cached_slice(self):
+        """`gather._MAX_TODOS` bounds what the cache holds; `todo_count` is unclipped.
+        Deriving the total from the list's length would tell an operator with four
+        hundred open todos that they have twenty."""
+        self._seed_todos([f"todo {i}" for i in range(20)], total=400)
+        lines = _plain_lines(self._render(cols=40))
+        shown = sum(1 for ln in lines if ln.startswith("- todo "))
+        self.assertIn(f"{statusline._HEAD_PAD}todos 400", lines)
+        self.assertIn(f"  …(+{400 - shown} more)", lines)
+
+    def test_a_cache_written_before_the_count_existed_still_lists_what_it_has(self):
+        """`_shaped_like_a_scan` is deliberately loose so a cache file surviving an
+        upgrade still renders. A `todos` list with no `todo_count` beside it is exactly
+        that file, and it must not report a negative or zero total."""
+        _seed("f-1", todos=[{"title": "an older cache"}])
+        lines = _plain_lines(self._render(cols=40))
+        self.assertIn(f"{statusline._HEAD_PAD}todos 1", lines)
+        self.assertIn("- an older cache", lines)
+        self.assertFalse(any("…(+" in ln for ln in lines), lines)
+
+    def test_a_short_pane_keeps_the_personas_and_gives_up_the_todos(self):
+        """`right` is the persona column everywhere else charter names it, so a pane too
+        short for both loses the section that is duplicated elsewhere (`charter ws todo`,
+        and `bottom`'s own count) rather than the one that is not."""
+        for i in range(6):
+            self.make_persona(f"p{i}")
+        self._seed_todos(["a todo nobody will see"])
+        out = "\n".join(_plain_lines(self._render(rows=7, cols=40)))
+        self.assertIn("p0", out)
+        self.assertNotIn("a todo nobody will see", out)
+
+    def test_a_pane_with_room_for_one_row_draws_no_section_at_all(self):
+        """A heading with nothing under it claims this workspace has no todos, which is
+        the false-clean reading the module refuses everywhere else. Two rows is the
+        floor, and two rows is spent on the count and how much is hidden — the honest
+        half of the pair, exactly as `_table_lines` spends a one-row budget."""
+        for i in range(4):
+            self.make_persona(f"p{i}")
+        self._seed_todos(["one", "two"])
+        # 4 persona rows + the heading is 5, and the blank separator takes a sixth.
+        one_row = "\n".join(_plain_lines(self._render(rows=7, cols=40)))
+        self.assertNotIn("todos", one_row)
+        two_rows = _plain_lines(self._render(rows=8, cols=40))
+        self.assertIn(f"{statusline._HEAD_PAD}todos 2", two_rows)
+        self.assertIn("  …(+2 more)", two_rows)
+
+    def test_a_todo_title_is_contained_before_it_reaches_a_row(self):
+        """A todo is a COMMITTED value — someone else's machine wrote it into this
+        plane's repo. A newline in one writes a second line that looks exactly as much
+        like charter's own output as the first (#472's class), and the bound has to come
+        before the width arithmetic, not after."""
+        self._seed_todos(["first line\nSECOND ROW FORGED"])
+        lines = _plain_lines(self._render(cols=60))
+        # ONE row, with the newline shown as its own escape — not two rows, the second
+        # of which looks exactly as much like charter's own output as the first.
+        self.assertIn("- first line\\x0aSECOND ROW FORGED", lines)
+        self.assertEqual(sum(1 for ln in lines if "SECOND ROW FORGED" in ln), 1, lines)
+
+    def test_an_escape_in_a_todo_title_never_reaches_the_pane(self):
+        self._seed_todos(["\x1b[2Jcleared your screen"])
+        self.assertNotIn("\x1b[2J", self._render(cols=60))
+
+    def test_a_cjk_todo_title_does_not_push_the_row_past_the_pane(self):
+        self._seed_todos(["測" * 40])
+        for line in self._render(cols=22).split("\n"):
+            self.assertLessEqual(tui.width(line), 22)
+
+    def test_the_rows_come_from_the_cache_and_never_from_the_todo_directory(self):
+        """The idle-cost rule, one slot over from `bottom`'s table: `todos.open_todos`
+        opens and parses one file per todo, and a panel repaints on every version bump.
+        Pinned by making the live reader raise — a renderer that reaches it is red,
+        rather than merely slow in a way no test can see."""
+        self._seed_todos(["from the cache"])
+        with mock.patch("charter.todos.open_todos",
+                        side_effect=AssertionError("read the workspace, and must not")):
+            lines = _plain_lines(self._render(cols=40))
+        self.assertIn("- from the cache", lines)
+
+    def test_a_frames_first_paint_lists_the_todos_rather_than_an_empty_column(self):
+        """**The cache makes every repaint after the first one free; it is not what
+        makes the first one right.**
+
+        A launch DISCARDS the gather cache on purpose (`gather.discard` — a recycled pid
+        must not adopt a dead frame's repos), so the very first paint of a new frame
+        reaches this section with no cache file at all. `gather.read` falls through to a
+        live `scan()` exactly there, which is the path that `discard`'s own docstring
+        says deleting the file restores — so the first frame an operator sees carries
+        their todos.
+
+        Written because the round-1 news entry claimed the opposite, and the claim was
+        never executed. It is also the guard against the cheap-looking simplification of
+        `read` — answering `_empty()` on a cold cache rather than scanning — which would
+        make a new frame's first impression a confident "this workspace has no todos".
+        The seeded sibling above pins the other half: with a cache present, the todo
+        directory is never touched at all.
+
+        WHICH workspace that live gather is for is a separate question and a real one —
+        `gather.scan` resolves it from the panel process, which #512 showed reaches none
+        of the rungs that speak for the frame. Filed as **#526** rather than fixed here:
+        the mechanism it wants (`state.workspace_for`) arrives with #525.
+        """
+        from charter import todos, workspace
+        todos.add(workspace.resolve(), "written before the frame ever launched")
+        gather.discard("f-cold")            # what `cmd_launch` runs before it draws
+        with mock.patch.object(gather, "scan", wraps=gather.scan) as scanned:
+            lines = _plain_lines(self._render(cols=50, fid="f-cold"))
+        self.assertIn(f"{statusline._HEAD_PAD}todos 1", lines)
+        self.assertIn("- written before the frame ever launched", lines)
+        # And the cache really was cold: the rows came from the live fallback, not from
+        # a file some earlier assertion had quietly left behind.
+        self.assertTrue(scanned.called)
 
 
 if __name__ == "__main__":

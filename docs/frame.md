@@ -408,8 +408,8 @@ those four rows instead of all of them, which is the point of the level: `minima
 your session the rows back rather than blanking them. How many rows that is depends on how
 many clones you have — a fourteen-repo workspace gets ten back, an eight-repo one gets
 four, and a workspace with four or fewer gets none, because there was never a fifth row to
-give. If you have kept
-`right` by writing `slots` yourself, `minimal` shows four chips in it and says the same.
+give. `right` shows four persona chips at `minimal` and says how many it hid, and its
+todo list shrinks to four rows the same way.
 
 **The hotkey changes the density of the running frame, and nothing else.** `F2` opens the
 menu, which now lists all three levels with a `•` on the one in effect; choosing one
@@ -432,10 +432,17 @@ cannot make sense of it. That check is not cosmetic: this value is interpolated 
 configuration that `source-file` *executes*, and `charter.toml` is a committed, shared
 file that arrives from someone else's machine.
 
-Every edge is on by default. `top` is a one-line strip; `bottom` is the attention row
-plus the repo table under it, as many rows tall as the plane and the terminal allow (see
-above); `right` (persona chips) is a 22-column sidebar that drops itself on a terminal too
-small for it. The **order** is the order the panes are split in, and therefore the
+Every edge is on by default. `top` is a one-line strip — the workspace and the persona on
+the left, the charter version (and the `dev` chip, if you are on that channel) at the
+far right, so identity and build are not read as one sentence; `bottom` is the attention
+row plus the repo table under it, as many rows tall as the plane and the terminal allow
+(see above); `right` is a 22-column sidebar carrying two headed sections — `personas`,
+one row each with the memory, health and in-flight badges lined up in a column of their
+own, and `todos`, this workspace's open todos beneath them. The todo list is what
+`charter ws todo` shows, oldest first, cut to what the pane has room for with a
+`…(+N more)` line saying how many it hid; a workspace with nothing open gets no todo
+section at all rather than a heading over an empty space. The sidebar drops itself on a
+terminal too small for it. The **order** is the order the panes are split in, and therefore the
 geometry: with `bottom` before the sidebar its rows span the whole frame, while listing it
 last leaves it only the width the sidebar did not take — 23 columns fewer, which means a
 118-column terminal before the table is drawn at all. `bottom` is where an alert, the

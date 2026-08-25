@@ -50,12 +50,13 @@ import ast
 import contextlib
 import io
 import os
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import charter
-from charter import commands_report, config, statusline, util
+from charter import commands_report, config, statusline, tui, util
 from charter.frame import slots
 
 from tests._isolation import PersonaIso
@@ -194,6 +195,33 @@ class TopRendersTheChannelBesideTheVersion(PersonaIso, unittest.TestCase):
         with mock.patch("charter.channel.is_dev", side_effect=RuntimeError("boom")):
             out = slots.render("top", self.fid)
         self.assertIn("charter", out)
+
+    def test_the_chip_moves_to_the_right_hand_end_with_the_version(self):
+        """#516 right-aligned the version. The chip is a fact ABOUT the version, not a
+        fourth thing on the row, so it has to travel — pinned by asserting they are
+        still adjacent at the row's end rather than that both merely appear."""
+        from charter import __version__
+        with mock.patch.object(config, "UPDATE", {"channel": "dev"}), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((110, 1))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = tui.strip_ansi(slots.render("top", self.fid))
+        self.assertTrue(out.rstrip().endswith(f"charter {__version__} dev"), out)
+        self.assertGreater(out.index("charter "), len(out) // 2,
+                           "the version is still sitting beside the identity")
+
+    def test_a_row_with_no_room_for_both_drops_the_version_and_its_chip_together(self):
+        """Half of a dropped field is worse than the field: a bare `dev` with no version
+        beside it names a channel and nothing to act on. They go out together the way
+        `terse` already takes them out together."""
+        from charter import __version__
+        with mock.patch.object(config, "UPDATE", {"channel": "dev"}), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((26, 1))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = tui.strip_ansi(slots.render("top", self.fid))
+        self.assertNotIn(__version__, out)
+        self.assertNotIn("dev", out)
 
 
 # --------------------------------------------------------------------------- #
