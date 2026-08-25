@@ -14,10 +14,11 @@ for a command charter has no launcher for at all. That is not just naming: once 
 frame` is on the command line, everything after it is grafted onto the harness's own argv
 verbatim, before charter's own argument parser ever sees it, so `frame claude -p hi` would
 hand `claude -p hi` to the `frame --` mechanism rather than route anywhere. The same reason
-keeps `frame-menu`, `frame-action`, `frame-density`, `frame-resize` and `frame-probe` —
-the command tmux's hotkey calls back into, the one every menu action calls back into, the
-one the density entries run, the one the `window-resized` hook calls back into, and the
-read-only probe — as top-level names rather than nested under `frame` too.
+keeps `frame-menu`, `frame-action`, `frame-density`, `frame-switch`, `frame-resize` and
+`frame-probe` — the command tmux's hotkey calls back into, the one every menu action calls
+back into, the one the density entries run, the one the workspace and persona entries run,
+the one the `window-resized` hook calls back into, and the read-only probe — as top-level
+names rather than nested under `frame` too.
 
 ## What it needs
 
@@ -495,8 +496,81 @@ resolved settings charter's own code reads back use an underscore
 is silently not recognized — the hyphenated spelling above is the one that is read.
 
 The hotkey (`F2` by default) opens a small menu on whichever frame you are attached to —
-"Detach", and the three density levels. It exists only on charter's own server; inside a
-tmux you already have, charter binds no key at all (see above). However you detach — that
-entry, or tmux's own prefix key — charter notices the session is still running and prints
-how to get back in (`tmux -L charter attach -t <frame-id>`) rather than leaving you to
-remember the flags.
+"Detach", the three density levels, and two submenus: the plane's workspaces and its
+personas, each marking the one the frame is drawing. It exists only on charter's own
+server; inside a tmux you already have, charter binds no key at all (see above). However
+you detach — that entry, or tmux's own prefix key — charter notices the session is still
+running and prints how to get back in (`tmux -L charter attach -t <frame-id>`) rather than
+leaving you to remember the flags.
+
+```
+┌─charter───────────────────────────┐        ┌─charter · workspace───┐
+│ Detach                        (1) │        │   default         (1) │
+│   density: minimal            (2) │        │ * harness-wrapper (2) │
+│ * density: normal             (3) │   ▸    │   release-0-54    (3) │
+│   density: full               (4) │        │   user-reporting  (4) │
+│ workspace: harness-wrapper  ▸ (5) │        └───────────────────────┘
+│ persona: forge  ▸             (6) │
+└───────────────────────────────────┘
+```
+
+**Switching from the menu moves the frame, and says so.** Choosing a workspace writes the
+choice under the frame's own id — the same pointer `charter workspace use` writes from
+inside the frame, which is what makes the panels follow — records it as the frame's
+workspace, re-gathers the repo table for it, and bumps the frame so every panel repaints
+against the new plane. A persona switch is the same minus the gather. Either way a
+one-line message lands on your own screen saying what happened.
+
+**Two switches are refused, and both say why on that same line.** A frame launched with
+`$CHARTER_WORKSPACE` (or `$CHARTER_PERSONA`) set is *pinned*: that variable is in every
+panel pane's environment for as long as the pane lives, and nothing charter can write
+outranks it — so the menu says `cannot switch: $CHARTER_WORKSPACE pins this frame to
+'<name>'` rather than reporting a move that would not happen. A name that is not there is
+refused with the names that are; the menu never creates a workspace.
+
+**The session lock moves with you.** `charter workspace use` locks the session to what it
+selected so a workspace cannot be swapped out from under a running task — but a keypress
+on a menu *is* you, and the switcher's own first write would otherwise take a lock that
+its second write hit, leaving a switcher that worked exactly once. So the menu overrides
+the lock and names what it overrode: `workspace → beta  (lock moved from 'alpha')`.
+
+Long lists are cut to twelve rows with a last row saying how many were left out — a tmux
+menu is drawn inside your terminal and does not scroll. Rows past the ninth have no
+number key; the arrow keys still reach them.
+
+### Picking a workspace when the frame opens
+
+`charter <harness>` used to resolve a workspace silently and go straight in. If **nothing
+chose one** — no `--workspace`, no `$CHARTER_WORKSPACE`, not standing in a workspace tree,
+no per-session or per-terminal pointer, no declared default — it now asks first:
+
+```
+  charter · which workspace?
+
+     1  * default          —
+     2    harness-wrapper  7 repos
+     3    user-reporting   1 repo
+
+     n    create a new workspace
+     q    cancel — start nothing
+
+  workspace [default]:
+```
+
+A number, a name, or Enter for the marked one. `n` prompts for a name, checks it against
+the workspace alphabet, and asks `create <name> and switch to it? [y/N]` — anything but a
+`y` goes back to the list, and a cancelled picker creates nothing at all. `q`, Ctrl-C or a
+closed stdin end the launch having started nothing; the exit code is 130.
+
+**Picking is the confirmation that locks.** That is what selecting a workspace has always
+meant — `charter workspace use` locks the session to what it selected — and the launch
+says so on the line after your answer. The frame has its own way out: `F2 → workspace`
+overrides the lock and tells you it did, so a choice made at the prompt does not send you
+back to a shell to change it.
+
+**It never asks twice, and it never asks a script.** Your choice is written as the
+terminal's own pointer, so the next launch from that terminal has an answer and goes
+straight in. And the prompt is reached only on the interactive path: `--no-frame`, a
+redirected stdout and a stdin that is not a terminal each return before it — `charter
+claude` from a script or another agent cannot block on it. `--workspace <name>` names one
+outright and skips the picker; `--pick` asks even when something already chose.

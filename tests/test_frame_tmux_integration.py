@@ -2308,6 +2308,64 @@ class MenuClientIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
         self.assertTrue(os.path.exists(canary_b),
                         "B's own hotkey press must open B's own, selectable menu")
 
+    def test_a_submenu_opens_on_the_presser_and_its_rows_are_selectable(self):
+        """#517's whole mechanism, proved through the real chain rather than asserted
+        from an argv.
+
+        A submenu row's own command is `run-shell '"$CHARTER_PY" -m charter frame-menu
+        #{client_name} --group workspace'` — a SECOND `display-menu`, opened by a
+        `run-shell` child of the FIRST one's selection, on a client named by a tmux
+        format expanded inside the item's own command text. Two things could be true
+        instead, and neither is checkable from `menu_argv`'s argv:
+
+        * `#{client_name}` could expand to whatever tmux calls the current client rather
+          than to the one the menu was drawn on — the exact defect
+          `test_each_presser_gets_their_own_menu_not_the_others` above exists for, one
+          layer deeper. B's keystream selecting A's submenu row is what that would look
+          like, so that is what is asserted.
+        * the nested `display-menu` could fail to wire itself to the client's key input
+          at all — this class's own docstring records `display-menu` behaving differently
+          when issued directly rather than from a bind, and a submenu is issued from
+          neither: it comes off another menu's selection. The canary firing on A's own
+          `1` is what rules that out.
+        """
+        fid = f"menu-sub-integ-{os.getpid()}"
+        self._new_session(fid)
+        clientA, fdA = self._attach_pty(fid)
+        clientB, fdB = self._attach_pty(fid, exclude=frozenset({clientA}))
+        self.assertNotEqual(clientA, clientB)
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=SOCKET, session=fid)).returncode, 0)
+        self.assertEqual(_tmux("set-environment", "-t", fid, "CHARTER_PY",
+                              str(self.shim)).returncode, 0)
+        self._install_real_bind(fid)
+
+        canary = self._short_canary("sub")
+        menu.record(fid=fid, entries=[
+            menu.Entry("workspace: demo  ▸", opens="workspace"),
+            menu.Entry("* demo",
+                       (sys.executable, "-c", f"open({canary!r}, 'w').close()"),
+                       "workspace"),
+        ])
+
+        os.write(fdA, b"\x1bOQ")   # F2 on A -> the top-level menu, on A
+        time.sleep(0.8)
+        os.write(fdA, b"1")        # its only row is the opener -> the submenu, on A
+        time.sleep(1.2)
+        os.write(fdB, b"1")        # B must not be able to select in A's submenu
+        time.sleep(0.8)
+        self.assertFalse(os.path.exists(canary),
+                         "client B's keystream selected a row in the SUBMENU that A's "
+                         "own press opened — `#{client_name}` inside a menu item's own "
+                         "command did not resolve to the client the menu was drawn on")
+        os.write(fdA, b"1")
+        deadline = time.monotonic() + _DEADLINE
+        while time.monotonic() < deadline and not os.path.exists(canary):
+            time.sleep(0.2)
+        self.assertTrue(os.path.exists(canary),
+                        "selecting a submenu opener must open a submenu on the "
+                        "presser's own client, with selectable rows")
+
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
