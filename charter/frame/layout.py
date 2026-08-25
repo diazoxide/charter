@@ -81,6 +81,62 @@ HARNESS_MIN_ROWS = 12
 #: says what it is doing.
 _BORDER_ROWS = 1
 
+#: One column per pane border, the vertical counterpart of :data:`_BORDER_ROWS` and
+#: measured the same way — on tmux 3.7c, a 110-column window split `-h -l 22` reads back
+#: as an 87-column harness and a 22-column sidebar, which is 109.
+_BORDER_COLS = 1
+
+#: Slots that take COLUMNS off the pane they are split from rather than rows — the `-h`
+#: half of :func:`panel_argvs`' `direction`. Kept as a name rather than an inline
+#: ``== "right"`` because :func:`bottom_cols` and `panel_argvs` are two places that have
+#: to agree about which splits cost columns, and the next side slot must not have to be
+#: remembered in both.
+_COLUMN_SLOTS = ("right",)
+
+
+def bottom_cols(slots: list[str] | tuple[str, ...], *, window_cols: int) -> int:
+    """How wide the `bottom` pane actually is, in a *window_cols*-column window whose
+    slots were split in *slots*' order — **not the window's own width** (#500).
+
+    `panel_argvs` splits every slot off the HARNESS pane in list order, so a side slot
+    split before `bottom` has already narrowed the pane `bottom` is then carved out of.
+    Measured on tmux 3.7c, window 110x40, `-l 22` for `right` and `-l 7` for `bottom`:
+
+    * ``["top", "bottom", "right"]`` (the shipped order) — `bottom` reads back **110**
+      wide; `right` is split off the harness afterwards and sits beside the harness only.
+    * ``["right", "top", "bottom"]`` and ``["top", "right", "bottom"]`` — `bottom` reads
+      back **87**, which is ``110 - 22 - 1``.
+
+    That difference is a promise, not an accident: `instance.frame_of` keeps an
+    operator's `[frame] slots` order verbatim and
+    `tests/test_frame_config.py::test_the_operators_own_slot_order_is_kept_exactly`
+    pins it, precisely because the order IS the geometry. What #500 got wrong was not the
+    order — it was handing `slots.bottom_rows_wanted` the window's width regardless, so a
+    `bottom` that had been inset beside the sidebar was sized for a table its own pane
+    was too narrow to draw. Below `statusline._LEFT_W` (95) the renderer draws no table
+    at all, so a 110-column frame with `right` first got a seven-row pane and one line in
+    it, six rows taken off the harness and left blank.
+
+    Order in, order out — this reads *slots* rather than a set, and stops at `bottom`.
+    A slot split AFTER `bottom` costs it nothing (measured above), and killing one gives
+    the columns back (`kill-pane` on `right` widened the same `bottom` from 87 to 110),
+    which is why the list a caller passes has to be the order its panes were actually
+    split in: at launch that is the drawable slot list, and for a running frame it is the
+    recorded pane map's own order, survivors first and later splits appended.
+
+    With no `bottom` in *slots* this answers the width one WOULD be split to. Nothing
+    asks in that state today — `slot_sizes` only sizes the slots it was given — and an
+    answer that is right the moment the slot appears is better than a zero that is right
+    for nothing.
+    """
+    out = window_cols
+    for slot in slots:
+        if slot == "bottom":
+            break
+        if slot in _COLUMN_SLOTS:
+            out -= SLOT_SIZE[slot] + _BORDER_COLS
+    return max(0, out)
+
 
 def visible_slots(slots: list[str], cols: int, rows: int,
                   min_cols: int, min_rows: int) -> list[str]:
@@ -457,7 +513,10 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
     cmds: list[list[str]] = []
     for slot in slots:
         size = (sizes or SLOT_SIZE).get(slot, SLOT_SIZE[slot])
-        direction = "-v" if slot in ("top", "bottom") else "-h"
+        # :data:`_COLUMN_SLOTS` rather than a second list of names: which splits take
+        # COLUMNS is exactly what :func:`bottom_cols` has to know to answer how wide
+        # `bottom` ends up, and two copies of that fact are two things to keep in step.
+        direction = "-h" if slot in _COLUMN_SLOTS else "-v"
         before = ["-b"] if slot == "top" else []
         cmds.append(_tmux(socket, "split-window", "-t", harness_pane,
                           direction, *before, "-l", str(size),

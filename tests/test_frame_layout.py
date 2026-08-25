@@ -358,6 +358,92 @@ class BottomIsSizedToItsContent(unittest.TestCase):
             layout.SLOT_SIZE["bottom"])
 
 
+class BottomsWidthIsWhateverTheSplitOrderLeftIt(unittest.TestCase):
+    """#500, round 3: `layout.bottom_cols` — how wide the `bottom` PANE actually is.
+
+    The property, stated once: **a slot that takes columns and is split before `bottom`
+    has already narrowed the pane `bottom` is carved out of.** Not "the window's width",
+    which is what every caller was passing, and not "the width when `slots` happens to be
+    the shipped list", which is the coincidence that let it through two rounds of review.
+
+    Every number below was measured against real tmux 3.7c on a private socket, window
+    110x40, splitting exactly as `panel_argvs` does (`-h -l 22` for `right`, `-v -b -l 1`
+    for `top`, `-v -l 7` for `bottom`, every split targeting the harness pane):
+
+        ["top", "bottom", "right"]  ->  bottom 110x7   harness 87x30
+        ["right", "top", "bottom"]  ->  bottom  87x7   harness 87x30
+        ["top", "right", "bottom"]  ->  bottom  87x7   harness 87x30
+        ["bottom", "right"]         ->  bottom 110x7   harness 87x32
+
+    and, for the re-layout case, killing `right` on the second of those widened the same
+    `bottom` pane from 87 back to 110, while re-splitting `right` off the harness
+    afterwards left it at 110.
+    """
+
+    def test_the_shipped_order_leaves_bottom_the_whole_window(self):
+        """The control. `right` is split off the harness AFTER `bottom` and lands beside
+        the harness only, so it costs `bottom` nothing — without this the assertions
+        below could be satisfied by subtracting `right` unconditionally."""
+        self.assertEqual(
+            layout.bottom_cols(["top", "bottom", "right"], window_cols=110), 110)
+
+    def test_a_side_slot_split_first_insets_bottom_by_its_columns_and_its_border(self):
+        """The defect. `instance.frame_of` keeps an operator's `[frame] slots` order
+        verbatim — `tests/test_frame_config.py` calls that a promise — so this is a frame
+        charter ships the ability to ask for, not a corner. Both orders that put `right`
+        first are asserted, because "before `bottom`" is the property and "first in the
+        list" is only one spelling of it."""
+        for order in (["right", "top", "bottom"], ["top", "right", "bottom"]):
+            with self.subTest(order=order):
+                self.assertEqual(layout.bottom_cols(order, window_cols=110), 87)
+
+    def test_the_inset_is_the_slots_own_size_and_not_a_literal(self):
+        """87 is `110 - SLOT_SIZE["right"] - _BORDER_COLS`, asserted as that arithmetic
+        rather than restated, so a change to the sidebar's width moves this answer
+        instead of leaving a stale constant that is right for one release."""
+        self.assertEqual(
+            layout.bottom_cols(["right", "bottom"], window_cols=110),
+            110 - layout.SLOT_SIZE["right"] - layout._BORDER_COLS)
+
+    def test_two_side_slots_before_bottom_are_both_charged(self):
+        """The arithmetic accumulates rather than answering "was there a sidebar". No
+        second side slot exists today; the next one this frame grows is the reason the
+        loop subtracts per slot instead of testing for `right`."""
+        self.assertEqual(
+            layout.bottom_cols(["right", "right", "bottom"], window_cols=200),
+            200 - 2 * (layout.SLOT_SIZE["right"] + layout._BORDER_COLS))
+
+    def test_a_horizontal_strip_before_bottom_costs_it_no_columns(self):
+        """`top` is a `-v` split: it takes rows off the harness and spans its full width.
+        Charging it here would shrink the table on every frame that draws a `top`."""
+        self.assertEqual(layout.bottom_cols(["top", "bottom"], window_cols=110), 110)
+
+    def test_it_never_answers_a_negative_width(self):
+        """A terminal narrower than the sidebar. `visible_slots` drops `right` long
+        before this, so it is unreachable through the launcher — but the answer feeds a
+        `<` against `statusline._LEFT_W`, and a negative there would merely be right by
+        accident. Zero says "no columns" and means it."""
+        self.assertEqual(layout.bottom_cols(["right", "bottom"], window_cols=10), 0)
+
+    def test_which_splits_take_columns_is_one_fact_panel_argvs_shares(self):
+        """The two places that must agree: this function decides how much width a slot
+        costs `bottom`, and `panel_argvs` decides whether tmux is asked for a `-h` at
+        all. Two lists of names would drift the day a side slot is added — the frame
+        would split it with `-h` and `bottom` would be sized as if it had not.
+
+        Asserted across every slot `instance.FRAME_SLOTS` admits, so a new slot is
+        covered the moment it is declared rather than when someone remembers this test.
+        """
+        from charter import instance
+        for slot in instance.FRAME_SLOTS:
+            with self.subTest(slot=slot):
+                cmd, = layout.panel_argvs(slots=[slot], **PANELS)
+                self.assertEqual(
+                    _direction(cmd),
+                    "-h" if slot in layout._COLUMN_SLOTS else "-v",
+                    "panel_argvs and bottom_cols disagree about this slot's direction")
+
+
 class SlotSizesAnswersEverySlotAtOnce(unittest.TestCase):
     def test_the_fixed_slots_keep_their_declared_size(self):
         got = layout.slot_sizes(["top", "bottom", "right"], window_rows=50,

@@ -2653,9 +2653,14 @@ class BottomIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
     `_launch_sizes` and `layout.bottom_rows` run for real.
     """
 
-    def _bottom_split_size(self, *, cols, rows=50, repos=6):
-        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
-        with mock.patch("charter.frame.gather.row_count", return_value=repos):
+    def _bottom_split_size(self, *, cols, rows=50, repos=6, slots=None):
+        fake = _FakeTmux(exit_code=0,
+                         panel_pane_ids={"top": "%11", "bottom": "%12", "right": "%13"})
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                mock.patch("charter.frame.gather.row_count", return_value=repos))
+            if slots is not None:
+                stack.enter_context(mock.patch.dict(config.FRAME, {"slots": slots}))
             rc = _launch(fake, cols=cols, rows=rows)
         self.assertEqual(rc, 0)
         split = next(c for c in fake.calls
@@ -2680,6 +2685,42 @@ class BottomIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
         the test above happens to use."""
         self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W), 1 + 6)
         self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W - 1), 1)
+
+    def test_a_sidebar_split_first_makes_the_pane_narrower_than_the_window(self):
+        """Round 3, and the half two rounds of review passed over: the width that decides
+        is the PANE's, and only the shipped slot order makes that the window's.
+
+        `instance.frame_of` keeps an operator's `[frame] slots` verbatim and
+        `tests/test_frame_config.py::test_the_operators_own_slot_order_is_kept_exactly`
+        calls that a promise, so `["right", "top", "bottom"]` is a frame charter offers.
+        `panel_argvs` splits every slot off the HARNESS pane in list order, so `right`
+        going first leaves `bottom` 23 columns narrower than the window — measured on
+        tmux 3.7c with real `charter panel` processes: window 110x40, the bottom pane
+        reads back **87x7**, and the panel draws ONE line with six rows blank.
+
+        110 is not an arbitrary width. Below `[frame] min-cols` (100) `visible_slots`
+        drops `right` and `bottom` is full width again; at 118 the inset pane is still
+        `_LEFT_W` or wider and the table draws. 100..117 is the whole break band, and
+        this asserts inside it.
+
+        The control below is the same window and the same repo count with the shipped
+        order — without it, a fix that simply stopped sizing `bottom` for its content
+        would pass.
+        """
+        inset = ["right", "top", "bottom"]
+        self.assertEqual(self._bottom_split_size(cols=110, slots=inset), 1)
+        self.assertEqual(
+            self._bottom_split_size(cols=110, slots=["top", "bottom", "right"]), 1 + 6)
+
+    def test_the_inset_pane_still_gets_its_table_once_the_window_can_spare_it(self):
+        """Degradation, not refusal — the fix must not turn "sidebar first" into "never
+        a table". At 118 columns the inset pane is 95, which is `_LEFT_W` exactly, and
+        the table is drawn and therefore split for. Pinned from both sides of that
+        boundary so an off-by-one in the border column is red rather than absorbed."""
+        inset = ["right", "top", "bottom"]
+        edge = statusline._LEFT_W + layout.SLOT_SIZE["right"] + layout._BORDER_COLS
+        self.assertEqual(self._bottom_split_size(cols=edge, slots=inset), 1 + 6)
+        self.assertEqual(self._bottom_split_size(cols=edge - 1, slots=inset), 1)
 
 
 class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):

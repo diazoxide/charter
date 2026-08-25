@@ -264,9 +264,13 @@ attention row, capped so the harness always keeps at least 12 rows and floored a
 row `bottom` has always been. A workspace with no clones gets exactly that one row — and
 so does a frame narrower than the table's own 95 columns, or one at `minimal`, because
 "its content" means *what the panel will actually draw*, not how many clones there are:
-the launcher and the resize hook ask the same function the panel asks, with the same width
-and the same density. Narrow your terminal below 95 columns and `bottom` gives its rows
-back rather than keeping them blank. The
+the launcher and the resize hook ask the same function the panel asks, at the same density
+and — the part that is easy to get wrong — at the width of the **pane**, not of the
+window. Those are the same number for the shipped `slots`, where `bottom` spans the whole
+window. They are not the same if you have written a `slots` list that puts `right` before
+`bottom`: the sidebar is split off first, so `bottom` comes out 23 columns narrower, and
+it is that width the pane is sized for. Narrow your terminal below 95 columns and `bottom`
+gives its rows back rather than keeping them blank. The
 cap is recomputed on every terminal resize, not remembered from the launch — tmux does not
 refuse an over-large pane height, it takes the difference out of the neighbouring pane,
 and the neighbour is your agent session. Recomputing means charter runs for a moment on
@@ -280,9 +284,11 @@ drawn rather than drawn with its right-hand columns cut off: a row trimmed past 
 loses the CI glyph and the open-change count, and a dirty, failing repo then reads as a
 clean one. That is an ordinary width, not an exotic one — `min-cols` gates `right` and
 `top`, never `bottom` — so an 80-column frame is the attention row and nothing under it,
-and the pane is one row tall to match. The attention row itself is unaffected — it drops
-whole fields instead, in priority order. (The status line outside a frame still crops
-instead of refusing; that is #506.)
+and the pane is one row tall to match. A `slots` list naming `right` before `bottom` moves
+that threshold up by the sidebar's 23 columns: such a frame needs 118 columns of terminal
+before the table appears, and between 100 and 117 it is the attention row alone. The
+attention row itself is unaffected — it drops whole fields instead, in priority order.
+(The status line outside a frame still crops instead of refusing; that is #506.)
 
 If a future `[frame] slots` ever names an edge charter sizes but has no renderer for, that
 slot is skipped rather than drawn as a dead pane — the harness keeps the space — and
@@ -366,7 +372,7 @@ There are three levels:
 
 | level | edges | each panel says |
 |---|---|---|
-| `minimal` | `top` and `bottom` | one field on the attention row, four rows of repo table — and a `bottom` pane that is four rows tall, so the difference goes to your session |
+| `minimal` | `top` and `bottom` | one field on the attention row, at most four rows of repo table — and a `bottom` pane at most five rows tall (that row plus those four), so the difference goes to your session |
 | `normal` | `top` and `bottom` | everything they have, table as tall as the window can spare |
 | `full` | every edge | everything they have |
 
@@ -386,9 +392,12 @@ persona are what it exists to tell you), and `bottom` keeps only its highest-pri
 attention field (an alert if there is one, the spinner if work is running, otherwise the
 todo count, so the row is never blank) and at most four rows of repo table under it. The
 four that survive are the ones worth keeping — the repo you are standing in, and the ones
-with something on them — and the table still says how many it hid. The pane is four rows
-shorter to match, which is the point of the level: `minimal` gives your session the rows
-back rather than blanking them. If you have kept
+with something on them — and the table still says how many it hid. The pane is sized for
+those four rows instead of all of them, which is the point of the level: `minimal` gives
+your session the rows back rather than blanking them. How many rows that is depends on how
+many clones you have — a fourteen-repo workspace gets ten back, an eight-repo one gets
+four, and a workspace with four or fewer gets none, because there was never a fifth row to
+give. If you have kept
 `right` by writing `slots` yourself, `minimal` shows four chips in it and says the same.
 
 **The hotkey changes the density of the running frame, and nothing else.** `F2` opens the
@@ -417,7 +426,8 @@ plus the repo table under it, as many rows tall as the plane and the terminal al
 above); `right` (persona chips) is a 22-column sidebar that drops itself on a terminal too
 small for it. The **order** is the order the panes are split in, and therefore the
 geometry: with `bottom` before the sidebar its rows span the whole frame, while listing it
-last leaves it only the width the sidebar did not take. `bottom` is where an alert, the
+last leaves it only the width the sidebar did not take — 23 columns fewer, which means a
+118-column terminal before the table is drawn at all. `bottom` is where an alert, the
 command that fixes it, and the repo table all appear, so the shipped order gives it the
 full width.
 

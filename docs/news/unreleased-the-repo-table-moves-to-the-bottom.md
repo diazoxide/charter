@@ -58,14 +58,18 @@ draws". `minimal` and `normal` still expand to the same two strips, but what sep
 them is no longer only how much each panel *says* — `minimal` also keeps at most four rows
 of table, and the four that survive are ranked (the repo you are standing in, the ones
 with something on them), with the `…(+N more)` line still saying how many it hid. The pane
-is four rows shorter to match, so `minimal` actually gives your session the rows back
-rather than blanking them.
+is sized for those four rows instead of all of them — at most five rows tall, the
+attention row included — so `minimal` actually gives your session the rows back rather
+than blanking them. How many rows that is is however many the table was over four: ten on
+a fourteen-repo workspace, none at all on a workspace with four clones or fewer.
 
 **The panel's idle cost is unchanged, and that was a constraint rather than a hope.** A
-panel's idle tick is still exactly one `stat`. `bottom` is the one slot that animates, so a
-table that walked a directory per row would have paid that back fourteen times over, five
-times a second, for the length of every dispatch. Every row comes out of the gather cache;
-nothing here opens a repo directory. The one column that cannot be answered that way —
+panel's idle tick is still one filesystem touch — a read of the frame's own version file —
+whether the pane is one row or fifteen, and a repaint costs the same either way (measured:
+13 calls for a 2-line paint and the same 13 for a 15-line one). `bottom` is the one slot
+that animates, so a table that walked a directory per row would have paid that back
+fourteen times over, five times a second, for the length of every dispatch. Every row
+comes out of the gather cache; nothing here opens a repo directory. The one column that cannot be answered that way —
 presence, "who else is standing in this tree" — is absent rather than faked, exactly as
 the status line drops it on a pane too narrow to hold it.
 
@@ -84,15 +88,24 @@ question on the surface you see when you are *not* in a frame, and it is not fix
 
 **And the pane is sized for that, at every width and every density.** The launcher, the
 `window-resized` recompute and the panel itself all ask one function how many table rows
-there are room for, and they ask it with the same width and the same density. Narrow your
-terminal below 95 columns and `bottom` shrinks back to its one row; switch to `minimal`
-and it shrinks to the four rows that level draws. Both used to be sized from the repo
-count alone, so a six-repo plane on an 80-column terminal got a seven-row pane to draw one
-line in, and `minimal` on a wide one got an eleven-row pane to draw five — up to fourteen
-blank rows taken off your agent session, and re-taken on every subsequent resize.
+there are room for, at the same density and at the width of the **pane** — which is the
+window's only when `bottom` spans it. Narrow your terminal below 95 columns and `bottom`
+shrinks back to its one row; switch to `minimal` and it shrinks to the four rows that
+level draws. Both used to be sized from the repo count alone, so a six-repo plane on an
+80-column terminal got a seven-row pane to draw one line in, and `minimal` on a wide one
+got an eleven-row pane to draw five — up to fourteen blank rows taken off your agent
+session, and re-taken on every subsequent resize.
 
 Nothing to adopt: upgrading is the whole of it. A `charter.toml` still naming `left` in
 `[frame] slots` is not an error — the name is dropped the way any unknown slot always was,
-and you get the rest of your list. If yours pins the order, check it: `bottom` listed
-after `right` is inset to 177 columns instead of the window's full width, and the table
-starts giving up its right-hand columns.
+and you get the rest of your list. **If yours pins the order, this is the line to read.**
+`bottom` listed after `right` is split off a harness pane the sidebar has already
+narrowed, so it is 23 columns short of the window — 87 in a 110-column terminal, which is
+under the table's own 95, so that frame is the attention row alone until the terminal
+reaches 118 columns. That is the geometry your order asks for and charter keeps it; what
+changed is that the pane is now sized for it, one row rather than seven. Put `bottom`
+before `right` and it spans the window again.
+
+Charter works that width out from the order your panes were split in rather than asking
+tmux for the pane's own; that is right for every frame charter itself lays out, and
+**#510** is whether the running frame should measure instead of derive.

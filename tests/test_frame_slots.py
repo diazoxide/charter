@@ -735,7 +735,7 @@ class BottomTable(PersonaIso, unittest.TestCase):
                         _seed(fid, repos=[_row(f"repo{i}") for i in range(n)])
                         if level is not None:
                             state.record_density(fid, level)
-                        want = slots.bottom_rows_wanted(fid, cols=cols)
+                        want = slots.bottom_rows_wanted(fid, pane_cols=cols)
                         out = self._render(fid, cols=cols, rows=want)
                         self.assertEqual(len(out.split("\n")), want, out)
 
@@ -754,9 +754,9 @@ class BottomTable(PersonaIso, unittest.TestCase):
         _seed("narrow", repos=[_row(f"repo{i}") for i in range(6)])
         for cols in (50, 80, statusline._LEFT_W - 1):
             with self.subTest(cols=cols):
-                self.assertEqual(slots.bottom_rows_wanted("narrow", cols=cols), 1)
+                self.assertEqual(slots.bottom_rows_wanted("narrow", pane_cols=cols), 1)
         self.assertEqual(slots.bottom_rows_wanted("narrow",
-                                                  cols=statusline._LEFT_W), 1 + 6)
+                                                  pane_cols=statusline._LEFT_W), 1 + 6)
 
     def test_a_terse_density_asks_for_a_shorter_pane_not_a_blanker_one(self):
         """`minimal` exists to give the harness its rows back — `instance.FRAME_DENSITY`
@@ -769,9 +769,9 @@ class BottomTable(PersonaIso, unittest.TestCase):
         between the two numbers is the one the level is for."""
         _seed("dense", repos=[_row(f"repo{i}") for i in range(10)])
         state.record_density("dense", "normal")
-        wide = slots.bottom_rows_wanted("dense", cols=200)
+        wide = slots.bottom_rows_wanted("dense", pane_cols=200)
         state.record_density("dense", "minimal")
-        terse = slots.bottom_rows_wanted("dense", cols=200)
+        terse = slots.bottom_rows_wanted("dense", pane_cols=200)
         self.assertEqual(wide, 1 + 10)
         self.assertEqual(terse, 1 + slots._TERSE_ROWS)
         self.assertLess(terse, wide)
@@ -957,19 +957,19 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
 
     def test_a_plane_with_no_repos_wants_exactly_the_attention_row(self):
         _seed("f-1")
-        self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200), 1)
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1)
 
     def test_it_grows_with_the_repos_and_the_pieces_alike(self):
         _seed("f-1", repos=[_row("a"), _row("b")],
               worktrees=[_row("p", repo="a")])
-        self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200), 1 + 3)
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1 + 3)
 
     def test_it_is_capped_at_the_wide_tables_own_row_budget(self):
         """A workspace with forty clones must ask for a fifteen-row strip, not a
         forty-one-row one — `_MAX_REPO_LINES` is the same total-row budget the wide table
         keeps, reused rather than invented fresh."""
         _seed("f-1", repos=[_row(f"r{i}") for i in range(40)])
-        self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200),
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200),
                          1 + statusline._MAX_REPO_LINES)
 
     def test_the_width_is_required_and_cannot_be_confused_with_the_row_count(self):
@@ -984,6 +984,28 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         with self.assertRaises(TypeError):
             slots.bottom_rows_wanted("f-1", 200)
 
+    def test_the_width_asked_for_is_the_panes_and_a_window_width_will_not_fit(self):
+        """The rename is the guard, and this is what pins it. Round 2 of #500 spelled this
+        argument `cols` and every caller handed it the WINDOW's width — right only when
+        nothing vertical was split before `bottom`. `pane_cols` is not a nicer name for
+        the same number: it is the name that makes the old call a `TypeError` here rather
+        than six blank rows in a frame nobody thought to re-measure.
+
+        Asserted on the signature rather than only on a failing keyword, so a future
+        `**kwargs` (or a `cols` alias added back for compatibility) is red too — an alias
+        would restore exactly the confusion this closes. The next spelling to refuse is
+        `width`, which is what `_table_cap` calls its own parameter: it takes the pane's
+        width because the RENDERER measures a pane, and a caller that copies that name up
+        here would be naming the thing correctly by luck rather than by contract."""
+        import inspect
+        sig = inspect.signature(slots.bottom_rows_wanted)
+        self.assertEqual([p.name for p in sig.parameters.values()], ["fid", "pane_cols"])
+        self.assertEqual(sig.parameters["pane_cols"].kind,
+                         inspect.Parameter.KEYWORD_ONLY)
+        _seed("f-1", repos=[_row("a")])
+        with self.assertRaises(TypeError):
+            slots.bottom_rows_wanted("f-1", cols=200)
+
     def test_it_never_runs_a_git_sweep(self):
         """It is called on a launch the operator is waiting on, and again on every step
         of a terminal drag. `gather.row_count` answers from the cache when there is one
@@ -992,7 +1014,7 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         _seed("f-1", repos=[_row("a")])
         with mock.patch("charter.frame.gather.scan",
                         side_effect=AssertionError("row_count ran a scan")):
-            self.assertEqual(slots.bottom_rows_wanted("f-1", cols=200), 2)
+            self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 2)
 
     def test_a_narrow_frame_does_not_even_ask_how_many_repos_there_are(self):
         """The launch path reaches `gather.row_count` with no cache by design
@@ -1006,7 +1028,7 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         _seed("f-1", repos=[_row(f"r{i}") for i in range(6)])
         with mock.patch("charter.frame.gather.row_count",
                         side_effect=AssertionError("counted rows it had no room for")):
-            self.assertEqual(slots.bottom_rows_wanted("f-1", cols=80), 1)
+            self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=80), 1)
 
 
 class RightRenderer(PersonaIso, unittest.TestCase):

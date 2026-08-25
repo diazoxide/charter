@@ -1067,9 +1067,11 @@ def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
         time.sleep(_POLL_SECONDS)
 
 
-def _launch_sizes(fid: str, slots: list[str], cols: int, rows: int) -> dict[str, int]:
-    """How big each of *slots* is split, in a *cols* x *rows* window — the launch-time
-    half of `layout.slot_sizes`, shared by both launch paths so they cannot disagree.
+def _launch_sizes(fid: str, slots: list[str], *,
+                  window_cols: int, window_rows: int) -> dict[str, int]:
+    """How big each of *slots* is split, in a *window_cols* x *window_rows* window —
+    the launch-time half of `layout.slot_sizes`, shared by both launch paths so they
+    cannot disagree.
 
     `bottom` is the only slot whose answer is not a constant (#488): it is sized to the
     repo table it is about to draw, floored at the one row it always was and capped so
@@ -1078,21 +1080,34 @@ def _launch_sizes(fid: str, slots: list[str], cols: int, rows: int) -> dict[str,
     coming up with a pane taller than its content or a table cut off with nothing saying
     so.
 
-    **`cols` is not decoration (#500).** The renderer draws NO table below
+    **The width is not decoration (#500).** The renderer draws NO table below
     `statusline._LEFT_W` (95) and at most `slots._TERSE_ROWS` of one at a `terse`
     density, and neither is a rare shape: `layout.visible_slots` keeps `bottom` down to
     `min_cols // 2`, so an 80-column terminal is one, and `minimal` is a level the F2
     menu offers. Sizing from the repo count alone gave both of them a pane sized for a
     table the panel then refused to draw — up to fourteen blank rows taken off the
-    harness. `bottom` is split BEFORE `right`, so the window's width IS the pane's.
+    harness.
+
+    **And it is the PANE's columns, which are not always the window's.** *slots* is the
+    split order and the split order is the geometry (`instance.frame_of` keeps an
+    operator's own `[frame] slots` verbatim), so a `right` split before `bottom` has
+    already taken 23 columns off the pane `bottom` is carved from — 87 in a 110-column
+    window, measured on tmux 3.7c. `layout.bottom_cols` is that arithmetic; handing
+    `bottom_rows_wanted` *window_cols* straight through was #500's own second half, and
+    it put six blank rows into exactly the frame this function exists to size. Both
+    measurements are keyword-only and named for the WINDOW here for that reason: this
+    function's whole job is turning a window into panes, and the two names that reach it
+    must not be mistakable for either a row count or a pane's own width.
 
     Affordable at launch by construction, and that is not incidental: `cmd_launch` calls
     `gather.discard(fid)` before it draws anything, so this reaches `gather.row_count`
     with no cache and gets the directory-listing answer — an `iterdir`, never the git
     sweep `gather.scan` would run. See `gather.row_count`'s own docstring for both paths.
     """
-    return layout.slot_sizes(slots, window_rows=rows,
-                             content_rows=frame_slots.bottom_rows_wanted(fid, cols=cols))
+    return layout.slot_sizes(
+        slots, window_rows=window_rows,
+        content_rows=frame_slots.bottom_rows_wanted(
+            fid, pane_cols=layout.bottom_cols(slots, window_cols=window_cols)))
 
 
 def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -> list[str]:
@@ -1509,7 +1524,8 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[
     # the whole environment here (#446): see `_guest_harness_env`.
     panes = _draw_panels(socket, slots=slots, fid=fid, harness_pane=harness_pane,
                          env=None, v=v, pane_env=_pane_identity_env(env, v),
-                         sizes=_launch_sizes(fid, slots, cols, rows))
+                         sizes=_launch_sizes(fid, slots, window_cols=cols,
+                                             window_rows=rows))
     _arm_panel_respawn(socket, fid=fid, panes=panes, env=None)
     tmuxctl.run("focusing the harness pane",
                 tmuxctl.server_argv(socket, "select-pane", "-t", harness_pane))
@@ -2229,7 +2245,8 @@ def cmd_launch(args) -> int:
             panes = _draw_panels(
                 SOCKET, slots=slots, fid=fid, harness_pane=harness_pane, env=env, v=v,
                 pane_env=_pane_identity_env(env, v),
-                sizes=_launch_sizes(fid, slots, cols, rows))
+                sizes=_launch_sizes(fid, slots, window_cols=cols,
+                                    window_rows=rows))
             _arm_panel_respawn(SOCKET, fid=fid, panes=panes, env=env)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
@@ -2483,12 +2500,23 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
         # `instance.FRAME_DENSITY` for why that order is geometry rather than reading
         # order. Every split targets the harness pane, so a slot added to a frame that
         # already has the others lands exactly where a launch would have put it.
+        #
+        # `list(keep) + missing` and NOT `want`, for `bottom`'s width (#500): the panes
+        # that survived this re-layout are wherever their own launch put them, and the
+        # new ones are split after all of them. That concatenation is the order the panes
+        # are actually in — which is what `layout.bottom_cols` needs, and what `want`'s
+        # order is not. A frame launched with `["right", "top", "bottom"]` and then sent
+        # to the `full` density keeps its inset 87-column `bottom`, because nothing was
+        # killed or re-split; sizing it from `want`'s `["top", "bottom", "right"]` would
+        # say 110 and hand it the seven-row pane this fix exists to stop.
         keep.update(_split_panels(
             socket, slots=missing, fid=fid, harness_pane=harness_pane, env=None,
             pane_env=pane_env,
             sizes=layout.slot_sizes(
                 want, window_rows=window_rows,
-                content_rows=frame_slots.bottom_rows_wanted(fid, cols=window_cols))))
+                content_rows=frame_slots.bottom_rows_wanted(
+                    fid, pane_cols=layout.bottom_cols(list(keep) + missing,
+                                                      window_cols=window_cols)))))
         _arm_panel_respawn(socket, fid=fid,
                            panes={s: keep[s] for s in missing if s in keep}, env=None)
 
@@ -2529,6 +2557,12 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     narrowed terminal keep a table-sized pane it could no longer draw a table in, on every
     step of the drag rather than only at launch.
 
+    **And the window's width is not the PANE's.** `layout.bottom_cols` turns one into the
+    other from the order *panes* is in, which is the order those panes were split in. A
+    frame whose `[frame] slots` names `right` before `bottom` has an 87-column `bottom`
+    in a 110-column window, and this is the site that re-applied the wrong height for it
+    on every step of a drag — the launch-time defect's longer-lived half.
+
     Every pane id is checked before it is used, even though both callers already checked
     theirs. `_panel_died_hook_argv`'s own rule ("every value that reaches the text is
     what decides, never where it came from") applies to a `-t` argument too, and #475 was
@@ -2539,9 +2573,17 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     between the map being read and this running) makes `resize-pane` fail, and that is
     not an integration failure worth printing over the agent's own screen.
     """
+    # `list(panes)` twice, and it is the same list for two different questions:
+    # `slot_sizes` needs to know which OTHER horizontal strips are charging `bottom`
+    # rows, and `bottom_cols` needs the order they were split in to know how wide
+    # `bottom` is. Both callers hand a map whose insertion order is that split order —
+    # `_draw_panels` records a launch in split order, `_relayout` keeps survivors ahead
+    # of new splits, and `state.panes` is JSON, which round-trips a dict's order.
+    order = list(panes)
     sizes = layout.slot_sizes(
-        list(panes), window_rows=window_rows,
-        content_rows=frame_slots.bottom_rows_wanted(fid, cols=window_cols))
+        order, window_rows=window_rows,
+        content_rows=frame_slots.bottom_rows_wanted(
+            fid, pane_cols=layout.bottom_cols(order, window_cols=window_cols)))
     for slot, pane_id in panes.items():
         if slot not in _RESIZE_FLAG or slot not in sizes:
             continue

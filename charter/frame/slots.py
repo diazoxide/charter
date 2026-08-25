@@ -347,14 +347,16 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     # `charter  main`. Refusing to draw says "no room to say" where a trimmed row says
     # "nothing to say".
     #
-    # **Ordinary, not exotic — an 80-column terminal lands here.** `bottom` is split
-    # BEFORE `right` (the slot order IS the geometry — `instance.FRAME_FIELDS`), so its
-    # width is the whole WINDOW's; and `[frame] min-cols` (100) gates `right` and `top`
-    # only — `layout.visible_slots` keeps `bottom` all the way down to `min_cols // 2`.
-    # So every frame between 50 and `_LEFT_W - 1` (94) columns draws the attention row
-    # and no table, which is why :func:`_table_cap` — not this function — is what the
-    # LAUNCHER asks, and why it asks with the same width. The attention row above is
-    # unaffected either way; it does its own per-field budgeting (`_fit_fields`).
+    # **Ordinary, not exotic — an 80-column terminal lands here.** `[frame] min-cols`
+    # (100) gates `right` and `top` only; `layout.visible_slots` keeps `bottom` all the
+    # way down to `min_cols // 2`, so every frame between 50 and `_LEFT_W - 1` (94)
+    # columns draws the attention row and no table. And the PANE can be narrower than the
+    # window on top of that: the slot order is the geometry, so a `[frame] slots` that
+    # names `right` before `bottom` insets this pane by `right`'s columns and its border
+    # (`layout.bottom_cols`). Which is why :func:`_table_cap` — not this function — is
+    # what the LAUNCHER asks, and why it asks with the width of the PANE rather than of
+    # the window. The attention row above is unaffected either way; it does its own
+    # per-field budgeting (`_fit_fields`).
     if width < sl._LEFT_W:
         return []
 
@@ -443,7 +445,7 @@ def _table_cap(fid: str, width: int) -> int:
       table under its attention row rather than forty.
 
     **Both sides of "how tall is `bottom`?" call this, and that is the whole point.**
-    :func:`bottom_rows_wanted` asks it with the WINDOW's width to size the pane;
+    :func:`bottom_rows_wanted` asks it to size the pane before it exists;
     :func:`_bottom` asks it with the pane's own measured width to bound what it draws
     into it. A cap applied on one side only is exactly the defect #500 fixes: the sizer
     used to answer from the repo count alone, so an 80-column frame with six repos got a
@@ -452,9 +454,12 @@ def _table_cap(fid: str, width: int) -> int:
     re-taken by `cmd_resize` on every subsequent resize.
 
     Takes *width* rather than measuring it: the renderer has a pane to measure and the
-    launcher has only the window it is about to split. Same number by construction —
-    `bottom` is split BEFORE `right` (`instance.FRAME_FIELDS`' order is the geometry), so
-    the pane's width IS the window's.
+    launcher has only a window it has not split yet. **Both must be the PANE's width, and
+    that is not always the window's** — `layout.bottom_cols` is where the launcher's side
+    of it is computed, because a `[frame] slots` naming `right` before `bottom` insets
+    this pane by 23 columns (measured on tmux 3.7c: 87 in a 110-column window). Sizing
+    from the window's width there is the second half of the same defect, and it is what
+    round 2 of #500 shipped.
     """
     from .. import statusline as sl
     if width < sl._LEFT_W:
@@ -465,8 +470,8 @@ def _table_cap(fid: str, width: int) -> int:
     return cap
 
 
-def bottom_rows_wanted(fid: str, *, cols: int) -> int:
-    """How many rows `_bottom` would fill for this frame in a *cols*-column window.
+def bottom_rows_wanted(fid: str, *, pane_cols: int) -> int:
+    """How many rows `_bottom` would fill for this frame in a *pane_cols*-column PANE.
 
     **One answer to "how tall is `bottom`", read by both sides of the question.** The
     renderer spends the pane it was given (:func:`_table_lines`' *budget*); the LAUNCHER
@@ -479,10 +484,20 @@ def bottom_rows_wanted(fid: str, *, cols: int) -> int:
     renders `_bottom` into a pane of exactly this height, at exactly this width and at
     every density, and counts the lines that come back.
 
-    *cols* is required, and keyword-only so no caller can pass a row count by mistake.
-    A frame narrower than `statusline._LEFT_W` draws no table at all, so it wants the
-    one-row strip `bottom` always was — see :func:`_table_cap`, which is where every
+    *pane_cols* is required, and keyword-only so no caller can pass a row count by
+    mistake. A pane narrower than `statusline._LEFT_W` draws no table at all, so it wants
+    the one-row strip `bottom` always was — see :func:`_table_cap`, which is where every
     reason the renderer draws fewer rows than there is content now lives.
+
+    **The PANE's columns, not the window's, and the name is the guard.** Round 2 of #500
+    called this argument `cols` and every caller handed it the window's width, which is
+    only `bottom`'s width when nothing took columns off it first: with a `[frame]
+    slots` of `["right", "top", "bottom"]` a 110-column window gives an 87-column
+    `bottom` (measured, tmux 3.7c), so a six-repo plane was split seven rows tall for a
+    table the panel then refused to draw. The number is `layout.bottom_cols`' answer, and
+    the rename is what makes the old, wrong call a `TypeError` at the call site rather
+    than a frame with six blank rows in it — the same discipline `window_cols=` already
+    applies one level up.
 
     `+ 1` is the attention row — the alert, the spinner, this session's news, the todo
     count and the hotkey hint — which `_bottom` always draws and which #488 is explicit
@@ -495,7 +510,7 @@ def bottom_rows_wanted(fid: str, *, cols: int) -> int:
     about to discard.
     """
     from . import gather
-    cap = _table_cap(fid, cols)
+    cap = _table_cap(fid, pane_cols)
     return 1 + (min(gather.row_count(fid), cap) if cap > 0 else 0)
 
 
@@ -706,10 +721,13 @@ def _bottom(fid: str) -> str:
 
     **The pane is measured, not assumed.** :func:`_height` reads this pane's own tty the
     way :func:`_width` reads its width; :func:`bottom_rows_wanted` is what told the
-    LAUNCHER how tall to make it, and both go through :func:`_table_cap` with the same
-    width and the same density — so on an untouched frame the two agree exactly and no
-    row is either blank or cut, at every width the frame is drawn at and at every level
-    the density menu offers. A pane that is shorter anyway — a transient mid-resize
+    LAUNCHER how tall to make it, and both go through :func:`_table_cap` at the same
+    density and at THIS PANE's width — measured here, predicted there by
+    `layout.bottom_cols`, which is the only reason the launcher's number can match a pane
+    the sidebar has narrowed. So on an untouched frame the two agree exactly and no row
+    is either blank or cut, at every width the frame is drawn at, at every level the
+    density menu offers, and in whatever order the operator's `[frame] slots` puts the
+    edges in. A pane that is shorter anyway — a transient mid-resize
     size, or a window with no rows to spare — costs the table its lowest-priority rows
     through `_pick_rows`' ranking, never the attention row.
 

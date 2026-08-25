@@ -2838,6 +2838,75 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                              f"the {slot!r} panel died sometime after repainting")
 
 
+class BottomsWidthIsWhatTmuxActuallyGivesIt(_TmuxServerFixture, PersonaIso):
+    """#500 round 3: `layout.bottom_cols` says how wide the `bottom` pane comes out.
+    tmux is the only authority on that, so this asks tmux.
+
+    The unit tests in `tests/test_frame_layout.py` pin the arithmetic against a number
+    written down by a human who once ran tmux. That is exactly the shape of assertion
+    this repo has been burned by — a constant that was right the day it was measured and
+    is never re-checked. What is actually being claimed is that a `right` split off the
+    harness pane BEFORE `bottom` costs `bottom` the sidebar's columns plus one border
+    column, and the only thing that can confirm it is `#{pane_width}` off a real server.
+
+    **The splits are `layout.panel_argvs`' own commands, not hand-retyped ones** — the
+    direction (`-h`/`-v`), the `-b`, and the `-l` are the production values, because
+    those flags ARE the geometry under test. Only the program after `--` is swapped for
+    a `sleep`, so this class needs no importable plane, no `charter panel` process and
+    no repaint: it is about rectangles, and `FourEdgeIntegration` above is where real
+    panels are proven.
+    """
+
+    def _bottom_width(self, order: list[str], cols: int) -> int:
+        session = f"bw{self._pane_counter}"
+        self._pane_counter += 1
+        r = self._srv("new-session", "-d", "-s", session,
+                      "-x", str(cols), "-y", "40", "-P", "-F", "#{pane_id}",
+                      "--", "sleep", "600")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        self.addCleanup(self._srv, "kill-session", "-t", session)
+
+        sizes = layout.slot_sizes(order, window_rows=40, content_rows=7)
+        cmds = layout.panel_argvs(slots=order, session=session,
+                                  socket=self.SOCKET_NAME,
+                                  harness_pane=harness_pane, sizes=sizes)
+        widths: dict[str, int] = {}
+        for slot, cmd in zip(order, cmds):
+            argv = cmd[:cmd.index("--") + 1] + ["sleep", "600"]
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+            self.assertEqual(p.returncode, 0, f"splitting {slot!r}: {p.stderr}")
+            pane = p.stdout.strip()
+            self.addCleanup(_kill_pid, self._pane_pid_on(pane))
+            widths[slot] = pane
+        got = self._srv("display-message", "-p", "-t", widths["bottom"],
+                        "#{pane_width}").stdout.strip()
+        return int(got)
+
+    def _pane_pid_on(self, pane: str) -> str:
+        return self._srv("display-message", "-p", "-t", pane,
+                         "#{pane_pid}").stdout.strip()
+
+    def test_tmux_agrees_with_the_arithmetic_in_both_slot_orders(self):
+        """Both orders in one test, because the claim is a DIFFERENCE: the shipped order
+        leaves `bottom` the whole window and an operator's `right`-first order does not.
+        Asserted against `layout.bottom_cols`' own answer rather than against 110 and 87,
+        so this is tmux checking charter's arithmetic rather than two literals agreeing
+        with each other — and the second assertion is what stops "always the window's
+        width" from passing.
+        """
+        for order in (["top", "bottom", "right"], ["right", "top", "bottom"],
+                      ["top", "right", "bottom"], ["bottom", "right"]):
+            with self.subTest(order=order):
+                self.assertEqual(self._bottom_width(order, 110),
+                                 layout.bottom_cols(order, window_cols=110),
+                                 f"tmux disagrees with layout.bottom_cols for {order}")
+        self.assertNotEqual(
+            layout.bottom_cols(["top", "bottom", "right"], window_cols=110),
+            layout.bottom_cols(["right", "top", "bottom"], window_cols=110),
+            "the two orders answered the same width — the loop above proved nothing")
+
+
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
 class EarlyDeathIntegration(unittest.TestCase):
     """#384: what a command that dies before the frame is drawn actually leaves behind.

@@ -878,6 +878,41 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         that over-asks is granted by tmux out of the harness rather than refused."""
         self.assertEqual(self._bottom_split_size("80:50"), 1)
 
+    def test_a_bottom_split_in_beside_a_surviving_sidebar_gets_the_inset_width(self):
+        """Round 3, and the case that says why the order used here is the PANE order and
+        not *want*'s. A frame launched with `[frame] slots = ["right", "top"]` already
+        has a 22-column sidebar; growing it to `full` splits `bottom` off a harness pane
+        that is therefore already 23 columns narrower than the window — 87 in a
+        110-column window, measured on tmux 3.7c, which draws no table.
+
+        `want` at `full` is `["top", "bottom", "right"]`, whose order says `bottom` comes
+        first and is full width. That is the order a fresh launch would produce, not the
+        order THIS frame's panes are in: `right` is already there and is not re-split.
+        Sizing from `want` here answers 110 and hands back the seven-row pane — so the
+        list handed to `layout.bottom_cols` is the surviving panes in their recorded
+        order followed by what is about to be split, which is what actually happens.
+
+        The control is the same re-layout with no sidebar surviving, so a fix that simply
+        stopped sizing `bottom` for its content is red.
+        """
+        rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
+                 "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
+                 "change": None, "sigil": "", "current": False, "worktree_count": 0}
+                for i in range(6)]
+        gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
+                               "current_repo": None, "repos": rows, "worktrees": []})
+
+        def _split_l(panels):
+            state.record_panes(self.fid, panels=panels)
+            rc, fake = self._run("full", _Tmux(size="110:50"))
+            self.assertEqual(rc, 0)
+            cmd = next(c for c in fake.calls
+                       if "split-window" in c and "bottom" in c)
+            return int(cmd[cmd.index("-l") + 1])
+
+        self.assertEqual(_split_l({"right": "%3", "top": "%1"}), 1)
+        self.assertEqual(_split_l({"top": "%1"}), 1 + 6)
+
     def test_shrinking_kills_the_panes_it_no_longer_wants(self):
         state.record_panes(self.fid, panels={"top": "%1", "right": "%3", "bottom": "%2"})
         rc, fake = self._run("minimal")
@@ -1288,7 +1323,9 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
                                "current_repo": None, "repos": rows, "worktrees": []})
 
-    def _bottom_height(self, size):
+    def _bottom_height(self, size, *, panels=None):
+        if panels is not None:
+            state.record_panes(self.fid, panels=panels)
         fake = _Tmux(size=size)
         with mock.patch("charter.frame.tmuxctl.run", side_effect=fake):
             rc = commands_frame.cmd_resize(SimpleNamespace(frame=self.fid))
@@ -1318,6 +1355,31 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         self.assertEqual(self._bottom_height("200:50"), 1 + slots._TERSE_ROWS)
         state.record_density(self.fid, "normal")
         self.assertEqual(self._bottom_height("200:50"), 1 + 6)
+
+    def test_a_pane_inset_beside_the_sidebar_is_resized_for_its_own_width(self):
+        """Round 3. The window's width is not the PANE's when the frame's `[frame] slots`
+        put `right` before `bottom`: `panel_argvs` splits both off the harness pane in
+        list order, so `bottom` comes off a harness that is already 23 columns narrower —
+        measured on tmux 3.7c, 87 columns in a 110-column window, which is below
+        `statusline._LEFT_W` and draws no table at all.
+
+        `cmd_resize` never consults a slot list, so this was the longer-lived half of the
+        defect: it re-applied the over-tall pane on every step of a terminal drag. What it
+        does have is the recorded pane map, whose insertion order IS the order those panes
+        were split in — `_split_panels` writes it that way and JSON round-trips it — so
+        `layout.bottom_cols` can turn the window's width into the pane's.
+
+        The control is the same window and the same map with the shipped order, so a fix
+        that stopped sizing `bottom` for its content at all is red rather than green.
+        """
+        self.assertEqual(
+            self._bottom_height("110:50",
+                                panels={"right": "%3", "top": "%1", "bottom": "%2"}),
+            1)
+        self.assertEqual(
+            self._bottom_height("110:50",
+                                panels={"top": "%1", "bottom": "%2", "right": "%3"}),
+            1 + 6)
 
 
 class DensityIsWiredIntoTheCli(unittest.TestCase):

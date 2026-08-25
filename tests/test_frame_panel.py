@@ -251,6 +251,88 @@ class Tick(PersonaIso, unittest.TestCase):
         self.assertNotEqual(result, state.version(fid))
 
 
+class IdleCostsTheSameWhateverTheBottomPaneIsTallEnoughToDraw(PersonaIso,
+                                                              unittest.TestCase):
+    """The budget this module's own docstring states, checked against the thing #488 and
+    #500 changed underneath it: `bottom` is no longer a one-row strip, so "the frame
+    costs nothing at idle" is a claim about a pane that can now be fifteen rows tall.
+
+    An idle tick is the steady state a panel sits in between bumps — the version has not
+    moved, the pane has not resized, nothing is in flight — and it must cost the same
+    there whether the pane is one row or `statusline._MAX_REPO_LINES + 1`, because the
+    loop runs `1 / panel.TICK` times a second for the life of the frame.
+
+    Counted DIFFERENTIALLY and at every spelling a filesystem touch arrives by, for
+    `tests/test_frame_slots.py::BottomTable`' own reasons: an absolute number would have
+    to be revised whenever the version record changes shape, and a revised number is not
+    a budget. `os.stat` alone would miss it — `state.version` is a `read_text`, which is
+    `io.open` and not `builtins.open`; a directory walk is `os.scandir`; a git call is
+    `subprocess.Popen` under `run`. Each of those is the next spelling this would
+    otherwise miss.
+
+    Sibling to `BottomTable.test_a_taller_pane_costs_the_same_syscalls_as_a_one_row_one`,
+    which bounds a REPAINT. This bounds the tick that decides not to repaint at all —
+    the one that actually runs five times a second when nothing is happening.
+    """
+
+    _WATCHED = (("os", ("stat", "lstat", "scandir", "listdir")),
+                ("io", ("open",)), ("builtins", ("open",)),
+                ("subprocess", ("run", "Popen")))
+
+    def _idle_tick_calls(self, fid: str, repos: int) -> list[str]:
+        import builtins
+        import contextlib
+        import io as _io
+        import subprocess as _sp
+        from charter.frame import gather
+        mods = {"os": os, "io": _io, "builtins": builtins, "subprocess": _sp}
+        gather.save(fid, {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+                          "repos": [{"name": f"r{i}", "branch": "main", "dirty": False,
+                                     "tracked_dirty": False, "ahead": 0, "behind": 0,
+                                     "ci": None, "change": None, "sigil": "",
+                                     "current": False, "worktree_count": 0}
+                                    for i in range(repos)],
+                          "worktrees": []})
+        state.bump(fid)
+        version = state.version(fid)
+        rows = 1 + repos
+        seen: list[str] = []
+        size = mock.patch("os.get_terminal_size",
+                          return_value=os.terminal_size((200, rows)))
+        out = mock.patch.object(sys.stdout, "fileno", return_value=1, create=True)
+        with size, out, redirect_stdout(io.StringIO()):
+            # Primed first: the resolvers this reaches memoise, so an unprimed tick
+            # would be measuring the priming rather than the steady state.
+            panel._tick({"flag": False}, version, "bottom", fid)
+            with contextlib.ExitStack() as stack:
+                for mod_name, fns in self._WATCHED:
+                    for fn in fns:
+                        real = getattr(mods[mod_name], fn)
+                        tag = f"{mod_name}.{fn}"
+                        stack.enter_context(mock.patch(
+                            tag,
+                            (lambda r, t: lambda *a, **k:
+                                (seen.append(t), r(*a, **k))[1])(real, tag)))
+                painted = panel._tick({"flag": False}, version, "bottom", fid)
+        self.assertEqual(painted, version,
+                         "this tick repainted — it is not the idle one being budgeted")
+        return seen
+
+    def test_an_idle_tick_does_not_grow_with_the_panes_height(self):
+        from charter import statusline
+        short = self._idle_tick_calls("idle-short", 0)
+        tall = self._idle_tick_calls("idle-tall", statusline._MAX_REPO_LINES)
+        self.assertTrue(short, "nothing was counted at all — the budget is vacuous")
+        self.assertEqual(
+            sorted(tall), sorted(short),
+            f"a tall pane's idle tick cost {len(tall)} filesystem calls where a one-row "
+            f"pane's cost {len(short)} — the loop is doing per-row work when it is not "
+            f"even repainting")
+        self.assertEqual(len(short), 1,
+                         f"an idle tick cost {len(short)} filesystem calls, not the one "
+                         f"read of the frame's version this module's budget is: {short}")
+
+
 class Sigwinch(unittest.TestCase):
     """A resize does not bump the frame's version — only charter's own hooks call
     `state.bump` — so without this handler a pane would sit painted at the OLD size

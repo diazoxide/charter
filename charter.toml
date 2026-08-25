@@ -16,7 +16,9 @@ default = "steward"
 # `layout.visible_slots` drops it rather than cramping the harness.
 #
 # The ORDER is the geometry (#488): `bottom` is split before `right`, so its table gets
-# the full window width. Listed after it, the same table would be inset to 177 columns
-# and start losing its own right-hand columns. There is no `left` any more — it drew a
-# 22-column copy of the table `bottom` now draws properly.
+# the full window width. Listed after it, `bottom` is split off a harness the sidebar has
+# already narrowed — 23 columns short of the window, so the table needs a 118-column
+# terminal before it is drawn at all, and below that the pane is the attention row alone
+# (#500). There is no `left` any more — it drew a 22-column copy of the table `bottom`
+# now draws properly.
 slots = ["top", "bottom", "right"]
