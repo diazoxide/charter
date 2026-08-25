@@ -118,6 +118,44 @@ def _frame_workspace(fid: str) -> str:
     return state.workspace_for(fid)
 
 
+def _sidebar_live(fid: str) -> bool:
+    """Is the `right` panel on screen in THIS frame, right now?
+
+    Asked so `_top` can stop repeating what the sidebar already says (#530) — and asked
+    LIVE, on every repaint, because the answer moves while the frame runs. #387's density
+    hotkey and `commands_frame.cmd_density` re-lay-out a running frame, and `right` is the
+    first slot `layout.visible_slots` drops on ANY shortage, so a value decided once at
+    launch is wrong the moment the operator presses a key or resizes the window.
+
+    **`state.panes` is the record, and it is the only one that can answer this.** It is
+    written where a frame's shape is actually DECIDED — by `_draw_panels` at launch and
+    again by `cmd_density` after `_relayout` — from the panes tmux really gave back, so a
+    slot whose `split-window` failed is absent from it exactly like a slot the density
+    dropped. The alternatives are all worse in the same direction: `instance
+    .density_slots` is what was *asked for* rather than what is *there*, `[frame] slots`
+    is what the operator configured, and an environment variable is whatever was true at
+    launch — the one thing the docstring above says it must not be. tmux itself cannot be
+    asked either: `list-panes` reports ids and geometry and nothing that says which pane
+    charter meant as `right` (see `state.record_panes`).
+
+    **The cost is one small JSON read on a slot that is not animated.** `top` is not in
+    :data:`ANIMATED`, so it repaints on a version bump, never on `panel.TICK` — and a
+    density change bumps the version precisely so that surviving panels re-read, which is
+    exactly when this answer can have changed. It reads the same directory `_top` already
+    opens four times over (`_frame_workspace`, `verbosity`, `state.harness_session`, the
+    recorded gauge), and nothing on the idle path (`panel._running`, whose one `stat` per
+    tick #387 pinned) goes anywhere near it.
+
+    **False when charter cannot tell**, which covers the corrupt file and the frame
+    launched by a charter that predates `record_panes` alike. That is the safe direction
+    and not merely the convenient one: false means the roster comes BACK to the top bar,
+    which is at worst the duplication this issue is about, while a wrong `True` would take
+    the plane's only roster off a screen that has no sidebar to replace it.
+    """
+    from . import state
+    return "right" in state.panes(fid)
+
+
 def _width() -> int:
     """The pane's own width in columns — measured, never read out of `$COLUMNS`.
 
@@ -211,6 +249,29 @@ def _top(fid: str) -> str:
     that predates the fourth field — answers `[]` and draws nothing, rather than a
     confident `ctx 0%`. Pinned by `tests.test_frame_slots.TopRenderer`.
 
+    **The persona ROSTER is drawn only when the sidebar is not (#530), and the active
+    persona always is.** The operator asked why the top bar lists every persona when the
+    sidebar lists them too, and they were right for the frame they were looking at: since
+    #516 `_right` draws the same names with a heading, memory badges, vault dots, health
+    marks and in-flight badges, in an aligned column — so the top bar's `◇ personas …`
+    said strictly less about exactly the same thing. But it is a CONDITION and not a
+    deletion, because `layout.visible_slots` drops `right` first on any shortage: on a
+    terminal too narrow or too short for a sidebar the top bar is the plane's only roster
+    again, and a `charter statusline` session outside a frame has no sidebar at all
+    (`statusline._persona_line`, this row's other caller, is left exactly as it was).
+
+    `◆ <active>` is on the other side of that line, and stays whatever else is on screen.
+    The roster is a LIST — a thing the sidebar can hold more of, better — while the active
+    persona is IDENTITY: "who am I being" is read here, next to the workspace, which is
+    the question this whole row exists to answer. The sidebar does mark the active one
+    with `▸`, but that is a mark inside a list, not an answer beside a workspace.
+
+    `_sidebar_live` is what decides, per repaint, and its docstring argues the record it
+    reads. What this function must not do is reassemble the roster's words to drop half of
+    them: `statusline._persona_line_parts` hands over the row already split, the same way
+    `PersonaChip` hands `_right` its chips, so nothing here repeats what either surface
+    says and neither can drift from the other.
+
     **At `terse` the version goes, and nothing else does.** `top` answers "where am I and
     who am I being", and of the things on it the charter version is the only one that
     reads the same on every frame on this machine all day — it is a fact about the
@@ -265,7 +326,12 @@ def _top(fid: str) -> str:
     # pointer reads off this slot.
     ws = _frame_workspace(fid)
     pin = "*" if ws == os.environ.get("CHARTER_WORKSPACE", "").strip() else ""
-    persona = statusline._persona_line() or ""
+    # Identity always; the roster only when nothing else on screen is drawing it (#530).
+    # `_persona_line_parts` is what decides which words are which — this row picks its
+    # pieces and never assembles any, for the reason `_right`'s docstring gives about the
+    # chips: a fact recomposed here is a fact free to drift from the surface it copies.
+    line = statusline._persona_line_parts()
+    persona = "" if line is None else line.rendered(roster=not _sidebar_live(fid))
     # Two file reads on a slot that repaints only on a version bump (`top` is not in
     # `ANIMATED`), and nothing is read at all for a frame with no recorded session —
     # which is every frame whose harness is not Claude Code.

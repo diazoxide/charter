@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import sys
 import unittest
 from unittest import mock
 
-from charter import config, instance, statusline, todos, tui, workspace
+from charter import config, instance, persona, statusline, todos, tui, workspace
 from charter.frame import gather, layout, slots, state
 
 from tests._isolation import PersonaIso
@@ -1812,6 +1813,203 @@ class TheSidebarListsTheWorkspacesTodos(PersonaIso, unittest.TestCase):
         # And the cache really was cold: the rows came from the live fallback, not from
         # a file some earlier assertion had quietly left behind.
         self.assertTrue(scanned.called)
+
+
+class TheTopBarStopsRepeatingTheSidebarsRoster(PersonaIso, unittest.TestCase):
+    """#530: *"we still have personas in top-bar, why to have it if we already have
+    personas list in right sidebar?"*
+
+    Since #516 `_right` draws every persona with a heading, a memory badge, a vault dot, a
+    health mark and an in-flight badge, in an aligned column. `_top` drew the same names
+    flat — strictly less about exactly the same thing — so with a sidebar on screen the
+    roster on the identity row said nothing new.
+
+    **The property is a CONDITION, not a deletion**, and these tests pin both directions,
+    because either one alone is satisfied by a wrong constant: `layout.visible_slots` drops
+    `right` first on ANY shortage, so on a narrow or short terminal the top bar is the
+    plane's only roster, and outside a frame there is no sidebar at all. A test that only
+    asserted the roster's absence would pass a `_top` that never draws one.
+
+    **What must survive either way is `◆ <active>`** — the roster is a list the sidebar
+    can hold better, but the active persona is identity, and "who am I being" is read on
+    this row next to the workspace.
+
+    The panes are recorded through `state.record_panes`, which is where a launch
+    (`commands_frame._draw_panels`) and a live density change (`cmd_density`) both write
+    the frame's real shape — not through a stub of `_sidebar_live`, so what is exercised
+    here is the record an operator's frame actually leaves behind.
+    """
+
+    #: None of these carry the words the assertions look for, so a hit is a label
+    #: charter drew and never the fixture's own name.
+    OTHERS = ("forge", "release")
+
+    def setUp(self):
+        super().setUp()
+        self.make_persona("steward")
+        for n in self.OTHERS:
+            self.make_persona(n)
+        persona.set_active("steward")
+
+    def _top(self, fid, *, cols=200) -> str:
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, 3))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return tui.strip_ansi(slots.render("top", fid))
+
+    def _with_sidebar(self, fid="f-wide") -> str:
+        state.record_panes(fid, panels={"top": "%1", "right": "%3", "bottom": "%2"})
+        return self._top(fid)
+
+    def _without_sidebar(self, fid="f-narrow") -> str:
+        state.record_panes(fid, panels={"top": "%1", "bottom": "%2"})
+        return self._top(fid, cols=60)
+
+    def test_the_roster_is_gone_when_the_sidebar_is_drawing_it(self):
+        row = self._with_sidebar()
+        self.assertNotIn("◇ personas", row, row)
+        for n in self.OTHERS:
+            self.assertNotIn(n, row, f"`{n}` is on the top bar and in the sidebar: {row!r}")
+
+    def test_the_active_persona_stays_because_it_is_identity_and_not_a_roster(self):
+        """The half that must never go. The sidebar marks the active persona with `▸`
+        inside a column of names; this row answers "who am I being" beside the workspace,
+        which is a different question and this row's own."""
+        row = self._with_sidebar()
+        self.assertIn("◆ steward", row, row)
+
+    def test_the_roster_comes_back_when_the_sidebar_is_not_on_screen(self):
+        """`visible_slots` drops `right` first on any shortage, so this is the terminal
+        where the top bar is the plane's only roster. Without this the fix above would be
+        a deletion."""
+        row = self._without_sidebar()
+        self.assertIn("◇ personas", row, row)
+        for n in self.OTHERS:
+            self.assertIn(n, row, row)
+
+    def test_a_frame_with_no_recorded_panes_keeps_its_roster(self):
+        """The migration case and the corrupt-file case, which `state.panes` answers the
+        same way. Charter cannot tell, so it draws the roster: at worst that is the
+        duplication this issue is about, where the other direction would take the plane's
+        only roster off a screen with no sidebar to replace it."""
+        self.assertEqual({}, state.panes("f-unrecorded"))
+        self.assertIn("◇ personas", self._top("f-unrecorded"))
+
+    def test_the_answer_is_read_live_rather_than_at_launch(self):
+        """#387's density hotkey adds and drops `right` while the frame runs, so a value
+        decided once is wrong the moment the operator presses a key. Same fid, same
+        process, same renderer — only the record changes in between."""
+        fid = "f-density"
+        state.record_panes(fid, panels={"top": "%1", "bottom": "%2"})
+        self.assertIn("◇ personas", self._top(fid))
+        state.record_panes(fid, panels={"top": "%1", "right": "%3", "bottom": "%2"})
+        self.assertNotIn("◇ personas", self._top(fid))
+        state.record_panes(fid, panels={"top": "%1", "bottom": "%2"})
+        self.assertIn("◇ personas", self._top(fid),
+                      "the sidebar went away and the roster did not come back")
+
+    def test_density_decides_the_version_and_the_sidebar_decides_the_roster(self):
+        """`terse` is the VERSION's business (see `_top`'s docstring), and this must not
+        become a second, silent rule about the persona half. Both terse rows below drop
+        the version; which of them carries a roster is decided by the sidebar and by
+        nothing else.
+
+        Both are reachable. `charter frame-density minimal` expands to `["top", "bottom"]`
+        — no sidebar, so the terse row is the plane's only roster — while an explicit
+        `[frame] slots` naming `right` alongside `density = "minimal"` wins over the
+        preset (`instance.frame_of`), which is the terse frame that does have one.
+        """
+        for fid, panels, roster in (("f-terse-bare", {"top": "%1", "bottom": "%2"}, True),
+                                    ("f-terse-side", {"top": "%1", "right": "%3"}, False)):
+            with self.subTest(fid=fid):
+                state.record_density(fid, "minimal")
+                state.record_panes(fid, panels=panels)
+                self.assertEqual("terse", slots.verbosity(fid))
+                row = self._top(fid)
+                self.assertNotIn("charter 0.", row, "terse kept the version")
+                self.assertIn("◆ steward", row, row)
+                self.assertEqual(roster, "◇ personas" in row, row)
+
+    def test_top_picks_the_parts_rather_than_reassembling_the_row(self):
+        """The shape #516 gave the chips, applied to the row (#530). `_top` chooses which
+        pieces it draws and never what they say — pinned by handing it values nothing in
+        `slots.py` could have produced, and requiring the two it keeps to reach the pane
+        byte-for-byte while the one it drops does not."""
+        parts = statusline.PersonaLine("SENTINEL-HEAD-0xF00D", "SENTINEL-ROSTER-0xBEEF",
+                                       "SENTINEL-TAIL-0xCAFE")
+        with mock.patch("charter.statusline._persona_line_parts", return_value=parts):
+            with_bar = self._with_sidebar()
+            without = self._without_sidebar()
+        self.assertIn("SENTINEL-HEAD-0xF00D", with_bar)
+        self.assertIn("SENTINEL-TAIL-0xCAFE", with_bar)
+        self.assertNotIn("SENTINEL-ROSTER-0xBEEF", with_bar)
+        self.assertIn("SENTINEL-ROSTER-0xBEEF", without)
+
+    def test_a_plane_with_no_personas_draws_no_persona_half_at_all(self):
+        """`_persona_line_parts` answers `None` there, and the row is still a row —
+        the same promise the flat `_persona_line` made by answering `None`."""
+        for n in ("steward", *self.OTHERS):
+            shutil.rmtree(config.PERSONAS_DIR / n)
+        persona.clear_active()
+        row = self._with_sidebar()
+        self.assertIn("⬢", row, row)
+        self.assertNotIn("◆", row, row)
+
+
+class TheStatusLineOutsideAFrameKeepsItsRoster(PersonaIso, unittest.TestCase):
+    """The other caller (#530). `statusline._persona_line` feeds every session that is
+    NOT in a frame, where there is no sidebar and the roster is the only place personas
+    appear — so the split that let `_top` drop half of the row must leave that surface
+    saying exactly what it said before, in exactly the order it said it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        for n in ("steward", "forge", "release"):
+            self.make_persona(n)
+
+    def test_the_flat_line_still_carries_the_whole_roster(self):
+        persona.set_active("steward")
+        line = tui.strip_ansi(statusline._persona_line() or "")
+        self.assertIn("◆ steward", line)
+        self.assertIn("◇ personas", line)
+        self.assertIn("forge", line)
+        self.assertIn("release", line)
+
+    def test_the_flat_line_is_exactly_the_three_parts_in_order(self):
+        """The invariant that keeps the two surfaces from drifting: whatever the parts
+        say, joined head-roster-tail, IS the row the status line prints. Asserted for
+        both branches, because they are two different compositions."""
+        for active in ("steward", None):
+            with self.subTest(active=active):
+                if active:
+                    persona.set_active(active)
+                else:
+                    persona.clear_active()
+                parts = statusline._persona_line_parts()
+                self.assertEqual(parts.head + parts.roster + parts.tail,
+                                 statusline._persona_line())
+
+    def test_no_active_persona_keeps_the_command_that_gets_you_one(self):
+        """The `tail`, and why it is a field of its own rather than part of the roster:
+        a sidebar full of persona names still never says how to adopt one, so the tip
+        survives the roster being dropped while the names do not."""
+        persona.clear_active()
+        parts = statusline._persona_line_parts()
+        self.assertIn("persona none", tui.strip_ansi(parts.head))
+        self.assertIn("charter persona use", tui.strip_ansi(parts.tail))
+        self.assertNotIn("charter persona use", tui.strip_ansi(parts.roster))
+        kept = tui.strip_ansi(parts.rendered(roster=False))
+        self.assertIn("charter persona use", kept)
+        self.assertNotIn("forge", kept, kept)
+
+    def test_the_parts_need_no_separator_between_them(self):
+        """`PersonaChip`'s contract, kept here too: each part carries its own leading
+        separator, so dropping one never leaves a dangling ` · ` at the seam."""
+        persona.clear_active()
+        kept = tui.strip_ansi(statusline._persona_line_parts().rendered(roster=False))
+        self.assertNotIn(" ·  · ", kept, kept)
+        self.assertFalse(kept.rstrip().endswith("·"), kept)
 
 
 if __name__ == "__main__":
