@@ -47,8 +47,25 @@ the workspace lock and the opencode plugin realm — every one of them a test wh
 depended on the terminal it ran in. Each now states, once per fixture, that it is outside a
 frame with no session id and no pinned workspace.
 
-The suite now reports the same result in four environments that used to disagree: a fresh
-checkout with the variables cleared, a plane that has been used, inside a live charter
-frame, and with `CHARTER_WORKSPACE` pinned to a name no fixture uses.
+**And "derived, not listed" had to earn its own words back.** The first version of this
+guard spelled `TMUX` and defended the spelling — the one name with no constant to derive it
+from — while missing three names charter *already keeps in a constant*: `$EDM_HOME`,
+`$EDM_WORKSPACE` and `$EDM_PERSONA`, from before charter was renamed from `edm`. charter
+does not honor their values, but it does warn about them, on stderr, at import — so
+`$EDM_WORKSPACE` exported in a shell put a 133-column banner into the output of every
+`charter` the suite spawned, and two tests failed on the machine of the person most likely
+to still have it exported while passing everywhere else. They are scrubbed now, and asked
+of the same constant the warning is printed from, so a fourth rename is covered on the
+commit that adds it.
 
-None of this reaches you unless you run charter's own test suite. Nothing to adopt.
+Getting there turned up something that *does* reach you: that warning was printed **twice**,
+every time, in every charter invocation with a legacy variable set — two calls at import,
+one beside the definition and one in the bootstrap. It is printed once now.
+
+The suite now reports the same result in five environments that used to disagree: a fresh
+checkout with the variables cleared, a plane that has been used, inside a live charter
+frame, with `CHARTER_WORKSPACE` pinned to a name no fixture uses, and with the pre-rename
+`EDM_WORKSPACE` still exported.
+
+Beyond the doubled warning, none of this reaches you unless you run charter's own test
+suite. Nothing to adopt.

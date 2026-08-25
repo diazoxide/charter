@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from . import instance as _instance
+from . import legacyenv as _legacyenv
 from . import root as _root
 
 #: Fallbacks used when a control plane declares nothing (or none was found).
@@ -83,23 +84,6 @@ def worktrees_root_for(root: "Path", cfg: dict) -> "Path | None":
         return p.resolve()
     except (OSError, RuntimeError):
         return p       # unresolvable (symlink loop, vanished parent) — still usable
-
-
-_LEGACY_ENV_VARS = (("EDM_HOME", "CHARTER_HOME"), ("EDM_WORKSPACE", "CHARTER_WORKSPACE"),
-                    ("EDM_PERSONA", "CHARTER_PERSONA"))
-
-
-def _warn_legacy_env_vars() -> None:
-    """Print a loud stderr warning for each old `edm`-era env var that's still set —
-    its value is never honored (only the new name is), so silence here would look
-    like state (vaults!) vanished rather than simply needing a renamed env var."""
-    for legacy, new in _LEGACY_ENV_VARS:
-        if os.environ.get(legacy):
-            print(f"charter: ${legacy} is no longer used (charter was renamed from `edm`) — "
-                  f"set ${new} instead. Ignoring ${legacy}.", file=sys.stderr)
-
-
-_warn_legacy_env_vars()
 
 
 def _migrate_state_dir(root: Path) -> Path:
@@ -522,5 +506,15 @@ def restore(previous: dict) -> None:
 
 
 # Bootstrap: locate the plane the same way every command does, and derive from it.
-_warn_legacy_env_vars()
+#
+# The `edm`-era env var names and this warning live in `charter.legacyenv` rather than
+# here, and the move is the point: importing THIS module RESOLVES A PLANE, so a caller that
+# only wants to know charter's former namespace had to pay for one. `tests/_envguard` is
+# that caller and cannot pay — it strips charter's variables from the suite's environment
+# *before* charter is first imported — so it did not ask, and those three names were the
+# only ones that reached the suite (#540). See `legacyenv`'s docstring.
+#
+# Warned ONCE, here. There used to be two calls, one beside the definition and this one, so
+# every charter invocation with a legacy variable exported printed each banner twice.
+_legacyenv.warn()
 globals().update(derive(_root.find_root_or_cwd()))

@@ -35,12 +35,24 @@ under test asks for.
    that never had the variable set in the first place.
 
 **What counts as a charter environment variable is a property, not a list.** It is any
-name in charter's own namespace (``CHARTER_*``, ``CLAUDE*``) plus the terminal-identity
-variables `charter.session` derives a session and a pane from — asked of
-`session._PANE_ID_VARS` and `session._WINDOW_ID_VARS` rather than copied out of them, for
-the same reason `PersonaIso` asks `config.derive` instead of re-listing twenty-five
-settings. A ``CHARTER_`` variable invented next month is guarded the day it is invented,
-and #519's specific four are covered by the property rather than by being spelled.
+name in charter's own namespace (``CHARTER_*``, ``CLAUDE*``), plus the terminal-identity
+variables `charter.session` derives a session and a pane from, plus charter's FORMER
+namespace — each asked of the constant production reads it from (`session._PANE_ID_VARS`,
+`session._WINDOW_ID_VARS`, `legacyenv.NAMES`) rather than copied out of them, for the same
+reason `PersonaIso` asks `config.derive` instead of re-listing twenty-five settings. A
+``CHARTER_`` variable invented next month is guarded the day it is invented, and #519's
+specific four are covered by the property rather than by being spelled.
+
+**The former namespace is here because the first version of this file forgot it, and the
+way it forgot is the argument for the paragraph above.** That version spelled ``TMUX`` and
+justified the spelling — "the one name with no constant to derive it from" — while missing
+three names charter *already keeps in a constant*, and which are exactly the ones a
+long-time charter developer still has exported. ``$EDM_WORKSPACE`` alone made two tests
+fail on that developer's machine and pass in CI: `charter.legacyenv.warn` prints a
+133-column stderr banner for each old name still set, at import of `charter.config`, and so
+in every subprocess this suite spawns (#540). Scrubbed, not refused — charter never honors
+their VALUES, so no test can be asserting the operator's terminal through one; what leaked
+was the banner, and removing the name removes the banner.
 
 **How a test declares.** Three ways, and all three are things tests already do:
 
@@ -107,13 +119,31 @@ def _scrubbed_names() -> frozenset[str]:
     NOT walk, scrubbed anyway because "deliberately not read" is a decision that can change
     and a scrub costs nothing if it is wrong.
 
+    `legacyenv.NAMES` is charter's own former namespace — ``$EDM_HOME``, ``$EDM_WORKSPACE``,
+    ``$EDM_PERSONA``, from before the rename. Outside ``CHARTER_``/``CLAUDE`` by spelling
+    but squarely inside charter by ownership: `legacyenv.warn` runs at import of
+    `charter.config` and prints a 133-column line to stderr for each one still set, which
+    reaches every subprocess this suite spawns. Missing them cost two failures on a
+    developer's machine that CI could not reproduce (#540). Asked of the constant, so a
+    fourth rename is guarded on the commit that adds it —
+    `test_no_test_reads_the_operators_shell.WhatIsGuarded` pins that the asking still
+    happens.
+
+    ``EDM_`` is deliberately NOT a fourth entry in :data:`_PREFIXES`. A prefix is what
+    ``CHARTER_`` earns by being open — a variable nobody has invented yet must not be able
+    to arrive from the operator's shell. charter's ex-namespace is closed in the other
+    direction: no new ``EDM_*`` name will ever be invented, so a prefix would buy nothing
+    forward and would reach sideways into whatever unrelated tool on the machine happens to
+    share three letters.
+
     ``TMUX`` is the one name spelled out, and it has to be: it is tmux's variable, not
     charter's, read in half a dozen places to answer "is this process inside a tmux" with
     no constant to derive it from. Its pane counterpart arrives from `_PANE_ID_VARS`, so
     inventing a constant for one of a pair would buy nothing.
     """
-    from charter import session
-    return frozenset(session._PANE_ID_VARS + session._WINDOW_ID_VARS + ("TMUX",))
+    from charter import legacyenv, session
+    return frozenset(session._PANE_ID_VARS + session._WINDOW_ID_VARS + ("TMUX",)
+                     + legacyenv.NAMES)
 
 
 def _loud_names() -> frozenset[str]:
@@ -305,9 +335,12 @@ def install() -> None:
         return
     _installed = True
 
-    # `charter.session` imports `os` and `re` and nothing else — in particular not
-    # `charter.config` — so asking it for the pane variables here cannot pull the plane
-    # resolution in ahead of the scrub below.
+    # `charter.session` imports `os` and `re`, `charter.legacyenv` imports `os` and `sys`,
+    # and neither imports anything else — in particular not `charter.config` — so asking
+    # them for the pane variables and the pre-rename names here cannot pull the plane
+    # resolution in ahead of the scrub below. `legacyenv` is a separate module for exactly
+    # this reason: those three names used to live in `config`, where nobody could ask for
+    # them without resolving a plane, so this file did not ask and they leaked (#540).
     _SCRUB_NAMES = _scrubbed_names()
 
     for key in [k for k in os.environ if _in_namespace(k)]:

@@ -26,7 +26,7 @@ import sys
 import unittest
 from unittest import mock
 
-from charter import commands_frame, session, workspace
+from charter import commands_frame, legacyenv, session, workspace
 from tests import _envguard
 from tests._isolation import PersonaIso
 
@@ -62,6 +62,42 @@ class WhatIsGuarded(unittest.TestCase):
         `_PANE_ID_VARS`; `$TMUX` has no constant to derive it from and is spelled once."""
         self.assertIn("TMUX", _envguard._LOUD)
         self.assertIn("TMUX_PANE", _envguard._LOUD)
+
+    def test_every_name_charter_was_renamed_from_is_scrubbed(self):
+        """charter's OWN former namespace, which the first version of this guard missed.
+
+        It missed them the way lists get missed: ``$EDM_HOME``, ``$EDM_WORKSPACE`` and
+        ``$EDM_PERSONA`` are outside ``CHARTER_``/``CLAUDE`` by spelling, so nothing in the
+        property covered them — while `legacyenv.warn` reads all three at import of
+        `charter.config` and prints a 133-column line to stderr for each one still set, in
+        this process and in every subprocess this suite spawns. ``$EDM_WORKSPACE`` alone
+        made `test_cli_smoke` fail on the width of `charter init`'s output and
+        `test_a_deny_survives_a_broken_channel` fail on an exit status, on the machine of
+        the person most likely to still have it exported, and neither failed in CI (#540).
+
+        Scrubbed but deliberately NOT loud. Tier two is for names where "unset" is a claim
+        about the world the test runs in — whose session is this, is this a real tmux,
+        which workspace outranks every pointer. charter never honors these VALUES at all;
+        what leaked was the banner, not an answer, so removing the name is the whole fix
+        and a refusal would be noise on a read that decides nothing.
+        """
+        for name in legacyenv.NAMES:
+            with self.subTest(variable=name):
+                self.assertTrue(
+                    _envguard._in_namespace(name),
+                    f"${name} is in `charter.legacyenv.RENAMES`, so `legacyenv.warn` "
+                    f"prints a 133-column stderr banner for it at import of "
+                    f"`charter.config` — here and in every subprocess this suite spawns — "
+                    f"whenever the operator has it exported. Unscrubbed, this suite "
+                    f"answers differently on their machine than in CI (#540). Two ways "
+                    f"out:\n"
+                    f"  - derive it: `tests._envguard._scrubbed_names` asks "
+                    f"`legacyenv.NAMES` for exactly this set, so a name that reached "
+                    f"`RENAMES` from somewhere else needs its source asked for there too; "
+                    f"or\n"
+                    f"  - retire it: if charter no longer warns about ${name}, drop its "
+                    f"pair from `legacyenv.RENAMES` — the warning and the scrub are two "
+                    f"halves of one fact and must not disagree.")
 
     def test_every_loud_name_is_also_scrubbed(self):
         """Refusing a read the operator's value could still reach is half a guard: the
@@ -181,12 +217,17 @@ class WhatIsScrubbed(unittest.TestCase):
         """The half `_planeguard` says it cannot see. A spawned `charter` resolves its own
         plane from its own environment, so the scrub has to be a real `unsetenv` and not a
         Python-side illusion — otherwise a subprocess in this suite keys state by the
-        operator's live frame id."""
-        out = subprocess.run(
-            [sys.executable, "-c",
-             "import os;print(' '.join(k for k in os.environ "
-             "if k.startswith(('CHARTER_', 'CLAUDE')) or k in ('TMUX', 'TMUX_PANE')))"],
-            capture_output=True, text=True, check=True).stdout.split()
+        operator's live frame id.
+
+        The child is asked about the whole guarded set rather than a hand-copied corner of
+        it: the probe used to spell four names, and the three it did not spell were
+        precisely the ones that reached `charter init`'s stderr through a subprocess and
+        cost two failures (#540)."""
+        probe = (f"import os;print(' '.join(k for k in os.environ "
+                 f"if k.startswith({_envguard._PREFIXES!r}) "
+                 f"or k in {tuple(sorted(_envguard._SCRUB_NAMES))!r}))")
+        out = subprocess.run([sys.executable, "-c", probe],
+                             capture_output=True, text=True, check=True).stdout.split()
         self.assertEqual(out, [], f"{out} reached a child process")
 
     def test_an_ambient_session_reaching_a_fresh_suite_is_removed_before_charter_loads(self):
@@ -201,9 +242,15 @@ class WhatIsScrubbed(unittest.TestCase):
 
         A child rather than an in-process check because the scrub runs once, at import of
         the `tests` package, and by the time any test executes it has long since happened.
+
+        ``$EDM_WORKSPACE`` is planted alongside them because it is the one that got away:
+        every other name here was already gone when this case was written, and that one
+        walked straight through the property into `charter init`'s stderr (#540). Planting
+        it is what makes this case fail on the tree that had the hole.
         """
         planted = {"CHARTER_SESSION_ID": "ambient-sess", "CHARTER_WORKSPACE": "ambient-ws",
-                   "TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%9"}
+                   "TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%9",
+                   "EDM_WORKSPACE": "legacy-ws"}
         probe = ("import json, os, tests;"
                  "from tests import _envguard;"
                  "print(json.dumps({"
