@@ -570,5 +570,73 @@ class ReapAcrossServers(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.frame_server("../escape"))
 
 
+class TheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
+    """`record_workspace`/`frame_workspace` — #512.
+
+    A frame is launched FOR a workspace, and no process inside it can work out which one:
+    `workspace.resolve`'s deciding rungs are a `$CHARTER_WORKSPACE` the launcher usually
+    does not have, a cwd that is the plane root, a per-session pointer keyed on an id that
+    inside a frame names the FRAME, and a per-terminal pointer keyed on the asking pane.
+    The launcher is one ordinary shell in the operator's own terminal and answers all
+    three; a panel answers none of them, and falls to `default`. So the launcher writes
+    the answer down.
+    """
+
+    def test_the_recorded_workspace_reads_back(self):
+        state.record_workspace("f-1", "harness-wrapper")
+        self.assertEqual(state.frame_workspace("f-1"), "harness-wrapper")
+
+    def test_a_frame_nobody_recorded_one_for_says_it_does_not_know(self):
+        """`None`, never a guessed name. The migration case (a frame launched by a
+        charter that predates this and still running across the upgrade) and the failed
+        write are the same fact — "do not take this frame's workspace from here" — and
+        `slots._frame_workspace` is what decides what to do instead."""
+        state.bump("f-never-recorded")
+        self.assertIsNone(state.frame_workspace("f-never-recorded"))
+
+    def test_a_relaunch_on_the_same_id_overwrites_rather_than_keeps(self):
+        """The recycled-pid case #383 is about, on this file. A frame id is
+        `<workspace>-<launcher pid>` and `reap` keeps a directory while that pid is live —
+        which on a launch it is, because it is the launcher's own. An adopted `workspace`
+        is another frame's answer, so every launch rewrites it, exactly as `record_server`
+        does with its own marker."""
+        state.record_workspace("f-1", "an-older-frames-workspace")
+        state.record_workspace("f-1", "this-frames-workspace")
+        self.assertEqual(state.frame_workspace("f-1"), "this-frames-workspace")
+
+    def test_a_name_that_could_escape_the_workspaces_directory_is_refused_on_read(self):
+        """The value is joined onto `workspaces/` by `workspace_dir()` and drawn on a
+        panel's screen. #442 is what an unchecked `../../` in that position already cost
+        once, through `workspace.declared_default`; this keeps the same rule
+        (`workspace.valid_name`) on charter's own copy of the same kind of value.
+
+        Written past `record_workspace` deliberately — the writer is charter's own
+        launcher and never produces this, so a test that went through it would be pinning
+        the writer rather than the reader that has to survive a corrupt file."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "workspace").write_text("../../escaped\n")
+        self.assertIsNone(state.frame_workspace("f-1"))
+
+    def test_an_empty_recorded_workspace_is_not_known_either(self):
+        """A truncated write is the shape that would otherwise pass the truthiness test
+        one layer up and hand `workspace_dir()` the `workspaces/` directory itself."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "workspace").write_text("\n")
+        self.assertIsNone(state.frame_workspace("f-1"))
+
+    def test_recording_for_an_id_no_directory_can_be_made_for_is_a_no_op(self):
+        """The launch path's own promise, kept here too: an id `contain.child` refuses
+        degrades to "charter does not know" rather than taking the launch down."""
+        state.record_workspace("../escape", "demo")
+        self.assertIsNone(state.frame_workspace("../escape"))
+
+    def test_reading_never_creates_the_directory_it_looked_in(self):
+        """The rule the whole module keeps and `version`'s docstring states: a read must
+        not resurrect a directory `reap()` has just removed."""
+        self.assertIsNone(state.frame_workspace("f-never-existed"))
+        self.assertFalse(state.frame_dir("f-never-existed").exists(),
+                         "a read minted the frame directory it was only looking in")
+
+
 if __name__ == "__main__":
     unittest.main()

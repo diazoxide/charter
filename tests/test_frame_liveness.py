@@ -11,7 +11,7 @@ import os
 import unittest
 from unittest import mock
 
-from charter import hooks
+from charter import hooks, workspace
 from charter.frame import gather, notify, state
 
 from tests._isolation import PersonaIso, run_hook
@@ -65,7 +65,33 @@ class Notify(PersonaIso, unittest.TestCase):
              mock.patch.object(gather, "refresh") as refresh:
             notify._last["at"] = 0.0
             notify.plane_changed()
-            refresh.assert_called_once_with("f-1")
+            refresh.assert_called_once()
+            self.assertEqual(refresh.call_args.args, ("f-1",))
+
+    def test_the_refresh_is_keyed_to_the_frames_workspace_not_this_hooks(self):
+        """#512. The cache belongs to the FRAME and a panel draws it whole, so a refresh
+        keyed to another workspace does not degrade the table — it replaces it. This runs
+        inside the harness, which resolves for the SESSION; the launcher resolved for the
+        frame and wrote that answer down. Without this, a launch gathers the workspace you
+        launched for and the very first tool call swaps in another one's repos."""
+        state.record_workspace("f-1", "the-frames-own")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+             mock.patch.object(gather, "refresh") as refresh:
+            notify._last["at"] = 0.0
+            notify.plane_changed()
+            refresh.assert_called_once_with("f-1", workspace="the-frames-own")
+
+    def test_a_frame_with_no_recorded_workspace_refreshes_what_it_always_did(self):
+        """The migration case. `state.workspace_for`'s last rung is a local `resolve()`,
+        so a frame launched by a charter that predates the record gathers exactly the
+        workspace this hook would have gathered on its own — never worse than before
+        #512, and never a blank."""
+        self.assertIsNone(state.frame_workspace("f-1"))
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+             mock.patch.object(gather, "refresh") as refresh:
+            notify._last["at"] = 0.0
+            notify.plane_changed()
+            refresh.assert_called_once_with("f-1", workspace=workspace.resolve())
 
     def test_a_second_call_inside_the_debounce_window_skips_the_refresh_too(self):
         """The cache refresh rides the SAME debounce as the version bump (see the
@@ -99,7 +125,7 @@ class Notify(PersonaIso, unittest.TestCase):
         order = []
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
              mock.patch.object(gather, "refresh",
-                                side_effect=lambda fid: order.append("refresh")), \
+                                side_effect=lambda fid, **kw: order.append("refresh")), \
              mock.patch.object(state, "bump",
                                 side_effect=lambda fid: order.append("bump")):
             notify._last["at"] = 0.0

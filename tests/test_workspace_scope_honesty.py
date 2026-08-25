@@ -84,6 +84,49 @@ class TestScopeNamesWhatWasWritten(ScopeBase):
         self.assertEqual(workspace.resolve(session_id=self.SID), "alpha")
 
 
+class TestAskingWhatOneSessionChose(ScopeBase):
+    """`workspace.for_session` — the per-session pointer rung, asked about a session that
+    is not this process's.
+
+    Public since #512, for one caller that genuinely has to distinguish it from the rest of
+    the chain: a frame panel. Inside a frame the frame IS the charter session, so `charter
+    workspace use` writes this pointer under the FRAME's id and `docs/frame.md` promises
+    that "moves the panels too". The panels also carry a launch-time answer the launcher
+    recorded for them, and an operator's live choice has to outrank it — which is only
+    askable if this rung can be asked ON ITS OWN. `resolve()` cannot answer it: it returns
+    a workspace whatever happened, and `source()`'s label is a sentence for a status line.
+    """
+
+    def test_it_names_the_workspace_that_session_chose(self):
+        with mock.patch.object(workspace, "_terminal_id", return_value=None):
+            workspace.set_active("alpha")
+        self.assertEqual(workspace.for_session(self.SID), "alpha")
+
+    def test_a_session_that_chose_nothing_answers_none_rather_than_a_default(self):
+        """The distinction the caller needs and `resolve()` cannot make: `resolve` would
+        answer `default` here, which is a workspace, not "nobody chose"."""
+        self.assertIsNone(workspace.for_session("a-session-that-never-chose"))
+        self.assertEqual(workspace.resolve(session_id="a-session-that-never-chose"),
+                         config.DEFAULT_WORKSPACE)
+
+    def test_it_answers_for_the_session_asked_about_not_this_process(self):
+        """The whole reason it takes an argument: a panel asks about the FRAME's id while
+        running as its own process."""
+        with mock.patch.object(workspace, "_terminal_id", return_value=None):
+            workspace.set_active("alpha")
+        self.assertIsNone(workspace.for_session("some-other-session"))
+
+    def test_a_name_that_could_escape_the_workspaces_directory_is_refused(self):
+        """It feeds `workspace_dir()`'s join like every other rung, and #442 is what an
+        unchecked `../../` in that position cost once already."""
+        config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        workspace._session_file("hostile").write_text("../../escaped\n")
+        self.assertIsNone(workspace.for_session("hostile"))
+
+    def test_no_session_id_at_all_is_not_an_error(self):
+        self.assertIsNone(workspace.for_session(""))
+
+
 class TestTheMessageFollowsTheScope(ScopeBase):
     def test_terminal_scope_may_promise_a_restart(self):
         self.assertIn("reopening", _scope_note("terminal"))

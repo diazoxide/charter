@@ -368,6 +368,124 @@ def frame_server(fid: str) -> str | None:
         return None
 
 
+def record_workspace(fid: str, name: str) -> None:
+    """Write down which workspace this frame was LAUNCHED for.
+
+    **A panel cannot work this out for itself, and #512 is what that costs.**
+    `workspace.resolve`'s rungs are, in order: `--workspace`, `$CHARTER_WORKSPACE`, the
+    tree you are standing in, a per-SESSION pointer, a per-TERMINAL pointer, the declared
+    default. At LAUNCH — before anything inside the frame has chosen anything — a panel
+    process reaches none of the rungs that could speak for the frame:
+
+    * `$CHARTER_WORKSPACE` arrives as the empty string on every launch where the operator
+      did not pin one by hand — `commands_frame._frame_identity_env` emits every name in
+      `_FRAME_IDENTITY`, present or not, precisely so a frame cannot inherit a *stale*
+      pin from whichever launcher started the shared tmux server. Absent is absent.
+    * the cwd is the pane's, which is the plane root for anyone who typed `charter claude`
+      there — `workspace.from_path` answers `None` for it.
+    * the per-session pointer is keyed on `session.current()`, which inside a frame is the
+      FRAME id (`$CHARTER_SESSION_ID`), not the harness's own session id; and the
+      per-terminal pointer is keyed on `session.terminal()`, which is the panel's OWN tmux
+      pane. Both miss.
+
+    So a panel falls all the way to the declared default (`default`, ordinarily) while the
+    launcher — an ordinary shell, in the operator's own terminal, one rung up — resolved
+    something else entirely. Measured on the plane that reported #512: three terminal
+    pointers naming `harness-wrapper` and one naming `user-reporting`, a `default`
+    workspace holding no clones at all, and every panel drawing `default`'s empty repo
+    list beside a `bottom` pane the LAUNCHER had sized for the real workspace's rows.
+
+    The launcher is the one process that knows, so it writes it down — the same argument
+    :func:`record_identity` already makes for the rest of a frame's identity, and the same
+    atomic-write, never-raise, rewrite-on-every-launch shape as :func:`record_server` (an
+    adopted directory's value is another frame's answer, so it is overwritten rather than
+    merged).
+
+    This is deliberately NOT `$CHARTER_WORKSPACE`. Exporting the resolved name into the
+    frame's environment would fix the same reads and take `charter ws use` away from every
+    framed session on the way past — `workspace.resolve` ranks the variable above every
+    pointer, `commands_workspace` says so in as many words, and `hooks` skips its
+    session-start workspace nudge whenever it is set. A frame recording what it drew is
+    not the same thing as a session being pinned.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "workspace.tmp"
+    try:
+        tmp.write_text(f"{name}\n")
+        os.replace(tmp, d / "workspace")
+    except OSError:
+        return
+
+
+def frame_workspace(fid: str) -> str | None:
+    """The workspace *fid* was launched for, or ``None`` when charter does not know.
+
+    ``None`` is the migration case (a frame launched by a charter that predates
+    :func:`record_workspace` and still running across the upgrade) and the corrupt one,
+    answered the same way and for :func:`identity`'s reason: the caller
+    (:func:`workspace_for`) decides what to do instead, which is to fall through to the
+    rung below — a local resolve, exactly today's behaviour and no worse than it.
+
+    **Name-checked on the way out**, like every other name charter reads off disk and
+    joins onto a path (`workspace.declared_default`, `persona.default_persona`). The value
+    is charter's own — written by a launcher, under `config.STATE_DIR` — not a committed
+    file a teammate can set, so this is a floor rather than the whole guard; but the read
+    ends up in `workspace_dir()`'s join and on a panel's screen, and #442 is what an
+    unchecked `../../` in that position already cost once.
+
+    `valid_name` alone, with no `val and` in front of it: `workspace.valid_name("")` is
+    already False, so the truthiness test would be a second guard that no mutation can
+    turn red — the shape this repo keeps shipping ("a guard passing because a DIFFERENT
+    guard caught it"). A truncated write is refused by the name check, on the name check's
+    own terms.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        val = (d / "workspace").read_text().strip()
+    except (OSError, ValueError):
+        return None
+    from .. import workspace as ws_mod
+    return val if ws_mod.valid_name(val) else None
+
+
+def workspace_for(fid: str) -> str:
+    """The workspace this frame is DRAWING — what every surface of the frame asks.
+
+    Three rungs, and the order is the whole of it:
+
+    1. **What was chosen inside this frame.** `charter workspace use <name>` typed at the
+       agent writes the per-session pointer under the FRAME's id, because inside a frame
+       the frame is the charter session (`docs/frame.md`, ADR 0019) — and "it moves the
+       panels too" is a documented promise, not an accident. An explicit choice made while
+       the frame runs outranks anything the launch decided.
+    2. **What the launcher resolved**, :func:`record_workspace`. The seed: the launch's own
+       answer to a question nothing inside the frame can ask (#512).
+    3. **Whatever this process resolves for itself**, for a frame launched by a charter
+       that predates the record and still running across the upgrade — today's behaviour,
+       so this is never worse than what it replaces.
+
+    Rungs 1 and 2 are the only two that can ever disagree, and it is worth saying why the
+    others cannot. `$CHARTER_WORKSPACE` reaches a panel exactly when the launcher had it
+    (`commands_frame._frame_identity_env` carries it, empty when absent), and the launcher
+    resolves it first — so the record holds the same value. The cwd rung is the same story:
+    a panel's cwd is the launcher's, and the launcher asked `from_path` about it before
+    anything else. The per-terminal pointer and the declared default are the two rungs a
+    panel reaches that answer for the PANEL rather than for the frame, and those are
+    exactly the two the record is here to outrank.
+
+    Asked through `workspace.for_session` rather than by reading `workspace.source()`'s
+    label: that function returns a sentence written for a status line, and matching the
+    string ``"session"`` would be this repo's own recurring defect — a spelling standing in
+    for a property.
+    """
+    from .. import workspace as ws_mod
+    return ws_mod.for_session(fid) or frame_workspace(fid) or ws_mod.resolve()
+
+
 def record_density(fid: str, level: str) -> None:
     """Write down the density THIS RUNNING FRAME is at, overriding `[frame] density`.
 

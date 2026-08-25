@@ -90,6 +90,30 @@ def verbosity(fid: str) -> str:
     return instance.verbosity_for(override or config.FRAME["density"])
 
 
+def _frame_workspace(fid: str) -> str:
+    """Which workspace THIS FRAME is drawing — `state.workspace_for`, which owns the rule.
+
+    **A panel that re-resolves the workspace gets a different answer, and #512 is what
+    that costs.** `state.record_workspace`'s docstring has the full walk through
+    `workspace.resolve`'s rungs and why a panel process reaches none of the ones that
+    ordinarily decide it; the short version is that a panel falls all the way to the
+    declared default while the launcher — one ordinary shell, one rung up — resolved
+    something else. On the plane that reported #512 that gap was the whole bug: `bottom`
+    drew `default`'s empty repo list into a pane the launcher had sized for
+    `harness-wrapper`'s three rows, and the rows only appeared once the first tool call's
+    hook refreshed the cache from inside the HARNESS, which resolves it correctly.
+
+    Kept as a named function here rather than inlined at the three call sites, because
+    what it means is a `slots` fact: every panel goes through it — `_top` names the
+    workspace, `_bottom` counts its todos and its alerts and draws its repo table — so the
+    things a frame says about "where am I" cannot disagree with each other. That is a
+    failure an operator reads immediately: a header saying `default` above a table listing
+    another workspace's repos.
+    """
+    from . import state
+    return state.workspace_for(fid)
+
+
 def _width() -> int:
     """The pane's own width in columns — measured, never read out of `$COLUMNS`.
 
@@ -222,7 +246,12 @@ def _top(fid: str) -> str:
     """
     from .. import __version__, statusline, workspace
     from . import state
-    ws = workspace.resolve()
+    # The FRAME's workspace, not this pane's own guess at one (#512) — see
+    # :func:`_frame_workspace`. `source()` is still asked locally and still only decides
+    # the PIN: `$CHARTER_WORKSPACE` is the one rung a panel does share with its launcher
+    # (`commands_frame._frame_identity_env` carries it, empty when the launcher had none),
+    # so "the operator pinned this by hand" is a question this process can still answer.
+    ws = _frame_workspace(fid)
     src = workspace.source()
     pin = "*" if src == "$CHARTER_WORKSPACE" else ""
     persona = statusline._persona_line() or ""
@@ -448,6 +477,40 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
                                 f"{emph}{sl._DIM}{p['name']}{sl._R}", p, width,
                                 branch_override="" if wb == p.get("name") else None))
     return lines[:budget]
+
+
+def _unknown_lines(width: int) -> list[str]:
+    """What the repo table draws when charter has not gathered this frame's repos YET —
+    which is a different claim from "this workspace has no repos", and #512 is the whole
+    cost of drawing them the same.
+
+    `cmd_launch` deletes the cache before it draws anything (`gather.discard`, so a
+    recycled pid cannot adopt a dead frame's rows) and a detached refresh fills it a beat
+    later (`commands_frame._spawn_gather`). Between the two there is a real window in
+    which the honest answer is "not known yet" — and an empty table is not that answer,
+    it is a confident `no repos` on a plane that may have fourteen. That is the same
+    false-clean reading `_table_lines` refuses for a starved pane ("too narrow for the
+    table is NO table, not a cut one") and the same one the `left` sidebar was retired
+    for in #488; this is it said out loud instead of implied by absence.
+
+    **A pane too narrow for the table says nothing here either**, which matters: a line
+    that appeared while the rows were unknown and vanished the moment they were known
+    would read as "the repos went away". That is not enforced HERE, though — the width
+    rule for this pane lives in :func:`_table_cap`, which answers 0 below
+    `statusline._LEFT_W`, and `_bottom` already refuses to compose anything on a budget of
+    0. A second copy of the rule in this function would be unreachable through the only
+    caller there is, and a guard no test can turn red is exactly the kind that passes
+    because a DIFFERENT guard caught it.
+
+    One line, always: there is exactly one thing to say and repeating it down a tall pane
+    would be padding. Bounded through `tui.truncate` like every other line in this module
+    — `⋯` and `…` are both East-Asian *Ambiguous*, the class `statusline._persona_chips`
+    records as having "broken this layout twice", so their width is measured rather than
+    counted.
+    """
+    from .. import statusline as sl
+
+    return [tui.truncate(f"  {sl._DIM}⋯ gathering this workspace's repos…{sl._R}", width)]
 
 
 def _table_cap(fid: str, width: int) -> int:
@@ -990,9 +1053,12 @@ def _bottom(fid: str) -> str:
     repaints a second. Everything the table draws comes out of the cache; see
     :func:`_table_row` for the one column that costs (presence) and is therefore absent.
     """
-    from .. import config, session as _session, statusline as sl, workspace
+    from .. import config, session as _session, statusline as sl
     from . import state, tmuxctl
-    ws = workspace.resolve()
+    # The FRAME's workspace (#512), for the todo count and the alerts as much as for the
+    # table: they are three statements about one workspace on one row, and a panel that
+    # resolved its own would count another workspace's todos beside this one's repos.
+    ws = _frame_workspace(fid)
     todos = sl._todo_count(ws)
     alerts = sl._alerts(ws)
     news = sl._session_news(_session.current(), inflight=False)
@@ -1042,7 +1108,30 @@ def _bottom(fid: str) -> str:
     budget = min(_height() - len(lines), _table_cap(fid, w))
     if budget > 0:
         from . import gather
-        lines.extend(_table_lines(gather.read(fid), w, budget))
+        # `gather.cached`, never `gather.read` (#512). The two differ by exactly one
+        # thing: `read` falls back to a live `scan()` when there is no cache, and a
+        # PANEL is the one caller that must not have that fallback. Two reasons, and
+        # both are rules this module already keeps:
+        #
+        # * **A panel does not sweep.** `_table_lines`' own docstring promises it never
+        #   reaches a repo directory, a `git status` or a `glstate.read_for`; #387 pinned
+        #   an idle tick at one `stat`, and `bottom` is the ONE animated slot, so a paint
+        #   that scans is five cold sweeps a second for as long as anything is in flight.
+        #   `cmd_launch` calls `gather.discard` before it draws, so a fresh frame reached
+        #   that fallback BY DESIGN, on the very repaints an operator is watching.
+        # * **An empty table is not the same claim as an unknown one.** `read`'s fallback
+        #   returns `repos: []` for "the scan found nothing" and for "the scan ran in the
+        #   wrong workspace" alike, and `_table_lines` draws both as no rows at all — a
+        #   pane that says "no repos" on a plane full of them. `None` here keeps the two
+        #   apart, and :func:`_unknown_lines` says which one this is.
+        #
+        # Nothing is left blank waiting: `commands_frame._spawn_gather` kicks a detached
+        # refresh at launch which writes this cache and bumps the version, the same shape
+        # `update.maybe_spawn`/`glstate.maybe_spawn` already use, and every
+        # `posttooluse*` hook refreshes it after that (`notify.plane_changed`).
+        data = gather.cached(fid)
+        lines.extend(_unknown_lines(w) if data is None
+                     else _table_lines(data, w, budget))
     return "\n".join(lines)
 
 

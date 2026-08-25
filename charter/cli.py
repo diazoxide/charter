@@ -706,7 +706,7 @@ def _add_frame_parsers(sub) -> None:
     # version (see `commands_frame.cmd_probe`'s own docstring).
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
                                          "frame-probe", "frame-respawn", "frame-density",
-                                         "frame-resize"}
+                                         "frame-resize", "frame-gather"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -805,6 +805,22 @@ def _add_frame_parsers(sub) -> None:
     rz = sub.add_parser("frame-resize")
     rz.add_argument("--frame", dest="frame", default=None)
     rz.set_defaults(func=commands_frame.cmd_resize)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # ones above. Fired DETACHED by `commands_frame._spawn_gather` at launch (#512) —
+    # never typed by an operator, and never by tmux: this one has no `run-shell` behind
+    # it at all, it is `util.detach_self` out of the launcher's own process.
+    #
+    # BOTH arguments are required, and neither has a default that could be inferred. The
+    # child is deliberately as far from the operator's terminal as a panel is (a new
+    # session, no controlling tty), so `workspace.resolve`'s pointer rungs would answer
+    # for the CHILD rather than for the frame — which is exactly the defect #512 is. The
+    # launcher already knows both; stating them is what keeps the gather keyed to the
+    # frame it is for.
+    gt = sub.add_parser("frame-gather")
+    gt.add_argument("--session", dest="session", required=True)
+    gt.add_argument("--workspace", dest="workspace", required=True)
+    gt.set_defaults(func=commands_frame.cmd_gather)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
     # three above. Fired by a hotkey-menu selection (`commands_frame._menu_entries`), whose

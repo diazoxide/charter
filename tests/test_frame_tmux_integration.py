@@ -2519,6 +2519,32 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # test can still inspect rather than one that simply vanishes.
         conf_path.write_text(commands_frame._PLACEHOLDER_CONF)
 
+        # The two things `cmd_launch` does to a frame's own state directory before it
+        # asks tmux for anything, and #512 is why they are here rather than left out with
+        # the hotkey menu and the exit-code hooks. A panel is a PURE CACHE READER since
+        # #512 (`slots._bottom` calls `gather.cached`, never `gather.read`), so a frame
+        # nobody gathered for shows "gathering …" forever — which is what this test
+        # observed the day the fallback went, and correctly: production fills that cache
+        # from the launcher, so a test that hand-builds a frame has to do the launcher's
+        # job or it is not testing a launch.
+        #
+        # Both are the REAL production functions, not a hand-rolled `gather.save`:
+        # `_spawn_gather` IS #512's fix, and running it here is what makes the repo-row
+        # assertions below a proof that the detached child really starts, really gathers
+        # the workspace it was told to, really writes the cache, and really bumps the
+        # frame — end to end, through a real `charter frame-gather` process, against a
+        # real git repo, read back out of a real tmux pane.
+        #
+        # `os.environ` is patched for exactly that call, and only for it: the child is a
+        # separate PROCESS, so `PersonaIso`'s in-process `config.use()` redirection cannot
+        # reach it — without this it would resolve the DEVELOPER'S OWN plane and gather
+        # (and bump) there. `self.env` is the same isolated environment every pane in this
+        # frame already runs under, so the child lands on the same throwaway plane the
+        # panels are reading.
+        state.record_workspace(fid, "demo")
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            commands_frame._spawn_gather(fid, "demo")
+
         session_cmd = layout.session_argv(session=fid, conf=str(conf_path), socket=SOCKET,
                                           cols=120, rows=40, harness_argv=["sleep", "600"])
         r = self._run_env(session_cmd)

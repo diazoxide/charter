@@ -105,7 +105,16 @@ def plane_changed() -> None:
         _last["at"] = now
         try:
             from . import gather
-            gather.refresh(fid)
+            # The FRAME's workspace, not this hook process's own answer (#512). The cache
+            # belongs to the frame and a panel draws it whole, so a refresh keyed to a
+            # different workspace does not degrade the table, it REPLACES it — the launch
+            # gathers the workspace you launched for, and the first tool call swaps in
+            # another one's repos. The two answers can genuinely differ: this runs inside
+            # the harness, whose cwd and pane id are its own. `state.workspace_for` is the
+            # one rule every frame surface asks — an explicit `charter workspace use`
+            # inside the frame first, then the launcher's recorded answer, then a local
+            # resolve for a frame that predates the record.
+            gather.refresh(fid, workspace=state.workspace_for(fid))
         except Exception:
             pass
         state.bump(fid)
