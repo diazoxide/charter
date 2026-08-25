@@ -3260,6 +3260,9 @@ def cmd_switch(args) -> int:
     one session, `display-message -t <session>` drew on the most recently attached client
     regardless of who pressed, and `-c` drew on exactly the named one.
 
+    **The menu is re-recorded** (`_rerecord_menu`) — it is a snapshot, and one taken
+    before the switch names the workspace the frame left.
+
     **Always 0**, like `cmd_density` and `cmd_respawn`: nothing reads this status, and a
     non-zero exit is what makes tmux print into the harness pane.
     """
@@ -3274,8 +3277,45 @@ def cmd_switch(args) -> int:
         out = switch.to_persona(fid, persona_name)
     else:
         return 0
+    _rerecord_menu(fid)
     _say_on_screen(fid, out, state.menu_client(fid))
     return 0
+
+
+def _rerecord_menu(fid: str) -> None:
+    """Rewrite *fid*'s menu table so the next keypress describes the frame as it now is.
+
+    `menu.record` writes a SNAPSHOT: `_menu_entries` resolves the current workspace and
+    persona once, and every row's label and action id is minted from that. So a switch
+    that does not re-record leaves the menu naming the workspace the frame LEFT —
+    measured on a real plane before this call existed: after `switch.to_workspace(fid,
+    "ws05")` with `state.workspace_for(fid) == "ws05"`, `menu.build(fid, MAIN)` still
+    returned `workspace: ws00  ▸` and the submenu still marked `* ws00`. The panels
+    repainted; the menu lied. The same staleness is why a workspace or persona created
+    after launch never appeared in the submenu at all.
+
+    This is `cmd_density`'s own rule, applied to the command #517 is about rather than
+    only to the one beside it — same call, same operator-socket refusal, and for the same
+    reason: charter binds no key inside an operator's tmux, so there is nothing there to
+    open a menu with, and the "Detach" row `_menu_entries` grows targets `detach-client
+    -s <fid>`, a SESSION name that does not exist on that server.
+
+    The density argument is `_current_density(fid)` rather than a level passed in: this
+    command does not change the density, so the mark has to be re-derived from the frame's
+    own record or it would be re-recorded as whatever this function guessed.
+
+    **On a refusal too, and that is not an oversight.** A refused switch left the frame
+    where it was, so no mark moves — but the OTHER half of the staleness is the plane, and
+    that half moved regardless of what this frame did. A pinned frame whose operator keeps
+    pressing the hotkey is exactly the frame that would otherwise never see a workspace
+    made since launch. Guarding on `out.ok` would buy nothing back — the labels a refusal
+    re-records are identical, and `menu.record` mints every action id from position, so
+    the ids come out the same — and would cost that refresh.
+    """
+    socket = state.frame_server(fid) or SOCKET
+    if tmuxctl.is_operator_socket(socket):
+        return
+    menu.record(fid=fid, entries=_menu_entries(fid, socket, current=_current_density(fid)))
 
 
 def _say_on_screen(fid: str, out, client: str | None = None) -> None:

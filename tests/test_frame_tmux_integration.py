@@ -2050,6 +2050,60 @@ class MenuFormatIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase)
         self.assertFalse(os.path.exists(format_canary),
                          "selecting the item must not retroactively execute the label")
 
+    def test_a_row_past_the_ninth_is_fired_by_no_keystroke_but_is_still_reachable(self):
+        """`menu._key`'s "no shortcut" has to be measured against tmux, not believed.
+
+        It used to be `-`, on the reading that tmux spells an unbound row that way. It
+        does not: `-` is an ordinary key name, and a menu of eleven rows gave the tenth
+        one a working `-` shortcut — a stray hyphen on the workspace submenu performing a
+        real switch, and the eleventh row advertising a `(-)` that could never fire.
+        `tests/test_frame_switch.py` pins the constant; only a rendered menu can say which
+        constant is right, which is the whole reason this class exists.
+
+        Both halves in one test, because an unbound key does NOT dismiss a tmux menu
+        (measured here): `-` is pressed first and must create nothing, then nine Downs and
+        Enter must reach the SAME row on the SAME still-open menu. A row with no shortcut
+        that the arrow keys could not reach either would be a row that does nothing at
+        all — which is the failure the `-` was reached for in the first place.
+        """
+        fid = f"menu-fmt-integ4-{os.getpid()}"
+        self._new_session(fid)
+        client, fd = self._attach_pty(fid)
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=SOCKET, session=fid)).returncode, 0)
+        self.assertEqual(_tmux("set-environment", "-t", fid, "CHARTER_PY",
+                               sys.executable).returncode, 0)
+
+        tmp = tempfile.mkdtemp(prefix="charter-integ-fmt4-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        canary = os.path.join(tmp, "TENTH_ROW")
+        # Eleven rows: nine that take the digits, then the two that do not. The canary
+        # hangs off the TENTH — the first row past the ninth, and the one that used to be
+        # keyed `-`.
+        entries = [(f"row {i}", ["true"]) for i in range(11)]
+        entries[9] = ("row 9", [sys.executable, "-c",
+                                f"open({canary!r}, 'w').close()"])
+        menu.record(fid=fid, entries=entries)
+        cmd = menu.menu_argv(fid, SOCKET, client=client)
+        self.assertEqual(cmd[10:][1::3][9:], ["", ""], cmd)
+        self._drive_menu(fd, cmd)
+
+        os.write(fd, b"-")
+        time.sleep(0.8)
+        self.assertFalse(os.path.exists(canary),
+                         "`-` fired the tenth row — it is a real tmux key, not tmux's "
+                         "spelling for 'no shortcut'")
+
+        # Nine Downs from the first row lands on the tenth: the menu opens with row 0
+        # selected, so the count is the index, not the position.
+        os.write(fd, b"\x1b[B" * 9 + b"\r")
+        deadline = time.monotonic() + _DEADLINE
+        while time.monotonic() < deadline and not os.path.exists(canary):
+            time.sleep(0.2)
+        self.assertTrue(os.path.exists(canary),
+                        "a row with no key must still be selectable with the arrow keys "
+                        "— and the unbound `-` must not have dismissed the menu")
+
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
 class MenuClientIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase):

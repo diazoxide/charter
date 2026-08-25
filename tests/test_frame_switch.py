@@ -321,7 +321,13 @@ class MenuGroups(PersonaIso, unittest.TestCase):
     def test_the_tenth_row_gets_no_key_rather_than_an_impossible_one(self):
         """`display-menu`'s middle argument is a KEY NAME: `"10"` is not one. Before
         submenus the menu had four fixed rows and could never reach it; a workspace list
-        can."""
+        can.
+
+        The no-key spelling is the EMPTY STRING and the constant is pinned here because
+        the obvious-looking `-` is a real tmux key: measured against 3.7c on an attached
+        pty, a row keyed `-` renders as `(-)` and pressing `-` ran its command. On a
+        workspace submenu that is a stray keystroke performing a real switch (see
+        `menu._key`)."""
         menu.record(fid=self.FID, entries=[(f"row {i}", ["true"]) for i in range(11)])
         argv = menu.menu_argv(self.FID, "charter", client="/dev/ttys0")
         # The triples begin after `tmux -L <sock> display-menu -t <fid> -c <client> -T
@@ -329,7 +335,8 @@ class MenuGroups(PersonaIso, unittest.TestCase):
         # word, since the socket and the title are both spelled "charter".
         keys = argv[10:][1::3]
         self.assertEqual(keys[:9], [str(i) for i in range(1, 10)])
-        self.assertEqual(keys[9:], ["-", "-"])
+        self.assertEqual(keys[9:], ["", ""])
+        self.assertNotIn("-", keys)
 
 
 class TheMenuOffersBothLists(PersonaIso, unittest.TestCase):
@@ -378,6 +385,98 @@ class TheMenuOffersBothLists(PersonaIso, unittest.TestCase):
                                return_value=["alpha", "line break"]):
             rows = self._labels("workspace")
         self.assertTrue(all(" " not in r for r in rows), rows)
+
+
+class TheMenuFollowsTheSwitch(PersonaIso, unittest.TestCase):
+    """`cmd_switch` re-records the menu, so the next keypress describes the frame as it
+    now is rather than as it was when it launched.
+
+    `menu.record` writes a snapshot — `_menu_entries` resolves the current workspace and
+    persona once, and every label is minted from that — so without this the F2 menu keeps
+    naming the workspace the frame LEFT, and a workspace made after launch never appears
+    in the submenu at all. It is `cmd_density`'s own rule ("re-recorded so the menu's own
+    mark moves with the frame"), applied to the command #517 is about.
+    """
+
+    FID = "f-menu-follows"
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID},
+                                          clear=True))
+        # No screen to report on in a test: `_say_on_screen` is the tmux half and is
+        # covered by its own cases. What is under test is what the menu table holds after.
+        self.said = self.enterContext(mock.patch.object(commands_frame, "_say_on_screen"))
+        _plane_workspaces("alpha", "beta")
+        _plane_personas("forge", "scribe")
+        state.frame_dir(self.FID, create=True)
+        state.record_identity(self.FID, {"CHARTER_SESSION_ID": self.FID,
+                                         "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+        state.record_workspace(self.FID, "alpha")
+        menu.record(fid=self.FID,
+                    entries=commands_frame._menu_entries(self.FID, "charter",
+                                                         current="normal"))
+
+    def _labels(self, group):
+        return [lbl for lbl, _ in menu.build(self.FID, group)]
+
+    def _switch(self, **kw):
+        return commands_frame.cmd_switch(mock.Mock(**{"workspace": None, "persona": None,
+                                                      **kw}))
+
+    def test_the_top_row_names_the_workspace_the_frame_moved_TO(self):
+        self.assertIn("workspace: alpha  ▸", self._labels(menu.MAIN))
+        self.assertEqual(self._switch(workspace="beta"), 0)
+        self.assertIn("workspace: beta  ▸", self._labels(menu.MAIN))
+
+    def test_the_submenu_mark_moves_with_the_frame(self):
+        # `default` is folded in whether or not its directory exists — `switch.workspaces`
+        # matches `commands_workspace.cmd_workspace_use` there.
+        self.assertEqual(self._labels("workspace"),
+                         ["* alpha", "  beta", "  default"])
+        self._switch(workspace="beta")
+        self.assertEqual(self._labels("workspace"),
+                         ["  alpha", "* beta", "  default"])
+
+    def test_a_persona_switch_moves_its_own_mark_too(self):
+        self.assertEqual(self._labels("persona"), ["  forge", "  scribe"])
+        self._switch(persona="scribe")
+        self.assertEqual(self._labels("persona"), ["  forge", "* scribe"])
+
+    def test_a_workspace_made_after_launch_reaches_the_submenu(self):
+        """The same staleness seen from the other side: the table is a snapshot, so a
+        plane that grew a workspace since launch had no row for it."""
+        _plane_workspaces("gamma")
+        self._switch(workspace="beta")
+        self.assertIn("  gamma", self._labels("workspace"))
+
+    def test_a_refusal_refreshes_the_list_without_moving_the_mark(self):
+        """A refused switch left the frame where it was — but the plane moved anyway, and
+        a pinned frame whose operator keeps pressing the hotkey is the one frame that
+        would otherwise never see a workspace made since launch. So the mark stays on the
+        pin and the new name still arrives."""
+        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "alpha"})
+        _plane_workspaces("gamma")
+        self._switch(workspace="beta")
+        self.assertEqual(self._labels("workspace"),
+                         ["* alpha", "  beta", "  default", "  gamma"])
+
+    def test_nothing_is_recorded_on_a_tmux_charter_is_a_guest_on(self):
+        """`cmd_launch` and `cmd_density` both refuse to write a menu inside an operator's
+        own tmux: charter binds no key there, so there is nothing to open one with, and
+        the `Detach` row would target a session name that server does not have."""
+        state.record_server(self.FID, "/tmp/operator.sock")
+        self._switch(workspace="beta")
+        self.assertEqual(self._labels("workspace"),
+                         ["* alpha", "  beta", "  default"])
+
+    def test_the_density_mark_survives_a_switch(self):
+        """The re-record has to re-derive the density from the frame's own record: a
+        switch does not change it, and a guessed level would be written over the real
+        one."""
+        state.record_density(self.FID, "full")
+        self._switch(workspace="beta")
+        self.assertIn("* density: full", self._labels(menu.MAIN))
 
 
 class ThePickerDecidesNothingOnItsOwn(unittest.TestCase):

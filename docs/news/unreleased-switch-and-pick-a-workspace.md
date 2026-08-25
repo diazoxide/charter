@@ -36,6 +36,18 @@ repaints. The gather happens before the bump on purpose: a panel reads the versi
 and the cache second, so bumping first would repaint the new workspace's name over the old
 workspace's repos. A persona switch is the same thing minus the gather.
 
+**And the menu follows.** It is rebuilt after every switch, so the next `F2` names the
+workspace you are in rather than the one you left, the `*` sits on the row you chose, and
+a workspace or persona made since the frame opened is in the list. The menu is rebuilt
+after a *refused* switch too — the frame did not move, but your plane may have, and a
+pinned frame is the one that would otherwise never see a new name.
+
+**Rows past the ninth are drawn with no shortcut**, and that is now literally true. They
+used to be given the key `-`, on the belief that tmux spells "no key" that way. It does
+not: `-` is a real key, and on a list long enough to reach the tenth row a stray hyphen
+performed a real workspace switch while every row under it advertised a `(-)` that did
+nothing. Ten rows is where the digits run out; the arrow keys reach the rest.
+
 **Two switches are refused, and a refusal is put on your screen.** A frame launched with
 `$CHARTER_WORKSPACE` or `$CHARTER_PERSONA` set is *pinned*: the variable is in every panel
 pane's environment for as long as the pane lives, and no file charter writes outranks it.

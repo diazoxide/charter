@@ -535,8 +535,8 @@ its second write hit, leaving a switcher that worked exactly once. So the menu o
 the lock and names what it overrode: `workspace → beta  (lock moved from 'alpha')`.
 
 Long lists are cut to twelve rows with a last row saying how many were left out — a tmux
-menu is drawn inside your terminal and does not scroll. Rows past the ninth have no
-number key; the arrow keys still reach them.
+menu is drawn inside your terminal and does not scroll. Rows past the ninth are drawn with
+no key at all — the digits run out at nine — and the arrow keys still reach them.
 
 ### Picking a workspace when the frame opens
 

@@ -410,9 +410,25 @@ def _key(i: int) -> str:
 
     `display-menu`'s middle argument is a KEY NAME, not a label: `"10"` is not one. Before
     submenus the menu had four fixed rows and could never reach it; a workspace list can,
-    so rows past the ninth get ``-`` — tmux's own spelling for a row with no key bound,
-    still selectable with the arrow keys. Ten rows is also where the digits run out, not
-    an arbitrary cap: continuing into letters would shadow `display-menu`'s own `q`, and
-    a menu whose tenth row silently quits it is worse than one with no shortcut there.
+    so rows past the ninth get the **empty string**, which is tmux's own spelling for a row
+    with no key bound. Ten rows is also where the digits run out, not an arbitrary cap:
+    continuing into letters would shadow `display-menu`'s own `q`, and a menu whose tenth
+    row silently quits it is worse than one with no shortcut there.
+
+    **Not ``-``, which is a real key.** Measured against tmux 3.7c on an attached pty, a
+    four-row menu keyed ``1``, ``-``, ``-``, ``""``::
+
+        ┌─probe─────┐
+        │ row-a (1) │
+        │ row-b (-) │
+        │ row-c (-) │
+        │ row-d     │
+        └───────────┘
+
+    Pressing ``-`` RAN row-b's command and closed the menu — so a stray hyphen on a
+    workspace submenu would have performed a real switch to the tenth workspace, and
+    row-c, which advertises the same ``(-)``, was unreachable by that key. The empty-key
+    row is drawn with no ``(…)`` at all and is still arrow-selectable: from the same menu,
+    three Downs and Enter fired row-d.
     """
-    return str(i + 1) if i < 9 else "-"
+    return str(i + 1) if i < 9 else ""
