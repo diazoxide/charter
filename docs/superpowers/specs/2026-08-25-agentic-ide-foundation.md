@@ -316,6 +316,124 @@ that before the palette is written than after.
 
 ---
 
+## 4d. Settled by grilling — round 1 (2026-08-25)
+
+**Vocabulary.** **Component** is the concept — identity, visibility, size policy, renderer,
+events. **Panel** is the process that hosts one. **Pane** is tmux's rectangle. **Slot
+retires**: it currently means "a string whose list position is secretly geometry", which is
+the confusion this work removes.
+
+**A component owns a pane, and components compose.** A `sidebar` may be *built from*
+`personas` and `todos`, but charter never draws splits inside a pane. This gives
+N-things-in-one-pane without a layout engine, and keeps tmux doing resize, borders and pane
+focus — all solved, none of them cheap to redo. Composition is the seam to grow true
+in-pane layout at, if it is ever needed.
+
+(Note this was already happening informally: #516 put personas and todos in one `right` pane
+with no concept for it.)
+
+**Actions are extensible too, separate entry-point group, stricter contract.** A provider
+that adds a CI panel but cannot add "rerun failed job" is half a plugin. `charter.components`
+and `charter.actions`. But a component *draws* and an action *does*: an action declares what
+it touches, and anything reaching a vault, a forge token or a shell goes **through** the
+existing guards rather than around them. Narrow from day one — widening is easy, and this is
+where real damage would live.
+
+**A cross-repo change is a stored object, not a view over git.** A view cannot hold *intent*,
+and intent is the only thing that actually spans repositories. Branch-name conventions break
+the moment someone names one differently, and they cannot record why a change exists, what
+blocks it, or that a fourth repo was considered and excluded. Storage also makes a change
+addressable — by the frame, by actions, and eventually by agents.
+
+
+## 4e. Settled by grilling — round 2 (2026-08-25)
+
+**`ctx` is constructed FROM `needs`.** A component receives an object holding only what it
+declared, plus geometry and its own identity. No filesystem handle, no subprocess factory,
+no network client — **not present**, rather than present-and-discouraged. That makes the
+idle-cost property enforced by construction rather than by a reviewer counting `stat`s,
+which is the only version that survives third-party code. Asking for something undeclared
+fails in development, naming what to add.
+
+**Size: children declare, the parent arbitrates, exactly one `fill`.** Each child is
+`fixed(n)`, `content` (its own height, capped), or `fill` (what remains). More than one
+`fill` is a load-time configuration error, never a runtime tie-break — ambiguity here
+produces layouts that shift with the data, which reads as a bug every time.
+
+**Focus has two levels.** tmux owns **pane focus** — unchanged, free, already correct.
+Charter owns **intra-pane focus** — which child of a composed component is active — and only
+inside a pane tmux has already focused. **The escape hatch operates at the tmux level**,
+returning to the harness pane, so it works even when charter's intra-pane focus is wedged or
+a third-party component has captured input badly. A single-level model would put the escape
+hatch inside the thing it must escape.
+
+**A change is committed, like a workspace** — cross-repo work is team work, and the point is
+that a teammate can see what "the auth migration" touches. Consequence, named now rather
+than retrofitted: **a change's name and description are untrusted committed values**, needing
+containment before any table row, menu item or pane, and the change list is a committed
+reading site — the same class as #442.
+
+## 4f. Settled by grilling — round 3 (2026-08-25)
+
+**Store intent, derive facts.** A change stores what only a human knows — its name, why it
+exists, which repos are members, what blocks it, which repo was considered and excluded. It
+stores **no** derived state: PR numbers, CI results and branch positions come from the
+sources the repo table already reads, through the same refresh path. Stored facts go stale
+silently and become a second truth that disagrees with git — the shape that produced #524
+and #526. The line: **if git or the forge knows it, do not store it.**
+
+**One gather, extended — not a cache per source.** A single snapshot of the plane at refresh
+time holding repos, personas, todos and changes, with one timestamp; `ctx` hands a component
+the slice it declared. Multiple caches means multiple refresh clocks that can disagree, and
+this codebase has paid for that twice already. One snapshot makes "everything on screen is
+from the same moment" true by construction rather than by luck.
+
+**Five event kinds, closed: `key`, `click`, `scroll`, `focus`/`blur`, `resize`.**
+Deliberately excluding `drag` — stateful, hardest to get right across terminals, and most
+likely to fight tmux's own selection. Adding it later costs nothing; removing it after a
+provider ships against it costs everything.
+
+**`[frame] slots` and `[frame] density` keep working, mapped rather than removed.** `slots`
+becomes shorthand for "place these built-in components on their default edges in this split
+order" — lossless, because slot order IS split order, which is what the registry stores.
+`density` becomes a named arrangement. A config break is the most effective way to stop
+people upgrading, and charter is already installed and in use.
+
+## 4g. Settled by grilling — round 4 (2026-08-25)
+
+**One refresh, one timestamp, the existing debounce — measure before optimising.** Git is
+the expensive part and is already bounded by `statusline._repo_states`' 5-second TTL; file
+reads for personas, todos and changes are small beside it. The tempting per-source clock is
+the multiple-clock problem of §4f reintroduced one layer down. If measurement later says
+otherwise, that is a decision with evidence rather than a guess with complexity.
+
+**Actions are fire-and-report, never blocking.** An action returns immediately having
+*started* work; progress surfaces through `inflight`; the palette closes. A blocking action
+in a TUI is indistinguishable from a hang, and the operator's only recourse would be the
+escape hatch — for something working correctly.
+
+This makes **#420 load-bearing**: inflight records have no `kind` field, which is why clones
+and refreshes are invisible. It stops being a nice-to-have.
+
+**Overlays are `display-popup` with charter drawing the contents.** tmux 3.2+ runs a command
+in a floating pane; charter runs its renderer there with its own tty and its own input,
+mouse included. tmux keeps window management; charter owns the rectangle's interior. It
+aligns with an existing floor — `SESSION_ENV_FLOOR` is `(3,2)`, and `display-popup` landed
+in the same release. **`below_floor_message` promises charter still launches below 3.2**, so
+that band needs a full-pane fallback. Like §4c's mouse routing, this is a hypothesis to
+measure — confirm what `display-popup` does with mouse reporting and focus, on both servers,
+before the palette is built on it.
+
+**Provider compatibility is a single integer, refused at load.** Not semver negotiation, not
+best-effort shims. Charter bumps the integer when the contract changes; a provider declaring
+a different one does not load, and charter names the provider, the version it wants and the
+version charter speaks. Loading-and-hoping means failure at render time inside someone's
+frame; refusing at load is visible, actionable, and happens before anything is on screen. It
+also makes the contract's cost real to us — bumping breaks every provider, which is the
+friction that stops the contract churning.
+
+---
+
 ## 5. The command surface
 
 One mechanism, three faces.
