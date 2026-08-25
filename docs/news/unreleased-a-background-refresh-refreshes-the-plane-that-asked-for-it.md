@@ -56,9 +56,15 @@ tests.test_cli_smoke.CliSmokeTest.test_doctor_runs_without_crashing is about to 
 `… -m charter doctor`, and that child would resolve its plane as ~/work/charter …
 ```
 
-It found ten more sites the moment it was armed, including a smoke test whose own docstring
-claimed isolation while running `charter doctor` against the developer's personas,
-workspaces and vault registry.
+It found eight more call sites the moment it was armed. One is a smoke test whose own
+docstring claimed isolation — it set `$CHARTER_HOME`, which covers the per-human directory
+and reads as though it covered the plane — while running `charter doctor` against the
+developer's personas, workspaces and vault registry.
+
+**Two of the eight only fire inside a charter frame**, which is the part worth keeping.
+`$CHARTER_ROOT` wins outright over any walk, and every frame exports it — so two suites
+that isolated their children by `cwd` were correct in a bare shell and wrong in the terminal
+they are actually written in. One of them ran `charter init` against the operator's plane.
 
 `root.find_root` grew an optional `env=` for it, so the guard asks the real resolver instead
 of keeping a private copy of the walk that would drift away from it.

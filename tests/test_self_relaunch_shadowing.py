@@ -75,12 +75,21 @@ class WithADecoyCwd(unittest.TestCase):
         (pkg / "__init__.py").write_text(f'__version__ = "{DECOY_VERSION}"\n')
         (pkg / "__main__.py").write_text(_DECOY_MAIN)
 
+        # The decoy dir is also the child's PLANE. `$CHARTER_HOME` below covers the
+        # per-human directory and reads as though it covered this too; it does not, and
+        # the difference only showed up with `$CHARTER_ROOT` in the environment — which
+        # every charter frame exports, so it was invisible everywhere except the terminal
+        # these are written in. With it set, `charter panel top` ran against the
+        # operator's own plane (#527, found by `tests._planeguard.RealPlaneSpawn`).
+        (self.tmp / "charter.toml").write_text("schema = 1\n")
+
         self.env = dict(os.environ)
         # Stands in for a real install — see the module docstring for why this is a
         # faithful substitute for `-P`'s own purposes, not a shortcut around them.
         self.env["PYTHONPATH"] = str(REPO_ROOT)
         # Never let a spawned child touch this machine's real ~/.charter.
         self.env["CHARTER_HOME"] = str(self.tmp / ".charter-home")
+        self.env["CHARTER_ROOT"] = str(self.tmp)
 
 
 class TheDecoyGenuinelyShadows(WithADecoyCwd):
