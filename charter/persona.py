@@ -757,7 +757,8 @@ def declared_default() -> str | None:
     return val if val and reference_ok(val) and def_path(val).exists() else None
 
 
-def _pointer_files() -> tuple[Path | None, Path | None]:
+def _pointer_files(session_id: str | None = None,
+                   terminal_id: str | None = None) -> tuple[Path | None, Path | None]:
     """``(session pointer, terminal pointer)`` for right now — either may be ``None``.
 
     Mirrors workspaces exactly (``.charter/sessions/<id>.workspace`` and
@@ -765,10 +766,23 @@ def _pointer_files() -> tuple[Path | None, Path | None]:
     one, one noun over: a single plane-wide file meant `charter persona use forge` in one
     pane changed the persona in every other pane and every future session, which is the
     opposite of what a fleet of parallel personas is for (#255).
+
+    ``session_id`` names *whose* session pointer, for the same reason
+    `workspace.set_active` takes one: the process writing is not always the session being
+    written for. A frame's persona switcher (`frame/switch.py`) is the case — it runs as a
+    `run-shell` child of the tmux server and must write under the FRAME's id, which it was
+    handed, rather than under whatever `$CHARTER_SESSION_ID` that child happens to have
+    inherited from a server shared with every other frame on the machine (#411).
+
+    ``terminal_id=""`` says the same thing about the TERMINAL pointer, and is the half
+    that matters more: `session.terminal()` reads `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/
+    `$SSH_TTY`, and in that same `run-shell` child those belong to whichever launcher
+    started the shared server. Writing a persona pointer for THAT terminal would change
+    the persona in a terminal nobody touched. See `workspace.set_active`'s own note.
     """
     from . import session as _session
-    sid = _session.current()
-    tid = _session.terminal()
+    sid = _session.current(session_id)
+    tid = _session.terminal() if terminal_id is None else terminal_id
     return (config.SESSIONS_DIR / f"{sid}.persona" if sid else None,
             config.TERMINALS_DIR / f"{tid}.persona" if tid else None)
 
@@ -780,6 +794,23 @@ def _read_pointer(f: Path | None) -> str | None:
         return f.read_text().strip() or None
     except OSError:
         return None
+
+
+def for_session(sid: str) -> str | None:
+    """The persona explicitly chosen FOR *sid*, or ``None`` if nobody chose one.
+
+    The per-session rung of :func:`_resolved`, asked about a session that is not
+    necessarily this process's — the exact counterpart of `workspace.for_session`, and
+    public for the same reason. A frame's menu (`frame/switch.py`) has to mark the persona
+    the PANELS are showing, and it runs as a `run-shell` child of a tmux server shared
+    between every frame on the machine, so reading the rung out of its own environment
+    would answer for whichever frame started that server (#411).
+
+    Name-checked on the way out, like `workspace.for_session`: the value ends up in
+    :func:`dir_of`'s join and on a panel's screen.
+    """
+    val = _read_pointer(config.SESSIONS_DIR / f"{sid}.persona") if sid else None
+    return val if val and valid_name(val) else None
 
 
 def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
@@ -827,16 +858,22 @@ def source(explicit: str | None = None) -> str:
     return _resolved(explicit)[1]
 
 
-def set_active(name: str) -> str:
+def set_active(name: str, session_id: str | None = None,
+               terminal_id: str | None = None) -> str:
     """Select *name* for this session and this pane. Returns the reach of what was written
     (``session`` | ``terminal`` | ``plane``) so a caller can say how long it will last.
 
     The plane-wide file is written only when there is neither a session id nor a pane id —
     a bare shell with nothing to key on. That is the one case where it is still the right
     answer, and it is why the file is kept rather than removed.
+
+    ``session_id`` and ``terminal_id`` state which session and which terminal are being
+    selected for, rather than letting :func:`charter.session` read them out of the
+    environment — see :func:`_pointer_files` for the case that needs it. Ordinary callers
+    (`charter persona use`) leave both unset and get exactly today's behaviour.
     """
     config.private_mkdir(config.STATE_DIR)
-    sf, tf = _pointer_files()
+    sf, tf = _pointer_files(session_id, terminal_id)
     for f in (sf, tf):
         if f is not None:
             config.private_mkdir(f.parent)

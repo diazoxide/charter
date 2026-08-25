@@ -132,8 +132,8 @@ import subprocess
 import sys
 import time
 
-from . import config, harness, util, workspace
-from .frame import gather, layout, menu, state, tmuxctl
+from . import config, contain, harness, tui, util, workspace
+from .frame import gather, layout, menu, picker, state, switch, tmuxctl
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -2116,6 +2116,113 @@ def early_death_message(argv: list[str], code: int, last_words: list[str]) -> st
     return "\n".join(lines)
 
 
+#: What `cmd_launch` returns when the operator cancelled the picker. 130 is the shell's
+#: own "ended by SIGINT" convention, which is what cancelling is — and it is deliberately
+#: not 0: a script that ran `charter claude` and got 0 back would take a frame that was
+#: never started for one that ran and exited cleanly.
+_PICKER_CANCELLED = 130
+
+
+def _picker_wanted(args, chosen: str | None) -> bool:
+    """Should this launch stop and ask? #518's whole gating rule, in one place.
+
+    **A non-interactive launch must never block, and that is a property here, not a
+    promise.** `charter claude` runs from scripts and from other agents; a prompt waiting
+    on a pipe is a hang, not a question. Two gates close that by construction:
+
+    * `cmd_launch` has already returned through `bypass` for `--no-frame` and for a
+      non-tty stdout, so nothing reaches here with its output redirected;
+    * stdin is checked HERE, because the two can differ — `charter claude < /dev/null` on
+      a real terminal has a tty for output and nothing to read from.
+
+    * **`--workspace` and `$CHARTER_WORKSPACE` skip it outright.** They are the top two
+      rungs of `workspace.resolve`'s precedence and they mean "this one, I have decided" —
+      putting a picker in front of an answer already given would be the same silence #518
+      complains about, wearing a prompt.
+
+    * **`--pick` forces it**, for the launch where an operator wants to move and has a
+      pointer saying otherwise.
+
+    * Otherwise the question is whether **anything chose**: `workspace.chosen` is
+      `resolve`'s ladder minus its built-in fallback, so ``None`` means every rung came
+      back empty and the launch was about to answer `default` — a name nobody picked.
+      That is the launch #518 is about, and it is a PROPERTY of the resolution rather than
+      a spelling of `workspace.source`'s human-facing label.
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    if getattr(args, "workspace", None) or os.environ.get("CHARTER_WORKSPACE"):
+        return False
+    if getattr(args, "pick", False):
+        return True
+    return chosen is None
+
+
+def _choose_workspace(args) -> tuple[str, int | None, bool]:
+    """``(workspace, exit code or None, whether the operator picked it)`` — #518.
+
+    The launch's workspace, either resolved exactly as it always was or chosen at a
+    prompt. A non-``None`` exit code means the launch is over and nothing was started.
+
+    **Creating happens here and nowhere else.** `frame/picker.py` renders and reads; it
+    returns a decision. That split is what makes "a cancelled picker creates nothing" a
+    fact about the code — there is no create call inside the picker to reach — and it is
+    why the confirmation (`[y/N]`, defaulting to no) can live next to the prompt while the
+    side effect lives next to the launch.
+
+    `workspace.ensure` is the validating creator (`charter workspace create` calls the
+    same one), so a name that got past the picker's own `valid_name` and still cannot be
+    made raises `ValueError` here and ends the launch with a message, rather than being
+    carried into a frame for a workspace that does not exist.
+
+    The clone count each row carries is `workspace.clones` — one directory listing per
+    workspace, paid once, before tmux starts. It is what makes the list worth reading
+    (#512: the repo table is empty until the first gather, so the count is the only thing
+    on screen at pick time that distinguishes them), and it is on no repaint path, so the
+    idle-cost property is untouched.
+    """
+    explicit = getattr(args, "workspace", None)
+    chosen = workspace.chosen(explicit)
+    if not _picker_wanted(args, chosen):
+        return workspace.resolve(explicit), None, False
+
+    current = chosen or config.DEFAULT_WORKSPACE
+
+    def _read() -> str | None:
+        # `EOFError` is a closed stdin and `KeyboardInterrupt` is the operator pressing
+        # ^C at the prompt: both are "no answer", which the picker reads as cancel. Caught
+        # at the seam rather than around the whole launch, so a ^C means "not this
+        # workspace" and never leaves a half-built frame behind — nothing has been created
+        # or started at this point in `cmd_launch`.
+        try:
+            return input()
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+    def _write(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    got = picker.ask(
+        picker.rows(switch.workspaces(), lambda n: len(workspace.clones(n))),
+        current, read=_read, write=_write, name_ok=workspace.valid_name,
+        width=tui.term_width())
+
+    if got.action == picker.CANCEL:
+        util.info("charter: nothing started.")
+        return "", _PICKER_CANCELLED, False
+    if got.action == picker.CREATE:
+        try:
+            wd = workspace.ensure(got.name)
+        except ValueError as e:
+            util.err(str(e))
+            return "", 1, False
+        workspace.scaffold(got.name)
+        util.ok(f"Workspace '{contain.one_line(got.name)}' created → "
+                f"{wd.relative_to(config.ROOT)}/")
+    return got.name, None, True
+
+
 def cmd_launch(args) -> int:
     """One launcher, shared by every registered harness and by `charter frame --`."""
     if getattr(args, "probe", False):
@@ -2184,8 +2291,41 @@ def cmd_launch(args) -> int:
     # It is reported by `frame_ready` (`--probe`, `charter frame-probe`) and by
     # `doctor.check_frame` instead; see `frame_ready`'s own docstring.
 
-    ws = workspace.resolve()
+    ws, rc, picked = _choose_workspace(args)
+    if rc is not None:
+        return rc
     fid = state.frame_id(ws, os.getpid())
+    if picked:
+        # **Only when the operator actually picked.** A launch that resolved silently
+        # writes no pointer today and must keep writing none — starting to would move
+        # every framed session's workspace on a path nobody asked anything on.
+        #
+        # `session_id=fid`, so the per-session pointer lands under the FRAME's id: inside
+        # a frame the frame IS the charter session (ADR 0019), which is what makes the
+        # choice reach the panels and the agent's own shell alike (`state.workspace_for`
+        # rung 1). `set_active` also writes the pointer for the LAUNCHER's terminal, and
+        # that is the half that answers #518's "must not answer a prompt every launch":
+        # the next launch from this terminal finds `workspace.chosen` already answered
+        # and never asks.
+        #
+        # `force=True` because `fid` is minted from the workspace and this process's pid,
+        # so an earlier launcher with the same pid and the same workspace can have left a
+        # lock under this very id (`cmd_launch` reaps exactly that case a few lines down).
+        # Being refused by a dead frame's lock, on a name the operator just typed, is not
+        # a refusal worth having.
+        workspace.set_active(ws, session_id=fid, force=True)
+        # **Picking IS the confirmation that locks, and #518 asks that this be decided and
+        # SAID.** `set_active`'s contract is that confirming a workspace locks the session
+        # to it, and the picker is a confirmation — the alternative would be a launch that
+        # writes the pointer and leaves the lock off, which is a third behaviour for
+        # `charter workspace use` to disagree with. What makes it liveable is that the
+        # frame has its own way out: `F2 → workspace` overrides the lock and says so
+        # (`frame/switch.py`), so the operator is not sent back to the shell for a choice
+        # they just made at a prompt. Printed here rather than in the picker, because it
+        # describes what the LAUNCH did with the answer, not what the answer was.
+        util.info(f"Workspace '{contain.one_line(ws)}' — 🔒 locked for this frame's "
+                  f"session. F2 → workspace changes it; `charter workspace unlock` "
+                  f"releases it.")
 
     # Inside a tmux the operator already has, the frame is a WINDOW in THEIR server —
     # same layout, no second tmux, no second prefix key (ADR 0018 and the design spec
@@ -2541,9 +2681,24 @@ def _menu_entries(fid: str, socket: str, *, current: str) -> list[tuple[str, lis
     *current* is marked, not filtered out: an operator who selects the level they are
     already on gets a re-layout that produces the same frame, which is the harmless
     outcome, and a menu whose rows move around depending on state is a menu nobody learns.
+
+    **Workspaces and personas are SUBMENUS, not two more top-level binds (#517).** A tmux
+    key table is server-wide with no per-session form — the same measurement that put
+    density here — so two more `bind -n` keys would cost every frame on the socket two
+    more keys and still give an operator inside their own tmux nothing. The hotkey charter
+    already binds opens this menu; the two lists hang off it, which reuses the containment
+    (`menu._safe_label`), the action-id validation (`menu._ACTION_ID_RE`) and the repaint
+    path (`frame/switch.py` → `state.bump`) that already exist, instead of opening three
+    new doors.
+
+    Each list is capped at :data:`_MENU_LIST_MAX` with a last row saying how many were
+    left out — `slots._cap_personas`' own rule, one surface over. A `display-menu` is
+    drawn inside the terminal and tmux does not scroll it; a plane with forty workspaces
+    would otherwise build a menu taller than the window, and what tmux does then is not
+    something charter should be finding out at an operator's keypress.
     """
     from . import instance
-    entries: list[tuple[str, list[str]]] = [
+    entries: list = [
         # The spec's own words, "Detach is allowed and prints how to reattach". `-s fid`
         # (not `-t`): `detach-client`'s `-s` targets every client attached to a SESSION,
         # `-t` a single CLIENT — this frame normally has exactly one attached client, but
@@ -2555,7 +2710,64 @@ def _menu_entries(fid: str, socket: str, *, current: str) -> list[tuple[str, lis
         mark = on if level == current else off
         entries.append((f"{mark} density: {level}",
                         util.self_relaunch_argv("frame-density", level)))
+    entries += _switch_entries(fid)
     return entries
+
+
+#: How many workspaces (or personas) one submenu ever lists. `slots._MAX_PERSONA_LINES`
+#: bounds the sidebar for the same reason and this is the same trade — a bound that fits
+#: on a screen, with the overflow SAID rather than silently dropped.
+_MENU_LIST_MAX = 12
+
+
+def _switch_entries(fid: str) -> list:
+    """The two submenu openers and the rows they open — #517's whole menu surface.
+
+    `frame/switch.py` owns every name that appears here, already checked against
+    `workspace.valid_name`/`persona.valid_name`, and `contain.one_line` is applied to each
+    one BEFORE it is measured or padded — #472 was filed because a table sized its columns
+    from a raw name first, and a menu row is a table one column wide. `menu._safe_label`
+    then makes it inert against tmux's own format parser, which is a different property
+    from being one line and is applied at a different boundary (see `menu.py`).
+
+    The mark is `_DENSITY_MARK`'s, reused rather than re-chosen: it is already the answer
+    to "which one am I on" everywhere else in this menu, and `*` is unambiguously narrow
+    where `●`/`◆` are East-Asian *Ambiguous* and have broken this layout twice
+    (`statusline._persona_chips`).
+
+    An empty list still gets its opener, carrying the count — `personas 0` opening an
+    empty submenu would be a row that does nothing, so the openers say what they hold and
+    the empty submenu says so in a row of its own. `cmd_menu` refuses to draw a zero-row
+    menu outright (`display-menu` fails with `not enough arguments`), so that row is what
+    stands between an empty plane and a hotkey that silently does nothing.
+    """
+    from . import contain
+    out: list = []
+    for group, names, current, verb in (
+            (menu.WORKSPACES, switch.workspaces(), switch.current_workspace(fid),
+             "workspace"),
+            (menu.PERSONAS, switch.personas(), switch.current_persona(fid), "persona")):
+        shown = names[:_MENU_LIST_MAX]
+        out.append(menu.Entry(
+            label=f"{verb}: {contain.one_line(current) if current else '—'}  ▸",
+            opens=group))
+        on, off = _DENSITY_MARK
+        for n in shown:
+            out.append(menu.Entry(
+                label=f"{on if n == current else off} {contain.one_line(n)}",
+                argv=tuple(util.self_relaunch_argv("frame-switch", f"--{verb}", n)),
+                group=group))
+        if len(names) > len(shown):
+            # A row that names no workspace and runs nothing — the same sentence-not-an-
+            # item shape `slots._cap_personas` ends its column with. It is still a real
+            # menu row (tmux has no inert one that does not desynchronise the triples —
+            # see `menu.record`), so it resolves to an argv that does nothing observable.
+            out.append(menu.Entry(label=f"  …{len(names) - len(shown)} more — "
+                                        f"charter {verb} list",
+                                 argv=("true",), group=group))
+        elif not shown:
+            out.append(menu.Entry(label=f"  no {verb}s yet", argv=("true",), group=group))
+    return out
 
 
 def _pane_identity_env(env: dict[str, str], v: tuple[int, int]) -> dict[str, str] | None:
@@ -3046,15 +3258,156 @@ def cmd_menu(args) -> int:
     refuses an empty id — so a keypress arriving with no session id would otherwise
     have gone on to build a zero-item `display-menu` call and fail loudly for no
     reason the operator could see).
+
+    **`--group` is how a SUBMENU opens (#517), and it is the same command because it is
+    the same job**: resolve the frame, resolve the presser's client, draw one of this
+    frame's recorded menus. The group arrives from a menu item's own command text, which
+    charter wrote (`menu.menu_argv`) — so it is checked against `menu.GROUPS` here anyway,
+    at the point it becomes an argument, and an unknown one is the same quiet no-op as a
+    missing client rather than an argparse exit 2 from inside a `run-shell` where nothing
+    would print the reason. Deliberately NOT `choices=` in the parser, for exactly the
+    reason `frame-density`'s own `level` is not.
+
+    That membership test is a **floor, not the guard**, and is worth saying so rather than
+    testing as if it were: `menu.build(fid, <unknown>)` is empty for any group no row
+    claims, so the empty-menu refusal beside it already answers the same way. What the
+    test buys is that `menu_argv` is never called with a group charter did not choose, so
+    the `-T charter · <group>` title cannot carry a caller's string.
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
-    if not args.client or not menu.build(fid):
+    group = getattr(args, "group", None) or menu.MAIN
+    if not args.client or group not in menu.GROUPS or not menu.build(fid, group):
         return 0
+    # Written before the menu is drawn, so a `frame-switch` fired from it has a screen to
+    # report a refusal on — see `state.record_menu_client` for why an action's own argv
+    # cannot carry one, and what this deliberately is not.
+    state.record_menu_client(fid, args.client)
     # `tmuxctl.interact`: `display-menu` draws on an attached client and does not return
     # until the operator chooses or dismisses it, so it belongs with `attach` on the
     # no-capture, no-timeout side of `tmuxctl` — time-boxing it would close a menu for
     # the crime of being read slowly.
-    return tmuxctl.interact(menu.menu_argv(fid, SOCKET, client=args.client)).returncode
+    return tmuxctl.interact(
+        menu.menu_argv(fid, SOCKET, client=args.client, group=group)).returncode
+
+
+def cmd_switch(args) -> int:
+    """`charter frame-switch --workspace <name>` / `--persona <name>` — move THIS frame.
+
+    Fired by a hotkey-submenu selection (`_switch_entries`), and typeable by hand from
+    inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
+    `cmd_density`, `cmd_menu` and `cmd_respawn` resolve theirs, and for the same reason:
+    one bind and one action template are shared by every frame on `SOCKET`, so the frame
+    a keypress acts on is resolved at the moment it fires, never baked into a menu action.
+
+    The switch itself is `frame/switch.py`'s — this function is the tmux half and nothing
+    else: which frame, and where the answer is shown.
+
+    **Every outcome is put on the operator's screen, and that is the point of the command
+    existing at all.** #517: "a menu that silently fails against a lock is worse than no
+    menu — if a switch is refused, the frame must say so." A refusal here has no other
+    surface: this runs as a `run-shell` child of a menu selection, whose stdout tmux
+    prints INTO THE HARNESS PANE and then drops that pane into copy-mode — charter drawing
+    in the one rectangle ADR 0018 says it never draws. So the message goes through
+    `display-message`, which draws on the client's own status area and disappears on its
+    own.
+
+    **Which screen.** This command's argv cannot carry `#{client_name}` — it is run by
+    `cmd_action` through `subprocess.run` as a LIST, which tmux never parses, so a format
+    in it would be four literal characters (see `state.record_menu_client`). The presser's
+    client comes from the menu that fired this instead, recorded by `cmd_menu` an instant
+    before it drew. It matters: measured against tmux 3.7c with two real ptys attached to
+    one session, `display-message -t <session>` drew on the most recently attached client
+    regardless of who pressed, and `-c` drew on exactly the named one.
+
+    **The menu is re-recorded** (`_rerecord_menu`) — it is a snapshot, and one taken
+    before the switch names the workspace the frame left.
+
+    **Always 0**, like `cmd_density` and `cmd_respawn`: nothing reads this status, and a
+    non-zero exit is what makes tmux print into the harness pane.
+    """
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    if not fid:
+        return 0
+    ws = getattr(args, "workspace", None)
+    persona_name = getattr(args, "persona", None)
+    if ws:
+        out = switch.to_workspace(fid, ws)
+    elif persona_name:
+        out = switch.to_persona(fid, persona_name)
+    else:
+        return 0
+    _rerecord_menu(fid)
+    _say_on_screen(fid, out, state.menu_client(fid))
+    return 0
+
+
+def _rerecord_menu(fid: str) -> None:
+    """Rewrite *fid*'s menu table so the next keypress describes the frame as it now is.
+
+    `menu.record` writes a SNAPSHOT: `_menu_entries` resolves the current workspace and
+    persona once, and every row's label and action id is minted from that. So a switch
+    that does not re-record leaves the menu naming the workspace the frame LEFT —
+    measured on a real plane before this call existed: after `switch.to_workspace(fid,
+    "ws05")` with `state.workspace_for(fid) == "ws05"`, `menu.build(fid, MAIN)` still
+    returned `workspace: ws00  ▸` and the submenu still marked `* ws00`. The panels
+    repainted; the menu lied. The same staleness is why a workspace or persona created
+    after launch never appeared in the submenu at all.
+
+    This is `cmd_density`'s own rule, applied to the command #517 is about rather than
+    only to the one beside it — same call, same operator-socket refusal, and for the same
+    reason: charter binds no key inside an operator's tmux, so there is nothing there to
+    open a menu with, and the "Detach" row `_menu_entries` grows targets `detach-client
+    -s <fid>`, a SESSION name that does not exist on that server.
+
+    The density argument is `_current_density(fid)` rather than a level passed in: this
+    command does not change the density, so the mark has to be re-derived from the frame's
+    own record or it would be re-recorded as whatever this function guessed.
+
+    **On a refusal too, and that is not an oversight.** A refused switch left the frame
+    where it was, so no mark moves — but the OTHER half of the staleness is the plane, and
+    that half moved regardless of what this frame did. A pinned frame whose operator keeps
+    pressing the hotkey is exactly the frame that would otherwise never see a workspace
+    made since launch. Guarding on `out.ok` would buy nothing back — the labels a refusal
+    re-records are identical, and `menu.record` mints every action id from position, so
+    the ids come out the same — and would cost that refresh.
+    """
+    socket = state.frame_server(fid) or SOCKET
+    if tmuxctl.is_operator_socket(socket):
+        return
+    menu.record(fid=fid, entries=_menu_entries(fid, socket, current=_current_density(fid)))
+
+
+def _say_on_screen(fid: str, out, client: str | None = None) -> None:
+    """Put one `switch.Outcome` on the frame's own screen. Best effort, never raises.
+
+    **The message is a tmux FORMAT, exactly as a menu label is.** `display-message`'s own
+    docs say so, and `menu._safe_label`'s measurement — a `#(...)` in a label runs during
+    format evaluation whether or not the thing goes on to display — applies here word for
+    word. `out.message` already carries a contained workspace or persona name
+    (`contain.one_line`, in `switch.py`), which closes the newline half; `_safe_label`
+    closes the `#` half. Both, because they are different properties: one line, and inert.
+
+    A leading `-` would make tmux read the message as a flag of its own and refuse the
+    whole command — the same measured failure `_safe_label` guards a label against — so
+    the same guard is what runs here rather than a second one that "does the same thing".
+
+    `-d 4000`: long enough to read a sentence, short enough that it is gone before the
+    operator wants the screen back. tmux's own default comes from `display-time`, which is
+    an operator's setting for THEIR messages and typically 750ms — too short for a refusal
+    that names a workspace and says what to do about it.
+    """
+    socket = state.frame_server(fid) or SOCKET
+    argv = tmuxctl.server_argv(socket, "display-message", "-d", "4000")
+    if client:
+        argv += ["-c", client]
+    else:
+        argv += ["-t", fid]
+    # One prefix for both outcomes. Every refusal `switch.py` produces already reads as
+    # one ("cannot switch: …", "no workspace 'x' — have: …"), and a second word saying so
+    # only ate columns off a status line tmux truncates without saying it did — measured
+    # against a 100-column client: `charter: refused — cannot switch: …` ran off the end.
+    tmuxctl.run("reporting a switch on screen",
+                argv + [menu._safe_label("charter: " + out.message)])
 
 
 def cmd_respawn(args) -> int:

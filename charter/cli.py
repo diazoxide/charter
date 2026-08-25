@@ -681,6 +681,21 @@ def _add_frame_parsers(sub) -> None:
         parser.add_argument("--probe", action="store_true",
                             help="Read-only: can a frame run here? Prints one line, "
                                  "starts nothing, never launches the harness.")
+        # #518. `--workspace` is the top rung of `workspace.resolve`'s own precedence,
+        # said on the command line — so it both aims the launch and skips the picker, in
+        # one flag, without a second rule for the second job. `--pick` is the other
+        # direction: ask even though something already answered.
+        #
+        # Both share `--no-frame`'s `_OWN_FLAGS`/`_OWN_VALUE_FLAGS` treatment below, so
+        # they reach `cmd_launch` as flags instead of being grafted onto the harness's own
+        # verbatim argv — and only in the leading position, which is the one unambiguous
+        # rule available once a harness's own flags are indistinguishable from ours by
+        # shape (see `_split_frame_argv`).
+        parser.add_argument("--workspace", dest="workspace", default=None,
+                            help="Run in this workspace (skips the picker).")
+        parser.add_argument("--pick", action="store_true",
+                            help="Choose the workspace before the harness starts, even "
+                                 "if one is already selected.")
         parser.set_defaults(harness=name, func=commands_frame.cmd_launch)
 
     # Snapshot, not a live read of `sub.choices` inside the loop — see this function's
@@ -706,7 +721,7 @@ def _add_frame_parsers(sub) -> None:
     # version (see `commands_frame.cmd_probe`'s own docstring).
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
                                          "frame-probe", "frame-respawn", "frame-density",
-                                         "frame-resize", "frame-gather"}
+                                         "frame-resize", "frame-gather", "frame-switch"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -770,13 +785,37 @@ def _add_frame_parsers(sub) -> None:
     # the bind's `run-shell` text before this process starts — never queried after the
     # fact (see `cmd_menu`'s own docstring for why: `list-clients` cannot tell WHO
     # pressed the key, only who is attached, and picking among several guessed wrong).
+    #
+    # `--group` opens a SUBMENU (#517). It arrives from a menu item's own command text,
+    # which charter wrote (`frame/menu.py`'s `menu_argv`) — and is validated in
+    # `cmd_menu` against `menu.GROUPS` rather than by `choices=` here, for the same
+    # reason `frame-density`'s `level` is not: a `choices=` mismatch exits 2 from inside a
+    # `run-shell`, where nothing prints the reason.
     mn = sub.add_parser("frame-menu")
     mn.add_argument("client")
+    mn.add_argument("--group", dest="group", default=None)
     mn.set_defaults(func=commands_frame.cmd_menu)
 
     act = sub.add_parser("frame-action")
     act.add_argument("action_id")
     act.set_defaults(func=commands_frame.cmd_action)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # ones above. Fired by a hotkey-SUBMENU selection (#517,
+    # `commands_frame._switch_entries`), whose stored argv is exactly
+    # `util.self_relaunch_argv("frame-switch", "--workspace"|"--persona", <name>)`. Also
+    # typeable by hand from inside a frame, which is why the name is a value and not a
+    # positional: `charter frame-switch --workspace foo` reads as what it does.
+    #
+    # The two are separate flags rather than one `--to` plus a noun, because a switch is
+    # not one operation with a parameter — `frame/switch.py` has different refusals, a
+    # different lock story and a different repaint cost for each, and a single flag would
+    # have to be dispatched on a second one anyway.
+    sw = sub.add_parser("frame-switch",
+                        help="Move this frame to another workspace or persona.")
+    sw.add_argument("--workspace", dest="workspace", default=None)
+    sw.add_argument("--persona", dest="persona", default=None)
+    sw.set_defaults(func=commands_frame.cmd_switch)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
     # two above. Fired by a PANEL pane's own `pane-died` hook (#382,
@@ -1335,7 +1374,17 @@ def _frame_command_names() -> set[str]:
 #: harness named `""`, bare `frame`) hands `["--probe"]` to `bypass`, which
 #: `os.execvp("--probe", ...)` turns into a `FileNotFoundError` — confirmed by running
 #: `charter frame --probe` with this entry left out before adding it.
-_OWN_FLAGS = ("--no-frame", "--probe", "-h", "--help")
+_OWN_FLAGS = ("--no-frame", "--probe", "--pick", "-h", "--help")
+
+#: The launcher's own flags that take a VALUE — `--workspace <name>` (#518). Kept apart
+#: from `_OWN_FLAGS` because the two are consumed differently and getting that wrong is
+#: silent in both directions: listed here but consumed as one token, and the name after it
+#: becomes `argv[0]` of the harness's own command; listed in `_OWN_FLAGS` and consumed as
+#: two, and a harness argument disappears.
+#:
+#: `--workspace=<name>` needs no entry — it is a single token, so the leading-run scan
+#: below matches it by prefix and `argparse` splits it.
+_OWN_VALUE_FLAGS = ("--workspace",)
 
 
 def _split_frame_argv(argv: list[str]) -> tuple[list[str], list[str] | None]:
@@ -1359,12 +1408,30 @@ def _split_frame_argv(argv: list[str]) -> tuple[list[str], list[str] | None]:
     or `--help` is just more of the harness's own verbatim argv, which is the one
     unambiguous rule available once the harness's own flags (`-p`, `--continue`,
     anything) are indistinguishable from ours by shape alone.
+
+    **A value-taking flag consumes two tokens, and that is why `_OWN_VALUE_FLAGS` is a
+    separate tuple.** `--workspace foo` in the leading run is charter's; scanning it as one
+    token would leave `foo` as the harness's `argv[0]`, which for `charter frame
+    --workspace foo -- true` would try to execute the workspace name. A trailing
+    `--workspace` with nothing after it stops the scan there and is handed to `argparse`,
+    which refuses it with its own "expected one argument" — the right message, from the
+    part that owns the flag.
     """
     if not argv or argv[0] not in _frame_command_names():
         return argv, None
     i = 1
-    while i < len(argv) and argv[i] in _OWN_FLAGS:
-        i += 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _OWN_FLAGS or any(tok.startswith(f + "=") for f in _OWN_VALUE_FLAGS):
+            i += 1
+        elif tok in _OWN_VALUE_FLAGS:
+            # Two tokens, or one when the flag is last — that trailing case is handed to
+            # `argparse` on its own so its "expected one argument" is what the operator
+            # gets, rather than the flag disappearing into the harness's verbatim argv
+            # where nothing would ever mention it.
+            i += 2 if i + 1 < len(argv) else 1
+        else:
+            break
     return argv[:i], argv[i:]
 
 

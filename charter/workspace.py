@@ -299,6 +299,39 @@ def resolve(explicit: str | None = None, session_id: str | None = None,
     Code runs the hook and passes the session's directory in the payload, so a renderer
     reading ``os.getcwd()`` would answer for the hook. Callers that ARE the session — every
     CLI command — leave it unset and get the process cwd, which is the same fact.
+
+    The whole ladder lives in :func:`chosen`; this is that answer with the built-in
+    fallback underneath it. Two functions, one ladder — see :func:`chosen` for why the
+    difference between them is the question #518 is about.
+    """
+    return chosen(explicit, session_id, cwd) or config.DEFAULT_WORKSPACE
+
+
+def chosen(explicit: str | None = None, session_id: str | None = None,
+           cwd=None) -> str | None:
+    """The workspace something actually **chose**, or ``None`` when nothing did.
+
+    :func:`resolve`'s ladder, minus its last rung. ``None`` means every rung came back
+    empty and `resolve` is about to answer :data:`config.DEFAULT_WORKSPACE` — which is not
+    a decision anybody made, it is the name charter falls back to when there is nothing to
+    read. That difference is the whole of #518: `charter <harness>` "resolves a workspace
+    silently", and the launch worth interrupting with a picker is exactly the one where
+    nobody had chosen.
+
+    **One ladder, asked twice — not two ladders that agree today.** `resolve` used to walk
+    the rungs itself and this function would have been a second walker; that is the shape
+    this module already warns about in :func:`valid_name` (one rule, two copies, and the
+    reading site and the deciding site drift apart). A rung added here reaches `resolve`
+    for free, and a picker that fired on a launch `resolve` had an answer for would be a
+    prompt in front of a decision already made.
+
+    :func:`source` remains a third walker: it answers a different question (a human label
+    for a status line, including *why* nothing chose), and folding it in here would make
+    this return a sentence. Its rungs must mirror these — that was already true before
+    this split and is unchanged by it.
+
+    ``declared_default()`` counts as a choice: somebody nominated it (#193). The built-in
+    below it does not, and that is the one rung this function drops.
     """
     if explicit:
         return explicit
@@ -327,7 +360,7 @@ def resolve(explicit: str | None = None, session_id: str | None = None,
     declared = declared_default()
     if declared:
         return declared
-    return config.DEFAULT_WORKSPACE
+    return None
 
 
 def source(explicit: str | None = None, session_id: str | None = None,
@@ -414,7 +447,8 @@ def unlock(session_id: str | None = None) -> bool:
     return False
 
 
-def set_active(name: str, session_id: str | None = None, force: bool = False) -> str:
+def set_active(name: str, session_id: str | None = None, force: bool = False,
+               terminal_id: str | None = None) -> str:
     """Select ``name`` for THIS pane/session only, and **lock** the session to it.
 
     Writes a **per-terminal** pointer (keyed by a stable terminal id, so the pane
@@ -426,13 +460,24 @@ def set_active(name: str, session_id: str | None = None, force: bool = False) ->
     the switch is refused and ``"locked"`` is returned (nothing is written) — unless
     ``force=True``. Confirming a workspace locks the session to it, so the workspace
     can't be swapped out from under a running task. Returns the scope
-    (``session`` | ``terminal`` | ``none``) on success, or ``"locked"`` when refused."""
+    (``session`` | ``terminal`` | ``none``) on success, or ``"locked"`` when refused.
+
+    **``terminal_id=""`` writes no terminal pointer, and that is not a micro-option — it
+    closes #411 one caller over.** A frame's own switcher (`frame/switch.py`) runs as a
+    ``run-shell`` child of charter's private tmux server, and that server is SHARED: its
+    environment belongs to whichever launcher happened to start it, possibly days ago, in
+    another terminal. :func:`_terminal_id` reads `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/
+    `$SSH_TTY` out of that environment, so a switch inside frame B would otherwise write
+    the pointer for the terminal that launched frame A — moving a workspace in a terminal
+    nobody touched. Passing the empty string says "this process has no terminal to speak
+    for", which is the truth there. ``None`` (the default) keeps today's behaviour for
+    every ordinary caller: `charter workspace use` IS the terminal it is typed in."""
     locked = is_locked(session_id)
     if locked and locked != name and not force:
         _trace("workspace-refused", session_id, workspace=name, locked_to=locked)
         return "locked"
     config.private_mkdir(config.STATE_DIR)
-    tid = _terminal_id()
+    tid = _terminal_id() if terminal_id is None else terminal_id
     if tid:
         config.private_mkdir(config.TERMINALS_DIR)
         _terminal_file(tid).write_text(name + "\n")

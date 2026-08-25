@@ -58,8 +58,28 @@ from __future__ import annotations
 import json
 import os
 import re
+from typing import NamedTuple
 
 from . import state, tmuxctl
+
+#: The top-level menu — what `F2` opens, and what every table written before groups
+#: existed is read as. Named rather than spelled `"main"` at four call sites.
+MAIN = "main"
+
+#: The two submenus (#517). Named rather than spelled at each call site, and indexed by
+#: name rather than by position in :data:`GROUPS` — a list a future group is appended to
+#: must not silently re-point the workspace menu at the persona one.
+WORKSPACES = "workspace"
+PERSONAS = "persona"
+
+#: The closed set of menu groups, and **the only thing between a group name and tmux's own
+#: parser**: a submenu opener's command is a template with the group interpolated into it
+#: (`menu_argv`), so a group is in exactly the position `_ACTION_ID_RE` guards an action id
+#: in. These are charter's own constants — no committed value ever becomes one — and the
+#: membership test below is the guard at the join, for `_ACTION_ID_RE`'s own stated reason:
+#: a hand-edited or otherwise corrupted `actions.json` is not bound by what `record` would
+#: have written.
+GROUPS = (MAIN, WORKSPACES, PERSONAS)
 
 #: The bound on one label's length, and the reason for it: a `display-menu` row is one
 #: line, and a label long enough to wrap would corrupt the menu's own layout rather than
@@ -77,6 +97,25 @@ _MAX_LABEL = 60
 _ACTION_ID_RE = re.compile(r"^a[0-9]+$")
 
 
+class Entry(NamedTuple):
+    """One row of one menu, in the shape `record` stores and `menu_argv` renders.
+
+    Constructible from a plain tuple of two, three or four values, so every caller that
+    only ever wanted a label and an argv (`("Detach", ["true"])`) keeps working unchanged
+    — `record` normalises through ``Entry(*e)``.
+
+    ``group`` says which menu the row belongs to; ``opens`` makes the row a **submenu
+    opener** — a row that draws another group instead of running an argv. The two are
+    mutually exclusive in practice: an opener has no argv, because opening a menu is a
+    tmux command and not something `cmd_action` could run through `subprocess.run`.
+    """
+
+    label: str
+    argv: tuple = ()
+    group: str = MAIN
+    opens: str | None = None
+
+
 def _table(fid: str, *, create: bool = False):
     """Path to *fid*'s menu table, or ``None`` when `state.frame_dir` refuses *fid*.
 
@@ -90,8 +129,15 @@ def _table(fid: str, *, create: bool = False):
     return None if d is None else d / "actions.json"
 
 
-def record(*, fid: str, entries: list[tuple[str, list[str]]]) -> None:
-    """Store this frame's menu as ``{id: {label, argv}}``. The only place ids are minted.
+def record(*, fid: str, entries) -> None:
+    """Store this frame's menus as ``{id: {label, argv, group, opens}}``. The only place
+    ids are minted.
+
+    **One table, one id space, several menus.** *entries* holds every row of every group
+    (:data:`GROUPS`) in one list, and an id is minted from position across the whole of
+    it — so `resolve` and `cmd_action` never have to know which menu a selection came
+    from, and a submenu costs no second file, no second id space and no second thing that
+    can go stale against the first. `build` filters by group at read time.
 
     Ids are ``a0``, ``a1``, … — insertion order, never re-derived from the label — so
     `resolve` can answer purely from the id with no dependency on what a label happens to
@@ -123,9 +169,18 @@ def record(*, fid: str, entries: list[tuple[str, list[str]]]) -> None:
     if path is None:
         return
     data = {}
-    for i, (label, argv) in enumerate(entries):
-        clean = label.replace("\n", " ")[:_MAX_LABEL] or "(untitled)"
-        data[f"a{i}"] = {"label": clean, "argv": list(argv)}
+    for i, raw in enumerate(entries):
+        e = raw if isinstance(raw, Entry) else Entry(*raw)
+        clean = e.label.replace("\n", " ")[:_MAX_LABEL] or "(untitled)"
+        row = {"label": clean, "argv": list(e.argv)}
+        # Only written when they say something — a table with no submenus in it stays
+        # byte-for-byte what it was before groups existed, so nothing has to migrate and
+        # a frame running across the upgrade keeps the menu it already has.
+        if e.group != MAIN:
+            row["group"] = e.group
+        if e.opens:
+            row["opens"] = e.opens
+        data[f"a{i}"] = row
     tmp = path.with_name(path.name + ".tmp")
     try:
         tmp.write_text(json.dumps(data))
@@ -137,8 +192,17 @@ def record(*, fid: str, entries: list[tuple[str, list[str]]]) -> None:
         return
 
 
-def build(fid: str) -> list[tuple[str, str]]:
-    """``(label, opaque id)`` for each entry, in the order `record` stored them.
+def build(fid: str, group: str = MAIN) -> list[tuple[str, str]]:
+    """``(label, opaque id)`` for each entry of *group*, in the order `record` stored them.
+
+    Thin over :func:`rows` — the same read, dropping the two fields a caller that only
+    wants to name the rows does not need. See :func:`rows` for what is checked and why.
+    """
+    return [(e.label, action_id) for e, action_id in rows(fid, group)]
+
+
+def rows(fid: str, group: str = MAIN) -> list[tuple[Entry, str]]:
+    """``(entry, opaque id)`` for every row of *group*, in the order `record` stored them.
 
     `json.loads` rebuilds the dict in the order its keys appeared in the text, which is
     the same order `record`'s own dict comprehension wrote them in — no `sorted()` here on
@@ -158,6 +222,23 @@ def build(fid: str) -> list[tuple[str, str]]:
     of defect `_ACTION_ID_RE` exists to close for the key, applied consistently to the
     value next to it, so a corrupted label degrades the one row it belongs to rather
     than crashing the hotkey for the whole menu.
+
+    **`opens` is checked against :data:`GROUPS` here, at the join**, for exactly
+    `_ACTION_ID_RE`'s reason and not because `record` might write something else: it is
+    interpolated into tmux command text by `menu_argv`, so a corrupted table holding
+    ``"opens": "x'; run-shell \\"...\\""`` would otherwise reach that f-string untouched.
+    An unknown `opens` costs the row only its submenu, degrading it to an ordinary row,
+    because that field is decoration on a row that is otherwise complete.
+
+    **`group` is NOT checked against `GROUPS`, deliberately.** It is a filter key and
+    nothing else — it reaches no parser, no argv and no screen — so a row claiming a
+    group this charter does not have is already unreachable by the `g != group`
+    comparison below, and adding a membership test next to it would be a guard no
+    mutation could turn red: this repo's own "a guard passing because a DIFFERENT guard
+    caught it". Confirmed by mutating it out and watching the covering test stay green.
+
+    A MISSING `group` is `main`: that is every table written before groups existed, and a
+    frame running across the upgrade keeps its menu.
     """
     path = _table(fid)
     if path is None:
@@ -172,8 +253,17 @@ def build(fid: str) -> list[tuple[str, str]]:
     for k, v in data.items():
         if not isinstance(v, dict) or not _ACTION_ID_RE.fullmatch(k):
             continue
+        g = v.get("group", MAIN)
+        if g != group:
+            continue
         label = v.get("label")
-        out.append((label if isinstance(label, str) and label else "(untitled)", k))
+        opens = v.get("opens")
+        argv = v.get("argv")
+        out.append((Entry(
+            label=label if isinstance(label, str) and label else "(untitled)",
+            argv=tuple(argv) if isinstance(argv, list) else (),
+            group=g,
+            opens=opens if opens in GROUPS else None), k))
     return out
 
 
@@ -238,8 +328,26 @@ def _safe_label(label: str) -> str:
     return label
 
 
-def menu_argv(fid: str, socket: str, client: str) -> list[str]:
-    """The `display-menu` invocation for this frame. Ids only — never a name.
+def menu_argv(fid: str, socket: str, client: str, group: str = MAIN) -> list[str]:
+    """The `display-menu` invocation for one of this frame's menus. Ids only — never a name.
+
+    **A submenu is a row whose command opens another `display-menu`, and the client it
+    opens on is carried by tmux itself.** An opener's command is a second fixed template,
+    ``run-shell '"$CHARTER_PY" -m charter frame-menu #{client_name} --group <g>'`` — the
+    same shape the `F2` bind already uses (`commands_frame.conf_text`), with `<g>` taken
+    from the closed set :data:`GROUPS` and nothing else varying. Measured against tmux
+    3.7c with **two real ptys attached to one session**: `#{client_name}` inside a menu
+    item's own command expands to the client the menu was drawn on (`-c`), never to
+    whichever client tmux would otherwise call current — pressing on client A ran the
+    item with A's name, pressing on B ran it with B's, in the same session. That is the
+    property `cmd_menu`'s docstring says was NOT available from `list-clients`, and it is
+    what lets a submenu reach the presser's screen without charter storing a client
+    anywhere or guessing at one.
+
+    The opener cannot go through `frame-action` like every other row: `cmd_action` runs a
+    stored argv through `subprocess.run`, which is a list and is never seen by tmux, so a
+    `#{client_name}` in it would be four literal characters. Opening a menu is a tmux
+    command; only text tmux parses can carry the format that names the screen.
 
     `-c client` is what selects WHICH ATTACHED TERMINAL the menu is drawn on —
     `display-menu`'s own docs: "Display a menu on target-client. target-pane gives the
@@ -281,9 +389,46 @@ def menu_argv(fid: str, socket: str, client: str) -> list[str]:
     instead would put an absolute path back inside a nested tmux-quote layer, the exact
     construction the `commands_frame` module docstring bans for `status_path`.
     """
-    cmd = ["tmux", "-L", socket, "display-menu", "-t", fid, "-c", client, "-T", "charter"]
-    for i, (label, action_id) in enumerate(build(fid)):
-        cmd += [_safe_label(label), str(i + 1),
-                f'run-shell \'"${tmuxctl.CHARTER_PY_ENV}" -m charter '
-                f'frame-action {action_id}\'']
+    title = "charter" if group == MAIN else f"charter · {group}"
+    cmd = ["tmux", "-L", socket, "display-menu", "-t", fid, "-c", client, "-T", title]
+    for i, (entry, action_id) in enumerate(rows(fid, group)):
+        if entry.opens:
+            # `entry.opens` is already confined to `GROUPS` by `rows`, at the read — the
+            # same discipline `_ACTION_ID_RE` gets, and for the same reason: this is an
+            # f-string into text tmux re-parses.
+            action = (f'run-shell \'"${tmuxctl.CHARTER_PY_ENV}" -m charter '
+                      f'frame-menu #{{client_name}} --group {entry.opens}\'')
+        else:
+            action = (f'run-shell \'"${tmuxctl.CHARTER_PY_ENV}" -m charter '
+                      f'frame-action {action_id}\'')
+        cmd += [_safe_label(entry.label), _key(i), action]
     return cmd
+
+
+def _key(i: int) -> str:
+    """The one-key shortcut for row *i*, or tmux's own "no shortcut".
+
+    `display-menu`'s middle argument is a KEY NAME, not a label: `"10"` is not one. Before
+    submenus the menu had four fixed rows and could never reach it; a workspace list can,
+    so rows past the ninth get the **empty string**, which is tmux's own spelling for a row
+    with no key bound. Ten rows is also where the digits run out, not an arbitrary cap:
+    continuing into letters would shadow `display-menu`'s own `q`, and a menu whose tenth
+    row silently quits it is worse than one with no shortcut there.
+
+    **Not ``-``, which is a real key.** Measured against tmux 3.7c on an attached pty, a
+    four-row menu keyed ``1``, ``-``, ``-``, ``""``::
+
+        ┌─probe─────┐
+        │ row-a (1) │
+        │ row-b (-) │
+        │ row-c (-) │
+        │ row-d     │
+        └───────────┘
+
+    Pressing ``-`` RAN row-b's command and closed the menu — so a stray hyphen on a
+    workspace submenu would have performed a real switch to the tenth workspace, and
+    row-c, which advertises the same ``(-)``, was unreachable by that key. The empty-key
+    row is drawn with no ``(…)`` at all and is still arrow-selectable: from the same menu,
+    three Downs and Enter fired row-d.
+    """
+    return str(i + 1) if i < 9 else ""
