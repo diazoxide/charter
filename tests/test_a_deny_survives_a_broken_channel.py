@@ -48,7 +48,7 @@ from pathlib import Path
 from unittest import mock
 
 import charter
-from charter import config, hooks
+from charter import config, hooks, root
 from tests._isolation import PersonaIso
 
 #: A payload that MUST be denied, per handler that can deny one.
@@ -89,8 +89,14 @@ class RealPipeCase(PersonaIso):
     and nothing is patched.
     """
 
-    #: `config.use` rather than an env var, because the child must not touch the developer's
-    #: real `.charter/` and this is the same seam `PersonaIso` uses in-process.
+    #: `config.use` is the same seam `PersonaIso` uses in-process — but it is the SECOND
+    #: statement, and the first is ``from charter import config``, which resolves a plane at
+    #: import from the child's own cwd. That cwd is the checkout, so for as long as this
+    #: said "an env var is unnecessary" the child was resolving the developer's real plane
+    #: and only then being repointed. Nothing was harmed, and nothing enforced it —
+    #: "a module-level charter import in a child that resolves its own plane" is the shape
+    #: that produced #527. ``$CHARTER_ROOT`` on the child's environment (below) makes the
+    #: import land where `config.use` is about to point anyway.
     CHILD = ("import sys;"
              "from pathlib import Path;"
              "from charter import config, hooks;"
@@ -102,6 +108,7 @@ class RealPipeCase(PersonaIso):
         super().setUp()
         (self.tmp / "charter.toml").write_text("schema = 1\n")
         self.env = {**os.environ,
+                    root.ENV_VAR: str(self.tmp),
                     "PYTHONPATH": str(Path(charter.__file__).resolve().parent.parent)}
         # Buffering is the subject, so it is not left to the ambient environment: with this
         # set the child's stdout is unbuffered and the bug is invisible again.

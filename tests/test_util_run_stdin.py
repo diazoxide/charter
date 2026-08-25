@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 
 import charter
+from tests._isolation import child_plane_env
 
 #: So the helper below can `from charter import util` whatever the cwd is.
 _REPO_ROOT = Path(charter.__file__).resolve().parent.parent
@@ -80,11 +81,16 @@ class TheFixtureIsRealBeforeAnythingIsConcludedFromIt(unittest.TestCase):
 
 class AChildNeverInheritsCharterSStdin(unittest.TestCase):
     def _report(self) -> dict:
+        # `_HELPER` opens with ``from charter import util``, and a charter import resolves
+        # a plane from the importing process's own cwd — which here is the checkout, i.e.
+        # the developer's live plane. The helper never writes to it, but nothing said it
+        # could not, and that is the shape #527 was: a module-level charter import in a
+        # child nobody handed a plane. `child_plane_env` hands it one.
+        _, env = child_plane_env(self, PYTHONPATH=str(_REPO_ROOT))
         with _NeverEofStdin() as stdin:
             proc = subprocess.run(
                 [sys.executable, "-c", _HELPER], stdin=stdin,
-                capture_output=True, text=True, timeout=_OUTER_BOUND,
-                env={**os.environ, "PYTHONPATH": str(_REPO_ROOT)},
+                capture_output=True, text=True, timeout=_OUTER_BOUND, env=env,
             )
         # Precondition: the helper ran and reported. An ImportError or a traceback here
         # must be loud, not silently read as "did not block".
