@@ -20,7 +20,7 @@ import sys
 import unittest
 from unittest import mock
 
-from charter import config, instance, statusline, tui
+from charter import config, instance, statusline, todos, tui, workspace
 from charter.frame import gather, slots, state
 
 from tests._isolation import PersonaIso
@@ -330,6 +330,192 @@ class TopRenderer(PersonaIso, unittest.TestCase):
         self.assertEqual(statusline._context_gauge(None), [])
 
 
+class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
+    """#512 — the reported bug, at the layer that showed it.
+
+    An operator opened a session and the frame's repo table was empty; the repos appeared
+    "after I resized the window". The resize was a coincidence (it happened alongside a
+    tool call, and a tool call's `posttooluse` hook refreshes the gather cache from inside
+    the HARNESS). What was actually wrong is that **a panel resolved a different workspace
+    than the launcher did**: measured on the reporting plane, three per-terminal pointers
+    naming `harness-wrapper`, one naming `user-reporting`, and a `default` workspace with
+    no clones in it at all. `workspace.resolve` from inside a panel pane cannot reach any
+    of the rungs that decided it (`state.record_workspace`'s docstring walks all six), so
+    every panel drew `default` — its empty repo list, its todo count, its alerts — into a
+    frame the launcher had built for another workspace entirely.
+
+    The fixture below is that situation exactly: the panel's OWN `workspace.resolve()`
+    answers `default`, and the frame was launched for `elsewhere`. Nothing here mocks a
+    renderer or a helper — `workspace.resolve` is left completely alone and answers
+    honestly for this process, which is the whole point: the defect was never that
+    `resolve` was wrong, it was that a panel asked it at all.
+    """
+
+    OTHER = "elsewhere"
+
+    def _render(self, slot, fid="f-1", *, cols=200, rows=24) -> str:
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, rows))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return tui.strip_ansi(slots.render(slot, fid))
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A panel process standing at the plane root, with no pin and no pointer it can
+        # read — `workspace.resolve()` genuinely answers the built-in default here, which
+        # is what a real panel gets.
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+        self.assertEqual(workspace.resolve(), config.DEFAULT_WORKSPACE,
+                         "the fixture no longer reproduces a panel's own answer")
+
+    def test_top_names_the_workspace_the_frame_was_launched_for(self):
+        state.record_workspace("f-1", self.OTHER)
+        out = self._render("top")
+        self.assertIn(self.OTHER, out)
+        self.assertNotIn(config.DEFAULT_WORKSPACE, out,
+                         "the header named the panel's own guess, not the frame's")
+
+    def test_the_attention_row_counts_the_frames_workspaces_todos(self):
+        """The same defect one field over, and the reason `_bottom` goes through
+        `_frame_workspace` too rather than only the table: a row reading `0 todos` beside
+        a table of another workspace's repos is two answers to one question."""
+        todos.add(self.OTHER, "something the frame's workspace is carrying")
+        state.record_workspace("f-1", self.OTHER)
+        _seed("f-1")
+        self.assertIn("1 todo", self._render("bottom"))
+
+    def test_without_the_record_it_falls_back_to_resolving_locally(self):
+        """The migration case, and the failed-write case. `None` from
+        `state.frame_workspace` means "do not take it from here" — the fallback is exactly
+        what every panel did before #512, so this is never worse than what it replaces."""
+        self.assertIsNone(state.frame_workspace("f-1"))
+        self.assertIn(config.DEFAULT_WORKSPACE, self._render("top"))
+
+    def test_a_workspace_chosen_inside_the_frame_still_moves_the_panels(self):
+        """`docs/frame.md`'s own promise, and the regression #512's first cut shipped:
+        "`charter workspace use <name>` typed at the agent moves the panels too — the
+        pointer is written under the frame's id and the panels read it back under the same
+        one." The launcher's recorded answer is a SEED, not an override; a choice made
+        while the frame is running outranks it.
+
+        Through the real `workspace.set_active`, with the frame's id in the environment,
+        because that is exactly what `charter workspace use` does — a hand-written pointer
+        file would prove that `state.workspace_for` reads a file, not that the two ends of
+        this promise still meet."""
+        state.record_workspace("f-1", self.OTHER)
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
+            self.assertNotEqual(workspace.set_active("chosen-later"), "locked")
+        out = self._render("top")
+        self.assertIn("chosen-later", out)
+        self.assertNotIn(self.OTHER, out,
+                         "the panel ignored a workspace chosen inside the running frame")
+
+    def test_the_frames_repo_table_follows_that_choice_too(self):
+        """The same rung, on the surface #512 is actually about — a header that moved and
+        a table that did not would be the disagreement this class exists to prevent."""
+        clone = config.WORKSPACES_DIR / "chosen-later" / "arepo"
+        (clone / ".git").mkdir(parents=True)
+        state.record_workspace("f-1", self.OTHER)
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
+            workspace.set_active("chosen-later")
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 2)
+
+    def test_the_pane_is_sized_from_the_frames_workspace_too(self):
+        """`gather.row_count`'s no-cache path is the third surface that used to resolve
+        for itself, and its caller makes it matter: `cmd_resize` runs as a tmux
+        `run-shell` child on every step of a terminal drag, with the SERVER's environment
+        and neither the operator's cwd nor their pane id. A pane sized from one workspace
+        while its panel draws another is #512 wearing a height instead of a row.
+
+        Two real workspaces on disk, one with a clone in it and one without, so the count
+        can only come from the right listing — and no cache, which is the state
+        `cmd_launch` guarantees by calling `gather.discard`."""
+        clone = config.WORKSPACES_DIR / self.OTHER / "arepo"
+        (clone / ".git").mkdir(parents=True)
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1,
+                         "the fixture already counted a repo before the record existed")
+        state.record_workspace("f-1", self.OTHER)
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 2)
+
+    def test_a_corrupt_record_falls_back_rather_than_drawing_it(self):
+        """`frame_workspace` name-checks on read, so a `workspaces/` escape never reaches
+        `workspace_dir()`'s join or the operator's screen — and the panel degrades to its
+        own answer rather than to nothing at all."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "workspace").write_text("../../escaped\n")
+        out = self._render("top")
+        self.assertNotIn("escaped", out)
+        self.assertIn(config.DEFAULT_WORKSPACE, out)
+
+
+class TheChipAndItsStarNameTheSameWorkspace(PersonaIso, unittest.TestCase):
+    """`top`'s `⬢ <name>*` is one claim, not two, and the `*` is the half that says who
+    made it: "`$CHARTER_WORKSPACE` chose this".
+
+    The two halves used to be answered from different rungs — the name from
+    `state.workspace_for`, the star from `workspace.source()`, which only knows whether
+    the variable is set at all. A frame launched under the pin that then had `charter
+    workspace use other` typed at it drew `⬢ other*`: a name the environment did not
+    name, wearing the marker that says it did, while every command in that session went
+    on acting in the pinned workspace. Self-contradictory on its own line, and the
+    contradiction is the tell — an operator reading it has no way to know which half to
+    believe.
+
+    This is the case charter's own documentation steers people into: `hooks`' nudge tells
+    an operator to "re-launch with `CHARTER_WORKSPACE=<name>` set" to aim a parallel or
+    unattended agent, and `commands_workspace` warns that `ws use` will not stick while
+    it is. The frame has to survive somebody doing both.
+    """
+
+    def _top(self, fid="f-1", *, cols=200, rows=24) -> str:
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, rows))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return tui.strip_ansi(slots.render("top", fid))
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+
+    def test_the_pinned_name_is_the_one_drawn_and_it_keeps_the_star(self):
+        """Through the real `workspace.set_active` with the frame's id in the
+        environment, because that is what `charter workspace use` does — a hand-written
+        pointer file would prove the reader reads a file, not that a real in-frame command
+        can no longer move the header off the pin."""
+        os.environ["CHARTER_WORKSPACE"] = "zeta"
+        state.record_workspace("f-1", "zeta")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
+            workspace.set_active("other", force=True)
+        self.assertEqual(workspace.for_session("f-1"), "other",
+                         "the fixture never wrote the pointer this test is about")
+        out = self._top()
+        self.assertIn("⬢ zeta*", out)
+        self.assertNotIn("other", out,
+                         "the header named a workspace no command in the session acts on")
+        self.assertEqual(workspace.resolve(), "zeta",
+                         "the header and the session's own commands disagree")
+
+    def test_a_name_the_pin_did_not_choose_never_wears_the_star(self):
+        """The star's meaning, checked from the other side: a pin charter refuses to draw
+        (`workspace_dir()` would join it) leaves the panel on a name the variable did not
+        name, and the marker has to come off with it. A star sourced from "is the variable
+        set" would still be there."""
+        os.environ["CHARTER_WORKSPACE"] = "../../escaped"
+        state.record_workspace("f-1", "recorded-at-launch")
+        out = self._top()
+        self.assertIn("⬢ recorded-at-launch", out)
+        self.assertNotIn("escaped", out)
+        self.assertNotIn("*", out, "the star claimed the environment chose this name")
+
+    def test_no_pin_means_no_star(self):
+        """The ordinary frame, so neither test above can pass by the star never being
+        drawn at all."""
+        state.record_workspace("f-1", "recorded-at-launch")
+        out = self._top()
+        self.assertIn("⬢ recorded-at-launch", out)
+        self.assertNotIn("*", out)
+
+
 class TopDrawsTheRecordedGauge(PersonaIso, unittest.TestCase):
     """#413: `ctx NN%` / `cache NN%` on `top`, out of the history the suppressed status
     line records — the one capability a framed Claude Code session lost to #386 and the
@@ -637,9 +823,68 @@ class BottomTable(PersonaIso, unittest.TestCase):
     def test_a_plane_with_no_repos_is_the_one_row_strip_it_always_was(self):
         """The floor `layout.bottom_rows` keeps, seen from the renderer's side. The
         reported "always empty sidebar" of #488 was this case being told the truth —
-        a workspace with 0 clones — so it must stay honest rather than grow furniture."""
+        a workspace with 0 clones — so it must stay honest rather than grow furniture.
+
+        `_seed` is what makes this the honest case rather than the unknown one below: a
+        cache exists and it says zero repos. Delete the seed and this is a DIFFERENT
+        claim, which is #512."""
         _seed("f-1")
         self.assertEqual(len(self._render().split("\n")), 1)
+
+    def test_a_frame_whose_repos_are_not_gathered_yet_says_so_rather_than_showing_none(self):
+        """#512, at the renderer. `cmd_launch` deletes the cache before it draws anything
+        and a detached child fills it a beat later, so there is a real window in which
+        charter does not KNOW this frame's repos — and drawing that as an empty table is
+        the same confidently-wrong output the `left` sidebar was retired for in #488.
+
+        The two cases are asserted against each other rather than in isolation, because
+        "says something" and "says nothing" are only meaningful as a pair: a renderer that
+        drew this line unconditionally would pass a membership check on its own and would
+        be a permanent lie on every plane with no clones."""
+        unknown = self._render("f-never-gathered")
+        _seed("f-known-empty")
+        empty = self._render("f-known-empty")
+        self.assertIn("gathering", unknown)
+        self.assertEqual(len(unknown.split("\n")), 2)
+        self.assertNotIn("gathering", empty)
+        self.assertEqual(len(empty.split("\n")), 1)
+
+    def test_the_gathering_line_goes_the_moment_the_rows_arrive(self):
+        """It is a statement about now, not furniture. Same frame id, one cache write
+        between the two renders — the sequence a real launch actually performs."""
+        self.assertIn("gathering", self._render("f-1"))
+        _seed("f-1", repos=[_row("demo")])
+        after = self._render("f-1")
+        self.assertNotIn("gathering", after)
+        self.assertIn("demo", after)
+
+    def test_a_pane_too_narrow_for_the_table_says_nothing_either(self):
+        """`_table_cap` answers 0 below `statusline._LEFT_W` and `bottom` composes nothing
+        on a budget of 0, so a "gathering" line cannot appear where a table never will:
+        one that did would show up while the rows were unknown and VANISH once they were
+        known — "the repos went away", which is worse than the silence it replaces.
+
+        Asserted through the whole renderer at both widths in one test, because what is
+        being pinned is that the two agree: the SAME frame, gathered or not, draws exactly
+        the attention row at 90 columns."""
+        self.assertEqual(len(self._render("f-never-gathered", cols=90).split("\n")), 1)
+        _seed("f-never-gathered", repos=[_row("demo")])
+        self.assertEqual(len(self._render("f-never-gathered", cols=90).split("\n")), 1)
+
+    def test_a_repaint_never_runs_a_gather_of_its_own(self):
+        """The rule `_table_lines`' own docstring states and #512 found broken: a panel
+        reads the cache and nothing else. `gather.read` falls back to a live `scan()`
+        when there is no cache — three git invocations and ~35ms — and `cmd_launch`
+        guarantees exactly that state at launch, so every repaint of a fresh frame was
+        paying for one, on the ONE animated slot (`slots.ANIMATED`), five times a second
+        for as long as anything was in flight.
+
+        Asserted on the unknown case specifically: with a cache present, a renderer that
+        called `scan` unconditionally would still be caught, but a renderer that called it
+        only when there is nothing to read — the actual defect — would not."""
+        with mock.patch.object(gather, "scan",
+                               side_effect=AssertionError("a repaint gathered")):
+            self.assertIn("gathering", self._render("f-never-gathered"))
 
     def test_a_dirty_repo_shows_the_dirty_marker(self):
         _seed("f-1", repos=[_row("demo", dirty=True)])
@@ -1015,9 +1260,16 @@ class BottomTable(PersonaIso, unittest.TestCase):
         pinned against a renderer that reaches into a real dependency.
 
         Rendered at a width the table is actually attempted at: below
-        `statusline._LEFT_W` there is no table, so `gather.read` is never reached and the
-        test would pass by never running the code it claims to bound."""
-        with mock.patch.object(gather, "read", side_effect=RuntimeError("boom")), \
+        `statusline._LEFT_W` there is no table, so the cache is never reached and the
+        test would pass by never running the code it claims to bound.
+
+        **`cached`, not `read` (#512).** `_bottom` stopped calling `gather.read` when a
+        panel stopped being allowed to fall back to a live `scan()`, and this test kept
+        passing against a mock nothing called any more — the exact "instrumenting one
+        function while claiming to bound a property" shape. It is pinned to whichever
+        function the renderer actually reaches, and `_seed` is deliberately NOT called
+        first: a cache on disk would make a raising reader unreachable a second way."""
+        with mock.patch.object(gather, "cached", side_effect=RuntimeError("boom")), \
              mock.patch("os.get_terminal_size",
                         return_value=os.terminal_size((200, 24))), \
              mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):

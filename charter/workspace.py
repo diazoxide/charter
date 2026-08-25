@@ -56,6 +56,31 @@ def _session_file(sid: str) -> Path:
     return config.SESSIONS_DIR / f"{sid}.workspace"
 
 
+def for_session(sid: str) -> str | None:
+    """The workspace explicitly chosen FOR *sid*, or ``None`` if nobody chose one.
+
+    The per-session pointer rung of :func:`resolve`, asked about a session that is not
+    necessarily this process's — which is the whole reason it is public. Inside a charter
+    frame the frame **is** the charter session (`docs/frame.md`, ADR 0019), so
+    `charter workspace use <name>` typed at the agent writes this file under the FRAME's
+    id, and that is the documented mechanism by which it "moves the panels too".
+
+    A panel needs to tell that choice apart from the frame's launch-time answer
+    (`frame/state.py`'s `record_workspace`, #512): the launcher's answer is a SEED, and an
+    operator choosing inside the running frame outranks it. Asking this directly is what
+    keeps that distinction a property rather than a spelling — the alternative was reading
+    :func:`source`'s human-facing label and matching the string ``"session"``, which is a
+    sentence written for a status line, not an API.
+
+    Name-checked like every other rung that hands a value to :func:`workspace_dir`'s join.
+    The ``val and`` in front of it is a None-guard rather than a second name check —
+    :func:`_read` answers ``None`` for a missing or empty file, and `valid_name` takes a
+    string.
+    """
+    val = _read(_session_file(sid)) if sid else None
+    return val if val and valid_name(val) else None
+
+
 def _terminal_id(explicit: str | None = None) -> str | None:
     """This terminal PANE's id, or ``None`` — see :func:`charter.session.terminal`,
     which owns it. Kept as a module-level name because it is the seam tests patch to

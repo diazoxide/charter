@@ -1067,6 +1067,61 @@ def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
         time.sleep(_POLL_SECONDS)
 
 
+def _spawn_gather(fid: str, ws: str) -> None:
+    """Fill *fid*'s gather cache in a DETACHED child, and bump the frame when it lands.
+
+    **The launcher empties the cache and nothing used to refill it — #512.** `cmd_launch`
+    calls `gather.discard(fid)` before it draws anything (a recycled pid must not adopt a
+    dead frame's rows; see that function), and the only other caller of `gather.refresh`
+    in charter is `frame/notify.plane_changed`, reached from a `posttooluse*` hook. So a
+    frame's repo table was filled by the operator's FIRST TOOL CALL and by nothing else —
+    reported as "the repos appear after I resize", because a resize happens to coincide
+    with one.
+
+    **Detached rather than inline, and that is the whole design.** A cold `gather.scan()`
+    is ~35ms and three git invocations per repo; the launch path is a person waiting for a
+    harness to appear, and `charter claude` is the default way charter is started. So this
+    is the shape charter already uses twice for exactly this problem — `update.maybe_spawn`
+    and `glstate.maybe_spawn`: draw immediately with whatever is there, kick a child, let
+    the answer arrive a beat later. `slots._bottom` says "gathering" in the meantime rather
+    than drawing an empty table (`slots._unknown_lines`), so the window this opens is
+    visible and honest rather than a silent lie.
+
+    **`--workspace` is passed, not left to the child, for `glstate.maybe_spawn`'s own
+    reason**: the launcher resolves the workspace for the FRAME — from its own terminal,
+    its own cwd, its own pointers — while the child would resolve it for ITSELF, and a
+    detached process started with `start_new_session` is exactly as far from the
+    operator's terminal as a panel is (#512 again: `session.terminal()` would answer for
+    the child, not for the frame). A refresh keyed to a different workspace than the frame
+    it is refreshing is the defect, not a stale value.
+
+    **The child bumps, because a panel repaints on nothing else.** `panel.run` polls
+    `state.version`; a cache written with no bump behind it would sit on disk unread until
+    something unrelated moved the version — which on an idle session is the same "first
+    tool call" wait this function exists to end. `notify.plane_changed`'s order is kept
+    verbatim (refresh, THEN bump) and for its stated reason: a poller that saw the new
+    version must never then read the old cache.
+
+    **Inline as a last resort, never as the plan.** `util.detach_self` reports whether the
+    spawn happened; when it did not there is no other filler on this path, and a pane
+    saying "gathering" for the rest of the session would be a promise charter had already
+    broken. Paying ~35ms once, on a launch that has just failed to fork, is the cheaper
+    of the two — and it is the only path in this function that costs the operator anything.
+
+    Never raises: a frame must launch whether or not its rows can be gathered.
+    """
+    try:
+        if util.detach_self(["frame-gather", "--session", fid, "--workspace", ws]):
+            return
+    except Exception:
+        pass
+    try:
+        gather.refresh(fid, workspace=ws)
+        state.bump(fid)
+    except Exception:
+        return
+
+
 def _launch_sizes(fid: str, slots: list[str], *,
                   window_cols: int, window_rows: int) -> dict[str, int]:
     """How big each of *slots* is split, in a *window_cols* x *window_rows* window —
@@ -1435,8 +1490,8 @@ def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
                                "remain-on-exit", "on")
 
 
-def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[str],
-                             h, v: tuple[int, int]) -> int | None:
+def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, ws: str,
+                             argv: list[str], h, v: tuple[int, int]) -> int | None:
     """Build the frame as a WINDOW in the tmux the operator is already in.
 
     The same layout as the private-server path — harness in the middle, charter's panels
@@ -1533,7 +1588,15 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, argv: list[
     # Rewritten, not merely written: an adopted directory may name the OTHER server, and
     # a stale marker would make `reap` there skip a frame that is now genuinely ours.
     state.record_server(fid, socket)
+    # And the workspace this frame is FOR, for the same rewrite-don't-merge reason and a
+    # sharper one of its own: a panel process cannot resolve it (#512 — see
+    # `state.record_workspace`), so this launcher is the only thing that ever knows.
+    state.record_workspace(fid, ws)
     state.bump(fid)
+    # Kicked here, before a single tmux split — the child gathers while tmux is still
+    # carving panes, so on an ordinary launch the cache is already on disk by the time
+    # the first panel process paints. See `_spawn_gather`.
+    _spawn_gather(fid, ws)
 
     env = _frame_env(fid, h)
     # The launcher is the only process that knows this frame's own charter identity —
@@ -2115,7 +2178,8 @@ def cmd_launch(args) -> int:
     # exactly that, and the private-server path below is the right one after all.
     inside = tmuxctl.operator_server()
     if inside is not None:
-        rc = _launch_in_operator_tmux(inside[0], inside[1], fid=fid, argv=argv, h=h, v=v)
+        rc = _launch_in_operator_tmux(inside[0], inside[1], fid=fid, ws=ws, argv=argv,
+                                      h=h, v=v)
         if rc is not None:
             return rc
 
@@ -2177,8 +2241,15 @@ def cmd_launch(args) -> int:
     # may name the OTHER server, and a stale marker would make `reap` on this one skip
     # a frame that is now genuinely ours.
     state.record_server(fid, SOCKET)
+    # And the workspace this frame is FOR — rewritten for the same reason, and the one
+    # thing here no process inside the frame can work out for itself (#512; see
+    # `state.record_workspace`).
+    state.record_workspace(fid, ws)
     state.clear_respawn(fid)
     state.bump(fid)
+    # Kicked before tmux is asked for anything, so the gather runs alongside the session
+    # start rather than in front of it. See `_spawn_gather`.
+    _spawn_gather(fid, ws)
 
     try:
         cols, rows = os.get_terminal_size()
@@ -2757,6 +2828,47 @@ def cmd_resize(args) -> int:
     socket = state.frame_server(fid) or SOCKET
     cols, rows = _window_size(socket, harness_pane)
     _reassert_sizes(socket, fid=fid, panes=panes, window_cols=cols, window_rows=rows)
+    return 0
+
+
+def cmd_gather(args) -> int:
+    """`charter frame-gather --session <fid> --workspace <ws>` — gather one frame's repo
+    state into its cache and bump it. Internal: fired detached by `_spawn_gather` at
+    launch, never typed.
+
+    **Its own command rather than a thread in the launcher**, for the reason
+    `update.maybe_spawn` and `glstate.maybe_spawn` are both separate processes: the work
+    has to outlive the call that started it *and* not be on its stack. A launcher blocks
+    in `attach`/`_wait_for_harness` for the whole life of the frame on one path, and a
+    background thread there would be a git sweep running inside the process the operator's
+    terminal is currently handed to.
+
+    **`--workspace` is required and never inferred here.** A detached child started with
+    `start_new_session` has no terminal of the operator's, and `$CHARTER_SESSION_ID` names
+    the FRAME rather than any agent session — the two rungs `workspace.resolve` would
+    otherwise land on (#512). The launcher resolved this frame's workspace already; asking
+    a second process to guess at it is the whole bug.
+
+    **The order is `notify.plane_changed`'s, verbatim: refresh, then bump.** A panel's poll
+    reads `state.version` first and the cache second, so bumping first opens a window where
+    a poller sees the new version and still reads the old cache. Refreshing first closes it.
+
+    **Always 0, and every refusal is a quiet no-op** — the same posture `cmd_respawn` and
+    `cmd_resize` keep, for the same reason: nothing reads this process's status, and the
+    only screen it could complain to is the agent's own. `gather.refresh` and `state.bump`
+    each already promise not to raise; the `try` is here so that a future change to either
+    — or to anything this grows between them — cannot turn a background gather into a
+    traceback nobody will ever read.
+    """
+    fid = getattr(args, "session", None) or ""
+    ws = getattr(args, "workspace", None) or ""
+    if not fid or not ws:
+        return 0
+    try:
+        gather.refresh(fid, workspace=ws)
+        state.bump(fid)
+    except Exception:
+        return 0
     return 0
 
 

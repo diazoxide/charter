@@ -347,10 +347,10 @@ def read(fid: str, *, workspace: str | None = None, cwd: str | None = None) -> d
     all fall through to a fresh :func:`scan`, the same one a caller would
     otherwise have no data to draw from. This never returns anything but a dict
     carrying ``repos``/``worktrees`` as lists — never the raw, untrusted value a
-    corrupt or stale cache file happened to contain. :func:`_cached` is where each of
+    corrupt or stale cache file happened to contain. :func:`cached` is where each of
     those degradations actually lives; this is that plus the fallback.
     """
-    data = _cached(fid)
+    data = cached(fid)
     if data is not None:
         return data
     try:
@@ -359,7 +359,7 @@ def read(fid: str, *, workspace: str | None = None, cwd: str | None = None) -> d
         return _empty(workspace)
 
 
-def _cached(fid: str) -> dict | None:
+def cached(fid: str) -> dict | None:
     """Whatever *fid*'s cache file holds, if it holds something a renderer can index
     into — ``None`` for every way that can fail.
 
@@ -404,17 +404,26 @@ def row_count(fid: str) -> int:
       uses, rather than a second way of counting repos that could disagree with the rows
       the panel then draws.
 
+    **The listing counts the FRAME's workspace, not the asking process's** (#512).
+    `state.workspace_for` is the one rule every frame surface asks — what was chosen inside
+    the frame, else what the launcher recorded, else a local resolve — so the pane is sized
+    from the same workspace `slots._bottom` then draws. The two callers make the difference
+    real: the launcher IS the process that resolved it and would agree either way, but
+    `cmd_resize` runs as a tmux `run-shell` child, whose environment is the SERVER's and
+    whose cwd and pane id are not the operator's — so it would size `bottom` for whatever
+    workspace it resolved for itself, which on the plane that reported #512 was a
+    `default` holding no clones at all.
+
     Zero for anything that fails, which is the floor `layout.bottom_rows` already
     handles: a frame whose repo count could not be established gets the one-row strip
     `bottom` always was, never a taller pane full of nothing.
     """
-    data = _cached(fid)
+    data = cached(fid)
     if data is not None:
         return len(data.get("repos") or []) + len(data.get("worktrees") or [])
     try:
         from .. import statusline as sl
-        from .. import workspace as ws_mod
-        active = ws_mod.resolve()
+        active = state.workspace_for(fid)
         dirs = sl._repo_trees(active)
         return len(dirs) + len(sl._detail_worktrees(active, dirs))
     except Exception:

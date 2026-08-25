@@ -1580,11 +1580,36 @@ def _carried_env(cmd: list[str]) -> dict[str, str]:
     return out
 
 
+def _no_real_detached_child(sink: list):
+    """Record what a launch would have spawned DETACHED, and spawn nothing.
+
+    `_spawn_gather` (#512) fires `charter frame-gather` through `util.detach_self`, which
+    is a real `subprocess.Popen` with `start_new_session=True` and `os.environ.copy()`.
+    That child is a separate PROCESS: `PersonaIso`'s `config.use()` cannot reach it and
+    `tests/_planeguard.py` says so in as many words ("What this cannot see: a
+    subprocess"), so an unpatched launch here would gather — and BUMP — against whatever
+    plane the developer's own environment resolves, exactly the #402 shape
+    `_refuse_the_real_plane` above exists for. It happened to be harmless on the machine
+    this was written on (a checkout, not an install: `-P` leaves `charter` unimportable,
+    so every child died at once) and would not have been on a machine with charter
+    installed — which is precisely the kind of "passes here" a tripwire is for.
+
+    Recorded rather than merely blocked: the launcher's own tests assert on this sink, so
+    the stub that keeps the suite off the real plane is also the thing that proves the
+    launch fires the gather at all. Returns True, like a spawn that worked, so
+    `_spawn_gather`'s inline last resort is not taken (that path runs a real `gather.scan`
+    on the launch, which every launcher test here would then pay for).
+    """
+    return mock.patch("charter.util.detach_self",
+                      side_effect=lambda args: (sink.append(list(args)), True)[1])
+
+
 def _launch(fake: _FakeTmux, *, cols=200, rows=50, version=(3, 7), harness="claude",
-           rest=(), which=None):
+           rest=(), which=None, detached=None):
     _refuse_the_real_plane()
     args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False)
     with _outside_tmux(), \
+         _no_real_detached_child(detached if detached is not None else []), \
          mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
          mock.patch("sys.stdout.isatty", return_value=True), \
          _harness_binary_installed(which), \
@@ -1914,6 +1939,7 @@ class Launch(PersonaIso, unittest.TestCase):
         fake_call = fake.__call__
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
         with _outside_tmux(), \
+             _no_real_detached_child([]), \
              mock.patch("charter.commands_frame.subprocess.run", side_effect=_peek), \
              mock.patch("sys.stdout.isatty", return_value=True), \
              _harness_binary_installed(), \
@@ -2396,6 +2422,7 @@ class Launch(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(exit_code=0)
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
         with _outside_tmux(), \
+             _no_real_detached_child([]), \
              mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
              mock.patch("sys.stdout.isatty", return_value=True), \
              _harness_binary_installed(), \
@@ -3820,12 +3847,13 @@ def _frame_id():
 
 
 def _launch_inside(fake: _FakeOperatorTmux, *, version=(3, 7), harness="claude",
-                   rest=(), tmux_env=OPERATOR_TMUX, slots=None):
+                   rest=(), tmux_env=OPERATOR_TMUX, slots=None, detached=None):
     """Run `cmd_launch` as if the operator typed it inside their own tmux."""
     _refuse_the_real_plane()
     args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False)
     env = dict(os.environ, TMUX=tmux_env, TMUX_PANE="%0")
     ctx = [mock.patch.dict(os.environ, env, clear=True),
+           _no_real_detached_child(detached if detached is not None else []),
            mock.patch("charter.commands_frame.subprocess.run", side_effect=fake),
            mock.patch("charter.commands_frame.time.sleep"),
            mock.patch("sys.stdout.isatty", return_value=True),
@@ -4394,6 +4422,7 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
             return private(cmd, **kw)
 
         with mock.patch.dict(os.environ, dict(os.environ, TMUX=OPERATOR_TMUX)), \
+             _no_real_detached_child([]), \
              mock.patch("charter.commands_frame.subprocess.run", side_effect=_route), \
              mock.patch("charter.commands_frame.time.sleep"), \
              mock.patch("sys.stdout.isatty", return_value=True), \
@@ -4422,6 +4451,218 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         rc = _launch_inside(fake)
         self.assertNotEqual(rc, 0)
         self.assertTrue(fake.window_killed, "the placeholder window was left behind")
+
+
+class ALaunchFillsTheCacheItJustEmptied(PersonaIso, unittest.TestCase):
+    """#512 — `gather.discard` had no counterpart.
+
+    `cmd_launch` empties the gather cache on both paths, deliberately (a recycled pid must
+    not adopt a dead frame's rows, #383) and **nothing refilled it**: the only other caller
+    of `gather.refresh` in charter is `frame/notify.plane_changed`, reached from a
+    `posttooluse*` hook. So a frame's repo table was filled by the operator's first tool
+    call and by nothing else. The fix is the shape charter already uses twice
+    (`update.maybe_spawn`, `glstate.maybe_spawn`): draw now, gather in a detached child,
+    let the rows arrive a beat later.
+
+    Both launch paths are asserted, separately, because they are two functions: the
+    private-server `cmd_launch` body and `_launch_in_operator_tmux`. Every property this
+    class pins was broken on both at once and could be fixed on one.
+    """
+
+    def _spawns_on(self, launch) -> list[list[str]]:
+        detached: list[list[str]] = []
+        launch(detached)
+        return [a for a in detached if a and a[0] == "frame-gather"]
+
+    def test_the_private_server_path_kicks_a_gather_for_the_frame_it_just_emptied(self):
+        spawns = self._spawns_on(
+            lambda d: _launch(_FakeTmux(exit_code=0), detached=d))
+        self.assertEqual(
+            spawns, [["frame-gather", "--session", _frame_id(), "--workspace", "demo"]],
+            "nothing refilled the cache `gather.discard` emptied — the repo table waits "
+            "for the session's first tool call, which is #512")
+
+    def test_the_operators_tmux_path_kicks_one_too(self):
+        spawns = self._spawns_on(
+            lambda d: _launch_inside(_FakeOperatorTmux(exit_code=0), detached=d))
+        self.assertEqual(
+            spawns, [["frame-gather", "--session", _frame_id(), "--workspace", "demo"]])
+
+    def test_the_workspace_is_stated_rather_than_left_to_the_child(self):
+        """`glstate.maybe_spawn`'s own rule, and #512's root cause. The launcher resolves
+        the workspace for the FRAME — its terminal, its cwd, its pointers — and a detached
+        child (`start_new_session`, no controlling terminal) is exactly as far from all
+        three as a panel is. A child left to resolve for itself gathers a different
+        workspace's repos into this frame's cache.
+
+        The launch fixture pins `workspace.resolve` to `demo`, so a spawn carrying
+        anything else — or nothing — is a child asking its own question."""
+        for name, launch in (("private", lambda d: _launch(_FakeTmux(exit_code=0),
+                                                           detached=d)),
+                             ("operator", lambda d: _launch_inside(
+                                 _FakeOperatorTmux(exit_code=0), detached=d))):
+            with self.subTest(path=name):
+                argv = self._spawns_on(launch)[0]
+                self.assertIn("--workspace", argv)
+                self.assertEqual(argv[argv.index("--workspace") + 1], "demo")
+
+    def test_the_gather_is_kicked_after_the_discard_that_empties_the_cache(self):
+        """Order, not merely presence — and this is the one that a future tidy-up breaks
+        silently. `gather.discard` deletes the cache file; a spawn ordered BEFORE it races
+        a child whose whole job is to write that same file, and the launch would then
+        delete the rows it had just asked for, intermittently, on a fast machine only.
+
+        Both paths, and both spied through the REAL functions so the assertion is about
+        `cmd_launch`'s sequence rather than about a stub's."""
+        for name, launch in (("private", _launch), ("operator", _launch_inside)):
+            with self.subTest(path=name):
+                order: list[str] = []
+                real_discard = gather.discard
+                with mock.patch("charter.commands_frame.gather.discard",
+                                side_effect=lambda fid: (order.append("discard"),
+                                                         real_discard(fid))[1]), \
+                     mock.patch("charter.commands_frame._spawn_gather",
+                                side_effect=lambda fid, ws: order.append("spawn")):
+                    launch(_FakeTmux(exit_code=0) if name == "private"
+                           else _FakeOperatorTmux(exit_code=0))
+                self.assertEqual(order, ["discard", "spawn"],
+                                 f"a launch that spawns before it discards can delete "
+                                 f"the rows it just asked for: {order}")
+
+    def test_the_frames_own_workspace_is_written_down_on_both_paths(self):
+        """The other half of #512: a panel cannot resolve the workspace itself, so the
+        launcher records it (`state.record_workspace`).
+
+        Asserted on the CALL rather than on the file, for `record_server`'s own reason in
+        this module: the last `reap` of a finished launch legitimately removes this
+        frame's whole directory, marker and all."""
+        for name, launch in (("private", _launch), ("operator", _launch_inside)):
+            with self.subTest(path=name):
+                marked: list[tuple[str, str]] = []
+                real = state.record_workspace
+                with mock.patch("charter.frame.state.record_workspace",
+                                side_effect=lambda fid, ws: (marked.append((fid, ws)),
+                                                             real(fid, ws))[1]):
+                    launch(_FakeTmux(exit_code=0) if name == "private"
+                           else _FakeOperatorTmux(exit_code=0))
+                self.assertEqual(marked, [(_frame_id(), "demo")])
+
+
+class SpawningTheGather(PersonaIso, unittest.TestCase):
+    """`_spawn_gather` on its own — the fallbacks a launch cannot exercise."""
+
+    def test_a_successful_spawn_does_no_gathering_on_the_launch_path(self):
+        """The whole reason this is detached. A cold `gather.scan()` is ~35ms and three
+        git invocations per repo, and the launch path is a person waiting for a harness to
+        appear. `charter claude` is the default way charter starts, so this is not a
+        micro-optimisation — it is the difference between the frame appearing and the
+        frame appearing after a git sweep."""
+        with mock.patch("charter.util.detach_self", return_value=True), \
+             mock.patch.object(gather, "refresh",
+                               side_effect=AssertionError("gathered on the launch path")):
+            commands_frame._spawn_gather("f-1", "demo")
+
+    def test_a_spawn_that_never_started_is_gathered_inline_instead(self):
+        """A pane saying "gathering …" for the rest of the session would be a promise
+        charter had already broken, and after a failed fork there is no other filler on
+        this path. Paying ~35ms once, on a launch that has just failed to fork, is the
+        cheaper of the two."""
+        seen: list[tuple] = []
+        with mock.patch("charter.util.detach_self", return_value=False), \
+             mock.patch.object(gather, "refresh",
+                               side_effect=lambda fid, workspace=None: seen.append(
+                                   (fid, workspace))):
+            commands_frame._spawn_gather("f-1", "demo")
+        self.assertEqual(seen, [("f-1", "demo")],
+                         "the spawn failed and nothing gathered — the frame's table "
+                         "would say `gathering` until the first tool call")
+
+    def test_the_inline_fallback_bumps_so_a_panel_ever_reads_what_it_wrote(self):
+        """A panel repaints on nothing but a `state.version` bump (`panel.run`), so a
+        cache written with no bump behind it sits on disk unread until something unrelated
+        moves the version — which on an idle session is the same "first tool call" wait
+        this whole fix exists to end."""
+        before = state.version("f-1")
+        with mock.patch("charter.util.detach_self", return_value=False), \
+             mock.patch.object(gather, "refresh", return_value={}):
+            commands_frame._spawn_gather("f-1", "demo")
+        self.assertNotEqual(state.version("f-1"), before)
+
+    def test_nothing_it_can_hit_reaches_the_launch(self):
+        """A frame must launch whether or not its rows can be gathered — the same posture
+        every other writer on this path keeps."""
+        with mock.patch("charter.util.detach_self", side_effect=OSError("no fork")), \
+             mock.patch.object(gather, "refresh", side_effect=RuntimeError("boom")):
+            commands_frame._spawn_gather("f-1", "demo")     # must not raise
+
+
+class TheGatherCommand(PersonaIso, unittest.TestCase):
+    """`charter frame-gather` — what the detached child actually runs."""
+
+    def _args(self, session="f-1", workspace="demo"):
+        return SimpleNamespace(session=session, workspace=workspace)
+
+    def test_it_refreshes_the_named_frame_for_the_named_workspace(self):
+        seen: list[tuple] = []
+        with mock.patch.object(gather, "refresh",
+                               side_effect=lambda fid, workspace=None: seen.append(
+                                   (fid, workspace))):
+            self.assertEqual(commands_frame.cmd_gather(self._args()), 0)
+        self.assertEqual(seen, [("f-1", "demo")])
+
+    def test_it_bumps_after_it_refreshes_never_before(self):
+        """`notify.plane_changed`'s order, verbatim, and for its stated reason: a panel's
+        poll reads `state.version` first and the cache second, so bumping first opens a
+        window in which a poller sees the new version and still reads the old cache."""
+        order: list[str] = []
+        with mock.patch.object(gather, "refresh",
+                               side_effect=lambda *a, **k: order.append("refresh")), \
+             mock.patch("charter.frame.state.bump",
+                        side_effect=lambda fid: order.append("bump")):
+            commands_frame.cmd_gather(self._args())
+        self.assertEqual(order, ["refresh", "bump"])
+
+    def test_it_really_writes_the_cache_a_panel_then_reads(self):
+        """Through the real `gather.refresh`, not a stub: the cache FILE is what a panel
+        reads, and a `refresh` that gathered without saving would satisfy every
+        call-spy above."""
+        commands_frame.cmd_gather(self._args(session="f-real"))
+        self.assertIsNotNone(gather.cached("f-real"),
+                             "the child gathered and left nothing on disk for a panel")
+
+    def test_it_gathers_the_workspace_it_was_told_about(self):
+        """The argument is the point of the command existing (#512). A child that
+        resolved its own would answer for a detached process with no terminal, which is
+        the defect."""
+        commands_frame.cmd_gather(self._args(session="f-real", workspace="named-by-hand"))
+        self.assertEqual((gather.cached("f-real") or {}).get("workspace"),
+                         "named-by-hand")
+
+    def test_a_call_missing_either_half_is_a_quiet_no_op(self):
+        """Nothing reads this process's status and the only screen it could complain to
+        is the agent's own — `cmd_respawn`/`cmd_resize`'s posture. Refusing rather than
+        guessing: a gather keyed to a workspace nobody named is the bug, not a degraded
+        version of the fix.
+
+        **Recorded, never raised from inside the mock.** This test was first written with
+        `side_effect=AssertionError(...)`, and `cmd_gather`'s own `except Exception` — the
+        never-raise promise every `frame-*` command keeps — swallowed it: mutation testing
+        turned `or` into `and` here and the test stayed green. A stub that raises into code
+        whose whole job is to catch is a stub that proves nothing; the call is counted
+        outside instead. Both halves are asserted separately, because `and` in place of
+        `or` still refuses when BOTH are missing."""
+        called: list[tuple] = []
+        with mock.patch.object(gather, "refresh",
+                               side_effect=lambda *a, **k: called.append((a, k))):
+            self.assertEqual(commands_frame.cmd_gather(self._args(session="")), 0)
+            self.assertEqual(called, [], "gathered for a frame nobody named")
+            self.assertEqual(commands_frame.cmd_gather(self._args(workspace="")), 0)
+            self.assertEqual(called, [], "gathered for a workspace nobody named — the "
+                                         "child guessing its own is #512 itself")
+
+    def test_a_failure_inside_it_is_still_a_zero(self):
+        with mock.patch.object(gather, "refresh", side_effect=RuntimeError("boom")):
+            self.assertEqual(commands_frame.cmd_gather(self._args()), 0)
 
 
 if __name__ == "__main__":

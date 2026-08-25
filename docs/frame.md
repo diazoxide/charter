@@ -363,6 +363,37 @@ Claude Code's own session id has not gone anywhere; it arrives in the status lin
 payload and keys what comes with it (the usage history, the session trace). Two ids, two
 jobs. See ADR 0019.
 
+**Which workspace the panels draw is decided once, at launch, by the launcher.** A panel
+cannot work it out for itself: the launcher is an ordinary shell in your own terminal and
+answers from your cwd or your terminal's pointer, while a panel's cwd is the pane's and
+its terminal id is its own tmux pane, so it would fall all the way through to `default` —
+and did (#512). The launcher writes the answer into the frame's own state directory
+instead. Nothing is pinned into the environment to achieve it, deliberately: exporting
+`$CHARTER_WORKSPACE` would rank above every pointer and take `charter workspace use` away
+from every framed session.
+
+So the order the panels read is: `$CHARTER_WORKSPACE` if you pinned one, then what you
+chose **inside** this frame, then what the launch resolved, then whatever the panel can
+resolve for itself (a frame launched by an older charter, still running across the
+upgrade). `charter workspace use <name>` at the agent still moves the panels, and still
+moves them for the same reason as before.
+
+The pin comes first because that is what it means everywhere else in charter: it ranks
+above every pointer in `charter`'s own resolution, and `charter workspace use` warns you
+that it will not stick while the variable is set. A frame is not an exception to that —
+if it were, a frame launched under a pin that then had `ws use` typed at it would draw a
+workspace no command in that session acts on. The `*` beside the name on `top` marks that
+name as the pinned one.
+
+**The repo table is gathered at launch, in the background.** A launch deletes the cached
+scan first — pids are recycled and a new frame must not adopt a dead one's rows — and a
+detached `charter frame-gather` fills it alongside the frame coming up, then bumps the
+frame so the panels repaint. Until it lands, `bottom` says `⋯ gathering this workspace's
+repos…` rather than drawing an empty table: a workspace with no clones and a workspace not
+yet looked at are different facts, and drawing them the same way is what made a frame read
+as "no repos" on a plane full of them. A panel never gathers on its own — it reads the
+cache or says it has none.
+
 ## Configuring it
 
 ```toml

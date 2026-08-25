@@ -75,6 +75,13 @@ from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
 from tests._isolation import PersonaIso, run_hook
+# Imported rather than re-declared: a second copy of the stub that keeps a launch's
+# detached `frame-gather` child off the developer's real plane is a copy that can drift
+# out of step with the production call it stands in for, and `tests/_planeguard.py`
+# cannot see a subprocess to tell anyone it drifted. Cross-module test imports are this
+# suite's ordinary way of sharing a fixture (`tests.test_hooks.InAControlPlane` has four
+# importers).
+from tests.test_frame_launcher import _no_real_detached_child
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -2519,6 +2526,32 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # test can still inspect rather than one that simply vanishes.
         conf_path.write_text(commands_frame._PLACEHOLDER_CONF)
 
+        # The two things `cmd_launch` does to a frame's own state directory before it
+        # asks tmux for anything, and #512 is why they are here rather than left out with
+        # the hotkey menu and the exit-code hooks. A panel is a PURE CACHE READER since
+        # #512 (`slots._bottom` calls `gather.cached`, never `gather.read`), so a frame
+        # nobody gathered for shows "gathering …" forever — which is what this test
+        # observed the day the fallback went, and correctly: production fills that cache
+        # from the launcher, so a test that hand-builds a frame has to do the launcher's
+        # job or it is not testing a launch.
+        #
+        # Both are the REAL production functions, not a hand-rolled `gather.save`:
+        # `_spawn_gather` IS #512's fix, and running it here is what makes the repo-row
+        # assertions below a proof that the detached child really starts, really gathers
+        # the workspace it was told to, really writes the cache, and really bumps the
+        # frame — end to end, through a real `charter frame-gather` process, against a
+        # real git repo, read back out of a real tmux pane.
+        #
+        # `os.environ` is patched for exactly that call, and only for it: the child is a
+        # separate PROCESS, so `PersonaIso`'s in-process `config.use()` redirection cannot
+        # reach it — without this it would resolve the DEVELOPER'S OWN plane and gather
+        # (and bump) there. `self.env` is the same isolated environment every pane in this
+        # frame already runs under, so the child lands on the same throwaway plane the
+        # panels are reading.
+        state.record_workspace(fid, "demo")
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            commands_frame._spawn_gather(fid, "demo")
+
         session_cmd = layout.session_argv(session=fid, conf=str(conf_path), socket=SOCKET,
                                           cols=120, rows=40, harness_argv=["sleep", "600"])
         r = self._run_env(session_cmd)
@@ -3563,7 +3596,21 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         def _run_launch():
             env = dict(os.environ, TMUX=f"{OP_SOCKET_PATH},{server_pid},{sid[1:]}",
                        TMUX_PANE=op_pane)
+            # `_no_real_detached_child` because a launch now FORKS (#512): `_spawn_gather`
+            # sends `charter frame-gather` through `util.detach_self`, a real
+            # `subprocess.Popen` carrying `os.environ.copy()`. That child is a separate
+            # PROCESS, so neither `PersonaIso`'s in-process `config.use()` nor
+            # `tests/_planeguard.py` reaches it, and the environment being copied here is
+            # the DEVELOPER'S with no `$CHARTER_ROOT` in it — so on any machine where
+            # `sys.executable` can import charter the child resolves the plane from the
+            # checkout's cwd and gathers, bumps and git-sweeps the operator's live one.
+            # Measured on the machine this was written on: `detach_self` really fired,
+            # with `argv=['frame-gather', '--session', 'demo-<pid>', '--workspace',
+            # 'demo']` and `CHARTER_ROOT=''`. This test is about what a launch writes on
+            # somebody else's tmux SERVER; the gather child is not part of that question,
+            # and it is the one part of a launch that escapes the isolation.
             with mock.patch.dict(os.environ, env, clear=True), \
+                 _no_real_detached_child([]), \
                  mock.patch("sys.stdout.isatty", return_value=True), \
                  mock.patch("charter.workspace.resolve", return_value="demo"), \
                  mock.patch.dict(config.FRAME, {"slots": []}):
