@@ -433,13 +433,18 @@ class TerseSaysLess(PersonaIso, unittest.TestCase):
         self.assertIn("solo", terse, "the repo keeps its row whatever its pieces lose")
 
     def test_right_shows_fewer_personas_and_says_how_many_it_hid(self):
-        chips = [f"◆ p{i}" for i in range(9)]
-        with mock.patch("charter.statusline._persona_chips", return_value=chips):
+        """`+ 1` on both counts is the `personas` heading #516 added — it is chrome the
+        density does not buy back, because a column of names with no title is what the
+        heading exists to fix and one row is not what `minimal` is short of."""
+        cells = [statusline.PersonaChip(f"p{i}", f"▫ p{i}", "") for i in range(9)]
+        with mock.patch("charter.statusline._persona_chip_cells", return_value=cells):
             normal = self._render("right", "normal")
             terse = self._render("right", "minimal")
-        self.assertEqual(len(normal.split("\n")), 9)
-        self.assertEqual(len(terse.split("\n")), slots._TERSE_ROWS)
+        self.assertEqual(len(normal.split("\n")), 9 + 1)
+        self.assertEqual(len(terse.split("\n")), slots._TERSE_ROWS + 1)
         self.assertIn("more", terse)
+        self.assertIn("personas 9", tui.strip_ansi(terse),
+                      "the heading must count the personas, not the rows that fit")
 
 
 class TheSpinnerRunsOnlyWhileWorkDoes(PersonaIso, unittest.TestCase):

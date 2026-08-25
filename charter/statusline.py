@@ -51,6 +51,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from . import config, tui
 
@@ -1434,10 +1435,63 @@ def _inflight_badge(entry: tuple[int, float, bool] | None) -> str:
         return ""
 
 
+class PersonaChip(NamedTuple):
+    """One row of the persona column, split where a table COLUMN can be drawn through it.
+
+    :func:`_persona_chips` is exactly ``head + badges`` per row, so a surface that draws
+    the two halves as separate columns and a surface that draws one flat string cannot
+    come to disagree about what a chip says. That is the whole reason this type exists:
+    `frame/slots.py`'s `_right` wants the badges in a column of their own, and the only
+    other way to get them there is to recompose the chip out of `_vault_dot`,
+    `_mem_badge`, `_health_mark` and `_inflight_badge` — which is precisely the drift
+    `_right`'s own docstring says it delegates in order to avoid.
+
+    *head* is everything that must start in the same screen column on every row: the
+    two-cell marker, the name, and the vault dot. *badges* is everything that trails it —
+    the memory badge, the health mark and the in-flight badge, each of which already
+    carries its own leading separator, so ``head + badges`` needs nothing between them and
+    a caller padding *badges* into a fixed cell gets the separator for free.
+
+    **The vault dot belongs to the head**, and it is the one genuinely arguable placement
+    here. `_vault_dot` speaks only when a vault cannot be USED, so it is absent on almost
+    every row; in a right-hand badge column its width would therefore be paid by every
+    persona for a fact about one of them, and the whole column would shift on the day
+    somebody registers a vault. In the head it trails the name, where nothing after it has
+    to line up — which is exactly where the flat chip already put it.
+
+    *name* is ``None`` on the ``…(+N more)`` row, which is not a persona: it names none,
+    carries no badges, and a caller drawing columns must let it span the row rather than
+    pad it into a name cell. *hidden* is how many personas that row stands for, carried as
+    DATA rather than left to be read back out of the rendered text — a caller that wants
+    the true total (a column heading, say) adds it to the rows that do name a persona,
+    instead of parsing a sentence whose wording is a rendering choice.
+    """
+
+    name: str | None
+    head: str
+    badges: str
+    hidden: int = 0
+
+
 def _persona_chips(session: str | None = None) -> list[str]:
     """One chip per persona (active first) for the status-line right column, each
     tagged with its memory counts (``✎`` persistent + ``◌`` ephemeral). Every
-    persona is also dispatchable as a sub-agent."""
+    persona is also dispatchable as a sub-agent.
+
+    Composed from :func:`_persona_chip_cells` rather than built alongside it — one
+    builder, two shapes. See :class:`PersonaChip`.
+    """
+    return [c.head + c.badges for c in _persona_chip_cells(session)]
+
+
+def _persona_chip_cells(session: str | None = None) -> list[PersonaChip]:
+    """:func:`_persona_chips`, with each chip still in the parts it is made of.
+
+    Everything :func:`_persona_chips` promises is decided here — which personas, in what
+    order, capped at :data:`_MAX_PERSONA_LINES` with a row that says how many were
+    dropped, and never raising. See :class:`PersonaChip` for where the split falls and
+    why the vault dot sits on the name's side of it.
+    """
     try:
         from . import persona
         names = sorted(persona.list_personas())
@@ -1471,10 +1525,9 @@ def _persona_chips(session: str | None = None) -> list[str]:
             # move. `⚡` is East-Asian *Wide* — two cells, unambiguously, unlike the
             # Ambiguous glyphs that have broken this layout twice — and it is trailing,
             # so its width never reaches a name.
-            if n == active:
-                chips.append(f"{_MAGENTA}{_MARK_ACTIVE} {_BOLD}{n}{_R}{dot}{badge}{health}{flight}")
-            else:
-                chips.append(f"{_DIM}{_MARK_IDLE} {n}{_R}{dot}{badge}{health}{flight}")
+            head = (f"{_MAGENTA}{_MARK_ACTIVE} {_BOLD}{n}{_R}{dot}" if n == active
+                    else f"{_DIM}{_MARK_IDLE} {n}{_R}{dot}")
+            chips.append(PersonaChip(n, head, f"{badge}{health}{flight}"))
         if len(chips) > _MAX_PERSONA_LINES:
             # Which ones survive matters more than how many. Keeping the first N
             # alphabetically would drop exactly the personas worth seeing, so the order is
@@ -1484,14 +1537,16 @@ def _persona_chips(session: str | None = None) -> list[str]:
             # contract `_repo_rows` keeps with its own "(+N more)".
             keep = _MAX_PERSONA_LINES - 1          # one row spent saying what was dropped
             by_name = dict(zip(order, chips))
-            head = [n for n in order[:1] if n == active]
-            rest = [n for n in order if n not in head]
-            ordered = head + [n for n in rest if n in flagged_names] \
+            lead = [n for n in order[:1] if n == active]
+            rest = [n for n in order if n not in lead]
+            ordered = lead + [n for n in rest if n in flagged_names] \
                            + [n for n in rest if n not in flagged_names]
             shown = ordered[:keep]
             hidden = len(order) - len(shown)
             chips = [by_name[n] for n in shown]
-            chips.append(f"{_DIM}  …(+{hidden} more · charter persona list){_R}")
+            chips.append(PersonaChip(
+                None, f"{_DIM}  …(+{hidden} more · charter persona list){_R}", "",
+                hidden))
         return chips
     except Exception:
         return []

@@ -66,6 +66,21 @@ from . import state
 #: name; a caller asks :func:`save`/:func:`read` instead of the path.
 _CACHE_NAME = "gather.json"
 
+#: How many of the workspace's open todos :func:`scan` writes into the cache.
+#:
+#: **A bound on the cache file, not a rendering choice.** ``frame/slots.py``'s ``_right``
+#: draws at most a handful of rows and says how many it hid, so nothing on screen wants
+#: more than this; what this number actually stops is a workspace with four hundred open
+#: todos turning a file every panel re-reads into a four-hundred-entry JSON document. It
+#: is deliberately far above what any pane can draw, so the renderer's own budget — not
+#: this — is what decides how many rows appear.
+#:
+#: The COUNT is stored separately (``todo_count``) and is never clipped, so the
+#: ``…(+N more)`` line stays honest past this bound: clipping the list and then deriving
+#: the total from its length would tell an operator with four hundred todos they have
+#: twenty.
+_MAX_TODOS = 20
+
 
 def _cache_file(fid: str, *, create: bool) -> Path | None:
     """The cache file's path for *fid*, or ``None`` when ``state.frame_dir``
@@ -93,6 +108,8 @@ def _empty(workspace: str | None) -> dict:
         "current_repo": None,
         "repos": [],
         "worktrees": [],
+        "todos": [],
+        "todo_count": 0,
     }
 
 
@@ -239,12 +256,40 @@ def scan(workspace: str | None = None, cwd: str | None = None) -> dict:
     except Exception:
         repos, worktrees = [], []
 
+    # This workspace's own open todos, gathered here for exactly the reason every other
+    # field is: ``frame/slots.py``'s ``_right`` lists them in the sidebar, and a panel
+    # repaints without asking anybody's permission. ``todos.open_todos`` opens and parses
+    # one file per todo — affordable once per plane-state bump, and a per-repaint cost the
+    # frame is not allowed to have (``panel.py``: an idle tick is one ``stat``). The
+    # renderer therefore reads this and never ``todos`` directly.
+    #
+    # Only what a row needs — the title. Neither the body nor the age is carried, and the
+    # rule is the same for both: a cache every panel re-reads is the wrong place to keep
+    # text nothing draws. A sidebar row is one line in a 22-column pane, ``charter ws
+    # todo`` is what shows the rest, and a field added here "in case a renderer wants it"
+    # is a field nothing is measuring the cost of.
+    #
+    # Open todos only, which is the whole of what ``open_todos`` returns and is stated
+    # here because it is a choice: a done todo is not something the frame is asking you to
+    # look at, and a sidebar listing them would be a list you read past rather than act on.
+    todo_items: list = []
+    todo_count = 0
+    try:
+        from .. import todos as todos_mod
+        open_todos = todos_mod.open_todos(active)
+        todo_count = len(open_todos)
+        todo_items = [{"title": t.get("title") or ""} for t in open_todos[:_MAX_TODOS]]
+    except Exception:
+        todo_items, todo_count = [], 0
+
     return {
         "gathered_at": time.time(),
         "workspace": active,
         "current_repo": cur_repo,
         "repos": repos,
         "worktrees": worktrees,
+        "todos": todo_items,
+        "todo_count": todo_count,
     }
 
 

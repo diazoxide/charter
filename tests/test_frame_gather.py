@@ -252,6 +252,74 @@ class ScanWithNoRepos(PersonaIso, unittest.TestCase):
         self.assertEqual(data["worktrees"], [])
 
 
+class TheWorkspacesTodosAreGatheredToo(PersonaIso, unittest.TestCase):
+    """#516: the sidebar lists this workspace's open todos, and `todos.open_todos` opens
+    and parses one file per todo.
+
+    That cost belongs HERE, once per plane-state bump, for exactly the reason every other
+    field is here: a panel repaints without asking anybody's permission, and `panel.py`
+    pins an idle tick at one `stat`. A renderer reading the todo directory would be the
+    per-row filesystem work #488's table was explicitly not allowed to add either.
+    """
+
+    def _add(self, *titles: str) -> None:
+        from charter import todos
+        for t in titles:
+            todos.add(config.DEFAULT_WORKSPACE, t)
+
+    def test_an_open_todo_lands_in_the_cache(self):
+        self._add("ship the sidebar")
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        self.assertEqual([t["title"] for t in data["todos"]], ["ship the sidebar"])
+        self.assertEqual(data["todo_count"], 1)
+
+    def test_a_workspace_with_nothing_open_carries_an_empty_list_not_a_missing_key(self):
+        """A renderer must never need a `None`-check before indexing — `_empty`'s own
+        contract, and the reason it grew the two keys at the same time this did."""
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        self.assertEqual(data["todos"], [])
+        self.assertEqual(data["todo_count"], 0)
+        self.assertEqual(gather._empty("w")["todos"], [])
+        self.assertEqual(gather._empty("w")["todo_count"], 0)
+
+    def test_only_the_title_is_carried(self):
+        """Not the body, and not the age. A cache every panel re-reads on every version
+        bump is the wrong place to keep text nothing draws."""
+        self._add("a todo with a body")
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        self.assertEqual(list(data["todos"][0]), ["title"])
+
+    def test_the_list_is_bounded_but_the_count_is_not(self):
+        """`_MAX_TODOS` bounds the FILE. Deriving the total from the clipped list would
+        tell an operator with far more open todos that they have exactly the cap — and
+        the sidebar's "…(+N more)" line is computed from that number."""
+        self._add(*[f"todo number {i}" for i in range(gather._MAX_TODOS + 5)])
+        data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        self.assertEqual(len(data["todos"]), gather._MAX_TODOS)
+        self.assertEqual(data["todo_count"], gather._MAX_TODOS + 5)
+
+    def test_a_broken_todo_read_degrades_to_no_todos_rather_than_losing_the_scan(self):
+        """Individually wrapped like every other step — one bad field must not cost the
+        repo rows gathered beside it."""
+        with mock.patch("charter.todos.open_todos", side_effect=RuntimeError("boom")):
+            data = gather.scan(workspace=config.DEFAULT_WORKSPACE, cwd=str(self.tmp))
+        self.assertEqual(data["todos"], [])
+        self.assertEqual(data["todo_count"], 0)
+        self.assertIn("repos", data)
+
+    def test_a_cache_written_before_todos_existed_is_still_read_as_a_scan(self):
+        """`_shaped_like_a_scan` is deliberately loose about fields a FUTURE scan adds,
+        and this is that case arriving: a cache file surviving an upgrade must still
+        render rather than be thrown away as corrupt."""
+        old = {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+               "repos": [], "worktrees": []}
+        self.assertTrue(gather._shaped_like_a_scan(old))
+        gather.save("f-todo-1", old)
+        with mock.patch.object(gather, "scan",
+                               side_effect=AssertionError("re-gathered a good cache")):
+            self.assertEqual(gather.read("f-todo-1"), old)
+
+
 class ScanNeverRaises(PersonaIso, unittest.TestCase):
     """Every step in `scan()` is wrapped individually — Task 2 calls this from a
     hook, where "a hook may cost a session its briefing, never its turn"."""

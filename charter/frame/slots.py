@@ -201,6 +201,24 @@ def _top(fid: str) -> str:
     about the version, not a fourth thing on this row, so it goes exactly where the
     version goes — including out, at `terse`, since a density that meant to buy back a
     whole line does not mean to keep half of it.
+
+    **The version sits at the row's RIGHT-HAND END (#516), and everything else stays
+    where it was.** The split is what the operator asked for and it is also the reading
+    the row already had: the left of this bar answers *where am I and who am I being* —
+    the workspace, the gauge, the persona — and the version answers *which build is
+    saying so*, which is not part of that sentence. Pushed to the far edge it stops
+    reading as a fourth field of the identity and starts reading as the bar's own
+    signature, which is what it is.
+
+    **Right-aligned by PADDING, never by truncating the identity into it.** `tui.pad`
+    on the left half is what places the version, so a wide row simply has spaces in
+    between; and when the two halves genuinely do not both fit, the VERSION is dropped
+    whole rather than the workspace being cut to make room for it. That is the same
+    "shown whole or dropped whole" discipline `_fit_fields` keeps one slot over, and it
+    is the same field `terse` already drops — so a starved row and a terse row lose the
+    same thing, rather than a narrow terminal inventing a third way for this bar to
+    degrade. The `dev` chip travels inside that one f-string, so it goes and comes back
+    with the version and can never be left behind on its own.
     """
     from .. import __version__, statusline, workspace
     from . import state
@@ -214,10 +232,17 @@ def _top(fid: str) -> str:
     gauge = " ".join(statusline.recorded_context_gauge(
         state.harness_session(fid) or ""))
     left = f" ⬢ {ws}{pin}"
-    tail = (persona if verbosity(fid) == "terse"
-            else f"{persona}  charter {__version__}{statusline._dev_chip()} ")
-    right = f"{gauge}  {tail}" if gauge else tail
-    return tui.truncate(f"{left}  {right}", _width())
+    identity = f"{left}  {gauge}  {persona}" if gauge else f"{left}  {persona}"
+    if verbosity(fid) == "terse":
+        return tui.truncate(identity, _width())
+    build = f"charter {__version__}{statusline._dev_chip()} "
+    w = _width()
+    # `+ 1` is the one column that must separate them; without it a full-width identity
+    # would butt straight up against the version and read as one word.
+    if tui.width(identity) + tui.width(build) + 1 > w:
+        return tui.truncate(identity, w)
+    return tui.Row(tui.Cell(identity, w - tui.width(build)),
+                   tui.Cell(build, tui.width(build)), gap="").render(w)[0]
 
 
 class _RowKey:
@@ -514,50 +539,277 @@ def bottom_rows_wanted(fid: str, *, pane_cols: int) -> int:
     return 1 + (min(gather.row_count(fid), cap) if cap > 0 else 0)
 
 
+#: Columns the persona NAME cell is never squeezed below once the badges have a column
+#: of their own — the two-cell marker plus enough of a name to tell two personas apart.
+#:
+#: The badge column is sized from the WIDEST badge on screen, so without a floor one
+#: persona holding three dispatches (`⚡3 2h?` — eleven columns) would take that width off
+#: every name in a 22-column sidebar and leave `▸ ste…` down the whole list. Past this
+#: point the BADGE column is what gives way, and a badge that no longer fits is cut by its
+#: own cell rather than by pushing a name out of the pane.
+_NAME_MIN_W = 12
+
+#: The most rows the sidebar's todo section may occupy — its heading, its items and its
+#: `…(+N more)` line together.
+#:
+#: A cap on top of the pane's own height, because the two answer different questions: the
+#: pane says how many rows there ARE, and this says how many of them a todo list has any
+#: business taking. `right` is the persona column first — that is what the slot is for
+#: everywhere else charter names it — so on a forty-row terminal the todos get a section
+#: and the rest of the pane stays quiet, rather than the list running to the bottom of the
+#: screen. `charter ws todo` is where the whole list lives; this is the frame's reminder
+#: that it does, not a replacement for it.
+_MAX_TODO_LINES = 8
+
+
+def _sidebar_head(label: str, count: int, width: int) -> str:
+    """One section heading for the `right` sidebar — ``▪ personas 6``.
+
+    Composed from `statusline.py`'s OWN header constants (`_HEAD_PAD`, which carries
+    `_MARK_HEAD`, and `_DIM`) rather than a string of this module's, so the frame's
+    sidebar and the status line's persona column cannot come to disagree about what a
+    column header looks like — the same delegation this module already practises with
+    `_markers`, `_ci_part` and the table's column widths.
+
+    Lower case, and a bare word with no glyph of its own. The frame's chrome is lower case
+    wherever it speaks (`no personas`, `3 todos`, `F2 menu`), and `_HEAD_PAD`'s own
+    comment in `statusline.py` records that a decorative glyph on a header shipped broken
+    twice: a header is the one row with no sibling beneath it to reveal that a font drew
+    it wider than the Unicode tables claim.
+    """
+    from .. import statusline as sl
+    return tui.truncate(f"{sl._DIM}{sl._HEAD_PAD}{label}{sl._R} {count}", width)
+
+
+def _persona_total(cells) -> int:
+    """How many personas *cells* stands for: the rows that name one, plus the personas a
+    `…(+N more)` row admits it is standing in for.
+
+    Added up from `PersonaChip.hidden` rather than read back out of the rendered note,
+    which would tie a heading's number to the wording of a sentence — the same reason
+    `statusline._persona_chip_cells` records a flagged persona in a set instead of looking
+    for its glyph afterwards.
+    """
+    return sum(1 for c in cells if c.name is not None) + sum(c.hidden for c in cells)
+
+
+def _cap_personas(cells: list, keep: int) -> list:
+    """*cells* trimmed to at most *keep* rows, the last of them saying how many personas
+    it dropped.
+
+    **One trimmer for both reasons the sidebar shows fewer personas than exist** — a
+    `terse` density asking for less, and a pane too short to hold the list. "Which
+    personas survive" is one question, and answering it in two places is how the two
+    answers come to disagree; a short pane at `terse` asks it once here.
+
+    `_persona_chip_cells` is already ordered (the active persona first, then anything
+    carrying a health mark), so what survives is the top of an order rather than an
+    arbitrary handful, and a row that was ALREADY standing for hidden personas folds its
+    count into the new row rather than losing it.
+    """
+    from .. import statusline as sl
+    if keep <= 0 or len(cells) <= keep:
+        return cells
+    shown = cells[:max(0, keep - 1)]
+    hidden = _persona_total(cells[len(shown):])
+    return [*shown,
+            sl.PersonaChip(None, f"{sl._DIM}  …(+{hidden} more){sl._R}", "", hidden)]
+
+
+def _persona_rows(cells: list, width: int) -> list[str]:
+    """The persona chips drawn as a TABLE: names down the left, badges in a right-hand
+    column of their own (#516).
+
+    The badges used to start wherever a name happened to end, so the column was ragged
+    and one long name pushed its own badge past every other. The column's width is the
+    widest badge ON SCREEN — measured with `tui.width`, never `len`, because `✎ ◌ ⚑ ✗ ⚡`
+    and the vault dot are exactly the glyphs `_persona_chip_cells`' own comment says have
+    broken this layout twice — bounded by :data:`_NAME_MIN_W` so a persona with three
+    dispatches in flight cannot take a 22-column sidebar's names away from it.
+
+    **The name is contained BEFORE the arithmetic, not after** (#472). Neither number
+    here is derived from a persona name: the badge column comes from the badges, the name
+    column is the pane's remainder, and `tui.Cell`'s own `pad`/`truncate` is what fits the
+    name into the column it was given — sanitising it on the way, which is the containment.
+    A row whose name is too long loses its own tail to a `…` and moves nothing else.
+
+    Badges keep the leading separator `_mem_badge`/`_health_mark`/`_inflight_badge` each
+    put on themselves, so the cells are joined with no gap and `head + badges` is still
+    byte-for-byte what `statusline._persona_chips` renders.
+    """
+    badge_w = min(max((tui.width(c.badges) for c in cells), default=0),
+                  max(0, width - _NAME_MIN_W))
+    rows: list[str] = []
+    for c in cells:
+        if badge_w <= 0 or c.name is None:
+            # A `…(+N more)` row names no persona and carries no badge — it is a sentence
+            # about the list, so it spans the pane rather than being padded into a name
+            # cell whose column it has no business lining up with.
+            rows.append(tui.truncate(c.head + c.badges, width))
+        else:
+            rows.append(tui.Row(tui.Cell(c.head, width - badge_w),
+                                tui.Cell(c.badges, badge_w), gap="").render(width)[0])
+    return rows
+
+
+def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
+    """This workspace's open todos, heading included, in at most *budget* lines.
+
+    **Read from the gather cache, never from the todo directory** — *data* is
+    `gather.read(fid)`'s, and `gather.scan` is what opened and parsed those files, once,
+    on a plane-state bump. `todos.open_todos` is one file read per todo; a panel repaints
+    on every version bump and `bottom` repaints five times a second while work is in
+    flight, so a renderer that called it would be the per-row filesystem work #387 pinned
+    a panel's idle tick against. Same rule, same cache, same reason as the repo table.
+
+    **Which ones, and how many.** `open_todos` is oldest-first and that ordering is the
+    point of it — what surfaces is what is being avoided, rather than what you already
+    have in mind — so the rows are its own top, not a sample. The section spends
+    *budget* in the same priority order `_table_lines` spends its own: the heading, then
+    items, then the `…(+N more)` line that admits what was dropped, which is RESERVED out
+    of the budget rather than appended and trimmed off the end. A budget of exactly two
+    therefore says the count and how much is hidden, because "there is more here than
+    fits" outranks "here is an arbitrary one of them".
+
+    **Nothing at all when there is nothing open**, unlike `_bottom`'s `0 todos`. That row
+    is one row on a strip that is never blank anyway; this is a heading plus an empty
+    space in a column, which is furniture within a day — and then a real todo appearing in
+    it draws no more attention than the zero did. `_bottom` keeps its unconditional count,
+    so the frame still says `0 todos` somewhere: the two surfaces are not saying the same
+    thing twice, they are saying it at two different costs.
+
+    **Done todos never appear**, which is the whole of what `open_todos` returns: a closed
+    todo is not something the frame is asking you to look at, and a list you have to read
+    past is not a list you act on.
+
+    A todo's title is a COMMITTED value — someone else's machine wrote it into this
+    plane's repo — so `contain.one_line` bounds it BEFORE any width arithmetic touches it,
+    which is the ordering #472 was filed for. The width maths here does not read the title
+    at all (`tui.truncate` fits the finished row to the pane), so the bound cannot be
+    walked around by a title long enough to matter.
+    """
+    from .. import contain, statusline as sl
+    items = [t for t in (data.get("todos") or []) if isinstance(t, dict)]
+    if not items or budget < 2:
+        return []
+    # `todo_count` is the UNCLIPPED total (`gather._MAX_TODOS` bounds only the list), so a
+    # cache written by an older charter — which has the items and no count — falls back to
+    # what it can actually see rather than reporting zero hidden todos it cannot name.
+    raw = data.get("todo_count")
+    total = raw if isinstance(raw, int) and raw >= len(items) else len(items)
+    room = budget - 1                       # the heading is not negotiable
+    shown = items[:room]
+    if total > len(shown):
+        shown = items[:max(0, room - 1)]    # reserve the line that says how many are left
+    rows = [_sidebar_head("todos", total, width)]
+    for t in shown:
+        title = contain.one_line(t.get("title") or "")
+        # An ASCII `-`, and the bullet every eye reaches for first (`·`, `•`) is exactly
+        # the one this column may not have: both are East-Asian *Ambiguous*, so a terminal
+        # may draw either two cells wide and shift every todo title one column right of
+        # the persona names above them — the drift `_persona_chip_cells`' own comment says
+        # has broken this layout twice. `-` is Narrow everywhere, which is
+        # `_inflight_badge`'s own reason for spelling presumed-dead as `?`.
+        #
+        # Two columns of marker, so a title begins in the same column as a persona name
+        # and as both headings — `_HEAD_PAD` exists to make that one column, and a section
+        # whose rows started somewhere else would undo it.
+        rows.append(tui.truncate(f"{sl._DIM}-{sl._R} {title}", width))
+    hidden = total - len(shown)
+    if hidden > 0:
+        # The count alone, with no command beside it — unlike `_persona_chip_cells`'
+        # `…(+N more · charter persona list)`, which is written for a status line 36
+        # columns wide at its narrowest. This pane is 22 (`layout.SLOT_SIZE`), and
+        # `…(+4 more · charter ws todo)` is 28: the command would be cut off on every
+        # frame charter actually draws, and half a command name is worse than none —
+        # it is a thing to type that does not work.
+        rows.append(tui.truncate(f"{sl._DIM}  …(+{hidden} more){sl._R}", width))
+    return rows
+
+
 def _right(fid: str) -> str:
-    """Persona chips — memory badges, in-flight badges and vault dots included,
-    because `statusline._persona_chips` already builds one chip as all four
-    combined (`◆ name` + vault dot + memory badge + health mark + in-flight
-    badge) and this calls it rather than reassembling the same facts out of
+    """The plane's personas, and this workspace's open todos underneath them.
+
+    Persona chips carry memory badges, in-flight badges and vault dots because
+    `statusline._persona_chip_cells` already builds them all, and this calls it
+    rather than reassembling the same facts out of
     `_mem_badge`/`_inflight_badge`/`_inflight_by_persona`/`_vault_dot`/
     `_mem_count` itself. A fix to any one of those five lands here the moment it
     lands in the status line's right column — nothing in this module could drift
     from it, because nothing in this module repeats what it does.
 
+    **#516 asked for the badges in a column, and that is why the parts exist.**
+    `_persona_chips` returns one flat string per persona, with the name, the vault dot
+    and all three badges already concatenated — nothing left to put in a column. The
+    honest fix was upstream: `statusline` grew `PersonaChip`, `_persona_chips` became
+    ``head + badges`` over it, and this reads the same parts the status line composes.
+    Recomposing the chip HERE out of the five helpers would have satisfied the same
+    screenshot while reintroducing exactly the drift the paragraph above rules out.
+
     No per-turn session id to hand it: unlike `statusline.render`, a frame panel
     never receives Claude Code's JSON payload on stdin (see `gather.py`'s own
     module docstring for the identical point about the gather side).
-    `_persona_chips()`'s own default (`session=None`) is exactly right here —
+    `_persona_chip_cells()`'s own default (`session=None`) is exactly right here —
     its ephemeral-memory count falls back through `charter.session.current`,
     which reads `$CHARTER_SESSION_ID`/`$CLAUDE_CODE_SESSION_ID` out of the
     environment a launched panel process inherits whole from the harness (the
     same env var `notify.plane_changed` already depends on being set there).
 
-    No guard of its own around the call: `_persona_chips` already swallows
+    No guard of its own around the call: `_persona_chip_cells` already swallows
     every failure internally and answers `[]` (its own docstring's "never
     breaks the status line"), and `render`'s caller-side `try/except` covers
     whatever gets past that — the same trust `_top`/`_bottom` already place in
     it rather than each re-wrapping their own calls into `statusline.py`.
 
-    **At `terse` this keeps :data:`_TERSE_ROWS` chips and says so.** A slice, not a
-    narrower chip: `_persona_chips` builds one chip as `◆ name` plus its vault dot,
-    memory badge, health mark and in-flight badge all together, and dropping any of
-    those parts would mean reassembling the chip here out of the five helpers this
-    function exists specifically not to duplicate. So the panel drops whole personas
-    and adds `_left`'s own `…(+N more)` line, which is the honest way to show fewer of
-    a list — `_persona_chips` is already ordered, so what survives is the top of an
-    order rather than an arbitrary handful.
+    **Two headings, because a bare column of names told a newcomer nothing** (#516) —
+    `_sidebar_head` is where their register is argued, and it is `statusline.py`'s own.
+    The personas heading counts every persona this plane has, not the rows that fit:
+    `_persona_total` adds the hidden ones back from `PersonaChip.hidden`, so the heading
+    and the `…(+N more)` line beneath it can never contradict each other.
+
+    **The pane is measured, and the personas are served first.** `_cap_personas` bounds
+    the list by `_height()` — a `terse` density and a short pane reach it through the same
+    call — and the todos take what is left, capped by :data:`_MAX_TODO_LINES`. That
+    ordering is deliberate rather than incidental: `right` is the persona column
+    everywhere else charter names it, so a pane too short for both loses the section that
+    is duplicated elsewhere (`charter ws todo`, and `bottom`'s own count) rather than the
+    one that is not. How SHORT is too short is `_todo_rows`' own rule and is asked there
+    once — this function only decides whether there is any room at all to be worth
+    opening the cache for, which is a question about a file read rather than about a row.
     """
     from .. import statusline as sl
+    from . import gather
 
-    w = _width()
-    chips = sl._persona_chips()
-    if not chips:
-        return tui.truncate(f"{sl._DIM}no personas{sl._R}", w)
-    if verbosity(fid) == "terse" and len(chips) > _TERSE_ROWS:
-        hidden = len(chips) - (_TERSE_ROWS - 1)
-        chips = [*chips[:_TERSE_ROWS - 1], f"{sl._DIM}…(+{hidden} more){sl._R}"]
-    return "\n".join(tui.truncate(c, w) for c in chips)
+    w, h = _width(), _height()
+    terse = verbosity(fid) == "terse"
+    cells = sl._persona_chip_cells()
+    if cells:
+        keep = h - 1                        # the heading takes a row off the list
+        if terse:
+            keep = min(keep, _TERSE_ROWS)
+        cells = _cap_personas(cells, keep)
+        lines = [_sidebar_head("personas", _persona_total(cells), w),
+                 *_persona_rows(cells, w)]
+    else:
+        lines = [tui.truncate(f"{sl._DIM}no personas{sl._R}", w)]
+
+    # The blank row between the two sections is counted OUT of the todo budget rather
+    # than added on top of it, so the section can never be the row that overflows the
+    # pane — the same reservation `_table_lines` makes for its own overflow line.
+    #
+    # `> 0` and NOT the two-row floor, which is `_todo_rows`' to keep: this test is only
+    # "is there any room at all", asked so a pane with none does not open a cache file it
+    # is about to discard (`bottom_rows_wanted` orders its own two questions the same way,
+    # and for the same reason). Repeating the floor here would put one rule in two places,
+    # where the outer copy silently decides the case and the inner one can be broken
+    # without anything noticing — which is exactly what a mutation of the inner guard
+    # proved while both existed.
+    budget = min(h - len(lines) - 1, _TERSE_ROWS if terse else _MAX_TODO_LINES)
+    if budget > 0:
+        rows = _todo_rows(gather.read(fid), w, budget)
+        if rows:
+            lines.extend(["", *rows])
+    return "\n".join(lines)
 
 
 def _inflight_field() -> str:
