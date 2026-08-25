@@ -880,6 +880,31 @@ class ReposTable(PersonaIso, unittest.TestCase):
         self.assertIn("no clones", tui.strip_ansi(out))
         self.assertIn("charter clone", tui.strip_ansi(out))
 
+    def test_a_workspace_name_the_rungs_never_checked_is_still_one_line(self):
+        """`_empty_lines` interpolates a workspace name with no `contain.one_line` over
+        it, and the reason has to be the true one. It is NOT that every rung of
+        `state.workspace_for` name-checks its answer: rung 0 does (`valid_name`), but the
+        last rung is `workspace.resolve()`, which returns `$CHARTER_WORKSPACE` stripped
+        and otherwise untouched — so a name with a newline in it reaches this renderer
+        verbatim, as this test's first assertion measures.
+
+        What contains it is `tui.truncate`, which runs `tui.sanitize` first: the newline
+        is not charter's markup, so the pane still draws exactly ONE line — the property
+        the whole slot is built on, since a `repos` pane that quietly became three rows
+        tall would push the attention strip off the bottom of the window.
+
+        The hostile value is asserted to have got through as well as to have been
+        contained. Asserting containment alone would pass just as well on a build where a
+        rung DID reject it and the sentence said `default` — a test that proves nothing
+        about the line it is named for."""
+        hostile = "ev\nil\x1b[31m;rm -rf /"
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": hostile}, clear=True):
+            self.assertEqual(state.workspace_for("f-known-empty"), hostile)
+            _seed("f-known-empty")
+            out = self._render("f-known-empty")
+        self.assertEqual(len(out.split("\n")), 1, repr(out))
+        self.assertIn("rm -rf /", tui.strip_ansi(out))
+
     def test_a_frame_whose_repos_are_not_gathered_yet_says_so_rather_than_showing_none(self):
         """#512, at the renderer. `cmd_launch` deletes the cache before it draws anything
         and a detached child fills it a beat later, so there is a real window in which

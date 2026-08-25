@@ -11,14 +11,22 @@ share = "local"
 default = "steward"
 
 [frame]
-# Every slot: identity across the top, the wide repo table across the bottom, persona
-# chips down the right. `right` needs a terminal at least `min-cols` wide — below that
-# `layout.visible_slots` drops it rather than cramping the harness.
+# Every slot: identity across the top, the one-row attention strip under it, the wide
+# repo table below that, persona chips down the right. `right` needs a terminal at least
+# `min-cols` wide — below that `layout.visible_slots` drops it rather than cramping the
+# harness. `repos` is dropped the same way once its own pane would be narrower than the
+# 95 columns the table needs, because a `repos` pane too narrow to draw one is a bordered
+# rectangle that reads as "this workspace has no repos" (#515).
 #
-# The ORDER is the geometry (#488): `bottom` is split before `right`, so its table gets
-# the full window width. Listed after it, `bottom` is split off a harness the sidebar has
-# already narrowed — 23 columns short of the window, so the table needs a 118-column
-# terminal before it is drawn at all, and below that the pane is the attention row alone
-# (#500). There is no `left` any more — it drew a 22-column copy of the table `bottom`
-# now draws properly.
-slots = ["top", "bottom", "right"]
+# `repos` carries the table as of #515; before that `bottom` carried the attention row
+# and the table stacked in one pane. This line has to NAME it: `slots` is the primitive
+# and an explicit list wins over the default outright, so a list without `repos` launches
+# fine and simply draws no table.
+#
+# The ORDER is the geometry (#488): `repos` is split before `right`, so its table gets
+# the full window width — measured drawn at 95 columns and up. Listed after it, `repos`
+# is split off a harness the sidebar has already narrowed — 23 columns short of the
+# window, so the table needs a 118-column terminal before it is drawn at all, and below
+# that the slot is dropped and the harness keeps the rows (#500). There is no `left` any
+# more — it drew a 22-column copy of the rows `repos` now draws at full width.
+slots = ["top", "bottom", "repos", "right"]

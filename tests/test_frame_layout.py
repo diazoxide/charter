@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from unittest import mock
 
 from charter import util
 from charter.frame import layout
@@ -96,9 +97,16 @@ class VisibleSlots(unittest.TestCase):
         `statusline._LEFT_W` — the same constant `slots._table_cap` refuses below — so
         the launcher's drop and the renderer's silence can never come apart. A literal
         here would be a guard that matched today's number and stopped matching the
-        renderer's the first time a column width moved."""
+        renderer's the first time a column width moved.
+
+        **`_LEFT_W` is MOVED for the assertion, and that is the whole test.** Asserted
+        against the constant where it stands, this passes just as happily on a
+        `_table_min_cols` whose body is `return 95` — 95 is today's `_LEFT_W`, so the
+        copy and the read are indistinguishable and the mutation survives. Moving the
+        constant separates them: the branch answers 102, a literal answers 95."""
         from charter import statusline
-        self.assertEqual(layout._table_min_cols(), statusline._LEFT_W)
+        with mock.patch.object(statusline, "_LEFT_W", statusline._LEFT_W + 7):
+            self.assertEqual(layout._table_min_cols(), statusline._LEFT_W)
 
     def test_a_tiny_terminal_keeps_nothing(self):
         """Below the floor the harness gets the whole terminal. Degrading to a bare

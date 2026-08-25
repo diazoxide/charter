@@ -366,13 +366,14 @@ def _table_row(lead: str, name_markup: str, r: dict, width: int,
 
 
 def _table_lines(data: dict, width: int, budget: int) -> list[str]:
-    """The repo table `bottom` draws under its attention row, at most *budget* lines.
+    """The repo table the `repos` pane draws under its heading, at most *budget* lines.
 
     **This is #488's actual answer**: the frame used to show LESS of the plane's repo
     state than the status line it suppresses (#386), because the only slot drawing repos
     was a 22-column sidebar whose own docstring conceded that `_NAME_W` (32) and
-    `_BRANCH_W` (34) alone exceed the whole pane. `bottom` is the frame's full-width
-    slot, so the table goes here and is drawn at the widths it was designed for.
+    `_BRANCH_W` (34) alone exceed the whole pane. The table is drawn at the widths it was
+    designed for — on `bottom` when #488 shipped it, and since #515 in `repos`, a pane of
+    its own whose whole width is the table's.
 
     Reads ONLY *data* — one `gather.read(fid)` in the caller — and never a repo
     directory, a `git status` or a `glstate.read_for` of its own. Every field a row needs
@@ -386,8 +387,11 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     :class:`_RowKey` — nothing here touches a filesystem, and a `Path` would imply one
     exists to touch.
 
-    *budget* is the pane's real height minus the attention row, measured by
-    :func:`_height` before anything is composed. The budget is spent in priority order —
+    *budget* is the `repos` pane's real height minus its HEADING (`_height() - 1` in
+    :func:`_repos`, floored by :func:`_table_cap`), measured before anything is composed.
+    The row it subtracts is `▪ repos N`, not the attention row — that is another pane's
+    since #515, and a budget still reserving a row for it would cost the table its
+    lowest-ranked repo row for nothing. The budget is spent in priority order —
     repo rows first, then the `…(+N more)` line that admits what was dropped, then piece
     rows — so a short pane loses DETAIL rather than losing a repo. That ordering is
     `statusline._repo_rows`' own (`wt_budget` there), kept because the two tables are
@@ -412,16 +416,18 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     # `charter  main`. Refusing to draw says "no room to say" where a trimmed row says
     # "nothing to say".
     #
-    # **Ordinary, not exotic — an 80-column terminal lands here.** `[frame] min-cols`
-    # (100) gates `right` and `top` only; `layout.visible_slots` keeps `bottom` all the
-    # way down to `min_cols // 2`, so every frame between 50 and `_LEFT_W - 1` (94)
-    # columns draws the attention row and no table. And the PANE can be narrower than the
-    # window on top of that: the slot order is the geometry, so a `[frame] slots` that
-    # names `right` before `bottom` insets this pane by `right`'s columns and its border
-    # (`layout.bottom_cols`). Which is why :func:`_table_cap` — not this function — is
-    # what the LAUNCHER asks, and why it asks with the width of the PANE rather than of
-    # the window. The attention row above is unaffected either way; it does its own
-    # per-field budgeting (`_fit_fields`).
+    # **Ordinary, not exotic — an 80-column terminal reaches here.** #515 changed WHO
+    # arrives: `layout.visible_slots` now drops `repos` outright below `_LEFT_W`, reading
+    # the width from `layout._table_min_cols` so the launcher's drop and this refusal are
+    # one number, so an 80-column LAUNCH has no `repos` pane at all. What still lands here
+    # is a running frame narrowed by `cmd_resize`, which changes sizes and never which
+    # panes exist, and `charter panel repos` piped into a narrow terminal by hand — and
+    # `_repos` turns this `[]` into :func:`_too_narrow_lines` rather than an empty box.
+    # The PANE can also be narrower than the window: the slot order is the geometry, so a
+    # `[frame] slots` naming `right` before `repos` insets this pane by `right`'s columns
+    # and its border (`layout.repos_cols`). Which is why :func:`_table_cap` — not this
+    # function — is what the LAUNCHER asks, and why it asks with the width of the PANE
+    # rather than of the window.
     if width < sl._LEFT_W:
         return []
 
@@ -546,14 +552,26 @@ def _empty_lines(ws: str, width: int) -> list[str]:
     the same. That one is reached when `gather.cached` answers ``None``; this one when it
     answers a real scan with no rows in it.
 
-    **No `contain.one_line` over *ws*, and that is a decision rather than an omission.**
-    Every rung of `state.workspace_for` that can answer a name checks it against
-    `instance.WORKSPACE_NAME_RE` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`), an alphabet with no
-    newline, no control character and no escape in it — so containment is already true by
-    construction one layer up, and a second copy here would be a guard nothing could ever
-    turn red. `_top` interpolates the same value on the same terms. What is NOT free is
-    the WIDTH: the name is arbitrary length, so the line is measured through
-    `tui.truncate` like every other line in this module.
+    **No `contain.one_line` over *ws*, and the reason is `tui.sanitize`, not the name
+    rungs.** It would be comfortable to say every rung of `state.workspace_for` checks its
+    answer against `instance.WORKSPACE_NAME_RE` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`) — rung 0
+    does, through `valid_name` — but the LAST rung does not: it is `workspace.resolve()`,
+    which hands back `$CHARTER_WORKSPACE` stripped and otherwise untouched. Measured:
+    with `CHARTER_WORKSPACE='ev\\nil\\x1b[31m;rm -rf /'` and no session pointer and no
+    recorded launch workspace, rung 0 rejects it, rungs 1 and 2 have nothing, and rung 3
+    returns that exact string — which arrives here verbatim.
+
+    What contains it is the `tui.truncate` call below, which runs `tui.sanitize` first:
+    the newline is not charter's markup, so it is replaced and the pane still gets ONE
+    line; the SGR is passed through as colour, which costs zero columns and cannot move a
+    cursor. That is the guarantee this module leans on everywhere — a value nobody has
+    thought about yet is contained at the point it is drawn, not by a rung nobody
+    re-checked. `_top` interpolates the same value on the same terms, and has since
+    before #515. Naming the wrong reason is how a guard gets deleted later for being
+    redundant against a property that was never true.
+
+    What is NOT free either way is the WIDTH: the name is arbitrary length, so the line
+    is measured through `tui.truncate` like every other line in this module.
     """
     from .. import statusline as sl
 
@@ -621,8 +639,8 @@ def _table_cap(fid: str, width: int) -> int:
 
     Takes *width* rather than measuring it: the renderer has a pane to measure and the
     launcher has only a window it has not split yet. **Both must be the PANE's width, and
-    that is not always the window's** — `layout.bottom_cols` is where the launcher's side
-    of it is computed, because a `[frame] slots` naming `right` before `bottom` insets
+    that is not always the window's** — `layout.repos_cols` is where the launcher's side
+    of it is computed, because a `[frame] slots` naming `right` before `repos` insets
     this pane by 23 columns (measured on tmux 3.7c: 87 in a 110-column window). Sizing
     from the window's width there is the second half of the same defect, and it is what
     round 2 of #500 shipped.
@@ -1229,11 +1247,16 @@ def _repos(fid: str) -> str:
     read as "nothing to add".
 
     **One `gather.cached`, and no repo directory touched.** #387 pinned a panel's idle
-    tick at exactly one `stat`; this slot is not in :data:`ANIMATED` so it pays even that
-    only on a version bump or a resize, but a table that walked a directory per row would
-    still cost fourteen walks per repaint. Everything the table draws comes out of the
-    cache; see :func:`_table_row` for the one column that costs (presence) and is
-    therefore absent.
+    tick at exactly one `stat` — `panel._tick`'s single `state.version(fid)`, which every
+    slot pays every `panel.TICK` whether it is animated or not, so this pane is a fourth
+    panel process and a fourth such read: the frame's idle cost is up a third on #515, not
+    unchanged. What this slot does not pay is the SECOND one: it is not in
+    :data:`ANIMATED`, so `panel._watch`'s `animates and bool(_running(...))`
+    short-circuits before `_running` is ever called, where `bottom` reads the in-flight
+    record set as well. And neither number is the one that would have mattered — a table
+    that walked a directory per row would cost fourteen walks per repaint. Everything the
+    table draws comes out of the cache; see :func:`_table_row` for the one column that
+    costs (presence) and is therefore absent.
     """
     w = _width()
     # `_table_cap` is the SAME call `repos_rows_wanted` made to size this pane, with the
