@@ -262,6 +262,69 @@ def harness_pane(fid: str) -> str | None:
         return None
 
 
+def record_harness_session(fid: str, sid: str) -> bool:
+    """Write down the HARNESS's own session id for this frame. ``True`` when the recorded
+    value actually changed.
+
+    **The mapping #413 is about, and there is exactly one process that can write it.**
+    Claude Code's per-turn token usage is keyed by ITS session id, and a panel never sees
+    that id — a panel only ever knows ``$CHARTER_SESSION_ID``, which the frame launcher
+    sets to the FRAME's id. The one moment both ids are in the same process is the
+    suppressing `statusline.main`: it has the frame id in its environment and Claude
+    Code's id in the JSON payload on its stdin. So it writes this, and a panel reads it.
+
+    **In the frame's own directory, and that placement is the answer to "must not leak
+    between planes".** `frame_dir` sits under `config.STATE_DIR`, which is per-plane; the
+    file goes with the frame and `reap` deletes it with the rest of the directory when
+    the launcher's pid dies. Nothing is committed, nothing is shared, and nothing outlives
+    the frame it describes.
+
+    Returns whether it CHANGED, because the caller runs on the status line's own render
+    path — several times per turn — and uses the answer to decide whether the frame's
+    panels have anything new to repaint for. Reading before writing is also what keeps
+    this to one `stat`-shaped read on the overwhelmingly common no-op path.
+
+    Same atomic-write, never-raise shape as :func:`record_harness_pane`, and for the same
+    reason: a frame whose harness session could not be recorded simply draws no gauge,
+    which is the safe direction — no gauge rather than a wrong one.
+    """
+    sid = (sid or "").strip()
+    if not sid or harness_session(fid) == sid:
+        return False
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return False
+    tmp = d / "session.tmp"
+    try:
+        tmp.write_text(f"{sid}\n")
+        os.replace(tmp, d / "session")
+    except OSError:
+        return False
+    return True
+
+
+def harness_session(fid: str) -> str | None:
+    """The harness's own session id for *fid*, or ``None`` when charter does not know.
+
+    ``None`` for a frame whose harness is not Claude Code (nothing else is handed a
+    per-turn usage payload, so nothing else writes here), for a frame launched by a
+    charter that predates :func:`record_harness_session`, for a directory that is not a
+    frame's, and for a file that cannot be read.
+
+    Four reasons, deliberately one answer, because every caller does the same thing with
+    it: **draw no gauge.** `frame/slots.py`'s own rule — a gauge that silently reads zero
+    is worse than no gauge — makes "charter does not know" and "charter knows there is
+    nothing" the same picture on purpose.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "session").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def record_server(fid: str, server: str) -> None:
     """Write down which tmux server this frame's session (or window) lives on.
 
@@ -350,8 +413,8 @@ def density(fid: str) -> str | None:
 
 
 def clear_shape(fid: str) -> None:
-    """Forget the density and the pane map recorded under *fid*, because a NEW frame is
-    claiming the id.
+    """Forget the density, the pane map and the harness session recorded under *fid*,
+    because a NEW frame is claiming the id.
 
     The fourth and fifth lines on :func:`clear_exit`'s bill, and the same recycled pid
     underneath them (#383). A frame id is ``<workspace>-<launcher pid>``; :func:`reap`
@@ -370,13 +433,20 @@ def clear_shape(fid: str) -> None:
       it as it draws, so this only matters when a launch dies before that — but then the
       map survives pointing at nothing, and the next density change on the next frame to
       claim the id would `kill-pane` ids that mean whatever tmux has since reused.
+    * ``session`` names ANOTHER agent session's token usage (#413). This one is the
+      sharpest of the three, because the failure is not an empty panel but a confident
+      wrong number: the new frame's `top` row would draw the previous session's `ctx 78%`
+      as its own, and go on doing it until that session's own harness happened to write a
+      new one — which it never will, because it is over. `slots.py`'s rule is that a gauge
+      reading zero is worse than no gauge; a gauge reading somebody else's 78% is worse
+      than either.
 
     Never raises, and never creates, like everything else here.
     """
     d = frame_dir(fid)
     if d is None:
         return
-    for name in ("density", "panes"):
+    for name in ("density", "panes", "session"):
         try:
             (d / name).unlink(missing_ok=True)
         except OSError:

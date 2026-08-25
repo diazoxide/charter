@@ -68,7 +68,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, hooks, instance, todos
-from charter.frame import gather, layout, menu, notify, state, tmuxctl
+from charter.frame import gather, layout, menu, notify
+from charter.frame import slots as frame_slots
+from charter.frame import state, tmuxctl
 
 from tests._isolation import PersonaIso, run_hook
 
@@ -1202,16 +1204,30 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
 
     # -- 4. Resize redistribution ----------------------------------------------------- #
 
-    def test_a_fixed_size_panels_dimension_survives_a_real_window_resize(self):
+    def test_recomputed_sizes_really_hold_across_real_window_resizes(self):
         """Cross-task fix round, item 3: tmux's own layout engine redistributes EVERY
         pane proportionally on ANY resize, `-l size` notwithstanding — hand-verified
         against this exact tmux binary during development: a 120x30 frame grown to
         200x50 stretched a one-row panel to 8 rows, and only snapped back to 1 row on
         the way down because that particular shrink happened to be an exact round trip
-        of the same grow. This drives `commands_frame._resize_hook_argv` — the real
-        function, not a hand-retyped `resize-pane` — through three resizes (grow,
-        shrink smaller than the original, grow past the first grow) to rule out "only
-        works for a round trip" as the actual fix."""
+        of the same grow. Three resizes here (grow, shrink smaller than the original,
+        grow past the first grow) rule out "only works for a round trip".
+
+        **What is driven changed with #488.** The `window-resized` hook used to carry
+        `resize-pane -t %N -y 1` as literal text and this test installed it. `bottom` is
+        content-and-window sized now, so the correction has to be RECOMPUTED against the
+        window that just changed — `commands_frame._reassert_sizes`, the real function
+        the hook's `charter frame-resize` child calls, is driven here instead. That the
+        hook actually fires and actually reaches that child is proven end to end against
+        a real frame by `FourEdgeIntegration.
+        test_the_resize_hook_really_fires_and_charter_really_recomputes`.
+
+        The measured failure the CAP exists for is asserted here too, on the 90x25 pass:
+        a `bottom` that wanted more rows than the window can spare must not be granted
+        them, because tmux does not refuse an over-large `-y` — it takes the difference
+        out of the neighbour, and the neighbour is the harness (measured on 3.7c:
+        `resize-pane -y 40` in a 20-row window left the harness pane 1 row tall)."""
+        fid = state.frame_id("rsz", os.getpid())
         r = _tmux("new-session", "-d", "-s", "rsz", "-x", "120", "-y", "30",
                   "-P", "-F", "#{pane_id}")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1220,20 +1236,41 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                    "-P", "-F", "#{pane_id}", "--", "sleep", "600")
         self.assertEqual(top.returncode, 0, top.stderr)
         top_pane = top.stdout.strip()
+        bot = _tmux("split-window", "-t", harness_pane, "-v", "-l", "6",
+                    "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+        self.assertEqual(bot.returncode, 0, bot.stderr)
+        bottom_pane = bot.stdout.strip()
+        panes = {"top": top_pane, "bottom": bottom_pane}
 
-        hook_cmd = commands_frame._resize_hook_argv(socket=SOCKET, harness_pane=harness_pane,
-                                                    panes={"top": top_pane})
-        self.assertEqual(_run(hook_cmd).returncode, 0, "installing the resize hook failed")
-
-        for cols, rows in ((200, 50), (90, 25), (300, 100)):
+        # The last size is the one the CAP binds at: at 20 rows the window can spare
+        # only `20 - top(1) - 2 borders - HARNESS_MIN_ROWS` = 5, fewer than the 6 the
+        # content wants — so `bottom` must come out a different number there than at the
+        # other three, and a `bottom_rows` that ignored *window_rows* entirely would
+        # still pass the first three.
+        for cols, rows in ((200, 50), (90, 25), (300, 100), (120, 20)):
             r = _tmux("resize-window", "-t", "rsz", "-x", str(cols), "-y", str(rows))
             self.assertEqual(r.returncode, 0, r.stderr)
-            time.sleep(0.3)
-            height = _tmux("display-message", "-p", "-t", top_pane,
-                           "#{pane_height}").stdout.strip()
-            self.assertEqual(height, "1",
-                             f"the panel drifted to {height} rows after resizing to "
-                             f"{cols}x{rows} — the hook did not hold")
+            with mock.patch("charter.frame.slots.bottom_rows_wanted", return_value=6):
+                commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
+                                               window_cols=cols, window_rows=rows)
+            want = layout.slot_sizes(["top", "bottom"], window_rows=rows,
+                                     content_rows=6)
+            if rows == 20:
+                self.assertLess(want["bottom"], 6,
+                                "the cap never bound — this loop's last pass is the "
+                                "only one that exercises it")
+            for slot, pane in panes.items():
+                height = _tmux("display-message", "-p", "-t", pane,
+                               "#{pane_height}").stdout.strip()
+                self.assertEqual(height, str(want[slot]),
+                                 f"the {slot} panel is {height} rows after resizing to "
+                                 f"{cols}x{rows}, not the {want[slot]} it was told")
+            harness = _tmux("display-message", "-p", "-t", harness_pane,
+                            "#{pane_height}").stdout.strip()
+            self.assertGreaterEqual(
+                int(harness), layout.HARNESS_MIN_ROWS,
+                f"the harness kept only {harness} rows at {cols}x{rows} — tmux grants "
+                f"an over-large -y out of the neighbour rather than refusing it")
 
     # -- 5. Session-scoped id delivery for the hotkey menu --------------------------- #
 
@@ -1379,8 +1416,10 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
     #: What that refusal writes to stderr, byte for byte (`frame/panel.py`'s `run`).
     #: Shared by the two tests below so the control below fails for the same REASON, and
     #: differs only in what the process does after printing it.
+    #: Read from the registry rather than spelled out, so retiring a slot (#488 retired
+    #: `left`) does not turn this control into a test that fails for the wrong reason.
     _BAD_SLOT_STDERR = (f"charter panel: unknown slot '{_BAD_SLOT}' "
-                        f"(known: bottom, left, right, top)")
+                        f"(known: {', '.join(sorted(frame_slots.SLOTS))})")
 
     #: A pane program that waits for a gate file, prints *stderr text* and exits 2 — the
     #: pre-#382 panel, reduced to the only two things about it that mattered. The gate
@@ -1441,7 +1480,8 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         proves nothing at all about what an operator sees: the failure being fixed is
         specifically that the reason DID reach the pane and was then scrolled out of it
         by tmux's own dead-pane message. So this spawns the real `charter panel` argv
-        into a real ONE-ROW pane (`layout.SLOT_SIZE["bottom"]`) with `remain-on-exit`
+        into a real ONE-ROW pane (`layout.SLOT_SIZE["bottom"]` — `bottom`'s floor since
+        #488, and still the height a plane with no clones gets) with `remain-on-exit`
         armed exactly as a real frame arms it, and asserts on `capture-pane` — what is
         on the screen — not on a return code.
 
@@ -1521,7 +1561,8 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         to write a message about yet: this 74-column reason, `print`ed to a 40-column
         ONE-row pane, leaves the visible screen ALREADY blank — the wrap and the print's
         own trailing newline each scroll the pane's only row into history. So at the
-        size `top` and `bottom` actually are (`layout.SLOT_SIZE`: 1) the operator's
+        size `top` always is, and `bottom` is at its floor (`layout.SLOT_SIZE`: 1), the
+        operator's
         nothing does not wait for the death, and does not depend on which tmux is
         running: the dead-pane message, where a tmux writes one, lands on a row that was
         already empty. It is also why `panel._write` — the one path `_hold` paints
@@ -2268,7 +2309,7 @@ def _init_repo(path: Path, branch: str) -> Path:
     `tests/test_frame_gather.py`'s own `_init_repo` uses, duplicated here (rather
     than imported across test modules) so this module stays as self-contained as
     every other fixture in it already is. `FourEdgeIntegration` below is the only
-    caller: it needs a repo a real `charter panel left --session <fid>` subprocess
+    caller: it needs a repo a real `charter panel bottom --session <fid>` subprocess
     can gather for itself, through `gather.scan`, exactly the way an operator's own
     clone would be gathered."""
     path.mkdir(parents=True, exist_ok=True)
@@ -2287,7 +2328,7 @@ def _init_repo(path: Path, branch: str) -> Path:
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
 class FourEdgeIntegration(PersonaIso, unittest.TestCase):
     """Task 5 (#385), the closing proof for this whole plan: a frame configured with
-    ALL FOUR slots comes up with all four panes alive and drawing REAL content, and
+    EVERY slot comes up with every pane alive and drawing REAL content, and
     repaints after a real `state.bump`. Tasks 1-4 were each unit-tested — a mocked
     `scan()`, an in-process cache read, a renderer called directly against a fixed
     `width`. Nothing before this class has ever run `gather.scan`,
@@ -2298,7 +2339,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
 
     `PanelIntegration` above already proves ONE panel end to end (`bottom`, driven
     by a direct `charter panel bottom --session <fid>` new-session). This class
-    proves the COMPOSITION `layout.panel_argvs` exists for instead: four real
+    proves the COMPOSITION `layout.panel_argvs` exists for instead: three real
     splits off the SAME harness pane id, in the same launch — the exact multi-split
     scenario `layout.py`'s own module docstring names as the index-churn hazard
     pane ids were built to close (tmux renumbers pane INDICES on every split;
@@ -2311,23 +2352,26 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
     `MenuIntegration`/`MenuFormatIntegration`/`MenuClientIntegration` above, and
     duplicating them here would only be a second, weaker copy.
 
-    **Only `left` is asserted through content that could only have come from the
-    cache Tasks 1/2 built.** `top` (workspace/persona/version), `right` (persona
-    chips) and `bottom` (todo count/alerts) all read live at render time —
-    `slots.py`'s own docstrings for `_top`/`_right`/`_bottom` each say so — real
-    subprocess, real data, but none of it through `gather.py`'s cache. `left` is
-    the one slot `slots._left` reads EXCLUSIVELY from `gather.read(fid)` (see that
-    function's own docstring: "never a repo directory listing, a `git status`, or a
+    **Only the repo TABLE is asserted through content that could only have come
+    from the cache Tasks 1/2 built.** `top` (workspace/persona/version), `right`
+    (persona chips) and `bottom`'s own attention row (todo count/alerts) all read
+    live at render time — `slots.py`'s own docstrings for `_top`/`_right`/`_bottom`
+    each say so — real subprocess, real data, but none of it through `gather.py`'s
+    cache. The table under that row (`slots._table_lines`, #488 — it was `left`
+    until then) is the one thing drawn EXCLUSIVELY from `gather.read(fid)` (see its
+    own docstring: "never a repo directory listing, a `git status`, or a
     `glstate.read_for` of its own"), so a real repo's real branch name showing up
-    in a captured `left` pane is the one assertion in this whole file that proves
+    in a captured `bottom` pane is the one assertion in this whole file that proves
     the actual thing this plan is for: a real `git` sweep, gathered ONCE, cached to
     disk by a hook, and read back by a panel process that never itself calls git —
     a panel showing "no repos" would be ALIVE and would tell you nothing about
     whether any of that chain actually works (see this module's own task brief).
+    That the two halves now share one pane is itself worth the assertion: #488's
+    own rule is that the table JOINS the attention row rather than evicting it.
 
     **Fix round 1 closed three links this proof left unproven, all the same shape
     (green even with the actual mechanism disabled):** a real, uncommitted file in
-    the fixture repo (mutation testing found `left`'s row shows a clean repo as
+    the fixture repo (mutation testing found the repo row shows a clean repo as
     clean whether or not `gather.scan`'s own `_repo_states` sweep — the real `git
     status --porcelain --branch` half — ever ran at all, since name/branch alone
     come from `_repo_trees`/`_branch`, neither of which touches it); a direct read
@@ -2481,9 +2525,17 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         self.assertTrue(harness_pane, "tmux did not report the harness pane's id")
         self.addCleanup(_kill_pid, self._pane_pid(harness_pane))
 
-        slots = ["top", "bottom", "left", "right"]
-        panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=SOCKET,
-                                        harness_pane=harness_pane)
+        slots = ["top", "bottom", "right"]
+        # `bottom` is content-sized since #488, and the sizer is asked for the size here
+        # rather than left to `SLOT_SIZE`'s floor — a one-row `bottom` would have no room
+        # for the repo table these tests read back, which is the whole point of the slot.
+        # *content_rows* is stated rather than taken from `slots.bottom_rows_wanted`: that
+        # helper resolves the workspace from THIS process's environment, and every panel
+        # below resolves it from the tmux session's instead, so a mismatch would size the
+        # pane for a different plane than the one the panels draw.
+        panel_cmds = layout.panel_argvs(
+            slots=slots, session=fid, socket=SOCKET, harness_pane=harness_pane,
+            sizes=layout.slot_sizes(slots, window_rows=40, content_rows=8))
         panes: dict[str, str] = {}
         for slot, cmd in zip(slots, panel_cmds):
             p = self._run_env(cmd)
@@ -2503,17 +2555,16 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         self._run_env(["tmux", "-L", SOCKET, "select-pane", "-t", harness_pane])
         return harness_pane, panes
 
-    def test_all_four_panels_come_up_alive_with_real_content_and_the_harness_keeps_focus(self):
-        """Launch composition, proven end to end: a frame with `top`/`left`/`right`/
-        `bottom` all configured comes up with all four panes alive, each showing
-        real content a broken renderer (or an empty, never-gathered cache) could
-        not have produced, and the harness pane — not the last panel
-        `split-window` happened to draw — holds keyboard focus once the launch
-        finishes.
+    def test_every_panel_comes_up_alive_with_real_content_and_the_harness_keeps_focus(self):
+        """Launch composition, proven end to end: a frame with `top`/`bottom`/`right`
+        all configured comes up with every pane alive, each showing real content a
+        broken renderer (or an empty, never-gathered cache) could not have produced, and
+        the harness pane — not the last panel `split-window` happened to draw — holds
+        keyboard focus once the launch finishes.
 
         **Fix round 1: the repo is made DIRTY before the frame ever launches, not
         left pristine.** `_init_repo`'s own repo has nothing uncommitted, so
-        without this, `left`'s row shows no marker regardless of whether
+        without this, the repo row shows no marker regardless of whether
         `gather.scan`'s `_repo_states` half (a real `git status --porcelain
         --branch` subprocess) ran at all — a mutation that replaced that whole
         sweep with `{}` left every assertion in this test green, because
@@ -2521,7 +2572,12 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         `_repo_trees`/`_branch` alone, neither of which touches `_repo_states`.
         The `*` dirty marker asserted below is the one thing in this test that
         can only come from that sweep actually running and actually landing in
-        the cache `left` reads back.
+        the cache the table reads back.
+
+        **#488 moved the repo table from `left` to `bottom`**, so the cache-proving
+        assertions moved with it: the same pane now carries the live todo count AND the
+        cached repo row, which is itself worth asserting together — the attention row
+        must survive the table joining it, not be evicted by it.
         """
         repo_name = f"cnry{os.getpid() % 10000}"
         branch = f"br{os.getpid() % 10000}a"
@@ -2533,7 +2589,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
 
         fid = state.frame_id("four-edge-alive", os.getpid())
         harness_pane, panes = self._spawn_frame(fid)
-        self.assertEqual(set(panes), {"top", "bottom", "left", "right"})
+        self.assertEqual(set(panes), {"top", "bottom", "right"})
 
         # Poll for real content (`_wait_for`'s own docstring — fix round 1:
         # replaces a fixed `time.sleep(1.5)` that guessed at how long four cold
@@ -2543,9 +2599,8 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # `_wait_for` spends its own timeout before falling through to the alive
         # check below, same as a deliberate wait would have.
         top = self._wait_for(panes["top"], "demo")
-        left = self._wait_for(panes["left"], repo_name)
         right = self._wait_for(panes["right"], persona_name)
-        bottom = self._wait_for(panes["bottom"], "1 todo")
+        bottom = self._wait_for(panes["bottom"], repo_name)
 
         for slot, pane in panes.items():
             self.assertEqual(self._alive(pane), "0",
@@ -2556,19 +2611,22 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
 
         self.assertIn("demo", top, f"top never showed the real workspace name:\n{top!r}")
 
-        self.assertIn(repo_name, left, f"left never showed the real repo:\n{left!r}")
-        self.assertIn(branch, left, f"left never showed the real branch:\n{left!r}")
-        self.assertIn("*", left,
-                      f"left never showed the dirty marker for a real uncommitted "
+        self.assertIn(repo_name, bottom,
+                      f"bottom never showed the real repo:\n{bottom!r}")
+        self.assertIn(branch, bottom,
+                      f"bottom never showed the real branch:\n{bottom!r}")
+        self.assertIn("*", bottom,
+                      f"bottom never showed the dirty marker for a real uncommitted "
                       f"file — either gather.scan's own git-status sweep never "
                       f"ran, or nothing carried its result into the cached "
-                      f"row:\n{left!r}")
+                      f"row:\n{bottom!r}")
 
         self.assertIn(persona_name, right,
                       f"right never showed the real persona:\n{right!r}")
 
         self.assertIn("1 todo", bottom,
-                      f"bottom never showed the real todo count:\n{bottom!r}")
+                      f"the attention row was evicted by the table it is supposed to "
+                      f"sit above:\n{bottom!r}")
 
         focus = _tmux("display-message", "-p", "-t", harness_pane,
                       "#{pane_active}").stdout.strip()
@@ -2577,18 +2635,81 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                          "operator's harness must be able to receive a keystroke "
                          "the instant the frame comes up")
 
-    def test_a_state_bump_through_the_real_hook_repaints_left_and_bottom_with_new_facts(self):
+    def test_the_resize_hook_really_fires_and_charter_really_recomputes(self):
+        """The one link `_reassert_sizes`' own integration test (`TmuxIntegration.
+        test_recomputed_sizes_really_hold_across_real_window_resizes`) cannot reach: that
+        one CALLS the recompute, and proves the sizes hold. This proves tmux actually
+        runs the hook charter installed, and that the `run-shell` child actually finds
+        this frame and resizes its panes — the whole of #488's answer to "a content-sized
+        pane must recompute its HEIGHT on `window-resized`, not just its width".
+
+        A real `set-hook` built by `commands_frame._resize_hook_argv`, a real
+        `resize-window`, and a real `charter frame-resize` subprocess started by tmux
+        against this class's own throwaway plane (the frame's harness pane, pane map and
+        server are recorded first, because that child reads all three off disk — which is
+        exactly why no pane id needs to travel in the hook's text, closing #475).
+
+        **Asserted on a GROW, and that is what makes it a test rather than a
+        coincidence.** On a shrink tmux's own proportional redistribution already makes
+        `bottom` smaller all by itself, so "it got smaller" would pass with no hook
+        installed at all — the fixture-coincidence shape this suite keeps paying for.
+        Growing the window is the one direction the two mechanisms disagree about: tmux
+        stretches every pane proportionally (measured on 3.7c: a one-row panel became 8
+        rows on a 120x30 -> 200x50 grow), while charter's recompute sizes `bottom` to its
+        CONTENT, and this frame's plane has no clones to table — so a pane that came out
+        SMALLER after the window grew can only be charter's answer.
+        """
+        fid = state.frame_id("four-edge-resize", os.getpid())
+        harness_pane, panes = self._spawn_frame(fid)
+        state.record_harness_pane(fid, harness_pane)
+        state.record_panes(fid, panels=panes)
+        state.record_server(fid, SOCKET)
+
+        hook = commands_frame._resize_hook_argv(socket=SOCKET,
+                                                harness_pane=harness_pane, fid=fid)
+        self.assertIsNotNone(hook, "the frame's own id was refused by the hook builder")
+        self.assertEqual(self._run_env(hook).returncode, 0,
+                         "installing the resize hook failed")
+        # The `run-shell` child is a `charter` of its own: it must find THIS plane, not
+        # the developer's. `_spawn_frame`'s session already carries `$CHARTER_ROOT` (see
+        # `setUp`), and the hook fires in that session's own environment.
+        before = int(_tmux("display-message", "-p", "-t", panes["bottom"],
+                           "#{pane_height}").stdout.strip())
+        self.assertGreater(before, 1, "the fixture never gave bottom a tall pane")
+
+        r = _tmux("resize-window", "-t", fid, "-x", "160", "-y", "80")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        deadline = time.monotonic() + _DEADLINE
+        height = before
+        while time.monotonic() < deadline:
+            height = int(_tmux("display-message", "-p", "-t", panes["bottom"],
+                               "#{pane_height}").stdout.strip() or before)
+            if height < before:
+                break
+            time.sleep(0.1)
+        self.assertLess(height, before,
+                        f"bottom is {height} rows after the window GREW from 40 to 80 — "
+                        f"tmux's own redistribution only ever stretches on a grow, so "
+                        f"this is what charter's recompute would have had to undo. The "
+                        f"hook never fired, or its child never reached this frame")
+        harness = int(_tmux("display-message", "-p", "-t", harness_pane,
+                            "#{pane_height}").stdout.strip())
+        self.assertGreaterEqual(harness, layout.HARNESS_MIN_ROWS, harness)
+
+    def test_a_state_bump_through_the_real_hook_repaints_the_table_and_the_alert_row(self):
         """Closes the gap `PanelIntegration`'s own hook test
         (`test_a_real_hook_call_repaints_a_live_panel_without_a_direct_state_bump`)
         leaves open for THIS plan: that test drives `hooks.posttooluse` against
         `bottom` alone, which never touches `gather.py` at all. This drives the
         SAME real hook — never a direct `state.bump` or `gather.refresh` call — and
-        watches `left` repaint with a NEW branch name that only exists because
+        watches `bottom`'s repo table repaint with a NEW branch name that only
+        exists because
         `notify.plane_changed` ran `gather.refresh` BEFORE `state.bump` (Task 2's
         own contract, and its own docstring's reason: refresh-then-bump closes the
         window where a poller sees the new version and still reads the stale
         cache). A version bump into a stale or never-refreshed cache would leave
-        `left` showing the OLD branch forever — this is the one test in the file
+        the table showing the OLD branch forever — this is the one test in the file
         that would catch that. `bottom` is watched in the same pass, from the SAME
         single hook call, to pin that one refresh/bump serves every slot that asks,
         not only the one `PanelIntegration` already covers.
@@ -2596,10 +2717,10 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         **The cache is warmed with one direct `gather.refresh` call before any
         assertion runs — this is load-bearing, not incidental.** Caught by
         mutation: with no cache file on disk yet, `gather.read`'s OWN fallback
-        (`_left` calls it, this file's `left` panel does not) recomputes a FRESH
+        (`_table_lines`' caller calls it) recomputes a FRESH
         scan on every call regardless of whether the cache was ever written — so
         with `notify.plane_changed`'s `gather.refresh` call deleted outright (a
-        real mutation tried while writing this test), `left` still showed the new
+        real mutation tried while writing this test), the table still showed the new
         branch every time, because it was never reading a cache at all, only ever
         falling through to a live scan. That passed for the wrong reason and would
         have shipped a vacuous proof of Task 2's whole contract. Priming the cache
@@ -2628,7 +2749,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         gather.refresh(fid, workspace="demo")
 
         # Fix round 1: prove the CACHE FILE itself exists and holds *branch_a* —
-        # not only that `left` shows the right text, which `gather.read`'s own
+        # not only that the table shows the right text, which `gather.read`'s own
         # missing-cache fallback (a fresh, live scan) can produce with `gather.
         # save` neutered outright and no cache ever written at all. This is the
         # direct check that `gather.refresh` did the WRITE half of its job, not
@@ -2642,10 +2763,9 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                       f"the primed cache file exists but does not hold the "
                       f"starting branch:\n{cache.read_text()!r}")
 
-        left_before = self._wait_for(panes["left"], branch_a)
-        bottom_before = self._wait_for(panes["bottom"], "1 todo")
-        self.assertIn(branch_a, left_before,
-                      f"left never showed the starting branch:\n{left_before!r}")
+        bottom_before = self._wait_for(panes["bottom"], branch_a)
+        self.assertIn(branch_a, bottom_before,
+                      f"the table never showed the starting branch:\n{bottom_before!r}")
         self.assertIn("1 todo", bottom_before,
                       f"bottom never showed the starting todo count:\n{bottom_before!r}")
 
@@ -2669,7 +2789,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # this throwaway plane's own `DEFAULT_WORKSPACE` instead (this process's
         # cwd is the checkout root, not inside `demo`'s own tree, so the cwd rung
         # cannot rescue it either) — `gather.refresh` would then cache a scan of
-        # the WRONG, repo-less workspace, and `left` would repaint to "no repos"
+        # the WRONG, repo-less workspace, and the table would repaint to "no repos"
         # rather than the new branch, for a reason that has nothing to do with
         # whether the refresh/bump wiring itself works.
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid,
@@ -2685,17 +2805,23 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # paint (fix round 1) — waits for the specific new fact each panel is
         # expected to show, rather than a fixed sleep or an undifferentiated
         # "content changed" check.
-        left_after = self._wait_for(panes["left"], branch_b)
+        self._wait_for(panes["bottom"], branch_b)
+        # Both new facts land on the SAME pane now, and the two halves of the repaint
+        # arrive together — but poll for the second needle as well rather than assuming
+        # it, so a capture taken between the two is a retry rather than a failure.
         bottom_after = self._wait_for(panes["bottom"], "2 todos")
 
-        self.assertNotEqual(left_after, left_before,
-                            f"left never repainted after a real hooks.posttooluse() "
-                            f"call; still showing:\n{left_before!r}")
-        self.assertIn(branch_b, left_after,
-                      f"left repainted but not with the NEW branch:\n{left_after!r}")
-        self.assertNotIn(branch_a, left_after,
-                         f"left kept showing the OLD branch after the switch — a "
-                         f"stale cache surviving its own refresh:\n{left_after!r}")
+        self.assertNotEqual(bottom_after, bottom_before,
+                            f"bottom never repainted after a real hooks.posttooluse() "
+                            f"call; still showing:\n{bottom_before!r}")
+        self.assertIn(branch_b, bottom_after,
+                      f"bottom repainted but not with the NEW branch:\n{bottom_after!r}")
+        self.assertNotIn(branch_a, bottom_after,
+                         f"the table kept showing the OLD branch after the switch — a "
+                         f"stale cache surviving its own refresh:\n{bottom_after!r}")
+        self.assertIn("2 todos", bottom_after,
+                      f"the live half of the same pane never repainted:"
+                      f"\n{bottom_after!r}")
 
         # Fix round 1: the cache FILE on disk, not only the pane's own capture,
         # now holds the new branch — proving the hook's `gather.refresh` call did
@@ -2703,19 +2829,82 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # direct check made against `branch_a` above, repeated here against the
         # value only a SECOND, successful refresh could have produced.
         self.assertIn(branch_b, cache.read_text(),
-                      f"left repainted (or the panel's own live fallback masked "
+                      f"bottom repainted (or the panel's own live fallback masked "
                       f"a broken refresh) but the cache file itself was never "
                       f"updated with the new branch:\n{cache.read_text()!r}")
-
-        self.assertNotEqual(bottom_after, bottom_before,
-                            f"bottom never repainted after the same real hook call; "
-                            f"still showing:\n{bottom_before!r}")
-        self.assertIn("2 todos", bottom_after,
-                      f"bottom repainted but not with the NEW todo count:\n{bottom_after!r}")
 
         for slot, pane in panes.items():
             self.assertEqual(self._alive(pane), "0",
                              f"the {slot!r} panel died sometime after repainting")
+
+
+class BottomsWidthIsWhatTmuxActuallyGivesIt(_TmuxServerFixture, PersonaIso):
+    """#500 round 3: `layout.bottom_cols` says how wide the `bottom` pane comes out.
+    tmux is the only authority on that, so this asks tmux.
+
+    The unit tests in `tests/test_frame_layout.py` pin the arithmetic against a number
+    written down by a human who once ran tmux. That is exactly the shape of assertion
+    this repo has been burned by — a constant that was right the day it was measured and
+    is never re-checked. What is actually being claimed is that a `right` split off the
+    harness pane BEFORE `bottom` costs `bottom` the sidebar's columns plus one border
+    column, and the only thing that can confirm it is `#{pane_width}` off a real server.
+
+    **The splits are `layout.panel_argvs`' own commands, not hand-retyped ones** — the
+    direction (`-h`/`-v`), the `-b`, and the `-l` are the production values, because
+    those flags ARE the geometry under test. Only the program after `--` is swapped for
+    a `sleep`, so this class needs no importable plane, no `charter panel` process and
+    no repaint: it is about rectangles, and `FourEdgeIntegration` above is where real
+    panels are proven.
+    """
+
+    def _bottom_width(self, order: list[str], cols: int) -> int:
+        session = f"bw{self._pane_counter}"
+        self._pane_counter += 1
+        r = self._srv("new-session", "-d", "-s", session,
+                      "-x", str(cols), "-y", "40", "-P", "-F", "#{pane_id}",
+                      "--", "sleep", "600")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        self.addCleanup(self._srv, "kill-session", "-t", session)
+
+        sizes = layout.slot_sizes(order, window_rows=40, content_rows=7)
+        cmds = layout.panel_argvs(slots=order, session=session,
+                                  socket=self.SOCKET_NAME,
+                                  harness_pane=harness_pane, sizes=sizes)
+        widths: dict[str, int] = {}
+        for slot, cmd in zip(order, cmds):
+            argv = cmd[:cmd.index("--") + 1] + ["sleep", "600"]
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+            self.assertEqual(p.returncode, 0, f"splitting {slot!r}: {p.stderr}")
+            pane = p.stdout.strip()
+            self.addCleanup(_kill_pid, self._pane_pid_on(pane))
+            widths[slot] = pane
+        got = self._srv("display-message", "-p", "-t", widths["bottom"],
+                        "#{pane_width}").stdout.strip()
+        return int(got)
+
+    def _pane_pid_on(self, pane: str) -> str:
+        return self._srv("display-message", "-p", "-t", pane,
+                         "#{pane_pid}").stdout.strip()
+
+    def test_tmux_agrees_with_the_arithmetic_in_both_slot_orders(self):
+        """Both orders in one test, because the claim is a DIFFERENCE: the shipped order
+        leaves `bottom` the whole window and an operator's `right`-first order does not.
+        Asserted against `layout.bottom_cols`' own answer rather than against 110 and 87,
+        so this is tmux checking charter's arithmetic rather than two literals agreeing
+        with each other — and the second assertion is what stops "always the window's
+        width" from passing.
+        """
+        for order in (["top", "bottom", "right"], ["right", "top", "bottom"],
+                      ["top", "right", "bottom"], ["bottom", "right"]):
+            with self.subTest(order=order):
+                self.assertEqual(self._bottom_width(order, 110),
+                                 layout.bottom_cols(order, window_cols=110),
+                                 f"tmux disagrees with layout.bottom_cols for {order}")
+        self.assertNotEqual(
+            layout.bottom_cols(["top", "bottom", "right"], window_cols=110),
+            layout.bottom_cols(["right", "top", "bottom"], window_cols=110),
+            "the two orders answered the same width — the loop above proved nothing")
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")

@@ -4,10 +4,11 @@ Defaults are the shipped behaviour, so they are asserted rather than assumed: `m
 off because `set -g mouse on` takes over drag-select, and breaking the operator's copy to
 enable a feature v1 does not ship is a bad trade.
 
-`slots` is all four edges since #386, and the reason is the same kind of trade read the
-other way: inside a frame `charter statusline` draws nothing (ADR 0019), so an edge the
-frame does not fill is information nobody sees at all. The order is asserted too, because
-it is the split order and therefore the geometry — see `instance.FRAME_FIELDS`.
+`slots` is every edge charter draws (#386, narrowed to three by #488's retirement of
+`left`), and the reason is the same kind of trade read the other way: inside a frame
+`charter statusline` draws nothing (ADR 0019), so an edge the frame does not fill is
+information nobody sees at all. The order is asserted too, because it is the split order
+and therefore the geometry — see `instance.FRAME_FIELDS`.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from charter import instance
 class FrameDefaults(unittest.TestCase):
     def test_an_absent_section_yields_the_shipped_defaults(self):
         f = instance.frame_of({})
-        self.assertEqual(f["slots"], ["top", "bottom", "left", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "right"])
         self.assertIs(f["mouse"], False)
         self.assertEqual(f["hotkey"], "F2")
         self.assertEqual(f["history_limit"], 50000)
@@ -32,7 +33,7 @@ class FrameDefaults(unittest.TestCase):
         f = instance.frame_of({"frame": {"mouse": True, "hotkey": "F5"}})
         self.assertIs(f["mouse"], True)
         self.assertEqual(f["hotkey"], "F5")
-        self.assertEqual(f["slots"], ["top", "bottom", "left", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "right"])
 
     def test_an_unknown_slot_is_dropped_rather_than_carried(self):
         """A typo must not reach a tmux argv. Dropping is louder than it looks: the slot
@@ -41,7 +42,7 @@ class FrameDefaults(unittest.TestCase):
         Until #386 this could not tell "filtered" from "ignored" on its own: the default
         was `["top", "bottom"]`, so `["top", "sideways", "bottom"]` filtered to something
         byte-identical to it and a stub that always returned the default passed too. The
-        shipped default is all four edges now, so the two answers differ and this test
+        shipped default carries `right` as well, so the two answers differ and this test
         distinguishes them by itself; `test_a_valid_slots_override_actually_takes_effect`
         below stays, because that is a property worth pinning on purpose rather than by
         the luck of what the default happens to be this release.
@@ -51,31 +52,37 @@ class FrameDefaults(unittest.TestCase):
 
     def test_a_valid_slots_override_actually_takes_effect(self):
         """Companion to the test above: a *different* valid override must actually be
-        honoured, not just filtered. Every slot name is in the shipped default now, so
-        "shares no element with it" is no longer available to anything; what rules a
-        default-returning stub out here is the length.
-
-        `["right", "left"]` and not `["left", "right"]`, and that is the whole point of
-        the pair below it: the first draft of this claimed to check an order "the default
-        does not have them in" while using the order the default DOES have them in."""
-        f = instance.frame_of({"frame": {"slots": ["left", "right"]}})
-        self.assertEqual(f["slots"], ["left", "right"])
+        honoured, not just filtered. Every slot name is in the shipped default, so
+        "shares no element with it" is not available to anything; what rules a
+        default-returning stub out here is the length."""
+        f = instance.frame_of({"frame": {"slots": ["bottom", "right"]}})
+        self.assertEqual(f["slots"], ["bottom", "right"])
 
     def test_the_operators_own_slot_order_is_kept_exactly(self):
         """**Order is geometry, so order is a promise.** `layout.panel_argvs` splits each
-        slot off the harness pane in list order, so `["top", "left", "right", "bottom"]`
-        and `["top", "bottom", "left", "right"]` are two different frames from the same
-        four names — measured on tmux 3.7c at 200x50, a 154-column bottom row inset
-        between the sidebars versus a full-width 200-column one (see
-        `instance.FRAME_FIELDS`).
+        slot off the harness pane in list order, so `["top", "right", "bottom"]` and
+        `["top", "bottom", "right"]` are two different frames from the same three names
+        — measured on tmux 3.7c at 200x50, a 177-column bottom row inset beside the
+        sidebar versus a full-width 200-column one (see `instance.FRAME_FIELDS`).
 
         Nothing pinned that. A `frame_of` that re-sorted an operator's `slots` into the
         shipped order — silently handing them a frame they did not ask for — passed the
         entire suite, including the test above, because every list it was ever given was
-        already in the default's relative order. `["right", "left"]` is the shortest list
+        already in the default's relative order. `["right", "top"]` is the shortest list
         that is not."""
-        f = instance.frame_of({"frame": {"slots": ["right", "left"]}})
-        self.assertEqual(f["slots"], ["right", "left"])
+        f = instance.frame_of({"frame": {"slots": ["right", "top"]}})
+        self.assertEqual(f["slots"], ["right", "top"])
+
+    def test_a_retired_slot_name_is_dropped_the_way_a_typo_is(self):
+        """#488 retired `left`, and a committed `charter.toml` outlives a charter
+        upgrade: a plane (or a teammate's checkout) still carrying the four-slot list is
+        the ORDINARY case for a release or two, not an edge one. `instance.FRAME_SLOTS`
+        is what makes it safe — the dead name is filtered here, so nothing downstream
+        splits a pane no renderer will ever draw in. Asserted with the exact list that
+        shipped as the default one release ago."""
+        f = instance.frame_of(
+            {"frame": {"slots": ["top", "bottom", "left", "right"]}})
+        self.assertEqual(f["slots"], ["top", "bottom", "right"])
 
     def test_a_malformed_section_falls_back_instead_of_raising(self):
         """`config` is imported by every command including `charter --version`, so a bad
@@ -88,7 +95,7 @@ class FrameDefaults(unittest.TestCase):
         final `isinstance(value, type(default))` type check is deleted: without it, the
         string `"lots"` would be assigned straight into `history_limit`."""
         f = instance.frame_of({"frame": {"slots": "top", "history-limit": "lots"}})
-        self.assertEqual(f["slots"], ["top", "bottom", "left", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "right"])
         self.assertEqual(f["history_limit"], 50000)
 
     def test_a_bool_does_not_satisfy_a_non_bool_default(self):

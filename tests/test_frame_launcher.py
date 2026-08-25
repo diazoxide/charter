@@ -39,7 +39,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests._isolation import PersonaIso
-from charter import commands_frame, config, instance, util
+from charter import commands_frame, config, instance, statusline, util
 from charter.frame import gather, layout, menu, slots, state, tmuxctl
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
@@ -998,22 +998,23 @@ class Probe(unittest.TestCase):
         the harness pane silently keeps that space. Read from `config.FRAME` with
         nothing started — the probe's own read-only promise.
 
-        `left`/`right` shipped renderers in Task 3 (#385) — both are removed from the
-        registry here (restored after, via `mock.patch.dict`) to simulate the one
-        still-standing case the same way, rather than asserting against a pair that
-        no longer names it."""
+        Every slot charter accepts has a renderer today, so the case is SIMULATED:
+        `bottom` and `right` are removed from the registry here (restored after, via
+        `mock.patch.dict`) rather than asserting against names `FRAME_SLOTS` would have
+        filtered out one stage earlier. Two of them, so the probe is shown naming a SET
+        rather than happening to print one word."""
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
-             mock.patch.dict(config.FRAME, {"slots": ["top", "left", "right"]}), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "bottom", "right"]}), \
              mock.patch.dict(slots.SLOTS), \
              mock.patch("charter.commands_frame.subprocess.run") as run, \
              mock.patch("builtins.print") as p:
-            del slots.SLOTS["left"]
+            del slots.SLOTS["bottom"]
             del slots.SLOTS["right"]
             rc = commands_frame.cmd_probe()
         self.assertEqual(rc, 0, "an unimplemented slot is a ceiling, not a failure")
         run.assert_not_called()
         printed = " ".join(str(c) for c in p.call_args_list)
-        self.assertIn("left", printed)
+        self.assertIn("bottom", printed)
         self.assertIn("right", printed)
 
     def test_a_tmux_without_the_resize_hook_is_a_ceiling_the_probe_names(self):
@@ -2027,14 +2028,21 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertTrue(any("respawn" in m for m in buf), buf)
         self.assertTrue(any("attach" in c for c in fake.calls))
 
-    def test_a_resize_hook_is_installed_reasserting_every_drawn_panels_size(self):
+    def test_a_resize_hook_is_installed_that_asks_charter_to_recompute(self):
         """Cross-task fix round, item 3: tmux's own layout engine redistributes EVERY
         pane proportionally on any resize, `-l size` notwithstanding — verified by hand
         against real tmux 3.7c (`commands_frame._resize_hook_argv`'s own docstring): a
-        120x30 frame grown to 200x50 stretched two one-row panels to 8 and 7 rows.
-        `cmd_launch` must install a `window-resized` hook re-asserting each DRAWN
-        panel's fixed dimension, targeting the REAL pane id tmux reported for it — a
-        slot name alone is not a valid `resize-pane` target."""
+        120x30 frame grown to 200x50 stretched two one-row panels to 8 and 7 rows. So
+        `cmd_launch` must install a `window-resized` hook, scoped to the harness pane's
+        own window.
+
+        **What the action says changed with #488.** It used to carry the sizes as
+        literal `resize-pane -t %11 -y 1` text, computed once at launch. `bottom` is
+        content-and-window sized now, so a literal is destructive rather than merely
+        stale — measured on 3.7c, a hook still asserting `-y 40` after the window shrank
+        to 20 rows left the harness pane 1 row tall. The action calls charter back
+        instead, naming the FRAME, and `cmd_resize` recomputes from the window it finds.
+        """
         fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
         rc = _launch(fake)
         self.assertEqual(rc, 0)
@@ -2042,9 +2050,9 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(resize_cmd[resize_cmd.index("-t") + 1], fake.pane_id,
                          "the hook must be scoped to the harness pane's own window")
         action = resize_cmd[-1]
-        self.assertIn("%11", action)
-        self.assertIn("%12", action)
-        self.assertIn("-y 1", action)
+        self.assertIn("frame-resize", action)
+        self.assertIn("--frame", action)
+        self.assertTrue(action.startswith("run-shell -b "), action)
 
     def test_no_resize_hook_is_installed_when_no_panel_pane_id_was_learned(self):
         """Companion: every OTHER test in this class leaves `split-window` reporting no
@@ -2055,15 +2063,19 @@ class Launch(PersonaIso, unittest.TestCase):
         _launch(fake)
         self.assertFalse(any("window-resized" in c for c in fake.calls))
 
-    def test_a_pane_id_of_the_wrong_shape_is_never_interpolated_into_the_resize_hook(self):
-        """Fix round 2, item 3: `_resize_hook_argv` interpolates the pane id directly
-        into a hook ACTION STRING tmux later re-parses as a command line — the exact
-        construction the module docstring's "constant string" section bans for
-        `status_path`, for the same reason: something interpolated into an action must
-        be safe BY CONSTRUCTION, not merely safe because tmux happens to always report
-        `%<digits>` today. A value of any other shape must be treated the same as no id
-        at all — that one slot gets no resize-hook entry, and every OTHER (validly
-        shaped) slot still does."""
+    def test_no_pane_id_of_any_shape_reaches_the_resize_hooks_action(self):
+        """Fix round 2, item 3 — and #475 read forward. A hook ACTION is a string tmux
+        re-parses as a command line, so anything interpolated into one has to be safe BY
+        CONSTRUCTION rather than because the program that currently produces it happens
+        to be well-behaved. That used to mean checking each pane id against
+        `_PANE_ID_RE`, and #475 was the branch of `_relayout` that skipped the check for
+        every slot it KEPT, so `%1;kill-server` off disk armed `kill-server` on every
+        resize for the life of the window.
+
+        #488 removes the class rather than the instance: no pane id reaches the text at
+        all. Asserted on BOTH a well-shaped id and a malformed one, so the property
+        being pinned is "no pane ids here", not "no bad pane ids here" — a fix that
+        merely filtered would leave `%12` in the action and pass a one-sided check."""
         fake = _FakeTmux(exit_code=0,
                          panel_pane_ids={"top": "not-a-pane-id", "bottom": "%12"})
         rc = _launch(fake)
@@ -2071,7 +2083,25 @@ class Launch(PersonaIso, unittest.TestCase):
         resize_cmd = next(c for c in fake.calls if "window-resized" in c)
         action = resize_cmd[-1]
         self.assertNotIn("not-a-pane-id", action)
-        self.assertIn("%12", action)
+        self.assertNotIn("%12", action)
+        self.assertNotIn("resize-pane", action)
+
+    def test_a_frame_id_that_cannot_be_named_safely_arms_no_hook(self):
+        """The other side of the same rule: the ONE value that does reach the action
+        text now is the frame id, so it gets exactly the treatment
+        `_panel_died_hook_argv` gives its own — every value that reaches the text is
+        what decides, never where it came from. `#{pane_title}` is the sharp case
+        `_ACTION_METACHARACTERS` records: tmux expands `#{…}` formats inside a hook
+        action before any shell sees it, and a pane's title is text the program running
+        in that pane sets for itself.
+
+        Called directly rather than through a launch, because `state.frame_id` cannot
+        mint an id like this — which is the point of checking the VALUE rather than
+        trusting the mint."""
+        self.assertIsNone(commands_frame._resize_hook_argv(
+            socket="charter", harness_pane="%0", fid="demo-1#{pane_title}"))
+        self.assertIsNotNone(commands_frame._resize_hook_argv(
+            socket="charter", harness_pane="%0", fid="demo-1"))
 
     def test_a_failed_resize_hook_install_is_reported_but_not_fatal(self):
         """Same "report, don't kill an already-running pane" treatment every other
@@ -2384,18 +2414,20 @@ class Launch(PersonaIso, unittest.TestCase):
         frame actually comes up). This pins that no such pane is even attempted, one
         warning names it, and the implemented slots still draw.
 
-        `left` shipped a renderer in Task 3 (#385) — removed from the registry here
-        (restored after, via `mock.patch.dict`) to keep simulating the one
-        still-standing case, rather than asserting against a slot that now draws."""
+        Every slot charter accepts has a renderer today, so the case is SIMULATED:
+        `right`'s renderer is removed from the registry here (restored after, via
+        `mock.patch.dict`) rather than asserting against a name that is not in
+        `FRAME_SLOTS` at all — a config value filtered out one stage earlier would never
+        reach the filter this test is about."""
         fake = _FakeTmux(exit_code=0)
         buf = []
-        with mock.patch.dict(config.FRAME, {"slots": ["top", "bottom", "left"]}), \
+        with mock.patch.dict(config.FRAME, {"slots": ["top", "bottom", "right"]}), \
              mock.patch.dict(slots.SLOTS), \
              mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
-            del slots.SLOTS["left"]
+            del slots.SLOTS["right"]
             rc = _launch(fake)
         self.assertEqual(rc, 0)
-        self.assertFalse(any("panel" in c and "left" in c for c in fake.calls),
+        self.assertFalse(any("panel" in c and "right" in c for c in fake.calls),
                          "no pane may be spawned for a slot with no renderer")
         self.assertTrue(any("panel" in c and "bottom" in c for c in fake.calls),
                         "an IMPLEMENTED slot must still be drawn")
@@ -2603,6 +2635,92 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(state.respawn_attempt(fake.fid, "top"), 1,
                          "this frame's first panel death was charged to a dead frame's "
                          "budget and would never be respawned")
+
+
+class BottomIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
+    """#500: the `-l` the launcher hands `split-window` for `bottom` is the number of
+    rows the PANEL will fill, not the number of repos there are.
+
+    `bottom`'s renderer draws no table below `statusline._LEFT_W` (95) and at most
+    `slots._TERSE_ROWS` of one at a `terse` density. #488 sized the pane from the repo
+    count alone, so both shapes came up with a pane taller than anything that would be
+    drawn into it — and `layout.HARNESS_MIN_ROWS` means those rows come straight off the
+    agent session. Asserted at the LAUNCHER rather than at `bottom_rows_wanted`, because
+    the defect was a call site that had the width and did not pass it.
+
+    `gather.row_count` is stubbed so the count is the same on every pass and the only
+    thing varying is what the test says varies. What is NOT stubbed is the arithmetic:
+    `_launch_sizes` and `layout.bottom_rows` run for real.
+    """
+
+    def _bottom_split_size(self, *, cols, rows=50, repos=6, slots=None):
+        fake = _FakeTmux(exit_code=0,
+                         panel_pane_ids={"top": "%11", "bottom": "%12", "right": "%13"})
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                mock.patch("charter.frame.gather.row_count", return_value=repos))
+            if slots is not None:
+                stack.enter_context(mock.patch.dict(config.FRAME, {"slots": slots}))
+            rc = _launch(fake, cols=cols, rows=rows)
+        self.assertEqual(rc, 0)
+        split = next(c for c in fake.calls
+                     if "split-window" in c and "bottom" in c)
+        return int(split[split.index("-l") + 1])
+
+    def test_a_wide_window_is_split_for_the_whole_table(self):
+        """The control, and it has to hold or the narrow assertion below is vacuous."""
+        self.assertEqual(self._bottom_split_size(cols=200), 1 + 6)
+
+    def test_a_window_too_narrow_for_the_table_is_split_for_one_row(self):
+        """`[frame] min-cols` (100) gates `right` and `top`; `layout.visible_slots` keeps
+        `bottom` down to `min_cols // 2`, so an 80-column terminal draws the attention
+        row and nothing else. It used to be split seven rows tall for it."""
+        for cols in (80, statusline._LEFT_W - 1):
+            with self.subTest(cols=cols):
+                self.assertEqual(self._bottom_split_size(cols=cols), 1)
+
+    def test_the_boundary_is_the_tables_own_width(self):
+        """Pinned from both sides at `_LEFT_W` itself, so an off-by-one in either
+        direction is red rather than absorbed by the two-column gap between the values
+        the test above happens to use."""
+        self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W), 1 + 6)
+        self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W - 1), 1)
+
+    def test_a_sidebar_split_first_makes_the_pane_narrower_than_the_window(self):
+        """Round 3, and the half two rounds of review passed over: the width that decides
+        is the PANE's, and only the shipped slot order makes that the window's.
+
+        `instance.frame_of` keeps an operator's `[frame] slots` verbatim and
+        `tests/test_frame_config.py::test_the_operators_own_slot_order_is_kept_exactly`
+        calls that a promise, so `["right", "top", "bottom"]` is a frame charter offers.
+        `panel_argvs` splits every slot off the HARNESS pane in list order, so `right`
+        going first leaves `bottom` 23 columns narrower than the window — measured on
+        tmux 3.7c with real `charter panel` processes: window 110x40, the bottom pane
+        reads back **87x7**, and the panel draws ONE line with six rows blank.
+
+        110 is not an arbitrary width. Below `[frame] min-cols` (100) `visible_slots`
+        drops `right` and `bottom` is full width again; at 118 the inset pane is still
+        `_LEFT_W` or wider and the table draws. 100..117 is the whole break band, and
+        this asserts inside it.
+
+        The control below is the same window and the same repo count with the shipped
+        order — without it, a fix that simply stopped sizing `bottom` for its content
+        would pass.
+        """
+        inset = ["right", "top", "bottom"]
+        self.assertEqual(self._bottom_split_size(cols=110, slots=inset), 1)
+        self.assertEqual(
+            self._bottom_split_size(cols=110, slots=["top", "bottom", "right"]), 1 + 6)
+
+    def test_the_inset_pane_still_gets_its_table_once_the_window_can_spare_it(self):
+        """Degradation, not refusal — the fix must not turn "sidebar first" into "never
+        a table". At 118 columns the inset pane is 95, which is `_LEFT_W` exactly, and
+        the table is drawn and therefore split for. Pinned from both sides of that
+        boundary so an off-by-one in the border column is red rather than absorbed."""
+        inset = ["right", "top", "bottom"]
+        edge = statusline._LEFT_W + layout.SLOT_SIZE["right"] + layout._BORDER_COLS
+        self.assertEqual(self._bottom_split_size(cols=edge, slots=inset), 1 + 6)
+        self.assertEqual(self._bottom_split_size(cols=edge - 1, slots=inset), 1)
 
 
 class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
@@ -3920,7 +4038,7 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         them had a test."""
         fake = _FakeOperatorTmux(exit_code=0, pane_id="%7",
                                  panel_pane_ids={"top": "%8", "bottom": "%9",
-                                                 "left": "%10", "right": "%11"})
+                                                 "right": "%11"})
         _launch_inside(fake)
         fid = state.frame_id("demo", os.getpid())
         self.assertEqual(state.harness_pane(fid), "%7")
@@ -3932,12 +4050,12 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         four edges on) for a reason that has nothing to do with what it checks."""
         fake = _FakeOperatorTmux(exit_code=0,
                                  panel_pane_ids={"top": "%8", "bottom": "%9",
-                                                 "left": "%10", "right": "%11"})
+                                                 "right": "%11"})
         with mock.patch.dict(config.FRAME,
-                             {"slots": ["top", "bottom", "left", "right"]}):
+                             {"slots": ["top", "bottom", "right"]}):
             _launch_inside(fake)
         splits = [c for c in fake.calls if "split-window" in c]
-        self.assertEqual(len(splits), 4, f"one per configured slot: {splits}")
+        self.assertEqual(len(splits), 3, f"one per configured slot: {splits}")
         for cmd in splits:
             self.assertEqual(cmd[cmd.index("-t") + 1], "%7",
                              "every split targets the harness pane's id — tmux "

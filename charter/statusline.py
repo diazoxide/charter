@@ -192,12 +192,34 @@ def _usage_file(sid: str) -> Path:
     return config.SESSIONS_DIR / f"{sid}.usage"
 
 
-def _record_turn(sid: str, hit: int, read: int, write: int) -> list[int]:
+def _record_turn(sid: str, hit: int, read: int, write: int,
+                 ctx: int | None = None) -> list[int]:
     """Append this turn's cache-hit % to the session's trend and return the recent history.
 
     The status line can render several times per turn, so a sample is only appended when the
     underlying API numbers CHANGE — the payload reflects the most recent API response, so an
-    identical (read, write) pair is the same turn re-rendered, not a new one."""
+    identical (read, write) pair is the same turn re-rendered, not a new one.
+
+    **The row grew a fourth field with #413, and it is the one number a panel cannot
+    derive.** ``ctx`` is ``context_window.used_percentage``, which lives only in Claude
+    Code's per-turn payload — the cache ratio and the rebuild history are both computable
+    from ``read``/``write``, and this is not. Inside a frame the status line draws nothing
+    and a panel draws instead, out of this file, so a percentage that was never written
+    down is a percentage the frame can never show. ``None`` writes an empty field rather
+    than a zero: early in a session, and right after ``/compact``, there is no percentage,
+    and ``ctx 0%`` is a claim rather than a gap.
+
+    **The de-duplication compares ``read``/``write`` only**, which is what the paragraph
+    above has always claimed the rule is. It used to compare the whole assembled row —
+    equivalent while every other field was derived from those two, and no longer, since
+    ``ctx`` is not. A row differing only in the percentage is still the same API response
+    re-rendered, and appending it would spend a slot of the ring buffer on a duplicate
+    turn and shift the rebuild history by one.
+
+    Reading a 3-field row back still works and a 3-field row is still readable by an older
+    charter, so an upgrade mid-session neither loses the history nor corrupts it: see
+    :func:`_history` and :func:`_last_ctx`.
+    """
     if not sid:
         return []
     f = _usage_file(sid)
@@ -205,9 +227,11 @@ def _record_turn(sid: str, hit: int, read: int, write: int) -> list[int]:
         rows = [ln for ln in f.read_text().splitlines() if ln.strip()]
     except OSError:
         rows = []
-    stamp = f"{read},{write},{hit}"
-    if rows and rows[-1] == stamp:            # same API response → same turn, don't double-count
-        return [int(r.rsplit(",", 1)[1]) for r in rows]
+    stamp = f"{read},{write},{hit},{'' if ctx is None else int(ctx)}"
+    # Same API response → same turn, don't double-count. Compared on the two fields the
+    # API actually reports, never on the whole row: see the docstring above.
+    if rows and rows[-1].split(",")[:2] == [str(read), str(write)]:
+        return _hits(rows)
     rows.append(stamp)
     rows = rows[-_TREND_KEEP:]
     try:
@@ -215,20 +239,94 @@ def _record_turn(sid: str, hit: int, read: int, write: int) -> list[int]:
         f.write_text("\n".join(rows) + "\n")
     except OSError:
         pass
-    return [int(r.rsplit(",", 1)[1]) for r in rows]
+    return _hits(rows)
+
+
+def _hits(rows: list[str]) -> list[int]:
+    """The cache-hit percentages out of raw rows, skipping any that cannot be read.
+
+    Positional (``rows[2]``), not "the last field", which is what this was when a row had
+    exactly three of them. With ``ctx`` appended, "the last field" is the percentage of
+    the CONTEXT WINDOW — a plausible number in the same range, so the trend would have
+    gone on rendering and quietly meant something else. A row too short to hold a hit is
+    skipped rather than guessed at.
+    """
+    out = []
+    for r in rows:
+        p = r.split(",")
+        if len(p) >= 3:
+            try:
+                out.append(int(p[2]))
+            except ValueError:
+                continue
+    return out
+
+
+def _pairs(rows: list[str]) -> list[tuple[int, int]]:
+    """The ``(cache_read, cache_write)`` pairs out of raw rows.
+
+    ``len(p) >= 3``, not ``== 3``: #413 appended a fourth field, and an exact-length check
+    would have silently dropped every row this charter writes — leaving `_rebuilds` with
+    an empty history and the `↻N` counter permanently absent, which reads as "no rebuilds
+    have happened" rather than as "charter stopped reading its own file".
+    """
+    out = []
+    for ln in rows:
+        p = ln.split(",")
+        if len(p) >= 3:
+            out.append((int(p[0]), int(p[1])))
+    return out
+
+
+def _usage_rows(sid: str) -> list[str]:
+    """The session's recorded rows, or ``[]`` for every way there are none."""
+    try:
+        return [ln for ln in _usage_file(sid).read_text().splitlines() if ln.strip()]
+    except OSError:
+        return []
 
 
 def _history(sid: str) -> list[tuple[int, int]]:
     """The session's recorded (cache_read, cache_write) pairs."""
     try:
-        out = []
-        for ln in _usage_file(sid).read_text().splitlines():
-            p = ln.split(",")
-            if len(p) == 3:
-                out.append((int(p[0]), int(p[1])))
-        return out
-    except (OSError, ValueError):
+        return _pairs(_usage_rows(sid))
+    except ValueError:
         return []
+
+
+def _last_ctx(sid: str) -> int | None:
+    """The most recent recorded ``context_window.used_percentage``, or ``None``.
+
+    ``None`` for every way there is nothing to say: no session id, no file, a file whose
+    rows are all pre-#413 three-field ones (an older charter's, or this session's own
+    turns from before an upgrade), or a last row whose ctx field is empty because that
+    turn had no percentage. Each of those is "charter does not know", and the caller draws
+    nothing — `frame/slots.py`'s rule that a gauge reading zero is worse than no gauge.
+
+    The LAST row that has one, not the last row: a turn early in a session carries usage
+    without a percentage, and falling back to the most recent one charter actually saw
+    beats blanking a gauge that was correct a moment ago. It cannot drift far — the ring
+    buffer is `_TREND_KEEP` turns deep.
+    """
+    return _last_ctx_of(_usage_rows(sid)) if sid else None
+
+
+def _last_ctx_of(rows: list[str]) -> int | None:
+    """:func:`_last_ctx`, over rows a caller has already read."""
+    for ln in reversed(rows):
+        p = ln.split(",")
+        if len(p) < 4:
+            continue
+        try:
+            return int(p[3])
+        except ValueError:
+            # An EMPTY field is the ordinary case, not a corrupt one: a turn with usage
+            # but no percentage writes `900,100,90,` deliberately, because `ctx 0%` would
+            # be a claim where there is none. `int("")` raising is what skips it, and the
+            # same clause covers a genuinely corrupt value for free — a hand-edited file
+            # is one this reader must degrade past, not one it may guess at.
+            continue
+    return None
 
 
 # A cache REBUILD is the expensive event, and it is invisible in the hit *ratio*: in steady
@@ -280,6 +378,46 @@ def _cache_hint(streak: int) -> str | None:
             f"churns the prefix; prefer {_R}{_BOLD}/rewind{_R}{_DIM} over /compact{_R}")
 
 
+def _ctx_percentage(payload: dict) -> int | None:
+    """``context_window.used_percentage`` as a whole number, or ``None``.
+
+    Split out because two surfaces need the same answer from two different places: the
+    status line reads it live off the payload, and a frame panel reads it back out of the
+    recorded history (:func:`_last_ctx`) because it never sees a payload at all. Both then
+    hand it to :func:`_ctx_part`, so the two surfaces cannot come to draw the same number
+    with different thresholds or a different label.
+    """
+    pct = ((payload or {}).get("context_window") or {}).get("used_percentage")
+    return int(pct) if isinstance(pct, (int, float)) else None
+
+
+def _ctx_part(pct: int | None) -> str:
+    """``ctx NN%``, coloured by how full the window is — or ``''`` for "not known".
+
+    The thresholds live here rather than at each call site for #413's own reason: the
+    frame's `top` row and Claude Code's footer draw this same number from two different
+    sources, and a green 60% on one surface beside a yellow 60% on the other is the kind
+    of disagreement nobody can debug from what is on screen.
+    """
+    if pct is None:
+        return ""
+    col = _GREEN if pct < 50 else (_YELLOW if pct < 80 else _RED)
+    return f"{_DIM}ctx{_R} {col}{int(pct)}%{_R}"
+
+
+def _cache_part(hit: int | None) -> str:
+    """``cache NN%`` — the share of this turn's input served from cache — or ``''``.
+
+    <50% sustained means the prefix is churning, which is the expensive failure mode.
+    Dim label, coloured number: the exact shape :func:`_ctx_part` uses, so the two session
+    gauges read as a pair rather than as a word and a symbol.
+    """
+    if hit is None:
+        return ""
+    col = _GREEN if hit >= 80 else (_YELLOW if hit >= 50 else _RED)
+    return f"{_DIM}cache{_R} {col}{hit}%{_R}"
+
+
 def _usage_numbers(payload: dict) -> tuple[str, int, int, int] | None:
     """``(session_id, cache_read, cache_write, hit%)`` out of a status-line payload, or
     ``None`` when this turn carries no live numbers.
@@ -327,7 +465,7 @@ def record_usage(payload: dict) -> list[int]:
     if nums is None:
         return []
     sid, read, write, hit = nums
-    return _record_turn(sid, hit, read, write)
+    return _record_turn(sid, hit, read, write, _ctx_percentage(payload))
 
 
 def _context_gauge(payload: dict) -> list[str]:
@@ -349,20 +487,14 @@ def _context_gauge(payload: dict) -> list[str]:
     two bolts apart only by a ``%``. The bolt went to the fact that has two rendering sites and
     needs them to read as one thing; the gauge took a word, which is what its sibling ``ctx``
     already had and what a rate nobody can guess from a symbol always wanted."""
-    cw = (payload or {}).get("context_window") or {}
     out: list[str] = []
-    pct = cw.get("used_percentage")
-    if isinstance(pct, (int, float)):
-        col = _GREEN if pct < 50 else (_YELLOW if pct < 80 else _RED)
-        out.append(f"{_DIM}ctx{_R} {col}{int(pct)}%{_R}")
+    ctx = _ctx_part(_ctx_percentage(payload))
+    if ctx:
+        out.append(ctx)
     nums = _usage_numbers(payload)
     if nums is not None:
         sid, _read, _write, hit = nums
-        # <50% sustained = the prefix is churning; that's the expensive failure mode.
-        col = _GREEN if hit >= 80 else (_YELLOW if hit >= 50 else _RED)
-        # Dim label, coloured number — the exact shape `ctx NN%` above uses, so the two
-        # session gauges read as a pair rather than as a word and a symbol.
-        out.append(f"{_DIM}cache{_R} {col}{hit}%{_R}")
+        out.append(_cache_part(hit))
         try:
             trend = record_usage(payload)
             # Rebuilds are the dominant cost and are invisible in the ratio — surface them
@@ -381,6 +513,54 @@ def _context_gauge(payload: dict) -> list[str]:
         except Exception:
             pass          # diagnostics must never break the footer
     return out
+
+
+def recorded_context_gauge(sid: str) -> list[str]:
+    """The same ``ctx NN%`` / ``cache NN%`` / ``↻N`` gauge, for a reader with no payload.
+
+    **#413, and it exists because a panel is exactly that reader.** `_context_gauge` is
+    gated on a live payload at every branch, and there is one source for that payload —
+    `statusline.main`'s stdin, sent only to the process Claude Code invokes as its
+    `statusLine` command. A frame panel is started once as a long-lived tmux pane command
+    and is never handed it, so inside a frame those two numbers had nowhere to come from
+    and the frame showed nothing at all (its own known limit, recorded in 0.52.0's news).
+
+    This closes it from the other side: everything drawn here comes out of the history
+    `record_usage` already writes, and #413's own change to that file is what makes `ctx`
+    answerable at all (:func:`_record_turn`). *sid* is Claude Code's session id, which a
+    panel gets from `frame.state.harness_session` — the mapping the suppressing
+    `statusline.main` writes, being the one process that sees both ids.
+
+    **``[]`` for anything not actually known**, and that is the rule rather than a
+    fallback: `frame/slots.py`'s `_top` already argues that a gauge silently reading zero
+    is worse than no gauge, and every "unknown" here — no sid, no file, a file with no
+    percentage recorded yet, a session whose turns all predate the fourth field — comes
+    back empty rather than as a confident 0%.
+
+    Never raises: this is drawn by a panel, where an exception is a hole in the frame.
+    """
+    try:
+        if not sid:
+            return []
+        # ONE read, three answers. `_last_ctx`/`_history` each open the file themselves
+        # for callers that have nothing else to do with it; this one draws three fields
+        # off the same history, and a panel repainting is not the place to open the same
+        # file three times.
+        rows = _usage_rows(sid)
+        out: list[str] = []
+        ctx = _ctx_part(_last_ctx_of(rows))
+        if ctx:
+            out.append(ctx)
+        hits = _hits(rows)
+        if hits:
+            out.append(_cache_part(hits[-1]))
+        n, cost = _rebuilds(_pairs(rows))
+        if n:
+            col = _RED if cost >= _REBUILD_LOUD else _YELLOW
+            out.append(f"{col}↻{n} {_fmt_tok(cost)}{_R}")
+        return out
+    except Exception:
+        return []
 
 
 def _stale_structure(ws: str) -> bool:
@@ -2231,6 +2411,88 @@ def a_frame_owns_this_surface() -> bool:
         return False
 
 
+def _usage_stamp(sid: str) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of the usage file, or ``None`` when there is no file (or no
+    session).
+
+    Read on both sides of :func:`record_usage` by :func:`_record_and_wake_the_frame`, and
+    that is the only thing it is for: `_record_turn` writes only when it actually appends
+    a row — a re-render of the same turn returns without touching the file — so a moved
+    stamp IS "a new turn was recorded", asked with one `stat` instead of by re-reading and
+    diffing what was just written.
+
+    **Both fields, because mtime alone is a filesystem's promise rather than a fact.**
+    macOS/APFS keeps nanoseconds, but a filesystem with coarse timestamps (some ext4
+    configurations report whole seconds) can record two genuinely different turns inside
+    one tick, and the panels would then not be woken for the second. The size moves
+    whenever the appended row differs in length from the one it displaced, which covers
+    most of that. What is left — two turns in one coarse tick whose rows are the same
+    length — costs one stale repaint, corrected by the next turn, and never a wrong
+    number: the panel is reading the same file either way.
+    """
+    if not sid:
+        return None
+    try:
+        st = _usage_file(sid).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _record_and_wake_the_frame(payload: dict) -> None:
+    """Record this turn, write the frame-id → Claude-Code-session-id mapping, and wake
+    the frame's panels when either is new.
+
+    **This process is the only one that can write that mapping, and #413 is the whole of
+    that.** The usage history is keyed by Claude Code's session id, which arrives here in
+    the payload; a panel knows only ``$CHARTER_SESSION_ID``, which the frame launcher sets
+    to the FRAME's id. This is the one moment both are in the same process — which is
+    exactly why #386's implementer declined to invent the mapping as a side effect of a
+    bugfix and filed it instead.
+
+    Reached only from the suppressed branch, deliberately. `a_frame_owns_this_surface`
+    has already established that this invocation IS the harness of a live frame of this
+    plane (its own rungs, `$TMUX_PANE` included), so no separate check is made here: a
+    second, weaker one is how the two would come to disagree about what being inside a
+    frame means.
+
+    **The bump is conditional, and that is the difference between a gauge and a lie.** A
+    panel repaints on a version bump and on nothing else, and `record_usage` bumps
+    nothing — so without a bump, `top`'s gauge would sit on whatever it last drew until
+    some unrelated hook happened to fire, which on a turn that calls no tools is never.
+    Bumping unconditionally would be the opposite mistake: Claude Code re-renders this
+    command several times per turn, and each bump repaints every panel in the frame
+    (`slots.ANIMATED`'s own note measures one `render("right")` at 4.8ms).
+
+    **So "did anything change" is asked of the file, not of a cache.** Every invocation is
+    a whole process — an in-process memo would be empty on all of them and would bump
+    every single time, which is the unconditional version wearing a cache. `_record_turn`
+    writes only when it appends, so the usage file's mtime moving across the call is
+    exactly "a new turn"; the recorded session id changing is the other reason, and it
+    matters on its own because the panel is about to read a different session's history.
+
+    Never raises. Everything here is bookkeeping for a gauge; a footer is not worth a
+    crash, and neither is a panel's refresh — a frame that is not woken redraws on the
+    next hook like it always did.
+    """
+    sid = (payload or {}).get("session_id") or ""
+    before = _usage_stamp(sid)
+    try:
+        record_usage(payload)
+    except Exception:
+        pass          # the record is best-effort; a footer is not worth a crash
+    try:
+        fid = os.environ.get("CHARTER_SESSION_ID", "")
+        if not fid or not sid:
+            return
+        from .frame import state as frame_state
+        moved = _usage_stamp(sid) != before
+        if frame_state.record_harness_session(fid, sid) or moved:
+            frame_state.bump(fid)
+    except Exception:
+        return
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="charter statusline", add_help=True)
     ap.add_argument("--watch", action="store_true",
@@ -2259,10 +2521,11 @@ def main(argv=None) -> int:
         # ADR 0019 says this in prose; this comment says it where the deletion would
         # happen. `print()` and not `return 0` alone: Claude Code reads a line from this
         # command, and an empty one is how it is told there is nothing to show.
-        try:
-            record_usage(payload)
-        except Exception:
-            pass          # the record is best-effort; a footer is not worth a crash
+        #
+        # `_record_and_wake_the_frame` is that recording plus #413's own half: this is
+        # also the one process that sees BOTH this frame's id and Claude Code's session
+        # id, so it writes the mapping a panel needs to find these numbers again.
+        _record_and_wake_the_frame(payload)
         print()
         return 0
     # Defense in depth (FINDING M9): `render()` itself is guarded end-to-end, but this

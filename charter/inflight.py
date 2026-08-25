@@ -1,4 +1,4 @@
-"""In-flight dispatch tracking — the signal the completion tally cannot give.
+"""In-flight work tracking — the signal the completion tally cannot give.
 
 ``personas/_dispatch/`` records a dispatch when it **finishes**, so two dispatches
 five minutes apart sequentially are indistinguishable from two that overlapped.
@@ -6,12 +6,30 @@ That makes it useless for the one failure it would be worth catching: two
 code-writing personas editing the same working tree at once, which fails quietly
 — no error, just interleaved edits and whichever commit lands last.
 
-This records a dispatch when it **starts** and clears it when it ends, so overlap
-is actually observable.
+This records work when it **starts** and clears it when it ends, so overlap is
+actually observable.
+
+**Every record carries a KIND, and #420 is why.** #387 promised the frame "a
+spinner while a dispatch, clone or `gl-refresh` runs"; only dispatches animated,
+because :func:`start` had exactly one caller. Wiring the other two in was not a
+one-liner: the SAME records feed the dispatch-overlap nudge through
+:func:`still_running`, and a record named ``clone`` would have made that nudge
+tell an operator *"`x` writes code and `clone` are already running"* — wrong, and
+wrong in the confident, human-readable way that is worse than silence.
+
+So a record says what it is, and every reader says which kinds it means. The
+default everywhere is :data:`DISPATCH`, deliberately: the readers that must not
+see a clone (the nudge, the per-persona chips, the session's own ``⚡ N``) get
+that by NOT asking, so the next kind somebody invents cannot leak into them by
+being forgotten. The frame's spinner is the one caller that opts into "anything
+live" (``kind=None``), which is exactly what it is for.
+
+A record written by a charter that predates the field reads as a
+:data:`DISPATCH`, which is what it was.
 
 Local and ephemeral: it lives under the state dir, is never committed, and holds
-only an agent name and a timestamp — the same discipline as the committed tally,
-which deliberately stores counts and dates, never prompt text.
+only an agent name, a kind and a timestamp — the same discipline as the committed
+tally, which deliberately stores counts and dates, never prompt text.
 
 Everything here is best-effort. A tracker that breaks a turn is worse than one
 that misses an overlap.
@@ -43,9 +61,33 @@ PRESUMED_DEAD_SECONDS = 30 * 60
 PRUNE_SECONDS = 24 * 60 * 60
 
 
+#: A sub-agent handed work by the `Task`/`Agent` tool. What this tracker held for its
+#: whole life before #420, and still what every reader means unless it says otherwise —
+#: including a record written before the field existed (:func:`_kind_of`).
+DISPATCH = "dispatch"
+
+#: One repo being cloned into a workspace (`commands.cmd_clone`, one per repo, so eight
+#: parallel clones read as eight).
+CLONE = "clone"
+
+#: A forge-state refresh (`commands.cmd_gl_refresh`) — the detached child
+#: `glstate.maybe_spawn` starts, not the parent that spawned it.
+REFRESH = "gl-refresh"
+
+
 def _dir() -> Path:
     from . import config
     return config.STATE_DIR / "dispatch-inflight"
+
+
+def _kind_of(rec: dict) -> str:
+    """What kind of work *rec* describes — :data:`DISPATCH` for anything that does not
+    say, which is every record this tracker held before #420 and every one written by an
+    older charter still sitting on disk. A non-string is treated the same way rather than
+    passed through: the value is compared against a caller's filter, and a filter that
+    can never match would silently hide a live record from the nudge that needs it."""
+    kind = rec.get("kind")
+    return kind if isinstance(kind, str) and kind else DISPATCH
 
 
 def _safe_name(agent: str) -> str:
@@ -79,8 +121,19 @@ def stamp() -> int | None:
         return None
 
 
-def live_records(exclude_token: str | None = None) -> list[tuple[str, float, bool]]:
+def live_records(exclude_token: str | None = None, *,
+                 kind: str | None = DISPATCH) -> list[tuple[str, float, bool]]:
     """``(agent, started_at, presumed_dead)`` per record, duplicates preserved.
+
+    *kind* selects which records answer: one of :data:`DISPATCH`/:data:`CLONE`/
+    :data:`REFRESH`, or ``None`` for every kind. **It defaults to `DISPATCH`, and that
+    default is the guard** — see the module docstring. The frame's spinner is the one
+    caller that wants everything; every other reader means dispatches and gets them
+    without having to remember to say so.
+
+    The kind is not in the returned tuple. Nothing that filters also needs to display it,
+    and a fourth element would have to be threaded through `panel._running`'s cache and
+    every test that builds a record by hand for no reader's benefit.
 
     The start time is what separates "two agents are out" from "two agents have been
     out for forty minutes", and only the second is worth interrupting for. It is read
@@ -112,6 +165,8 @@ def live_records(exclude_token: str | None = None) -> list[tuple[str, float, boo
             if exclude_token and p.stem == exclude_token:
                 continue
             rec = json.loads(p.read_text())
+            if kind is not None and _kind_of(rec) != kind:
+                continue
             ts = rec.get("ts")
             started = float(ts) if isinstance(ts, (int, float)) else mtime
             out.append((rec.get("agent") or p.stem, started,
@@ -121,29 +176,42 @@ def live_records(exclude_token: str | None = None) -> list[tuple[str, float, boo
     return out
 
 
-def live(exclude_token: str | None = None) -> list[str]:
+def live(exclude_token: str | None = None, *,
+         kind: str | None = DISPATCH) -> list[str]:
     """Agent names the tracker holds — presumed-dead ones included, since the aggregate
     this feeds counts records and the distinction is drawn per chip.
 
     ``exclude_token`` drops one specific record — the caller's own, so a dispatch
-    never reports itself as a concurrent peer.
+    never reports itself as a concurrent peer. *kind* is :func:`live_records`'.
     """
-    return sorted(name for name, _, _ in live_records(exclude_token))
+    return sorted(name for name, _, _ in live_records(exclude_token, kind=kind))
 
 
-def still_running(exclude_token: str | None = None) -> list[str]:
+def still_running(exclude_token: str | None = None, *,
+                  kind: str | None = DISPATCH) -> list[str]:
     """Agent names charter can still claim are *running* — presumed-dead ones dropped.
 
     For the callers that assert liveness rather than display it. The dispatch nudge says
     a peer "is already running", which stops being true at the presumed-dead threshold;
     keeping the record so a stuck dispatch stays visible must not turn that nudge into a
     nag that outlives the process by a day.
+
+    **Its *kind* default is load-bearing rather than tidy.** This is the function whose
+    output is read back to an operator as a sentence naming each peer, so a `clone`
+    record reaching it produces *"`x` writes code and `clone` are already running"* —
+    the wrong-and-confident failure #420 declined to ship. The nudge asks for nothing,
+    and therefore gets dispatches.
     """
-    return sorted(name for name, _, dead in live_records(exclude_token) if not dead)
+    return sorted(name for name, _, dead in live_records(exclude_token, kind=kind)
+                  if not dead)
 
 
-def start(agent: str) -> str | None:
-    """Mark *agent* as in flight; returns an opaque token, or None on any failure."""
+def start(agent: str, *, kind: str = DISPATCH) -> str | None:
+    """Mark *agent* as in flight; returns an opaque token, or None on any failure.
+
+    *kind* is what a reader filters on — :data:`DISPATCH` unless the caller says
+    otherwise, which keeps every pre-#420 call site meaning exactly what it meant.
+    """
     agent = (agent or "").strip()
     if not agent:
         return None
@@ -156,15 +224,16 @@ def start(agent: str) -> str | None:
         # in the prefix so `finish` can still find its own records.
         fd, path = tempfile.mkstemp(prefix=f"{_safe_name(agent)}.", suffix=".json", dir=d)
         with os.fdopen(fd, "w") as fh:
-            json.dump({"agent": agent, "ts": time.time()}, fh)
+            json.dump({"agent": agent, "kind": kind, "ts": time.time()}, fh)
         return Path(path).stem
     except OSError:
         return None
 
 
-def finish(agent: str) -> None:
-    """Clear one in-flight record for *agent* — the oldest **still-running** one, since a
-    repeat dispatch of the same persona should retire the run that started first.
+def finish(agent: str, *, kind: str = DISPATCH) -> None:
+    """Clear one in-flight record for *agent* of *kind* — the oldest **still-running**
+    one, since a repeat dispatch of the same persona should retire the run that started
+    first.
 
     "Still running" is the qualification records surviving past the presumed-dead
     threshold made necessary. Oldest-first alone would hand a finishing dispatch the
@@ -172,17 +241,38 @@ def finish(agent: str) -> None:
     to keep, and leaving a false live one in its place. Presumed-dead records are still
     eligible when there is nothing else, because a genuinely long dispatch does finish
     eventually and its record has to go when it does.
+
+    **The kind is matched, not merely written.** The file NAME carries only the agent, so
+    a clone of a repo called ``steward`` and a dispatch to a persona called ``steward``
+    glob identically — and whichever finished first would retire the other's record,
+    leaving a false live one behind and clearing a true one. Deciding it by reading each
+    candidate rather than by renaming the files keeps the on-disk shape unchanged in both
+    directions, so a record written by an older charter is still findable and one written
+    by this charter is still findable by an older one.
     """
     agent = (agent or "").strip()
     if not agent:
         return
     try:
         now = time.time()
-        matches = sorted(_dir().glob(f"{_safe_name(agent)}.*.json"),
-                         key=lambda p: p.stat().st_mtime)
+        matches = [p for p in sorted(_dir().glob(f"{_safe_name(agent)}.*.json"),
+                                     key=lambda p: p.stat().st_mtime)
+                   if _matches_kind(p, kind)]
         running = [p for p in matches
                    if now - p.stat().st_mtime <= PRESUMED_DEAD_SECONDS]
         for p in (running or matches)[:1]:
             p.unlink(missing_ok=True)
     except OSError:
         return
+
+
+def _matches_kind(p: Path, kind: str) -> bool:
+    """Is the record at *p* of *kind*? A file that cannot be read or parsed answers
+    **False** — :func:`finish` deletes what this admits, and deleting a record charter
+    could not read is deleting something it cannot claim is the caller's own. The
+    unreadable file is pruned on its own schedule (:data:`PRUNE_SECONDS`, in
+    :func:`live_records`), which is where a stray belongs."""
+    try:
+        return _kind_of(json.loads(p.read_text())) == kind
+    except (OSError, TypeError, ValueError):
+        return False

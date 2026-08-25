@@ -422,8 +422,25 @@ def _clone_one(r: dict, wd) -> dict:
     which is the whole point), `registry.for_repo` builds a fresh backend per call, and
     `gitpolicy.apply` writes only inside this clone's own `.git/config`. Nothing here is
     shared between repos.
+
+    **The network half is recorded as in flight (#420).** #387 promised the frame a
+    spinner while "a dispatch, clone or `gl-refresh`" runs and only dispatches animated,
+    because `inflight.start` had one caller. This is one of the two that were missing. The
+    record is per REPO rather than per command, so eight parallel clones read as eight —
+    `inflight`'s own `mkstemp` naming exists for exactly that concurrency, and this
+    function is already the per-repo, thread-local unit.
+
+    `kind=inflight.CLONE`, which is what keeps the dispatch-overlap nudge out of it: that
+    nudge reads names back to an operator as a sentence, and `inflight.still_running`
+    answers dispatches unless asked otherwise (see that module's docstring).
+
+    Recorded only around the parts that take time — after the destination and the URL are
+    settled, so a refusal never leaves a record, and released in a `finally`, so a `git`
+    that raises does not either. A process KILLED mid-clone still leaves one, and that is
+    the case `PRESUMED_DEAD_SECONDS`/`PRUNE_SECONDS` already exist for: the frame draws
+    such a record statically (`⋯`), never spinning.
     """
-    from . import gitpolicy
+    from . import gitpolicy, inflight
     from .forge import registry
 
     # #325: the destination is a name out of `inventory/repos.json`, a TRACKED file, and
@@ -446,15 +463,19 @@ def _clone_one(r: dict, wd) -> dict:
                 "reason": "its inventory record carries no HTTPS clone URL, and the "
                           "`ssh_url` it does carry is not a form this forge recognises — "
                           "charter will not hand git a string it did not build"}
-    proc = _git([*_cred_flag(forge), "clone", "--branch", r["default_branch"],
-                 "--", url, str(dest)])
-    if proc.returncode != 0:
-        return {"repo": r, "dest": dest, "status": "failed", "forge": forge,
-                "stderr": (proc.stderr or "").strip()}
-    # Golden rule 0: every git op from this clone uses ITS FORGE's token over HTTPS —
-    # credential helper + signing off + SSH→HTTPS rewrites (see charter/gitpolicy.py).
-    gitpolicy.apply(dest)
-    return {"repo": r, "dest": dest, "status": "ok", "forge": forge}
+    inflight.start(dest.name, kind=inflight.CLONE)
+    try:
+        proc = _git([*_cred_flag(forge), "clone", "--branch", r["default_branch"],
+                     "--", url, str(dest)])
+        if proc.returncode != 0:
+            return {"repo": r, "dest": dest, "status": "failed", "forge": forge,
+                    "stderr": (proc.stderr or "").strip()}
+        # Golden rule 0: every git op from this clone uses ITS FORGE's token over HTTPS —
+        # credential helper + signing off + SSH→HTTPS rewrites (see charter/gitpolicy.py).
+        gitpolicy.apply(dest)
+        return {"repo": r, "dest": dest, "status": "ok", "forge": forge}
+    finally:
+        inflight.finish(dest.name, kind=inflight.CLONE)
 
 
 def cmd_save(args) -> int:
@@ -614,7 +635,23 @@ def cmd_gl_refresh(args) -> int:
     if not dirs:
         util.info(f"No repos in workspace '{ws}'.")
         return 0
-    cache = glstate.refresh(dirs)
+    # In flight while the fetch runs (#420) — the second of the two callers #387's
+    # spinner was promised and never got. Recorded HERE, in the process that does the
+    # work, never in the `--detach` branch above: that branch returns immediately, and a
+    # record taken there would clear before the child it started had begun. `glstate
+    # .maybe_spawn` starts that child on the status line's own render path, so an
+    # operator sees the frame move while their forge state is being fetched rather than
+    # wondering why a column changed by itself.
+    #
+    # The WORKSPACE is the agent name, not a repo: one refresh covers every tree in it,
+    # and naming one of them would be a claim about which. `kind=inflight.REFRESH` keeps
+    # it out of the dispatch nudge and the persona chips.
+    from . import inflight
+    inflight.start(ws, kind=inflight.REFRESH)
+    try:
+        cache = glstate.refresh(dirs)
+    finally:
+        inflight.finish(ws, kind=inflight.REFRESH)
     util.ok(f"Refreshed forge state for {len(dirs)} tree(s) in '{ws}'.")
     for d in dirs:
         ent = cache.get(str(d), {})

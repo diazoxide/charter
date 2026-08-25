@@ -200,9 +200,23 @@ not pretend to have made it.
   sees both ids at once, so it is the one place that could write the mapping. That is a
   surface decision with a width budget attached, and it belongs to the release that draws
   it, not to this one.
+
+  **Closed by #413, and closed the way this bullet said it would have to be.** The
+  suppressing `statusline.main` writes the mapping (`frame.state.record_harness_session`),
+  because it remains the one process that sees both ids; `record_usage` grew a fourth
+  field for the context percentage, which is the one figure nothing can re-derive from
+  `read`/`write`; and `slots._top` draws `statusline.recorded_context_gauge` — a sibling
+  of `_context_gauge` composed from the recorded history rather than a live payload, so
+  the two surfaces share their thresholds and their labels. `_context_gauge` itself is
+  still not called from a panel, and every word above about why remains true. What did NOT
+  change is the rule this bullet's own reasoning rested on: every way of not knowing
+  answers empty, because a gauge silently reading zero is worse than no gauge.
 * **codex and opencode get no context gauge either, and for a harder reason: nothing feeds
   them one.** Neither invokes `charter statusline` with a per-turn payload, so there is no
-  usage recorded to draw from at all. Their frames show everything else.
+  usage recorded to draw from at all — which #413 does not change and cannot: it made a
+  recorded history readable by a panel, and there is no history to read for a harness
+  nobody hands the numbers to. Their frames show everything else, and their `top` row
+  simply has no gauge on it.
 * **A human can still ask.** `charter statusline` at a terminal, and `charter statusline
   --watch`, render exactly as before, frame or no frame.
 * **Nothing outside a frame changes.** No renderer was modified, no test of `render`

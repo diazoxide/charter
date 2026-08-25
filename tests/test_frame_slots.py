@@ -14,12 +14,13 @@ environment. `Width` below pins that a panel lays out against its own tty instea
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import unittest
 from unittest import mock
 
-from charter import config, statusline, tui
+from charter import config, instance, statusline, tui
 from charter.frame import gather, slots, state
 
 from tests._isolation import PersonaIso
@@ -128,23 +129,33 @@ class Unimplemented(unittest.TestCase):
     splitting a pane that would be permanently dead under `remain-on-exit on`),
     `frame_ready` (`--probe`) and `doctor.check_frame`."""
 
-    def test_all_four_slots_now_have_a_renderer(self):
-        """Task 3 landed `left`/`right` beside `top`/`bottom`: every slot
-        `instance.FRAME_SLOTS` accepts now has a renderer, so a fully-configured
-        frame names nothing missing."""
-        self.assertEqual(slots.unimplemented(["top", "left", "bottom", "right"]), [])
+    def test_every_slot_charter_accepts_has_a_renderer(self):
+        """The two registries have to agree: a slot `instance.FRAME_SLOTS` accepts and
+        `slots.SLOTS` cannot draw is a pane charter splits and then leaves permanently
+        dead. Asked of `FRAME_SLOTS` itself rather than a hand-written list, so retiring
+        a slot from one registry and not the other (#488 retired `left` from both) is red
+        rather than a frame with a hole in it."""
+        self.assertEqual(slots.unimplemented(list(instance.FRAME_SLOTS)), [])
+
+    def test_the_retired_sidebar_is_gone_from_the_registry_too(self):
+        """#488. `left` is not a slot charter accepts any more, so it cannot reach here
+        from config — but a preset or a hand-typed `charter panel left` still could, and
+        this is the answer they get: named as unimplemented, which is what makes
+        `_drawable_slots` skip it and `--probe`/`doctor` say so."""
+        self.assertNotIn("left", slots.SLOTS)
+        self.assertEqual(slots.unimplemented(["top", "left"]), ["left"])
 
     def test_an_all_implemented_configuration_names_nothing(self):
         self.assertEqual(slots.unimplemented(["top", "bottom"]), [])
 
-    def test_the_answer_comes_from_the_registry_not_a_hardcoded_pair(self):
-        """`left`/`right` having renderers today is not the rule this function follows
-        — the registry is. Proved here from the other direction now that both are
-        implemented: temporarily REMOVE one from the registry and the answer must
-        follow, exactly as it would the day a real slot's renderer regresses."""
+    def test_the_answer_comes_from_the_registry_not_a_hardcoded_name(self):
+        """Which slots have renderers TODAY is not the rule this function follows — the
+        registry is. Proved from the other direction: temporarily REMOVE one from the
+        registry and the answer must follow, exactly as it would the day a real slot's
+        renderer regresses."""
         with mock.patch.dict(slots.SLOTS):
             del slots.SLOTS["right"]
-            self.assertEqual(slots.unimplemented(["top", "left", "right"]), ["right"])
+            self.assertEqual(slots.unimplemented(["top", "right"]), ["right"])
 
 
 class Width(unittest.TestCase):
@@ -219,7 +230,14 @@ class TopRenderer(PersonaIso, unittest.TestCase):
     argument. These tests pin that finding as a regression rather than a one-time
     observation: a future edit that wires either call back into `_top` "because it
     compiles" must turn one of these red, since the call would return `[]` forever and
-    add nothing but a docstring gone stale."""
+    add nothing but a docstring gone stale.
+
+    **#413 gave `top` a gauge anyway, and none of that changed.** What changed is that a
+    panel now has a FILE to read (`statusline.recorded_context_gauge`), so the gauge is
+    composed from the recorded history rather than from a payload nobody hands it. The two
+    "never called" tests below are exactly as load-bearing as before: reaching for the
+    payload-gated helpers would still return `[]` forever, and now it would do it beside a
+    working gauge, which is harder to notice rather than easier."""
 
     def test_the_context_gauge_is_never_called_by_top(self):
         with mock.patch("charter.statusline._context_gauge") as gauge:
@@ -232,12 +250,128 @@ class TopRenderer(PersonaIso, unittest.TestCase):
         strip.assert_not_called()
 
     def test_context_gauge_confirmed_empty_with_no_payload_the_premise_top_relies_on(self):
-        """The load-bearing fact behind leaving the gauge out: with no live per-turn
-        payload — exactly what a panel process always has — `_context_gauge` produces
-        nothing, not a misleading zero. `tests/test_statusline_gauge.py` already pins
-        this generically (`test_silent_before_first_api_call`); repeated here because
+        """The load-bearing fact behind not reaching for the payload-gated helper: with no
+        live per-turn payload — exactly what a panel process always has — `_context_gauge`
+        produces nothing, not a misleading zero. `tests/test_statusline_gauge.py` already
+        pins this generically (`test_silent_before_first_api_call`); repeated here because
         it is the premise `_top`'s design decision rests on."""
         self.assertEqual(statusline._context_gauge(None), [])
+
+
+class TopDrawsTheRecordedGauge(PersonaIso, unittest.TestCase):
+    """#413: `ctx NN%` / `cache NN%` on `top`, out of the history the suppressed status
+    line records — the one capability a framed Claude Code session lost to #386 and the
+    thing 0.52.0's own news entry named as "genuinely lost".
+
+    Every test renders through the real `slots.render("top", …)`, because what #413
+    promises is that a PANEL shows this. And every "does not know" case is asserted to
+    draw NOTHING rather than a zero: that rule (`_top`'s own docstring, and the task
+    brief's) is what the whole design is built around, so it is pinned case by case
+    rather than once.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.fid = "gauge-frame"
+        self.sid = "cc-session-1"
+
+    def _usage(self, *rows: str) -> None:
+        f = statusline._usage_file(self.sid)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("\n".join(rows) + "\n")
+
+    def _render(self) -> str:
+        with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((200, 3))):
+            return tui.strip_ansi(slots.render("top", self.fid))
+
+    def test_a_recorded_session_puts_the_gauge_on_the_row(self):
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        out = self._render()
+        self.assertIn("ctx 42%", out)
+        self.assertIn("cache 90%", out)
+
+    def test_the_workspace_and_the_persona_are_not_pushed_off_by_it(self):
+        """The gauge JOINS `top`'s identity row; it does not replace it. `top` answers
+        "where am I and who am I being" first, and a session number that evicted either
+        would leave the row not earning its line."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        self.assertIn("⬢", self._render())
+
+    def test_a_frame_with_no_recorded_session_draws_no_gauge(self):
+        """Every frame whose harness is not Claude Code, and every frame launched by a
+        charter that predates the mapping. Nothing is handed a usage payload there, so
+        there is nothing to draw — and `ctx 0%` would be a claim about a session charter
+        has never seen a single number from."""
+        self._usage("900,100,90,42")
+        out = self._render()
+        self.assertNotIn("ctx", out)
+        self.assertNotIn("cache", out)
+
+    def test_a_recorded_session_with_no_turns_yet_draws_no_gauge(self):
+        """Early in a session, and right after `/compact`: the mapping is written on the
+        first render, the numbers only once the API has answered."""
+        state.record_harness_session(self.fid, self.sid)
+        out = self._render()
+        self.assertNotIn("ctx", out)
+        self.assertNotIn("cache", out)
+
+    def test_a_history_written_before_the_ctx_field_existed_draws_no_ctx(self):
+        """An upgrade mid-session is the ordinary case: three-field rows are what every
+        charter before #413 wrote. The cache half is still fully derivable from them and
+        is drawn; the context percentage was never recorded and is not guessed at."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90")
+        out = self._render()
+        self.assertNotIn("ctx", out)
+        self.assertIn("cache 90%", out)
+
+    def test_a_turn_recorded_without_a_percentage_falls_back_to_the_last_one_seen(self):
+        """A turn early in a session carries usage but no percentage, so its ctx field is
+        empty. Blanking a gauge that was correct one turn ago is worse than showing the
+        most recent figure charter actually saw — and the ring buffer is only
+        `_TREND_KEEP` turns deep, so it cannot drift far."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("800,200,80,37", "900,100,90,")
+        self.assertIn("ctx 37%", self._render())
+
+    def test_the_gauge_survives_a_terse_density(self):
+        """`terse` buys back columns by dropping the charter version — a standing fact
+        about the install. The gauge is the opposite: the one field on this row that is
+        different every turn."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        state.record_density(self.fid, "minimal")
+        self.assertIn("ctx 42%", self._render())
+
+    def test_it_reads_the_session_the_frame_recorded_and_not_some_other(self):
+        """The mapping is the whole mechanism, so this pins that it is actually followed
+        rather than the panel finding a usage file some other way: two sessions with
+        different numbers on disk, and the row must show the one this frame is mapped
+        to."""
+        other = statusline._usage_file("cc-session-2")
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text("100,900,10,99\n")
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        out = self._render()
+        self.assertIn("ctx 42%", out)
+        self.assertNotIn("99%", out)
+
+    def test_a_new_frame_claiming_a_recycled_pid_does_not_inherit_the_gauge(self):
+        """#383's recycled-pid adoption, applied to the sharpest of the three files it
+        clears. A frame id is `<workspace>-<launcher pid>`, and a launcher landing on a
+        pid an earlier launcher used adopts that frame's whole directory — so without
+        `clear_shape` taking `session` with it, a brand-new session's `top` row would
+        draw the PREVIOUS session's `ctx 42%` as its own, confidently, and forever: the
+        session that would correct it is over."""
+        state.record_harness_session(self.fid, self.sid)
+        self._usage("900,100,90,42")
+        state.clear_shape(self.fid)
+        self.assertNotIn("ctx", self._render())
         self.assertEqual(statusline._context_gauge({}), [])
 
 
@@ -394,232 +528,507 @@ class FitFields(unittest.TestCase):
                          {"alert", "news"})
 
 
-class LeftRenderer(PersonaIso, unittest.TestCase):
-    """`left`: repo rows composed narrow straight from `gather`'s cache — never a
-    `git` call, never `glstate`, never `_repo_rows`' `tui.Node`s (built for a wide
-    boxed frame; `_NAME_W`=32 alone exceeds this whole pane)."""
+class BottomTable(PersonaIso, unittest.TestCase):
+    """#488: the repo table `bottom` draws under its attention row.
+
+    The rows are `statusline.py`'s OWN wide table — same four columns, same declared
+    widths, same markers and CI glyphs — composed straight from `gather`'s cache: never a
+    `git` call, never `glstate`, and never a repo directory (see `_table_row`'s docstring
+    for the one column that costs a filesystem walk per row and is therefore absent).
+
+    Every test here renders through the real `slots.render("bottom", …)` rather than
+    calling `_table_lines` directly, because what #488 actually promises is that a
+    PANEL shows this — a helper returning perfect rows that `_bottom` never asks for
+    would satisfy a unit test of the helper and none of the promise.
+    """
+
+    def _render(self, fid="f-1", *, cols=200, rows=24) -> str:
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, rows))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return slots.render("bottom", fid)
 
     def test_lists_a_repo_from_the_cache(self):
         _seed("f-1", repos=[_row("demo")])
-        self.assertIn("demo", slots.render("left", "f-1"))
+        self.assertIn("demo", self._render())
 
-    def test_degrades_to_a_readable_line_with_an_empty_cache(self):
+    def test_the_attention_row_is_still_the_first_line(self):
+        """#488's non-negotiable: the table JOINS the alert, the news, the todo count and
+        the plane-root warning — it does not evict them. Asserted as line 0 specifically,
+        because a table drawn above the row it is meant to sit under would still contain
+        both strings and satisfy a membership check."""
+        _seed("f-1", repos=[_row("demo")])
+        out = self._render()
+        self.assertIn("todo", tui.strip_ansi(out.split("\n")[0]))
+        self.assertIn("demo", out)
+
+    def test_a_plane_with_no_repos_is_the_one_row_strip_it_always_was(self):
+        """The floor `layout.bottom_rows` keeps, seen from the renderer's side. The
+        reported "always empty sidebar" of #488 was this case being told the truth —
+        a workspace with 0 clones — so it must stay honest rather than grow furniture."""
         _seed("f-1")
-        out = slots.render("left", "f-1")
-        self.assertTrue(out.strip())
-        self.assertIn("no repos", tui.strip_ansi(out))
+        self.assertEqual(len(self._render().split("\n")), 1)
 
     def test_a_dirty_repo_shows_the_dirty_marker(self):
         _seed("f-1", repos=[_row("demo", dirty=True)])
-        self.assertIn("*", tui.strip_ansi(slots.render("left", "f-1")))
+        self.assertIn("*", tui.strip_ansi(self._render()))
 
     def test_a_clean_repo_shows_no_dirty_marker(self):
         _seed("f-1", repos=[_row("demo", dirty=False)])
-        self.assertNotIn("*", tui.strip_ansi(slots.render("left", "f-1")))
+        self.assertNotIn("*", tui.strip_ansi(self._render()))
 
     def test_an_open_change_shows_its_sigil_and_number(self):
         _seed("f-1", repos=[_row("demo", change=42, sigil="!")])
-        self.assertIn("!42", tui.strip_ansi(slots.render("left", "f-1")))
+        self.assertIn("!42", tui.strip_ansi(self._render()))
 
     def test_a_failing_ci_status_shows_its_glyph(self):
         _seed("f-1", repos=[_row("demo", ci="failed")])
-        self.assertIn("✗", tui.strip_ansi(slots.render("left", "f-1")))
+        self.assertIn("✗", tui.strip_ansi(self._render()))
+
+    def test_the_wide_tables_own_ci_label_survives_now_there_is_room_for_it(self):
+        """The gain #488 is actually for. `left` had 22 columns and could show only the
+        glyph; the wide table has `_CI_W` and shows `✗ failed` — the same
+        `statusline._ci_part` the status line calls, which is why this reads identically
+        in both surfaces. A frame drawing the glyph alone would still pass the test above
+        and would still be the downgrade the issue is about."""
+        _seed("f-1", repos=[_row("demo", ci="failed")])
+        self.assertIn("failed", tui.strip_ansi(self._render()))
+
+    def test_the_branch_gets_the_wide_tables_own_column_not_a_22_column_squeeze(self):
+        """`left`'s own docstring conceded it could not do this: `_NAME_W` (32) and
+        `_BRANCH_W` (34) alone exceed a 22-column pane, so a real branch name was always
+        elided. This is the reviewer's own repro fixture from #385's fix round 1, which
+        rendered as `charter worktree-reca…` there and must render whole here."""
+        _seed("f-1", repos=[_row("charter", branch="worktree-recall-since",
+                                 dirty=True, ahead=1, ci="failed")])
+        out = tui.strip_ansi(self._render())
+        self.assertIn("worktree-recall-since", out)
+        self.assertIn("*", out, "the dirty marker must survive")
+        self.assertIn("✗", out, "the CI glyph must survive")
 
     def test_a_piece_from_the_worktrees_cache_field_is_shown(self):
         _seed("f-1", repos=[_row("demo")],
-             worktrees=[_row("piece-one", repo="demo")])
-        self.assertIn("piece-one", tui.strip_ansi(slots.render("left", "f-1")))
+              worktrees=[_row("piece-one", repo="demo")])
+        self.assertIn("piece-one", tui.strip_ansi(self._render()))
+
+    def test_a_pieces_branch_column_is_emptied_when_it_restates_its_own_name(self):
+        """`charter worktree add <repo> <piece>` names the branch after the piece, so by
+        default those two columns print the same word twice — `statusline._repo_rows`
+        empties the branch cell when they agree, and this table does the same rather than
+        spending 34 columns restating the name beside it. The markers still render: dirty
+        is true of the tree whatever its branch is called."""
+        _seed("f-1", repos=[_row("demo", worktree_count=1)],
+              worktrees=[_row("same-name", repo="demo", branch="same-name",
+                              dirty=True)])
+        piece = tui.strip_ansi(self._render().split("\n")[-1])
+        self.assertEqual(piece.count("same-name"), 1, piece)
+        self.assertIn("*", piece, "the dirty marker survives an emptied branch cell")
 
     def test_a_multi_repo_workspaces_piece_count_shows_as_a_badge(self):
-        """Fix round 1, finding 2: `worktree_count` did not exist in the cache at
-        all for a multi-repo workspace before this round — `data["worktrees"]`
-        is `[]` here (as it always is with two repos; `gather._detail_worktrees`'
-        own single-repo rule), so the badge is the ONLY way either repo's pieces
-        are visible at all."""
+        """`data["worktrees"]` is `[]` here (as it always is with two repos —
+        `gather._detail_worktrees`' own single-repo rule), so the badge is the ONLY way
+        either repo's pieces are visible at all."""
         _seed("f-1", repos=[_row("demo", worktree_count=3),
                             _row("second", worktree_count=0)],
-             worktrees=[])
-        out = tui.strip_ansi(slots.render("left", "f-1"))
-        self.assertIn("⑂3", out)
+              worktrees=[])
+        self.assertIn("⑂3", tui.strip_ansi(self._render()))
 
     def test_a_repo_whose_pieces_are_all_shown_as_rows_carries_no_badge(self):
-        """The single-repo case: every piece already has its own row
-        (`data["worktrees"]`), so the badge — "there is more you cannot see" —
-        would be actively misleading if it appeared anyway."""
+        """The single-repo case: every piece already has its own row, so the badge —
+        "there is more you cannot see" — would be actively misleading if it appeared."""
         _seed("f-1", repos=[_row("demo", worktree_count=1)],
-             worktrees=[_row("piece-one", repo="demo")])
-        out = tui.strip_ansi(slots.render("left", "f-1"))
-        self.assertNotIn("⑂", out)
+              worktrees=[_row("piece-one", repo="demo")])
+        self.assertNotIn("⑂", tui.strip_ansi(self._render()))
 
     def test_picks_the_dirty_repo_over_clean_ones_when_over_budget(self):
-        """`_pick_rows` is CALLED here, not reinvented — the same ranking
-        `statusline.py`'s own regression (an unranked slice of 18 clones showed
-        thirteen clean repos and hid the one dirty one) was filed against. A plain
-        `dirs[:budget]` slice would keep `clean-0..clean-N` (they sort first) and
-        drop `zzz-dirty` off the end."""
+        """`statusline._pick_rows` is CALLED here, not reinvented — the same ranking
+        `statusline.py`'s own production regression (an unranked slice of 18 clones
+        showed thirteen clean repos and hid the one dirty one) was filed against."""
         clean = [_row(f"clean-{i}") for i in range(statusline._MAX_REPO_LINES)]
         dirty = _row("zzz-dirty-one-past-the-cap", dirty=True)
         _seed("f-1", repos=clean + [dirty])
-        self.assertIn("zzz-dirty-one-past-the-cap",
-                      tui.strip_ansi(slots.render("left", "f-1")))
+        self.assertIn("zzz-dirty-one-past-the-cap", tui.strip_ansi(self._render()))
 
     def test_the_overflow_note_matches_the_wide_tables_own_wording(self):
-        """Fix round 1, finding 3: this line used to say `", clean"` where
-        `_repo_rows`' own overflow line (`statusline.py`) says `", all clean"` —
-        the same claim, worded two different ways on the two surfaces."""
+        """One claim, one wording. `_repo_rows`' own overflow line says `, all clean`,
+        and a second surface saying `, clean` for the same claim is a divergence a reader
+        has to reconcile."""
         clean = [_row(f"clean-{i}") for i in range(statusline._MAX_REPO_LINES + 1)]
         _seed("f-1", repos=clean)
-        out = tui.strip_ansi(slots.render("left", "f-1"))
+        out = tui.strip_ansi(self._render(rows=8))
         self.assertIn(", all clean)", out)
         self.assertNotIn("more, clean)", out)
 
-    def test_never_exceeds_the_pane_width(self):
+    def test_the_overflow_note_refuses_to_say_all_clean_when_it_is_hiding_trouble(self):
+        """The half that matters. `_needs_attention` is what stands between the operator
+        and a panel that hides a failing pipeline behind the words "all clean" — the
+        false-clean reading this whole surface is built to avoid.
+
+        MORE repos need attention than the pane has rows, so `_pick_rows` ranking them
+        all to the front cannot empty the hidden set of them: two rows of table for five
+        failing repos means at least three failing ones are hidden, whatever the ranking
+        does. A single one would be ranked in and the note would then be telling the
+        truth — which is why the sibling test above asserts the `, all clean` wording and
+        this one asserts its absence."""
+        rows = [_row(f"failing-{i}", ci="failed") for i in range(5)]
+        rows += [_row(f"clean-{i}") for i in range(5)]
+        _seed("f-1", repos=rows)
+        out = tui.strip_ansi(self._render(rows=4))
+        self.assertIn("more)", out)
+        self.assertNotIn("all clean", out)
+
+    def test_a_one_row_budget_spends_it_on_saying_how_much_is_hidden(self):
+        """The narrowest overflow case, and a false-clean one until it was closed. The
+        note used to be appended on top of the budget and trimmed off at the end, so a
+        pane with room for exactly one table row showed one repo — clean, on main — and
+        nothing saying the other nine existed. A pane claiming one clean repo IS the plane
+        is the reading this module refuses everywhere else, so the row is spent on the
+        note instead: "there is more here than fits" outranks an arbitrary one of them."""
+        rows = [_row(f"repo{i}") for i in range(10)]
+        rows[3] = _row("the-dirty-one", dirty=True)
+        _seed("f-1", repos=rows)
+        # Split BEFORE stripping: `tui.strip_ansi` runs `tui.sanitize`, which replaces a
+        # newline like any other control character, so stripping the whole render first
+        # would fold every row onto one line and make a line-count assertion meaningless.
+        lines = [tui.strip_ansi(ln) for ln in self._render(rows=2).split("\n")]
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn("+10 more", lines[1])
+        self.assertNotIn("all clean", lines[1],
+                         "it is hiding a dirty repo and must not claim otherwise")
+
+    def test_the_table_is_bounded_by_the_panes_own_measured_height(self):
+        """The renderer must spend the pane it HAS, not the one the launcher intended:
+        a resize changes the pane under a running panel and nothing bumps the frame's
+        version for it. Asserted at two heights against the same cache, so a renderer
+        ignoring the measurement and emitting everything is red at the short one."""
+        _seed("f-1", repos=[_row(f"repo{i}") for i in range(10)])
+        self.assertEqual(len(self._render(rows=6).split("\n")), 6)
+        self.assertEqual(len(self._render(rows=20).split("\n")), 1 + 10)
+
+    def test_the_height_the_launcher_asks_for_is_the_height_the_renderer_fills(self):
+        """The seam #488 turns on, over every input that changes either side's answer.
+
+        `slots.bottom_rows_wanted` is what tells `layout.slot_sizes` how tall to split the
+        pane; `_bottom` is what fills it. If the two disagreed, every frame would come up
+        either padded with blank rows the harness could have had, or with a table cut off
+        and nothing saying so — and neither is visible from either side alone.
+
+        **The PROPERTY is "the pane the launcher asks for is the pane the panel fills",
+        not "the row count matches".** #488 shipped a sizer that read the repo count and
+        a renderer that also read the WIDTH (no table below `statusline._LEFT_W`) and the
+        DENSITY (`_TERSE_ROWS` at `terse`), so the seam held only at the one shape the
+        original test used — wide, `normal`. Every input either side consults is varied
+        here: repo count across the cap, width across `_LEFT_W` and down to the smallest
+        `layout.visible_slots` still draws `bottom` at, and every level in
+        `instance.FRAME_DENSITY`. The next input to appear — a fourth density, a
+        `bottom`-specific `min-cols` — has to be added to this loop, and until it is, its
+        own dimension is unpinned rather than silently wrong.
+
+        Rendered into a pane of EXACTLY the height the sizer asked for, at EXACTLY the
+        width the sizer was asked about, and counted.
+        """
+        for level in (None, *sorted(instance.FRAME_DENSITY)):
+            for n in (0, 1, 4, 9, statusline._MAX_REPO_LINES + 3):
+                for cols in (50, 80, statusline._LEFT_W - 1, statusline._LEFT_W, 200):
+                    with self.subTest(density=level, repos=n, cols=cols):
+                        fid = f"wanted-{level}-{n}-{cols}"
+                        _seed(fid, repos=[_row(f"repo{i}") for i in range(n)])
+                        if level is not None:
+                            state.record_density(fid, level)
+                        want = slots.bottom_rows_wanted(fid, pane_cols=cols)
+                        out = self._render(fid, cols=cols, rows=want)
+                        self.assertEqual(len(out.split("\n")), want, out)
+
+    def test_a_frame_too_narrow_for_the_table_is_sized_for_the_row_it_can_draw(self):
+        """The width half of the seam, stated as the number the LAUNCHER hands tmux.
+
+        `[frame] min-cols` (100) gates `right` and `top`; `layout.visible_slots` keeps
+        `bottom` down to `min_cols // 2`, so an 80-column terminal draws the attention row
+        and no table at all. Sized from the repo count alone it was given a pane for the
+        table anyway — six repos meant a seven-row pane holding one line, and the other
+        six rows came off the harness.
+
+        Asserted against a repo count large enough that the two answers cannot coincide,
+        and at `_LEFT_W` itself so the boundary is pinned from both sides rather than
+        only from the narrow one."""
+        _seed("narrow", repos=[_row(f"repo{i}") for i in range(6)])
+        for cols in (50, 80, statusline._LEFT_W - 1):
+            with self.subTest(cols=cols):
+                self.assertEqual(slots.bottom_rows_wanted("narrow", pane_cols=cols), 1)
+        self.assertEqual(slots.bottom_rows_wanted("narrow",
+                                                  pane_cols=statusline._LEFT_W), 1 + 6)
+
+    def test_a_terse_density_asks_for_a_shorter_pane_not_a_blanker_one(self):
+        """`minimal` exists to give the harness its rows back — `instance.FRAME_DENSITY`
+        says so in as many words. It shipped costing the harness exactly what `normal`
+        cost and drawing less in it: the renderer capped the TABLE at `_TERSE_ROWS`, the
+        sizer never read the density at all, so ten repos meant an eleven-row pane with
+        five lines in it and six blank.
+
+        Both levels asked for the same frame and the same width, so the only difference
+        between the two numbers is the one the level is for."""
+        _seed("dense", repos=[_row(f"repo{i}") for i in range(10)])
+        state.record_density("dense", "normal")
+        wide = slots.bottom_rows_wanted("dense", pane_cols=200)
+        state.record_density("dense", "minimal")
+        terse = slots.bottom_rows_wanted("dense", pane_cols=200)
+        self.assertEqual(wide, 1 + 10)
+        self.assertEqual(terse, 1 + slots._TERSE_ROWS)
+        self.assertLess(terse, wide)
+
+    def test_a_pane_too_narrow_for_the_table_draws_no_table_rather_than_a_cut_one(self):
+        """Every column after the branch sits at a fixed offset past
+        `_NAME_W + _BRANCH_W`, so a narrow pane loses the CI glyph and the open change
+        off the right-hand end — and a dirty, CI-failing repo then renders as a clean
+        `charter  main`. Refusing to draw says "no room to say"; a trimmed row says
+        "nothing to say", which is the false-clean failure the plan's Global Constraints
+        name. The attention row is unaffected — it budgets its own fields."""
+        _seed("f-1", repos=[_row("demo", dirty=True, ci="failed")])
+        out = self._render(cols=statusline._LEFT_W - 1)
+        self.assertEqual(len(out.split("\n")), 1, out)
+        self.assertIn("todo", tui.strip_ansi(out))
+        # ...and one column wider, it draws.
+        self.assertIn("demo", self._render(cols=statusline._LEFT_W))
+
+    def test_no_line_ever_exceeds_the_panes_width(self):
         _seed("f-1", repos=[_row("a-repo-with-quite-a-long-descriptive-name",
-                                change=999999, ci="failed", ahead=12, behind=34)])
-        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 24))), \
-             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            out = slots.render("left", "f-1")
-        for line in out.splitlines():
+                                 branch="a-very-long-branch-name-that-keeps-going",
+                                 change=999999, ci="failed", ahead=12, behind=34)],
+              worktrees=[])
+        for cols in (statusline._LEFT_W, 120, 200):
+            out = self._render(cols=cols)
+            for line in out.split("\n"):
+                with self.subTest(cols=cols, line=line):
+                    self.assertLessEqual(tui.width(line), cols)
+
+    def test_a_cjk_heavy_repo_name_does_not_push_the_table_past_the_pane(self):
+        """`tui.Cell` pads and truncates in display CELLS, not characters — a name of 30
+        CJK characters is 60 cells and would blow a 37-column name column out by 23 if
+        anything here counted characters."""
+        cjk = "測" * 30
+        _seed("f-1", repos=[_row(cjk, dirty=True, ci="failed")])
+        out = self._render(cols=statusline._LEFT_W)
+        for line in out.split("\n"):
             with self.subTest(line=line):
-                self.assertLessEqual(tui.width(line), 22)
+                self.assertLessEqual(tui.width(line), statusline._LEFT_W)
+        self.assertIn("✗", tui.strip_ansi(out), "the CI cell keeps its own column")
 
-    def test_never_exceeds_the_pane_width_even_when_narrower_than_the_markers(self):
-        """`_row`'s own per-field budgeting can still ask for more than a truly
-        tiny pane has (each field's floor is `max(1, ...)`, and those floors can
-        sum past `width` once the pane is narrower than the markers themselves)
-        — `_row`'s trailing `tui.truncate(line, width)` is the backstop for
-        exactly that. Confirmed load-bearing by mutation: dropping it lets a
-        5-repo-state line overflow a 3-column pane to 8 display cells."""
-        _seed("f-1", repos=[_row("abcdef", dirty=True, ahead=3, behind=2,
-                                ci="failed", change=5, sigil="!")])
-        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((3, 24))), \
-             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            out = slots.render("left", "f-1")
-        for line in out.splitlines():
-            with self.subTest(line=line):
-                self.assertLessEqual(tui.width(line), 3)
+    def test_it_never_reaches_the_wide_tables_own_filesystem_walking_composer(self):
+        """#387 pinned a panel's idle tick at exactly one `stat`, and `bottom` is the ONE
+        animated slot — at `panel.TICK` a table that walked a directory per row would pay
+        that back fourteen times over, five times a second, for the length of every
+        dispatch.
 
-    def test_a_realistic_long_branch_does_not_crowd_out_the_dirty_marker_or_ci_glyph(self):
-        """Fix round 1, finding 1: a single `tui.truncate` over the whole assembled
-        line cut from the right, and this project's own branches
-        (`worktree-recall-since`, `browser-session-scope`, `global-shim-refresh`:
-        21-28 characters, the norm here) are long enough that `name + " " +
-        branch` alone fills a 22-column pane before the dirty marker, the CI
-        glyph or an open change is ever reached — a FALSE CLEAN reading on a
-        dirty, CI-failing, unpushed repo. `test_a_dirty_repo_shows_the_dirty_marker`
-        and `test_a_failing_ci_status_shows_its_glyph` above use `branch="main"`
-        (no truncation pressure) and would not have caught this; this fixture
-        matches the reviewer's own repro exactly."""
-        _seed("f-1", repos=[_row("charter", branch="worktree-recall-since",
-                                dirty=True, ahead=1, ci="failed")])
-        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 24))), \
-             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            out = tui.strip_ansi(slots.render("left", "f-1"))
-        self.assertIn("*", out, "the dirty marker must survive truncation")
-        self.assertIn("✗", out, "the CI glyph must survive truncation")
+        `statusline._tree_cells` is the composer this table deliberately does NOT call:
+        it ends in `_presence_for_dir`, a `worktree.locate`/`workspace.clone_of` pair,
+        per row. `worktree.dirs_for` is the other one — `_repo_rows` calls it per repo
+        for its `⑂N` badge, and the frame reads `worktree_count` out of the cache
+        instead. All three are made to raise, so a call is a loud failure rather than a
+        slow success.
 
-    def test_a_long_branch_with_a_change_still_surfaces_marker_ci_and_change(self):
-        """The three-field version of the test above, at the ACTUAL production
-        pane width (`layout.SLOT_SIZE["left"] == 22`) — pins that reserving room
-        for CI does not itself starve a trailing open change (`_row`'s priority
-        order includes it last), the case a narrower, artificial width would
-        have to invent rather than measure."""
-        _seed("f-1", repos=[_row("charter", branch="worktree-recall-since",
-                                dirty=True, ahead=1, ci="failed",
-                                change=12, sigil="!")])
-        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((22, 24))), \
-             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            line = slots.render("left", "f-1").splitlines()[0]
-        out = tui.strip_ansi(line)
-        self.assertLessEqual(tui.width(line), 22)
-        self.assertIn("*", out, "the dirty marker must survive")
-        self.assertIn("✗", out, "the CI glyph must survive")
-        self.assertIn("!12", out, "the open change must survive")
+        Scoped to the three helpers rather than to "any filesystem call": `_bottom`'s
+        attention row legitimately resolves the workspace (which reaches
+        `worktree.locate` on its own), and the sibling test below is what bounds the
+        table's own syscalls."""
+        _seed("f-1", repos=[_row("demo", dirty=True, ci="failed", change=3, sigil="!",
+                                 worktree_count=2)],
+              worktrees=[_row("piece", repo="demo")])
+        boom = AssertionError("the table used the wide table's own row composer")
+        with mock.patch("charter.statusline._tree_cells", side_effect=boom), \
+             mock.patch("charter.statusline._presence_for_dir", side_effect=boom), \
+             mock.patch("charter.worktree.dirs_for", side_effect=boom):
+            out = tui.strip_ansi(self._render())
+        self.assertIn("demo", out)
+        self.assertIn("piece", out)
+        self.assertIn("⑂2", out, "the badge came from the cache, not a directory walk")
 
-    def test_a_cjk_heavy_repo_name_still_fits_a_narrow_pane(self):
-        """Fix round 2, finding 1: pins the width invariant end-to-end through
-        `_left`/`_repo_line` for a real CJK repo name — it does NOT by itself
-        pin that `_row`'s name truncation is cell-aware rather than
-        char-aware. A repo's `name_markup` carries an ANSI colour prefix
-        (`_PALETTE`), and naive `name_markup[:name_w]` character-slicing
-        spends several of the budgeted characters on the escape bytes rather
-        than the CJK text — which happens to *under*-consume the intended
-        cell budget for this fixture, so this test stays green under that
-        mutation (verified: reverting `_row`'s `tui.truncate(name_markup,
-        name_w)` to `name_markup[:name_w]` does not red this test, with or
-        without the trailing safety-net truncate). `_piece_line`'s CJK test
-        below is the one that actually pins cell-awareness — a piece name
-        carries no ANSI prefix to accidentally absorb the mistake."""
-        cjk = "測" * 30  # 30 characters, 60 display cells
-        _seed("f-1", repos=[_row(cjk)])
-        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((20, 24))), \
-             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            out = slots.render("left", "f-1")
-        for line in out.splitlines():
-            self.assertLessEqual(tui.width(line), 20)
+    def test_composing_the_table_opens_no_file_and_starts_no_process(self):
+        """The syscall half of the same property, counted rather than timed (a wall-clock
+        assertion on a shared CI box measures the box) and counted at the BOTTOM —
+        `os.stat`, `builtins.open`, `subprocess.run` — which is where every higher-level
+        spelling (`Path.stat`, `Path.exists`, `read_text`, `glob`) must eventually
+        arrive. `_table_lines` is handed the cache it would otherwise read, so what is
+        left to count is composition alone: fourteen rows of it must cost nothing."""
+        import builtins
+        import subprocess as _sp
+        data = {"gathered_at": 0.0, "workspace": "w", "current_repo": "r0",
+                "repos": [_row(f"r{i}", dirty=True, ci="failed", change=i, sigil="!",
+                               worktree_count=2) for i in range(14)],
+                "worktrees": []}
+        real_stat, real_open, real_run = os.stat, builtins.open, _sp.run
+        stats, opens, runs = [], [], []
+        with mock.patch("os.stat", lambda *a, **k: (stats.append(a),
+                                                    real_stat(*a, **k))[1]), \
+             mock.patch("builtins.open", lambda *a, **k: (opens.append(a),
+                                                          real_open(*a, **k))[1]), \
+             mock.patch("subprocess.run", lambda *a, **k: (runs.append(a),
+                                                           real_run(*a, **k))[1]):
+            lines = slots._table_lines(data, 200, 14)
+        self.assertEqual(len(lines), 14)
+        self.assertEqual(stats, [], "composing the table stat'ed something")
+        self.assertEqual(opens, [], "composing the table opened a file")
+        self.assertEqual(runs, [], "composing the table started a process")
 
-    def test_a_cjk_heavy_piece_name_does_not_crowd_out_its_branch_or_markers(self):
-        """Fix round 2, finding 1: the genuinely fragile field. A piece's name
-        (`_piece_line`, `p["name"]`) carries no ANSI prefix, so nothing
-        absorbs a char-vs-cell counting mistake the way the repo-name test
-        above happens to. With `tui.truncate` doing the real truncation, the
-        branch and its markers survive alongside a correctly-shrunk CJK name
-        (`'╰─ 測測測… main* ✗'`); under naive `name_markup[:name_w]` slicing
-        the name alone consumes 2x its intended cell budget (each CJK
-        character sliced in COUNT costs 2 cells), so the branch, the dirty
-        marker and the CI glyph are all pushed out entirely by the trailing
-        safety-net truncate — the SAME false-clean failure mode fix round 1
-        closed for the branch field, reopened here through the name field."""
-        cjk = "測" * 30  # 30 characters, 60 display cells
-        _seed("f-1", repos=[_row("demo", worktree_count=1)],
-             worktrees=[_row(cjk, repo="demo", branch="main",
-                             dirty=True, ci="failed")])
-        with mock.patch("os.get_terminal_size", return_value=os.terminal_size((20, 24))), \
-             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            out = slots.render("left", "f-1")
-        for line in out.splitlines():
-            with self.subTest(line=line):
-                self.assertLessEqual(tui.width(line), 20)
-        piece_line = tui.strip_ansi(out.splitlines()[-1])
-        self.assertIn("main", piece_line, "the branch must survive")
-        self.assertIn("*", piece_line, "the dirty marker must survive")
-        self.assertIn("✗", piece_line, "the CI glyph must survive")
+    def test_a_taller_pane_costs_the_same_syscalls_as_a_one_row_one(self):
+        """#387 pinned a panel's idle tick at exactly one `stat`, and #488 made `bottom`
+        the tall slot AND the one animated slot — so the question that budget does not
+        answer on its own is whether a REPAINT scales with the pane's height. At
+        `panel.TICK` a repaint that cost a syscall per row would pay fourteen times over,
+        five times a second, for the length of every dispatch.
 
-    def test_a_starved_pane_drops_lowest_priority_fields_first(self):
-        """Fix round 2, finding 2: reachable in production despite the
-        22-column DEFAULT — `layout.py`'s own module docstring measures real
-        tmux 3.7c redistributing every pane proportionally on a resize, `-l
-        size` notwithstanding ("growing a 120x30 frame to 200x50 stretched two
-        one-row panels to 8 and 7 rows" before a corrective `window-resized`
-        hook snapped them back): an ORDINARY window resize, not a future
-        configurability feature. `_width()` measures the real pane rather
-        than trusting `layout.SLOT_SIZE` for exactly this reason.
+        The sibling test above bounds `_table_lines` in isolation, handed a dict; this
+        one bounds the whole `slots.render("bottom", …)` a panel actually calls — the
+        gather read, the workspace resolve, the alerts and the todo count included — and
+        it bounds it DIFFERENTIALLY. An absolute number would have to be revised every
+        time the attention row learns a new field, and a revised number is not a budget.
+        The claim is that the count does not depend on how many rows are drawn, so the
+        same count at one repo and at `_MAX_REPO_LINES` is exactly the claim.
 
-        Pins `_row`'s priority order (CI drops before the dirty marker, which
-        `_left`'s own overflow-quiet logic and `_tree_cells`' wide-table
-        counterpart both treat as the higher-priority fact) rather than
-        merely the total width bound `test_never_exceeds_the_pane_width_...`
-        above already covers."""
-        _seed("f-1", repos=[_row("ab", branch="main", dirty=True, ci="failed")])
-        # (width, marker expected, CI glyph expected) — matches this fixture
-        # measured directly: 'ab main* ✗' / 'ab m…* ✗' / 'ab m…*' / 'ab …'.
-        cases = [(10, True, True), (8, True, True), (6, True, False), (4, False, False)]
-        for width, want_marker, want_ci in cases:
-            with mock.patch("os.get_terminal_size", return_value=os.terminal_size((width, 24))), \
-                 mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-                line = tui.strip_ansi(slots.render("left", "f-1").splitlines()[0])
-            with self.subTest(width=width):
-                self.assertLessEqual(tui.width(line), width)
-                self.assertEqual("*" in line, want_marker)
-                self.assertEqual("✗" in line, want_ci)
+        Primed first: `workspace.resolve` and friends memoise, so the first render of the
+        process pays for caches every later one reuses, and comparing an unprimed render
+        against a primed one would measure the priming.
+
+        **Counted at every spelling a walk could arrive by, not at `os.stat` alone.** The
+        thing being kept out is "touch the filesystem once per row", and a directory walk
+        does not spell itself `stat`: `Path.iterdir` is `os.scandir`, `Path.resolve` is
+        `os.lstat`, `Path.read_text` is `io.open` and not `builtins.open`, and a `git`
+        call is `subprocess.Popen` under `run`. Each of those is the next spelling this
+        budget would otherwise miss, so each is counted.
+
+        Measured on this branch: 45 calls for a 2-line repaint and the same 45, in the
+        same order, for a 15-line one."""
+        import builtins
+        import io
+        import subprocess as _sp
+        watched = {"os": (os, ("stat", "lstat", "scandir", "listdir")),
+                   "io": (io, ("open",)), "builtins": (builtins, ("open",)),
+                   "subprocess": (_sp, ("run", "Popen"))}
+
+        def _count(fid, n):
+            _seed(fid, current_repo="r0",
+                  repos=[_row(f"r{i}", dirty=True, ci="failed", change=i, sigil="!",
+                              worktree_count=2) for i in range(n)])
+            self._render(fid, cols=200, rows=1 + n)          # prime
+            seen: list[str] = []
+            patches = []
+            for mod_name, (mod, fns) in watched.items():
+                for fn in fns:
+                    real = getattr(mod, fn)
+                    tag = f"{mod_name}.{fn}"
+                    patches.append(mock.patch(
+                        tag,
+                        (lambda r, t: lambda *a, **k: (seen.append(t), r(*a, **k))[1])(
+                            real, tag)))
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                out = self._render(fid, cols=200, rows=1 + n)
+            return len(out.split("\n")), seen
+
+        short_lines, short = _count("cost-1", 1)
+        tall_lines, tall = _count("cost-many", statusline._MAX_REPO_LINES)
+        self.assertEqual(short_lines, 2)
+        self.assertEqual(tall_lines, 1 + statusline._MAX_REPO_LINES,
+                         "the tall render drew no more rows — this proves nothing")
+        self.assertTrue(short, "nothing was counted at all — the budget is vacuous")
+        self.assertEqual(sorted(tall), sorted(short),
+                         f"a {tall_lines}-row repaint cost {len(tall)} filesystem calls "
+                         f"where a {short_lines}-row one cost {len(short)} — the table "
+                         f"is doing per-row filesystem work")
+        self.assertNotIn("subprocess.run", tall, "a repaint started a process")
+        self.assertNotIn("subprocess.Popen", tall, "a repaint started a process")
 
     def test_a_failing_gather_read_yields_a_line_rather_than_an_exception(self):
-        """A panel that raises leaves a hole in the frame — `slots.render`'s own
-        promise, pinned here against a renderer that actually reaches into a real
-        dependency (`gather.read`) rather than the generic lambda `Render`'s own
-        `test_a_failing_renderer...` uses."""
-        with mock.patch.object(gather, "read", side_effect=RuntimeError("boom")):
-            self.assertIn("charter", slots.render("left", "f-1"))
+        """A panel that raises leaves a hole in the frame — `slots.render`'s own promise,
+        pinned against a renderer that reaches into a real dependency.
+
+        Rendered at a width the table is actually attempted at: below
+        `statusline._LEFT_W` there is no table, so `gather.read` is never reached and the
+        test would pass by never running the code it claims to bound."""
+        with mock.patch.object(gather, "read", side_effect=RuntimeError("boom")), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((200, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            self.assertIn("charter", slots.render("bottom", "f-1"))
+
+
+class BottomRowsWanted(PersonaIso, unittest.TestCase):
+    """`slots.bottom_rows_wanted` — the number the LAUNCHER sizes the pane from."""
+
+    def test_a_plane_with_no_repos_wants_exactly_the_attention_row(self):
+        _seed("f-1")
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1)
+
+    def test_it_grows_with_the_repos_and_the_pieces_alike(self):
+        _seed("f-1", repos=[_row("a"), _row("b")],
+              worktrees=[_row("p", repo="a")])
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1 + 3)
+
+    def test_it_is_capped_at_the_wide_tables_own_row_budget(self):
+        """A workspace with forty clones must ask for a fifteen-row strip, not a
+        forty-one-row one — `_MAX_REPO_LINES` is the same total-row budget the wide table
+        keeps, reused rather than invented fresh."""
+        _seed("f-1", repos=[_row(f"r{i}") for i in range(40)])
+        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200),
+                         1 + statusline._MAX_REPO_LINES)
+
+    def test_the_width_is_required_and_cannot_be_confused_with_the_row_count(self):
+        """Keyword-only, so the launcher cannot hand it a window HEIGHT and get a
+        plausible-looking number back. #500's defect was a caller that had the width and
+        did not pass it (`cmd_resize` measured it into `_cols`); a positional parameter
+        would have turned that into the next one silently passing the wrong measurement.
+        A missing width is a `TypeError` at the call site, not a default of "wide"."""
+        _seed("f-1", repos=[_row("a")])
+        with self.assertRaises(TypeError):
+            slots.bottom_rows_wanted("f-1")
+        with self.assertRaises(TypeError):
+            slots.bottom_rows_wanted("f-1", 200)
+
+    def test_the_width_asked_for_is_the_panes_and_a_window_width_will_not_fit(self):
+        """The rename is the guard, and this is what pins it. Round 2 of #500 spelled this
+        argument `cols` and every caller handed it the WINDOW's width — right only when
+        nothing vertical was split before `bottom`. `pane_cols` is not a nicer name for
+        the same number: it is the name that makes the old call a `TypeError` here rather
+        than six blank rows in a frame nobody thought to re-measure.
+
+        Asserted on the signature rather than only on a failing keyword, so a future
+        `**kwargs` (or a `cols` alias added back for compatibility) is red too — an alias
+        would restore exactly the confusion this closes. The next spelling to refuse is
+        `width`, which is what `_table_cap` calls its own parameter: it takes the pane's
+        width because the RENDERER measures a pane, and a caller that copies that name up
+        here would be naming the thing correctly by luck rather than by contract."""
+        import inspect
+        sig = inspect.signature(slots.bottom_rows_wanted)
+        self.assertEqual([p.name for p in sig.parameters.values()], ["fid", "pane_cols"])
+        self.assertEqual(sig.parameters["pane_cols"].kind,
+                         inspect.Parameter.KEYWORD_ONLY)
+        _seed("f-1", repos=[_row("a")])
+        with self.assertRaises(TypeError):
+            slots.bottom_rows_wanted("f-1", cols=200)
+
+    def test_it_never_runs_a_git_sweep(self):
+        """It is called on a launch the operator is waiting on, and again on every step
+        of a terminal drag. `gather.row_count` answers from the cache when there is one
+        and from a directory listing when there is not; a `scan()` on either path would
+        put a `git status` per repo inside a `window-resized` hook."""
+        _seed("f-1", repos=[_row("a")])
+        with mock.patch("charter.frame.gather.scan",
+                        side_effect=AssertionError("row_count ran a scan")):
+            self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 2)
+
+    def test_a_narrow_frame_does_not_even_ask_how_many_repos_there_are(self):
+        """The launch path reaches `gather.row_count` with no cache by design
+        (`cmd_launch` calls `gather.discard` first), where it costs a directory listing.
+        Below `statusline._LEFT_W` the answer is one row whatever the count is, so the
+        listing is work with no reader — and `cmd_resize` would pay it again on every
+        step of a drag that is narrowing the terminal.
+
+        `row_count` itself is made to raise, so an implementation that asks and then
+        discards is a loud failure rather than a slow success."""
+        _seed("f-1", repos=[_row(f"r{i}") for i in range(6)])
+        with mock.patch("charter.frame.gather.row_count",
+                        side_effect=AssertionError("counted rows it had no room for")):
+            self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=80), 1)
 
 
 class RightRenderer(PersonaIso, unittest.TestCase):

@@ -21,17 +21,21 @@ module docstring for the full measurement. Duplicating that logic here would jus
 second place to get it wrong; `_paint` below calls `slots.render` and trusts its output
 is already clamped to the pane's width.
 
-**Height is this module's job.** `render()`'s contract is a single string, so nothing
-downstream of it knows how many ROWS the pane it is about to overwrite actually has. A
-`top`/`bottom` panel is one row today (`layout.SLOT_SIZE`), but `left`/`right` are
-full-height panes the layout module already supports — assuming "one line" here would
-silently clip a future multi-line renderer to its first row, or (the opposite failure)
-let it emit more lines than the pane holds and scroll THAT PANEL'S OWN rows — measured
-against real tmux: each pane keeps its own scroll region, so an over-height paint pushes
-only its own top line out of view and leaves every sibling pane untouched, not the whole
-frame. `_rows` measures the pane the same way `slots._width` measures it, and `_paint`
-clamps the LINE COUNT to that measurement the way `tui.truncate` already clamps each
-line's WIDTH.
+**Clamping the height is this module's job; MEASURING it is not, any more.**
+`render()`'s contract is a single string, so nothing downstream of it knows how many ROWS
+the pane it is about to overwrite actually has. Assuming "one line" here would silently
+clip a multi-line renderer to its first row, or (the opposite failure) let it emit more
+lines than the pane holds and scroll THAT PANEL'S OWN rows — measured against real tmux:
+each pane keeps its own scroll region, so an over-height paint pushes only its own top
+line out of view and leaves every sibling pane untouched, not the whole frame. `_paint`
+clamps the LINE COUNT the way `tui.truncate` already clamps each line's WIDTH.
+
+The measurement itself moved to `slots._height` with #488, beside `slots._width` and for
+the same reason width already lived there: a renderer needs it now. `bottom` is sized to
+its content and draws as much of the repo table as its pane holds, choosing which rows to
+spend on through `statusline._pick_rows` — a clamp applied after the fact would cut the
+table at whatever came last, which is the unranked slice that ranking exists to prevent.
+So the renderer measures first and this clamp goes back to being a safety net.
 
 **Animation is scoped to work that is actually in flight, and idle stays one `stat`.**
 A panel repaints on a version bump, and a dispatch STARTING does not bump anything — the
@@ -62,9 +66,9 @@ the reason to stderr does not fix that, and the measurement is why (real tmux 3.
 `remain-on-exit on`): tmux writes its own `Pane is dead (status N, <date>)` message by
 moving to the pane's LAST row and issuing a linefeed first, which scrolls the pane up by
 exactly one line — in a six-row pane the first of three stderr lines is lost and the
-rest survive, but `top` and `bottom` are ONE row (`layout.SLOT_SIZE`), so that one
-scrolled line is the whole pane and `Pane is dead (status 2)` is provably all that is
-left. It cost a real debugging session, whose only way through was running the panel's
+rest survive, but `top` is ONE row (`layout.SLOT_SIZE`) and `bottom` is one whenever the
+workspace holds no clones (its own floor, since #488), so that one scrolled line is the
+whole pane and `Pane is dead (status 2)` is provably all that is left. It cost a real debugging session, whose only way through was running the panel's
 argv by hand outside tmux. A pane whose process is still ALIVE keeps what it painted
 (measured the same way), so `_hold` paints the reason and then simply does not return.
 
@@ -77,9 +81,9 @@ failing to start, a SIGKILL), which is the only kind respawning could ever help.
 **Holding rather than exiting into that hook is a decision, so here is the argument.**
 Exiting would let a crashed panel be retried three times, which sounds strictly better
 until you ask what can actually reach the handler: `slots.render` catches everything a
-renderer raises, `state.version` catches everything a read raises, and `_rows` catches
-its own `OSError` — so what is left is a genuine bug in charter, or a pane whose fd has
-gone away. Neither is transient, so all a retry buys is three more identical crashes,
+renderer raises, `state.version` catches everything a read raises, and `_rows` (through
+`slots._height`) catches its own `OSError` — so what is left is a genuine bug in charter,
+or a pane whose fd has gone away. Neither is transient, so all a retry buys is three more identical crashes,
 and the cost is certain: three deaths, and then tmux's own message scrolling the reason
 out of a one-row pane — the exact failure this whole section exists to end. The pane
 that HAS gone away needs no special case either; `_hold`'s own write raises in turn, the
@@ -88,7 +92,6 @@ process dies for real, and the respawn hook takes it from there.
 
 from __future__ import annotations
 
-import os
 import signal
 import sys
 import time
@@ -107,20 +110,26 @@ TICK = 0.2
 #: hand for debugging, or a test). Matches `commands_frame._FALLBACK_SIZE`'s own row
 #: count: the same "traditional default screen" charter already falls back to elsewhere
 #: when a terminal's real size is unknowable.
-_DEFAULT_ROWS = 24
+#:
+#: Re-exported from `slots` rather than declared here, because #488 gave a RENDERER a
+#: reason to ask the same question (`bottom` chooses which repo rows to spend its pane
+#: on, so it has to know how many it has) and two copies of a fallback are two answers
+#: to "how tall is a pane nobody can measure" — one of which would eventually move.
+_DEFAULT_ROWS = slots._DEFAULT_ROWS
 
 
 def _rows() -> int:
-    """This pane's own height, measured the way `slots._width` measures its own width:
-    `os.get_terminal_size(sys.stdout.fileno())` asks the file descriptor this process is
-    actually writing to, which for a panel launched as a tmux pane command IS the pane —
-    not a pipe, not the launching terminal. Only when that raises (no tty behind the fd
-    at all) does this fall back to `_DEFAULT_ROWS`.
+    """This pane's own height — `slots._height()`, the same one the renderer measures
+    with, for exactly the reason this module already asks `slots` for the WIDTH.
+
+    It was implemented here first, and correctly, back when height was purely this
+    module's clamp. #488 made it a renderer's question too (`slots._bottom` decides how
+    many repo rows to draw), and a second `os.get_terminal_size` with its own `OSError`
+    fallback beside the first is how the two come to disagree about a pane neither can
+    measure. Kept as a named function rather than inlined: `_write` reads better for it,
+    and this is where the module docstring's "Height is this module's job" section points.
     """
-    try:
-        return os.get_terminal_size(sys.stdout.fileno()).lines
-    except OSError:
-        return _DEFAULT_ROWS
+    return slots._height()
 
 
 def _write(text: str) -> None:
@@ -154,8 +163,9 @@ def _hold(reason: str, *, once: bool, rc: int) -> int:
     The whole of this module's answer to a panel that cannot run: **returning is the
     bug**. A panel process that exits hands its pane to `remain-on-exit`, and tmux then
     scrolls the pane by exactly one line to write `Pane is dead (status N, <date>)` over
-    it — which in the one-row `top`/`bottom` panes is the entire pane (measured against
-    real tmux 3.7c; see the module docstring). So the reason is painted and the process
+    it — which in a one-row pane, which `top` always is and `bottom` is on a plane with
+    no clones, is the entire pane (measured against real tmux 3.7c; see the module
+    docstring). So the reason is painted and the process
     simply does not leave, which is the only state in which a pane keeps what was
     written to it.
 
@@ -199,7 +209,7 @@ def _new_inflight_cache() -> dict:
 
 
 def _running(cache: dict) -> int:
-    """How many dispatches are in flight right now — one `stat` when nothing has changed.
+    """How much work is in flight right now — one `stat` when nothing has changed.
 
     The idle cost of the whole animation, and the reason it can be on by default. The
     expensive answer (`inflight.live_records()`: open the directory, read every entry,
@@ -212,8 +222,9 @@ def _running(cache: dict) -> int:
       consulted while something is actually running, so an idle panel never computes a
       deadline, never stores one, and never compares against one.
 
-    Counts RUNNING records only, presumed-dead ones excluded, and that is what stops a
-    killed dispatch from spinning a panel for the rest of the day: `inflight` keeps such a
+    Counts RUNNING records of EVERY kind — a clone and a `gl-refresh` move the spinner
+    exactly as a dispatch does (#420) — presumed-dead ones excluded, and that is what
+    stops a killed dispatch from spinning a panel for the rest of the day: `inflight` keeps such a
     record for `PRUNE_SECONDS` (24 hours) precisely so it stays visible, and
     `slots._inflight_field` does still draw it — statically, with `⋯`. Animating it would
     claim progress that stopped hours ago, on an otherwise idle machine.
@@ -229,7 +240,11 @@ def _running(cache: dict) -> int:
         stale = cache["running"] and time.time() >= cache["recheck"]
         if stamp == cache["stamp"] and not stale:
             return cache["running"]
-        records = inflight.live_records()
+        # `kind=None`: the gate has to agree with what `slots._inflight_field` will
+        # DRAW, or a clone would leave the row showing a spinner frame frozen at whatever
+        # instant the last version bump happened to be (#420). The nudge's dispatch-only
+        # view is a different question, asked elsewhere — see `inflight`'s own docstring.
+        records = inflight.live_records(kind=None)
         cache["stamp"] = stamp
         cache["running"] = sum(1 for _a, _t, dead in records if not dead)
         cache["recheck"] = min((t for _a, t, dead in records if not dead),

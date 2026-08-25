@@ -705,7 +705,8 @@ def _add_frame_parsers(sub) -> None:
     # naming `frame-probe` silently launching a harness instead of reading tmux's own
     # version (see `commands_frame.cmd_probe`'s own docstring).
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
-                                         "frame-probe", "frame-respawn", "frame-density"}
+                                         "frame-probe", "frame-respawn", "frame-density",
+                                         "frame-resize"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -791,6 +792,19 @@ def _add_frame_parsers(sub) -> None:
     rs.add_argument("--pane", dest="pane", required=True)
     rs.add_argument("--frame", dest="frame", default=None)
     rs.set_defaults(func=commands_frame.cmd_respawn)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # ones above. Fired by the frame window's own `window-resized` hook (#488,
+    # `commands_frame._resize_hook_argv`) — never typed by an operator. The hook used to
+    # carry the sizes as literal text; `bottom` is content-sized now, so the sizes have
+    # to be RECOMPUTED against the window that just changed, and only charter can do
+    # that. `--frame` travels on the argv for `frame-respawn`'s reason: on the operator's
+    # own server there is no `$CHARTER_SESSION_ID` for a `run-shell` child to read.
+    # Optional, not required, so a hook installed by an older charter and still sitting
+    # in a running frame's window options resolves its frame from the environment.
+    rz = sub.add_parser("frame-resize")
+    rz.add_argument("--frame", dest="frame", default=None)
+    rz.set_defaults(func=commands_frame.cmd_resize)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
     # three above. Fired by a hotkey-menu selection (`commands_frame._menu_entries`), whose
