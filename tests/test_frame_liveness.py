@@ -75,7 +75,10 @@ class Notify(PersonaIso, unittest.TestCase):
         frame and wrote that answer down. Without this, a launch gathers the workspace you
         launched for and the very first tool call swaps in another one's repos."""
         state.record_workspace("f-1", "the-frames-own")
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+        # Cleared rather than merely overwritten: rung 0 of `workspace_for` reads
+        # `$CHARTER_WORKSPACE`, so a developer's own ambient pin would otherwise survive
+        # into this environ and answer instead of the recorded name (#519, #521).
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}, clear=True), \
              mock.patch.object(gather, "refresh") as refresh:
             notify._last["at"] = 0.0
             notify.plane_changed()
@@ -87,7 +90,11 @@ class Notify(PersonaIso, unittest.TestCase):
         workspace this hook would have gathered on its own — never worse than before
         #512, and never a blank."""
         self.assertIsNone(state.frame_workspace("f-1"))
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}), \
+        # Cleared rather than merely overwritten (#519, #521): otherwise an ambient
+        # `$CHARTER_WORKSPACE` would answer `workspace.resolve()` too, and both sides of
+        # the assertion below would collapse to the pinned name whether or not the
+        # local-resolve fallback this test exists to pin actually ran.
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}, clear=True), \
              mock.patch.object(gather, "refresh") as refresh:
             notify._last["at"] = 0.0
             notify.plane_changed()
