@@ -30,6 +30,19 @@ os.environ["CODEX_HOME"] = os.path.join(_SANDBOX, "codex")
 os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
 os.makedirs(os.environ["CODEX_HOME"], exist_ok=True)
 
+# The third fixture a test can inherit without noticing, after the plane root and these
+# config directories: the SHELL the suite was launched from. `$CHARTER_SESSION_ID`,
+# `$TMUX` and `$CHARTER_WORKSPACE` reach the code under test the same way `$XDG_CONFIG_HOME`
+# did, and cost sixteen false failures inside a live frame plus one false GREEN (#519,
+# #521, #528). This removes them and then refuses an undeclared read of one.
+#
+# ABOVE the `_planeguard` import, which is not cosmetic: `$CHARTER_ROOT` is one of the
+# names scrubbed, and importing `charter.config` is what resolves the plane. Scrub after it
+# and the whole suite is already pointing at whichever plane the operator's shell pinned.
+from . import _envguard      # noqa: E402
+
+_envguard.install()
+
 # The same move for the one directory that CANNOT be redirected away from every test —
 # some tests read the real plane on purpose — but that none of them may write to. See
 # `tests/_planeguard.py`: after this line, a write into the developer's own `.charter/`

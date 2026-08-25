@@ -41,6 +41,7 @@ from unittest import mock
 from tests._isolation import PersonaIso
 from charter import commands_frame, config, instance, statusline, util
 from charter.frame import gather, layout, menu, slots, state, tmuxctl
+from tests import _envguard
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
 #: has had a chance to repoint `config`, so it is unavoidably the developer's REAL
@@ -1054,6 +1055,11 @@ class Probe(unittest.TestCase):
     below `tmuxctl.FLOOR` (warn, still runs), not a stricter refusal, is the whole point:
     a probe that refused there would report a frame this same launcher goes on to draw.
     """
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
 
     def test_present_and_at_the_floor_exits_zero(self):
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \

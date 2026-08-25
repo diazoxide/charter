@@ -18,10 +18,16 @@ from pathlib import Path
 from unittest import mock
 
 from charter import statusline
+from tests import _envguard
 
 
 class RenderNeverCrashesCase(unittest.TestCase):
     def setUp(self):
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         from charter import config
         self.tmp = Path(tempfile.mkdtemp(prefix="edm-renderguard-"))
         self._orig = config.SESSIONS_DIR

@@ -11,10 +11,16 @@ from pathlib import Path
 from unittest import mock
 
 from charter import root
+from tests import _envguard
 
 
 class RootIso(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.tmp = Path(tempfile.mkdtemp(prefix="charter-root-")).resolve()
         self.plane = self.tmp / "my-control-plane"
         (self.plane / "deep" / "nested").mkdir(parents=True)

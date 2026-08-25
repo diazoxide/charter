@@ -21,12 +21,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from charter import config, hooks, workspace
+from tests import _envguard
 
 
 class WorkspaceLockBase(unittest.TestCase):
     SID = "sess-lock-test"
 
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.tmp = Path(tempfile.mkdtemp(prefix="edm-wslock-"))
         # `config.use`, not a hand-picked list. This fixture named five attributes and
         # `set_active` writes through a sixth — `PERSONA_STATE_DIR`, where the trace lives —

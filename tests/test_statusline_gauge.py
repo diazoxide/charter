@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import config, statusline
+from tests import _envguard
 from tests._isolation import PersonaIso, isolate_state_dir, pin_update_channel
 
 
@@ -35,6 +36,11 @@ def _payload(pct=None, read=None, write=None, usage=True):
 
 class ContextGaugeCase(unittest.TestCase):
     def setUp(self):
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         isolate_state_dir(self)
         # The render path brands the last line, and `_brand` renders the channel chip.
         # This case runs against the real plane on purpose; the chip is not what it is

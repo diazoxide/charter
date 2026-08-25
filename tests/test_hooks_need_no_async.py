@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import util
+from tests import _envguard
 
 MANIFEST = Path(__file__).resolve().parents[1] / "hooks" / "hooks.json"
 
@@ -88,6 +89,11 @@ class TheCommandsHonourTheFlag(unittest.TestCase):
     manifest test still passed, because it only reads JSON. What the hook actually calls
     has to be driven.
     """
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
 
     def _drive(self, module_name: str, func_name: str, argv: list[str]):
         import importlib

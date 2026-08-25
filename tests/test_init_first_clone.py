@@ -30,6 +30,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from charter import cli, commands, config, gitpolicy, instance, workspace
+from tests import _envguard
 from tests._isolation import PersonaIso
 
 
@@ -322,6 +323,11 @@ class TestThePlaneIsTheSameEitherWay(unittest.TestCase):
     """The acceptance criterion the whole design turns on: being inside a git repo changes
     what init OFFERS, never what it BUILDS. Two identical repo-planes, one accepting and
     one declining, must produce the same control plane."""
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
 
     def _plane(self, accept: bool) -> Path:
         tmp = Path(tempfile.mkdtemp(prefix="charter-either-way-")).resolve()

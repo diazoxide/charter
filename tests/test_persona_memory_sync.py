@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from charter import config, persona, commands_persona
+from tests import _envguard
 from tests._isolation import PersonaIso
 
 _KEYS = ("ROOT", "PERSONAS_DIR", "STATE_DIR", "PERSONA_STATE_DIR", "ACTIVE_PERSONA_FILE")
@@ -24,6 +25,11 @@ class _Args:
 
 class TestMemorySync(unittest.TestCase):
     def setUp(self):
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.tmp = Path(tempfile.mkdtemp(prefix="edm-memsync-"))
         _git(self.tmp, "init", "-q")
         _git(self.tmp, "config", "user.email", "t@t")

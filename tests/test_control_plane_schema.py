@@ -11,10 +11,16 @@ from contextlib import redirect_stderr
 from pathlib import Path
 
 from charter import doctor, instance
+from tests import _envguard
 
 
 class SchemaIso(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.root = Path(tempfile.mkdtemp(prefix="charter-schema-")).resolve()
         (self.root / "charter.toml").write_text(f"schema = {instance.SCHEMA}\n")
 

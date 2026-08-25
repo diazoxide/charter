@@ -19,6 +19,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from charter import config, statusline, update
+from tests import _envguard
 from tests._isolation import pin_update_channel
 
 
@@ -82,6 +83,11 @@ class Silence(unittest.TestCase):
 
 class NeverBreaksTheStatusLine(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         # render() reaches _brand() -> update.maybe_spawn(), which forks a real
         # network child. A suite that quietly reaches the internet is not hermetic.
         self._spawn = update.maybe_spawn

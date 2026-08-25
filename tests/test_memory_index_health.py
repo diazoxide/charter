@@ -18,6 +18,7 @@ from __future__ import annotations
 import unittest
 
 from charter import doctor, memstore, persona
+from tests import _envguard
 from tests._isolation import PersonaIso, pin_update_channel
 
 
@@ -88,6 +89,11 @@ class DoctorCheck(unittest.TestCase):
     """
 
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         # `run_all` reaches `check_plugin_freshness`, and so the channel (#459).
         pin_update_channel(self)
 

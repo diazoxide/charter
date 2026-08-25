@@ -30,6 +30,7 @@ import unittest
 from pathlib import Path
 
 from charter import doctor
+from tests import _envguard
 from tests._isolation import PersonaIso, pin_update_channel
 
 
@@ -186,6 +187,11 @@ class TestProjectScopedServersAreChecked(LauncherCase):
 
 class TestItIsWiredIn(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         # `run_all` reaches `check_plugin_freshness`, and so the channel (#459).
         pin_update_channel(self)
 

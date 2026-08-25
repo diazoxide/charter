@@ -20,10 +20,16 @@ from unittest import mock
 
 from charter import __version__, doctor
 from charter.harness import opencode, registry
+from tests import _envguard
 
 
 class InstallingKeepsItCurrent(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.home = Path(tempfile.mkdtemp(prefix="charter-gsr-"))
         self.addCleanup(lambda: shutil.rmtree(self.home, True))
         self.enterContext(mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.home)}))
@@ -53,6 +59,11 @@ class InstallingKeepsItCurrent(unittest.TestCase):
 
 class DoctorNamesAStalePlugin(unittest.TestCase):
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         self.home = Path(tempfile.mkdtemp(prefix="charter-gsr-d-"))
         self.addCleanup(lambda: shutil.rmtree(self.home, True))
         self.enterContext(mock.patch.dict(os.environ,

@@ -733,7 +733,7 @@ _WALK_FIX = (
 #: `edm` is charter's pre-rename name. Kept because this is a security guard and the cost
 #: of an extra alternative is one string, while the cost of dropping it is a silent
 #: denial that stops happening on a machine where the old binary is still installed.
-#: `config._LEGACY_ENV_VARS` keeps the same posture for the renamed env vars.
+#: `legacyenv.RENAMES` keeps the same posture for the renamed env vars.
 _CHARTER_PROGS = ("charter", "edm")
 
 

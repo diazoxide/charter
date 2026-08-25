@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_harness
+from tests import _envguard
 
 
 def _run(fn, args) -> tuple[int, str]:
@@ -22,6 +23,12 @@ def _run(fn, args) -> tuple[int, str]:
 
 
 class HarnessList(unittest.TestCase):
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
     def test_it_names_every_registered_harness_and_its_ceilings(self):
         rc, text = _run(commands_harness.cmd_harness_list, SimpleNamespace())
         self.assertEqual(rc, 0)

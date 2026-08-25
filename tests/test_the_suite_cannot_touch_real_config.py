@@ -14,9 +14,16 @@ import unittest
 from pathlib import Path
 
 from charter.harness import codex, opencode, registry
+from tests import _envguard
 
 
 class ConfigDirsArePointedSomewhereDisposable(unittest.TestCase):
+    def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
     def test_opencodes_config_dir_is_not_the_developers(self):
         self.assertNotEqual(opencode.global_dir(), Path.home() / ".config" / "opencode")
         self.assertTrue(str(opencode.global_dir()).startswith(tempfile.gettempdir()),

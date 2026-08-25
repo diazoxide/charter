@@ -15,6 +15,7 @@ from __future__ import annotations
 import unittest
 
 from charter import config, doctor, persona
+from tests import _envguard
 from tests._isolation import PersonaIso, pin_update_channel
 
 
@@ -136,6 +137,11 @@ class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
     `util.run` entirely just to pass their own timeout literal."""
 
     def setUp(self) -> None:
+        # Outside a frame, with no session id and no pinned workspace: stated here
+        # rather than inherited from the shell the suite was launched from
+        # (#519, #521, #528).
+        _envguard.unset_all()
+
         # The two cases that drive the real `iter_all`/`run_all` reach
         # `check_plugin_freshness`, and so the channel (#459).
         pin_update_channel(self)
