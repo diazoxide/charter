@@ -1185,11 +1185,18 @@ def _persona_line() -> str | None:
             # applying "the same" rule: this renderer is the fallback, so a divergence
             # here would only ever be seen on the day the layout is already broken.
             seg += f"{_DIM} · vault {_R}{vault}{_vault_dot(vault)}"
-        # The other personas, on the same line — each dispatchable as a sub-agent.
+        # The other personas, on the same line. The label names the CONCEPT — a persona —
+        # and not the mechanism one harness happens to dispatch it with (#513). Under
+        # Claude Code each of these is also reachable as a sub-agent, which is how this
+        # line came to read `◇ agents`; but this row is drawn identically on codex and
+        # opencode, neither of which has a sub-agent at all, so on two of the three
+        # harnesses charter supports that label named nothing the operator could act on.
+        # `personas` is the word `charter persona`, `personas/`, the ADRs and the
+        # no-active branch above all already use.
         others = [n for n in names if n != active]
         if others:
             chips = f"{_DIM} · {_R}".join(f"{_DIM}{n}{_R}" for n in others)
-            seg += f"{_DIM} · ◇ agents {_R}{chips}"
+            seg += f"{_DIM} · ◇ personas {_R}{chips}"
         return seg
     except Exception:
         return None
