@@ -432,6 +432,31 @@ frame; refusing at load is visible, actionable, and happens before anything is o
 also makes the contract's cost real to us — bumping breaks every provider, which is the
 friction that stops the contract churning.
 
+## 4h. Settled by grilling — round 5 (2026-08-25). Frontier closed for Phases 1–2.
+
+**An id collision refuses both providers, names both, and draws the rest of the frame.**
+Silently picking one means the frame shows something whose origin cannot be determined, and
+"which of my two plugins drew this" is a debugging problem with no entry point. Ids are
+namespaced by distribution (`acme.metrics`), so a true collision is a mistake worth
+surfacing rather than resolving by load order.
+
+**Composition is one level.** A component is either a leaf or a composite of leaves.
+Arbitrary nesting is the layout engine §4d refused, wearing a different hat. One level covers
+every case on the table — the sidebar, and the bottom's status row plus table — and if a
+second level is ever genuinely needed, that is evidence for real in-pane layout rather than a
+reason to arrive at it by recursion.
+
+**`F2` becomes the palette; the menu ceases to exist as a separate thing.** Not a new key —
+the menu was always trying to be a palette. Per-component toggles get their own keys;
+everything else is reachable through the palette. Keeping both would leave two answers to
+"how do I do a thing", which is how the single menu became weird in the first place.
+
+---
+
+**Nineteen decisions, five rounds, 2026-08-25. The design frontier for Phases 1 and 2 is
+empty.** What remains is Phase 4 (what identifies a change on disk, and its lifecycle) and
+implementation detail that now follows from the above rather than needing a decision.
+
 ---
 
 ## 5. The command surface
