@@ -123,10 +123,6 @@ class CliSmokeTest(unittest.TestCase):
         self._assert_clean(self._run("persona", "secret", "--help"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestInitDoesNotPrintOneEnormousLine(unittest.TestCase):
     """The headline is a count; the paths go underneath it.
 
@@ -170,3 +166,7 @@ class TestInitDoesNotPrintOneEnormousLine(unittest.TestCase):
         self.assertEqual(p.returncode, 0, out)
         for expected in ("charter.toml", "personas/", "inventory/", "workspaces/"):
             self.assertIn(expected, out)
+
+
+if __name__ == "__main__":
+    unittest.main()

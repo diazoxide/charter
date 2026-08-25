@@ -126,10 +126,6 @@ class MemoryIndexDocstringIsHonest(unittest.TestCase):
         self.assertNotIn("import doctor", src)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
     """A 1Password session needing re-auth stalled the SessionStart preflight for its whole
     20s budget and then printed NOTHING — `cmd_doctor` collected every Result before
@@ -184,3 +180,7 @@ class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
             res = doctor.check_vaults()
         self.assertEqual(res.status, doctor.WARN)
         self.assertIn("timed out", res.hint)
+
+
+if __name__ == "__main__":
+    unittest.main()

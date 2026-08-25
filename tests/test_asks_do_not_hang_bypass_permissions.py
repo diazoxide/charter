@@ -153,10 +153,6 @@ class TestTheInjectedProseStopsTellingTheAgentToQuiz(InAControlPlane):
             self.assertIn("Scout first", ctx)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestAnUnattendedRunWithNoWorkspaceFailsFast(InAControlPlane):
     """The one block that does NOT get an assume-and-continue rewrite. Every other nudge
     names a preference; this one names a missing input, and guessing it silently claims
@@ -197,3 +193,7 @@ class TestASuppressedAskIsCountedExactlyOnce(ModeCase):
     def test_attended_records_only_the_ask(self):
         self.nudge("default", sid="d")
         self.assertEqual(["dispatch-ask"], self.events("d"))
+
+
+if __name__ == "__main__":
+    unittest.main()

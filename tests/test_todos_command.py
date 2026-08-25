@@ -310,10 +310,6 @@ class TestClosingIsWorkspaceScoped(ClosingCase):
         self.assertEqual(len(todos.open_todos("alpha")), 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestTheReservedWordsAreEscapable(TodoCommandCase):
     """Issue #59. `done` and `forget` are reserved as closing verbs, so a todo whose text
     is exactly one of them cannot be recorded. Degenerate, but the escape existed all
@@ -336,3 +332,7 @@ class TestTheReservedWordsAreEscapable(TodoCommandCase):
     def test_the_word_inside_a_longer_todo_is_untouched(self):
         rc, _ = self.run_todo(text="done with the migration, write it up")
         self.assertEqual(rc, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

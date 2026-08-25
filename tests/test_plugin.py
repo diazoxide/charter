@@ -282,10 +282,6 @@ class TestVersionSkew(unittest.TestCase):
         self.assertIsNone(hooks.skew_message("not-a-version"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestSkewReachesTheUser(unittest.TestCase):
     # `hooks.dispatch` runs REAL handlers, and a handler may write plane state — a trace
     # row, a guard-seen mark. Without redirecting the root those writes land in whatever
@@ -364,3 +360,7 @@ class TestSkewReachesTheUser(unittest.TestCase):
              mock.patch.dict(__import__("os").environ, {"CLAUDE_PLUGIN_ROOT": str(ROOT)}):
             res = doctor.check_plugin_skew()
         self.assertEqual(res.status, doctor.FAIL)
+
+
+if __name__ == "__main__":
+    unittest.main()

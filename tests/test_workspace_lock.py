@@ -193,10 +193,6 @@ class TestCommandLayer(WorkspaceLockBase):
 from charter import commands_workspace as commands  # noqa: E402
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UseDoesNotInventAWorkspaceFromATypo(WorkspaceLockBase):
     """`use` validated the name's SHAPE, then created it and took the session lock. So
     `charter workspace use fature-x` made `fature-x`, locked to it, and the correction hit
@@ -250,3 +246,7 @@ class EnsureScaffoldsSoNothingAsksForReinit(WorkspaceLockBase):
     def test_it_has_its_baseline_structure(self):
         workspace.ensure("fresh")
         self.assertTrue((config.WORKSPACES_DIR / "fresh" / "memory").is_dir())
+
+
+if __name__ == "__main__":
+    unittest.main()

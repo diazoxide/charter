@@ -242,10 +242,6 @@ class SharedAndLocalHalves(PersonaIso):
         self.assertEqual(_stat.S_IMODE(config.VAULTS_REGISTRY.stat().st_mode), 0o600)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PlaintextMustNotLandInGit(PersonaIso):
     """A plain-file vault holds PLAINTEXT. The default sits under `.charter/`, which
     `charter init` gitignores — but `--file` accepts any path, and a vault pointed at one
@@ -294,3 +290,7 @@ class PlaintextMustNotLandInGit(PersonaIso):
         _sh.rmtree(self.tmp / ".git")
         rc, _ = self._add("anywhere", file=self.tmp / "cfg" / "v.json")
         self.assertEqual(rc, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

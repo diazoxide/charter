@@ -84,10 +84,6 @@ class TestGeneratedAgentForgeWordingMatchesDeclaredForges(PersonaIso):
         self.assertIn("gh auth status", text)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class GeneratedAgentBody(unittest.TestCase):
     """What `_render_agent` emits — the reviewer-reported gaps (#7, #8, #9)."""
 
@@ -181,3 +177,7 @@ class DispatchIsolationHint(unittest.TestCase):
                                      "dispatch-isolation": "worktree"}, "# body\n")
         head = body.split("---")[1]
         self.assertNotIn("dispatch-isolation:", head)
+
+
+if __name__ == "__main__":
+    unittest.main()

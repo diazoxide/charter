@@ -287,10 +287,6 @@ class RepoRowSigilCase(unittest.TestCase):
         self.assertNotIn("#", line)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class VaultHealthIsCachedOffTheRenderPath(PersonaIso):
     """A `1password` or `reference` vault's `health()` shells out to `op`, and both call
     sites ran it once per persona chip with no cache — on a status line that renders every
@@ -507,3 +503,7 @@ class ThePanelsGaugeReadsTheSameAsTheFooters(unittest.TestCase):
         with mock.patch("charter.statusline._usage_file",
                         side_effect=RuntimeError("boom")):
             self.assertEqual(statusline.recorded_context_gauge("s1"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

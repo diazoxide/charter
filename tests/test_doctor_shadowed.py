@@ -101,10 +101,6 @@ class TestShippedSkillsStayInSync(unittest.TestCase):
         self.assertEqual(set(doctor.SHIPPED_SKILLS), on_disk)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCharterItselfIsExemptHoweverItWasInstalled(PersonaIso):
     """The exemption used to key on `docsrc.source()`, which prefers the PACKAGED copy — so
     it only matched for someone running `python3 -m charter` from the clone. Every
@@ -203,3 +199,7 @@ class TestNoCheckHidesAPythonErrorInAWarning(PersonaIso):
                     break
         self.assertEqual(leaked, [], "a code defect is being reported as 'not checked':\n"
                                      + "\n".join(leaked))
+
+
+if __name__ == "__main__":
+    unittest.main()

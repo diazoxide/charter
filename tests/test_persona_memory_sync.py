@@ -72,10 +72,6 @@ class TestMemorySync(unittest.TestCase):
         self.assertIn("leak", self._pending())     # left uncommitted
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class EveryPlaneCommitOffersTheForgeToken(PersonaIso):
     """charter's headline rule is one credential: each repo's own forge's token over
     HTTPS, never SSH. `commands.commit_push` obeyed it; `cmd_persona_memory_sync` had
@@ -156,3 +152,7 @@ class EveryPlaneCommitOffersTheForgeToken(PersonaIso):
                           f"a push without the forge token: {argv}")
             self.assertFalse([a for a in argv if a.startswith("git@")],
                              f"an SSH remote reached a push: {argv}")
+
+
+if __name__ == "__main__":
+    unittest.main()

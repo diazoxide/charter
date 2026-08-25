@@ -204,10 +204,6 @@ class CommitPushTakesGitsArgumentsNotACommandLine(unittest.TestCase):
         self.assertEqual(bad, [], f"commit_push called with a command line, not arguments: {bad}")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class CommitPushRefusesToClaimSuccessItDidNotHave(PersonaIso):
     """`charter save` printed `✓ Committed : charter save: 0 file(s)` and exited 0 in a
     plane that is not a git repo — which `charter init` in a fresh directory produces, and
@@ -239,3 +235,7 @@ class CommitPushRefusesToClaimSuccessItDidNotHave(PersonaIso):
             rc = commands.commit_push(self.tmp, ["add", "-A"], "m")
         self.assertEqual(rc, 0)
         self.assertIn("Nothing to save", err.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

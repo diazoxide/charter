@@ -308,10 +308,6 @@ class ManifestWiring(unittest.TestCase):
                          "must match dispatch tools only — never every Bash call")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class RecordsSayWhatKindOfWorkTheyAre(unittest.TestCase):
     """#420. #387 promised the frame "a spinner while a dispatch, clone or `gl-refresh`
     runs" and shipped dispatches only, because `inflight.start` had exactly one caller.
@@ -561,3 +557,7 @@ class CloneAndRefreshActuallyRecordThemselves(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         detach.assert_called_once()
         self.assertEqual(inflight.live_records(kind=None), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
