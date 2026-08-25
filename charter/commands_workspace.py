@@ -700,7 +700,7 @@ def cmd_workspace_autosave(args) -> int:
         if not _git(["status", "--porcelain", "--", *rel], cwd=config.ROOT).stdout.strip():
             return 0  # nothing pending
         marker = config.STATE_DIR / "ws-autosave" / name
-        marker.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(marker.parent)
         if marker.exists() and time.time() - marker.stat().st_mtime < 90:
             return 0  # debounce: at most once per ~90s per workspace
         # commit locally, scoped + secret-scanned (commit_push refuses a secret → rc 1)

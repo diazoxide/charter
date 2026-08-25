@@ -89,29 +89,17 @@ def make_private_dir(p) -> None:
     watching — the #331 defect with a fresh coat of paint. charter tightens what it
     creates and **reports** what it did not; :meth:`PlainFileProvider.health` is where the
     report comes out.
-    """
-    import os
-    from pathlib import Path
 
-    p = Path(p)
-    missing = []
-    cur = p
-    while not cur.exists():
-        missing.append(cur)
-        if cur.parent == cur:
-            break
-        cur = cur.parent
-    for d in reversed(missing):
-        try:
-            d.mkdir(mode=0o700)
-        except FileExistsError:
-            # Someone else created it between the walk and here. It is now a directory
-            # charter did NOT create, and the rule above applies to it: leave its mode.
-            continue
-        try:
-            os.chmod(d, 0o700)
-        except OSError:
-            pass
+    **One implementation, two names.** The walk lives in :func:`charter.config.private_mkdir`
+    now, because the writers that create ``.charter/`` are not only the vault writers —
+    the registry, the persona and workspace pointers, the caches and the session markers
+    all get there first on some flow, and each of them needs this without importing
+    `charter.secrets` (#470). This name stays: it is what the three secrets writers call,
+    and what `tests/test_vault_dir_mode.py` measures.
+    """
+    from .. import config as _config
+
+    _config.private_mkdir(p)
 
 
 def loose_dirs(leaf, stop) -> list:
@@ -179,6 +167,42 @@ def _same(p, resolved) -> bool:
         return Path(p).resolve() == resolved
     except OSError:
         return False
+
+
+def short_path(p) -> str:
+    """A path as it should be SHOWN — relative to the plane when it lives inside it.
+
+    `charter vault list` printed the absolute path in its STATUS column, which is noise
+    and leaks one developer's local layout into terminal output other people see (issue
+    #21's aside). Inside the plane the relative form is both shorter and the same string
+    everyone else would see.
+    """
+    from pathlib import Path
+
+    from .. import config as _config
+    try:
+        return str(Path(p).resolve().relative_to(Path(_config.ROOT).resolve()))
+    except (ValueError, OSError):
+        return str(p)
+
+
+def loose_dir_note(loose) -> str:
+    """``listed by other accounts: .charter 755 (want 700 — chmod 700)``, or ``""``.
+
+    **One wording, two commands.** `charter vault list` prints it as its STATUS column and
+    `charter doctor` puts it on the vaults line (#471); if each rendered its own sentence,
+    the day somebody rewords one is the day an operator can no longer grep for the thing
+    they were told to look for. It is also the sentence tests assert on, and two of them
+    means one gets updated.
+
+    Terse on purpose: it lands in a table row, and *why* charter will not fix the
+    directory itself is a paragraph that belongs in `docs/secrets.md`. The row carries what
+    is wrong and what to type.
+    """
+    if not loose:
+        return ""
+    named = ", ".join(f"{short_path(d)} {oct(m)[-3:]}" for d, m in loose)
+    return f"listed by other accounts: {named} (want 700 — chmod 700)"
 
 
 class VaultProvider(ABC):
@@ -313,6 +337,24 @@ class VaultProvider(ABC):
         Must never include a secret value in ``detail``.
         """
         return True, "ok"
+
+    def loose_dirs(self) -> list:
+        """``(path, mode)`` for each directory this vault is reached through that another
+        account on the machine can reach. Empty for a provider that keeps nothing on disk.
+
+        **The structured answer, so two commands cannot disagree about it.** The note used
+        to exist only inside the string :meth:`health` returns, which is why `doctor` — who
+        keeps the boolean and drops the string — could not report it however much its docs
+        said it did (#471). Substring-matching `health`'s prose from `doctor` would have
+        "fixed" it in the way this codebase keeps being bitten by: the report would go
+        silent the day somebody rewords the sentence, and nothing would fail. Both surfaces
+        now ask this, and :func:`loose_dir_note` renders it for both.
+
+        A provider that stores its data somewhere else entirely (1Password, Vault) has no
+        directory of charter's to report, so the honest answer is an empty list rather than
+        a guess about a backend charter does not own.
+        """
+        return []
 
 
 def redact(text: str, secrets: list[str]) -> str:

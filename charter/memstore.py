@@ -18,7 +18,7 @@ import datetime
 import re
 from pathlib import Path
 
-from . import contain
+from . import config, contain
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -44,6 +44,15 @@ def _now() -> datetime.datetime:
 #: check entirely (#349).
 writable = contain.writable
 
+#: **The one gate on the MODE side**, for the same reason and at the same three writes.
+#: This module is handed its directory: ``personas/<n>/memory`` (committed, the operator's
+#: to mode) on one call and ``PERSONA_STATE_DIR/ephemeral/<sid>/<n>`` (charter's own state,
+#: which must be 0700 whatever the umask says) on the next. A bare
+#: ``mkdir(parents=True, exist_ok=True)`` here is what created ``.charter/`` at 0755 on a
+#: fresh clone, and no reader of this file could have told — only the caller knows which
+#: quadrant it is. `config.mkdir_for` asks at runtime (#470).
+mkdir_for = config.mkdir_for
+
 
 def ensure_index(mem_dir: Path, header: str) -> Path:
     """Create the dir + MEMORY.md (with *header*) if missing; return the index path."""
@@ -51,7 +60,7 @@ def ensure_index(mem_dir: Path, header: str) -> Path:
     # directory outside the plane, and would then create that directory's missing parents
     # for the attacker on the way past.
     idx = writable(index_path(mem_dir))
-    mem_dir.mkdir(parents=True, exist_ok=True)
+    mkdir_for(mem_dir)
     if not idx.exists():
         idx.write_text(header if header.endswith("\n") else header + "\n")
     return idx
@@ -73,7 +82,7 @@ def write(mem_dir: Path, text: str, title: str | None = None, *, timestamped: bo
     refusal = contain.dir_refusal(mem_dir, "write")
     if refusal:
         raise contain.Refused(refusal)
-    mem_dir.mkdir(parents=True, exist_ok=True)
+    mkdir_for(mem_dir)
     now = stamp or _now()
     prefix = now.strftime("%Y%m%d-%H%M%S-") if timestamped else ""
     base = slug(title)
@@ -96,7 +105,7 @@ def write(mem_dir: Path, text: str, title: str | None = None, *, timestamped: bo
 def index_append(idx: Path, filename: str, title: str) -> None:
     idx = writable(idx)
     if not idx.exists():
-        idx.parent.mkdir(parents=True, exist_ok=True)
+        mkdir_for(idx.parent)
         idx.write_text("# Memory Index\n\n")
     with idx.open("a") as f:
         f.write(f"- [{title}]({filename})\n")
@@ -413,7 +422,7 @@ def archive(mem_dir: Path, ident: str) -> Path | None:
     # batch.
     if contain.dir_refusal(dest_dir, "write"):
         return None
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    mkdir_for(dest_dir)
     dest = dest_dir / p.name
     i = 2
     while dest.exists():

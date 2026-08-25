@@ -79,7 +79,7 @@ def mark(harness: str | None = None, when: datetime | None = None,
     src = source or _source()
     p = path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(p.parent)
         p.write_text(json.dumps({"ts": when.isoformat(timespec="seconds"),
                                  "harness": harness, "source": src},
                                 sort_keys=True) + "\n")

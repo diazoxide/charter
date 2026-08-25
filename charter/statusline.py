@@ -235,7 +235,7 @@ def _record_turn(sid: str, hit: int, read: int, write: int,
     rows.append(stamp)
     rows = rows[-_TREND_KEEP:]
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         f.write_text("\n".join(rows) + "\n")
     except OSError:
         pass
@@ -654,7 +654,7 @@ def _repo_states(dirs: list[Path]) -> dict:
             changed = True
     if changed:
         try:
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            config.private_mkdir(cache_file.parent)
             cache_file.write_text(json.dumps(cache))
         except Exception:
             pass
@@ -1238,7 +1238,7 @@ def _vault_health(vault: str) -> tuple[bool, str]:
     ok, detail = registry.provider_for(vault).health()
     cache[vault] = {"ok": bool(ok), "detail": detail or "", "ts": now}
     try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(cache_file.parent)
         cache_file.write_text(json.dumps(cache))
     except Exception:
         pass

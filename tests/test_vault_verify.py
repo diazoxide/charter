@@ -53,6 +53,12 @@ class _Ref:
         # variable is unset is broken in a way health() cannot see.
         return {}
 
+    def loose_dirs(self):
+        # Part of the provider contract since #471: `doctor` asks every vault which of the
+        # directories it is reached through another account can list. A reference vault
+        # here keeps nothing this test put on disk, so the answer is the base class's.
+        return []
+
     def get(self, key):
         if key in self._fails:
             raise base.VaultError(f"resolving '{key}' via op failed (exit 1)")

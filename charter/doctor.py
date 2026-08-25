@@ -1348,6 +1348,14 @@ def check_vaults() -> Result:
     if not vs:
         return Result("vaults", OK, detail="none configured")
     bad, no_identity, timed_out = [], [], []
+    # The loose-directory report, collected as (path, mode) rather than scraped out of
+    # `health()`'s sentence (#471). `_loose_dir_note` deliberately does not set `healthy`
+    # False — a directory another account can list is not an unreachable vault, and this
+    # check runs from the SessionStart hook where it must not hold up a session — so the
+    # only way it reaches an operator through `doctor` is a note on the green line. Keyed
+    # by resolved path: several vaults normally share `.charter/`, and one directory is one
+    # `chmod`, not one per vault.
+    loose: dict = {}
     for name in vs:
         try:
             prov = registry.provider_for(name)
@@ -1357,7 +1365,9 @@ def check_vaults() -> Result:
             # vault rather than as a missing credential. Separated from `bad` because
             # the fix is `export`, not anything about the vault.
             prov.env_overlay()
-            healthy, _ = prov.health()
+            healthy, _detail = prov.health()
+            for d, mode in prov.loose_dirs():
+                loose[str(d)] = (d, mode)
         except util.ProcTimeout:
             # `op` reaching a desktop app that is waiting on a biometric prompt looks
             # exactly like a hang. Naming it beats inheriting the caller's whole budget.
@@ -1370,8 +1380,19 @@ def check_vaults() -> Result:
             healthy = False
         if not healthy:
             bad.append(name)
+    # Deepest first, matching the order `charter vault list` prints, and on EVERY return
+    # below rather than only the green one: a vault that times out or has no identity is a
+    # different problem, and a loose state directory does not stop being one while it is
+    # being fixed. Dropping the note on those paths is how it would come back to being
+    # reported only in conditions nobody is in.
+    loose_note = base.loose_dir_note(
+        sorted(loose.values(), key=lambda pm: len(Path(pm[0]).parts), reverse=True))
+
+    def _with_note(*parts: str) -> str:
+        return "; ".join([p for p in parts if p])
+
     if timed_out:
-        return Result("vaults", WARN, detail=f"{len(vs)} configured",
+        return Result("vaults", WARN, detail=_with_note(f"{len(vs)} configured", loose_note),
                       hint=f"timed out reading: {', '.join(timed_out)} — the provider CLI "
                            f"did not answer within {CHECK_TIMEOUT:g}s (1Password waiting on "
                            f"a biometric prompt looks exactly like this).")
@@ -1379,13 +1400,13 @@ def check_vaults() -> Result:
         srcs = []
         for n in no_identity:
             srcs += [f"${s}" for s in (vs[n].get("config", {}).get("env") or {}).values()]
-        return Result("vaults", WARN, detail=f"{len(vs)} configured",
+        return Result("vaults", WARN, detail=_with_note(f"{len(vs)} configured", loose_note),
                       hint=f"identity variable unset for: {', '.join(no_identity)} — "
                            f"export {', '.join(sorted(set(srcs)))} (charter will not fall "
                            f"back to an ambient token; that would read the vault as "
                            f"someone else)")
     if bad:
-        return Result("vaults", WARN, detail=f"{len(vs)} configured",
+        return Result("vaults", WARN, detail=_with_note(f"{len(vs)} configured", loose_note),
                       hint="not reachable: " + ", ".join(bad))
     # Says what was actually checked, and nothing more. This line used to read "all
     # healthy", which is a claim about resolution that nothing here tests: `health()`
@@ -1405,7 +1426,7 @@ def check_vaults() -> Result:
     # a SUPPORTED configuration that `commands_secrets` recommends by name, so warning
     # about it every session start would be a check crying wolf at a working plane, which
     # this file has already paid for twice (#171, #55). State it; do not resolve it.
-    notes = []
+    notes = [loose_note] if loose_note else []
     outside = registry.shared_files_outside_plane()
     if outside:
         notes.append(f"vaults.json points outside the plane: {', '.join(outside)}")

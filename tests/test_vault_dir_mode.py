@@ -29,16 +29,20 @@ covers two levels and not three goes RED. Modes are tested through that mask and
 against a list of known-bad values: 0755 is the one everybody pictures, while 0705, 0711,
 0730 and 0701 list or traverse just as well and appear on no such list.
 
-**"The vault writers", not "charter", and the qualifier is load-bearing.** The 0700 walk
-lives in :func:`base.make_private_dir`, which only the three secrets writers call. On the
-default CLI flow they are not what creates ``.charter/``: ``charter vault add`` writes the
-local registry first, through a bare ``path.parent.mkdir(parents=True, exist_ok=True)``,
-so the state directory is already there — at the umask default — before any vault file is
+**"The vault writers", and who else gets there first.** The 0700 walk is
+:func:`base.make_private_dir`, which the three secrets writers call — and it is
+:func:`config.private_mkdir` under another name, which is what every other state writer
+calls since #470. That distinction used to matter: on the default CLI flow the vault
+writers are not what creates ``.charter/`` (``charter vault add`` writes the local
+registry first, through a bare ``path.parent.mkdir(parents=True, exist_ok=True)``), so the
+state directory was already there, at the umask default, before any vault file was
 written. Every class below except :class:`TheOrderTheCliActuallyUses` gives the vault
 writer the first move, which is the order a direct ``PlainFileProvider(...).set()``
-produces and not the order the CLI produces, and under that fixture the writer creates
-``.charter/`` too. That class exists so the difference is pinned rather than hidden: it
-reproduces the registry-first ordering and asserts what is true under it (#470).
+produces and not the order the CLI produces. That class exists so the difference is pinned
+rather than hidden: it reproduces the registry-first ordering and asserts that the state
+directory comes out 0700 under it too. The whole-CLI sweep — real binary, real plane,
+three umasks, three different first writers — is
+`tests/test_the_state_directory_is_charters_to_choose.py`.
 
 The second property is the honest half, and it is asserted rather than merely documented:
 
@@ -487,15 +491,16 @@ class TheOrderTheCliActuallyUses(PersonaIso):
     So this class drives ``registry.add_vault`` first, which is the real call, and pins
     all three halves of what the documents now say:
 
-    * the levels the vault writers create are 0700 whatever the umask is — unchanged, and
-      that is the fix;
-    * ``.charter/`` itself is whatever the umask left it — the residual, open as #470;
-    * it is *reported* rather than silently fine, on the health line ``charter vault list``
-      prints.
+    * the levels the vault writers create are 0700 whatever the umask is;
+    * ``.charter/`` itself is 0700 too, whatever the umask is — the registry write goes
+      through the same walk since #470, so the mode no longer depends on which command
+      somebody happened to run first;
+    * a directory charter did **not** create keeps its mode and is *reported* — on the
+      health line ``charter vault list`` prints, and on ``charter doctor``'s vaults line
+      (#471).
 
-    The middle one is a defect pinned on purpose. If it goes RED because #470 landed, that
-    is good news and the thing to fix is `docs/secrets.md` and the news entry, which
-    currently tell the reader it is open.
+    The middle one used to be a defect pinned on purpose, with the residual written into
+    `docs/secrets.md` and the news entry. Both now describe the fix.
     """
 
     def _fresh_plane(self, tag: str, um: int):
@@ -555,30 +560,27 @@ class TheOrderTheCliActuallyUses(PersonaIso):
                         f"registry going first must not cost the levels below it")
                 self.assertEqual(stat.S_IMODE(vf.stat().st_mode), 0o600, "and the file")
 
-    def test_the_state_directory_itself_is_decided_by_the_umask(self):
-        """The residual, executed. `.charter/` is the registry's to create, not the walk's.
+    def test_the_state_directory_is_charters_to_choose(self):
+        """The residual, closed (#470). `.charter/` is the registry's to create — and the
+        registry creates it through the same walk now.
 
-        Asserted as *the umask decides it* — two umasks, two different modes — and not
-        merely as "0755 under 022". A regression that hardcoded 0755 would satisfy the
-        second and not the first, and the property is the dependence, not the value.
+        Asserted as *the umask does not decide it* — three umasks, one mode — and not
+        merely as "0700 under 022". The property is the independence; a fix that only held
+        under the umask it was written for would satisfy the weaker reading. The CLI-level
+        sweep, in a plane built by `charter init` and driven through the real binary, is
+        `tests/test_the_state_directory_is_charters_to_choose.py`; this case is the
+        in-process pin on the ordering `charter vault add` produces.
         """
         seen = {}
-        for um in (0o022, 0o077):
+        for um in (0o000, 0o022, 0o077):
             self._fresh_plane(f"s{um:03o}", um)
             self._add_vault("devops", "vaults/team/prod.json")
             seen[um] = stat.S_IMODE(Path(config.STATE_DIR).stat().st_mode)
 
-        self.assertNotEqual(
-            seen[0o022], seen[0o077],
-            f"`.charter/` came out {oct(seen[0o022])[-3:]} under both umasks. If charter "
-            f"now chooses this mode itself, #470 is fixed — good news, and docs/secrets.md "
-            f"and the `a-vault-charter-cannot-make-private` news entry both still tell the "
-            f"reader it is open. Update them and delete this case.")
-        self.assertEqual(seen[0o077], 0o700, "umask 077 masks the group and other bits")
         self.assertEqual(
-            seen[0o022] & 0o077, 0o055,
-            f"the measurement in #470: umask 022 leaves `.charter` at "
-            f"{oct(seen[0o022])[-3:]}, other-readable and other-traversable")
+            set(seen.values()), {0o700},
+            f"the umask still decides `.charter/`: "
+            f"{[(oct(u), oct(m)[-3:]) for u, m in seen.items()]}")
 
     def test_the_loose_state_directory_is_named_where_the_docs_say_it_is(self):
         """Reported, not silently accepted — and reported in `charter vault list`.
@@ -594,10 +596,15 @@ class TheOrderTheCliActuallyUses(PersonaIso):
         from charter.secrets import registry
 
         self._fresh_plane("report", 0o022)
+        # Made by hand, before charter gets there: since #470 a `.charter/` charter creates
+        # is 0700, so the directory that has to be REPORTED is the one that predates it —
+        # an older charter's, or a `mkdir -p` at the umask default.
+        sd = Path(config.STATE_DIR)
+        sd.mkdir(parents=True)
+        os.chmod(sd, 0o755)
         vf = self._add_vault("devops", "vaults/team/prod.json")
         PlainFileProvider("devops", {"file": str(vf)}).set("K", "value-one")
 
-        sd = Path(config.STATE_DIR)
         self.assertEqual(stat.S_IMODE(sd.stat().st_mode) & 0o077, 0o055,
                          "precondition: there is something to report")
 
@@ -615,33 +622,25 @@ class TheOrderTheCliActuallyUses(PersonaIso):
                       "`charter vault list`'s STATUS column is where docs/secrets.md now "
                       "says this appears, so that is where it has to appear")
 
-    def test_doctor_is_not_where_it_appears(self):
-        """The other narrowed sentence, pinned as the limit it is (#471).
+    def test_the_note_is_where_the_docs_say_it_is_in_doctor_too(self):
+        """#471, closed: `check_vaults` asks `loose_dirs()` and renders the same note.
 
-        `check_vaults` does ``healthy, _ = prov.health()`` and drops the detail, and
-        `_loose_dir_note` never sets ``healthy`` False — deliberately, since this check
-        runs from the SessionStart hook. So no path carries the note into `doctor`, and
-        the docs no longer say one does.
+        Kept here as the pair to the case above — the two surfaces are one claim, and a
+        test file that pins only one of them is how they came apart in the first place.
+        The rest of doctor's behaviour around it (the JSON, the WARN paths, one line per
+        directory) is `tests/test_doctor_names_a_loose_state_directory.py`.
         """
         from charter import doctor
-        from charter.secrets import registry
 
         self._fresh_plane("doctor", 0o022)
+        sd = Path(config.STATE_DIR)
+        sd.mkdir(parents=True)
+        os.chmod(sd, 0o755)
         vf = self._add_vault("devops", "vaults/team/prod.json")
         PlainFileProvider("devops", {"file": str(vf)}).set("K", "value-one")
 
-        self.assertIn("listed by other accounts",
-                      registry.provider_for("devops").health()[1],
-                      "precondition: the health line carries the note, so doctor had "
-                      "something to drop")
-
         res = doctor.check_vaults()
-        rendered = res.render()
-        self.assertNotIn(
-            "listed by other accounts", rendered,
-            f"doctor now carries the loose-directory note. #471 is fixed — good news, and "
-            f"docs/secrets.md and the news entry both still say it does not. Update them "
-            f"and delete this case. Got: {rendered!r}")
+        self.assertIn("listed by other accounts: .charter 755", res.render())
         self.assertEqual(res.status, doctor.OK,
                          "and it stays a green line: a loose directory is an operator's "
                          "decision, not an unreachable vault")

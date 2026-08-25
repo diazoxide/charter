@@ -280,7 +280,7 @@ def _ask_mark_set(sid, tuid, kind) -> None:
     if f is None:
         return
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         f.touch()
     except OSError:
         pass
@@ -4088,7 +4088,7 @@ def _ws_edit_first_this_session(session, ws) -> bool:
         return True
     try:
         d = config.STATE_DIR / "ws-edit-nudge"
-        d.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(d)
         key = re.sub(r"[^A-Za-z0-9._-]", "", f"{session}-{ws}")
         marker = d / key
         if marker.exists():
@@ -4125,7 +4125,7 @@ def _memnudge_get(sid: str) -> int:
 def _memnudge_set(sid: str, n: int) -> None:
     try:
         f = _memnudge_file(sid)
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         f.write_text(str(n))
     except OSError:
         pass
@@ -4300,7 +4300,7 @@ def _configver_file(sid: str) -> Path:
 
 def _write_configver(f: Path, sha: str) -> None:
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         f.write_text(sha + "\n")
     except OSError:
         pass
@@ -4496,7 +4496,7 @@ def _agent_map_file() -> Path:
 def _agent_map_remember(agent_id: str, persona_name: str) -> None:
     try:
         f = _agent_map_file()
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         try:
             data = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -4605,7 +4605,7 @@ def _commit_dispatch(path, agent: str) -> None:
         return
     lock = _cfg.STATE_DIR / "dispatch-commit.lock"
     try:
-        lock.parent.mkdir(parents=True, exist_ok=True)
+        _cfg.private_mkdir(lock.parent)
         with open(lock, "w") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
             try:
@@ -4715,7 +4715,7 @@ def _commit_gate_due(sid: str | None) -> bool:
         return True
     try:
         d = config.STATE_DIR / "commit-gate"
-        d.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(d)
         f = d / re.sub(r"[^A-Za-z0-9._-]", "", sid)
         n = int(f.read_text().strip()) if f.exists() else 0
         if n > 0:
@@ -4759,7 +4759,7 @@ def _route_mark_set(sid: str | None, names: list[str]) -> None:
     if f is None:
         return
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(f.parent)
         # The roster's NAMES, so the ask can list them without re-deriving the roster from
         # a persona that may have changed mid-turn. Names only — the same counts-and-names
         # discipline the tally keeps; no prompt text goes anywhere near this file.

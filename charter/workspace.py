@@ -406,14 +406,14 @@ def set_active(name: str, session_id: str | None = None, force: bool = False) ->
     if locked and locked != name and not force:
         _trace("workspace-refused", session_id, workspace=name, locked_to=locked)
         return "locked"
-    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    config.private_mkdir(config.STATE_DIR)
     tid = _terminal_id()
     if tid:
-        config.TERMINALS_DIR.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(config.TERMINALS_DIR)
         _terminal_file(tid).write_text(name + "\n")
     sid = _session_id(session_id)
     if sid:
-        config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(config.SESSIONS_DIR)
         _session_file(sid).write_text(name + "\n")
         _lock_file(sid).write_text(name + "\n")  # confirming = locking for the session
     _prune()
@@ -441,7 +441,7 @@ def reconcile(session_id: str | None = None, terminal_id: str | None = None) -> 
     tid = _terminal_id(terminal_id)
     val = _read(_terminal_file(tid)) if tid else None
     if val:
-        config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        config.private_mkdir(config.SESSIONS_DIR)
         _session_file(sid).write_text(val + "\n")
         # The one pointer write nobody typed. If any write is ever going to look as though
         # it came from nowhere, it is this one — so it says where it came from.

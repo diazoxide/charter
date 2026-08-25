@@ -184,7 +184,7 @@ def _write(path, doc: dict, mode: int) -> None:
     and environment variable NAMES — never a value — which is what makes the weaker
     posture the right one rather than an oversight.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    config.private_mkdir(path.parent)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, mode)
     try:
         try:
