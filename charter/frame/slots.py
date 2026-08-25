@@ -40,12 +40,16 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_PERIOD = 0.2
 
 #: How many rows the full-height `right` panel draws at `terse`, and how many rows of
-#: repo table `bottom` keeps there. `top` has no equivalent — it is one row at every
-#: density (`layout.SLOT_SIZE`), so what "less" means for it is FIELDS, not rows.
+#: repo table `repos` keeps there. `top` and `bottom` have no equivalent — each is one
+#: row at every density (`layout.SLOT_SIZE`), so what "less" means for them is FIELDS,
+#: not rows.
 #:
-#: `bottom` is BOTH now (#488): at `terse` its attention row keeps one field and its
-#: table keeps this many rows, because a density that buys back rows has to buy them
-#: from the slot that actually has rows to give.
+#: **`repos` is where the rows are, and #515 is why that is one slot rather than two.**
+#: #488 had `bottom` carrying both, so `terse` meant "one field on the attention row AND
+#: this many table rows" — one level name governing two unrelated budgets in one pane.
+#: Split apart, `terse` limits `_bottom` to a single field and limits this pane to this
+#: many rows, and a density that buys back rows still buys them from the slot that
+#: actually has rows to give.
 _TERSE_ROWS = 4
 
 
@@ -105,8 +109,8 @@ def _frame_workspace(fid: str) -> str:
 
     Kept as a named function here rather than inlined at the three call sites, because
     what it means is a `slots` fact: every panel goes through it — `_top` names the
-    workspace, `_bottom` counts its todos and its alerts and draws its repo table — so the
-    things a frame says about "where am I" cannot disagree with each other. That is a
+    workspace, `_bottom` counts its todos and its alerts, `_repos` draws its table — so
+    the things a frame says about "where am I" cannot disagree with each other. That is a
     failure an operator reads immediately: a header saying `default` above a table listing
     another workspace's repos.
     """
@@ -504,8 +508,9 @@ def _unknown_lines(width: int) -> list[str]:
     that appeared while the rows were unknown and vanished the moment they were known
     would read as "the repos went away". That is not enforced HERE, though — the width
     rule for this pane lives in :func:`_table_cap`, which answers 0 below
-    `statusline._LEFT_W`, and `_bottom` already refuses to compose anything on a budget of
-    0. A second copy of the rule in this function would be unreachable through the only
+    `statusline._LEFT_W`, and `_repos` already refuses to compose anything on a budget of
+    0 (and since #515 `layout.visible_slots` does not even split the pane at that width).
+    A second copy of the rule in this function would be unreachable through the only
     caller there is, and a guard no test can turn red is exactly the kind that passes
     because a DIFFERENT guard caught it.
 
@@ -520,8 +525,71 @@ def _unknown_lines(width: int) -> list[str]:
     return [tui.truncate(f"  {sl._DIM}⋯ gathering this workspace's repos…{sl._R}", width)]
 
 
+def _empty_lines(ws: str, width: int) -> list[str]:
+    """What the `repos` pane draws once the gather HAS run and found no clones.
+
+    **A pane of its own cannot be silent about this, and that is what #515 changed.**
+    While the table shared `bottom` with the attention row, a workspace with no clones
+    simply produced no table rows and the pane was the one-line strip it always was —
+    absence said it. Split into its own bordered component, the same silence is an empty
+    rectangle, and an empty rectangle is a claim nobody made: it reads as a table that
+    failed to draw rather than as a workspace with nothing in it.
+
+    So it is said, with the command that changes it — the shape every `statusline._alerts`
+    row already has, because a line that names a problem and not its fix costs a row and
+    settles nothing. *ws* is the FRAME's workspace (`_frame_workspace`), the same one the
+    count was taken from, so the command names the workspace the pane is actually about
+    rather than whatever this process would have resolved for itself (#512).
+
+    Distinct from :func:`_unknown_lines` on purpose: "not gathered yet" and "gathered,
+    nothing there" are two different claims and #512 is the whole cost of drawing them
+    the same. That one is reached when `gather.cached` answers ``None``; this one when it
+    answers a real scan with no rows in it.
+
+    **No `contain.one_line` over *ws*, and that is a decision rather than an omission.**
+    Every rung of `state.workspace_for` that can answer a name checks it against
+    `instance.WORKSPACE_NAME_RE` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`), an alphabet with no
+    newline, no control character and no escape in it — so containment is already true by
+    construction one layer up, and a second copy here would be a guard nothing could ever
+    turn red. `_top` interpolates the same value on the same terms. What is NOT free is
+    the WIDTH: the name is arbitrary length, so the line is measured through
+    `tui.truncate` like every other line in this module.
+    """
+    from .. import statusline as sl
+
+    return [tui.truncate(
+        f"  {sl._DIM}no clones in{sl._R} {ws}{sl._DIM} · charter clone <repo> -w "
+        f"{ws}{sl._R}", width)]
+
+
+def _too_narrow_lines(width: int) -> list[str]:
+    """What the `repos` pane says when it exists but is narrower than its own table.
+
+    **Reachable only by a RESIZE, and that is the whole reason it exists.** At launch
+    `layout.visible_slots` does not split this pane below `layout._table_min_cols()` at
+    all — a bordered rectangle with nothing in it is the "no repos" lie #515 removed. But
+    `cmd_resize` re-sizes panes; it does not create or destroy them, so narrowing a
+    running frame's terminal leaves a `repos` pane that `_table_lines` correctly refuses
+    to draw a cut table into. Before this, that was a blank bordered row: the same lie,
+    reached by dragging instead of by launching.
+
+    So the pane says what it is. One line, the width it needs stated as a number the
+    operator can act on, and read from `statusline._LEFT_W` rather than spelled here for
+    the reason `layout._table_min_cols` gives: the number that stops the table drawing and
+    the number this line quotes must be the same one.
+
+    Bounded through `tui.truncate` like every other line here — this line is drawn at
+    widths below 95 by definition, and `⋯` is East-Asian *Ambiguous*.
+    """
+    from .. import statusline as sl
+
+    return [tui.truncate(
+        f"  {sl._DIM}⋯ too narrow for the repo table — {sl._LEFT_W} columns "
+        f"needed{sl._R}", width)]
+
+
 def _table_cap(fid: str, width: int) -> int:
-    """The most rows of repo table `_bottom` will draw in a *width*-column pane —
+    """The most rows of repo table `_repos` will draw in a *width*-column pane —
     **every reason the renderer draws fewer rows than there is content**, in one place.
 
     Three of them, and until #500 only the first was written down where the LAUNCHER
@@ -529,19 +597,22 @@ def _table_cap(fid: str, width: int) -> int:
 
     * **Too narrow is no table at all.** Below `statusline._LEFT_W` (95)
       :func:`_table_lines` refuses outright rather than trimming a row into a false-clean
-      `charter  main`, and that is not an exotic width: `layout.visible_slots` keeps
-      `bottom` down to `min_cols // 2` (50), so every ordinary 80-column terminal is here.
+      `charter  main`, and that is not an exotic width: every ordinary 80-column terminal
+      is here. Since #515 that answer is also what `layout.visible_slots` reads (through
+      `layout._table_min_cols`) to decide the `repos` pane is not split at all at those
+      widths — one number, two decisions, rather than a renderer that refuses and a
+      launcher that splits a pane for the refusal to sit in.
     * **`terse` keeps :data:`_TERSE_ROWS`.** A density that buys the harness back its
       rows has to buy them from the slot that has rows to give, so `minimal` asks for a
       SHORTER pane, not the same pane with more of it blank.
     * **`statusline._MAX_REPO_LINES` bounds the rest**, the same total-row budget the
       wide table keeps (repo rows plus the `…(+N more)` line, not repo COUNT — see that
       constant's own comment), so a workspace with forty clones gets fourteen rows of
-      table under its attention row rather than forty.
+      table rather than forty.
 
-    **Both sides of "how tall is `bottom`?" call this, and that is the whole point.**
-    :func:`bottom_rows_wanted` asks it to size the pane before it exists;
-    :func:`_bottom` asks it with the pane's own measured width to bound what it draws
+    **Both sides of "how tall is the table pane?" call this, and that is the whole
+    point.** :func:`repos_rows_wanted` asks it to size the pane before it exists;
+    :func:`_repos` asks it with the pane's own measured width to bound what it draws
     into it. A cap applied on one side only is exactly the defect #500 fixes: the sizer
     used to answer from the repo count alone, so an 80-column frame with six repos got a
     seven-row pane to draw one line in, and `minimal` on a wide terminal got an
@@ -565,38 +636,50 @@ def _table_cap(fid: str, width: int) -> int:
     return cap
 
 
-def bottom_rows_wanted(fid: str, *, pane_cols: int) -> int:
-    """How many rows `_bottom` would fill for this frame in a *pane_cols*-column PANE.
+def repos_rows_wanted(fid: str, *, pane_cols: int) -> int:
+    """How many rows `_repos` would fill for this frame in a *pane_cols*-column PANE.
 
-    **One answer to "how tall is `bottom`", read by both sides of the question.** The
-    renderer spends the pane it was given (:func:`_table_lines`' *budget*); the LAUNCHER
-    has to decide how tall to make that pane before any panel exists, and the
+    **One answer to "how tall is the table pane", read by both sides of the question.**
+    The renderer spends the pane it was given (:func:`_table_lines`' *budget*); the
+    LAUNCHER has to decide how tall to make that pane before any panel exists, and the
     `window-resized` recompute has to decide again with the window's new size. If those
     two disagreed, a frame would come up with a pane taller than its content (blank rows
     the harness could have had) or shorter (a table cut off with nothing saying so) —
     and both were shipped by #488, because this asked the repo count and nothing else
     while the renderer also asked the width and the density. Pinned by a test that
-    renders `_bottom` into a pane of exactly this height, at exactly this width and at
+    renders `_repos` into a pane of exactly this height, at exactly this width and at
     every density, and counts the lines that come back.
 
     *pane_cols* is required, and keyword-only so no caller can pass a row count by
-    mistake. A pane narrower than `statusline._LEFT_W` draws no table at all, so it wants
-    the one-row strip `bottom` always was — see :func:`_table_cap`, which is where every
-    reason the renderer draws fewer rows than there is content now lives.
+    mistake. A pane narrower than `statusline._LEFT_W` draws no table at all and is not
+    split at all (`layout.visible_slots`), so the zero this answers there is the honest
+    one rather than a pane sized for nothing — see :func:`_table_cap`, which is where
+    every reason the renderer draws fewer rows than there is content now lives.
 
     **The PANE's columns, not the window's, and the name is the guard.** Round 2 of #500
     called this argument `cols` and every caller handed it the window's width, which is
-    only `bottom`'s width when nothing took columns off it first: with a `[frame]
-    slots` of `["right", "top", "bottom"]` a 110-column window gives an 87-column
-    `bottom` (measured, tmux 3.7c), so a six-repo plane was split seven rows tall for a
-    table the panel then refused to draw. The number is `layout.bottom_cols`' answer, and
-    the rename is what makes the old, wrong call a `TypeError` at the call site rather
-    than a frame with six blank rows in it — the same discipline `window_cols=` already
+    only this pane's width when nothing took columns off it first: with a `[frame] slots`
+    of `["right", "top", "bottom", "repos"]` a 120-column window gives a 97-column table
+    pane (measured, tmux 3.7c), so a six-repo plane was split seven rows tall for a table
+    the panel then refused to draw. The number is `layout.repos_cols`' answer, and the
+    keyword is what makes the old, wrong call a `TypeError` at the call site rather than
+    a frame with six blank rows in it — the same discipline `window_cols=` already
     applies one level up.
 
-    `+ 1` is the attention row — the alert, the spinner, this session's news, the todo
-    count and the hotkey hint — which `_bottom` always draws and which #488 is explicit
-    that the table joins rather than evicts.
+    **The `+ 1` is the pane's own heading, and it is no longer the attention row.** This
+    used to add that row, because `bottom` drew it and the table into one pane; they are
+    two panes now (`bottom` is the one-row strip it was before #488, and
+    `layout.SLOT_SIZE` states its height as the constant it is). What the row buys here
+    is `▪ repos N` — the same heading `_right` gained in #516, from the same
+    `_sidebar_head`, so the frame's two bordered components are labelled the same way and
+    the tree beneath it has something to hang from. Chrome the density does not buy back,
+    exactly as the sidebar's heading is not (`_TERSE_ROWS` bounds the table's ROWS; the
+    label is what the component is).
+
+    Zero is a real answer, and `layout.repos_rows` is what turns it into the one-line
+    pane that says so (`_empty_lines`): a workspace with no clones, or a gather that has
+    not run yet. Those two lines carry no heading — `▪ repos 0` above "no clones in demo"
+    would be the same fact twice in a two-row pane.
 
     `gather.row_count` is what makes this affordable at launch: it answers from the
     frame's cache when there is one and from a plain directory listing when there is not,
@@ -606,7 +689,10 @@ def bottom_rows_wanted(fid: str, *, pane_cols: int) -> int:
     """
     from . import gather
     cap = _table_cap(fid, pane_cols)
-    return 1 + (min(gather.row_count(fid), cap) if cap > 0 else 0)
+    if cap <= 0:
+        return 0
+    rows = gather.row_count(fid)
+    return 1 + min(rows, cap) if rows else 0
 
 
 #: Columns the persona NAME cell is never squeezed below once the badges have a column
@@ -870,7 +956,7 @@ def _right(fid: str) -> str:
     #
     # `> 0` and NOT the two-row floor, which is `_todo_rows`' to keep: this test is only
     # "is there any room at all", asked so a pane with none does not open a cache file it
-    # is about to discard (`bottom_rows_wanted` orders its own two questions the same way,
+    # is about to discard (`repos_rows_wanted` orders its own two questions the same way,
     # and for the same reason). Repeating the floor here would put one rule in two places,
     # where the outer copy silently decides the case and the inner one can be broken
     # without anything noticing — which is exactly what a mutation of the inner guard
@@ -971,7 +1057,22 @@ def _fit_fields(priority: list[tuple[str, str]], width: int,
 
 
 def _bottom(fid: str) -> str:
-    """What still wants attention, and how to act on it.
+    """What still wants attention, and how to act on it — the frame's last row.
+
+    **One row, always, and #515 is what made that true again.** Between #488 and now this
+    pane carried the attention row AND the repo table stacked underneath it with nothing
+    between them, which is exactly what the operator reported: two different kinds of
+    thing sharing a pane, and the eye with nothing to separate them by. The table has its
+    own bordered pane now (:func:`_repos`), and this is the one-row strip it was before —
+    isolated the way `top` is, and sitting on the terminal's LAST row (see
+    `layout.panel_argvs` for the split order that puts it there, measured).
+
+    **Last row rather than first, and it is a property rather than a preference.** The
+    table's height is its content's (`layout.repos_rows`), so whichever of the two sits
+    below the other moves up and down the screen as repos are cloned, go dirty, or drop
+    off. Anchoring the ATTENTION row is worth more than anchoring the table: it is the
+    surface #488 protected from eviction, and an alert you have to go looking for is one
+    you read late. So the table floats and the alert does not.
 
     Only the first alert, deliberately: `_alerts()` already returns its entries in
     priority order, so this picks which one survives rather than leaving it to whichever
@@ -990,16 +1091,15 @@ def _bottom(fid: str) -> str:
     the harness (`_right`'s docstring makes the identical point for `_persona_chips`).
 
     **Four candidate fields on that row, each shown WHOLE or dropped WHOLE — never one
-    assembled string cut once from the right.** The attention row is one row whatever
-    this pane's height is, and its WIDTH is the frame's own, not a narrow side panel's,
-    so ordinarily every field fits comfortably and this never has to choose. But
-    `layout.py`'s own module docstring records a REAL tmux 3.7c resize that transiently
-    starves a pane before the corrective hook snaps it back — not hypothetical, reachable
-    by an ordinary window resize at any moment. A naive single `tui.truncate` over the
-    joined line would risk Task 3's own Critical on perfectly ordinary data: an alert
-    exists specifically to carry the command that fixes it, and slicing into that command
-    mid-word reads as "no problem here" — the exact false-clean failure this plan's
-    Global Constraints call out by name.
+    assembled string cut once from the right.** The attention row is one row and its
+    WIDTH is the frame's own, not a narrow side panel's, so ordinarily every field fits
+    comfortably and this never has to choose. But `layout.py`'s own module docstring
+    records a REAL tmux 3.7c resize that transiently starves a pane before the corrective
+    hook snaps it back — not hypothetical, reachable by an ordinary window resize at any
+    moment. A naive single `tui.truncate` over the joined line would risk Task 3's own
+    Critical on perfectly ordinary data: an alert exists specifically to carry the command
+    that fixes it, and slicing into that command mid-word reads as "no problem here" — the
+    exact false-clean failure this plan's Global Constraints call out by name.
 
     Priority order, highest first: the one alert (`_alerts()`'s own top pick — an
     actionable control-plane problem, carrying its own fix); the in-flight spinner
@@ -1029,42 +1129,12 @@ def _bottom(fid: str) -> str:
     every operator the wrong key, on every repaint, forever. `config.FRAME` is the
     resolved value `commands_frame.conf_text` binds, so there is one source for what the
     panel says and what the frame actually does.
-
-    **Under it, the wide repo table — #488.** The frame suppresses the status line
-    (#386) and until now showed LESS of the plane's repo state than the line it replaced:
-    the only slot drawing repos was a 22-column `left` sidebar recomposing a table
-    designed for 66. `bottom` is the frame's full-width slot, so the table lives here
-    now, at `statusline.py`'s own column widths, and `left` is retired rather than left
-    drawing a lesser copy of its neighbour.
-
-    **The attention row is not evicted by it — it is the first line, always.** The alert
-    and the command that fixes it outrank any repo row; the table gets what is left of
-    the pane after it (`_table_lines`' own *budget*). On a plane with no clones there is
-    no table at all and this is exactly the one-row strip it always was.
-
-    **The pane is measured, not assumed.** :func:`_height` reads this pane's own tty the
-    way :func:`_width` reads its width; :func:`bottom_rows_wanted` is what told the
-    LAUNCHER how tall to make it, and both go through :func:`_table_cap` at the same
-    density and at THIS PANE's width — measured here, predicted there by
-    `layout.bottom_cols`, which is the only reason the launcher's number can match a pane
-    the sidebar has narrowed. So on an untouched frame the two agree exactly and no row
-    is either blank or cut, at every width the frame is drawn at, at every level the
-    density menu offers, and in whatever order the operator's `[frame] slots` puts the
-    edges in. A pane that is shorter anyway — a transient mid-resize
-    size, or a window with no rows to spare — costs the table its lowest-priority rows
-    through `_pick_rows`' ranking, never the attention row.
-
-    **One `gather.read`, and no repo directory touched.** #387 pinned a panel's idle tick
-    at exactly one `stat` and `bottom` is the ONE animated slot (:data:`ANIMATED`), so a
-    table that walked a directory per row would pay that back fourteen times over at five
-    repaints a second. Everything the table draws comes out of the cache; see
-    :func:`_table_row` for the one column that costs (presence) and is therefore absent.
     """
     from .. import config, session as _session, statusline as sl
     from . import state, tmuxctl
-    # The FRAME's workspace (#512), for the todo count and the alerts as much as for the
-    # table: they are three statements about one workspace on one row, and a panel that
-    # resolved its own would count another workspace's todos beside this one's repos.
+    # The FRAME's workspace (#512), for the todo count as much as for the alerts: they
+    # are statements about one workspace on one row, and a panel that resolved its own
+    # would count another workspace's todos beside this one's alerts.
     ws = _frame_workspace(fid)
     todos = sl._todo_count(ws)
     alerts = sl._alerts(ws)
@@ -1103,48 +1173,126 @@ def _bottom(fid: str) -> str:
               "todo": todo_text, "hotkey": hotkey_text}
     parts = [fields[n] for n in ("todo", "alert", "inflight", "news", "hotkey")
              if n in keep]
-    lines = [tui.truncate(" · ".join(parts), w)]
+    return tui.truncate(" · ".join(parts), w)
 
-    # The table gets what is left of the pane below the attention row, bounded by
-    # `_table_cap` — the SAME call `bottom_rows_wanted` made to size this pane, with this
-    # pane's own measured width instead of the window's. Asked for fewer ROWS rather than
-    # sliced afterwards, so what survives at `terse` is still `_pick_rows`' ranked subset
-    # (the repo you are standing in, the ones with something on them) rather than
-    # whichever happened to come first — the same discipline the `terse` chip list in
-    # `_right` keeps.
-    budget = min(_height() - len(lines), _table_cap(fid, w))
-    if budget > 0:
-        from . import gather
-        # `gather.cached`, never `gather.read` (#512). The two differ by exactly one
-        # thing: `read` falls back to a live `scan()` when there is no cache, and a
-        # PANEL is the one caller that must not have that fallback. Two reasons, and
-        # both are rules this module already keeps:
-        #
-        # * **A panel does not sweep.** `_table_lines`' own docstring promises it never
-        #   reaches a repo directory, a `git status` or a `glstate.read_for`; #387 pinned
-        #   an idle tick at one `stat`, and `bottom` is the ONE animated slot, so a paint
-        #   that scans is five cold sweeps a second for as long as anything is in flight.
-        #   `cmd_launch` calls `gather.discard` before it draws, so a fresh frame reached
-        #   that fallback BY DESIGN, on the very repaints an operator is watching.
-        # * **An empty table is not the same claim as an unknown one.** `read`'s fallback
-        #   returns `repos: []` for "the scan found nothing" and for "the scan ran in the
-        #   wrong workspace" alike, and `_table_lines` draws both as no rows at all — a
-        #   pane that says "no repos" on a plane full of them. `None` here keeps the two
-        #   apart, and :func:`_unknown_lines` says which one this is.
-        #
-        # Nothing is left blank waiting: `commands_frame._spawn_gather` kicks a detached
-        # refresh at launch which writes this cache and bumps the version, the same shape
-        # `update.maybe_spawn`/`glstate.maybe_spawn` already use, and every
-        # `posttooluse*` hook refreshes it after that (`notify.plane_changed`).
-        data = gather.cached(fid)
-        lines.extend(_unknown_lines(w) if data is None
-                     else _table_lines(data, w, budget))
-    return "\n".join(lines)
+
+def _repos(fid: str) -> str:
+    """This workspace's repo table, in a bordered pane of its own — #515.
+
+    **The table used to be the bottom half of `_bottom` and that is the defect.** #488
+    put it there because `bottom` was the frame's full-width slot and the 22-column
+    `left` sidebar it replaced could not draw a table at all. What shipped was one pane
+    holding two unrelated things stacked with no rule between them: the attention row,
+    then repo rows running straight on out of it. This is that table given its own pane,
+    which is the only way tmux can draw a rule between the two — and the rule is tmux's,
+    drawn from the five window options `commands_frame._CHROME` pins (#514), never a box
+    a renderer paints for itself.
+
+    **This is #488's actual content, unchanged**: the frame used to show LESS of the
+    plane's repo state than the status line it suppresses (#386), because the only slot
+    drawing repos was a 22-column sidebar whose own docstring conceded that `_NAME_W`
+    (32) and `_BRANCH_W` (34) alone exceed the whole pane. The table is drawn here at the
+    widths it was designed for.
+
+    **It is headed, `▪ repos 6`, from `_sidebar_head` — the same helper `_right` heads
+    its own sections with (#516).** A bordered box of tree rows next to a bordered box
+    whose sections are all labelled reads as an overflow of its neighbour rather than as
+    a component, which is the exact impression #515 exists to remove; and the table's
+    first row is `statusline._TREE_MID` (`├─`), a glyph that means "there is more above
+    me" and had nothing above it once the attention row moved out. One row, and the count
+    is the plane's repo count — a fact the frame did not previously show anywhere.
+
+    **The pane is measured, not assumed.** :func:`_height` reads this pane's own tty the
+    way :func:`_width` reads its width; :func:`repos_rows_wanted` is what told the
+    LAUNCHER how tall to make it, and both go through :func:`_table_cap` at the same
+    density and at THIS PANE's width — measured here, predicted there by
+    `layout.repos_cols`, which is the only reason the launcher's number can match a pane
+    the sidebar has narrowed. So on an untouched frame the two agree exactly and no row
+    is either blank or cut, at every width the frame is drawn at, at every level the
+    density menu offers, and in whatever order the operator's `[frame] slots` puts the
+    edges in. The `- 1` is the heading and nothing else — the attention row is another
+    pane's now, and a budget still reserving a row for THAT would lose the lowest-ranked
+    repo row to nothing.
+
+    A pane that is shorter anyway — a transient mid-resize size, or a window with no rows
+    to spare — costs the table its lowest-priority rows through `_pick_rows`' ranking,
+    and the `…(+N more)` line is reserved out of the budget rather than trimmed off the
+    end (see :func:`_table_lines`), so a starved pane never claims one clean repo is the
+    whole plane.
+
+    **Three states, three different sentences, because they are three different claims.**
+    A gather that has not run yet is `_unknown_lines`; a gather that ran and found
+    nothing is :func:`_empty_lines`; anything else is the table. #512 is the cost of
+    drawing the first two the same, and #515 is the cost of drawing the second one as an
+    empty rectangle — which is what an unmodified `_table_lines` returning `[]` would now
+    be, since this pane no longer has an attention row above it to make its emptiness
+    read as "nothing to add".
+
+    **One `gather.cached`, and no repo directory touched.** #387 pinned a panel's idle
+    tick at exactly one `stat`; this slot is not in :data:`ANIMATED` so it pays even that
+    only on a version bump or a resize, but a table that walked a directory per row would
+    still cost fourteen walks per repaint. Everything the table draws comes out of the
+    cache; see :func:`_table_row` for the one column that costs (presence) and is
+    therefore absent.
+    """
+    w = _width()
+    # `_table_cap` is the SAME call `repos_rows_wanted` made to size this pane, with the
+    # pane's own measured width instead of the window's.
+    cap = _table_cap(fid, w)
+    if cap <= 0:
+        # A pane narrower than `statusline._LEFT_W`. The LAUNCHER does not split one
+        # (`layout.visible_slots`), but `cmd_resize` only re-sizes panes — it neither
+        # creates nor destroys them — so narrowing a running frame's terminal arrives
+        # here with a real pane to fill. Said out loud rather than left blank: see
+        # :func:`_too_narrow_lines`. A renderer must not depend on the launcher's filter
+        # for its own correctness either — `charter panel repos` run by hand into a
+        # narrow terminal reaches exactly here, and an unbounded `_table_lines` would
+        # draw a false-clean `charter  main` into it.
+        return "\n".join(_too_narrow_lines(w))
+    from . import gather
+    # `gather.cached`, never `gather.read` (#512). The two differ by exactly one thing:
+    # `read` falls back to a live `scan()` when there is no cache, and a PANEL is the one
+    # caller that must not have that fallback. Two reasons, and both are rules this
+    # module already keeps:
+    #
+    # * **A panel does not sweep.** `_table_lines`' own docstring promises it never
+    #   reaches a repo directory, a `git status` or a `glstate.read_for`; #387 pinned an
+    #   idle tick at one `stat`, and a paint that scans is a cold sweep every time the
+    #   plane version moves. `cmd_launch` calls `gather.discard` before it draws, so a
+    #   fresh frame reached that fallback BY DESIGN, on the very repaints an operator is
+    #   watching.
+    # * **An empty table is not the same claim as an unknown one.** `read`'s fallback
+    #   returns `repos: []` for "the scan found nothing" and for "the scan ran in the
+    #   wrong workspace" alike, and `_table_lines` draws both as no rows at all — a pane
+    #   that says "no repos" on a plane full of them. `None` here keeps the two apart,
+    #   and :func:`_unknown_lines` says which one this is.
+    #
+    # Nothing is left blank waiting: `commands_frame._spawn_gather` kicks a detached
+    # refresh at launch which writes this cache and bumps the version, the same shape
+    # `update.maybe_spawn`/`glstate.maybe_spawn` already use, and every `posttooluse*`
+    # hook refreshes it after that (`notify.plane_changed`).
+    data = gather.cached(fid)
+    if data is None:
+        return "\n".join(_unknown_lines(w))
+    repos = data.get("repos") or []
+    if not repos:
+        # Gathered, and there is nothing in it. Said out loud rather than left as an
+        # empty bordered rectangle — see :func:`_empty_lines`. No heading: `▪ repos 0`
+        # above "no clones in demo" is the same fact twice in a two-row pane.
+        return "\n".join(_empty_lines(_frame_workspace(fid), w))
+    # The heading takes the first row and the table spends what is left. Asked for fewer
+    # ROWS rather than sliced afterwards, so what survives at `terse` (or in a pane a
+    # resize starved) is still `_pick_rows`' ranked subset — the repo you are standing
+    # in, the ones with something on them — rather than whichever happened to come
+    # first, the same discipline the `terse` chip list in `_right` keeps.
+    budget = min(_height() - 1, cap)
+    return "\n".join([_sidebar_head("repos", len(repos), w),
+                      *(_table_lines(data, w, budget) if budget > 0 else [])])
 
 
 #: Every slot charter can draw. `panel.run` refuses a name that is not in here rather
 #: than painting an empty pane, because an empty pane reads as a broken frame.
-SLOTS = {"top": _top, "bottom": _bottom, "right": _right}
+SLOTS = {"top": _top, "bottom": _bottom, "repos": _repos, "right": _right}
 
 
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no

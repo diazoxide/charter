@@ -1245,27 +1245,31 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                    "-P", "-F", "#{pane_id}", "--", "sleep", "600")
         self.assertEqual(top.returncode, 0, top.stderr)
         top_pane = top.stdout.strip()
-        bot = _tmux("split-window", "-t", harness_pane, "-v", "-l", "6",
+        bot = _tmux("split-window", "-t", harness_pane, "-v", "-l", "1",
                     "-P", "-F", "#{pane_id}", "--", "sleep", "600")
         self.assertEqual(bot.returncode, 0, bot.stderr)
         bottom_pane = bot.stdout.strip()
-        panes = {"top": top_pane, "bottom": bottom_pane}
+        tab = _tmux("split-window", "-t", harness_pane, "-v", "-l", "6",
+                    "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+        self.assertEqual(tab.returncode, 0, tab.stderr)
+        panes = {"top": top_pane, "bottom": bottom_pane, "repos": tab.stdout.strip()}
 
-        # The last size is the one the CAP binds at: at 20 rows the window can spare
-        # only `20 - top(1) - 2 borders - HARNESS_MIN_ROWS` = 5, fewer than the 6 the
-        # content wants — so `bottom` must come out a different number there than at the
-        # other three, and a `bottom_rows` that ignored *window_rows* entirely would
-        # still pass the first three.
-        for cols, rows in ((200, 50), (90, 25), (300, 100), (120, 20)):
+        # The last size is the one the CAP binds at: at 22 rows the window can spare
+        # only `22 - top(1) - bottom(1) - 3 borders - HARNESS_MIN_ROWS` = 5, fewer than
+        # the 6 the content wants — so `repos` must come out a different number there
+        # than at the other three, and a `repos_rows` that ignored *window_rows*
+        # entirely would still pass the first three.
+        for cols, rows in ((200, 50), (90, 25), (300, 100), (120, 22)):
             r = _tmux("resize-window", "-t", "rsz", "-x", str(cols), "-y", str(rows))
             self.assertEqual(r.returncode, 0, r.stderr)
-            with mock.patch("charter.frame.slots.bottom_rows_wanted", return_value=6):
+            with mock.patch("charter.frame.slots.repos_rows_wanted", return_value=6):
                 commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
+                                               harness_pane=harness_pane,
                                                window_cols=cols, window_rows=rows)
-            want = layout.slot_sizes(["top", "bottom"], window_rows=rows,
+            want = layout.slot_sizes(["top", "bottom", "repos"], window_rows=rows,
                                      content_rows=6)
-            if rows == 20:
-                self.assertLess(want["bottom"], 6,
+            if rows == 22:
+                self.assertLess(want["repos"], 6,
                                 "the cap never bound — this loop's last pass is the "
                                 "only one that exercises it")
             for slot, pane in panes.items():
@@ -1280,6 +1284,12 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                 int(harness), layout.HARNESS_MIN_ROWS,
                 f"the harness kept only {harness} rows at {cols}x{rows} — tmux grants "
                 f"an over-large -y out of the neighbour rather than refusing it")
+            self.assertEqual(
+                int(harness), layout.harness_rows(want, window_rows=rows),
+                f"the harness is {harness} rows at {cols}x{rows}, not the "
+                f"{layout.harness_rows(want, window_rows=rows)} it was told — and it is "
+                f"the pane #515 has to name explicitly, because with three strips the "
+                f"two below it trade rows with each other and never with it")
 
     # -- 5. Session-scoped id delivery for the hotkey menu --------------------------- #
 
@@ -2560,11 +2570,12 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         self.assertTrue(harness_pane, "tmux did not report the harness pane's id")
         self.addCleanup(_kill_pid, self._pane_pid(harness_pane))
 
-        slots = ["top", "bottom", "right"]
-        # `bottom` is content-sized since #488, and the sizer is asked for the size here
-        # rather than left to `SLOT_SIZE`'s floor — a one-row `bottom` would have no room
-        # for the repo table these tests read back, which is the whole point of the slot.
-        # *content_rows* is stated rather than taken from `slots.bottom_rows_wanted`: that
+        slots = ["top", "bottom", "repos", "right"]
+        # `repos` is content-sized since #488 (it was `bottom` until #515 split the
+        # attention row off it), and the sizer is asked for the size here rather than
+        # left to `SLOT_SIZE`'s floor — a one-row table pane would have no room for the
+        # repo rows these tests read back, which is the whole point of the slot.
+        # *content_rows* is stated rather than taken from `slots.repos_rows_wanted`: that
         # helper resolves the workspace from THIS process's environment, and every panel
         # below resolves it from the tmux session's instead, so a mismatch would size the
         # pane for a different plane than the one the panels draw.
@@ -2591,10 +2602,10 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         return harness_pane, panes
 
     def test_every_panel_comes_up_alive_with_real_content_and_the_harness_keeps_focus(self):
-        """Launch composition, proven end to end: a frame with `top`/`bottom`/`right`
-        all configured comes up with every pane alive, each showing real content a
-        broken renderer (or an empty, never-gathered cache) could not have produced, and
-        the harness pane — not the last panel `split-window` happened to draw — holds
+        """Launch composition, proven end to end: a frame with `top`/`bottom`/`repos`/
+        `right` all configured comes up with every pane alive, each showing real content
+        a broken renderer (or an empty, never-gathered cache) could not have produced,
+        and the harness pane — not the last panel `split-window` happened to draw — holds
         keyboard focus once the launch finishes.
 
         **Fix round 1: the repo is made DIRTY before the frame ever launches, not
@@ -2609,10 +2620,13 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         can only come from that sweep actually running and actually landing in
         the cache the table reads back.
 
-        **#488 moved the repo table from `left` to `bottom`**, so the cache-proving
-        assertions moved with it: the same pane now carries the live todo count AND the
-        cached repo row, which is itself worth asserting together — the attention row
-        must survive the table joining it, not be evicted by it.
+        **#488 moved the repo table from `left` to `bottom`, and #515 moved it again to
+        `repos`**, so the cache-proving assertions moved with it. The two are asserted
+        against each other rather than each alone: the table pane carries the cached repo
+        row and NOT the attention row, and the `bottom` pane carries the live todo count
+        and NOT a repo row. Either assertion alone would pass against a renderer that
+        drew both things in both panes, which is what a half-applied split looks like on
+        screen — the operator's report in #515 with a rule drawn through it.
         """
         repo_name = f"cnry{os.getpid() % 10000}"
         branch = f"br{os.getpid() % 10000}a"
@@ -2624,7 +2638,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
 
         fid = state.frame_id("four-edge-alive", os.getpid())
         harness_pane, panes = self._spawn_frame(fid)
-        self.assertEqual(set(panes), {"top", "bottom", "right"})
+        self.assertEqual(set(panes), {"top", "bottom", "repos", "right"})
 
         # Poll for real content (`_wait_for`'s own docstring — fix round 1:
         # replaces a fixed `time.sleep(1.5)` that guessed at how long four cold
@@ -2635,7 +2649,8 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # check below, same as a deliberate wait would have.
         top = self._wait_for(panes["top"], "demo")
         right = self._wait_for(panes["right"], persona_name)
-        bottom = self._wait_for(panes["bottom"], repo_name)
+        table = self._wait_for(panes["repos"], repo_name)
+        bottom = self._wait_for(panes["bottom"], "1 todo")
 
         for slot, pane in panes.items():
             self.assertEqual(self._alive(pane), "0",
@@ -2646,22 +2661,31 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
 
         self.assertIn("demo", top, f"top never showed the real workspace name:\n{top!r}")
 
-        self.assertIn(repo_name, bottom,
-                      f"bottom never showed the real repo:\n{bottom!r}")
-        self.assertIn(branch, bottom,
-                      f"bottom never showed the real branch:\n{bottom!r}")
-        self.assertIn("*", bottom,
-                      f"bottom never showed the dirty marker for a real uncommitted "
-                      f"file — either gather.scan's own git-status sweep never "
-                      f"ran, or nothing carried its result into the cached "
-                      f"row:\n{bottom!r}")
+        self.assertIn(repo_name, table,
+                      f"the table pane never showed the real repo:\n{table!r}")
+        self.assertIn(branch, table,
+                      f"the table pane never showed the real branch:\n{table!r}")
+        self.assertIn("*", table,
+                      f"the table pane never showed the dirty marker for a real "
+                      f"uncommitted file — either gather.scan's own git-status sweep "
+                      f"never ran, or nothing carried its result into the cached "
+                      f"row:\n{table!r}")
 
         self.assertIn(persona_name, right,
                       f"right never showed the real persona:\n{right!r}")
 
         self.assertIn("1 todo", bottom,
-                      f"the attention row was evicted by the table it is supposed to "
-                      f"sit above:\n{bottom!r}")
+                      f"the attention strip never showed the workspace's todo "
+                      f"count:\n{bottom!r}")
+        # #515's own property, and the half a membership check cannot give: the two
+        # things the operator reported as one undivided pane are now in two panes, and
+        # NEITHER draws the other's content. A renderer that split the panes but kept
+        # composing both halves in each would satisfy every assertion above.
+        self.assertNotIn("todo", table,
+                         f"the table pane is still drawing the attention row:\n{table!r}")
+        self.assertNotIn(repo_name, bottom,
+                         f"the attention strip is still drawing the repo "
+                         f"table:\n{bottom!r}")
 
         focus = _tmux("display-message", "-p", "-t", harness_pane,
                       "#{pane_active}").stdout.strip()
@@ -2708,9 +2732,9 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # The `run-shell` child is a `charter` of its own: it must find THIS plane, not
         # the developer's. `_spawn_frame`'s session already carries `$CHARTER_ROOT` (see
         # `setUp`), and the hook fires in that session's own environment.
-        before = int(_tmux("display-message", "-p", "-t", panes["bottom"],
+        before = int(_tmux("display-message", "-p", "-t", panes["repos"],
                            "#{pane_height}").stdout.strip())
-        self.assertGreater(before, 1, "the fixture never gave bottom a tall pane")
+        self.assertGreater(before, 1, "the fixture never gave the table a tall pane")
 
         r = _tmux("resize-window", "-t", fid, "-x", "160", "-y", "80")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -2718,16 +2742,26 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         deadline = time.monotonic() + _DEADLINE
         height = before
         while time.monotonic() < deadline:
-            height = int(_tmux("display-message", "-p", "-t", panes["bottom"],
+            height = int(_tmux("display-message", "-p", "-t", panes["repos"],
                                "#{pane_height}").stdout.strip() or before)
             if height < before:
                 break
             time.sleep(0.1)
         self.assertLess(height, before,
-                        f"bottom is {height} rows after the window GREW from 40 to 80 — "
-                        f"tmux's own redistribution only ever stretches on a grow, so "
-                        f"this is what charter's recompute would have had to undo. The "
-                        f"hook never fired, or its child never reached this frame")
+                        f"the table is {height} rows after the window GREW from 40 to "
+                        f"80 — tmux's own redistribution only ever stretches on a grow, "
+                        f"so this is what charter's recompute would have had to undo. "
+                        f"The hook never fired, or its child never reached this frame")
+        # And the two one-row strips really came back to one row. #515 is what makes
+        # this worth asserting here: the recompute now has three horizontal strips to
+        # reconcile and tmux's `resize-pane -y` moves only one boundary, so a recompute
+        # that named the strips and not the harness left two of them trading rows with
+        # each other — the table one row tall and the attention strip six, measured.
+        for slot in ("top", "bottom"):
+            got = _tmux("display-message", "-p", "-t", panes[slot],
+                        "#{pane_height}").stdout.strip()
+            self.assertEqual(got, "1",
+                             f"the {slot} strip is {got} rows after the recompute")
         harness = int(_tmux("display-message", "-p", "-t", harness_pane,
                             "#{pane_height}").stdout.strip())
         self.assertGreaterEqual(harness, layout.HARNESS_MIN_ROWS, harness)
@@ -2738,16 +2772,17 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         leaves open for THIS plan: that test drives `hooks.posttooluse` against
         `bottom` alone, which never touches `gather.py` at all. This drives the
         SAME real hook — never a direct `state.bump` or `gather.refresh` call — and
-        watches `bottom`'s repo table repaint with a NEW branch name that only
+        watches the `repos` pane's table repaint with a NEW branch name that only
         exists because
         `notify.plane_changed` ran `gather.refresh` BEFORE `state.bump` (Task 2's
         own contract, and its own docstring's reason: refresh-then-bump closes the
         window where a poller sees the new version and still reads the stale
         cache). A version bump into a stale or never-refreshed cache would leave
         the table showing the OLD branch forever — this is the one test in the file
-        that would catch that. `bottom` is watched in the same pass, from the SAME
-        single hook call, to pin that one refresh/bump serves every slot that asks,
-        not only the one `PanelIntegration` already covers.
+        that would catch that. `bottom` — a different PANE since #515, drawing the live
+        todo count — is watched in the same pass, from the SAME single hook call, to pin
+        that one refresh/bump serves every slot that asks, not only the one
+        `PanelIntegration` already covers.
 
         **The cache is warmed with one direct `gather.refresh` call before any
         assertion runs — this is load-bearing, not incidental.** Caught by
@@ -2798,9 +2833,10 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                       f"the primed cache file exists but does not hold the "
                       f"starting branch:\n{cache.read_text()!r}")
 
-        bottom_before = self._wait_for(panes["bottom"], branch_a)
-        self.assertIn(branch_a, bottom_before,
-                      f"the table never showed the starting branch:\n{bottom_before!r}")
+        table_before = self._wait_for(panes["repos"], branch_a)
+        bottom_before = self._wait_for(panes["bottom"], "1 todo")
+        self.assertIn(branch_a, table_before,
+                      f"the table never showed the starting branch:\n{table_before!r}")
         self.assertIn("1 todo", bottom_before,
                       f"bottom never showed the starting todo count:\n{bottom_before!r}")
 
@@ -2840,22 +2876,25 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # paint (fix round 1) — waits for the specific new fact each panel is
         # expected to show, rather than a fixed sleep or an undifferentiated
         # "content changed" check.
-        self._wait_for(panes["bottom"], branch_b)
-        # Both new facts land on the SAME pane now, and the two halves of the repaint
-        # arrive together — but poll for the second needle as well rather than assuming
-        # it, so a capture taken between the two is a retry rather than a failure.
+        # The two facts land on two panes since #515, and each is polled for its own
+        # needle — one refresh and one bump have to serve BOTH panels, which is the
+        # property this test is for and which a single-pane assertion can no longer
+        # cover.
+        table_after = self._wait_for(panes["repos"], branch_b)
         bottom_after = self._wait_for(panes["bottom"], "2 todos")
 
-        self.assertNotEqual(bottom_after, bottom_before,
-                            f"bottom never repainted after a real hooks.posttooluse() "
-                            f"call; still showing:\n{bottom_before!r}")
-        self.assertIn(branch_b, bottom_after,
-                      f"bottom repainted but not with the NEW branch:\n{bottom_after!r}")
-        self.assertNotIn(branch_a, bottom_after,
+        self.assertNotEqual(table_after, table_before,
+                            f"the table never repainted after a real "
+                            f"hooks.posttooluse() call; still showing:"
+                            f"\n{table_before!r}")
+        self.assertIn(branch_b, table_after,
+                      f"the table repainted but not with the NEW "
+                      f"branch:\n{table_after!r}")
+        self.assertNotIn(branch_a, table_after,
                          f"the table kept showing the OLD branch after the switch — a "
-                         f"stale cache surviving its own refresh:\n{bottom_after!r}")
+                         f"stale cache surviving its own refresh:\n{table_after!r}")
         self.assertIn("2 todos", bottom_after,
-                      f"the live half of the same pane never repainted:"
+                      f"the live pane never repainted off the same bump:"
                       f"\n{bottom_after!r}")
 
         # Fix round 1: the cache FILE on disk, not only the pane's own capture,
@@ -2873,16 +2912,16 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                              f"the {slot!r} panel died sometime after repainting")
 
 
-class BottomsWidthIsWhatTmuxActuallyGivesIt(_TmuxServerFixture, PersonaIso):
-    """#500 round 3: `layout.bottom_cols` says how wide the `bottom` pane comes out.
+class TheTablesWidthIsWhatTmuxActuallyGivesIt(_TmuxServerFixture, PersonaIso):
+    """#500 round 3: `layout.repos_cols` says how wide the `repos` pane comes out.
     tmux is the only authority on that, so this asks tmux.
 
     The unit tests in `tests/test_frame_layout.py` pin the arithmetic against a number
     written down by a human who once ran tmux. That is exactly the shape of assertion
     this repo has been burned by — a constant that was right the day it was measured and
     is never re-checked. What is actually being claimed is that a `right` split off the
-    harness pane BEFORE `bottom` costs `bottom` the sidebar's columns plus one border
-    column, and the only thing that can confirm it is `#{pane_width}` off a real server.
+    harness pane BEFORE `repos` costs it the sidebar's columns plus one border column,
+    and the only thing that can confirm it is `#{pane_width}` off a real server.
 
     **The splits are `layout.panel_argvs`' own commands, not hand-retyped ones** — the
     direction (`-h`/`-v`), the `-b`, and the `-l` are the production values, because
@@ -2892,7 +2931,7 @@ class BottomsWidthIsWhatTmuxActuallyGivesIt(_TmuxServerFixture, PersonaIso):
     panels are proven.
     """
 
-    def _bottom_width(self, order: list[str], cols: int) -> int:
+    def _table_width(self, order: list[str], cols: int) -> int:
         session = f"bw{self._pane_counter}"
         self._pane_counter += 1
         r = self._srv("new-session", "-d", "-s", session,
@@ -2914,7 +2953,7 @@ class BottomsWidthIsWhatTmuxActuallyGivesIt(_TmuxServerFixture, PersonaIso):
             pane = p.stdout.strip()
             self.addCleanup(_kill_pid, self._pane_pid_on(pane))
             widths[slot] = pane
-        got = self._srv("display-message", "-p", "-t", widths["bottom"],
+        got = self._srv("display-message", "-p", "-t", widths["repos"],
                         "#{pane_width}").stdout.strip()
         return int(got)
 
@@ -2924,22 +2963,70 @@ class BottomsWidthIsWhatTmuxActuallyGivesIt(_TmuxServerFixture, PersonaIso):
 
     def test_tmux_agrees_with_the_arithmetic_in_both_slot_orders(self):
         """Both orders in one test, because the claim is a DIFFERENCE: the shipped order
-        leaves `bottom` the whole window and an operator's `right`-first order does not.
-        Asserted against `layout.bottom_cols`' own answer rather than against 110 and 87,
+        leaves the table the whole window and an operator's `right`-first order does not.
+        Asserted against `layout.repos_cols`' own answer rather than against 110 and 87,
         so this is tmux checking charter's arithmetic rather than two literals agreeing
         with each other — and the second assertion is what stops "always the window's
         width" from passing.
         """
-        for order in (["top", "bottom", "right"], ["right", "top", "bottom"],
-                      ["top", "right", "bottom"], ["bottom", "right"]):
+        orders = (["top", "bottom", "repos", "right"],
+                  ["right", "top", "bottom", "repos"],
+                  ["top", "right", "bottom", "repos"],
+                  ["repos", "right"])
+        for order in orders:
             with self.subTest(order=order):
-                self.assertEqual(self._bottom_width(order, 110),
-                                 layout.bottom_cols(order, window_cols=110),
-                                 f"tmux disagrees with layout.bottom_cols for {order}")
+                self.assertEqual(self._table_width(order, 110),
+                                 layout.repos_cols(order, window_cols=110),
+                                 f"tmux disagrees with layout.repos_cols for {order}")
         self.assertNotEqual(
-            layout.bottom_cols(["top", "bottom", "right"], window_cols=110),
-            layout.bottom_cols(["right", "top", "bottom"], window_cols=110),
+            layout.repos_cols(orders[0], window_cols=110),
+            layout.repos_cols(orders[1], window_cols=110),
             "the two orders answered the same width — the loop above proved nothing")
+
+    def test_tmux_stacks_the_strips_in_the_order_the_shipped_slots_ask_for(self):
+        """#515's own geometry, asked of tmux rather than reasoned about. Every split but
+        `top`'s is a plain `-v` off the HARNESS pane, which tmux places DIRECTLY below it
+        — so a slot split later sits ABOVE one split earlier, and the shipped list reads
+        backwards on screen for everything under the harness.
+
+        That is not a detail anybody can hold in their head, and getting it wrong ships
+        the pre-#515 stacking order with a rule drawn through it: the status strip
+        squeezed between the session and the table instead of anchored to the terminal's
+        last row. So the panes' own `#{pane_top}` is read back and the reading order
+        asserted: identity, harness, table, attention.
+        """
+        session = f"st{self._pane_counter}"
+        self._pane_counter += 1
+        r = self._srv("new-session", "-d", "-s", session, "-x", "120", "-y", "40",
+                      "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        self.addCleanup(self._srv, "kill-session", "-t", session)
+
+        order = list(config.FRAME["slots"])
+        sizes = layout.slot_sizes(order, window_rows=40, content_rows=6)
+        panes = {"harness": harness_pane}
+        for slot, cmd in zip(order, layout.panel_argvs(
+                slots=order, session=session, socket=self.SOCKET_NAME,
+                harness_pane=harness_pane, sizes=sizes)):
+            argv = cmd[:cmd.index("--") + 1] + ["sleep", "600"]
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+            self.assertEqual(p.returncode, 0, f"splitting {slot!r}: {p.stderr}")
+            panes[slot] = p.stdout.strip()
+            self.addCleanup(_kill_pid, self._pane_pid_on(panes[slot]))
+
+        def _top_row(pane):
+            return int(self._srv("display-message", "-p", "-t", pane,
+                                 "#{pane_top}").stdout.strip())
+
+        rows = {name: _top_row(pane) for name, pane in panes.items()}
+        self.assertEqual(
+            [n for n in sorted(rows, key=rows.get) if n != "right"],
+            ["top", "harness", "repos", "bottom"], rows)
+        # And the attention strip really is the window's last row, which is the anchor
+        # #515 chose it for: the table above it grows and shrinks with the repo count
+        # while this one never moves.
+        self.assertEqual(rows["bottom"], 40 - 1, rows)
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")

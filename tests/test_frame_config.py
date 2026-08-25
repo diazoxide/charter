@@ -4,8 +4,8 @@ Defaults are the shipped behaviour, so they are asserted rather than assumed: `m
 off because `set -g mouse on` takes over drag-select, and breaking the operator's copy to
 enable a feature v1 does not ship is a bad trade.
 
-`slots` is every edge charter draws (#386, narrowed to three by #488's retirement of
-`left`), and the reason is the same kind of trade read the other way: inside a frame
+`slots` is every edge charter draws (#386, `left` retired by #488, `repos` added by
+#515), and the reason is the same kind of trade read the other way: inside a frame
 `charter statusline` draws nothing (ADR 0019), so an edge the frame does not fill is
 information nobody sees at all. The order is asserted too, because it is the split order
 and therefore the geometry — see `instance.FRAME_FIELDS`.
@@ -22,7 +22,7 @@ from charter import instance
 class FrameDefaults(unittest.TestCase):
     def test_an_absent_section_yields_the_shipped_defaults(self):
         f = instance.frame_of({})
-        self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "repos", "right"])
         self.assertIs(f["mouse"], False)
         self.assertEqual(f["hotkey"], "F2")
         self.assertEqual(f["history_limit"], 50000)
@@ -33,7 +33,7 @@ class FrameDefaults(unittest.TestCase):
         f = instance.frame_of({"frame": {"mouse": True, "hotkey": "F5"}})
         self.assertIs(f["mouse"], True)
         self.assertEqual(f["hotkey"], "F5")
-        self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "repos", "right"])
 
     def test_an_unknown_slot_is_dropped_rather_than_carried(self):
         """A typo must not reach a tmux argv. Dropping is louder than it looks: the slot
@@ -83,6 +83,9 @@ class FrameDefaults(unittest.TestCase):
         f = instance.frame_of(
             {"frame": {"slots": ["top", "bottom", "left", "right"]}})
         self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertNotIn("repos", f["slots"],
+                         "an explicit `slots` is the primitive — #515 must not smuggle "
+                         "a slot into a list the operator wrote by hand")
 
     def test_a_malformed_section_falls_back_instead_of_raising(self):
         """`config` is imported by every command including `charter --version`, so a bad
@@ -95,7 +98,7 @@ class FrameDefaults(unittest.TestCase):
         final `isinstance(value, type(default))` type check is deleted: without it, the
         string `"lots"` would be assigned straight into `history_limit`."""
         f = instance.frame_of({"frame": {"slots": "top", "history-limit": "lots"}})
-        self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "repos", "right"])
         self.assertEqual(f["history_limit"], 50000)
 
     def test_a_bool_does_not_satisfy_a_non_bool_default(self):

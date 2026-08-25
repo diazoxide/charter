@@ -796,7 +796,7 @@ def _add_frame_parsers(sub) -> None:
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
     # ones above. Fired by the frame window's own `window-resized` hook (#488,
     # `commands_frame._resize_hook_argv`) — never typed by an operator. The hook used to
-    # carry the sizes as literal text; `bottom` is content-sized now, so the sizes have
+    # carry the sizes as literal text; `repos` is content-sized now, so the sizes have
     # to be RECOMPUTED against the window that just changed, and only charter can do
     # that. `--frame` travels on the argv for `frame-respawn`'s reason: on the operator's
     # own server there is no `$CHARTER_SESSION_ID` for a `run-shell` child to read.

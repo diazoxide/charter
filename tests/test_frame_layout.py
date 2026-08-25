@@ -53,20 +53,52 @@ class VisibleSlots(unittest.TestCase):
             layout.visible_slots(["top", "bottom", "right"], 200, 12, 100, 20),
             ["bottom"])
 
-    def test_the_bottom_is_never_dropped_it_shrinks_instead(self):
-        """#488's own rule, and the reason `bottom` is absent from the two filters above.
-        Every other slot is a fixed size, so the only thing a short window can do with it
-        is drop it; `bottom` is variable-height (`layout.bottom_rows`), so it gives up
-        ROWS and keeps the alert line that is the whole reason a cramped terminal wants a
-        frame at all. Asserted across all three shortages the two filters answer —
-        narrow, short, and neither — so a `bottom` added to either filter is red whichever
-        one it was added to. The last clause (below HALF the floors) is a different rule
-        and still empties the list outright; `test_a_tiny_terminal_keeps_nothing` owns
-        that one."""
+    def test_the_bottom_is_never_dropped_whatever_the_shortage(self):
+        """The reason `bottom` is absent from every filter above. It is the attention
+        strip — one alert and the command that fixes it — which is the whole reason a
+        cramped terminal wants a frame at all, and since #515 it is one fixed row, so
+        there is nothing for a shortage to negotiate over. Asserted across all three
+        shortages the filters answer — narrow, short, and neither — so a `bottom` added
+        to any filter is red whichever one it was added to. The last clause (below HALF
+        the floors) is a different rule and still empties the list outright;
+        `test_a_tiny_terminal_keeps_nothing` owns that one."""
         for cols, rows in ((80, 50), (200, 12), (100, 20)):
             with self.subTest(cols=cols, rows=rows):
                 self.assertIn("bottom", layout.visible_slots(
-                    ["top", "bottom", "right"], cols, rows, 100, 20))
+                    ["top", "bottom", "repos", "right"], cols, rows, 100, 20))
+
+    def test_the_table_goes_when_its_pane_would_be_too_narrow_to_draw_one(self):
+        """#515. `slots._table_cap` answers 0 below `statusline._LEFT_W` and
+        `_table_lines` refuses outright there, so a `repos` pane split at that width is a
+        bordered rectangle with nothing in it — which reads as "this workspace has no
+        repos" on a plane that has fourteen. While the table shared `bottom` with the
+        attention row the same case was invisible: the pane went on drawing the row.
+
+        Asserted at the boundary from both sides, and through the PANE's width rather
+        than the window's: a `[frame] slots` naming `right` first insets this pane by
+        `SLOT_SIZE["right"] + _BORDER_COLS`, so a window wide enough for the table can
+        still leave the pane too narrow for it. That second case is the one a filter
+        reading `cols` directly would get wrong."""
+        from charter import statusline
+        edge = statusline._LEFT_W
+        self.assertIn("repos", layout.visible_slots(
+            ["top", "bottom", "repos"], edge, 50, 100, 20))
+        self.assertNotIn("repos", layout.visible_slots(
+            ["top", "bottom", "repos"], edge - 1, 50, 100, 20))
+        inset = layout.SLOT_SIZE["right"] + layout._BORDER_COLS
+        self.assertIn("repos", layout.visible_slots(
+            ["right", "top", "bottom", "repos"], edge + inset, 50, 100, 20))
+        self.assertNotIn("repos", layout.visible_slots(
+            ["right", "top", "bottom", "repos"], edge + inset - 1, 50, 100, 20))
+
+    def test_the_width_the_table_needs_is_read_from_the_renderer_not_copied(self):
+        """The property, not a spelling. `layout._table_min_cols` reads
+        `statusline._LEFT_W` — the same constant `slots._table_cap` refuses below — so
+        the launcher's drop and the renderer's silence can never come apart. A literal
+        here would be a guard that matched today's number and stopped matching the
+        renderer's the first time a column width moved."""
+        from charter import statusline
+        self.assertEqual(layout._table_min_cols(), statusline._LEFT_W)
 
     def test_a_tiny_terminal_keeps_nothing(self):
         """Below the floor the harness gets the whole terminal. Degrading to a bare
@@ -281,13 +313,15 @@ class PanelGeometry(unittest.TestCase):
         self.assertNotIn("left", layout.SLOT_SIZE)
         self.assertNotIn("left", layout._DROP_ORDER)
         self.assertEqual(
-            layout.slot_sizes(["top", "left", "bottom"], window_rows=50, content_rows=3),
-            {"top": 1, "bottom": 3})
+            layout.slot_sizes(["top", "left", "bottom", "repos"], window_rows=50,
+                              content_rows=3),
+            {"top": 1, "bottom": 1, "repos": 3})
 
 
-class BottomIsSizedToItsContent(unittest.TestCase):
-    """#488: `bottom` is the one variable-height slot, and `bottom_rows` is the whole of
-    how tall it gets. Pure arithmetic, so it is pinned here with no tmux and no cache.
+class ReposIsSizedToItsContent(unittest.TestCase):
+    """#488, moved to `repos` by #515: the one variable-height slot, and `repos_rows` is
+    the whole of how tall it gets. Pure arithmetic, so it is pinned here with no tmux and
+    no cache.
 
     The property is `floor <= rows <= what the window can spare`, and each of the three
     clauses is asserted where the OTHER two cannot be what produced the answer — a single
@@ -300,19 +334,21 @@ class BottomIsSizedToItsContent(unittest.TestCase):
         content itself. Deleting the `min` or the `max` leaves this green — which is why
         the two tests below exist as well."""
         self.assertEqual(
-            layout.bottom_rows(content_rows=4, window_rows=50, slots=["top", "bottom"]),
+            layout.repos_rows(content_rows=4, window_rows=50,
+                              slots=["top", "bottom", "repos"]),
             4)
 
-    def test_it_never_goes_below_the_one_row_it_has_always_been(self):
-        """A plane with no clones has no table, and `slots.bottom_rows_wanted` answers 1
-        — the attention row. Zero would be a pane tmux refuses to split at all, and the
-        alert line is the one thing the frame exists for."""
+    def test_it_never_goes_below_one_row(self):
+        """A plane with no clones has no table, and `slots.repos_rows_wanted` answers 0.
+        Zero would be a pane tmux refuses to split at all, so the floor is one — and the
+        row is spent saying there are no clones and how to get one (`slots._empty_lines`)
+        rather than left blank."""
         for content in (0, 1):
             with self.subTest(content=content):
                 self.assertEqual(
-                    layout.bottom_rows(content_rows=content, window_rows=50,
-                                       slots=["top", "bottom"]),
-                    layout.SLOT_SIZE["bottom"])
+                    layout.repos_rows(content_rows=content, window_rows=50,
+                                      slots=["top", "bottom", "repos"]),
+                    layout.SLOT_SIZE["repos"])
 
     def test_the_harness_keeps_its_floor_however_much_the_table_wants(self):
         """The measured failure this cap exists for (tmux 3.7c): `resize-pane -y 40` in a
@@ -321,32 +357,39 @@ class BottomIsSizedToItsContent(unittest.TestCase):
         a literal height, so the arithmetic is checked rather than restated: whatever
         `bottom` takes, plus the strips and their borders, must leave at least
         `HARNESS_MIN_ROWS`."""
-        slots = ["top", "bottom"]
+        slots = ["top", "bottom", "repos"]
         rows = 20
-        got = layout.bottom_rows(content_rows=99, window_rows=rows, slots=slots)
-        # top(1) + its border(1) + bottom's own border(1)
-        harness = rows - got - layout.SLOT_SIZE["top"] - 2 * layout._BORDER_ROWS
+        got = layout.repos_rows(content_rows=99, window_rows=rows, slots=slots)
+        # top(1) + bottom(1) + a border for each of the three strips
+        harness = (rows - got - layout.SLOT_SIZE["top"] - layout.SLOT_SIZE["bottom"]
+                   - 3 * layout._BORDER_ROWS)
         self.assertGreaterEqual(harness, layout.HARNESS_MIN_ROWS)
         self.assertLess(got, 99, "the cap did not bind at all")
 
-    def test_the_top_strips_own_rows_are_counted_against_the_cap(self):
-        """The cap is what the window can spare, and `top` is part of what it has already
-        spent. A frame drawing `top` must therefore give `bottom` strictly fewer rows
-        than one that is not, at the same window size — the arithmetic that a cap
-        ignoring *slots* would get wrong in exactly the direction that starves the
-        harness."""
-        with_top = layout.bottom_rows(content_rows=99, window_rows=24,
-                                      slots=["top", "bottom"])
-        without = layout.bottom_rows(content_rows=99, window_rows=24, slots=["bottom"])
-        self.assertLess(with_top, without)
+    def test_every_fixed_strips_own_rows_are_counted_against_the_cap(self):
+        """The cap is what the window can spare, and the fixed strips are part of what it
+        has already spent. A frame drawing `top` must therefore give the table strictly
+        fewer rows than one that is not, at the same window size — and so must one
+        drawing `bottom`, which is the row #515 added to the arithmetic. Both are
+        asserted: a `repos_rows` still subtracting `top` alone (the pre-#515 formula)
+        passes the first pair and fails the second."""
+        both = layout.repos_rows(content_rows=99, window_rows=26,
+                                 slots=["top", "bottom", "repos"])
+        no_top = layout.repos_rows(content_rows=99, window_rows=26,
+                                   slots=["bottom", "repos"])
+        no_bottom = layout.repos_rows(content_rows=99, window_rows=26,
+                                      slots=["top", "repos"])
+        self.assertLess(both, no_top)
+        self.assertLess(both, no_bottom)
 
     def test_the_side_column_costs_columns_not_rows(self):
         """`right` is a `-h` split: it takes width from the harness and no rows at all.
         Counting it here would shorten the table for no reason on every wide terminal."""
         self.assertEqual(
-            layout.bottom_rows(content_rows=99, window_rows=50,
-                               slots=["top", "bottom", "right"]),
-            layout.bottom_rows(content_rows=99, window_rows=50, slots=["top", "bottom"]))
+            layout.repos_rows(content_rows=99, window_rows=50,
+                              slots=["top", "bottom", "repos", "right"]),
+            layout.repos_rows(content_rows=99, window_rows=50,
+                              slots=["top", "bottom", "repos"]))
 
     def test_the_floor_wins_over_a_cap_that_has_gone_negative(self):
         """A window with no rows to spare at all. The alternative — returning the cap —
@@ -354,55 +397,56 @@ class BottomIsSizedToItsContent(unittest.TestCase):
         would come up with no bottom pane in exactly the terminal most likely to have an
         alert worth reading."""
         self.assertEqual(
-            layout.bottom_rows(content_rows=9, window_rows=6, slots=["top", "bottom"]),
-            layout.SLOT_SIZE["bottom"])
+            layout.repos_rows(content_rows=9, window_rows=6,
+                              slots=["top", "bottom", "repos"]),
+            layout.SLOT_SIZE["repos"])
 
 
-class BottomsWidthIsWhateverTheSplitOrderLeftIt(unittest.TestCase):
-    """#500, round 3: `layout.bottom_cols` — how wide the `bottom` PANE actually is.
+class TheTablesWidthIsWhateverTheSplitOrderLeftIt(unittest.TestCase):
+    """#500, round 3: `layout.repos_cols` — how wide the `repos` PANE actually is.
 
-    The property, stated once: **a slot that takes columns and is split before `bottom`
-    has already narrowed the pane `bottom` is carved out of.** Not "the window's width",
+    The property, stated once: **a slot that takes columns and is split before `repos`
+    has already narrowed the pane `repos` is carved out of.** Not "the window's width",
     which is what every caller was passing, and not "the width when `slots` happens to be
     the shipped list", which is the coincidence that let it through two rounds of review.
 
     Every number below was measured against real tmux 3.7c on a private socket, window
     110x40, splitting exactly as `panel_argvs` does (`-h -l 22` for `right`, `-v -b -l 1`
-    for `top`, `-v -l 7` for `bottom`, every split targeting the harness pane):
+    for `top`, `-v -l 7` for the table, every split targeting the harness pane):
 
-        ["top", "bottom", "right"]  ->  bottom 110x7   harness 87x30
-        ["right", "top", "bottom"]  ->  bottom  87x7   harness 87x30
-        ["top", "right", "bottom"]  ->  bottom  87x7   harness 87x30
-        ["bottom", "right"]         ->  bottom 110x7   harness 87x32
+        ["top", "repos", "right"]  ->  table 110x7   harness 87x30
+        ["right", "top", "repos"]  ->  table  87x7   harness 87x30
+        ["top", "right", "repos"]  ->  table  87x7   harness 87x30
+        ["repos", "right"]         ->  table 110x7   harness 87x32
 
     and, for the re-layout case, killing `right` on the second of those widened the same
-    `bottom` pane from 87 back to 110, while re-splitting `right` off the harness
-    afterwards left it at 110.
+    table pane from 87 back to 110, while re-splitting `right` off the harness afterwards
+    left it at 110.
     """
 
-    def test_the_shipped_order_leaves_bottom_the_whole_window(self):
-        """The control. `right` is split off the harness AFTER `bottom` and lands beside
-        the harness only, so it costs `bottom` nothing — without this the assertions
+    def test_the_shipped_order_leaves_the_table_the_whole_window(self):
+        """The control. `right` is split off the harness AFTER `repos` and lands beside
+        the harness only, so it costs the table nothing — without this the assertions
         below could be satisfied by subtracting `right` unconditionally."""
         self.assertEqual(
-            layout.bottom_cols(["top", "bottom", "right"], window_cols=110), 110)
+            layout.repos_cols(["top", "bottom", "repos", "right"], window_cols=110), 110)
 
     def test_a_side_slot_split_first_insets_bottom_by_its_columns_and_its_border(self):
         """The defect. `instance.frame_of` keeps an operator's `[frame] slots` order
         verbatim — `tests/test_frame_config.py` calls that a promise — so this is a frame
         charter ships the ability to ask for, not a corner. Both orders that put `right`
-        first are asserted, because "before `bottom`" is the property and "first in the
+        first are asserted, because "before `repos`" is the property and "first in the
         list" is only one spelling of it."""
-        for order in (["right", "top", "bottom"], ["top", "right", "bottom"]):
+        for order in (["right", "top", "repos"], ["top", "right", "repos"]):
             with self.subTest(order=order):
-                self.assertEqual(layout.bottom_cols(order, window_cols=110), 87)
+                self.assertEqual(layout.repos_cols(order, window_cols=110), 87)
 
     def test_the_inset_is_the_slots_own_size_and_not_a_literal(self):
         """87 is `110 - SLOT_SIZE["right"] - _BORDER_COLS`, asserted as that arithmetic
         rather than restated, so a change to the sidebar's width moves this answer
         instead of leaving a stale constant that is right for one release."""
         self.assertEqual(
-            layout.bottom_cols(["right", "bottom"], window_cols=110),
+            layout.repos_cols(["right", "repos"], window_cols=110),
             110 - layout.SLOT_SIZE["right"] - layout._BORDER_COLS)
 
     def test_two_side_slots_before_bottom_are_both_charged(self):
@@ -410,20 +454,21 @@ class BottomsWidthIsWhateverTheSplitOrderLeftIt(unittest.TestCase):
         second side slot exists today; the next one this frame grows is the reason the
         loop subtracts per slot instead of testing for `right`."""
         self.assertEqual(
-            layout.bottom_cols(["right", "right", "bottom"], window_cols=200),
+            layout.repos_cols(["right", "right", "repos"], window_cols=200),
             200 - 2 * (layout.SLOT_SIZE["right"] + layout._BORDER_COLS))
 
     def test_a_horizontal_strip_before_bottom_costs_it_no_columns(self):
         """`top` is a `-v` split: it takes rows off the harness and spans its full width.
         Charging it here would shrink the table on every frame that draws a `top`."""
-        self.assertEqual(layout.bottom_cols(["top", "bottom"], window_cols=110), 110)
+        self.assertEqual(
+            layout.repos_cols(["top", "bottom", "repos"], window_cols=110), 110)
 
     def test_it_never_answers_a_negative_width(self):
         """A terminal narrower than the sidebar. `visible_slots` drops `right` long
         before this, so it is unreachable through the launcher — but the answer feeds a
         `<` against `statusline._LEFT_W`, and a negative there would merely be right by
         accident. Zero says "no columns" and means it."""
-        self.assertEqual(layout.bottom_cols(["right", "bottom"], window_cols=10), 0)
+        self.assertEqual(layout.repos_cols(["right", "repos"], window_cols=10), 0)
 
     def test_which_splits_take_columns_is_one_fact_panel_argvs_shares(self):
         """The two places that must agree: this function decides how much width a slot
@@ -441,7 +486,7 @@ class BottomsWidthIsWhateverTheSplitOrderLeftIt(unittest.TestCase):
                 self.assertEqual(
                     _direction(cmd),
                     "-h" if slot in layout._COLUMN_SLOTS else "-v",
-                    "panel_argvs and bottom_cols disagree about this slot's direction")
+                    "panel_argvs and repos_cols disagree about this slot's direction")
 
 
 class SlotSizesAnswersEverySlotAtOnce(unittest.TestCase):
@@ -451,30 +496,34 @@ class SlotSizesAnswersEverySlotAtOnce(unittest.TestCase):
         self.assertEqual(got["top"], layout.SLOT_SIZE["top"])
         self.assertEqual(got["right"], layout.SLOT_SIZE["right"])
 
-    def test_only_the_bottom_moves_with_the_window(self):
+    def test_only_the_table_moves_with_the_window(self):
         """The one slot whose answer depends on the window it is in — which is why
-        `_reassert_sizes` recomputes on every resize instead of re-applying a constant."""
-        tall = layout.slot_sizes(["top", "bottom", "right"], window_rows=50,
+        `_reassert_sizes` recomputes on every resize instead of re-applying a constant.
+        `bottom` is asserted alongside `top` since #515: it went back to being a fixed
+        row, and a `slot_sizes` that kept treating it as the variable one would still
+        answer plausibly at every window size while starving the harness by a row."""
+        tall = layout.slot_sizes(["top", "bottom", "repos", "right"], window_rows=50,
                                  content_rows=99)
-        short = layout.slot_sizes(["top", "bottom", "right"], window_rows=22,
+        short = layout.slot_sizes(["top", "bottom", "repos", "right"], window_rows=22,
                                   content_rows=99)
         self.assertEqual(tall["top"], short["top"])
+        self.assertEqual(tall["bottom"], short["bottom"])
         self.assertEqual(tall["right"], short["right"])
-        self.assertGreater(tall["bottom"], short["bottom"])
+        self.assertGreater(tall["repos"], short["repos"])
 
     def test_a_size_map_is_what_panel_argvs_splits_with(self):
         """The seam that makes any of this reach tmux: `panel_argvs` takes the map and
         emits it as `-l`. Asserted as the literal string tmux would see, so a map that is
         built correctly and then ignored is red."""
-        sizes = layout.slot_sizes(["bottom"], window_rows=50, content_rows=7)
-        cmd, = layout.panel_argvs(slots=["bottom"], sizes=sizes, **PANELS)
+        sizes = layout.slot_sizes(["repos"], window_rows=50, content_rows=7)
+        cmd, = layout.panel_argvs(slots=["repos"], sizes=sizes, **PANELS)
         self.assertEqual(_size(cmd), "7")
 
     def test_a_missing_entry_degrades_to_the_fixed_size_rather_than_raising(self):
         """`panel_argvs` reads *sizes* with a per-slot fallback. A `KeyError` here would
         be raised from inside a launch, where the whole frame is lost over one slot."""
-        cmd, = layout.panel_argvs(slots=["bottom"], sizes={"top": 4}, **PANELS)
-        self.assertEqual(_size(cmd), str(layout.SLOT_SIZE["bottom"]))
+        cmd, = layout.panel_argvs(slots=["repos"], sizes={"top": 4}, **PANELS)
+        self.assertEqual(_size(cmd), str(layout.SLOT_SIZE["repos"]))
 
 
 class WindowInTheOperatorsServer(unittest.TestCase):

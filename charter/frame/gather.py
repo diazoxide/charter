@@ -3,7 +3,7 @@
 ``statusline.render`` performs an expensive gather before it lays anything out:
 ``_repo_trees``, ``_repo_states`` (one ``git status --porcelain --branch`` per
 repo), ``_branch`` per tree, and ``glstate.read_for``. The frame has up to four
-panels (``top``/``left``/``right``/``bottom``); if each gathered independently
+panels (``top``/``repos``/``right``/``bottom``); if each gathered independently
 that would be four identical git sweeps per repaint, which destroys the property
 the frame was built for — see ``charter/frame/panel.py``'s own docstring: a panel
 repaints only on a ``state.version`` bump, so watching a frame must cost a
@@ -385,7 +385,7 @@ def row_count(fid: str) -> int:
     """How many table rows this frame's repos and pieces would fill — **never a git
     sweep**, on either path.
 
-    #488 made the `bottom` pane's HEIGHT a function of its content, which means somebody
+    #488 made the table pane's HEIGHT a function of its content, which means somebody
     outside a panel has to know how much content there is: the launcher, before any panel
     exists, and `commands_frame.cmd_resize`, every time the window changes size. Both are
     on paths where cost is felt directly — a launch the operator is waiting on, and a
@@ -407,16 +407,16 @@ def row_count(fid: str) -> int:
     **The listing counts the FRAME's workspace, not the asking process's** (#512).
     `state.workspace_for` is the one rule every frame surface asks — what was chosen inside
     the frame, else what the launcher recorded, else a local resolve — so the pane is sized
-    from the same workspace `slots._bottom` then draws. The two callers make the difference
+    from the same workspace `slots._repos` then draws. The two callers make the difference
     real: the launcher IS the process that resolved it and would agree either way, but
     `cmd_resize` runs as a tmux `run-shell` child, whose environment is the SERVER's and
-    whose cwd and pane id are not the operator's — so it would size `bottom` for whatever
+    whose cwd and pane id are not the operator's — so it would size `repos` for whatever
     workspace it resolved for itself, which on the plane that reported #512 was a
     `default` holding no clones at all.
 
-    Zero for anything that fails, which is the floor `layout.bottom_rows` already
-    handles: a frame whose repo count could not be established gets the one-row strip
-    `bottom` always was, never a taller pane full of nothing.
+    Zero for anything that fails, which is the floor `layout.repos_rows` already
+    handles: a frame whose repo count could not be established gets a one-row pane saying
+    so, never a taller one full of nothing.
     """
     data = cached(fid)
     if data is not None:

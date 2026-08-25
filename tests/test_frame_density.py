@@ -174,19 +174,26 @@ class ShippedDefaultsAgree(unittest.TestCase):
                 common = [s for s in shipped if s in spec["slots"]]
                 self.assertEqual([s for s in spec["slots"] if s in shipped], common)
 
-    def test_minimal_is_the_two_strips_saying_as_little_as_they_can(self):
-        """#387's own words, re-derived by #488. It used to be "one-line top and bottom",
-        and half of that stopped being true: `bottom` is variable-height now, so what
-        makes `minimal` minimal is the VERBOSITY — one field on the attention row and at
-        most `slots._TERSE_ROWS` rows of table under it — not a row count in
-        `SLOT_SIZE`. `top` is still literally one row, and `bottom`'s entry is still the
-        floor it never goes below, so both halves are asserted for what they now mean."""
+    def test_minimal_is_the_two_strips_and_literally_nothing_else(self):
+        """#387's own words, re-derived by #488 and again by #515 — and this time they
+        are literally true again. #488 made `bottom` variable-height, so "one-line top
+        and bottom" stopped being a row count and became a verbosity. #515 gave the table
+        its own slot, so the two strips are one row each once more (`SLOT_SIZE`), and
+        `minimal` is what it says: those two and nothing that costs rows by the repo.
+
+        All three halves asserted — the slot list, the verbosity, and the row counts —
+        because a `minimal` that quietly grew `repos` back would still be terse and still
+        name two strips first, and would cost the harness a whole component's worth of
+        rows plus a border to show four repos."""
         self.assertEqual(instance.FRAME_DENSITY["minimal"]["slots"], ["top", "bottom"])
         self.assertEqual(instance.FRAME_DENSITY["minimal"]["verbosity"], "terse")
+        self.assertNotIn("repos", instance.FRAME_DENSITY["minimal"]["slots"])
         self.assertEqual(layout.SLOT_SIZE["top"], 1)
+        self.assertEqual(layout.SLOT_SIZE["bottom"], 1)
         self.assertEqual(
-            layout.bottom_rows(content_rows=1, window_rows=50, slots=["top", "bottom"]),
-            1, "a plane with nothing to table must still get the one-row strip")
+            layout.slot_sizes(["top", "bottom"], window_rows=50, content_rows=9),
+            {"top": 1, "bottom": 1},
+            "minimal must not have a slot whose height moves with the content")
 
     def test_every_level_expands_to_slots_charter_actually_accepts(self):
         """A level naming a slot outside `FRAME_SLOTS` would be filtered out of an
@@ -373,20 +380,21 @@ class TerseSaysLess(PersonaIso, unittest.TestCase):
             terse = self._render("bottom", "minimal")
         self.assertIn("todo", terse)
 
-    def test_bottoms_table_shows_fewer_repos_and_says_how_many_it_hid(self):
-        """#488 moved the repo table from the retired `left` sidebar to `bottom`, and
-        `terse` had to come with it: `bottom` is the slot with rows to give now, so
-        "less" means fewer of them. Asserted as line COUNTS against the same panel at
-        `normal`, so a renderer that merely broke cannot pass by drawing less of
-        nothing. `+ 1` is the attention row, which is not the table's to spend."""
+    def test_the_tables_pane_shows_fewer_repos_and_says_how_many_it_hid(self):
+        """#488 moved the repo table off the retired `left` sidebar and `terse` came with
+        it; #515 moved it again, into `repos`. The level's meaning is unchanged — it is
+        the slot with rows to give, so "less" means fewer of them — and the arithmetic
+        lost its `+ 1`, because the attention row is another pane's now. Asserted as line
+        COUNTS against the same panel at `normal`, so a renderer that merely broke cannot
+        pass by drawing less of nothing."""
         rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
                  "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
                  "change": None, "sigil": "", "current": False, "worktree_count": 0}
                 for i in range(9)]
         gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
                                "current_repo": None, "repos": rows, "worktrees": []})
-        normal = self._render("bottom", "normal")
-        terse = self._render("bottom", "minimal")
+        normal = self._render("repos", "normal")
+        terse = self._render("repos", "minimal")
         self.assertEqual(len(normal.split("\n")), 1 + 9)
         self.assertEqual(len(terse.split("\n")), 1 + slots._TERSE_ROWS)
         self.assertIn("more", terse, "a panel showing less must say how much less")
@@ -403,7 +411,7 @@ class TerseSaysLess(PersonaIso, unittest.TestCase):
         rows[-1] = dict(rows[-1], name="the-dirty-one", dirty=True, tracked_dirty=True)
         gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
                                "current_repo": None, "repos": rows, "worktrees": []})
-        terse = self._render("bottom", "minimal")
+        terse = self._render("repos", "minimal")
         self.assertIn("the-dirty-one", terse)
         # `_pick_rows` re-sorts the CHOSEN set back into cache order, so the two clean
         # repos that share the last rows are still `repo0`/`repo1` — what distinguishes
@@ -426,8 +434,8 @@ class TerseSaysLess(PersonaIso, unittest.TestCase):
                            "behind": 0, "ci": None, "change": None, "sigil": "",
                            "current": False, "worktree_count": 0}
                           for i in range(6)]})
-        normal = self._render("bottom", "normal")
-        terse = self._render("bottom", "minimal")
+        normal = self._render("repos", "normal")
+        terse = self._render("repos", "minimal")
         self.assertIn("piece-5", normal)
         self.assertNotIn("piece-5", terse)
         self.assertIn("solo", terse, "the repo keeps its row whatever its pieces lose")
@@ -818,7 +826,8 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         self.enterContext(mock.patch("charter.frame.tmuxctl.version",
                                      return_value=(3, 7)))
         state.record_harness_pane(self.fid, "%0")
-        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        state.record_panes(self.fid,
+                           panels={"top": "%1", "bottom": "%2", "repos": "%5"})
 
     def _run(self, level, fake=None):
         fake = fake or _Tmux()
@@ -849,18 +858,18 @@ class LiveOverride(PersonaIso, unittest.TestCase):
                        if "split-window" in c and "panel" in c]
         self.assertEqual(sorted(split_slots), ["right"])
         self.assertEqual(state.panes(self.fid),
-                         {"top": "%1", "bottom": "%2", "right": "%7"})
+                         {"top": "%1", "bottom": "%2", "repos": "%5", "right": "%7"})
 
-    def _bottom_split_size(self, size):
-        """The `-l` a re-layout hands `split-window` for a `bottom` it has to create.
+    def _repos_split_size(self, size):
+        """The `-l` a re-layout hands `split-window` for a `repos` it has to create.
 
-        A density change can ADD `bottom` — a frame whose panel died and was reaped, or
-        one grown from a level that had none — and that split's own `-l` comes from
-        `layout.slot_sizes`, not from the `_reassert_sizes` that follows it. So it is a
-        second place the window's width has to reach, and the correction after it is
-        `report=False` best-effort rather than a guarantee.
+        A density change can ADD `repos` — `minimal` has none, so every step up from it
+        is this — and that split's own `-l` comes from `layout.slot_sizes`, not from the
+        `_reassert_sizes` that follows it. So it is a second place the window's width has
+        to reach, and the correction after it is `report=False` best-effort rather than a
+        guarantee.
         """
-        state.record_panes(self.fid, panels={"top": "%1"})
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
         rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
                  "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
                  "change": None, "sigil": "", "current": False, "worktree_count": 0}
@@ -870,35 +879,56 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         rc, fake = self._run("normal", _Tmux(size=size))
         self.assertEqual(rc, 0)
         split = next(c for c in fake.calls
-                     if "split-window" in c and "bottom" in c)
+                     if "split-window" in c and "repos" in c)
         return int(split[split.index("-l") + 1])
 
-    def test_a_relayout_splits_bottom_for_the_table_a_wide_window_can_draw(self):
-        self.assertEqual(self._bottom_split_size("200:50"), 1 + 6)
+    def test_a_relayout_splits_the_table_for_what_a_wide_window_can_draw(self):
+        self.assertEqual(self._repos_split_size("200:50"), 1 + 6)
 
-    def test_a_relayout_splits_bottom_for_one_row_on_a_narrow_window(self):
-        """#500's other call site. `_reassert_sizes` runs immediately after and would
-        correct it, but it is `report=False` best-effort against a pane that may already
-        be gone — the split has to ask for the right size in the first place, and a `-l`
-        that over-asks is granted by tmux out of the harness rather than refused."""
-        self.assertEqual(self._bottom_split_size("80:50"), 1)
+    def test_a_narrow_window_does_not_get_a_table_pane_at_all(self):
+        """#500's other call site, and what #515 changed about it. An 80-column frame
+        draws no table, and the pane it used to be given a one-row `-l` for is now not
+        split at all (`layout.visible_slots`) — because a bordered rectangle with nothing
+        in it reads as "no repos" on a plane that has six.
 
-    def test_a_bottom_split_in_beside_a_surviving_sidebar_gets_the_inset_width(self):
+        The control is the wide case in the test above, so a fix that simply stopped
+        splitting `repos` anywhere is red."""
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
+                 "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
+                 "change": None, "sigil": "", "current": False, "worktree_count": 0}
+                for i in range(6)]
+        gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
+                               "current_repo": None, "repos": rows, "worktrees": []})
+        rc, fake = self._run("normal", _Tmux(size="80:50"))
+        self.assertEqual(rc, 0)
+        self.assertFalse([c for c in fake.calls
+                          if "split-window" in c and "repos" in c], fake.calls)
+
+    def test_a_table_split_in_beside_a_surviving_sidebar_gets_the_inset_width(self):
         """Round 3, and the case that says why the order used here is the PANE order and
-        not *want*'s. A frame launched with `[frame] slots = ["right", "top"]` already
-        has a 22-column sidebar; growing it to `full` splits `bottom` off a harness pane
-        that is therefore already 23 columns narrower than the window — 87 in a
-        110-column window, measured on tmux 3.7c, which draws no table.
+        not *want*'s. A frame launched with `[frame] slots = ["right", "top", "bottom"]`
+        already has a 22-column sidebar; growing it to `full` splits `repos` off a
+        harness pane that is therefore already 23 columns narrower than the window.
 
-        `want` at `full` is `["top", "bottom", "right"]`, whose order says `bottom` comes
-        first and is full width. That is the order a fresh launch would produce, not the
-        order THIS frame's panes are in: `right` is already there and is not re-split.
-        Sizing from `want` here answers 110 and hands back the seven-row pane — so the
-        list handed to `layout.bottom_cols` is the surviving panes in their recorded
-        order followed by what is about to be split, which is what actually happens.
+        `want` at `full` is `["top", "bottom", "repos", "right"]`, whose order says
+        `repos` comes before `right` and is full width. That is the order a fresh launch
+        would produce, not the order THIS frame's panes are in: `right` is already there
+        and is not re-split. So the list handed to `layout.repos_cols` is the surviving
+        panes in their recorded order followed by what is about to be split, which is what
+        actually happens.
+
+        Asserted at a window width the two answers straddle: 130 columns leaves a full
+        table pane 130 wide, and an inset one 107 — both above `statusline._LEFT_W`, so
+        both are split, and the sizes differ only because the inset pane holds fewer of
+        the table's rows... except it does not, since the rows are the same six. The
+        distinguishing case is therefore the width the sidebar pushes BELOW the table's
+        own minimum: at 110 the inset pane is 87 wide and is not split at all, while the
+        un-inset one is 110 and gets its six rows. A sizer reading the window's width
+        would split a seven-row pane there instead — #500's own defect, one slot over.
 
         The control is the same re-layout with no sidebar surviving, so a fix that simply
-        stopped sizing `bottom` for its content is red.
+        stopped splitting `repos` is red.
         """
         rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
                  "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
@@ -911,20 +941,20 @@ class LiveOverride(PersonaIso, unittest.TestCase):
             state.record_panes(self.fid, panels=panels)
             rc, fake = self._run("full", _Tmux(size="110:50"))
             self.assertEqual(rc, 0)
-            cmd = next(c for c in fake.calls
-                       if "split-window" in c and "bottom" in c)
-            return int(cmd[cmd.index("-l") + 1])
+            cmd = next((c for c in fake.calls
+                        if "split-window" in c and "repos" in c), None)
+            return None if cmd is None else int(cmd[cmd.index("-l") + 1])
 
-        self.assertEqual(_split_l({"right": "%3", "top": "%1"}), 1)
-        self.assertEqual(_split_l({"top": "%1"}), 1 + 6)
+        self.assertIsNone(_split_l({"right": "%3", "top": "%1", "bottom": "%2"}))
+        self.assertEqual(_split_l({"top": "%1", "bottom": "%2"}), 1 + 6)
 
     def test_shrinking_kills_the_panes_it_no_longer_wants(self):
-        state.record_panes(self.fid, panels={"top": "%1", "right": "%3", "bottom": "%2"})
+        state.record_panes(self.fid, panels={"top": "%1", "right": "%3", "bottom": "%2",
+                                             "repos": "%5"})
         rc, fake = self._run("minimal")
         self.assertEqual(rc, 0)
-        killed = [c for c in fake.calls if "kill-pane" in c]
-        self.assertEqual(len(killed), 1, fake.calls)
-        self.assertIn("%3", killed[0])
+        killed = {c[c.index("kill-pane") + 2] for c in fake.calls if "kill-pane" in c}
+        self.assertEqual(killed, {"%3", "%5"}, fake.calls)
         self.assertEqual(state.panes(self.fid), {"top": "%1", "bottom": "%2"})
 
     def test_a_panel_is_disarmed_before_it_is_killed(self):
@@ -966,10 +996,10 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         early return, the hook survives firing `resize-pane -t %1` at dead panes on every
         resize for the life of the window."""
         state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2",
-                                             "right": "%4"})
+                                             "repos": "%5", "right": "%4"})
         rc, fake = self._run("minimal", fake=_Tmux(size="40:8"))
         self.assertEqual(rc, 0)
-        self.assertEqual(len([c for c in fake.calls if "kill-pane" in c]), 3, fake.calls)
+        self.assertEqual(len([c for c in fake.calls if "kill-pane" in c]), 4, fake.calls)
         unset = [c for c in fake.calls if "window-resized" in c and "-u" in c]
         self.assertEqual(len(unset), 1, fake.calls)
         self.assertEqual(state.panes(self.fid), {})
@@ -999,10 +1029,12 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         absent from `keep`, is re-split fresh (`%7`, from the fake), and the bad string
         never reaches disk to be read again by the next keypress."""
         state.record_panes(self.fid,
-                           panels={"top": "%1", "bottom": "%2;kill-server"})
+                           panels={"top": "%1", "repos": "%5",
+                                   "bottom": "%2;kill-server"})
         self._run("normal")
         recorded = state.panes(self.fid)
-        self.assertEqual(recorded, {"top": "%1", "bottom": "%7"}, recorded)
+        self.assertEqual(recorded, {"top": "%1", "repos": "%5", "bottom": "%7"},
+                         recorded)
 
     def test_reassert_sizes_refuses_a_pane_id_of_the_wrong_shape_itself(self):
         """The second half of the same rule, pinned where the builder lives rather than
@@ -1013,13 +1045,16 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         disk and hands it straight here, with no `_relayout` in between.
 
         Called directly, with a hostile id its callers would have filtered, so the
-        assertion cannot be satisfied by somebody else's guard."""
+        assertion cannot be satisfied by somebody else's guard. The HARNESS pane is
+        hostile here too, and for the same reason: `cmd_resize` reads that one off disk as
+        well, and #515 gave this function a `resize-pane -t <harness>` of its own."""
         calls = []
         with mock.patch("charter.frame.tmuxctl.run",
                         side_effect=lambda a, argv, **k: calls.append(list(argv))):
             commands_frame._reassert_sizes(
                 "charter", fid=self.fid,
                 panes={"top": "%1", "bottom": "%2;kill-server"},
+                harness_pane="%0;kill-server",
                 window_cols=200, window_rows=50)
         targets = [c[c.index("-t") + 1] for c in calls if "resize-pane" in c]
         self.assertEqual(targets, ["%1"], calls)
@@ -1287,7 +1322,7 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         split_slots = sorted(c[c.index("panel") + 1] for c in fake.calls
                              if "split-window" in c and "panel" in c)
-        self.assertEqual(split_slots, ["bottom", "right", "top"], fake.calls)
+        self.assertEqual(split_slots, ["bottom", "repos", "right", "top"], fake.calls)
 
     def test_a_harness_pane_that_is_not_tmuxs_own_shape_is_refused(self):
         """The id comes back off disk, not off `split-window`'s stdout, so it gets the
@@ -1305,11 +1340,11 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
     DENSITY, not from the repo count alone.
 
     This is the surface the operator actually hits, and it is not launch-only: the
-    `window-resized` hook fires on every step of a terminal drag, so a `bottom` sized for
-    a table it can no longer draw is re-asserted continuously for as long as the terminal
-    stays narrow — with the harness pinned at `layout.HARNESS_MIN_ROWS` the whole time
-    (measured on tmux 3.7c: a 26-row, 80-column window with 14 repos gave `bottom` 11
-    rows to draw one line in).
+    `window-resized` hook fires on every step of a terminal drag, so a table pane sized
+    for a table it can no longer draw is re-asserted continuously for as long as the
+    terminal stays narrow — with the harness pinned at `layout.HARNESS_MIN_ROWS` the
+    whole time (measured on tmux 3.7c: a 26-row, 80-column window with 14 repos gave that
+    pane 11 rows to draw one line in).
 
     Driven through `cmd_resize` itself rather than through `_reassert_sizes`, because
     what shipped broken was the call site: it measured the width into `_cols` and threw
@@ -1320,7 +1355,8 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         super().setUp()
         self.fid = f"rsz-{_a_dead_pid()}"
         state.record_harness_pane(self.fid, "%0")
-        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        state.record_panes(self.fid,
+                           panels={"top": "%1", "bottom": "%2", "repos": "%5"})
         rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
                  "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
                  "change": None, "sigil": "", "current": False, "worktree_count": 0}
@@ -1328,28 +1364,61 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
                                "current_repo": None, "repos": rows, "worktrees": []})
 
-    def _bottom_height(self, size, *, panels=None):
+    def _heights(self, size, *, panels=None) -> dict[str, int]:
+        """Every `resize-pane -y` `cmd_resize` issues, as ``{pane id: rows}``.
+
+        **The table pane is deliberately absent from this map, and that is the property**
+        (#515). tmux's `resize-pane -y` moves one boundary, so in a stack of N panes only
+        N-1 heights are free; the one left unasserted is `repos`, whose height is already
+        a function of the others, and the HARNESS (`%0`) is asserted instead. So what
+        `cmd_resize` decided about the table is read here as the harness's height — and
+        `tests/test_frame_tmux_integration.py` is where a real tmux confirms the table
+        lands on the rows that leaves it.
+        """
         if panels is not None:
             state.record_panes(self.fid, panels=panels)
         fake = _Tmux(size=size)
         with mock.patch("charter.frame.tmuxctl.run", side_effect=fake):
             rc = commands_frame.cmd_resize(SimpleNamespace(frame=self.fid))
         self.assertEqual(rc, 0)
-        sized = [c for c in fake.calls if "resize-pane" in c and "%2" in c]
-        self.assertEqual(len(sized), 1, fake.calls)
-        return int(sized[0][sized[0].index("-y") + 1])
+        return {c[c.index("-t") + 1]: int(c[c.index("-y") + 1])
+                for c in fake.calls if "resize-pane" in c and "-y" in c}
+
+    def _table_rows(self, size, *, panels=None) -> int:
+        """How many rows `cmd_resize` left the table pane, read back out of the window.
+
+        Not an independent re-derivation: the window's height minus every height
+        `cmd_resize` actually asserted, minus one border row per horizontal pane. That is
+        the same subtraction tmux itself performs when it honours those `-y`s, which is
+        why `test_frame_tmux_integration` can check this number against a real
+        `#{pane_height}` rather than against another copy of charter's arithmetic.
+        """
+        heights = self._heights(size, panels=panels)
+        window_rows = int(size.split(":")[1])
+        # One border row per SPLIT, and the splits are one fewer than the panes in the
+        # stack — which is `len(heights)` named panes plus the table itself.
+        return window_rows - sum(heights.values()) - len(heights)
 
     def test_a_wide_window_keeps_the_table_sized_pane(self):
         """The control. Without it the narrow assertion below would pass against a
         function that always answered one."""
-        self.assertEqual(self._bottom_height("200:50"), 1 + 6)
+        self.assertEqual(self._table_rows("200:50"), 1 + 6)
+
+    def test_the_fixed_strips_are_re_asserted_at_their_own_constant_height(self):
+        """The rest of the map, and the check that #515's arithmetic reached this call
+        site. `bottom` went back to being one row; a `_reassert_sizes` still treating it
+        as the variable slot would hand it the table's height and take those rows out of
+        the harness on every step of a drag. The harness's own `-y` is asserted here too,
+        because before #515 nothing named it at all — with three strips instead of two,
+        the two below the harness trade rows with each other and never with it."""
+        self.assertEqual(self._heights("200:50"), {"%1": 1, "%2": 1, "%0": 38})
 
     def test_narrowing_the_terminal_shrinks_the_pane_back_to_its_one_row(self):
         """The panel draws no table below `statusline._LEFT_W`, so every row past the
         first was blank — and came out of the harness."""
         for cols in (60, 80, statusline._LEFT_W - 1):
             with self.subTest(cols=cols):
-                self.assertEqual(self._bottom_height(f"{cols}:50"), 1)
+                self.assertEqual(self._table_rows(f"{cols}:50"), 1)
 
     def test_the_density_the_operator_chose_is_read_here_too(self):
         """`cmd_density` and `cmd_resize` are different processes minutes apart, so the
@@ -1357,14 +1426,14 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         being remembered. A `minimal` frame that then gets resized must not be handed the
         `normal` height back."""
         state.record_density(self.fid, "minimal")
-        self.assertEqual(self._bottom_height("200:50"), 1 + slots._TERSE_ROWS)
+        self.assertEqual(self._table_rows("200:50"), 1 + slots._TERSE_ROWS)
         state.record_density(self.fid, "normal")
-        self.assertEqual(self._bottom_height("200:50"), 1 + 6)
+        self.assertEqual(self._table_rows("200:50"), 1 + 6)
 
     def test_a_pane_inset_beside_the_sidebar_is_resized_for_its_own_width(self):
         """Round 3. The window's width is not the PANE's when the frame's `[frame] slots`
-        put `right` before `bottom`: `panel_argvs` splits both off the harness pane in
-        list order, so `bottom` comes off a harness that is already 23 columns narrower —
+        put `right` before `repos`: `panel_argvs` splits both off the harness pane in
+        list order, so the table comes off a harness that is already 23 columns narrower —
         measured on tmux 3.7c, 87 columns in a 110-column window, which is below
         `statusline._LEFT_W` and draws no table at all.
 
@@ -1372,18 +1441,20 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         defect: it re-applied the over-tall pane on every step of a terminal drag. What it
         does have is the recorded pane map, whose insertion order IS the order those panes
         were split in — `_split_panels` writes it that way and JSON round-trips it — so
-        `layout.bottom_cols` can turn the window's width into the pane's.
+        `layout.repos_cols` can turn the window's width into the pane's.
 
         The control is the same window and the same map with the shipped order, so a fix
-        that stopped sizing `bottom` for its content at all is red rather than green.
+        that stopped sizing the table for its content at all is red rather than green.
         """
         self.assertEqual(
-            self._bottom_height("110:50",
-                                panels={"right": "%3", "top": "%1", "bottom": "%2"}),
+            self._table_rows("110:50",
+                             panels={"right": "%3", "top": "%1", "bottom": "%2",
+                                     "repos": "%5"}),
             1)
         self.assertEqual(
-            self._bottom_height("110:50",
-                                panels={"top": "%1", "bottom": "%2", "right": "%3"}),
+            self._table_rows("110:50",
+                             panels={"top": "%1", "bottom": "%2", "repos": "%5",
+                                     "right": "%3"}),
             1 + 6)
 
 
