@@ -372,10 +372,18 @@ instead. Nothing is pinned into the environment to achieve it, deliberately: exp
 `$CHARTER_WORKSPACE` would rank above every pointer and take `charter workspace use` away
 from every framed session.
 
-So the order the panels read is: what you chose **inside** this frame, then what the
-launch resolved, then whatever the panel can resolve for itself (a frame launched by an
-older charter, still running across the upgrade). `charter workspace use <name>` at the
-agent still moves the panels, and still moves them for the same reason as before.
+So the order the panels read is: `$CHARTER_WORKSPACE` if you pinned one, then what you
+chose **inside** this frame, then what the launch resolved, then whatever the panel can
+resolve for itself (a frame launched by an older charter, still running across the
+upgrade). `charter workspace use <name>` at the agent still moves the panels, and still
+moves them for the same reason as before.
+
+The pin comes first because that is what it means everywhere else in charter: it ranks
+above every pointer in `charter`'s own resolution, and `charter workspace use` warns you
+that it will not stick while the variable is set. A frame is not an exception to that —
+if it were, a frame launched under a pin that then had `ws use` typed at it would draw a
+workspace no command in that session acts on. The `*` beside the name on `top` marks that
+name as the pinned one.
 
 **The repo table is gathered at launch, in the background.** A launch deletes the cached
 scan first — pids are recycled and a new frame must not adopt a dead one's rows — and a

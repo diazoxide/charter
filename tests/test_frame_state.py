@@ -638,5 +638,91 @@ class TheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
                          "a read minted the frame directory it was only looking in")
 
 
+class ThePinOutranksTheFramesOwnRungs(PersonaIso, unittest.TestCase):
+    """`workspace_for`'s rung 0. `$CHARTER_WORKSPACE` beats every rung below it, because
+    that is what the variable means everywhere else charter reads it.
+
+    Nothing in the frame is allowed to draw a workspace the session's own commands will
+    not act on, and the pin is the one rung that decides for BOTH: `workspace.resolve`
+    puts it above every pointer, so a `charter ws` command run at the agent answers the
+    pinned name no matter what the frame recorded or what pointer the session wrote. A
+    panel that ranked the per-session pointer first drew `other` while every command in
+    that session worked in the pinned workspace.
+
+    That is also the mechanism charter itself tells operators to use for parallel and
+    unattended agents — `hooks`' own nudge says to "re-launch with `CHARTER_WORKSPACE`
+    set" — so it is precisely the case where nobody is watching the panel closely enough
+    to catch it lying.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Cleared rather than merely overwritten: `resolve`'s rungs below the pin read
+        # `$CHARTER_SESSION_ID` and `$TMUX_PANE` out of whatever terminal the suite is
+        # being run from, so a developer inside a live frame would otherwise be supplying
+        # half this fixture (#519, #521).
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+
+    def _pin(self, name: str) -> None:
+        os.environ["CHARTER_WORKSPACE"] = name
+
+    def test_the_pin_beats_a_workspace_chosen_inside_the_frame(self):
+        """The regression. Both rungs answer, they disagree, and the pin wins — the same
+        way `workspace.resolve` decides it for every command the session runs."""
+        from charter import workspace as ws
+        self._pin("zeta")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
+            ws.set_active("other", force=True)
+        self.assertEqual(ws.for_session("f-1"), "other",
+                         "the fixture never wrote the pointer this test is about")
+        self.assertEqual(state.workspace_for("f-1"), "zeta")
+        self.assertEqual(ws.resolve(), "zeta",
+                         "the frame and the session's own commands must not disagree")
+
+    def test_the_pin_beats_what_the_launcher_recorded(self):
+        """The second rung, checked separately so the test above cannot pass merely
+        because the record happened to be missing."""
+        self._pin("zeta")
+        state.record_workspace("f-1", "recorded-at-launch")
+        self.assertEqual(state.workspace_for("f-1"), "zeta")
+
+    def test_with_no_pin_the_frames_own_rungs_decide(self):
+        """The ordinary case, and the guard against a rung 0 that answers when it should
+        not: an unset variable must leave the chain exactly as it was."""
+        state.record_workspace("f-1", "recorded-at-launch")
+        self.assertEqual(state.workspace_for("f-1"), "recorded-at-launch")
+
+    def test_a_pin_that_cannot_name_a_workspace_is_not_drawn(self):
+        """The value reaches `workspace_dir()`'s join and a panel's screen, so it is
+        name-checked here on the same terms as `frame_workspace` — #442 is what an
+        unchecked `../../` in that position cost once already. A pin charter cannot use
+        falls through rather than being rendered."""
+        self._pin("../../escaped")
+        state.record_workspace("f-1", "recorded-at-launch")
+        self.assertEqual(state.workspace_for("f-1"), "recorded-at-launch")
+
+    def test_the_pin_is_stripped_the_way_resolve_strips_it(self):
+        """`workspace.resolve` returns `env.strip()`, so a variable exported with padding
+        (a here-doc, a `.env` line, an `export CHARTER_WORKSPACE=$(…)` with a trailing
+        newline) names a real workspace to every command the session runs. A frame that
+        compared the raw value would find no such name, fall through, and draw something
+        else — the disagreement this whole rung exists to close, arriving through a space."""
+        from charter import workspace as ws
+        self._pin("  zeta\n")
+        state.record_workspace("f-1", "recorded-at-launch")
+        self.assertEqual(ws.resolve(), "zeta",
+                         "the fixture no longer matches what `resolve` does with padding")
+        self.assertEqual(state.workspace_for("f-1"), "zeta")
+
+    def test_an_empty_pin_is_no_pin(self):
+        """`CHARTER_WORKSPACE=` exported empty is how a shell clears one, and
+        `workspace.resolve` already treats it as absent. The name check answers this on
+        its own terms — `valid_name("")` is False — so there is no separate truthiness
+        guard here for a mutation to pass through."""
+        self._pin("   ")
+        state.record_workspace("f-1", "recorded-at-launch")
+        self.assertEqual(state.workspace_for("f-1"), "recorded-at-launch")
+
+
 if __name__ == "__main__":
     unittest.main()

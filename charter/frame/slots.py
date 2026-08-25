@@ -244,16 +244,23 @@ def _top(fid: str) -> str:
     degrade. The `dev` chip travels inside that one f-string, so it goes and comes back
     with the version and can never be left behind on its own.
     """
-    from .. import __version__, statusline, workspace
+    from .. import __version__, statusline
     from . import state
     # The FRAME's workspace, not this pane's own guess at one (#512) — see
-    # :func:`_frame_workspace`. `source()` is still asked locally and still only decides
-    # the PIN: `$CHARTER_WORKSPACE` is the one rung a panel does share with its launcher
-    # (`commands_frame._frame_identity_env` carries it, empty when the launcher had none),
-    # so "the operator pinned this by hand" is a question this process can still answer.
+    # :func:`_frame_workspace`. `$CHARTER_WORKSPACE` is the one rung a panel does share
+    # with its launcher (`commands_frame._frame_identity_env` carries it, empty when the
+    # launcher had none), so "the operator pinned this by hand" is a question this process
+    # can still answer.
+    #
+    # The variable is compared to the NAME DRAWN, not asked about through
+    # `workspace.source()`: the `*` claims the environment chose *this* name, and a marker
+    # that only knows the variable is set somewhere will say so over a name the variable
+    # did not name — which is what `state.workspace_for`'s rung 0 is about. Comparing the
+    # value keeps the two halves of the chip agreeing by construction rather than by both
+    # happening to consult the same rung, and it drops `source()`'s `from_path` walk and
+    # pointer reads off this slot.
     ws = _frame_workspace(fid)
-    src = workspace.source()
-    pin = "*" if src == "$CHARTER_WORKSPACE" else ""
+    pin = "*" if ws == os.environ.get("CHARTER_WORKSPACE", "").strip() else ""
     persona = statusline._persona_line() or ""
     # Two file reads on a slot that repaints only on a version bump (`top` is not in
     # `ANIMATED`), and nothing is read at all for a frame with no recorded session —

@@ -40,10 +40,19 @@ same thing as a session being pinned.
 workspace use <name>` typed at the agent still moves the panels, exactly as it always has
 and for the same reason — inside a frame the frame *is* the charter session, so the
 pointer is written under the frame's id and the panels read it back under the same one.
-The order is: what you chose inside this frame, then what the launch resolved, then
-whatever the panel can resolve for itself. A frame already running across the upgrade has
-no record and lands on that third rung, so it behaves exactly as it does today; relaunch
-it and it draws yours.
+The order is: `$CHARTER_WORKSPACE` if you pinned one, then what you chose inside this
+frame, then what the launch resolved, then whatever the panel can resolve for itself. A
+frame already running across the upgrade has no record and lands on that last rung, so it
+behaves exactly as it does today; relaunch it and it draws yours.
+
+**And a pin still outranks all of it**, because that is what `$CHARTER_WORKSPACE` means
+everywhere else — it ranks above every pointer when charter resolves a workspace, and
+`charter workspace use` tells you it will not stick while the variable is set. It is also
+how charter itself tells you to aim a parallel or unattended agent. So a frame launched
+under a pin keeps drawing the pinned workspace even if something inside it writes a
+pointer, and the `*` on the header marks that name as the pinned one. Without that rung
+the frame would draw a workspace no command in the session acts on — and wear the `*`
+over it, claiming an environment variable had chosen a name it never named.
 
 **And the table it draws was never being filled at launch.** A launch deliberately deletes
 the cached repo scan before it draws anything — a frame id is `<workspace>-<launcher pid>`,

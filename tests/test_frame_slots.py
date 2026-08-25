@@ -448,6 +448,74 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         self.assertIn(config.DEFAULT_WORKSPACE, out)
 
 
+class TheChipAndItsStarNameTheSameWorkspace(PersonaIso, unittest.TestCase):
+    """`top`'s `⬢ <name>*` is one claim, not two, and the `*` is the half that says who
+    made it: "`$CHARTER_WORKSPACE` chose this".
+
+    The two halves used to be answered from different rungs — the name from
+    `state.workspace_for`, the star from `workspace.source()`, which only knows whether
+    the variable is set at all. A frame launched under the pin that then had `charter
+    workspace use other` typed at it drew `⬢ other*`: a name the environment did not
+    name, wearing the marker that says it did, while every command in that session went
+    on acting in the pinned workspace. Self-contradictory on its own line, and the
+    contradiction is the tell — an operator reading it has no way to know which half to
+    believe.
+
+    This is the case charter's own documentation steers people into: `hooks`' nudge tells
+    an operator to "re-launch with `CHARTER_WORKSPACE=<name>` set" to aim a parallel or
+    unattended agent, and `commands_workspace` warns that `ws use` will not stick while
+    it is. The frame has to survive somebody doing both.
+    """
+
+    def _top(self, fid="f-1", *, cols=200, rows=24) -> str:
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, rows))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return tui.strip_ansi(slots.render("top", fid))
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+
+    def test_the_pinned_name_is_the_one_drawn_and_it_keeps_the_star(self):
+        """Through the real `workspace.set_active` with the frame's id in the
+        environment, because that is what `charter workspace use` does — a hand-written
+        pointer file would prove the reader reads a file, not that a real in-frame command
+        can no longer move the header off the pin."""
+        os.environ["CHARTER_WORKSPACE"] = "zeta"
+        state.record_workspace("f-1", "zeta")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
+            workspace.set_active("other", force=True)
+        self.assertEqual(workspace.for_session("f-1"), "other",
+                         "the fixture never wrote the pointer this test is about")
+        out = self._top()
+        self.assertIn("⬢ zeta*", out)
+        self.assertNotIn("other", out,
+                         "the header named a workspace no command in the session acts on")
+        self.assertEqual(workspace.resolve(), "zeta",
+                         "the header and the session's own commands disagree")
+
+    def test_a_name_the_pin_did_not_choose_never_wears_the_star(self):
+        """The star's meaning, checked from the other side: a pin charter refuses to draw
+        (`workspace_dir()` would join it) leaves the panel on a name the variable did not
+        name, and the marker has to come off with it. A star sourced from "is the variable
+        set" would still be there."""
+        os.environ["CHARTER_WORKSPACE"] = "../../escaped"
+        state.record_workspace("f-1", "recorded-at-launch")
+        out = self._top()
+        self.assertIn("⬢ recorded-at-launch", out)
+        self.assertNotIn("escaped", out)
+        self.assertNotIn("*", out, "the star claimed the environment chose this name")
+
+    def test_no_pin_means_no_star(self):
+        """The ordinary frame, so neither test above can pass by the star never being
+        drawn at all."""
+        state.record_workspace("f-1", "recorded-at-launch")
+        out = self._top()
+        self.assertIn("⬢ recorded-at-launch", out)
+        self.assertNotIn("*", out)
+
+
 class TopDrawsTheRecordedGauge(PersonaIso, unittest.TestCase):
     """#413: `ctx NN%` / `cache NN%` on `top`, out of the history the suppressed status
     line records — the one capability a framed Claude Code session lost to #386 and the

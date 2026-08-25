@@ -455,8 +455,16 @@ def frame_workspace(fid: str) -> str | None:
 def workspace_for(fid: str) -> str:
     """The workspace this frame is DRAWING — what every surface of the frame asks.
 
-    Three rungs, and the order is the whole of it:
+    Four rungs, and the order is the whole of it:
 
+    0. **The pin.** ``$CHARTER_WORKSPACE`` outranks everything, because that is what it
+       means everywhere else in charter: `workspace.resolve` puts it above every pointer,
+       `commands_workspace` warns that `ws use` will not stick while it is set, and `hooks`
+       tells an operator to "re-launch with CHARTER_WORKSPACE=<name> set" as the way to aim
+       a parallel or unattended agent. A frame is not exempt from it. Skip this rung and a
+       framed session that also typed `charter workspace use other` draws `other` while
+       every command it runs acts on the pinned name — a panel naming a workspace nothing
+       in the session touches, wearing `slots`' `*` that says the environment chose it.
     1. **What was chosen inside this frame.** `charter workspace use <name>` typed at the
        agent writes the per-session pointer under the FRAME's id, because inside a frame
        the frame is the charter session (`docs/frame.md`, ADR 0019) — and "it moves the
@@ -468,21 +476,33 @@ def workspace_for(fid: str) -> str:
        that predates the record and still running across the upgrade — today's behaviour,
        so this is never worse than what it replaces.
 
-    Rungs 1 and 2 are the only two that can ever disagree, and it is worth saying why the
-    others cannot. `$CHARTER_WORKSPACE` reaches a panel exactly when the launcher had it
-    (`commands_frame._frame_identity_env` carries it, empty when absent), and the launcher
-    resolves it first — so the record holds the same value. The cwd rung is the same story:
-    a panel's cwd is the launcher's, and the launcher asked `from_path` about it before
-    anything else. The per-terminal pointer and the declared default are the two rungs a
-    panel reaches that answer for the PANEL rather than for the frame, and those are
-    exactly the two the record is here to outrank.
+    Rungs 1 and 2 are the only two below the pin that can ever disagree, and it is worth
+    saying why the others cannot. `$CHARTER_WORKSPACE` reaches a panel exactly when the
+    launcher had it (`commands_frame._frame_identity_env` carries it, empty when absent),
+    and the launcher resolves it first — so the record holds the same value; rung 0 is
+    therefore invisible on an ordinary pinned launch and only shows itself when something
+    inside the frame tried to move off the pin. The cwd rung is the same story: a panel's
+    cwd is the launcher's, and the launcher asked `from_path` about it before anything
+    else. The per-terminal pointer and the declared default are the two rungs a panel
+    reaches that answer for the PANEL rather than for the frame, and those are exactly the
+    two the record is here to outrank.
+
+    **Name-checked, and `valid_name` alone with no `env and` in front of it** — the same
+    rule and the same reasoning as :func:`frame_workspace`, since this value ends up in
+    `workspace_dir()`'s join too, and `valid_name("")` is already False so a truthiness
+    test would be a second guard no mutation can turn red. A pin that cannot name a
+    workspace does not get drawn: it falls through, and `slots` withholds the `*` because
+    the name on screen is then not the one the environment named.
 
     Asked through `workspace.for_session` rather than by reading `workspace.source()`'s
     label: that function returns a sentence written for a status line, and matching the
     string ``"session"`` would be this repo's own recurring defect — a spelling standing in
-    for a property.
+    for a property. Rung 0 reads the variable itself for the same reason.
     """
     from .. import workspace as ws_mod
+    env = os.environ.get("CHARTER_WORKSPACE", "").strip()
+    if ws_mod.valid_name(env):
+        return env
     return ws_mod.for_session(fid) or frame_workspace(fid) or ws_mod.resolve()
 
 

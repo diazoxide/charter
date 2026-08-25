@@ -75,6 +75,13 @@ from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
 from tests._isolation import PersonaIso, run_hook
+# Imported rather than re-declared: a second copy of the stub that keeps a launch's
+# detached `frame-gather` child off the developer's real plane is a copy that can drift
+# out of step with the production call it stands in for, and `tests/_planeguard.py`
+# cannot see a subprocess to tell anyone it drifted. Cross-module test imports are this
+# suite's ordinary way of sharing a fixture (`tests.test_hooks.InAControlPlane` has four
+# importers).
+from tests.test_frame_launcher import _no_real_detached_child
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -3589,7 +3596,21 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         def _run_launch():
             env = dict(os.environ, TMUX=f"{OP_SOCKET_PATH},{server_pid},{sid[1:]}",
                        TMUX_PANE=op_pane)
+            # `_no_real_detached_child` because a launch now FORKS (#512): `_spawn_gather`
+            # sends `charter frame-gather` through `util.detach_self`, a real
+            # `subprocess.Popen` carrying `os.environ.copy()`. That child is a separate
+            # PROCESS, so neither `PersonaIso`'s in-process `config.use()` nor
+            # `tests/_planeguard.py` reaches it, and the environment being copied here is
+            # the DEVELOPER'S with no `$CHARTER_ROOT` in it — so on any machine where
+            # `sys.executable` can import charter the child resolves the plane from the
+            # checkout's cwd and gathers, bumps and git-sweeps the operator's live one.
+            # Measured on the machine this was written on: `detach_self` really fired,
+            # with `argv=['frame-gather', '--session', 'demo-<pid>', '--workspace',
+            # 'demo']` and `CHARTER_ROOT=''`. This test is about what a launch writes on
+            # somebody else's tmux SERVER; the gather child is not part of that question,
+            # and it is the one part of a launch that escapes the isolation.
             with mock.patch.dict(os.environ, env, clear=True), \
+                 _no_real_detached_child([]), \
                  mock.patch("sys.stdout.isatty", return_value=True), \
                  mock.patch("charter.workspace.resolve", return_value="demo"), \
                  mock.patch.dict(config.FRAME, {"slots": []}):
