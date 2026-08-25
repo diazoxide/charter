@@ -393,7 +393,7 @@ def record_workspace(fid: str, name: str) -> None:
     something else entirely. Measured on the plane that reported #512: three terminal
     pointers naming `harness-wrapper` and one naming `user-reporting`, a `default`
     workspace holding no clones at all, and every panel drawing `default`'s empty repo
-    list beside a `bottom` pane the LAUNCHER had sized for the real workspace's rows.
+    list beside a `repos` pane the LAUNCHER had sized for the real workspace's rows.
 
     The launcher is the one process that knows, so it writes it down — the same argument
     :func:`record_identity` already makes for the rest of a frame's identity, and the same

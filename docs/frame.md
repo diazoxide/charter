@@ -269,37 +269,41 @@ configured for it. A density change goes through the same floors, so choosing `f
 terminal with no room for a side panel gives you the edges that fit rather than a failed
 split.
 
-`bottom` is never dropped by those floors — it **shrinks** instead. Its height is its
-content's: one row per repo (and per worktree, in a single-repo workspace), plus the
-attention row, capped so the harness always keeps at least 12 rows and floored at the one
-row `bottom` has always been. A workspace with no clones gets exactly that one row — and
-so does a frame narrower than the table's own 95 columns, or one at `minimal`, because
-"its content" means *what the panel will actually draw*, not how many clones there are:
-the launcher and the resize hook ask the same function the panel asks, at the same density
-and — the part that is easy to get wrong — at the width of the **pane**, not of the
-window. Those are the same number for the shipped `slots`, where `bottom` spans the whole
-window. They are not the same if you have written a `slots` list that puts `right` before
-`bottom`: the sidebar is split off first, so `bottom` comes out 23 columns narrower, and
-it is that width the pane is sized for. Narrow your terminal below 95 columns and `bottom`
-gives its rows back rather than keeping them blank. The
-cap is recomputed on every terminal resize, not remembered from the launch — tmux does not
+`bottom` is never dropped by those floors, and it is the only slot that never is: it is
+the attention strip — one alert and the command that fixes it — which is the whole reason
+a cramped terminal is worth framing at all. It is one row at every size.
+
+`repos` is the one whose height moves. It is its content's: one row per repo (and per
+worktree, in a single-repo workspace), plus its own `▪ repos N` heading, capped so the
+harness always keeps at least 12 rows. "Its content" means *what the panel will actually
+draw*, not how many clones there are: the launcher and the resize hook ask the same
+function the panel asks, at the same density and — the part that is easy to get wrong — at
+the width of the **pane**, not of the window. Those are the same number for the shipped
+`slots`, where the table spans the whole window. They are not the same if you have written
+a `slots` list that puts `right` before `repos`: the sidebar is split off first, so the
+table comes out 23 columns narrower, and it is that width the pane is sized for. The cap
+is recomputed on every terminal resize, not remembered from the launch — tmux does not
 refuse an over-large pane height, it takes the difference out of the neighbouring pane,
 and the neighbour is your agent session. Recomputing means charter runs for a moment on
 each resize (median 20ms, in the background, so nothing waits on it). During a fast drag
-those runs can finish out of order and leave `bottom` sized for a window you have already
+those runs can finish out of order and leave the table sized for a window you have already
 resized past; it corrects itself the next time you resize, and #501 tracks closing it
 properly.
 
 If the frame ends up narrower than the repo table's own columns (95), the table is not
 drawn rather than drawn with its right-hand columns cut off: a row trimmed past the branch
 loses the CI glyph and the open-change count, and a dirty, failing repo then reads as a
-clean one. That is an ordinary width, not an exotic one — `min-cols` gates `right` and
-`top`, never `bottom` — so an 80-column frame is the attention row and nothing under it,
-and the pane is one row tall to match. A `slots` list naming `right` before `bottom` moves
-that threshold up by the sidebar's 23 columns: such a frame needs 118 columns of terminal
-before the table appears, and between 100 and 117 it is the attention row alone. The
-attention row itself is unaffected — it drops whole fields instead, in priority order.
-(The status line outside a frame still crops instead of refusing; that is #506.)
+clean one. Below that width the `repos` pane is not split at all — an empty bordered box
+says "no repos" to the eye on a plane that has fourteen. That is an ordinary width, not an
+exotic one, so an 80-column frame is the two strips and your session, with the table's
+rows going back to the harness rather than being taken and left blank. A `slots` list
+naming `right` before `repos` moves the threshold up by the sidebar's 23 columns: such a
+frame needs 118 columns of terminal before the table appears. Narrow a frame that is
+*already running* below 95 and the pane cannot be un-split — a resize changes sizes, not
+which panes exist — so it shrinks to one row and says `⋯ too narrow for the repo table —
+95 columns needed` rather than sitting there blank. The attention strip is unaffected
+either way: it drops whole fields instead, in priority order. (The status line outside a
+frame still crops instead of refusing; that is #506.)
 
 If a future `[frame] slots` ever names an edge charter sizes but has no renderer for, that
 slot is skipped rather than drawn as a dead pane — the harness keeps the space — and
@@ -388,17 +392,19 @@ name as the pinned one.
 **The repo table is gathered at launch, in the background.** A launch deletes the cached
 scan first — pids are recycled and a new frame must not adopt a dead one's rows — and a
 detached `charter frame-gather` fills it alongside the frame coming up, then bumps the
-frame so the panels repaint. Until it lands, `bottom` says `⋯ gathering this workspace's
+frame so the panels repaint. Until it lands, `repos` says `⋯ gathering this workspace's
 repos…` rather than drawing an empty table: a workspace with no clones and a workspace not
 yet looked at are different facts, and drawing them the same way is what made a frame read
-as "no repos" on a plane full of them. A panel never gathers on its own — it reads the
-cache or says it has none.
+as "no repos" on a plane full of them. A workspace that really has none says so, with the
+command that changes it: `no clones in <workspace> · charter clone <repo> -w
+<workspace>`. A panel never gathers on its own — it reads the cache or says it has
+none.
 
 ## Configuring it
 
 ```toml
 [frame]
-slots = ["top", "bottom", "right"]
+slots = ["top", "bottom", "repos", "right"]
 density = "full"
 mouse = false
 hotkey = "F2"
@@ -414,9 +420,9 @@ There are three levels:
 
 | level | edges | each panel says |
 |---|---|---|
-| `minimal` | `top` and `bottom` | one field on the attention row, at most four rows of repo table — and a `bottom` pane at most five rows tall (that row plus those four), so the difference goes to your session |
-| `normal` | `top` and `bottom` | everything they have, table as tall as the window can spare |
-| `full` | every edge | everything they have |
+| `minimal` | `top` and `bottom` | the two one-row strips and nothing else — no repo table, no sidebar, so every row and column the frame is not using is your session's; `top` drops the charter version and `bottom` keeps one field |
+| `normal` | `top`, `bottom` and `repos` | both strips saying everything they have, and the repo table between them, as tall as the window can spare |
+| `full` | every edge | the sidebar as well |
 
 `full` is the shipped frame, so writing nothing at all and writing `density = "full"`
 give you the same thing — and that is enforced rather than trusted: charter's own test
@@ -428,19 +434,20 @@ nothing else in charter has to know presets exist — the probe, `doctor`, and t
 floors all read the one resolved list. **An explicit `slots` wins**: `slots` is the
 primitive, and if you wrote a list you meant that list.
 
-`minimal` and `normal` are how you ask for less. Both drop to the two strips; `minimal`
-also makes each panel terser — `top` drops the charter version (the workspace and the
-persona are what it exists to tell you), and `bottom` keeps only its highest-priority
-attention field (an alert if there is one, the spinner if work is running, otherwise the
-todo count, so the row is never blank) and at most four rows of repo table under it. The
-four that survive are the ones worth keeping — the repo you are standing in, and the ones
-with something on them — and the table still says how many it hid. The pane is sized for
-those four rows instead of all of them, which is the point of the level: `minimal` gives
-your session the rows back rather than blanking them. How many rows that is depends on how
-many clones you have — a fourteen-repo workspace gets ten back, an eight-repo one gets
-four, and a workspace with four or fewer gets none, because there was never a fifth row to
-give. `right` shows four persona chips at `minimal` and says how many it hid, and its
-todo list shrinks to four rows the same way.
+`minimal` and `normal` are how you ask for less, and what they give back is a whole
+component rather than a shorter one. `normal` drops the sidebar; `minimal` drops the repo
+table too and leaves the two one-row strips, so a fourteen-repo workspace hands its
+session fifteen rows and a border back rather than four. `minimal` also makes each
+remaining panel terser: `top` drops the charter version (the workspace and the persona are
+what it exists to tell you), and `bottom` keeps only its highest-priority attention field
+— an alert if there is one, the spinner if work is running, otherwise the todo count, so
+the row is never blank.
+
+If you want the table but at `minimal`'s verbosity, write the `slots` list by hand and
+declare the level beside it: an explicit `slots` wins over a preset, and the table then
+keeps its four highest-ranked rows — the repo you are standing in, and the ones with
+something on them — and still says how many it hid. `right` shows four persona chips that
+way too, with its todo list shrunk to four rows the same way.
 
 **The hotkey changes the density of the running frame, and nothing else.** `F2` opens the
 menu, which now lists all three levels with a `•` on the one in effect; choosing one
@@ -463,29 +470,46 @@ cannot make sense of it. That check is not cosmetic: this value is interpolated 
 configuration that `source-file` *executes*, and `charter.toml` is a committed, shared
 file that arrives from someone else's machine.
 
-Every edge is on by default. `top` is a one-line strip — the workspace and the persona on
-the left, the charter version (and the `dev` chip, if you are on that channel) at the
-far right, so identity and build are not read as one sentence; `bottom` is the attention
-row plus the repo table under it, as many rows tall as the plane and the terminal allow
-(see above); `right` is a 22-column sidebar carrying two headed sections — `personas`,
-one row each with the memory, health and in-flight badges lined up in a column of their
-own, and `todos`, this workspace's open todos beneath them. The todo list is what
-`charter ws todo` shows, oldest first, cut to what the pane has room for with a
-`…(+N more)` line saying how many it hid; a workspace with nothing open gets no todo
-section at all rather than a heading over an empty space. The sidebar drops itself on a
-terminal too small for it. The **order** is the order the panes are split in, and therefore the
-geometry: with `bottom` before the sidebar its rows span the whole frame, while listing it
-last leaves it only the width the sidebar did not take — 23 columns fewer, which means a
-118-column terminal before the table is drawn at all. `bottom` is where an alert, the
-command that fixes it, and the repo table all appear, so the shipped order gives it the
-full width.
+Every edge is on by default, and the frame reads top to bottom as **identity · your
+session · the repo table · what wants attention**.
+
+`top` is a one-line strip — the workspace and the persona on the left, the charter version
+(and the `dev` chip, if you are on that channel) at the far right, so identity and build
+are not read as one sentence. `repos` is the repo table in a bordered component of its
+own, headed `▪ repos 6` and as many rows tall as the plane and the terminal allow (see
+above). `bottom` is the attention strip on the terminal's last row — one alert and the
+command that fixes it, the in-flight spinner, this session's news, the todo count and the
+hotkey hint, each shown whole or dropped whole. `right` is a 22-column sidebar carrying
+two headed sections — `personas`, one row each with the memory, health and in-flight
+badges lined up in a column of their own, and `todos`, this workspace's open todos beneath
+them. The todo list is what `charter ws todo` shows, oldest first, cut to what the pane has
+room for with a `…(+N more)` line saying how many it hid; a workspace with nothing open
+gets no todo section at all rather than a heading over an empty space. The sidebar drops
+itself on a terminal too small for it.
+
+**The attention strip is last, and the table floats above it.** The table's height is its
+content's, so whichever of the two sits lower moves up and down the screen as repos are
+cloned or go quiet. Anchoring the alert is worth more than anchoring the table: an alert
+you have to go looking for is one you read late.
+
+**The `slots` order is the order the panes are split in, and therefore the geometry — in
+both directions.** Sideways: a slot listed after `right` gets only the width the sidebar
+left it, 23 columns fewer, which means a 118-column terminal before the table is drawn at
+all. Vertically: every split but `top`'s goes directly below the harness, so a slot listed
+*later* sits *higher* on screen. That is why the shipped list names `bottom` before
+`repos` and the table appears above the strip. If you write the list yourself, keep that
+pair in that order unless you mean to swap them.
 
 **There used to be a `left` sidebar, and it is gone.** It drew repo rows recomposed for 22
 columns — narrower than the name and branch columns of the table it was standing in for,
 so a real branch name was always elided and a dirty, CI-failing repo could render looking
-clean. `bottom` draws that table properly now, and the 22 columns go back to your agent
+clean. `repos` draws that table properly now, and the 22 columns go back to your agent
 session. A `charter.toml` still naming `left` in `slots` is not an error: the name is
-dropped the way any unknown slot is, and you get the rest of your list.
+dropped the way any unknown slot is, and you get the rest of your list. The same rule cuts
+the other way for `repos`, which is a *new* name: a committed `slots = ["top", "bottom",
+"right"]` still launches and simply has no table, because an explicit list is the
+primitive and charter does not add to a list you wrote by hand. Add `repos` to it, or
+delete the line and take the default.
 
 `slots`/`density`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`,
 `min-cols` and `min-rows` are the three that are not: charter.toml spells them with a

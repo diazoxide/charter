@@ -31,7 +31,7 @@ line out of view and leaves every sibling pane untouched, not the whole frame. `
 clamps the LINE COUNT the way `tui.truncate` already clamps each line's WIDTH.
 
 The measurement itself moved to `slots._height` with #488, beside `slots._width` and for
-the same reason width already lived there: a renderer needs it now. `bottom` is sized to
+the same reason width already lived there: a renderer needs it now. `repos` is sized to
 its content and draws as much of the repo table as its pane holds, choosing which rows to
 spend on through `statusline._pick_rows` — a clamp applied after the fact would cut the
 table at whatever came last, which is the unranked slice that ranking exists to prevent.
@@ -66,7 +66,7 @@ the reason to stderr does not fix that, and the measurement is why (real tmux 3.
 `remain-on-exit on`): tmux writes its own `Pane is dead (status N, <date>)` message by
 moving to the pane's LAST row and issuing a linefeed first, which scrolls the pane up by
 exactly one line — in a six-row pane the first of three stderr lines is lost and the
-rest survive, but `top` is ONE row (`layout.SLOT_SIZE`) and `bottom` is one whenever the
+rest survive, but `top` and `bottom` are ONE row each (`layout.SLOT_SIZE`) and `repos` is
 workspace holds no clones (its own floor, since #488), so that one scrolled line is the
 whole pane and `Pane is dead (status 2)` is provably all that is left. It cost a real debugging session, whose only way through was running the panel's
 argv by hand outside tmux. A pane whose process is still ALIVE keeps what it painted
@@ -112,7 +112,7 @@ TICK = 0.2
 #: when a terminal's real size is unknowable.
 #:
 #: Re-exported from `slots` rather than declared here, because #488 gave a RENDERER a
-#: reason to ask the same question (`bottom` chooses which repo rows to spend its pane
+#: reason to ask the same question (`repos` chooses which repo rows to spend its pane
 #: on, so it has to know how many it has) and two copies of a fallback are two answers
 #: to "how tall is a pane nobody can measure" — one of which would eventually move.
 _DEFAULT_ROWS = slots._DEFAULT_ROWS
@@ -123,7 +123,7 @@ def _rows() -> int:
     with, for exactly the reason this module already asks `slots` for the WIDTH.
 
     It was implemented here first, and correctly, back when height was purely this
-    module's clamp. #488 made it a renderer's question too (`slots._bottom` decides how
+    module's clamp. #488 made it a renderer's question too (`slots._repos` decides how
     many repo rows to draw), and a second `os.get_terminal_size` with its own `OSError`
     fallback beside the first is how the two come to disagree about a pane neither can
     measure. Kept as a named function rather than inlined: `_write` reads better for it,
@@ -163,7 +163,7 @@ def _hold(reason: str, *, once: bool, rc: int) -> int:
     The whole of this module's answer to a panel that cannot run: **returning is the
     bug**. A panel process that exits hands its pane to `remain-on-exit`, and tmux then
     scrolls the pane by exactly one line to write `Pane is dead (status N, <date>)` over
-    it — which in a one-row pane, which `top` always is and `bottom` is on a plane with
+    it — which in a one-row pane, which `top` and `bottom` always are and `repos` is on a
     no clones, is the entire pane (measured against real tmux 3.7c; see the module
     docstring). So the reason is painted and the process
     simply does not leave, which is the only state in which a pane keeps what was
@@ -370,7 +370,7 @@ def run(slot: str, fid: str, *, once: bool = False) -> int:
     **Neither refusal nor a crash exits.** Both end in `_hold`, which paints the reason
     into the pane and stays there, because a panel process that returns hands its pane
     to tmux's own `Pane is dead (status N)` message — which scrolls a one-row `top`/
-    `bottom` pane clean (measured; see the module docstring). The stderr line is kept
+    one-row pane clean (measured; see the module docstring). The stderr line is kept
     beside the paint rather than replaced by it: it is the only trace left when this is
     run by hand for debugging with stdout redirected (`charter panel top --session x >
     /tmp/log`), the case `_DEFAULT_ROWS` already exists for, and inside a real pane the

@@ -4,8 +4,8 @@ Defaults are the shipped behaviour, so they are asserted rather than assumed: `m
 off because `set -g mouse on` takes over drag-select, and breaking the operator's copy to
 enable a feature v1 does not ship is a bad trade.
 
-`slots` is every edge charter draws (#386, narrowed to three by #488's retirement of
-`left`), and the reason is the same kind of trade read the other way: inside a frame
+`slots` is every edge charter draws (#386, `left` retired by #488, `repos` added by
+#515), and the reason is the same kind of trade read the other way: inside a frame
 `charter statusline` draws nothing (ADR 0019), so an edge the frame does not fill is
 information nobody sees at all. The order is asserted too, because it is the split order
 and therefore the geometry — see `instance.FRAME_FIELDS`.
@@ -13,16 +13,24 @@ and therefore the geometry — see `instance.FRAME_FIELDS`.
 
 from __future__ import annotations
 
+import pathlib
+import tomllib
 import unittest
 from unittest import mock
 
 from charter import instance
 
+#: This repo's own committed `charter.toml` — see
+#: :class:`CharterOwnPlaneDrawsEveryEdgeItShips`. Read off disk rather than through
+#: `config`, which resolves a WORKTREE back to the main tree it was cut from
+#: (`root._plane_of`) and would therefore test the operator's checkout, not this one.
+_COMMITTED = pathlib.Path(__file__).resolve().parents[1] / "charter.toml"
+
 
 class FrameDefaults(unittest.TestCase):
     def test_an_absent_section_yields_the_shipped_defaults(self):
         f = instance.frame_of({})
-        self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "repos", "right"])
         self.assertIs(f["mouse"], False)
         self.assertEqual(f["hotkey"], "F2")
         self.assertEqual(f["history_limit"], 50000)
@@ -33,7 +41,7 @@ class FrameDefaults(unittest.TestCase):
         f = instance.frame_of({"frame": {"mouse": True, "hotkey": "F5"}})
         self.assertIs(f["mouse"], True)
         self.assertEqual(f["hotkey"], "F5")
-        self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "repos", "right"])
 
     def test_an_unknown_slot_is_dropped_rather_than_carried(self):
         """A typo must not reach a tmux argv. Dropping is louder than it looks: the slot
@@ -83,6 +91,9 @@ class FrameDefaults(unittest.TestCase):
         f = instance.frame_of(
             {"frame": {"slots": ["top", "bottom", "left", "right"]}})
         self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertNotIn("repos", f["slots"],
+                         "an explicit `slots` is the primitive — #515 must not smuggle "
+                         "a slot into a list the operator wrote by hand")
 
     def test_a_malformed_section_falls_back_instead_of_raising(self):
         """`config` is imported by every command including `charter --version`, so a bad
@@ -95,7 +106,7 @@ class FrameDefaults(unittest.TestCase):
         final `isinstance(value, type(default))` type check is deleted: without it, the
         string `"lots"` would be assigned straight into `history_limit`."""
         f = instance.frame_of({"frame": {"slots": "top", "history-limit": "lots"}})
-        self.assertEqual(f["slots"], ["top", "bottom", "right"])
+        self.assertEqual(f["slots"], ["top", "bottom", "repos", "right"])
         self.assertEqual(f["history_limit"], 50000)
 
     def test_a_bool_does_not_satisfy_a_non_bool_default(self):
@@ -143,6 +154,40 @@ class FrameDefaults(unittest.TestCase):
         default holds."""
         f = instance.frame_of({"frame": {"history_limit": 999}})
         self.assertEqual(f["history_limit"], 50000)
+
+
+class CharterOwnPlaneDrawsEveryEdgeItShips(unittest.TestCase):
+    """The repo's OWN committed `charter.toml`, read off disk — the one file in this
+    project a slot rename can silently break.
+
+    `slots` is the primitive and an explicit list wins over the default outright, which
+    is the compatibility promise `instance.FRAME_SLOTS` makes to operators. It cuts
+    charter itself too: this repo IS a control plane, and the frame the maintainers run
+    while working on the frame is drawn from this file. A release that adds a slot and
+    leaves this line alone hands every other plane the new edge and takes it away from
+    charter's own, with nothing on screen saying why — which is exactly what #515 did
+    before this test existed. `origin/main` drew the repo table from this file; the first
+    version of the branch that split `repos` out of `bottom` did not.
+
+    Asserted through `instance.frame_of` rather than against the raw TOML list, because
+    the failure is about what charter RESOLVES: a list naming a slot charter no longer
+    has is filtered to nothing here, which reads on screen the same way as a list missing
+    one. And the whole set is required rather than a membership check on today's newest
+    name — the next slot has the same problem and should not need a new test.
+    """
+
+    def test_the_committed_slots_line_names_every_slot_charter_can_draw(self):
+        got = instance.frame_of(tomllib.loads(_COMMITTED.read_text()))["slots"]
+        self.assertEqual(sorted(got), sorted(instance.FRAME_SLOTS), got)
+
+    def test_the_committed_order_is_the_one_the_geometry_wants(self):
+        """The list is the SPLIT order, so it is the geometry (#488/#500): a slot listed
+        later sits higher, and a `repos` listed after `right` is inset by the sidebar's
+        23 columns and needs a 118-column terminal before it draws a table at all. The
+        shipped default is the order charter measured; this file having the same set in a
+        different order would be a frame nobody chose."""
+        got = instance.frame_of(tomllib.loads(_COMMITTED.read_text()))["slots"]
+        self.assertEqual(got, instance.frame_of({})["slots"])
 
 
 class HotkeyIsNotAFreeString(unittest.TestCase):

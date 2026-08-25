@@ -21,7 +21,7 @@ import unittest
 from unittest import mock
 
 from charter import config, instance, statusline, todos, tui, workspace
-from charter.frame import gather, slots, state
+from charter.frame import gather, layout, slots, state
 
 from tests._isolation import PersonaIso
 
@@ -418,7 +418,7 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         state.record_workspace("f-1", self.OTHER)
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
             workspace.set_active("chosen-later")
-        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 2)
+        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 1 + 1)
 
     def test_the_pane_is_sized_from_the_frames_workspace_too(self):
         """`gather.row_count`'s no-cache path is the third surface that used to resolve
@@ -432,10 +432,10 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         `cmd_launch` guarantees by calling `gather.discard`."""
         clone = config.WORKSPACES_DIR / self.OTHER / "arepo"
         (clone / ".git").mkdir(parents=True)
-        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1,
+        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 0,
                          "the fixture already counted a repo before the record existed")
         state.record_workspace("f-1", self.OTHER)
-        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 2)
+        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 1 + 1)
 
     def test_a_corrupt_record_falls_back_rather_than_drawing_it(self):
         """`frame_workspace` name-checks on read, so a `workspaces/` escape never reaches
@@ -786,17 +786,17 @@ class FitFields(unittest.TestCase):
                          {"alert", "news"})
 
 
-class BottomTable(PersonaIso, unittest.TestCase):
-    """#488: the repo table `bottom` draws under its attention row.
+class ReposTable(PersonaIso, unittest.TestCase):
+    """#488's repo table, in the bordered pane of its own #515 gave it.
 
     The rows are `statusline.py`'s OWN wide table — same four columns, same declared
     widths, same markers and CI glyphs — composed straight from `gather`'s cache: never a
     `git` call, never `glstate`, and never a repo directory (see `_table_row`'s docstring
     for the one column that costs a filesystem walk per row and is therefore absent).
 
-    Every test here renders through the real `slots.render("bottom", …)` rather than
+    Every test here renders through the real `slots.render("repos", …)` rather than
     calling `_table_lines` directly, because what #488 actually promises is that a
-    PANEL shows this — a helper returning perfect rows that `_bottom` never asks for
+    PANEL shows this — a helper returning perfect rows that `_repos` never asks for
     would satisfy a unit test of the helper and none of the promise.
     """
 
@@ -804,32 +804,106 @@ class BottomTable(PersonaIso, unittest.TestCase):
         with mock.patch("os.get_terminal_size",
                         return_value=os.terminal_size((cols, rows))), \
              mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            return slots.render("bottom", fid)
+            return slots.render("repos", fid)
 
     def test_lists_a_repo_from_the_cache(self):
         _seed("f-1", repos=[_row("demo")])
         self.assertIn("demo", self._render())
 
-    def test_the_attention_row_is_still_the_first_line(self):
-        """#488's non-negotiable: the table JOINS the alert, the news, the todo count and
-        the plane-root warning — it does not evict them. Asserted as line 0 specifically,
-        because a table drawn above the row it is meant to sit under would still contain
-        both strings and satisfy a membership check."""
+    def test_the_pane_is_headed_the_way_the_sidebars_sections_are(self):
+        """#515 gave the table a bordered pane; #516 had just given the sidebar's
+        sections headings. An unlabelled box of tree rows beside a labelled one reads as
+        an overflow of its neighbour, which is the impression this issue exists to
+        remove — and the table's first row is `├─`, a glyph that means "there is more
+        above me" and had nothing above it once the attention row moved out.
+
+        Composed through `_sidebar_head`, the same helper `_right` uses, rather than a
+        string of its own: two components labelled two ways is the drift that helper was
+        extracted to stop. The COUNT is asserted separately from the word, because a
+        heading that says `repos` and lies about how many there are is worse than none.
+        """
+        _seed("f-1", repos=[_row("demo"), _row("other")])
+        first = tui.strip_ansi(self._render().split("\n")[0])
+        self.assertEqual(first, tui.strip_ansi(slots._sidebar_head("repos", 2, 200)))
+        self.assertIn("repos", first)
+        self.assertIn("2", first)
+
+    def test_the_two_lines_that_are_not_a_table_carry_no_heading(self):
+        """`▪ repos 0` above "no clones in demo" is the same fact twice in a two-row
+        pane, and above "gathering…" it is a count charter does not have yet. Both of
+        those panes are one line, and the line is the sentence."""
+        self.assertEqual(len(self._render("f-never-gathered").split("\n")), 1)
+        _seed("f-known-empty")
+        empty = self._render("f-known-empty")
+        self.assertEqual(len(empty.split("\n")), 1)
+        self.assertNotIn("repos", tui.strip_ansi(empty))
+
+    def test_the_table_starts_under_the_heading_with_no_attention_row_in_this_pane(self):
+        """#515's non-negotiable, and the inverse of the one #488 needed. The attention
+        row is `bottom`'s own pane now, so this pane is the table and NOTHING else: a
+        renderer that kept composing the row here would put a second copy of the todo
+        count, the alert and the hotkey hint on screen, one pane above the real one.
+
+        Asserted as line 0 specifically — a table drawn under a leftover row would still
+        contain "demo" and satisfy a membership check. The `bottom` renderer is asked in
+        the same test so the pair is pinned together: exactly one of the two panes draws
+        the row, and it is not this one."""
         _seed("f-1", repos=[_row("demo")])
         out = self._render()
-        self.assertIn("todo", tui.strip_ansi(out.split("\n")[0]))
-        self.assertIn("demo", out)
+        self.assertIn("demo", tui.strip_ansi(out.split("\n")[1]))
+        self.assertNotIn("todo", tui.strip_ansi(out))
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((200, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            row = slots.render("bottom", "f-1")
+        self.assertIn("todo", tui.strip_ansi(row))
+        self.assertNotIn("demo", tui.strip_ansi(row))
 
-    def test_a_plane_with_no_repos_is_the_one_row_strip_it_always_was(self):
-        """The floor `layout.bottom_rows` keeps, seen from the renderer's side. The
-        reported "always empty sidebar" of #488 was this case being told the truth —
-        a workspace with 0 clones — so it must stay honest rather than grow furniture.
+    def test_a_plane_with_no_repos_says_so_rather_than_drawing_an_empty_pane(self):
+        """The floor `layout.repos_rows` keeps, seen from the renderer's side — and what
+        #515 changed about it. While this table shared `bottom` with the attention row, a
+        workspace with 0 clones simply produced no table rows and absence said it. In a
+        bordered pane of its own, absence is an empty rectangle, which reads as a table
+        that failed to draw rather than as a workspace with nothing in it.
+
+        So the pane is one row and that row is a sentence — with the command that changes
+        it, the shape every `statusline._alerts` row already has. Both halves asserted:
+        one row (a renderer padding the pane would be red) and the workspace named in it
+        (a renderer that said something generic would not carry the fix).
 
         `_seed` is what makes this the honest case rather than the unknown one below: a
         cache exists and it says zero repos. Delete the seed and this is a DIFFERENT
         claim, which is #512."""
         _seed("f-1")
-        self.assertEqual(len(self._render().split("\n")), 1)
+        out = self._render()
+        self.assertEqual(len(out.split("\n")), 1, out)
+        self.assertIn("no clones", tui.strip_ansi(out))
+        self.assertIn("charter clone", tui.strip_ansi(out))
+
+    def test_a_workspace_name_the_rungs_never_checked_is_still_one_line(self):
+        """`_empty_lines` interpolates a workspace name with no `contain.one_line` over
+        it, and the reason has to be the true one. It is NOT that every rung of
+        `state.workspace_for` name-checks its answer: rung 0 does (`valid_name`), but the
+        last rung is `workspace.resolve()`, which returns `$CHARTER_WORKSPACE` stripped
+        and otherwise untouched — so a name with a newline in it reaches this renderer
+        verbatim, as this test's first assertion measures.
+
+        What contains it is `tui.truncate`, which runs `tui.sanitize` first: the newline
+        is not charter's markup, so the pane still draws exactly ONE line — the property
+        the whole slot is built on, since a `repos` pane that quietly became three rows
+        tall would push the attention strip off the bottom of the window.
+
+        The hostile value is asserted to have got through as well as to have been
+        contained. Asserting containment alone would pass just as well on a build where a
+        rung DID reject it and the sentence said `default` — a test that proves nothing
+        about the line it is named for."""
+        hostile = "ev\nil\x1b[31m;rm -rf /"
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": hostile}, clear=True):
+            self.assertEqual(state.workspace_for("f-known-empty"), hostile)
+            _seed("f-known-empty")
+            out = self._render("f-known-empty")
+        self.assertEqual(len(out.split("\n")), 1, repr(out))
+        self.assertIn("rm -rf /", tui.strip_ansi(out))
 
     def test_a_frame_whose_repos_are_not_gathered_yet_says_so_rather_than_showing_none(self):
         """#512, at the renderer. `cmd_launch` deletes the cache before it draws anything
@@ -845,8 +919,9 @@ class BottomTable(PersonaIso, unittest.TestCase):
         _seed("f-known-empty")
         empty = self._render("f-known-empty")
         self.assertIn("gathering", unknown)
-        self.assertEqual(len(unknown.split("\n")), 2)
+        self.assertEqual(len(unknown.split("\n")), 1)
         self.assertNotIn("gathering", empty)
+        self.assertIn("no clones", tui.strip_ansi(empty))
         self.assertEqual(len(empty.split("\n")), 1)
 
     def test_the_gathering_line_goes_the_moment_the_rows_arrive(self):
@@ -859,17 +934,29 @@ class BottomTable(PersonaIso, unittest.TestCase):
         self.assertIn("demo", after)
 
     def test_a_pane_too_narrow_for_the_table_says_nothing_either(self):
-        """`_table_cap` answers 0 below `statusline._LEFT_W` and `bottom` composes nothing
+        """`_table_cap` answers 0 below `statusline._LEFT_W` and `_repos` composes nothing
         on a budget of 0, so a "gathering" line cannot appear where a table never will:
         one that did would show up while the rows were unknown and VANISH once they were
         known — "the repos went away", which is worse than the silence it replaces.
 
         Asserted through the whole renderer at both widths in one test, because what is
-        being pinned is that the two agree: the SAME frame, gathered or not, draws exactly
-        the attention row at 90 columns."""
-        self.assertEqual(len(self._render("f-never-gathered", cols=90).split("\n")), 1)
+        being pinned is that the two agree: the SAME frame, gathered or not, draws the
+        SAME line at 90 columns, and it is not the gathering one.
+
+        And the pane is not even SPLIT at that width by a launch since #515
+        (`layout.visible_slots`), which is asserted here beside the renderer rather than
+        only over in the layout tests: the two together are what stop a blank bordered
+        rectangle appearing. The line the renderer does draw is for the pane a RESIZE
+        leaves behind — `cmd_resize` re-sizes panes and never destroys them."""
+        before = self._render("f-never-gathered", cols=90)
         _seed("f-never-gathered", repos=[_row("demo")])
-        self.assertEqual(len(self._render("f-never-gathered", cols=90).split("\n")), 1)
+        after = self._render("f-never-gathered", cols=90)
+        self.assertEqual(before, after)
+        self.assertNotIn("gathering", before)
+        self.assertIn("too narrow", tui.strip_ansi(before))
+        self.assertEqual(len(before.split("\n")), 1, before)
+        self.assertNotIn("repos", layout.visible_slots(
+            ["top", "bottom", "repos", "right"], 90, 40, 100, 20))
 
     def test_a_repaint_never_runs_a_gather_of_its_own(self):
         """The rule `_table_lines`' own docstring states and #512 found broken: a panel
@@ -1025,8 +1112,8 @@ class BottomTable(PersonaIso, unittest.TestCase):
     def test_the_height_the_launcher_asks_for_is_the_height_the_renderer_fills(self):
         """The seam #488 turns on, over every input that changes either side's answer.
 
-        `slots.bottom_rows_wanted` is what tells `layout.slot_sizes` how tall to split the
-        pane; `_bottom` is what fills it. If the two disagreed, every frame would come up
+        `slots.repos_rows_wanted` is what tells `layout.slot_sizes` how tall to split the
+        pane; `_repos` is what fills it. If the two disagreed, every frame would come up
         either padded with blank rows the harness could have had, or with a table cut off
         and nothing saying so — and neither is visible from either side alone.
 
@@ -1035,14 +1122,18 @@ class BottomTable(PersonaIso, unittest.TestCase):
         a renderer that also read the WIDTH (no table below `statusline._LEFT_W`) and the
         DENSITY (`_TERSE_ROWS` at `terse`), so the seam held only at the one shape the
         original test used — wide, `normal`. Every input either side consults is varied
-        here: repo count across the cap, width across `_LEFT_W` and down to the smallest
-        `layout.visible_slots` still draws `bottom` at, and every level in
-        `instance.FRAME_DENSITY`. The next input to appear — a fourth density, a
-        `bottom`-specific `min-cols` — has to be added to this loop, and until it is, its
-        own dimension is unpinned rather than silently wrong.
+        here: repo count across the cap, width across `_LEFT_W` and down to widths the
+        pane is no longer even split at, and every level in `instance.FRAME_DENSITY`. The
+        next input to appear — a fourth density, a `repos`-specific `min-cols` — has to be
+        added to this loop, and until it is, its own dimension is unpinned rather than
+        silently wrong.
 
         Rendered into a pane of EXACTLY the height the sizer asked for, at EXACTLY the
-        width the sizer was asked about, and counted.
+        width the sizer was asked about, and counted. **`layout.repos_rows` is what turns
+        the sizer's answer into a pane height**, so it is called here rather than the raw
+        want: a 0 (no clones, or a width with no table in it) becomes the one-row pane
+        that says so, and asserting against the raw number would demand a zero-line render
+        the pane could not hold anyway.
         """
         for level in (None, *sorted(instance.FRAME_DENSITY)):
             for n in (0, 1, 4, 9, statusline._MAX_REPO_LINES + 3):
@@ -1052,18 +1143,30 @@ class BottomTable(PersonaIso, unittest.TestCase):
                         _seed(fid, repos=[_row(f"repo{i}") for i in range(n)])
                         if level is not None:
                             state.record_density(fid, level)
-                        want = slots.bottom_rows_wanted(fid, pane_cols=cols)
-                        out = self._render(fid, cols=cols, rows=want)
-                        self.assertEqual(len(out.split("\n")), want, out)
+                        want = slots.repos_rows_wanted(fid, pane_cols=cols)
+                        tall = layout.repos_rows(content_rows=want, window_rows=50,
+                                                 slots=["top", "bottom", "repos"])
+                        out = self._render(fid, cols=cols, rows=tall)
+                        if cols < statusline._LEFT_W:
+                            # Not a pane a LAUNCH splits at all any more
+                            # (`layout.visible_slots`); one a resize leaves behind draws
+                            # the single line saying why, in the single row the floor
+                            # gives it.
+                            self.assertEqual(tall, 1)
+                            self.assertEqual(len(out.split("\n")), 1, out)
+                            self.assertIn("too narrow", tui.strip_ansi(out))
+                            continue
+                        self.assertEqual(len(out.split("\n")), tall, out)
 
     def test_a_frame_too_narrow_for_the_table_is_sized_for_the_row_it_can_draw(self):
         """The width half of the seam, stated as the number the LAUNCHER hands tmux.
 
-        `[frame] min-cols` (100) gates `right` and `top`; `layout.visible_slots` keeps
-        `bottom` down to `min_cols // 2`, so an 80-column terminal draws the attention row
-        and no table at all. Sized from the repo count alone it was given a pane for the
-        table anyway — six repos meant a seven-row pane holding one line, and the other
-        six rows came off the harness.
+        An 80-column terminal cannot draw this table at all. Sized from the repo count
+        alone it was given a pane for the table anyway — six repos meant a seven-row pane
+        holding one line, and the other six rows came off the harness. Since #515 the slot
+        is dropped at those widths instead of sized, and this is the number that says so:
+        zero rows WANTED, which is a different statement from the one-row floor
+        `layout.repos_rows` applies to a pane that does get split.
 
         Asserted against a repo count large enough that the two answers cannot coincide,
         and at `_LEFT_W` itself so the boundary is pinned from both sides rather than
@@ -1071,9 +1174,9 @@ class BottomTable(PersonaIso, unittest.TestCase):
         _seed("narrow", repos=[_row(f"repo{i}") for i in range(6)])
         for cols in (50, 80, statusline._LEFT_W - 1):
             with self.subTest(cols=cols):
-                self.assertEqual(slots.bottom_rows_wanted("narrow", pane_cols=cols), 1)
-        self.assertEqual(slots.bottom_rows_wanted("narrow",
-                                                  pane_cols=statusline._LEFT_W), 1 + 6)
+                self.assertEqual(slots.repos_rows_wanted("narrow", pane_cols=cols), 0)
+        self.assertEqual(slots.repos_rows_wanted("narrow",
+                                                 pane_cols=statusline._LEFT_W), 1 + 6)
 
     def test_a_terse_density_asks_for_a_shorter_pane_not_a_blanker_one(self):
         """`minimal` exists to give the harness its rows back — `instance.FRAME_DENSITY`
@@ -1086,9 +1189,9 @@ class BottomTable(PersonaIso, unittest.TestCase):
         between the two numbers is the one the level is for."""
         _seed("dense", repos=[_row(f"repo{i}") for i in range(10)])
         state.record_density("dense", "normal")
-        wide = slots.bottom_rows_wanted("dense", pane_cols=200)
+        wide = slots.repos_rows_wanted("dense", pane_cols=200)
         state.record_density("dense", "minimal")
-        terse = slots.bottom_rows_wanted("dense", pane_cols=200)
+        terse = slots.repos_rows_wanted("dense", pane_cols=200)
         self.assertEqual(wide, 1 + 10)
         self.assertEqual(terse, 1 + slots._TERSE_ROWS)
         self.assertLess(terse, wide)
@@ -1101,9 +1204,11 @@ class BottomTable(PersonaIso, unittest.TestCase):
         "nothing to say", which is the false-clean failure the plan's Global Constraints
         name. The attention row is unaffected — it budgets its own fields."""
         _seed("f-1", repos=[_row("demo", dirty=True, ci="failed")])
-        out = self._render(cols=statusline._LEFT_W - 1)
-        self.assertEqual(len(out.split("\n")), 1, out)
-        self.assertIn("todo", tui.strip_ansi(out))
+        narrow = tui.strip_ansi(self._render(cols=statusline._LEFT_W - 1))
+        self.assertNotIn("demo", narrow)
+        self.assertIn("too narrow", narrow)
+        self.assertIn(str(statusline._LEFT_W), narrow,
+                      "the line must say how wide the pane has to be")
         # ...and one column wider, it draws.
         self.assertIn("demo", self._render(cols=statusline._LEFT_W))
 
@@ -1212,8 +1317,8 @@ class BottomTable(PersonaIso, unittest.TestCase):
         call is `subprocess.Popen` under `run`. Each of those is the next spelling this
         budget would otherwise miss, so each is counted.
 
-        Measured on this branch: 45 calls for a 2-line repaint and the same 45, in the
-        same order, for a 15-line one."""
+        Measured on this branch: the same calls, in the same order, for a one-row
+        repaint and a fourteen-row one."""
         import builtins
         import io
         import subprocess as _sp
@@ -1244,7 +1349,7 @@ class BottomTable(PersonaIso, unittest.TestCase):
 
         short_lines, short = _count("cost-1", 1)
         tall_lines, tall = _count("cost-many", statusline._MAX_REPO_LINES)
-        self.assertEqual(short_lines, 2)
+        self.assertEqual(short_lines, 1 + 1)
         self.assertEqual(tall_lines, 1 + statusline._MAX_REPO_LINES,
                          "the tall render drew no more rows — this proves nothing")
         self.assertTrue(short, "nothing was counted at all — the budget is vacuous")
@@ -1263,7 +1368,7 @@ class BottomTable(PersonaIso, unittest.TestCase):
         `statusline._LEFT_W` there is no table, so the cache is never reached and the
         test would pass by never running the code it claims to bound.
 
-        **`cached`, not `read` (#512).** `_bottom` stopped calling `gather.read` when a
+        **`cached`, not `read` (#512).** `_repos` stopped calling `gather.read` when a
         panel stopped being allowed to fall back to a live `scan()`, and this test kept
         passing against a mock nothing called any more — the exact "instrumenting one
         function while claiming to bound a property" shape. It is pinned to whichever
@@ -1273,27 +1378,27 @@ class BottomTable(PersonaIso, unittest.TestCase):
              mock.patch("os.get_terminal_size",
                         return_value=os.terminal_size((200, 24))), \
              mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
-            self.assertIn("charter", slots.render("bottom", "f-1"))
+            self.assertIn("charter", slots.render("repos", "f-1"))
 
 
-class BottomRowsWanted(PersonaIso, unittest.TestCase):
-    """`slots.bottom_rows_wanted` — the number the LAUNCHER sizes the pane from."""
+class ReposRowsWanted(PersonaIso, unittest.TestCase):
+    """`slots.repos_rows_wanted` — the number the LAUNCHER sizes the table pane from."""
 
-    def test_a_plane_with_no_repos_wants_exactly_the_attention_row(self):
+    def test_a_plane_with_no_repos_wants_no_table_rows_at_all(self):
         _seed("f-1")
-        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1)
+        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 0)
 
     def test_it_grows_with_the_repos_and_the_pieces_alike(self):
         _seed("f-1", repos=[_row("a"), _row("b")],
               worktrees=[_row("p", repo="a")])
-        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 1 + 3)
+        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 1 + 3)
 
     def test_it_is_capped_at_the_wide_tables_own_row_budget(self):
-        """A workspace with forty clones must ask for a fifteen-row strip, not a
-        forty-one-row one — `_MAX_REPO_LINES` is the same total-row budget the wide table
+        """A workspace with forty clones must ask for a fourteen-row pane, not a
+        forty-row one — `_MAX_REPO_LINES` is the same total-row budget the wide table
         keeps, reused rather than invented fresh."""
         _seed("f-1", repos=[_row(f"r{i}") for i in range(40)])
-        self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200),
+        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200),
                          1 + statusline._MAX_REPO_LINES)
 
     def test_the_width_is_required_and_cannot_be_confused_with_the_row_count(self):
@@ -1304,9 +1409,9 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         A missing width is a `TypeError` at the call site, not a default of "wide"."""
         _seed("f-1", repos=[_row("a")])
         with self.assertRaises(TypeError):
-            slots.bottom_rows_wanted("f-1")
+            slots.repos_rows_wanted("f-1")
         with self.assertRaises(TypeError):
-            slots.bottom_rows_wanted("f-1", 200)
+            slots.repos_rows_wanted("f-1", 200)
 
     def test_the_width_asked_for_is_the_panes_and_a_window_width_will_not_fit(self):
         """The rename is the guard, and this is what pins it. Round 2 of #500 spelled this
@@ -1322,13 +1427,13 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         width because the RENDERER measures a pane, and a caller that copies that name up
         here would be naming the thing correctly by luck rather than by contract."""
         import inspect
-        sig = inspect.signature(slots.bottom_rows_wanted)
+        sig = inspect.signature(slots.repos_rows_wanted)
         self.assertEqual([p.name for p in sig.parameters.values()], ["fid", "pane_cols"])
         self.assertEqual(sig.parameters["pane_cols"].kind,
                          inspect.Parameter.KEYWORD_ONLY)
         _seed("f-1", repos=[_row("a")])
         with self.assertRaises(TypeError):
-            slots.bottom_rows_wanted("f-1", cols=200)
+            slots.repos_rows_wanted("f-1", cols=200)
 
     def test_it_never_runs_a_git_sweep(self):
         """It is called on a launch the operator is waiting on, and again on every step
@@ -1338,13 +1443,13 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         _seed("f-1", repos=[_row("a")])
         with mock.patch("charter.frame.gather.scan",
                         side_effect=AssertionError("row_count ran a scan")):
-            self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=200), 2)
+            self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 1 + 1)
 
     def test_a_narrow_frame_does_not_even_ask_how_many_repos_there_are(self):
         """The launch path reaches `gather.row_count` with no cache by design
         (`cmd_launch` calls `gather.discard` first), where it costs a directory listing.
-        Below `statusline._LEFT_W` the answer is one row whatever the count is, so the
-        listing is work with no reader — and `cmd_resize` would pay it again on every
+        Below `statusline._LEFT_W` the answer is no table at all whatever the count is, so
+        the listing is work with no reader — and `cmd_resize` would pay it again on every
         step of a drag that is narrowing the terminal.
 
         `row_count` itself is made to raise, so an implementation that asks and then
@@ -1352,7 +1457,7 @@ class BottomRowsWanted(PersonaIso, unittest.TestCase):
         _seed("f-1", repos=[_row(f"r{i}") for i in range(6)])
         with mock.patch("charter.frame.gather.row_count",
                         side_effect=AssertionError("counted rows it had no room for")):
-            self.assertEqual(slots.bottom_rows_wanted("f-1", pane_cols=80), 1)
+            self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=80), 0)
 
 
 class RightRenderer(PersonaIso, unittest.TestCase):

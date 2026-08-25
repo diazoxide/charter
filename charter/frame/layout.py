@@ -43,32 +43,39 @@ from .. import util
 
 #: The order slots are dropped in as the terminal shrinks. The side first — a side panel
 #: costs the harness columns, so it goes as soon as space is tight in EITHER dimension,
-#: not only when columns themselves are the short one — then the top, whose row is worth
-#: less than the bottom's alerts and repo table, and which only goes when rows are the
+#: not only when columns themselves are the short one — then `repos`, whose table simply
+#: cannot be drawn in a pane narrower than `statusline._LEFT_W`, then the top, whose row
+#: is worth less than the status strip's alerts and which only goes when rows are the
 #: tight dimension.
 #:
+#: **`bottom` is not here, and it is the one slot that never is.** It is the attention
+#: strip — the one alert and the command that fixes it — which is the whole reason a
+#: frame is worth drawing at all on a terminal too small for anything else.
+#:
 #: **`left` is not here any more, and #488 is why.** It drew repo rows recomposed for a
-#: 22-column pane; `bottom` now draws the same rows as the full-width table the status
+#: 22-column pane; `repos` now draws the same rows as the full-width table the status
 #: line draws, so the sidebar's only remaining job was a lesser copy of its neighbour's.
 #: Retiring it hands those 22 columns back to the harness at every density.
-_DROP_ORDER = ("right", "top", "bottom")
+_DROP_ORDER = ("right", "repos", "top")
 
 #: Rows a horizontal panel occupies, and columns a vertical one does.
 #:
-#: **`bottom`'s entry is a FLOOR now, not its size** (#488). Every other slot is fixed:
-#: `top` says one row's worth of identity, `right` is a column of persona chips. `bottom`
-#: carries the repo table, which is as many rows as there are repos — so its real height
-#: is :func:`bottom_rows`, and this is what it never goes below (and what it is, on a
-#: plane with no repos at all). Callers ask :func:`slot_sizes` rather than indexing this
-#: directly, so nothing has to remember which of the two questions it is asking.
-SLOT_SIZE = {"top": 1, "bottom": 1, "right": 22}
+#: **`repos`' entry is a FLOOR, not its size** (#488, moved off `bottom` by #515). Every
+#: other slot is fixed: `top` says one row's worth of identity, `bottom` is the one-row
+#: attention strip, `right` is a column of persona chips. `repos` carries the table,
+#: which is as many rows as there are repos — so its real height is :func:`repos_rows`,
+#: and this is what it never goes below (and what it is, on a plane with no clones at
+#: all, where the pane says so in one line). Callers ask :func:`slot_sizes` rather than
+#: indexing this directly, so nothing has to remember which of the two questions it is
+#: asking.
+SLOT_SIZE = {"top": 1, "bottom": 1, "repos": 1, "right": 22}
 
 #: Rows the harness keeps whatever the repo table would like. The frame exists to show
 #: the plane's state around an agent session, and a session squeezed into three rows is
 #: not one anybody can read — so the table gives up rows before the harness does.
 #:
 #: Not hypothetical, and this number is what stands between the operator and it: measured
-#: against tmux 3.7c, `resize-pane -t <bottom> -y 40` in a 20-row window left the harness
+#: against tmux 3.7c, `resize-pane -t <the table pane> -y 40` in a 20-row window left the harness
 #: pane **1 row tall**. tmux clamps to what the window has and takes the remainder from
 #: its neighbour without complaint, so an over-large height is not refused — it is
 #: granted, out of the one pane that matters.
@@ -77,7 +84,7 @@ HARNESS_MIN_ROWS = 12
 #: One row per pane border. tmux charges a horizontal split one row for the divider on
 #: top of the pane's own height — measured on 3.7c: a 50-row window split `-l 8` reads
 #: back as a 41-row harness and an 8-row panel, which is 49. Counted explicitly rather
-#: than folded into :data:`HARNESS_MIN_ROWS` so the arithmetic in :func:`bottom_rows`
+#: than folded into :data:`HARNESS_MIN_ROWS` so the arithmetic in :func:`repos_rows`
 #: says what it is doing.
 _BORDER_ROWS = 1
 
@@ -88,54 +95,120 @@ _BORDER_COLS = 1
 
 #: Slots that take COLUMNS off the pane they are split from rather than rows — the `-h`
 #: half of :func:`panel_argvs`' `direction`. Kept as a name rather than an inline
-#: ``== "right"`` because :func:`bottom_cols` and `panel_argvs` are two places that have
+#: ``== "right"`` because :func:`repos_cols` and `panel_argvs` are two places that have
 #: to agree about which splits cost columns, and the next side slot must not have to be
 #: remembered in both.
 _COLUMN_SLOTS = ("right",)
 
+#: The horizontal strips whose height is a CONSTANT, and therefore the rows
+#: :func:`repos_rows` has to subtract before it may spend what is left. `right` is not
+#: here because it costs columns, and `repos` is not here because it is the slot being
+#: sized.
+#:
+#: **`bottom` joined this list in #515 and that is the whole arithmetic change.** It used
+#: to be the variable-height slot itself, so the only fixed strip to subtract was `top`;
+#: it is now the one-row attention strip it was before #488, and the table it used to
+#: carry is `repos`. A `repos_rows` still subtracting `top` alone would hand the table
+#: two rows the status strip and its own border are already using, and tmux grants an
+#: over-large height out of the neighbour rather than refusing it — the harness.
+_FIXED_ROW_SLOTS = ("top", "bottom")
 
-def bottom_cols(slots: list[str] | tuple[str, ...], *, window_cols: int) -> int:
-    """How wide the `bottom` pane actually is, in a *window_cols*-column window whose
+#: The slots whose height is a function of their content rather than a constant — the
+#: ones :func:`slot_sizes` answers with :func:`repos_rows` instead of :data:`SLOT_SIZE`.
+#:
+#: **It is also which pane is the DEPENDENT one when sizes are re-applied**, and that is
+#: not a second meaning bolted on. tmux's `resize-pane -y` moves exactly one boundary, so
+#: in a vertical stack of N panes only N-1 heights can be asserted; assert them all and
+#: the result depends on the order, which is how a re-assertion in split order came out
+#: with the table one row tall and the attention strip six (measured on 3.7c at 200x50:
+#: `top,bottom,repos` left `%3 h=1` and `%2 h=6` — the two sizes swapped panes). The pane
+#: that must be left to take the remainder is the one whose size is already a function of
+#: everything else, which is this one. See `commands_frame._reassert_sizes`.
+VARIABLE_ROW_SLOTS = frozenset({"repos"})
+
+
+def _table_min_cols() -> int:
+    """The narrowest pane the repo table can be drawn in at all — `statusline._LEFT_W`,
+    READ rather than copied.
+
+    `slots._table_cap` answers 0 below this width and `slots._table_lines` refuses
+    outright ("too narrow for the table is NO table, not a cut one"), so a `repos` pane
+    split narrower than this is a bordered rectangle with nothing in it — which reads as
+    "this workspace has no repos" on a plane that has fourteen. :func:`visible_slots`
+    drops the slot instead, and it must drop it at exactly the width the RENDERER stops
+    drawing at: a second copy of the number here would be a guard matching a spelling,
+    and the two would come apart the first time a column width moved.
+
+    Imported inside the call rather than at module scope, the way `frame/slots.py`
+    already reaches for the same module: this file is imported by every launch path and
+    `statusline` pulls in `config`, whose import resolves the plane root.
+    """
+    from .. import statusline as sl
+    return sl._LEFT_W
+
+
+def repos_cols(slots: list[str] | tuple[str, ...], *, window_cols: int) -> int:
+    """How wide the `repos` pane actually is, in a *window_cols*-column window whose
     slots were split in *slots*' order — **not the window's own width** (#500).
 
     `panel_argvs` splits every slot off the HARNESS pane in list order, so a side slot
-    split before `bottom` has already narrowed the pane `bottom` is then carved out of.
-    Measured on tmux 3.7c, window 110x40, `-l 22` for `right` and `-l 7` for `bottom`:
+    split before `repos` has already narrowed the pane `repos` is then carved out of.
+    Measured on tmux 3.7c, window 120x40, `-l 22` for `right` and `-l 6` for the table:
 
-    * ``["top", "bottom", "right"]`` (the shipped order) — `bottom` reads back **110**
-      wide; `right` is split off the harness afterwards and sits beside the harness only.
-    * ``["right", "top", "bottom"]`` and ``["top", "right", "bottom"]`` — `bottom` reads
-      back **87**, which is ``110 - 22 - 1``.
+    * ``["top", "bottom", "repos", "right"]`` (the shipped order) — the table reads back
+      **120** wide; `right` is split off the harness afterwards and sits beside the
+      harness only (`%3 top=32 h=6 w=120`, `%4 top=2 left=98 h=29 w=22`).
+    * ``["right", "top", "bottom", "repos"]`` — the table reads back **97**, which is
+      ``120 - 22 - 1``.
 
     That difference is a promise, not an accident: `instance.frame_of` keeps an
     operator's `[frame] slots` order verbatim and
     `tests/test_frame_config.py::test_the_operators_own_slot_order_is_kept_exactly`
     pins it, precisely because the order IS the geometry. What #500 got wrong was not the
-    order — it was handing `slots.bottom_rows_wanted` the window's width regardless, so a
-    `bottom` that had been inset beside the sidebar was sized for a table its own pane
-    was too narrow to draw. Below `statusline._LEFT_W` (95) the renderer draws no table
-    at all, so a 110-column frame with `right` first got a seven-row pane and one line in
+    order — it was handing `slots.repos_rows_wanted` the window's width regardless, so a
+    table pane that had been inset beside the sidebar was sized for a table its own pane
+    was too narrow to draw. Below :func:`_table_min_cols` the renderer draws no table at
+    all, so a 110-column frame with `right` first got a seven-row pane and one line in
     it, six rows taken off the harness and left blank.
 
-    Order in, order out — this reads *slots* rather than a set, and stops at `bottom`.
-    A slot split AFTER `bottom` costs it nothing (measured above), and killing one gives
-    the columns back (`kill-pane` on `right` widened the same `bottom` from 87 to 110),
+    Order in, order out — this reads *slots* rather than a set, and stops at `repos`.
+    A slot split AFTER `repos` costs it nothing (measured above), and killing one gives
+    the columns back (`kill-pane` on `right` widened the same pane from 87 to 110),
     which is why the list a caller passes has to be the order its panes were actually
     split in: at launch that is the drawable slot list, and for a running frame it is the
     recorded pane map's own order, survivors first and later splits appended.
 
-    With no `bottom` in *slots* this answers the width one WOULD be split to. Nothing
-    asks in that state today — `slot_sizes` only sizes the slots it was given — and an
-    answer that is right the moment the slot appears is better than a zero that is right
-    for nothing.
+    With no `repos` in *slots* this answers the width one WOULD be split to, which is
+    what :func:`visible_slots` asks it before deciding whether the slot survives at all.
     """
     out = window_cols
     for slot in slots:
-        if slot == "bottom":
+        if slot == "repos":
             break
         if slot in _COLUMN_SLOTS:
             out -= SLOT_SIZE[slot] + _BORDER_COLS
     return max(0, out)
+
+
+def repos_fits(order: list[str] | tuple[str, ...], *, window_cols: int) -> bool:
+    """Would a `repos` pane split in *order*, in a *window_cols*-column window, be wide
+    enough to draw a table in at all?
+
+    **One rule, two callers, and the second one is why it is a function.**
+    :func:`visible_slots` asks it at launch, where *order* is the configured slot list.
+    `commands_frame._relayout` asks it for a density change, where *order* is the
+    surviving panes in their recorded split order followed by what is about to be split —
+    which is NOT the level's own list, and which is the whole of #500's round 3. A frame
+    that already has `right` and grows a table gets that table split off a harness pane
+    the sidebar has already narrowed by 23 columns, so the level's list says 110 and the
+    pane is 87.
+
+    Without this shared, both said different things and the disagreement was visible: the
+    launch filter kept `repos` (from the level's order, full width) and the sizer floored
+    it at one row (from the pane's order, too narrow) — a bordered rectangle with nothing
+    in it, which is exactly the "no repos" lie #515 split the pane to avoid.
+    """
+    return repos_cols(order, window_cols=window_cols) >= _table_min_cols()
 
 
 def visible_slots(slots: list[str], cols: int, rows: int,
@@ -146,50 +219,66 @@ def visible_slots(slots: list[str], cols: int, rows: int,
     which is the same choice `statusline.render` makes when it runs out of width. Follows
     `_DROP_ORDER`: `right` is the first to go, on ANY shortage — a terminal that is short
     on rows cannot spare a side panel's own divider any more than a narrow one can spare
-    its columns — then `top`, only when rows specifically are the tight dimension.
+    its columns — then `repos`, and then `top`, only when rows specifically are the tight
+    dimension.
 
-    `bottom` never goes here, and it does not need to: it is the slot that SHRINKS
-    instead (:func:`bottom_rows` floors it at one row, the height it always had), so a
-    terminal too small for a table still gets the alert line the frame is really for.
+    **`repos` goes on a width its own renderer cannot draw in, and that width is read
+    from the renderer** (:func:`_table_min_cols`). This is the drop `bottom` did not need
+    while it carried both things: below `statusline._LEFT_W` the table refuses to draw at
+    all, so the pane kept drawing the attention row above it and the operator saw no
+    difference. Split apart (#515), the same case is a bordered rectangle with nothing in
+    it — a pane that says "no repos" on a plane full of them, which is the false-clean
+    reading the frame refuses everywhere else. The test is the PANE's width, not the
+    window's: a `[frame] slots` naming `right` first insets this pane by 23 columns, so
+    :func:`repos_cols` is asked with the slots that survived the line above.
+
+    `bottom` never goes here, and it is the only slot that never does: it is the one
+    alert and the command that fixes it, which is why a frame is worth drawing on a
+    terminal with room for nothing else.
     """
     keep = list(slots)
     if cols < min_cols or rows < min_rows:
         keep = [s for s in keep if s != "right"]
     if rows < min_rows:
         keep = [s for s in keep if s != "top"]
+    if "repos" in keep and not repos_fits(keep, window_cols=cols):
+        keep = [s for s in keep if s != "repos"]
     if cols < min_cols // 2 or rows < min_rows // 2:
         keep = []
     return [s for s in slots if s in keep]
 
 
-def bottom_rows(*, content_rows: int, window_rows: int,
-                slots: list[str] | tuple[str, ...] = ()) -> int:
-    """How many rows the `bottom` pane gets: what its content wants, floored and capped.
+def repos_rows(*, content_rows: int, window_rows: int,
+               slots: list[str] | tuple[str, ...] = ()) -> int:
+    """How many rows the `repos` pane gets: what its content wants, floored and capped.
 
-    Pure arithmetic, deliberately — this is the whole of #488's "how tall is `bottom`?"
+    Pure arithmetic, deliberately — this is the whole of #488's "how tall is the table?"
     and it is decided here, with no tmux and no filesystem, so both callers that need an
     answer (a launch, and the `window-resized` hook's own recompute) necessarily get the
     same one.
 
-    * **The floor is `SLOT_SIZE["bottom"]`.** A plane with no clones still has an alert
-      row, a todo count and this session's news to draw, which is the row `bottom` always
-      was. Never zero: a zero-row pane is one tmux refuses to split at all.
+    * **The floor is `SLOT_SIZE["repos"]`.** A workspace with no clones still has one
+      line to draw — that it has none, and the command that gets it one
+      (`slots._empty_lines`). Never zero: a zero-row pane is one tmux refuses to split at
+      all.
     * **The cap leaves the harness :data:`HARNESS_MIN_ROWS`.** *window_rows* is the whole
-      window, *slots* is what else is being drawn in it, and every horizontal strip costs
-      its own height plus :data:`_BORDER_ROWS`. `right` costs columns, not rows, so it is
-      not counted here — asking for the whole slot list rather than a pre-computed number
-      is what keeps that decision in one place instead of at each call site.
-    * **Between the two, the content wins.** *content_rows* is what `slots._bottom` would
-      actually fill (`slots.bottom_rows_wanted`), so a two-repo plane gets a three-row
-      strip rather than a fourteen-row one padded with blanks.
+      window, *slots* is what else is being drawn in it, and every horizontal strip in
+      :data:`_FIXED_ROW_SLOTS` costs its own height plus :data:`_BORDER_ROWS`. `right`
+      costs columns, not rows, so it is not counted here — asking for the whole slot list
+      rather than a pre-computed number is what keeps that decision in one place instead
+      of at each call site.
+    * **Between the two, the content wins.** *content_rows* is what `slots._repos` would
+      actually fill (`slots.repos_rows_wanted`), so a two-repo plane gets a two-row strip
+      rather than a fourteen-row one padded with blanks.
 
-    The cap can come out below the floor — a 14-row window has no rows to spare at all —
-    and the floor wins then, because the alternative is a frame with no alert row in
-    exactly the terminal where an alert is most likely to be the reason it is there.
+    The cap can come out below the floor — a 16-row window has no rows to spare at all —
+    and the floor wins then, because `panel_argvs` has to be able to split the pane at
+    all. What protects the harness in that terminal is :func:`visible_slots`, which drops
+    every slot below half the size floors.
     """
-    floor = SLOT_SIZE["bottom"]
+    floor = SLOT_SIZE["repos"]
     other = sum(SLOT_SIZE[s] + _BORDER_ROWS
-                for s in slots if s in ("top",))
+                for s in slots if s in _FIXED_ROW_SLOTS)
     cap = window_rows - other - _BORDER_ROWS - HARNESS_MIN_ROWS
     return max(floor, min(content_rows, cap))
 
@@ -198,11 +287,11 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int) -> dict
     """Every slot in *slots* mapped to the size it should be given — rows for the
     horizontal strips, columns for the side.
 
-    The one place `bottom`'s variable height and the other slots' fixed sizes are
-    answered together, so a caller never has to know which kind a slot is. `panel_argvs`
-    splits with it, `commands_frame._reassert_sizes` re-applies it, and the
-    `window-resized` recompute calls it again with the window's NEW row count — which is
-    the whole reason it takes *window_rows* rather than closing over a launch-time value.
+    The one place `repos`' variable height and the other slots' fixed sizes are answered
+    together, so a caller never has to know which kind a slot is. `panel_argvs` splits
+    with it, `commands_frame._reassert_sizes` re-applies it, and the `window-resized`
+    recompute calls it again with the window's NEW row count — which is the whole reason
+    it takes *window_rows* rather than closing over a launch-time value.
 
     Unknown slot names are dropped rather than raised on, matching `visible_slots`'
     filter-don't-refuse discipline: `[frame] slots` is committed, untrusted input, and by
@@ -210,12 +299,44 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int) -> dict
     """
     out: dict[str, int] = {}
     for slot in slots:
-        if slot == "bottom":
-            out[slot] = bottom_rows(content_rows=content_rows,
-                                    window_rows=window_rows, slots=slots)
+        if slot in VARIABLE_ROW_SLOTS:
+            out[slot] = repos_rows(content_rows=content_rows,
+                                   window_rows=window_rows, slots=slots)
         elif slot in SLOT_SIZE:
             out[slot] = SLOT_SIZE[slot]
     return out
+
+
+def harness_rows(sizes: dict[str, int], *, window_rows: int) -> int:
+    """The rows left for the HARNESS pane once every horizontal strip in *sizes* has its
+    own height and its own border — the number `commands_frame._reassert_sizes` asserts
+    on the harness itself after a resize.
+
+    **Why the harness is resized at all, which it never used to be.** tmux redistributes
+    every pane proportionally on a window resize, so the intended sizes have to be
+    re-applied; and `resize-pane -y` moves ONE boundary — the one below the pane, or the
+    one above it when the pane is last in the stack. With two strips (`top` above the
+    harness, `bottom` below it) every `resize-pane` therefore traded with the harness and
+    asserting both was enough. #515 makes three, and the two below the harness trade with
+    EACH OTHER instead: measured on tmux 3.7c at 200x50, asserting `top`, `bottom` and
+    `repos` in split order left the table 1 row and the attention strip 6 — each
+    assertion undoing the last, with the harness never consulted.
+
+    So the harness is told its height explicitly and the variable slot
+    (:data:`VARIABLE_ROW_SLOTS`) is left to take the remainder. Verified against tmux
+    3.7c at 200x50, 200x24, 200x100 and 90x40, with and without the sidebar, and in both
+    orders that put the harness before or after the strip below it: the table lands on
+    exactly `repos_rows`' answer every time.
+
+    *sizes* is :func:`slot_sizes`' map. Slots in :data:`_COLUMN_SLOTS` cost columns, not
+    rows, and are not counted — the same rule :func:`repos_rows` keeps, read from the same
+    constant. Floored at 1: a zero or negative `-y` is a resize tmux refuses, and a
+    refused resize leaves the frame as tmux's own redistribution left it, which is worse
+    than a harness squeezed to one row in a window that has no rows for it anyway.
+    """
+    used = sum(n + _BORDER_ROWS for slot, n in sizes.items()
+               if slot not in _COLUMN_SLOTS)
+    return max(1, window_rows - used)
 
 
 #: What a frame's window runs while charter is still setting it up, before the harness
@@ -503,19 +624,28 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
     Only `commands_frame._FRAME_IDENTITY` travels, never the whole environment: a `-e` is
     argv, and argv is world-readable. See `commands_frame._frame_identity_env`.
 
-    *sizes* is :func:`slot_sizes`' answer for this window, and it exists because `bottom`
-    is no longer a fixed height (#488). ``None`` falls back to :data:`SLOT_SIZE`, which
-    is `bottom`'s FLOOR — right for a caller that has no window to measure (a test, a
+    *sizes* is :func:`slot_sizes`' answer for this window, and it exists because `repos`
+    is not a fixed height (#488). ``None`` falls back to :data:`SLOT_SIZE`, which is
+    `repos`' FLOOR — right for a caller that has no window to measure (a test, a
     `--probe`), wrong for a launch, which is why both launch paths pass one. Read with a
     per-slot fallback rather than replaced wholesale, so a *sizes* missing an entry
     degrades to the fixed size instead of a `KeyError` inside a launch.
+
+    **`-b` is `top`'s alone, and the rest of the reading order is the split order run
+    backwards.** Every other split is a plain `-v`, which tmux places DIRECTLY below
+    the harness — so a slot split later sits ABOVE one split earlier. Measured on tmux
+    3.7c in a 120x40 window, splitting `top`, `bottom`, `repos`, `right` off the
+    harness in that order: `top` at row 0, harness and `right` at rows 2-30, `repos` at
+    rows 32-37, `bottom` on row 39. That is the frame #515 asks for — identity, the
+    session, the repo table, the attention strip on the terminal's last row — and it is
+    why the shipped `slots` list names `bottom` before `repos` and not after it.
     """
     cmds: list[list[str]] = []
     for slot in slots:
         size = (sizes or SLOT_SIZE).get(slot, SLOT_SIZE[slot])
         # :data:`_COLUMN_SLOTS` rather than a second list of names: which splits take
-        # COLUMNS is exactly what :func:`bottom_cols` has to know to answer how wide
-        # `bottom` ends up, and two copies of that fact are two things to keep in step.
+        # COLUMNS is exactly what :func:`repos_cols` has to know to answer how wide
+        # `repos` ends up, and two copies of that fact are two things to keep in step.
         direction = "-h" if slot in _COLUMN_SLOTS else "-v"
         before = ["-b"] if slot == "top" else []
         cmds.append(_tmux(socket, "split-window", "-t", harness_pane,

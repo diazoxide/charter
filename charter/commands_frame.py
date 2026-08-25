@@ -773,11 +773,30 @@ def _panel_died_hook_argv(*, socket: str, panel_pane: str, slot: str,
                                action)
 
 
-#: Which `resize-pane` flag re-asserts a slot's dimension: `-y` (rows) for the horizontal
-#: strips, `-x` (columns) for the side column — the same axis `layout.py`'s own `-v`/`-h`
-#: split direction already encodes for the same slots, read here rather than re-derived a
-#: third way. The SIZE that goes with it is `layout.slot_sizes`', not `SLOT_SIZE`'s, since
-#: `bottom`'s is a function of its content and of the window (#488).
+#: Which `resize-pane` flag re-asserts a slot's dimension, **for every slot
+#: :func:`_reassert_sizes` asserts one for**: `-y` (rows) for the horizontal strips, `-x`
+#: (columns) for the side column — the same axis `layout.py`'s own `-v`/`-h` split
+#: direction already encodes for the same slots, read here rather than re-derived a third
+#: way. The SIZE that goes with it is `layout.slot_sizes`', not `SLOT_SIZE`'s, since
+#: `repos`' is a function of its content and of the window (#488).
+#:
+#: **`repos` is deliberately absent, and #515 is the whole of it.** The issue asked for
+#: the second bottom pane to be in this map and that would be wrong — not because its
+#: axis is in doubt (it is rows; its width is whatever the harness column leaves it, and
+#: no `resize-pane -x` ever set that), but because tmux's `resize-pane` moves exactly ONE
+#: boundary. In a vertical stack of N panes only N-1 heights can be asserted; assert them
+#: all and the outcome depends on the order they are asserted in. Measured on tmux 3.7c
+#: at 200x50, asserting `top`, `bottom` and `repos` in split order: the table came back
+#: **1** row tall and the attention strip **6** — the two sizes swapped panes, and the
+#: harness kept whatever tmux's own proportional redistribution had left it.
+#:
+#: So the pane left out is the one whose height is already a function of all the others
+#: (`layout.VARIABLE_ROW_SLOTS`), the HARNESS is told its height explicitly
+#: (`layout.harness_rows`), and the table lands on exactly `layout.repos_rows`' answer
+#: without anything naming it. Putting `repos` back in this map is a mutation
+#: `tests/test_frame_density.py::ResizeRecomputesForBothDimensions
+#: ::test_the_fixed_strips_are_re_asserted_at_their_own_constant_height` turns red — it
+#: asserts the whole set of `-y`s issued, not merely that each one present is right.
 _RESIZE_FLAG = {"top": "-y", "bottom": "-y", "right": "-x"}
 
 #: Every real pane id tmux's own `-P -F '#{pane_id}'` has ever reported (`%<digits>`,
@@ -827,9 +846,9 @@ def _resize_hook_argv(*, socket: str, harness_pane: str, fid: str) -> list[str] 
 
     **This used to be the sizes themselves, as literal text, and #488 is why it cannot
     be.** The action was `resize-pane -t %1 -y 1 ; resize-pane -t %2 -x 22` — a constant,
-    computed once when the frame was laid out. `bottom`'s height is no longer a constant:
+    computed once when the frame was laid out. The table pane's height is not a constant:
     it is `min(content, cap)` where the cap is what the window can spare
-    (`layout.bottom_rows`), so a stale number is not merely imprecise, it is destructive.
+    (`layout.repos_rows`), so a stale number is not merely imprecise, it is destructive.
     Measured on 3.7c: a window shrunk from 50 rows to 20 with a hook still asserting
     `-y 40` left the harness pane **1 row tall**. tmux does not refuse an over-large
     height — it grants it out of the neighbour. The hook therefore has to RECOMPUTE, and
@@ -1083,7 +1102,7 @@ def _spawn_gather(fid: str, ws: str) -> None:
     harness to appear, and `charter claude` is the default way charter is started. So this
     is the shape charter already uses twice for exactly this problem — `update.maybe_spawn`
     and `glstate.maybe_spawn`: draw immediately with whatever is there, kick a child, let
-    the answer arrive a beat later. `slots._bottom` says "gathering" in the meantime rather
+    the answer arrive a beat later. `slots._repos` says "gathering" in the meantime rather
     than drawing an empty table (`slots._unknown_lines`), so the window this opens is
     visible and honest rather than a silent lie.
 
@@ -1128,27 +1147,27 @@ def _launch_sizes(fid: str, slots: list[str], *,
     the launch-time half of `layout.slot_sizes`, shared by both launch paths so they
     cannot disagree.
 
-    `bottom` is the only slot whose answer is not a constant (#488): it is sized to the
-    repo table it is about to draw, floored at the one row it always was and capped so
-    the harness keeps `layout.HARNESS_MIN_ROWS`. `frame_slots.bottom_rows_wanted` is the
-    same function the RENDERER's own budget comes from, which is what stops a frame
-    coming up with a pane taller than its content or a table cut off with nothing saying
-    so.
+    `repos` is the only slot whose answer is not a constant (#488, moved off `bottom` by
+    #515): it is sized to the repo table it is about to draw, floored at one row and
+    capped so the harness keeps `layout.HARNESS_MIN_ROWS`.
+    `frame_slots.repos_rows_wanted` is the same function the RENDERER's own budget comes
+    from, which is what stops a frame coming up with a pane taller than its content or a
+    table cut off with nothing saying so.
 
     **The width is not decoration (#500).** The renderer draws NO table below
     `statusline._LEFT_W` (95) and at most `slots._TERSE_ROWS` of one at a `terse`
-    density, and neither is a rare shape: `layout.visible_slots` keeps `bottom` down to
-    `min_cols // 2`, so an 80-column terminal is one, and `minimal` is a level the F2
-    menu offers. Sizing from the repo count alone gave both of them a pane sized for a
-    table the panel then refused to draw — up to fourteen blank rows taken off the
-    harness.
+    density, and `minimal` is a level the F2 menu offers. Sizing from the repo count
+    alone gave both of them a pane sized for a table the panel then refused to draw — up
+    to fourteen blank rows taken off the harness. (Since #515 `layout.visible_slots`
+    drops `repos` outright below `statusline._LEFT_W` rather than splitting a pane its
+    renderer will not draw in, so the narrow case now costs no rows at all.)
 
     **And it is the PANE's columns, which are not always the window's.** *slots* is the
     split order and the split order is the geometry (`instance.frame_of` keeps an
-    operator's own `[frame] slots` verbatim), so a `right` split before `bottom` has
-    already taken 23 columns off the pane `bottom` is carved from — 87 in a 110-column
-    window, measured on tmux 3.7c. `layout.bottom_cols` is that arithmetic; handing
-    `bottom_rows_wanted` *window_cols* straight through was #500's own second half, and
+    operator's own `[frame] slots` verbatim), so a `right` split before `repos` has
+    already taken 23 columns off the pane `repos` is carved from — 97 in a 120-column
+    window, measured on tmux 3.7c. `layout.repos_cols` is that arithmetic; handing
+    `repos_rows_wanted` *window_cols* straight through was #500's own second half, and
     it put six blank rows into exactly the frame this function exists to size. Both
     measurements are keyword-only and named for the WINDOW here for that reason: this
     function's whole job is turning a window into panes, and the two names that reach it
@@ -1161,8 +1180,8 @@ def _launch_sizes(fid: str, slots: list[str], *,
     """
     return layout.slot_sizes(
         slots, window_rows=window_rows,
-        content_rows=frame_slots.bottom_rows_wanted(
-            fid, pane_cols=layout.bottom_cols(slots, window_cols=window_cols)))
+        content_rows=frame_slots.repos_rows_wanted(
+            fid, pane_cols=layout.repos_cols(slots, window_cols=window_cols)))
 
 
 def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -> list[str]:
@@ -2628,7 +2647,7 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
       that merely SURVIVED a density change are the ones that get stretched by it, so
       they are exactly the ones a `-l` on the new pane cannot fix. :func:`_reassert_sizes`
       does it, and *window_cols*/*window_rows* are why it takes a measurement rather
-      than a constant: `bottom`'s height depends on the window it is in — on its rows
+      than a constant: `repos`' height depends on the window it is in — on its rows
       (#488) and, since #500, on its columns and this frame's density too, because a
       panel narrower than `statusline._LEFT_W` draws no table and `terse` draws at most
       `slots._TERSE_ROWS` of one.
@@ -2671,34 +2690,44 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
                     tmuxctl.server_argv(socket, "kill-pane", "-t", pane_id))
 
     missing = [s for s in want if s not in keep]
+    # The table pane's width is not the window's, and a re-layout is where the two come
+    # apart (#500 round 3, #515). `want` is the LEVEL's slot list, which is the order a
+    # fresh launch would split in; the panes this frame actually has are `keep`'s, and a
+    # `right` already sitting beside the harness insets anything split off it afterwards.
+    # `_drawable_slots` filtered `want` against the level's order and so believed the
+    # table fits; asked with the order the panes are really in, it may not — and a pane
+    # split too narrow for its table is the bordered rectangle #515 exists to stop.
+    if "repos" in missing and not layout.repos_fits(list(keep) + missing,
+                                                    window_cols=window_cols):
+        missing = [s for s in missing if s != "repos"]
     if missing:
         # Split in `want`'s order, which is the density level's own — see
         # `instance.FRAME_DENSITY` for why that order is geometry rather than reading
         # order. Every split targets the harness pane, so a slot added to a frame that
         # already has the others lands exactly where a launch would have put it.
         #
-        # `list(keep) + missing` and NOT `want`, for `bottom`'s width (#500): the panes
+        # `list(keep) + missing` and NOT `want`, for `repos`' width (#500): the panes
         # that survived this re-layout are wherever their own launch put them, and the
         # new ones are split after all of them. That concatenation is the order the panes
-        # are actually in — which is what `layout.bottom_cols` needs, and what `want`'s
-        # order is not. A frame launched with `["right", "top", "bottom"]` and then sent
-        # to the `full` density keeps its inset 87-column `bottom`, because nothing was
-        # killed or re-split; sizing it from `want`'s `["top", "bottom", "right"]` would
-        # say 110 and hand it the seven-row pane this fix exists to stop.
+        # are actually in — which is what `layout.repos_cols` needs, and what `want`'s
+        # order is not. A frame launched with `["right", "top", "bottom", "repos"]` and
+        # then sent to the `full` density keeps its inset 97-column table pane, because
+        # nothing was killed or re-split; sizing it from `want`'s own order would say 120
+        # and hand it the seven-row pane this fix exists to stop.
         keep.update(_split_panels(
             socket, slots=missing, fid=fid, harness_pane=harness_pane, env=None,
             pane_env=pane_env,
             sizes=layout.slot_sizes(
                 want, window_rows=window_rows,
-                content_rows=frame_slots.bottom_rows_wanted(
-                    fid, pane_cols=layout.bottom_cols(list(keep) + missing,
+                content_rows=frame_slots.repos_rows_wanted(
+                    fid, pane_cols=layout.repos_cols(list(keep) + missing,
                                                       window_cols=window_cols)))))
         _arm_panel_respawn(socket, fid=fid,
                            panes={s: keep[s] for s in missing if s in keep}, env=None)
 
     _install_resize_hook(socket, harness_pane=harness_pane, panes=keep, v=v,
                          env=None, fid=fid, replacing=True)
-    _reassert_sizes(socket, fid=fid, panes=keep,
+    _reassert_sizes(socket, fid=fid, panes=keep, harness_pane=harness_pane,
                     window_cols=window_cols, window_rows=window_rows)
     # `split-window` makes each new pane the ACTIVE one, so without this the operator is
     # left typing into a panel. The same correction `cmd_launch` makes after its own
@@ -2708,7 +2737,7 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
     return keep
 
 
-def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
+def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pane: str,
                     window_cols: int, window_rows: int) -> None:
     """Re-apply every pane in *panes* the size `layout.slot_sizes` says it should have in
     a *window_cols* x *window_rows* window.
@@ -2720,23 +2749,23 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     fix); and :func:`cmd_resize`, because the whole window just changed size under all of
     them.
 
-    **The sizes are recomputed here, never carried in.** `bottom`'s height depends on the
-    window it is in (`layout.bottom_rows`), so a caller passing a launch-time number
+    **The sizes are recomputed here, never carried in.** `repos`' height depends on the
+    window it is in (`layout.repos_rows`), so a caller passing a launch-time number
     would re-assert a height that was right for a window that no longer exists — measured
     on tmux 3.7c, asserting `-y 40` in a 20-row window leaves the harness 1 row.
     *window_rows* is therefore a measurement the CALLER just took, not a remembered one.
 
     **And *window_cols* alongside it (#500), for the same reason and a sharper one.** A
-    resize changes the window's WIDTH too, and how tall `bottom` should be depends on it:
+    resize changes the window's WIDTH too, and how tall `repos` should be depends on it:
     below `statusline._LEFT_W` the panel draws no table, so it wants one row. Dropping the
     width here — `cmd_resize` measured it and threw it away as `_cols` — is what made a
     narrowed terminal keep a table-sized pane it could no longer draw a table in, on every
     step of the drag rather than only at launch.
 
-    **And the window's width is not the PANE's.** `layout.bottom_cols` turns one into the
+    **And the window's width is not the PANE's.** `layout.repos_cols` turns one into the
     other from the order *panes* is in, which is the order those panes were split in. A
-    frame whose `[frame] slots` names `right` before `bottom` has an 87-column `bottom`
-    in a 110-column window, and this is the site that re-applied the wrong height for it
+    frame whose `[frame] slots` names `right` before `repos` has a 97-column table pane
+    in a 120-column window, and this is the site that re-applied the wrong height for it
     on every step of a drag — the launch-time defect's longer-lived half.
 
     Every pane id is checked before it is used, even though both callers already checked
@@ -2745,22 +2774,45 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     exactly a builder that documented "safe because my caller checked" growing a second
     caller.
 
+    **The HARNESS is told its height too, and the variable slot is left as the remainder
+    — #515.** tmux's `resize-pane -y` moves exactly ONE boundary: the one below the pane,
+    or the one above it when the pane is last in its stack. With two strips that always
+    traded with the harness, so asserting both was enough and the harness never had to be
+    named. Three strips have two of them BELOW the harness, and those two trade with each
+    other: measured on tmux 3.7c at 200x50, asserting `top`, `bottom` and `repos` in split
+    order left the table 1 row tall and the attention strip 6 — the two sizes swapped
+    panes, and the harness kept whatever tmux's own redistribution had given it.
+
+    So this asserts every slot :data:`_RESIZE_FLAG` names — which is every slot whose size
+    is a CONSTANT, and deliberately not `layout.VARIABLE_ROW_SLOTS` — plus
+    `layout.harness_rows` on the harness itself. The table's size is already a function of
+    all the others, so it lands on exactly `repos_rows`' answer without being asserted. In
+    a stack of N panes only N-1 heights are free; asserting all N is what made the result
+    depend on the order.
+
+    *harness_pane* is checked like every other id here and for the same reason: it is read
+    off disk (`state.harness_pane`) by `cmd_resize`, which is exactly the shape #475 was.
+
     `report=False`: a pane that has since died (the operator closed it, a panel crashed
     between the map being read and this running) makes `resize-pane` fail, and that is
     not an integration failure worth printing over the agent's own screen.
     """
     # `list(panes)` twice, and it is the same list for two different questions:
-    # `slot_sizes` needs to know which OTHER horizontal strips are charging `bottom`
-    # rows, and `bottom_cols` needs the order they were split in to know how wide
-    # `bottom` is. Both callers hand a map whose insertion order is that split order —
+    # `slot_sizes` needs to know which OTHER horizontal strips are charging `repos`
+    # rows, and `repos_cols` needs the order they were split in to know how wide
+    # `repos` is. Both callers hand a map whose insertion order is that split order —
     # `_draw_panels` records a launch in split order, `_relayout` keeps survivors ahead
     # of new splits, and `state.panes` is JSON, which round-trips a dict's order.
     order = list(panes)
     sizes = layout.slot_sizes(
         order, window_rows=window_rows,
-        content_rows=frame_slots.bottom_rows_wanted(
-            fid, pane_cols=layout.bottom_cols(order, window_cols=window_cols)))
+        content_rows=frame_slots.repos_rows_wanted(
+            fid, pane_cols=layout.repos_cols(order, window_cols=window_cols)))
     for slot, pane_id in panes.items():
+        # `layout.VARIABLE_ROW_SLOTS` is not in `_RESIZE_FLAG` at all, which is what
+        # leaves the table pane as the stack's dependent one — see that constant's own
+        # comment for the tmux measurement, and note that a second check for it here
+        # would be a guard no mutation could turn red, because this one already caught it.
         if slot not in _RESIZE_FLAG or slot not in sizes:
             continue
         if not _PANE_ID_RE.fullmatch(pane_id):
@@ -2768,6 +2820,12 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
         tmuxctl.run(f"restoring the {slot} panel's size",
                     tmuxctl.server_argv(socket, "resize-pane", "-t", pane_id,
                                         _RESIZE_FLAG[slot], str(sizes[slot])),
+                    report=False)
+    if _PANE_ID_RE.fullmatch(harness_pane or ""):
+        tmuxctl.run("restoring the harness pane's height",
+                    tmuxctl.server_argv(
+                        socket, "resize-pane", "-t", harness_pane, "-y",
+                        str(layout.harness_rows(sizes, window_rows=window_rows))),
                     report=False)
 
 
@@ -2778,8 +2836,8 @@ def cmd_resize(args) -> int:
     **Why this is a command and not a string in a hook.** tmux's layout engine
     redistributes every pane proportionally on a resize, so the intended sizes have to be
     re-applied afterwards; until #488 the hook carried them as literal text, computed once
-    at layout time. `bottom`'s height is content-and-window dependent now
-    (`layout.bottom_rows`), and a literal is not merely stale then — measured on tmux
+    at layout time. The table pane's height is content-and-window dependent now
+    (`layout.repos_rows`), and a literal is not merely stale then — measured on tmux
     3.7c, a hook still asserting `-y 40` after the window shrank to 20 rows left the
     harness pane **1 row tall**. Recomputing needs charter, so the hook calls charter.
 
@@ -2800,7 +2858,7 @@ def cmd_resize(args) -> int:
     read, because that variable is a session option charter does not write there.
 
     **Both dimensions are used, not just the rows (#500).** The window's WIDTH decides
-    whether `bottom` can draw its table at all (`statusline._LEFT_W`), so narrowing a
+    whether `repos` can draw its table at all (`statusline._LEFT_W`), so narrowing a
     terminal below 95 columns has to shrink the pane to the one-row strip it can actually
     fill. This measured the width and discarded it as `_cols`, which left a narrowed
     frame re-asserting a table-sized pane it drew one line into — on every step of the
@@ -2811,7 +2869,7 @@ def cmd_resize(args) -> int:
     once per size change, so this runs repeatedly and in the background while the
     operator is still dragging. Everything it reads is cheap by construction:
     `state.harness_pane`/`state.panes` are two small files, `_window_size` is one
-    `display-message`, and `frame_slots.bottom_rows_wanted` goes through
+    `display-message`, and `frame_slots.repos_rows_wanted` goes through
     `gather.row_count`, which answers from the frame's cache and never runs a git sweep
     (see its own docstring) — and at a width below `_LEFT_W` it does not even ask, since
     the answer is one row whatever the count is.
@@ -2827,7 +2885,8 @@ def cmd_resize(args) -> int:
         return 0
     socket = state.frame_server(fid) or SOCKET
     cols, rows = _window_size(socket, harness_pane)
-    _reassert_sizes(socket, fid=fid, panes=panes, window_cols=cols, window_rows=rows)
+    _reassert_sizes(socket, fid=fid, panes=panes, harness_pane=harness_pane,
+                    window_cols=cols, window_rows=rows)
     return 0
 
 

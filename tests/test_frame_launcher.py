@@ -2829,25 +2829,34 @@ class Launch(PersonaIso, unittest.TestCase):
                          "budget and would never be respawned")
 
 
-class BottomIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
-    """#500: the `-l` the launcher hands `split-window` for `bottom` is the number of
-    rows the PANEL will fill, not the number of repos there are.
+class TheTablePaneIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
+    """#500: the `-l` the launcher hands `split-window` for the table pane is the number
+    of rows the PANEL will fill, not the number of repos there are.
 
-    `bottom`'s renderer draws no table below `statusline._LEFT_W` (95) and at most
+    `_repos`' renderer draws no table below `statusline._LEFT_W` (95) and at most
     `slots._TERSE_ROWS` of one at a `terse` density. #488 sized the pane from the repo
     count alone, so both shapes came up with a pane taller than anything that would be
     drawn into it — and `layout.HARNESS_MIN_ROWS` means those rows come straight off the
-    agent session. Asserted at the LAUNCHER rather than at `bottom_rows_wanted`, because
+    agent session. Asserted at the LAUNCHER rather than at `repos_rows_wanted`, because
     the defect was a call site that had the width and did not pass it.
+
+    **The narrow cases assert the pane is not split at all, and that is #515.** While the
+    table shared `bottom` with the attention row, a too-narrow frame still needed that
+    pane and the right answer was a one-row `-l`. Split apart, a one-row table pane at 80
+    columns is a bordered rectangle with nothing in it, so `layout.visible_slots` drops
+    the slot instead — see `tests/test_frame_layout.py` for the boundary itself, and
+    `slots._too_narrow_lines` for the resize case a launch cannot reach.
 
     `gather.row_count` is stubbed so the count is the same on every pass and the only
     thing varying is what the test says varies. What is NOT stubbed is the arithmetic:
-    `_launch_sizes` and `layout.bottom_rows` run for real.
+    `_launch_sizes` and `layout.repos_rows` run for real.
     """
 
-    def _bottom_split_size(self, *, cols, rows=50, repos=6, slots=None):
+    def _table_split_size(self, *, cols, rows=50, repos=6, slots=None):
+        """The `-l` on the `repos` split, or ``None`` when there was no such split."""
         fake = _FakeTmux(exit_code=0,
-                         panel_pane_ids={"top": "%11", "bottom": "%12", "right": "%13"})
+                         panel_pane_ids={"top": "%11", "bottom": "%12", "repos": "%14",
+                                         "right": "%13"})
         with contextlib.ExitStack() as stack:
             stack.enter_context(
                 mock.patch("charter.frame.gather.row_count", return_value=repos))
@@ -2855,28 +2864,27 @@ class BottomIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
                 stack.enter_context(mock.patch.dict(config.FRAME, {"slots": slots}))
             rc = _launch(fake, cols=cols, rows=rows)
         self.assertEqual(rc, 0)
-        split = next(c for c in fake.calls
-                     if "split-window" in c and "bottom" in c)
-        return int(split[split.index("-l") + 1])
+        split = next((c for c in fake.calls
+                      if "split-window" in c and "repos" in c), None)
+        return None if split is None else int(split[split.index("-l") + 1])
 
     def test_a_wide_window_is_split_for_the_whole_table(self):
-        """The control, and it has to hold or the narrow assertion below is vacuous."""
-        self.assertEqual(self._bottom_split_size(cols=200), 1 + 6)
+        """The control, and it has to hold or the narrow assertions below are vacuous."""
+        self.assertEqual(self._table_split_size(cols=200), 1 + 6)
 
-    def test_a_window_too_narrow_for_the_table_is_split_for_one_row(self):
-        """`[frame] min-cols` (100) gates `right` and `top`; `layout.visible_slots` keeps
-        `bottom` down to `min_cols // 2`, so an 80-column terminal draws the attention
-        row and nothing else. It used to be split seven rows tall for it."""
+    def test_a_window_too_narrow_for_the_table_gets_no_table_pane(self):
+        """An 80-column terminal draws no table. It used to be split seven rows tall for
+        one, then one row tall for nothing; now it is not split at all."""
         for cols in (80, statusline._LEFT_W - 1):
             with self.subTest(cols=cols):
-                self.assertEqual(self._bottom_split_size(cols=cols), 1)
+                self.assertIsNone(self._table_split_size(cols=cols))
 
     def test_the_boundary_is_the_tables_own_width(self):
         """Pinned from both sides at `_LEFT_W` itself, so an off-by-one in either
         direction is red rather than absorbed by the two-column gap between the values
         the test above happens to use."""
-        self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W), 1 + 6)
-        self.assertEqual(self._bottom_split_size(cols=statusline._LEFT_W - 1), 1)
+        self.assertEqual(self._table_split_size(cols=statusline._LEFT_W), 1 + 6)
+        self.assertIsNone(self._table_split_size(cols=statusline._LEFT_W - 1))
 
     def test_a_sidebar_split_first_makes_the_pane_narrower_than_the_window(self):
         """Round 3, and the half two rounds of review passed over: the width that decides
@@ -2884,35 +2892,35 @@ class BottomIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
 
         `instance.frame_of` keeps an operator's `[frame] slots` verbatim and
         `tests/test_frame_config.py::test_the_operators_own_slot_order_is_kept_exactly`
-        calls that a promise, so `["right", "top", "bottom"]` is a frame charter offers.
-        `panel_argvs` splits every slot off the HARNESS pane in list order, so `right`
-        going first leaves `bottom` 23 columns narrower than the window — measured on
-        tmux 3.7c with real `charter panel` processes: window 110x40, the bottom pane
-        reads back **87x7**, and the panel draws ONE line with six rows blank.
+        calls that a promise, so `["right", "top", "bottom", "repos"]` is a frame charter
+        offers. `panel_argvs` splits every slot off the HARNESS pane in list order, so
+        `right` going first leaves the table 23 columns narrower than the window —
+        measured on tmux 3.7c with real `charter panel` processes: window 110x40, the
+        table pane reads back **87** wide, where no table is drawn.
 
         110 is not an arbitrary width. Below `[frame] min-cols` (100) `visible_slots`
-        drops `right` and `bottom` is full width again; at 118 the inset pane is still
+        drops `right` and the table is full width again; at 118 the inset pane is still
         `_LEFT_W` or wider and the table draws. 100..117 is the whole break band, and
         this asserts inside it.
 
         The control below is the same window and the same repo count with the shipped
-        order — without it, a fix that simply stopped sizing `bottom` for its content
-        would pass.
+        order — without it, a fix that simply stopped splitting `repos` would pass.
         """
-        inset = ["right", "top", "bottom"]
-        self.assertEqual(self._bottom_split_size(cols=110, slots=inset), 1)
+        inset = ["right", "top", "bottom", "repos"]
+        self.assertIsNone(self._table_split_size(cols=110, slots=inset))
         self.assertEqual(
-            self._bottom_split_size(cols=110, slots=["top", "bottom", "right"]), 1 + 6)
+            self._table_split_size(cols=110,
+                                   slots=["top", "bottom", "repos", "right"]), 1 + 6)
 
     def test_the_inset_pane_still_gets_its_table_once_the_window_can_spare_it(self):
         """Degradation, not refusal — the fix must not turn "sidebar first" into "never
         a table". At 118 columns the inset pane is 95, which is `_LEFT_W` exactly, and
         the table is drawn and therefore split for. Pinned from both sides of that
         boundary so an off-by-one in the border column is red rather than absorbed."""
-        inset = ["right", "top", "bottom"]
+        inset = ["right", "top", "bottom", "repos"]
         edge = statusline._LEFT_W + layout.SLOT_SIZE["right"] + layout._BORDER_COLS
-        self.assertEqual(self._bottom_split_size(cols=edge, slots=inset), 1 + 6)
-        self.assertEqual(self._bottom_split_size(cols=edge - 1, slots=inset), 1)
+        self.assertEqual(self._table_split_size(cols=edge, slots=inset), 1 + 6)
+        self.assertIsNone(self._table_split_size(cols=edge - 1, slots=inset))
 
 
 class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
