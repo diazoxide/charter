@@ -138,6 +138,111 @@ such rather than discovered by a reviewer counting `stat`s.
 
 ---
 
+## 4b. Third-party components — the extension model
+
+**Decided 2026-08-25: components may be supplied by installed providers, not only by
+charter itself.** A repo customises its frame through `charter.toml`; the code behind a
+component comes from something the operator installed.
+
+### The safety principle, and why this is the safe option
+
+> **Arrangement is committed. Execution is local.**
+
+`charter.toml` is committed and shared — it arrives from someone else's machine. So it may
+say *which* components to place, *where*, *in what order*, and *whether they are visible*.
+It may never say *what code runs*.
+
+This is why binding by **name to an installed provider** is safer than the obvious middle
+option of a `command = "..."` string. A command string is executable content in a committed
+file: clone the repo, open charter, run their code — no prompt, no consent. That is exactly
+`[frame] hotkey` (a newline reaching tmux config text achieved code execution at launch) and
+#453 (a committed `mcp.json` key spent any vault silently). A name that resolves against
+installed code cannot do that: if the provider is absent, nothing runs and charter says so.
+
+### Discovery
+
+A provider is a Python distribution declaring an entry point:
+
+```
+[project.entry-points."charter.components"]
+metrics = "acme_charter.metrics:Component"
+```
+
+charter discovers them with `importlib.metadata.entry_points(group="charter.components")` —
+**stdlib, so `dependencies = []` is untouched.** Nothing is imported until a component is
+actually placed, so an installed-but-unused provider costs nothing.
+
+This is deliberately not a harness plugin. The frame is harness-agnostic; a component
+provider must work under Claude Code, codex and opencode alike, so it binds to charter, not
+to a harness.
+
+### The provider contract
+
+A component declares its identity and its cost, and renders on request:
+
+| it declares | why |
+|---|---|
+| `id`, `title` | placement and menu text |
+| `default_edge`, `default_size` | a sensible arrangement before anyone configures one |
+| `needs` | what it reads — the gather cache, personas, todos, nothing |
+| `render(ctx) -> list[str]` | given width, height, and the caches it declared |
+
+`ctx` hands over what the component is allowed to read. It does **not** hand over a way to
+run a subprocess or reach the network on the repaint path.
+
+### Four properties that must survive a stranger's code
+
+These are what make the extension model real rather than a hole:
+
+1. **A component that raises must not kill the frame.** Same posture hooks already have: it
+   may cost its own pane, never the session. The pane shows that the component failed and
+   names it — a blank pane is the confidently-wrong output the left sidebar was retired for.
+
+2. **`needs` becomes enforcement, not documentation.** Today the idle-tick property (one
+   `stat` per panel per tick) is verified by reading charter's own code. With third-party
+   renderers that stops being possible, so the contract has to be enforced: a component that
+   declared `needs = ["gather"]` is handed the cache and nothing else, and a repaint that
+   tries to read the filesystem or spawn a process fails loudly in development rather than
+   silently costing every operator 200 ms a tick.
+
+3. **Output is contained.** A third-party component renders plane values — repo names,
+   branch names, todo text — all committed, all untrusted. Its output goes through the same
+   `contain.one_line` and `tui.width` path as a built-in, applied by charter after the
+   component returns, not trusted to the component.
+
+4. **A missing provider is a message, not a crash.** `charter.toml` naming `acme.metrics`
+   on a machine without it says so plainly and draws the rest of the frame. A committed
+   config must never make charter unusable for someone who has not installed a third-party
+   package.
+
+### What `charter.toml` gets to say
+
+```toml
+[[frame.component]]
+use     = "repos"          # a built-in
+edge    = "bottom"
+size    = "content"
+
+[[frame.component]]
+use     = "acme.metrics"   # a provider's id
+edge    = "right"
+size    = 12
+visible = false            # present, toggleable, off by default
+```
+
+Order in the file is split order, because **order is geometry** — the 200-column-versus-154
+measurement is a property of tmux splitting, not a detail. Everything here is arrangement;
+nothing here is code.
+
+### Sequencing
+
+This lands in **Phase 1**, but built inward-out: the registry serves built-ins first with the
+provider interface as its only way in, so charter's own components are the first consumers of
+the extension API. A component model that charter itself does not use through the public seam
+is a component model with a private back door, and the back door is where the drift lives.
+
+---
+
 ## 5. The command surface
 
 One mechanism, three faces.
