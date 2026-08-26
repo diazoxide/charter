@@ -43,6 +43,17 @@ is never used; `_derive` is only ever handed charter's own components, which hav
 committed spelling for the fallback to skip; `slot_sizes` is called by one case, on a
 frame with no provider in it. A test that cannot fail is not a pin, and this repo has
 shipped that kind believing it was the other.
+
+**And the paragraph above was itself a claim, not a measurement, the first time it was
+written.** The commit that added those twelve cases said *every* guard this branch adds is
+a line a test goes red without, and left six more of its own standing: `run`'s
+unknown-slot refusal loses its clip and stderr grows from 227 bytes to 5071; `_placed_here`
+— a function this branch added whole — has both halves of its only guard, its read of
+`config.FRAME` and the `_policy_cells` fallback below it survive deletion; and
+`panel_argvs`' last resort emits `-l None` to `split-window` when it is taken out. The
+last four classes here are those six, and the same sweep was run on every one of them
+before this sentence was written rather than after. The lesson is the sweep's scope: it
+has to cover the lines the FIX added, not only the lines the review named.
 """
 
 from __future__ import annotations
@@ -57,7 +68,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from charter import commands_frame, config, instance, tui
+from charter import commands_frame, config, contain, instance, tui
 from charter.frame import builtins, component, layout, panel, slots
 
 from tests._isolation import PersonaIso
@@ -794,3 +805,213 @@ class TheProviderNameThatReachesThePaneIsContained(PersonaIso, unittest.TestCase
         self.assertIn("\\x1b", err)
         self.assertNotIn("acme.m panel stopped", painted)
         self.assertIn("\\x1b", painted)
+
+
+class TheNameARefusalRepeatsBackIsClipped(PersonaIso, unittest.TestCase):
+    """`run`'s OTHER containment call — the unknown-slot refusal, on an unreadable name.
+
+    The twin two lines below it is `TheProviderNameThatReachesThePaneIsContained` above,
+    and this line's argument is the same one word for word: **stderr is the surface with
+    no other guard.** The pane copy goes through `_hold`, whose `tui.truncate` bounds it
+    to the pane whatever it is handed; `print(..., file=sys.stderr)` ships exactly what it
+    is given, and `charter panel <name>` is run by hand with stdout redirected often
+    enough that `_DEFAULT_ROWS` exists for it.
+
+    **What `contain.one_line` uniquely adds HERE is the clip, not the escaping.** The
+    value is already inside a `repr()`, and `repr` escapes ESC, newline, tab, the
+    bidirectional overrides and the zero-width joiners on its own — so a hostile name
+    reaches stderr contained either way and a case built on an escape would pass with this
+    call deleted. What `repr` does not do is stop: it repeats the whole name back, and a
+    name is not a value charter chose. `builtins.supplies` reads a stranger's
+    `entry_points.txt`, and a 5000-character entry point name is a legal one.
+
+    Asked at two lengths, because a single length can only show that the line is not one
+    particular size. The property is that the line does not grow with its input at all —
+    which is `DISPLAY_LIMIT`'s own docstring ("a budget a longer input makes longer is not
+    a budget"), asked of the one call site that had no case.
+    """
+
+    #: The whole sentence after the clipped name. Asserted because a clip that ate the
+    #: sentence's own end would leave the operator a name and no list to compare it to,
+    #: which is the confidently-truncated answer rather than the contained one.
+    _TAIL = f"(known: {', '.join(sorted(slots.SLOTS))})"
+
+    def test_the_refusal_does_not_grow_with_the_name_it_refuses(self):
+        lengths = set()
+        for chars in (5_000, 20_000):
+            with self.subTest(chars=chars):
+                rc, painted, err = _painted("acme." + "A" * chars)
+                self.assertEqual(rc, 2, painted)
+                self.assertIn("acme.AAAA", err,
+                              "the refusal stopped naming what it refused")
+                self.assertTrue(err.rstrip("\n").endswith(self._TAIL), err[-80:])
+                self.assertLess(len(err), 2 * contain.DISPLAY_LIMIT,
+                                "a committed value owns the operator's terminal")
+                lengths.add(len(err))
+        self.assertEqual(len(lengths), 1,
+                         f"the line is a function of the name's length: {sorted(lengths)}")
+
+
+class WhatThisPlanePlacedIsReadBackAndCharterOwnIsNot(unittest.TestCase):
+    """`layout._placed_here`, which is how a plane's own rectangle reaches every caller.
+
+    The function is this branch's, and every line of it was unpinned: it is read only by
+    `_edge_of` and `_size_of`, both of which consult the shipped tables FIRST — so for the
+    four names charter writes, what this returns is never looked at, and for every other
+    name charter's own committed frame places nothing at all. Its guards and that ordering
+    were protecting each other: delete either one and the suite stayed green, because the
+    other made it unobservable. **Two lines that hide each other's absence are not a pin,
+    so both are asked here** — that this never offers a built-in, and that `_edge_of` and
+    `_size_of` would not take one if it did.
+
+    `config.FRAME` is patched rather than a plane written to disk because this function
+    reads that mapping and nothing else, and because two of the four cases below are
+    shapes `instance.component_tables` refuses to build — which is the point of asking
+    them: this is the second reader of a value the config boundary already validated, and
+    a reader that raises on a shape it was not expecting is a `TypeError` from inside a
+    lookup, half a frame away from the line that was wrong.
+    """
+
+    #: The four built-ins spelled as `[[frame.component]]` tables — the arrangement a
+    #: plane writes the moment it wants to add a fifth component and has to name the four
+    #: it already had. Resolved through `instance.frame_of` rather than typed out, so the
+    #: rectangles are the ones the config boundary actually produces.
+    def _four_built_ins(self) -> dict:
+        frame = instance.frame_of({"frame": {"component": [
+            {"use": "identity"}, {"use": "attention"},
+            {"use": "repos"}, {"use": "sidebar"}]}})
+        self.assertEqual(frame["slots"], ["top", "bottom", "repos", "right"])
+        self.assertEqual(len(frame["components"]), 4, "the fixture placed nothing")
+        return frame
+
+    def test_a_built_in_a_plane_spelled_out_is_not_read_back_as_a_plane_placement(self):
+        """`Only names the shipped tables do not already carry`, which is the whole of
+        what keeps `layout`'s five tables the single answer for charter's own four. A
+        plane that spells them out is placing four components with edges and sizes, and
+        every one of them would otherwise land in this map beside the table entry it
+        duplicates — two answers to "how wide is `right`", which is #500 exactly.
+        """
+        with mock.patch.dict(config.FRAME, self._four_built_ins()):
+            self.assertEqual(layout._placed_here(), {})
+
+    def test_the_shipped_tables_win_over_a_placement_that_claims_a_built_in(self):
+        """The other half of that pair, and asked with the guard above stubbed out —
+        because with it in place this map can never hold a built-in, so the ordering
+        inside `_edge_of` and `_size_of` is unobservable and a case that did not stub it
+        would pass against either order.
+
+        `instance.component_tables` refuses a `[[frame.component]]` table that moves or
+        resizes one of charter's own, so this arrangement cannot be committed today. That
+        is what makes it the right question to ask here: the refusal is at the config
+        boundary, and this is the line that means `layout` does not depend on it having
+        happened.
+        """
+        moved = {"right": ("bottom", 3), "repos": ("top", 9), "top": ("right", 40)}
+        with mock.patch.object(layout, "_placed_here", return_value=moved):
+            self.assertEqual(layout._edge_of("right"), "right")
+            self.assertEqual(layout._size_of("right"), layout.SLOT_SIZE["right"])
+            self.assertEqual(layout._edge_of("repos"), "bottom")
+            self.assertEqual(layout._size_of("repos"), layout.SLOT_SIZE["repos"])
+            self.assertIs(layout._is_fixed_row("repos"), False)
+            self.assertIs(layout._is_fixed_row("top"), True)
+
+    def test_a_placement_whose_name_is_not_text_costs_only_its_own_entry(self):
+        """A `[[frame.component]]` table's `use` arrives from someone else's machine, and
+        `charter.toml` is TOML — `use = ["sidebar"]` is one keystroke away and a list is
+        not hashable. Without the `isinstance`, the membership test on the next token
+        raises `TypeError` from inside `layout`, and it takes the whole arrangement with
+        it: the provider placed BESIDE the malformed table never reaches the map, so a
+        frame loses a pane it could have drawn over a value it could have skipped.
+
+        The bad tables come first for that reason — under a `_placed_here` with no
+        `isinstance` this raises before the good one is ever read.
+        """
+        components = [{"slot": ["right"], "edge": "right", "size": component.Fixed(9)},
+                      {"slot": None, "edge": "bottom", "size": component.Fixed(2)},
+                      {"slot": 7, "edge": "top", "size": component.Fixed(1)},
+                      {"slot": CID, "edge": "right", "size": component.Fixed(12)}]
+        with mock.patch.dict(config.FRAME, {"components": components}):
+            self.assertEqual(layout._placed_here(), {CID: ("right", 12)})
+            self.assertEqual(layout._edge_of(CID), "right")
+            self.assertEqual(layout._size_of(CID), 12)
+
+    def test_a_frame_mapping_that_carries_no_arrangement_is_an_empty_one(self):
+        """`instance.frame_of` sets `components` on every path — the early return
+        included, which is `TheFrameHasOneShapeWhateverTheConfigSaid` above — so this is
+        the same property stated a second time, at the reader instead of at the writer.
+        It is stated twice on purpose: this is the only one of `config.FRAME`'s keys read
+        with a `.get`, and the reason is that it is the only one that is not a SETTING
+        with a default in `instance.FRAME_DEFAULTS`. A key `frame_of` computes is a key a
+        later `frame_of` can stop computing, and the cost of that here is every `charter
+        frame` command raising `KeyError` on a plane with no `[frame]` section at all.
+        """
+        for frame, label in (({}, "no components key"), ({"components": None}, "None")):
+            with self.subTest(frame=label):
+                with mock.patch.dict(config.FRAME, frame, clear=not frame):
+                    self.assertEqual(layout._placed_here(), {})
+                    self.assertIsNone(layout._edge_of(CID))
+                    self.assertEqual(layout._edge_of("top"), "top")
+
+
+class ASplitIsRefusedRatherThanSizedByANonNumber(unittest.TestCase):
+    """`panel_argvs`' last resort, and what taking it out puts on tmux's command line.
+
+    *sizes* is read with a PER-SLOT fallback so a map missing one entry degrades to the
+    shipped floor instead of raising inside a launch — and the floor is a `dict`, so it is
+    still a `KeyError` for a name nothing placed. The comment on that line calls the
+    alternative "the permanently-dead rectangle `_drawable_slots` exists to prevent", and
+    with the line deleted the alternative is literal: `size` stays `None`, `str(None)` is
+    `"None"`, and `split-window -l None` is what tmux is handed — a launch that has
+    already split some of its panes failing on the argument list of the next one.
+    """
+
+    _PANELS = dict(session="f-1", socket="testsock", harness_pane="%3")
+
+    def test_a_slot_nothing_can_size_stops_the_plan_rather_than_sizing_it_None(self):
+        with self.assertRaises(KeyError):
+            layout.panel_argvs(slots=["top", "nope"], sizes={}, **self._PANELS)
+
+    def test_a_sizes_map_missing_one_entry_still_splits_it_at_the_shipped_floor(self):
+        """The other side of the same two lines: the fallback exists because it fires,
+        and a `KeyError` for `top` would be this function refusing the frame charter
+        itself ships."""
+        [cmd] = layout.panel_argvs(slots=["top"], sizes={}, **self._PANELS)
+        self.assertEqual(cmd[cmd.index("-l") + 1], str(layout.SLOT_SIZE["top"]))
+
+
+class ASizePolicyBecomesCellsByOneRuleStatedOnce(unittest.TestCase):
+    """`_policy_cells` and `_cells` are the same sentence about two spellings of a size.
+
+    `_cells` is handed a COMPONENT and `_policy_cells` a size POLICY, which is why there
+    are two of them: `_placed_here` reads the resolved `[[frame.component]]` table, and a
+    placement carries the policy without the component. What they must never be is two
+    RULES — the number this one returns is the number that reaches `split-window -l` for a
+    component this plane placed, and the number `_cells` returns is the one in
+    `layout.SLOT_SIZE` for the components charter wrote, and a frame in which those two
+    disagree is a stack sized in two different units.
+
+    So they are asked together rather than separately, and across every policy
+    `frame/component.py` defines. Only `Fixed` is reachable through
+    `instance.component_tables` today, which refuses a `[[frame.component]]` table whose
+    `size` is not a number — that is exactly why the non-`Fixed` half needs a case here
+    rather than none: it is the half nothing else on this machine can reach, and without
+    it `_policy_cells` is not the rule `_cells` states but only the first line of it.
+    """
+
+    def test_a_policy_and_a_component_carrying_it_answer_the_same_number(self):
+        for size in (component.Fixed(1), component.Fixed(22), component.Content(),
+                     component.Content(cap=9), component.Fill()):
+            with self.subTest(size=size):
+                whole = component.Component(
+                    id=CID, title="Metrics", edge="right", size=size,
+                    needs=(), events=(), render=lambda ctx: [_DREW])
+                self.assertEqual(layout._policy_cells(size), layout._cells(whole))
+
+    def test_a_pane_whose_height_is_its_content_is_still_worth_one_cell(self):
+        """The floor itself, stated as a number rather than only as an agreement: a
+        `Content` or `Fill` pane has no answer to give before anything has measured it,
+        and `component.cells` refuses a size below one cell because a panel nobody can
+        see is a panel nobody asked for."""
+        for size in (component.Content(), component.Content(cap=9), component.Fill()):
+            with self.subTest(size=size):
+                self.assertEqual(layout._policy_cells(size), 1)
