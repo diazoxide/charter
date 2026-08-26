@@ -721,7 +721,8 @@ def _add_frame_parsers(sub) -> None:
     # version (see `commands_frame.cmd_probe`'s own docstring).
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-palette",
                                          "frame-probe", "frame-respawn", "frame-density",
-                                         "frame-resize", "frame-gather", "frame-switch"}
+                                         "frame-resize", "frame-gather", "frame-switch",
+                                         "frame-toggle"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -877,6 +878,22 @@ def _add_frame_parsers(sub) -> None:
     dn = sub.add_parser("frame-density")
     dn.add_argument("level")
     dn.set_defaults(func=commands_frame.cmd_density)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # ones above. Fired by ONE COMPONENT's own `bind -n` — the `key` its
+    # `[[frame.component]]` table declares, written into the frame's config by
+    # `commands_frame.conf_text` — and typeable by hand from inside a frame. It shows or
+    # hides that one component on the RUNNING frame; charter.toml is not touched, for
+    # `frame-density`'s reason.
+    #
+    # Deliberately NOT `choices=` on the component, and for a stronger version of
+    # `frame-density`'s argument: which names are togglable is a property of THIS PLANE's
+    # arrangement, resolved from a committed file at the moment the key fires, so there is
+    # no set for argparse to hold at parser-build time at all. `cmd_toggle` refuses a name
+    # its own frame's arrangement does not contain — one gate, where the arrangement is.
+    tg = sub.add_parser("frame-toggle")
+    tg.add_argument("component")
+    tg.set_defaults(func=commands_frame.cmd_toggle)
 
     # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-palette` above:
     # that one exists because `_split_frame_argv` eats everything

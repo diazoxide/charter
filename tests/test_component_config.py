@@ -197,9 +197,14 @@ class AnArrangementCharterCannotDrawIsRefusedWhole(unittest.TestCase):
                 self.assertEqual(got, list(instance.FRAME_DEFAULTS["slots"]))
 
     def test_the_component_keys_a_declared_arrangement_may_carry(self):
-        """Named as a closed set, so a key added to the form has to be added here too."""
+        """Named as a closed set, so a key added to the form has to be added here too.
+
+        `key` joined it in Phase 2's Task 5 — the tmux key that toggles this component's
+        `visible` on the running frame. It is what made density a NAME for an arrangement
+        of visibility rather than a mechanism of its own, and its refusals live in
+        `tests/test_component_toggle_keys.py`."""
         self.assertEqual(instance.FRAME_COMPONENT_FIELDS,
-                         ("use", "edge", "size", "visible"))
+                         ("use", "edge", "size", "visible", "key"))
 
 
 class OrderIsGeometry(unittest.TestCase):

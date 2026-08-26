@@ -132,9 +132,9 @@ import subprocess
 import sys
 import time
 
-from . import config, contain, harness, tui, util, workspace
-from .frame import (builtin_actions, gather, layout, overlay, palette, picker, state,
-                    switch, tmuxctl)
+from . import config, contain, harness, instance, tui, util, workspace
+from .frame import (builtin_actions, component, gather, layout, overlay,
+                    palette, picker, state, switch, tmuxctl)
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -360,7 +360,8 @@ def cmd_probe(args=None) -> int:
     return _report_probe(*frame_ready())
 
 
-def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> str:
+def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
+              toggles: dict | None = None) -> str:
     """The private tmux config for one frame's own settings. Never `~/.tmux.conf`.
 
     `status`, `mouse` and `history-limit` are SESSION-scoped (`set -t <session>`, no
@@ -506,8 +507,64 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     session-scoped `CHARTER_PY` reaches the shell this bind spawns and expands there,
     and that this exact bind text survives `source-file` intact (`list-keys` reads it
     back byte for byte).
+
+    *toggles* is ``{component name: key}`` (`instance.frame_toggles`) and each pair
+    becomes one more `bind -n`, running `charter frame-toggle <name>` — which shows or
+    hides that one component on the running frame. Empty for every plane spelled with
+    `slots` or `density`, because there is nowhere in those to write a key and charter
+    binds none by default: a `bind -n` is server-wide and intercepts the key BEFORE the
+    harness pane sees it, so a shipped default would quietly take keys away from Claude
+    Code (or codex, or whatever the operator ran) on every plane that has a charter.toml.
+
+    These are frame-agnostic for the same reason the hotkey bind above is, and they carry
+    no `#{client_name}`: a toggle changes the FRAME, not what one client is looking at, so
+    unlike the palette there is nothing here to draw on a particular presser's screen.
+    `cmd_toggle` resolves which frame from `$CHARTER_SESSION_ID` when the key fires.
+
+    **Both halves of a toggle line are refused rather than escaped, and each on its own
+    line below.** A component name and its key arrive from the same committed file as
+    `hotkey`, land in the same `source-file` text, and a newline in either ends the `bind`
+    line and starts a second tmux command with no keypress — the incident
+    `instance._HOTKEY_RE`'s docstring measures. The key is asked of `instance.toggle_key`,
+    which IS that constant; the name is asked of `frame/component.py`'s `usable_id`, which
+    is the alphabet a component id already travels to tmux under. Neither is a new
+    validator, and both are asked HERE as well as at the config boundary because
+    `instance.component_tables` accepts a provider's id on the strength of an installed
+    entry point NAME — a word charter did not choose and cannot un-install.
+
+    A refused pair costs its key and nothing else: the panel is still placed, still split
+    for and still drawn, and the rest of the frame's keys still bind. That is the one
+    degrade available, since the alternative is a `source-file` that fails and takes
+    `mouse`, `history-limit` and the palette's own hotkey down with it.
+
+    Verified against tmux 3.7c, sourcing exactly what this returns for a two-key
+    arrangement — `source-file` returns 0 and `list-keys -T root` reads all four binds
+    back, the palette's, both toggles' and the hatch's, byte for byte::
+
+        bind-key -T root F2  run-shell "\\"\\$CHARTER_PY\\" -m charter frame-palette \\"#{client_name}\\""
+        bind-key -T root F7  run-shell "\\"\\$CHARTER_PY\\" -m charter frame-toggle repos"
+        bind-key -T root F12 run-shell -C "#{@charter_hatch}"
+        bind-key -T root M-s run-shell "\\"\\$CHARTER_PY\\" -m charter frame-toggle right"
+
+    **They sit between the hotkey bind and the escape hatch, and both ends of that are
+    load-bearing.**
+
+    *After the palette's bind*, because that is the order that keeps the config boundary's own
+    collision refusal honest rather than masked. tmux has no notion of a key conflict — a
+    later `bind -n` replaces an earlier one — so a component that bound `F2` here would
+    take the palette away, and that is exactly the consequence `instance.component_tables`
+    refuses to allow and its test asserts. Emitting these first would have made the same
+    deletion harmless-looking and the guard unpinnable, which is how `layout.py`'s own
+    masked guard got there (#553).
+
+    *Before `overlay.hatch_bind()`*, because that line's own reason for going last (see
+    above) is that a tmux below `tmuxctl.FLOOR` cannot parse `run-shell -C` and everything
+    charter needs must already have been applied by the time `source-file` reaches it. A
+    toggle bind appended after it would be the first thing such a tmux dropped, and the
+    operator would lose their keys to a version skew that costs nothing else. Pinned by
+    `test_the_escape_hatch_is_still_the_last_line`.
     """
-    return "\n".join([
+    lines = [
         f"set -t {session} status off",
         f"set -t {session} mouse {'on' if mouse else 'off'}",
         f"set -t {session} history-limit {int(history_limit)}",
@@ -518,9 +575,24 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette \"#{{client_name}}\"'",
         "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
-        overlay.hatch_bind(),
-        "",
-    ])
+    ]
+    for name, key in (toggles or {}).items():
+        if not component.usable_id(name):
+            continue
+        if instance.toggle_key(key) is None:
+            continue
+        lines.append(f"bind -n {key} run-shell "
+                     f"'\"${_CHARTER_PY_ENV}\" -m charter frame-toggle {name}'")
+    # The escape hatch stays the LAST line, which is this file's own invariant and not
+    # this loop's convenience: `frame/overlay.py`'s `hatch_bind` is the one bind that has
+    # to keep working when charter's code does not, and it uses `run-shell -C`, which
+    # first parses in tmux 3.2 (`tmuxctl.FLOOR`). Below the floor that single line fails
+    # to parse, and everything charter needs must already have been applied by the time
+    # `source-file` reaches it — a toggle bind appended after it would be the first thing
+    # such a tmux dropped. So the toggles are inserted BEFORE it, never appended after.
+    lines.append(overlay.hatch_bind())
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _charter_py_env_argv(*, socket: str, session: str) -> list[str]:
@@ -2525,7 +2597,8 @@ def cmd_launch(args) -> int:
 
     frame = config.FRAME
     conf_path.write_text(conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
-                                   history_limit=frame["history_limit"], session=fid))
+                                   history_limit=frame["history_limit"], session=fid,
+                                   toggles=instance.frame_toggles(frame)))
     src = tmuxctl.run("loading the frame's config",
                       tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
                       env=env)
@@ -3125,51 +3198,214 @@ def cmd_density(args) -> int:
     says the refusal BEFORE the keypress instead: `builtin_actions._laid_out` asks the
     same question this function's third refusal asks, and the row carries the answer.
 
+    **A level is a NAME for one arrangement of visibility, not a mechanism of its own**
+    (Phase 2, Task 5; see `instance.FRAME_DENSITY`). This writes a hidden SET and then
+    hands it to `_apply_arrangement`, which is the identical path a single component's
+    toggle key takes — so pressing `minimal` and then a component's own key are two edits
+    to one thing rather than two things arguing. The one axis a level still owns by itself
+    is ``verbosity``, which is how much each panel SAYS: no per-component key can express
+    it, which is exactly why the level is still recorded.
+
     Refusals, in order:
 
     * no `$CHARTER_SESSION_ID` — not fired from inside a frame at all;
     * a *level* outside `instance.FRAME_DENSITY` — a closed set of three constants charter
       wrote itself, so this can only be a hand-typed argument;
-    * a harness pane that is not tmux's own `%<digits>` — a frame launched by a charter
-      that predates `state.record_harness_pane`, or a corrupted file. There is nothing to
-      split off, and guessing at a pane id is the one thing `frame/layout.py`'s module
-      docstring measures the cost of. (An empty PANEL map is not a refusal: a frame whose
-      panels all failed to draw can still be given some.)
+    * anything `_relayout_target` refuses — a harness pane that is not tmux's own
+      `%<digits>`, or a tmux whose version charter could not read. Shared with
+      `cmd_toggle` rather than spelled twice; see that function.
 
-    The density is recorded BEFORE the panes move, so a re-layout that fails halfway still
-    leaves the panels that survive drawing at the density the operator asked for. The
-    version is bumped afterwards: that is what makes every surviving panel repaint with the
-    new verbosity, and a bump before the layout settled would repaint into the old shape.
+    The density and the hidden set are recorded BEFORE the panes move, so a re-layout that
+    fails halfway still leaves the panels that survive drawing at the density the operator
+    asked for. The version is bumped afterwards (`_apply_arrangement`): that is what makes
+    every surviving panel repaint with the new verbosity, and a bump before the layout
+    settled would repaint into the old shape.
     """
-    from . import instance
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     level = instance.density_level(getattr(args, "level", None))
     if not fid or level is None:
         return 0
-    # The harness pane comes from `state.harness_pane`, the record ADR 0019's own
-    # `is_live` reads — not from a second copy of its own. `_PANE_ID_RE` still guards it:
-    # it arrives off disk here rather than off `split-window`'s stdout, and it is about to
-    # be interpolated into a hook action and a split target.
-    harness_pane = state.harness_pane(fid) or ""
-    panels = state.panes(fid)
-    if not _PANE_ID_RE.fullmatch(harness_pane):
+    where = _relayout_target(fid)
+    if where is None:
         return 0
-    socket = state.frame_server(fid) or SOCKET
+    state.record_density(fid, level)
+    # The whole of "density is a named arrangement over visibility". A level is turned
+    # into a HIDDEN SET over this frame's own arrangement and then handed to the same
+    # `_apply_arrangement` a single component's toggle key uses — it does not drive a
+    # layout of its own. Two consequences, and both are the point:
+    #
+    # * a toggle afterwards composes with the level instead of fighting it, because they
+    #   are edits to one set rather than two ideas about what the frame is;
+    # * the SPLIT ORDER is the plane's own, not the level's. `instance.FRAME_DENSITY`'s
+    #   lists are in charter's shipped order because they had to name one; an operator's
+    #   `[frame] slots` order is a promise `instance.frame_of` keeps verbatim, and it is
+    #   the order this frame's panes are actually in. A level names a SET of components;
+    #   the arrangement is what says where they go.
+    arrangement = instance.frame_arrangement(config.FRAME)
+    want = instance.density_slots(level)
+    state.record_hidden(fid, [n for n in arrangement if n not in want])
+    _apply_arrangement(fid, where=where, want=[n for n in arrangement if n in want])
+    return 0
+
+
+def _relayout_target(fid: str):
+    """Where a live re-layout of *fid* would act — ``(socket, harness pane, version)`` —
+    or ``None`` if this frame cannot be re-laid-out at all.
+
+    The refusals :func:`cmd_density` and :func:`cmd_toggle` share, held here so the two
+    keypresses cannot come to disagree about what a frame has to have before its panes may
+    be moved. Each is a quiet no-op for `cmd_respawn`'s reason: both callers normally run
+    as a `run-shell` child, where the only screen left to report on is the agent's own —
+    the one rectangle ADR 0018 says charter never draws in.
+
+    * A harness pane that is not tmux's own `%<digits>`. It comes from
+      `state.harness_pane` — the record ADR 0019's own `is_live` reads, never a second
+      copy — which means it arrives off DISK rather than off `split-window`'s stdout, and
+      it is about to be interpolated into a hook action and used as a split target.
+      `_PANE_ID_RE` is #475's rule applied to it. A frame launched by a charter that
+      predates `state.record_harness_pane`, or a corrupted file, has nothing to split off,
+      and guessing at a pane id is the one thing `frame/layout.py`'s module docstring
+      measures the cost of. (An empty PANEL map is not a refusal: a frame whose panels all
+      failed to draw can still be given some.)
+    * A tmux whose version charter could not read. Every builder below takes it.
+    """
+    harness_pane = state.harness_pane(fid) or ""
+    if not _PANE_ID_RE.fullmatch(harness_pane):
+        return None
     v = tmuxctl.version()
     if v is None:
-        return 0
+        return None
+    return (state.frame_server(fid) or SOCKET), harness_pane, v
 
-    state.record_density(fid, level)
+
+def _apply_arrangement(fid: str, *, where, want: list[str]) -> None:
+    """Make *fid*'s panes match *want*, and let every surviving panel know.
+
+    **The one live re-layout path**, and having exactly one is Task 5's actual
+    requirement: a density level and a component's toggle key are two ways of deciding
+    which components are visible, and a second resize path for the second of them would be
+    two answers to "what does this frame look like now" — the shape #500 and #547 both
+    cost. So a caller decides visibility and this does the rest, which is measurement,
+    the same two filters a LAUNCH goes through (`_drawable_slots`), the same `_relayout`,
+    and the same record-and-bump.
+
+    The version is bumped LAST: that is what makes every surviving panel repaint, and a
+    bump before the layout settled would repaint into the old shape. The caller records
+    its decision BEFORE calling here for the mirror-image reason — a re-layout that fails
+    halfway still leaves the panels that survive drawing the arrangement that was asked
+    for.
+    """
+    socket, harness_pane, v = where
     cols, rows = _window_size(socket, harness_pane)
-    want = _drawable_slots(cols, rows, instance.density_slots(level))
-    panes = _relayout(socket, fid=fid, harness_pane=harness_pane, panels=panels,
-                      want=want, v=v, window_cols=cols, window_rows=rows)
+    panes = _relayout(socket, fid=fid, harness_pane=harness_pane,
+                      panels=state.panes(fid),
+                      want=_drawable_slots(cols, rows, want), v=v,
+                      window_cols=cols, window_rows=rows)
     state.record_panes(fid, panels=panes)
     # Nothing to re-record. The palette is built from live state every time it opens
     # (`frame/builtin_actions.build`), so the mark on the density row moves with the frame
     # by construction — where the menu was a SNAPSHOT on disk that a switch had to rewrite
     # or it went on naming the level the frame had left.
     state.bump(fid)
+
+
+def _hidden_now(fid: str, frame: dict) -> list[str]:
+    """Which components *fid* is not drawing right now.
+
+    Two sources, in the one order that makes "for the running frame only" true: the
+    frame's OWN recorded set (`state.hidden`, written by a toggle key or a density level
+    and by nothing else) first, and the config behind it. This is
+    `frame/slots.py:verbosity`'s shape, said about visibility instead of about how much a
+    panel says.
+
+    ``None`` and not "empty" is what separates the two, which is why `state.record_hidden`
+    goes to the trouble of telling those apart: a frame whose operator has toggled the
+    last hidden panel back ON has an empty recorded set, and falling back to the config
+    there would put the panel straight back and make the key look broken.
+
+    **The config's answer is the arrangement MINUS the visible list, and reading only
+    ``visible = false`` instead would be wrong on the commonest plane there is.**
+    `instance.frame_arrangement` is deliberately longer than what a frame draws: it
+    appends charter's own built-ins the plane never named, so that a density level can
+    still reach them, as levels always have. A plane whose `[frame] slots` is
+    ``["top", "bottom"]`` therefore has `repos` and `sidebar` in its universe and neither
+    on screen — and taken as "not hidden", the very first keypress would have conjured
+    both. `frame["slots"]` is the VISIBLE list in either spelling (`instance.frame_of`
+    resolves `visible = false` into it), so subtracting it answers for both at once.
+    """
+    recorded = state.hidden(fid)
+    if recorded is not None:
+        return list(recorded)
+    visible = set(frame.get("slots") or ())
+    return [n for n in instance.frame_arrangement(frame) if n not in visible]
+
+
+def cmd_toggle(args) -> int:
+    """`charter frame-toggle <component>` — show or hide ONE component, live.
+
+    Fired by that component's own `bind -n` (`conf_text`), and typeable by hand from
+    inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
+    `cmd_density`, `cmd_palette` and `cmd_respawn` resolve theirs, since one bind text is
+    shared by every frame on `SOCKET`.
+
+    **charter.toml is not touched**, and every word of `cmd_density`'s argument for that
+    applies unchanged: `[[frame.component]]`'s `visible` says what a frame STARTS at, this
+    changes what one running frame IS, and the override lives in the frame's own state
+    directory (`state.record_hidden`) which `state.reap` deletes entire when the frame
+    ends. Relaunch and the arrangement the operator committed is back.
+
+    **The name is refused unless this frame's own arrangement contains it**, and that is
+    the guard that matters here rather than a shape check on the string. A name reaching
+    this far is about to become a `split-window`'s `charter panel <name>` argv and a
+    respawn hook's tmux CONFIG TEXT (`_arm_panel_respawn`), which is the `[frame] hotkey`
+    class of surface — and "is it in the arrangement" is a stronger answer than any
+    alphabet, because it admits only names that were already resolved by
+    `instance.component_tables` and already drawn. It is also the honest answer to the
+    ordinary case: `charter frame-toggle repos` on a plane whose arrangement has no repo
+    table is not a security question, it is a name this frame has nothing to toggle.
+
+    **Always 0, and every refusal is a quiet no-op**, for `cmd_density`'s reason: this
+    normally runs as a `run-shell` child of a keypress, where the only screen left to
+    report on is the agent's own — the one rectangle ADR 0018 says charter never draws in.
+
+    **There is deliberately NO "not inside a frame" refusal here, and the deletion sweep is
+    why.** An `if not fid: return 0` stood at the top of this function and was found to be
+    exactly equivalent — deleted, the FULL suite stayed green (6092 tests), and every
+    observable was identical: same return code, no tmux command issued, no file written,
+    nothing readable back out of the state directory. `$CHARTER_SESSION_ID` unset means
+    ``fid == ""``; `contain.child` refuses ``""`` as a path segment, so `state.frame_dir`
+    answers ``None`` and `state.harness_pane` with it, and :func:`_relayout_target`'s
+    `_PANE_ID_RE` check — which IS pinned, and goes red when deleted — is what stops the
+    empty string ever reaching a `-t`. Two guards in sequence, one of them free.
+
+    It was deleted rather than left, and rather than papered over with a test that would
+    have had to assert an implementation detail to see it: this command emits nothing by
+    construction, so there is no *reason* for a refusal test to distinguish, only a
+    consequence — and the consequence is already another line's. A guard nothing can pin
+    is a comment with a runtime cost. `test_outside_a_frame_it_does_nothing` pins the
+    property that survives it, and names the line that carries it.
+    """
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    name = getattr(args, "component", None)
+    frame = config.FRAME
+    arrangement = instance.frame_arrangement(frame)
+    if name not in arrangement:
+        return 0
+    where = _relayout_target(fid)
+    if where is None:
+        return 0
+    hidden = set(_hidden_now(fid, frame))
+    # `symmetric_difference_update` and not two branches: a toggle is one bit flipped, and
+    # written as `if name in hidden: discard else: add` it is two statements that have to
+    # agree about which name they are talking about.
+    hidden.symmetric_difference_update({name})
+    # Written back in the arrangement's own order rather than the set's, so the file a
+    # human may end up reading reads like the frame does. Filtered by the arrangement too,
+    # which is what keeps a name that has since left the operator's config from living in
+    # this file for the rest of the frame's life.
+    state.record_hidden(fid, [n for n in arrangement if n in hidden])
+    _apply_arrangement(fid, where=where,
+                       want=[n for n in arrangement if n not in hidden])
     return 0
 
 

@@ -1706,6 +1706,35 @@ class Launch(PersonaIso, unittest.TestCase):
                         "the real config was never loaded via `source-file`")
         self.assertIn("mouse", fake.sourced_conf_text)
 
+    def test_a_components_toggle_key_is_bound_by_the_config_the_launch_sources(self):
+        """Phase 2, Task 5, wired end to end: a `key` in the plane's committed
+        arrangement becomes a `bind -n` in the file this launch actually loads.
+
+        Asserted HERE rather than on `conf_text` alone, because `conf_text` takes the
+        toggles as a parameter and a launch that simply never passed them would leave
+        every one of that function's own tests green while no key on any plane did
+        anything. The frame is `instance.frame_of`'s answer, so this fails if the config
+        boundary drops the key too.
+        """
+        frame = instance.frame_of({"frame": {"component": [
+            {"use": "identity"}, {"use": "attention"},
+            {"use": "repos", "key": "F7"}]}})
+        self.assertEqual(instance.frame_toggles(frame), {"repos": "F7"})
+        fake = _FakeTmux(exit_code=0)
+        with mock.patch.dict(config.FRAME, frame):
+            _launch(fake)
+        self.assertIn("bind -n F7 run-shell "
+                      "'\"$CHARTER_PY\" -m charter frame-toggle repos'",
+                      fake.sourced_conf_text)
+
+    def test_a_plane_that_binds_no_component_keys_sources_no_toggle_binds(self):
+        """The control, and the shipped default: `[frame] slots` has nowhere to write a
+        key, so charter binds none — a `bind -n` is server-wide and intercepts the key
+        before the harness pane ever sees it."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        self.assertNotIn("frame-toggle", fake.sourced_conf_text)
+
     def test_both_hooks_are_installed_as_their_own_commands(self):
         """Companion to the `source-file` test: neither hook is missing from BOTH
         places (baked into the sourced config nor issued separately)."""

@@ -587,6 +587,67 @@ That is the one thing `slots` cannot express. Deleting a name from `slots` loses
 *position* along with it, so turning the panel back on later means remembering where in the
 order it went; `visible = false` keeps the order and turns off the panel.
 
+### A key that shows and hides one panel
+
+Give a component a `key` and that key turns it off and on while the frame is running:
+
+```toml
+[[frame.component]]
+use = "identity"
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
+use = "repos"
+key = "F7"
+
+[[frame.component]]
+use = "sidebar"
+key = "F8"
+```
+
+`F7` now hides the repo table and gives its rows back to your agent session; press it
+again and the table is back. **Hiding a panel does not delete it from your arrangement**,
+which is the whole difference from taking a name out of `slots`: charter still knows the
+panel's edge, its size and where it sits in the order, so you never have to remember any
+of it. Charter does not move panes that did not change, so a panel toggled back on is
+split beside the ones that stayed; relaunch and you get your file's order exactly.
+
+**Charter binds no key of its own for this, and it never will.** A tmux `bind -n`
+intercepts the key before the pane underneath ever sees it, so a default would silently
+take that key away from Claude Code — or codex, or whatever you ran — on every plane with
+a `charter.toml`. Keys are bound because you named them. Pick ones your harness does not
+use; function keys and `M-`/`C-` combinations are the usual safe ground.
+
+**The key is held to the same alphabet as `hotkey`**, and for the same reason: it is
+written into the tmux config your frame loads. Optional modifiers (`C-`, `M-`, `S-`) and
+then a key name or one punctuation character — `F7`, `M-r`, `C-M-t`, `\`. Anything else
+takes the whole arrangement out of play, like every other value charter cannot honour.
+
+**And you cannot take a key charter has already bound.** Two components asking for the
+same key, your frame's own `hotkey` (`F2` unless you moved it), and `F12` — the escape
+hatch, the key that always returns you to your session even from a wedged overlay — are
+all refused the same way. tmux has no notion of a key conflict: the last `bind` simply
+replaces the earlier one, so one of the two would silently stop working and nothing would
+say which.
+
+**Density is now a name for one of these arrangements.** The three levels have not
+changed and the `F2` palette still offers them — `minimal` still means the two one-row
+strips, `full` still means every edge charter draws — but a level is applied by hiding
+and showing the same components a key does, so the two compose. Press `minimal`, then
+press the sidebar's own key, and you have the strips and the sidebar; pick a level again
+and you are back to exactly what that level names. What a level still does that a key
+cannot is set the *verbosity* — how much each panel says — which is why the levels are
+worth keeping.
+
+Nothing about this touches `charter.toml`. A key changes the frame you are in, for as
+long as it runs; relaunch and you have the arrangement you committed.
+
+If your plane is spelled with `slots`, write the arrangement out first — the long form
+above says exactly the same thing, and the `[[frame.component]]` tables for any `slots`
+list are one per name, in the same order.
+
 For one of charter's own four, `edge` and `size` may be written down and may only say what
 the component already declares — `edge = "right"` and `size = 22` on the sidebar, `edge =
 "top"` on identity. Charter derives the built-in geometry from those declarations, and
@@ -659,7 +720,8 @@ one of the four, a provider placed without an `edge` and a `size`, or a `visible
 not `true`/`false` all mean the same thing: the arrangement is ignored and you get the
 frame your `slots` (or `density`, or the default) describes. You see your whole arrangement
 not take effect, which is something you can act on, rather than one pane's worth of quiet
-fiction.
+fiction. A `key` charter will not bind, a key two components both claim, and a key equal to
+your frame's own `hotkey` are on that list too.
 
 Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then
 `density`, then the shipped default.
