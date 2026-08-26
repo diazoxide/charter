@@ -41,7 +41,9 @@ class Floor(unittest.TestCase):
         documented as "the version `display-popup` needs" — `display-popup` appears
         nowhere in shipped code, in any form, only in two comments. What actually sits
         near 3.2 is the pane-scoped hook (`set-hook -p`) the exit-code mechanism rests
-        on; `display-menu`, the other named reason, is 3.0. Kept at 3.2 deliberately
+        on, and `run-shell -C` — the escape hatch's whole mechanism — which is 3.2
+        exactly. (`display-menu`, the reason this comment used to give, is 3.0 and no
+        longer exists in charter at all.) Kept at 3.2 deliberately
         rather than lowered on an unverified reading of tmux's CHANGES: no tmux older
         than 3.7c exists on this machine to test against, the cost of the floor being
         too HIGH is one accurate warning, and the cost of it being too LOW is a frame
@@ -231,6 +233,107 @@ class ServerArgv(unittest.TestCase):
         argv = tmuxctl.server_argv("charter", "new-window", "--", "claude", "-p", "a;b")
         self.assertEqual(argv[-1], "a;b")
         self.assertTrue(all(isinstance(a, str) for a in argv))
+
+
+
+
+class InertFormat(unittest.TestCase):
+    """`tmuxctl.inert_format` — carried whole from the deleted `tests/test_frame_menu.py`
+    when the palette replaced `display-menu`.
+
+    **The function moved; the hole it closes did not.** A `display-menu` item NAME was a
+    tmux format, and so is a `display-message` argument — `display-message`'s own docs say
+    so — which is where charter still puts a workspace name, a persona name and an action's
+    refusal (`commands_frame._say_on_screen`). Deleting these along with the menu would
+    have deleted the only tests behind the guard that closed a CRITICAL finding, leaving
+    correct code with nothing pinning it: exactly the shape the deletion sweep exists to
+    catch.
+    """
+
+    def test_a_shell_job_is_escaped_hash_by_hash(self):
+        """`#(cmd)` runs `cmd` the instant tmux draws it (confirmed by hand through the
+        real production path). `##` is tmux's own escape for a literal `#`; doubling
+        every occurrence is what closes it — checked here as an exact string match, not
+        merely "the substring #( is gone", since a partial escape (only the first #, say)
+        would still leave a working `#(...)` job one character later."""
+        self.assertEqual(tmuxctl.inert_format("#(touch /tmp/pwned)"),
+                         "##(touch /tmp/pwned)")
+
+    def test_a_format_variable_is_escaped_too(self):
+        """`#{session_name}` substitutes a value rather than running a job, but it is the
+        SAME construction (an unescaped `#`) and the SAME fix closes it — no separate
+        mechanism needed for the two forms tmux's FORMATS section documents."""
+        self.assertEqual(tmuxctl.inert_format("#{session_name}"), "##{session_name}")
+
+    def test_every_hash_is_doubled_not_only_the_first(self):
+        raw = "##(a)##(b)#"
+        self.assertEqual(tmuxctl.inert_format(raw).count("#"), 2 * raw.count("#"))
+
+    def test_a_leading_hyphen_never_reaches_tmuxs_flag_position(self):
+        """Measured against a real attached client: tmux reads a value beginning with `-`
+        as an unrecognised FLAG of its own and refuses the whole command, rc 1 — worse
+        than its own docs suggest. A leading space keeps the text and closes it."""
+        rendered = tmuxctl.inert_format("-my-branch")
+        self.assertFalse(rendered.startswith("-"))
+        self.assertIn("my-branch", rendered)
+
+    def test_a_trailing_hash_gets_a_trailing_space(self):
+        """Cosmetic, not a safety hole (the escape above already makes it inert either
+        way) — but a value doubled from a single trailing `#` collides with the
+        style-reset sequence tmux appends after it, rendering literal `x#[default]`
+        garbage (confirmed by hand). A trailing space breaks the adjacency."""
+        self.assertEqual(tmuxctl.inert_format("trailing#"), "trailing## ")
+
+    def test_text_with_none_of_the_special_shapes_is_unchanged(self):
+        self.assertEqual(tmuxctl.inert_format("ordinary text"), "ordinary text")
+
+
+class ChainedCommands(unittest.TestCase):
+    """`tmuxctl.chain` — several commands in ONE invocation, because the palette's own
+    close list kills the process sending it.
+
+    Measured against tmux 3.7c from inside the pane being killed: sent one at a time, the
+    first command returned 0 and the process was gone before the second answered, so the
+    third never ran. Sent as one command line, all three ran, 3 times out of 3.
+    """
+
+    def test_the_commands_are_separated_by_tmuxs_own_separator(self):
+        argv = tmuxctl.chain([tmuxctl.server_argv("charter", "select-pane", "-t", "%1"),
+                              tmuxctl.server_argv("charter", "kill-pane", "-t", "%2")])
+        self.assertEqual(argv, ["tmux", "-L", "charter", "select-pane", "-t", "%1",
+                                ";", "kill-pane", "-t", "%2"])
+
+    def test_the_server_is_named_once_and_only_once(self):
+        argv = tmuxctl.chain([tmuxctl.server_argv("charter", "a"),
+                              tmuxctl.server_argv("charter", "b"),
+                              tmuxctl.server_argv("charter", "c")])
+        self.assertEqual(argv.count("-L"), 1)
+        self.assertEqual(argv.count("charter"), 1)
+
+    def test_a_semicolon_inside_one_argument_is_not_a_separator(self):
+        """`@charter_hatch`'s own value IS `select-pane -t %1 ; kill-pane -t %2`, and it
+        travels as ONE argv element. Measured against tmux 3.7c: an argument merely
+        containing a `;` is passed through whole while a standalone `;` separates — so
+        the value must come back out of `chain` unsplit."""
+        value = "select-pane -t %1 ; kill-pane -t %2"
+        argv = tmuxctl.chain([tmuxctl.server_argv("charter", "set-option", "-w", "-t",
+                                                  "%1", "@charter_hatch", value),
+                              tmuxctl.server_argv("charter", "kill-pane", "-t", "%2")])
+        self.assertIn(value, argv)
+        self.assertEqual(argv.count(";"), 1, argv)
+
+    def test_two_servers_are_refused_rather_than_sent_to_one_of_them(self):
+        """The head is what selects WHICH tmux this reaches. A chain built from charter's
+        private socket and an operator's own would send one server's commands to the
+        other — so it is refused, not guessed at."""
+        self.assertIsNone(tmuxctl.chain([
+            tmuxctl.server_argv("charter", "kill-pane", "-t", "%1"),
+            tmuxctl.server_argv("/private/tmp/tmux-502/default", "kill-pane", "-t", "%2")]))
+
+    def test_nothing_to_chain_is_nothing_to_run(self):
+        """`overlay.close_argvs` answers `[]` when it will not build a close at all, and
+        that must not become a bare `tmux` invocation with no command in it."""
+        self.assertIsNone(tmuxctl.chain([]))
 
 
 if __name__ == "__main__":

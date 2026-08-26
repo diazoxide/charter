@@ -394,7 +394,7 @@ FRAME_SLOTS = ("top", "bottom", "repos", "right")
 #:
 #: **The level names are a closed set, which is stronger than sanitising them.** A density
 #: reaches tmux twice — as the slot list `layout.panel_argvs` splits panes for, and as a
-#: menu label — and both times it has already been matched against these three keys by
+#: palette row — and both times it has already been matched against these three keys by
 #: :func:`frame_of` or by `instance.density_level`. Unlike ``hotkey`` (see
 #: :data:`_HOTKEY_RE`), there is no value an operator can write here that is passed
 #: through: it is either one of three constants charter wrote itself, or it is discarded.
@@ -457,7 +457,7 @@ DEFAULT_VERBOSITY = "normal"
 def density_level(name) -> str | None:
     """*name* if it names a :data:`FRAME_DENSITY` level, else ``None``.
 
-    The one place a density arriving from OUTSIDE charter's own constants — a menu action's
+    The one place a density arriving from OUTSIDE charter's own constants — a palette row's
     argv, a value read back out of a frame's state directory, a hand-edited charter.toml —
     is admitted. ``isinstance`` first because ``value in FRAME_DENSITY`` raises
     ``TypeError`` for an unhashable value (a TOML array, a table), and this module is
@@ -596,7 +596,7 @@ FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.ite
 #: ``slots`` is set-filtered, ``mouse`` is a bool, the three numbers are int-checked —
 #: and ``hotkey`` was the one free string in the section, and the one that reaches a
 #: parser. The branch already carries four separate sanitisers added after four separate
-#: incidents (``frame.state._UNSAFE``, ``frame.menu._ACTION_ID_RE``,
+#: incidents (``frame.state._UNSAFE``,
 #: ``commands_frame._PANE_ID_RE``, ``contain.child``); this defect existed because a
 #: fifth input arrived through a fifth door.
 #:
@@ -616,7 +616,7 @@ FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.ite
 #: ``charter frame-probe`` nor ``charter doctor``'s frame row says a word: measured with
 #: the newline payload above sitting in charter.toml, both render a clean green tick.
 #: An earlier version of this comment claimed the probe reported it, which it never did —
-#: the same class of false claim this branch removed from `frame/menu.py` and
+#: the same class of false claim this branch removed from the frame's own modules and
 #: `frame/tmuxctl.py`, so it is written down here rather than quietly deleted.
 #:
 #: Left silent deliberately, not overlooked. The gap is real but it is not this

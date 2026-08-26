@@ -853,7 +853,7 @@ def check_frame() -> Result:
                            "charter <harness> --no-frame still runs the harness bare.")
     ceilings = []
     if v < tmuxctl.FLOOR:
-        # Not "the hotkey menu is disabled" — nothing disables it. `cmd_launch` warns
+        # Not "the hotkey palette is disabled" — nothing disables it. `cmd_launch` warns
         # and continues, and `conf_text` emits the bind unchanged; what is actually at
         # risk below the floor is that the bind opens nothing and that the pane-scoped
         # exit-code hooks may not install. `below_floor_message` is the one place that
@@ -908,7 +908,7 @@ def commands_frame_no_renderer(missing: list[str]) -> str:
 
     A module-level `from .commands_frame import no_renderer_message` would make every
     `charter doctor` import the whole launcher (and, through it, `harness`, `workspace`
-    and `frame.menu`) to print one row; the import lives inside a function for the same
+    and `frame.palette`) to print one row; the import lives inside a function for the same
     reason `check_frame`'s own `tmuxctl` import does.
     """
     from .commands_frame import no_renderer_message

@@ -69,7 +69,8 @@ def verbosity(fid: str) -> str:
 
     Two sources, in one order that is the whole of #387's "the hotkey overrides for the
     running frame only": the frame's OWN recorded density (`state.density`, written by
-    the density menu and by nothing else) first, and `[frame] density` from charter.toml
+    the palette's density rows and by nothing else) first, and `[frame] density` from
+    charter.toml
     behind it. A frame nobody has touched reads the configured value; a frame whose
     operator has pressed the hotkey reads their choice, for as long as that frame runs and
     not one moment longer — `state.reap` deletes the file with the rest of the directory.
@@ -85,7 +86,7 @@ def verbosity(fid: str) -> str:
 
     `instance.verbosity_for` is what turns whichever survives into a verbosity, so an
     unknown level from either source degrades identically. Read at call time, never
-    cached: a panel repaints on a version bump, and the density menu bumps the version
+    cached: a panel repaints on a version bump, and a density change bumps the version
     precisely so that this is re-read.
     """
     from .. import config, instance
@@ -813,7 +814,7 @@ def _sidebar_head(label: str, count: int, width: int) -> str:
     `_markers`, `_ci_part` and the table's column widths.
 
     Lower case, and a bare word with no glyph of its own. The frame's chrome is lower case
-    wherever it speaks (`no personas`, `3 todos`, `F2 menu`), and `_HEAD_PAD`'s own
+    wherever it speaks (`no personas`, `3 todos`, `F2 palette`), and `_HEAD_PAD`'s own
     comment in `statusline.py` records that a decorative glyph on a header shipped broken
     twice: a header is the one row with no sibling beneath it to reveal that a font drew
     it wider than the Unicode tables claim.
@@ -1251,7 +1252,7 @@ def _bottom(fid: str) -> str:
     "too narrow" cannot disagree about what matters.
 
     The hotkey is READ, not spelled out: `[frame] hotkey` is configurable, and this row
-    used to hardcode `F2 menu` — so a plane on `hotkey = "F1"` had its own panel telling
+    used to hardcode `F2 palette` — so a plane on `hotkey = "F1"` had its own panel telling
     every operator the wrong key, on every repaint, forever. `config.FRAME` is the
     resolved value `commands_frame.conf_text` binds, so there is one source for what the
     panel says and what the frame actually does.
@@ -1276,12 +1277,13 @@ def _bottom(fid: str) -> str:
     news_text = f"{sl._DIM} · {sl._R}".join(news) if news else ""
     # Nothing to advertise inside a tmux charter did not start: it binds no key there
     # at all (`commands_frame._launch_in_operator_tmux` says why — a key table is
-    # server-wide in tmux, and the menu's one entry is one the operator's own prefix
-    # already does). A row still printing `F2 menu` there would be telling every
+    # server-wide in tmux, and what the palette would offer there is what the
+    # operator's own prefix key already does). A row still printing `F2 palette`
+    # there would be telling every
     # operator about a key that does nothing, on every repaint — the same defect the
     # hardcoded `F2` was, reached through the other server instead of the wrong config.
     hotkey_text = ("" if tmuxctl.is_operator_socket(state.frame_server(fid))
-                   else f"{config.FRAME['hotkey']} menu")
+                   else f"{config.FRAME['hotkey']} palette")
 
     inflight_text = _inflight_field()
 
@@ -1335,7 +1337,7 @@ def _repos(fid: str) -> str:
     `layout.repos_cols`, which is the only reason the launcher's number can match a pane
     the sidebar has narrowed. So on an untouched frame the two agree exactly and no row
     is either blank or cut, at every width the frame is drawn at, at every level the
-    density menu offers, and in whatever order the operator's `[frame] slots` puts the
+    palette offers, and in whatever order the operator's `[frame] slots` puts the
     edges in. The `- 1` is the heading and nothing else — the attention row is another
     pane's now, and a budget still reserving a row for THAT would lose the lowest-ranked
     repo row to nothing.

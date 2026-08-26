@@ -40,7 +40,8 @@ from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter import commands_frame, config, instance, statusline, util
-from charter.frame import gather, layout, menu, overlay, slots, state, tmuxctl
+from charter.frame import (builtin_actions, gather, layout, overlay, slots, state,
+                           tmuxctl)
 from tests import _envguard
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
@@ -322,24 +323,33 @@ class Conf(unittest.TestCase):
                                         session="x")
         self.assertIn("history-limit 50000", text)
 
-    def test_the_hotkey_opens_the_menu_via_frame_menu_not_frame_space_menu(self):
-        """`charter frame menu` (a space) would never be reached: `cli._split_frame_argv`
-        treats `argv[0] == "frame"` as the launcher's own escape hatch and grafts
-        everything past it onto the harness's own verbatim argv before `argparse` ever
-        sees a subcommand to route — the exact reason `charter panel` is already a
-        top-level sibling of `frame` rather than nested under it. `charter frame-menu`
-        (a different literal token) is what `cli.py` actually registers."""
+    def test_the_hotkey_opens_the_palette_via_frame_palette_not_frame_space_palette(self):
+        """`charter frame palette` (a space) would never be reached: `cli
+        ._split_frame_argv` treats `argv[0] == "frame"` as the launcher's own escape hatch
+        and grafts everything past it onto the harness's own verbatim argv before
+        `argparse` ever sees a subcommand to route — the exact reason `charter panel` is
+        already a top-level sibling of `frame` rather than nested under it. `charter
+        frame-palette` (a different literal token) is what `cli.py` actually registers."""
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
         self.assertIn('bind -n F2 run-shell \'"$CHARTER_PY" -m charter '
-                      'frame-menu "#{client_name}"\'', text)
-        self.assertNotIn("frame menu", text)
+                      'frame-palette "#{client_name}"\'', text)
+        self.assertNotIn("frame palette", text)
+
+    def test_the_menu_is_gone_rather_than_left_beside_the_palette(self):
+        """§4h, and the plan's own exit criterion: two answers to "how do I do a thing" is
+        how the single menu became weird in the first place. Asserted on the bind text
+        because that is where an operator's keypress actually lands."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session="x")
+        self.assertNotIn("frame-menu", text)
+        self.assertNotIn("display-menu", text)
 
     def test_the_hotkey_never_invokes_a_bare_charter_off_the_path(self):
         """The panels already launch `[sys.executable, "-m", "charter"]`; this bind kept
         a bare `charter`. With charter not on the tmux server's own `$PATH` — a `uv
         tool` shim, a checkout run as `python -m charter` — pressing the hotkey makes
-        `run-shell` print `'charter frame-menu "/dev/ttys020"' returned 127` INTO THE
+        `run-shell` print `'charter frame-palette "/dev/ttys020"' returned 127` INTO THE
         HARNESS PANE and drop it into copy-mode: charter drawing in the one rectangle
         ADR 0018 says it never draws.
 
@@ -350,7 +360,7 @@ class Conf(unittest.TestCase):
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
         self.assertNotIn("run-shell 'charter", text)
-        self.assertIn('"$CHARTER_PY" -m charter frame-menu', text)
+        self.assertIn('"$CHARTER_PY" -m charter frame-palette', text)
 
     def test_the_interpreter_is_carried_out_of_band_not_baked_into_the_bind(self):
         """The same reasoning `_exit_path_env_argv`'s own docstring records for
@@ -560,7 +570,7 @@ class PaneDiedHooks(unittest.TestCase):
         self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo-1",
                               "CHARTER_FRAME_EXIT", path])
 
-    def test_the_frame_id_is_carried_to_its_own_hotkey_menu(self):
+    def test_the_frame_id_is_carried_to_its_own_palette(self):
         """Without this, `run-shell` fired from a LATER frame sharing `SOCKET` falls
         back to the SERVER's own starting environment — the FIRST frame's
         `CHARTER_SESSION_ID`, not this one's (verified by hand against tmux 3.7c: a
@@ -956,7 +966,7 @@ class Respawn(PersonaIso, unittest.TestCase):
 
     def test_no_frame_id_in_the_environment_is_a_quiet_no_op(self):
         """`$CHARTER_SESSION_ID` is how every `run-shell`-spawned charter command
-        resolves its own frame (`cmd_menu` does the same). Arriving without one means
+        resolves its own frame (`cmd_palette` does the same). Arriving without one means
         this was not fired by a frame at all; there is nothing to respawn and nowhere to
         report it."""
         fake = _RespawnTmux()
@@ -1119,7 +1129,7 @@ class Probe(unittest.TestCase):
     def test_below_the_floor_still_exits_zero(self):
         """The mutation this pins: a naive `--probe` written as "refuse below the floor"
         would flip this to non-zero — wrong, because `cmd_launch` itself still runs a
-        frame there (only the hotkey menu is disabled). A probe stricter than the thing
+        frame there (only the hotkey is disabled). A probe stricter than the thing
         it is asked about lies about that thing."""
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 0)), \
              mock.patch("charter.commands_frame.subprocess.run") as run, \
@@ -1720,7 +1730,7 @@ class Launch(PersonaIso, unittest.TestCase):
         satisfied by whichever landed first — so deleting the `_exit_path_env_argv`
         block outright left this assertion, and the whole suite, green. No test
         anywhere asserted the launcher issued the exit-path call at all. Copies the
-        shape `test_the_frame_id_is_carried_to_its_own_menu_before_the_write_hook`
+        shape `test_the_frame_id_is_carried_to_its_own_palette_before_the_write_hook`
         below already had right: filter, assert exactly one, assert the VALUE."""
         fake = _FakeTmux(exit_code=0)
         _launch(fake)
@@ -1738,8 +1748,8 @@ class Launch(PersonaIso, unittest.TestCase):
                        if "set-hook" in c and "pane-died[1]" not in c)
         self.assertLess(fake.calls.index(cmd), hook_idx)
 
-    def test_the_frame_id_is_carried_to_its_own_menu_before_the_write_hook(self):
-        """Companion to the test above: `charter frame-menu`/`charter frame-action`
+    def test_the_frame_id_is_carried_to_its_own_palette_before_the_write_hook(self):
+        """Companion to the test above: `charter frame-palette`
         (fired later, from a live keypress) both resolve `$CHARTER_SESSION_ID` from a
         `run-shell` environment the same way the write hook resolves
         `$CHARTER_FRAME_EXIT` — so this `set-environment` call needs to exist by the
@@ -1756,10 +1766,10 @@ class Launch(PersonaIso, unittest.TestCase):
                        if "set-hook" in c and "pane-died[1]" not in c)
         self.assertLess(sid_idx, hook_idx)
 
-    def test_charters_own_interpreter_is_carried_to_the_hotkey_menu(self):
+    def test_charters_own_interpreter_is_carried_to_the_palette(self):
         """The delivery half of the bare-`charter` fix (`Conf` above pins the bind text
         that READS it). Without this call the bind expands `$CHARTER_PY` to nothing and
-        `run-shell` runs ` -m charter frame-menu ...`, whose failure tmux prints into
+        `run-shell` runs ` -m charter frame-palette ...`, whose failure tmux prints into
         the harness pane. Filtered and counted the way the `CHARTER_SESSION_ID` test
         below is — an unfiltered "some set-environment happened" assertion is exactly
         what let the exit-path call be deleted with the suite green."""
@@ -1776,15 +1786,15 @@ class Launch(PersonaIso, unittest.TestCase):
                          "interpreter to frame N-1")
         self.assertEqual(cmd[-1], sys.executable)
 
-    def test_pythonsafepath_is_carried_to_the_hotkey_menu_too(self):
-        """#390: `"$CHARTER_PY" -m charter ...` (the bind `Conf` pins, and every menu
-        item's own action — `frame.menu.menu_argv`) is a shell TEMPLATE shared by every
+    def test_pythonsafepath_is_carried_to_the_palette_too(self):
+        """#390: `"$CHARTER_PY" -m charter ...` (the bind `Conf` pins) is a shell
+        TEMPLATE shared by every
         session on `SOCKET`, so there is nowhere in it to put a per-invocation `-P` the
         way the panel argv gets one (see `test_panels_are_launched_via_self_relaunch_argv`
         below) without re-embedding per-machine text `conf_text`'s own docstring already
         bans. `PYTHONSAFEPATH=1`, carried the same session-scoped way as `CHARTER_PY`
         itself, is `-P`'s equivalent for exactly this case: an interpreter env var every
-        `"$CHARTER_PY" -m charter` the hotkey or a menu item runs inherits, immune to
+        `"$CHARTER_PY" -m charter` the hotkey runs inherits, immune to
         whatever `charter/` package happens to sit under the pane's own cwd."""
         fake = _FakeTmux(exit_code=0)
         _launch(fake)
@@ -1963,8 +1973,8 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(fake.new_session_env.get("CHARTER_HARNESS"), "stale-sentinel",
                          "a bare `charter frame --` must not claim a harness identity")
 
-    def test_the_menu_is_populated_with_a_detach_action(self):
-        """`cmd_launch` must not merely bind the hotkey — the menu it opens has to have
+    def test_the_palette_a_launched_frame_opens_has_a_detach_row(self):
+        """`cmd_launch` must not merely bind the hotkey — what the key opens has to have
         something real in it, or the mechanism this whole task exists to wire up is
         reachable but empty. "Detach" is the spec's own words ("Detach is allowed and
         prints how to reattach").
@@ -1972,42 +1982,46 @@ class Launch(PersonaIso, unittest.TestCase):
         `still_live=True`, not `exit_code=0`: a launch that ends normally has its own
         frame directory reaped by `cmd_launch` itself before returning (same reasoning
         `test_a_still_live_session_after_attach_is_a_detach_not_a_silent_zero` already
-        documents for `state.frame_dir(...).exists()`) — this test needs the menu table
-        to still be there to read back, so it has to look at a still-running frame."""
+        documents for `state.frame_dir(...).exists()`) — this reads the frame's own
+        recorded server, so it has to look at a still-running frame."""
         fake = _FakeTmux(still_live=True)
         _launch(fake)
-        entries = menu.build(fake.fid)
-        label, action_id = entries[0]
-        self.assertEqual(label, "Detach")
-        argv = menu.resolve(fake.fid, action_id)
-        self.assertEqual(argv, ["tmux", "-L", "charter", "detach-client", "-s", fake.fid])
+        reg = builtin_actions.build(fake.fid, current_density="normal")
+        offer = [o for o in reg.offers(fid=fake.fid, snapshot={})
+                 if o.id == "frame.detach"]
+        self.assertEqual(len(offer), 1)
+        self.assertTrue(offer[0].available, offer[0].reason)
 
-    def test_the_menu_offers_every_density_and_marks_the_one_in_effect(self):
-        """The keypress half of #387: density is reached through the hotkey menu charter
+    def test_the_palette_offers_every_density_and_marks_the_one_in_effect(self):
+        """The keypress half of #387: density is reached through the hotkey charter
         already binds, not through a second `bind -n` — a tmux key table is server-wide
         with no per-session form, so a second key would be taken from every frame on
         `SOCKET` and, inside an operator's own tmux, could not be bound at all.
 
-        Asserted on the RESOLVED argv rather than the label, because the label is the
-        cosmetic half: what must be true is that selecting a row runs `charter
+        Asserted on the ARGV each row starts rather than on its title, because the title is
+        the cosmetic half: what must be true is that choosing a row runs `charter
         frame-density <level>` and nothing else — no tmux command, nothing that could
-        rewrite charter.toml. The dot is checked too, separately, because a menu that
-        offers three levels and cannot say which one is on is a menu that has to be
-        guessed at."""
+        rewrite charter.toml. The mark is checked separately, because a list that offers
+        three levels and cannot say which one is on is a list that has to be guessed at."""
         fake = _FakeTmux(still_live=True)
         _launch(fake)
-        rows = {}
-        for label, action_id in menu.build(fake.fid):
-            rows[label] = menu.resolve(fake.fid, action_id)
-        for level in instance.FRAME_DENSITY:
-            with self.subTest(level=level):
-                match = [(lb, argv) for lb, argv in rows.items()
-                         if argv == util.self_relaunch_argv("frame-density", level)]
-                self.assertEqual(len(match), 1, rows)
-                self.assertIn(f"density: {level}", match[0][0])
-        marked = [lb for lb in rows if lb.startswith(commands_frame._DENSITY_MARK[0])]
-        self.assertEqual(marked, [f"{commands_frame._DENSITY_MARK[0]} density: "
-                                  f"{config.FRAME['density']}"], rows)
+        reg = builtin_actions.build(fake.fid,
+                                    current_density=config.FRAME["density"])
+        started = []
+        with mock.patch.object(builtin_actions, "_spawn",
+                               side_effect=lambda argv, *, fid: started.append(argv)):
+            for level in instance.FRAME_DENSITY:
+                with self.subTest(level=level):
+                    started.clear()
+                    a = reg.get(f"density.{level}")
+                    a.run(SimpleNamespace(fid=fake.fid))
+                    self.assertEqual(started,
+                                     [util.self_relaunch_argv("frame-density", level)])
+                    self.assertIn(f"density: {level}", a.title)
+        titles = [a.title for a in reg.all() if a.id.startswith("density.")]
+        marked = [t for t in titles if t.startswith(builtin_actions.MARK[0])]
+        self.assertEqual(marked, [f"{builtin_actions.MARK[0]}density: "
+                                  f"{config.FRAME['density']}"], titles)
 
     def test_the_write_hook_is_installed_before_the_teardown_hook(self):
         """Load-bearing, not incidental — see `_pane_died_teardown_hook_argv`'s own
@@ -2915,7 +2929,7 @@ class Launch(PersonaIso, unittest.TestCase):
 
     def test_a_launch_does_not_inherit_a_density_from_an_earlier_life_of_its_pid(self):
         """The third file the recycled directory carries (#387). `density` is written by
-        the hotkey menu and by nothing else — it is the "for the running frame only"
+        the palette and by nothing else — it is the "for the running frame only"
         override — so a frame that adopts one has a keypress from a session that is over
         silently outranking this plane's own `[frame] density`, with nothing anywhere to
         explain why the frame came up narrower than the file says. `panes` goes with it:
@@ -3422,45 +3436,30 @@ class CollisionGuard(unittest.TestCase):
                 cli.build_parser()
         self.assertIn("panel-harness", str(ctx.exception))
 
-    def test_a_harness_named_frame_menu_is_refused_too(self):
-        """Same class of collision as `frame`/`panel` above, for the two commands this
-        task added: a harness claiming `cli_name == "frame-menu"` would pass the loop's
-        own `sub.choices` check (nothing is named that yet) and only collide once
-        `_add_frame_parsers`'s own `sub.add_parser("frame-menu")` call runs — silently
-        shadowing the hotkey menu's own handler on a 3.11 floor, with nothing telling
-        the operator why the hotkey stopped doing anything."""
+    def test_a_harness_named_frame_palette_is_refused_too(self):
+        """Same class of collision as `frame`/`panel` above, for the command the palette
+        added: a harness claiming `cli_name == "frame-palette"` would pass the loop's own
+        `sub.choices` check (nothing is named that yet) and only collide once
+        `_add_frame_parsers`'s own `sub.add_parser("frame-palette")` call runs — silently
+        shadowing the hotkey's own handler on a 3.11 floor, with nothing telling the
+        operator why the hotkey stopped doing anything."""
         from charter import cli
         from charter.harness.base import Harness
 
-        class _FrameMenuHarness(Harness):
-            name = "frame-menu-harness"
-            cli_name = "frame-menu"
-            binary = "frame-menu-harness"
+        class _FramePaletteHarness(Harness):
+            name = "frame-palette-harness"
+            cli_name = "frame-palette"
+            binary = "frame-palette-harness"
 
         with mock.patch.dict("charter.harness.registry.KINDS",
-                             {"frame-menu-harness": _FrameMenuHarness}, clear=True):
+                             {"frame-palette-harness": _FramePaletteHarness}, clear=True):
             with self.assertRaises(ValueError) as ctx:
                 cli.build_parser()
-        self.assertIn("frame-menu-harness", str(ctx.exception))
-
-    def test_a_harness_named_frame_action_is_refused_too(self):
-        from charter import cli
-        from charter.harness.base import Harness
-
-        class _FrameActionHarness(Harness):
-            name = "frame-action-harness"
-            cli_name = "frame-action"
-            binary = "frame-action-harness"
-
-        with mock.patch.dict("charter.harness.registry.KINDS",
-                             {"frame-action-harness": _FrameActionHarness}, clear=True):
-            with self.assertRaises(ValueError) as ctx:
-                cli.build_parser()
-        self.assertIn("frame-action-harness", str(ctx.exception))
+        self.assertIn("frame-palette-harness", str(ctx.exception))
 
     def test_a_harness_named_frame_probe_is_refused_too(self):
         """`frame-probe` (this task) is reserved the same way, though for a different
-        reason than `frame-menu`/`frame-action`: it exists because `news._PROBEABLE`
+        reason than `frame-palette`: it exists because `news._PROBEABLE`
         cannot list `("frame",)` at all — every parser `_wire` builds carries a
         pass-through `rest` — not because `_split_frame_argv` eats anything past
         `frame`. A harness silently shadowing it would break the one command a news
@@ -3504,7 +3503,7 @@ class TwoHarnessesCanShareAWord(unittest.TestCase):
 
         core = cli._subcommand_names(cli.build_parser())
         reserved = ({h.cli_name for h in harness.all() if h.cli_name} |
-                   {"frame", "panel", "frame-menu", "frame-action", "frame-probe"})
+                   {"frame", "panel", "frame-palette", "frame-probe"})
         # Only genuinely CORE commands — colliding with the frame family itself is
         # `CollisionGuard`'s own job, one dedicated test per reserved name.
         sample = sorted(core - reserved)
@@ -3702,17 +3701,18 @@ class FrameArgvSplit(unittest.TestCase):
                 self.assertEqual(rest, argv)
                 self.assertIsNone(frame_rest)
 
-    def test_frame_action_and_frame_menu_are_not_swallowed_by_the_frame_split(self):
+    def test_frame_palette_is_not_swallowed_by_the_frame_split(self):
         """The bug this pins: `argv[0] == "frame"` is what `_split_frame_argv` matches
-        on, so `charter frame action a1` (a SPACE, as the task brief's own draft text
-        proposed) would have `"action"` and `"a1"` grafted onto `args.rest` — the SAME
-        path `charter frame -- <cmd>` uses — and `cmd_launch` would try to LAUNCH A NEW
-        FRAME running `["action", "a1"]` as a harness, never reaching `cmd_action` at
-        all. `frame-action`/`frame-menu` are different literal tokens `argv[0]` never
-        matches, so `_split_frame_argv` leaves them alone — the same reason `panel` is
-        already a top-level sibling of `frame` rather than nested under it."""
+        on, so `charter frame palette` (a SPACE, as the task brief's own draft text
+        proposed) would have `"palette"` grafted onto `args.rest` — the SAME path `charter
+        frame -- <cmd>` uses — and `cmd_launch` would try to LAUNCH A NEW FRAME running
+        `["palette"]` as a harness, never reaching `cmd_palette` at all. `frame-palette` is
+        a different literal token `argv[0]` never matches, so `_split_frame_argv` leaves it
+        alone — the same reason `panel` is already a top-level sibling of `frame` rather
+        than nested under it."""
         from charter.cli import _split_frame_argv
-        for argv in (["frame-action", "a1"], ["frame-menu"], ["frame-probe"]):
+        for argv in (["frame-palette", "/dev/ttys7"], ["frame-palette"],
+                     ["frame-probe"]):
             with self.subTest(argv=argv):
                 rest, frame_rest = _split_frame_argv(list(argv))
                 self.assertEqual(rest, argv)
@@ -3734,26 +3734,27 @@ class MainDeliversFrameRest(unittest.TestCase):
         byp.assert_called_once_with(["claude", "-p", "hi"])
         self.assertEqual(rc, 0)
 
-    def test_charter_frame_action_reaches_cmd_action_via_main(self):
+    def test_charter_frame_palette_reaches_cmd_palette_via_main(self):
         """The delivery half of the `_split_frame_argv` fix above: a test that only
-        proves `_split_frame_argv` leaves `frame-action` alone cannot catch `cli.py`
-        never having registered a parser for it in the first place."""
-        from charter import cli
-        with mock.patch("charter.commands_frame.cmd_action", return_value=0) as ca:
-            rc = cli.main(["frame-action", "a3"])
-        ca.assert_called_once()
-        self.assertEqual(ca.call_args[0][0].action_id, "a3")
-        self.assertEqual(rc, 0)
+        proves `_split_frame_argv` leaves `frame-palette` alone cannot catch `cli.py`
+        never having registered a parser for it in the first place.
 
-    def test_charter_frame_menu_reaches_cmd_menu_via_main(self):
-        """`client` (`#{client_name}`, expanded by tmux inside the bind's own text —
-        see `conf_text`'s docstring) is a required positional now, not queried after
-        the fact."""
+        `client` (`#{client_name}`, expanded by tmux inside the bind's own text — see
+        `conf_text`'s docstring) arrives as a positional, not queried after the fact."""
         from charter import cli
-        with mock.patch("charter.commands_frame.cmd_menu", return_value=0) as cm:
-            rc = cli.main(["frame-menu", "/dev/ttys7"])
+        with mock.patch("charter.commands_frame.cmd_palette", return_value=0) as cm:
+            rc = cli.main(["frame-palette", "/dev/ttys7"])
         cm.assert_called_once()
         self.assertEqual(cm.call_args[0][0].client, "/dev/ttys7")
+        self.assertFalse(cm.call_args[0][0].pane)
+        self.assertEqual(rc, 0)
+
+    def test_charter_frame_palette_pane_reaches_the_same_command(self):
+        """The other half of the one subcommand: `--pane` says "you ARE the palette"."""
+        from charter import cli
+        with mock.patch("charter.commands_frame.cmd_palette", return_value=0) as cm:
+            rc = cli.main(["frame-palette", "/dev/ttys7", "--pane"])
+        self.assertTrue(cm.call_args[0][0].pane)
         self.assertEqual(rc, 0)
 
     def test_charter_frame_probe_reaches_cmd_probe_via_main(self):
@@ -3780,91 +3781,113 @@ class MainDeliversFrameRest(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
-class MenuCommands(PersonaIso, unittest.TestCase):
-    """`cmd_menu`/`cmd_action` — the handlers `charter frame-menu`/`charter frame-action`
-    dispatch to. `cmd_menu`'s `args.client` is `#{client_name}`, expanded by tmux INSIDE
-    the bind's own text before this process ever starts (see `conf_text`'s docstring) —
-    never queried here, so these tests supply it directly rather than mocking a
-    `list-clients` call that no longer exists. `fid` is still resolved purely from
-    `$CHARTER_SESSION_ID`; neither function ever takes a frame id as an argument (see
-    `menu.py`'s own docstring for why the id stays out of the bind's own text)."""
+class PaletteCommands(PersonaIso, unittest.TestCase):
+    """`cmd_palette` — the handler `charter frame-palette` dispatches to, in both halves.
 
-    def test_cmd_menu_opens_the_current_frames_own_menu_on_its_own_client(self):
-        """`-c` — not merely `-t` — is what the fix for IMPORTANT-1 added: `-t fid`
-        alone does not choose WHICH terminal sees the menu (verified by hand: it
-        rendered frame B's menu on frame A's screen). `cmd_menu` must pass
-        `args.client` straight through to `-c`, unmodified."""
-        menu.record(fid="f-menu", entries=[("Detach", ["true"])])
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            run.return_value = SimpleNamespace(returncode=0)
-            rc = commands_frame.cmd_menu(SimpleNamespace(client="/dev/ttys7"))
+    Its `args.client` is `#{client_name}`, expanded by tmux INSIDE the bind's own text
+    before this process ever starts (see `conf_text`'s docstring) — never queried here, so
+    these tests supply it directly. `fid` is resolved purely from `$CHARTER_SESSION_ID`;
+    neither half ever takes a frame id as an argument, because one bind is shared by every
+    frame on `SOCKET`.
+    """
+
+    FID = "f-palette"
+
+    def _frame(self, *, harness: str = "%0") -> None:
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter")
+        if harness:
+            state.record_harness_pane(self.FID, harness)
+        state.record_identity(self.FID, {"CHARTER_SESSION_ID": self.FID})
+
+    def _open(self, *, client: str = "/dev/ttys7", pane_id: str = "%9") -> list:
+        """Run the opener with tmux faked, and answer every argv it issued."""
+        calls = []
+
+        def _run(action, argv, **kw):
+            calls.append(argv)
+            return SimpleNamespace(returncode=0,
+                                   stdout=pane_id if "split-window" in argv else "",
+                                   stderr="")
+
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID}, clear=True), \
+             mock.patch.object(commands_frame.tmuxctl, "version", return_value=(3, 7)), \
+             mock.patch.object(commands_frame.tmuxctl, "run", side_effect=_run):
+            rc = commands_frame.cmd_palette(
+                SimpleNamespace(client=client, pane=False))
         self.assertEqual(rc, 0)
-        run.assert_called_once()
-        menu_cmd = run.call_args[0][0]
-        self.assertEqual(menu_cmd[:9],
-                         ["tmux", "-L", "charter", "display-menu", "-t", "f-menu",
-                          "-c", "/dev/ttys7", "-T"])
+        return calls
 
-    def test_cmd_menu_with_an_empty_client_is_a_quiet_no_op(self):
-        """`#{client_name}` failing to expand (or `charter frame-menu` invoked some
-        other way with nothing supplied) leaves no screen to draw on and none to
-        report that on either — `display-menu` must never even be attempted."""
-        menu.record(fid="f-menu", entries=[("Detach", ["true"])])
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-menu"}), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            rc = commands_frame.cmd_menu(SimpleNamespace(client=""))
+    def test_the_hotkey_splits_a_pane_off_the_harness_and_makes_it_the_surface(self):
+        """The order is `overlay.py`'s and is a safety property, not a style: the hatch is
+        armed BEFORE the pane can capture anything, so a surface that wedges on its first
+        paint still has a way out."""
+        self._frame()
+        calls = self._open()
+        verbs = [c[3] for c in calls]
+        self.assertEqual(verbs, ["split-window", "set-option", "select-pane",
+                                 "resize-pane"], calls)
+
+    def test_the_pane_runs_charters_own_palette_and_is_told_which_client_pressed(self):
+        self._frame()
+        split = self._open()[0]
+        self.assertIn("--pane", split)
+        self.assertIn("/dev/ttys7", split)
+        self.assertIn("frame-palette", split)
+        self.assertEqual(split[split.index("--") + 1], sys.executable,
+                         "the pane must run charter through this interpreter, never a "
+                         "bare `charter` off the server's own $PATH")
+
+    def test_the_pane_is_told_this_frames_identity_and_not_this_processs(self):
+        """#411 on the one command added since: this runs as a `run-shell` child of a tmux
+        server shared between every frame on the machine, so its own `$CHARTER_ROOT` and
+        `$CHARTER_WORKSPACE` may be another frame's. A palette built from those would offer
+        to switch to another plane's workspaces."""
+        self._frame()
+        split = self._open()[0]
+        self.assertIn(f"CHARTER_SESSION_ID={self.FID}", split)
+
+    def test_a_frame_with_no_recorded_harness_pane_opens_nothing_at_all(self):
+        """`overlay.open_argv` refuses a target that is not tmux's own `%<digits>`, and
+        this is what that refusal costs: no split, no zoom, no half-opened surface."""
+        self._frame(harness="")
+        self.assertEqual(self._open(), [])
+
+    def test_a_tmux_that_will_not_say_its_version_opens_nothing(self):
+        """`_relayout_pane_env` needs the version to decide whether `-e` can be parsed at
+        all. A traceback out of a `run-shell` child is printed INTO THE HARNESS PANE — the
+        one rectangle ADR 0018 says charter never draws in — so this is a quiet no-op."""
+        self._frame()
+        calls = []
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID}, clear=True), \
+             mock.patch.object(commands_frame.tmuxctl, "version", return_value=None), \
+             mock.patch.object(commands_frame.tmuxctl, "run",
+                               side_effect=lambda a, argv, **kw: calls.append(argv)):
+            rc = commands_frame.cmd_palette(SimpleNamespace(client="", pane=False))
         self.assertEqual(rc, 0)
-        run.assert_not_called()
+        self.assertEqual(calls, [])
 
-    def test_cmd_menu_with_no_session_id_is_a_quiet_no_op_not_a_failed_display_menu(self):
-        """Real tmux 3.7c: `list-clients -t ""` (the query an EARLIER version of this
-        module made) does NOT report zero clients — with a client attached it reports
-        the CURRENT session's client, same as an unscoped query would. The prior test
-        for this case asserted the opposite and passed anyway, because its mock hard
-        -coded the convenient wrong answer — the exact "wrong invariant pinned by a
-        passing test" this fix round exists to remove. `cmd_menu` no longer queries
-        `list-clients` at all, so that specific fiction cannot recur, but the SAME
-        real hazard remains from a different angle: `menu.build("")` is always empty
-        (`state.frame_dir` refuses an empty id), so a real `display-menu` call with no
-        `$CHARTER_SESSION_ID` would still have ZERO items and fail outright ("too few
-        arguments") if `cmd_menu` did not check for that deliberately."""
-        with mock.patch.dict(os.environ, {}, clear=True), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            rc = commands_frame.cmd_menu(SimpleNamespace(client="/dev/ttys7"))
-        self.assertEqual(rc, 0)
-        run.assert_not_called()
+    def test_the_close_goes_out_as_one_invocation_because_it_kills_the_caller(self):
+        """`close_argvs` is select, kill, re-arm — and this process is what `kill-pane` is
+        aimed at. Measured against tmux 3.7c from inside that pane: sent one at a time the
+        third command never ran. One invocation, and tmux runs all three server-side."""
+        calls = []
+        with mock.patch.object(commands_frame.tmuxctl, "run",
+                               side_effect=lambda a, argv, **kw: calls.append(argv)):
+            commands_frame._close_palette("charter", harness="%0", overlay_pane="%9")
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(calls[0].count(";"), 2, calls[0])
+        self.assertIn("kill-pane", calls[0])
+        self.assertIn(overlay.HATCH_OPTION, calls[0])
 
-    def test_cmd_menu_with_a_real_session_but_an_empty_menu_is_also_a_quiet_no_op(self):
-        """The same empty-menu guard, reached a different way: a genuine
-        `$CHARTER_SESSION_ID` whose frame has recorded no entries yet (nothing has
-        called `menu.record` for it, or `cmd_launch` has not reached that point)."""
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-empty"}), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            rc = commands_frame.cmd_menu(SimpleNamespace(client="/dev/ttys7"))
-        self.assertEqual(rc, 0)
-        run.assert_not_called()
-
-    def test_cmd_action_runs_the_resolved_argv_as_a_list_never_a_shell(self):
-        menu.record(fid="f-act", entries=[("Detach", ["tmux", "-L", "charter",
-                                                       "detach-client", "-s", "f-act"])])
-        entries = menu.build("f-act")
-        action_id = entries[0][1]
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-act"}), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            run.return_value = SimpleNamespace(returncode=0)
-            rc = commands_frame.cmd_action(SimpleNamespace(action_id=action_id))
-        self.assertEqual(rc, 0)
-        run.assert_called_once_with(["tmux", "-L", "charter", "detach-client",
-                                     "-s", "f-act"])
-
-    def test_cmd_action_on_an_unknown_id_is_a_clean_failure_not_a_crash(self):
-        buf = []
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-act"}), \
-             mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
-            rc = commands_frame.cmd_action(SimpleNamespace(action_id="a99"))
-        self.assertEqual(rc, 2)
-        self.assertTrue(any("a99" in m for m in buf), buf)
+    def test_a_close_it_cannot_build_issues_no_tmux_command_at_all(self):
+        """`overlay.close_argvs`' own docstring records the measurement: an empty kill
+        target makes `kill-pane -t ""` kill the pane the command is running against."""
+        calls = []
+        with mock.patch.object(commands_frame.tmuxctl, "run",
+                               side_effect=lambda a, argv, **kw: calls.append(argv)):
+            commands_frame._close_palette("charter", harness="%0", overlay_pane="")
+        self.assertEqual(calls, [])
 
 
 #: The `$TMUX` a real tmux 3.7c exports into every pane it starts —

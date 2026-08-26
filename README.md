@@ -367,7 +367,7 @@ copy wins, is compared to nothing, and drifts unwatched in both directions.
 - [docs/harnesses.md](docs/harnesses.md) — Claude Code, opencode and Codex: how each is
   wired, what each cannot carry, and the one command Codex needs.
 - [docs/frame.md](docs/frame.md) — `charter claude` and the frame: what tmux it needs,
-  what changes inside it (scrollback, mouse, the hotkey menu), how exit codes get out,
+  what changes inside it (scrollback, mouse, the hotkey palette), how exit codes get out,
   what happens when the terminal is too small, and every `[frame]` setting.
 - [docs/git-policy.md](docs/git-policy.md) — the one-credential rule, and why a denial from
   the plugin's guard is the rule working rather than a bug.

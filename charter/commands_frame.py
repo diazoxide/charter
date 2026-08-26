@@ -133,7 +133,8 @@ import sys
 import time
 
 from . import config, contain, harness, tui, util, workspace
-from .frame import gather, layout, menu, overlay, picker, state, switch, tmuxctl
+from .frame import (builtin_actions, gather, layout, overlay, palette, picker, state,
+                    switch, tmuxctl)
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -173,9 +174,9 @@ _PLACEHOLDER_CONF = "set -g remain-on-exit on\n"
 _EXIT_PATH_ENV = "CHARTER_FRAME_EXIT"
 
 #: The second value carried the same out-of-band way, for the same reason: the
-#: interpreter the hotkey bind and every menu action run charter with. Owned by
-#: `tmuxctl` so `frame/menu.py` — which cannot import this module without a cycle —
-#: spells the same name; see `_charter_py_env_argv` and `conf_text`.
+#: interpreter the hotkey bind runs charter with. Owned by `tmuxctl` so every module
+#: that spells the name reaches one definition; see `_charter_py_env_argv` and
+#: `conf_text`.
 _CHARTER_PY_ENV = tmuxctl.CHARTER_PY_ENV
 
 #: What `_query_pane_dead_status` returns for a pane confirmed dead (`#{pane_dead}` is
@@ -426,33 +427,41 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     plain `set -t <session> ...` config text, never into a shell command string, so it
     carries none of the risk `_EXIT_PATH_ENV`'s docstring describes for `status_path`.
 
-    `hotkey` opens this frame's own menu: `bind -n {hotkey} run-shell '"$CHARTER_PY" -m
-    charter frame-menu "#{client_name}"'`. A key BINDING has no per-session form the way
-    `status`/`mouse`/`history-limit` above do — key tables are server-wide in tmux, so
-    every frame on `SOCKET` ends up sharing this exact bind text, "last launched wins"
-    exactly like `escape-time`/`remain-on-exit`/the `WheelUpPane` bind two lines down
-    already do. That is only safe here because the action itself carries no frame
-    identity: `charter frame-menu` (`cmd_menu`) resolves the CURRENT session from
-    `$CHARTER_SESSION_ID` — carried out of band via `set-environment`, see
-    `_session_id_env_argv` — at the moment the key actually fires, never from anything
-    baked into this text. A bind that embedded one frame's own id here would start
-    opening the WRONG frame's menu the instant a second frame launched, the same trap
-    this function's own docstring already names for `mouse`/`history-limit`, just
-    reached through a binding instead of a session-scoped `set`.
+    `hotkey` opens this frame's own palette (§4h — `F2` IS the palette; there is no menu
+    beside it): `bind -n {hotkey} run-shell '"$CHARTER_PY" -m charter frame-palette'`. A
+    key BINDING has no per-session form the way `status`/`mouse`/`history-limit` above do
+    — key tables are server-wide in tmux, so every frame on `SOCKET` ends up sharing this
+    exact bind text, "last launched wins" exactly like `escape-time`/`remain-on-exit`/the
+    `WheelUpPane` bind two lines down already do. That is only safe here because the
+    action itself carries no frame identity: `charter frame-palette` (`cmd_palette`)
+    resolves the CURRENT session from `$CHARTER_SESSION_ID` — carried out of band via
+    `set-environment`, see `_session_id_env_argv` — at the moment the key actually fires,
+    never from anything baked into this text. A bind that embedded one frame's own id
+    here would start opening the WRONG frame's palette the instant a second frame
+    launched, the same trap this function's own docstring already names for
+    `mouse`/`history-limit`, just reached through a binding instead of a session-scoped
+    `set`.
 
     `"#{client_name}"` is a SECOND thing this same bind carries, for a DIFFERENT
-    reason: which of possibly several clients attached to one frame should see the
-    menu. Format expansion resolves `#{client_name}` in the context of whoever's
-    keypress is firing the bind — verified by hand with two real ptys attached to one
-    session, pressing the hotkey from each in turn: each press's own `run-shell`
+    reason: which of possibly several clients attached to one frame should be TOLD when
+    an action refuses. Format expansion resolves `#{client_name}` in the context of
+    whoever's keypress is firing the bind — verified by hand with two real ptys attached
+    to one session, pressing the hotkey from each in turn: each press's own `run-shell`
     resolved its OWN presser's client name, never the other one's, regardless of which
-    was attached first. `charter frame-menu` receives it as a plain argv value (`args
-    .client` in `cmd_menu`) and hands it straight to `display-menu -c`. Earlier, this
-    module queried `list-clients` and guessed the first one reported when several
-    clients were attached — confirmed wrong: pressing the hotkey on the SECOND-attached
-    client drew the menu on the FIRST client's screen, worse than tmux's own unscoped
-    default single-client guess this module was replacing. Carrying the presser by name
-    removes the guess entirely rather than making it a better one.
+    was attached first. `charter frame-palette` receives it as a plain argv value (`args
+    .client` in `cmd_palette`), carries it to the palette's own pane, and hands it to
+    `display-message -c`. Earlier, this module queried `list-clients` and guessed the
+    first one reported when several clients were attached — confirmed wrong, on the menu
+    this replaced: pressing the hotkey on the SECOND-attached client drew on the FIRST
+    client's screen, worse than tmux's own unscoped default single-client guess this
+    module was replacing. Carrying the presser by name removes the guess entirely rather
+    than making it a better one.
+
+    **What the palette does NOT carry it for, and this is a real difference from the
+    menu.** A `display-menu` was drawn per client; the palette is a PANE (§4k), and a
+    pane belongs to the window, so with two clients attached to one frame both of them
+    see it. That is the price of the surface being something charter draws rather than
+    something tmux draws, and it is the same price every other panel already pays.
 
     The last line is `frame/overlay.hatch_bind()` — **the escape hatch**, and it is here
     rather than beside the hotkey because it is the one bind that must keep working when
@@ -487,7 +496,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     different install, or no install at all — a `uv tool` shim not on the tmux server's
     own PATH, a checkout run as `python -m charter`. This line had kept the bare name,
     and the failure lands in the worst possible place: `run-shell` reports a non-zero
-    command by printing `'charter frame-menu "/dev/ttys020"' returned 127` INTO THE
+    command by printing `'charter frame-palette "/dev/ttys020"' returned 127` INTO THE
     HARNESS PANE and dropping it into copy-mode — charter drawing in the one rectangle
     ADR 0018 says it never draws. The interpreter is carried out of band via
     `set-environment` (`_charter_py_env_argv`) rather than interpolated here, for the
@@ -506,7 +515,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
         "set -g remain-on-exit on",
         "set -g focus-events on",
         f"bind -n {hotkey} run-shell "
-        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-menu \"#{{client_name}}\"'",
+        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette \"#{{client_name}}\"'",
         "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
         overlay.hatch_bind(),
@@ -515,14 +524,12 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
 
 
 def _charter_py_env_argv(*, socket: str, session: str) -> list[str]:
-    """`set-environment`: the interpreter the hotkey and every menu action run charter
-    with.
+    """`set-environment`: the interpreter the hotkey runs charter with.
 
     `sys.executable`, delivered the same out-of-band way `_exit_path_env_argv` delivers
     `status_path` and for the same two reasons — a single argv value nothing re-parses,
     and a bind/action TEMPLATE that stays free of per-machine text. See `conf_text`'s
-    own docstring for what a bare `charter` cost, and `frame/menu.py`'s `menu_argv` for
-    the second consumer.
+    own docstring for what a bare `charter` cost.
 
     Session-scoped, not `-g`: two planes on one laptop can be two different charter
     installs (`docs/control-plane.md`'s version pin exists for exactly that), and a `-g`
@@ -543,15 +550,15 @@ def _charter_pythonsafepath_env_argv(*, socket: str, session: str) -> list[str]:
     """`set-environment`: closes the same hole `util.self_relaunch_argv`'s `-P` closes
     for every OTHER self-relaunch site (#390), for the one shape that cannot take a flag.
 
-    `"$CHARTER_PY" -m charter ...` — the hotkey bind (`conf_text`) and every menu item's
-    own action (`frame.menu.menu_argv`) — is a shell TEMPLATE shared by every session on
+    `"$CHARTER_PY" -m charter ...` — the hotkey bind (`conf_text`) — is a shell TEMPLATE
+    shared by every session on
     `SOCKET`, built once and never per-invocation; there is nowhere in it to splice a
     `-P` without re-embedding per-machine text, the exact construction `conf_text`'s own
     docstring already bans for `status_path`. `PYTHONSAFEPATH=1` is `-P`'s own
     environment-variable form — carried the identical session-scoped way
     `_charter_py_env_argv` carries `$CHARTER_PY` itself, so it reaches the same shell
     that call already proves reaches: without this, a pane whose cwd happens to be a
-    charter checkout would have the hotkey menu import THAT tree the moment it opens,
+    charter checkout would have the hotkey palette import THAT tree the moment it opens,
     same failure shape as the panel argv, just one layer further from the operator.
 
     A separate `set-environment` call rather than folded into `_charter_py_env_argv`'s:
@@ -585,9 +592,8 @@ def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[
 def _session_id_env_argv(*, socket: str, session: str) -> list[str]:
     """`set-environment`: makes *session* resolvable from its own `run-shell` calls.
 
-    `cmd_menu` and `cmd_action` (the hotkey bind's own action, and every menu item's own
-    action) both read `$CHARTER_SESSION_ID` back out of a `run-shell`-spawned process's
-    environment — the same out-of-band shape `_exit_path_env_argv` already uses for
+    `cmd_palette` (the hotkey bind's own action) and every action it starts read
+    `$CHARTER_SESSION_ID` back out of a `run-shell`-spawned process's environment — the same out-of-band shape `_exit_path_env_argv` already uses for
     `status_path`, and for the identical reason: this is what lets `conf_text`'s bind
     stay a single, frame-agnostic line shared by every session on `SOCKET` (see its own
     docstring) while still resolving the RIGHT frame at the moment the key fires.
@@ -600,8 +606,8 @@ def _session_id_env_argv(*, socket: str, session: str) -> list[str]:
     inherited from whichever `new-session` call happened to start it) rather than an
     empty string — `show-environment -t <session>` confirmed the value was never tracked
     per-session at all until a call exactly like this one ties it there explicitly. Left
-    unfixed, every frame after the first would open the FIRST frame's own menu and run
-    its actions against the wrong session's state.
+    unfixed, every frame after the first would open the FIRST frame's own palette and
+    run its actions against the wrong session's state.
 
     The value IS the session's own name (`state.frame_id`'s own restricted alphabet —
     see its docstring — so there is nothing here for this call's own text to sanitise),
@@ -1199,7 +1205,7 @@ def _launch_sizes(fid: str, slots: list[str], *,
 
     **The width is not decoration (#500).** The renderer draws NO table below
     `statusline._LEFT_W` (95) and at most `slots._TERSE_ROWS` of one at a `terse`
-    density, and `minimal` is a level the F2 menu offers. Sizing from the repo count
+    density, and `minimal` is a level the F2 palette offers. Sizing from the repo count
     alone gave both of them a pane sized for a table the panel then refused to draw — up
     to fourteen blank rows taken off the harness. (Since #515 `layout.visible_slots`
     drops `repos` outright below `statusline._LEFT_W` rather than splitting a pane its
@@ -1233,7 +1239,7 @@ def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -
     *configured* defaults to `config.FRAME["slots"]` — already the density-resolved list
     (`instance.frame_of` expands a declared `[frame] density` into it, so nothing here
     knows presets exist). `cmd_density` passes the list a level expands to instead, so a
-    frame re-laid-out by the hotkey menu goes through exactly the same two filters a launch
+    frame re-laid-out from the palette goes through exactly the same two filters a launch
     does rather than a second copy of them: below the size floors it drops the same slots
     in the same order, and a slot with no renderer is skipped for the same reason.
 
@@ -1585,10 +1591,11 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, ws: str,
     stricter option, for a reason the spec could not have known: the bind's action has
     to resolve which frame it belongs to at the moment the key fires, and the only
     mechanism tmux offers for that is the session-scoped `set-environment` this path
-    must not use (see `_session_id_env_argv`). The menu's one entry today is "Detach",
-    which an operator already inside tmux has their own prefix key for. A key taken from
-    every window on their server to reach a redundant menu is a worse trade than no key
-    — `frame/slots.py` drops the hotkey hint from the bottom panel to match.
+    must not use (see `_session_id_env_argv`). What the palette would offer there is
+    "Detach", which an operator already inside tmux has their own prefix key for, and the
+    densities, which `[frame] density` sets. A key taken from every window on their server
+    to reach that is a worse trade than no key — `frame/slots.py` drops the hotkey hint
+    from the bottom panel to match.
 
     **And `frame/overlay.py`'s escape hatch is bound here no more than the hotkey is**,
     for the identical reason and at a higher cost worth stating rather than discovering.
@@ -1840,7 +1847,7 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     _install_resize_hook(socket, harness_pane=harness_pane, panes=panes, v=v, env=env,
                          fid=fid)
     # Written down, because a frame's shape can now be CHANGED while it runs (the density
-    # menu — `cmd_density`), and nothing else afterwards can say which tmux pane charter
+    # palette — `cmd_density`), and nothing else afterwards can say which tmux pane charter
     # meant as which slot. Slots only: `state.record_harness_pane` already owns the
     # harness pane, and one fact recorded twice is one fact free to disagree with itself.
     state.record_panes(fid, panels=panes)
@@ -2535,25 +2542,25 @@ def cmd_launch(args) -> int:
                   "recorded for this frame")
 
     # Ties this session to its own id BEFORE anything else can ask for it — the hotkey
-    # bind's action (`charter frame-menu`) and every menu item's own action (`charter
-    # frame-action <id>`) both resolve `$CHARTER_SESSION_ID` from a `run-shell`-spawned
-    # process's environment, and without this call a frame beyond the first sharing
+    # bind's action (`charter frame-palette`) and every action the palette starts resolve
+    # `$CHARTER_SESSION_ID` from a `run-shell`-spawned process's environment, and without
+    # this call a frame beyond the first sharing
     # `SOCKET` would silently resolve the FIRST frame's id instead of its own (see
     # `_session_id_env_argv`'s own docstring for what was verified by hand).
-    sid_set = tmuxctl.run("carrying the frame id to its own hotkey menu",
+    sid_set = tmuxctl.run("carrying the frame id to its own palette",
                           _session_id_env_argv(socket=SOCKET, session=fid), env=env)
     if sid_set.returncode != 0:
-        util.warn("charter frame: continuing without it — the hotkey menu may not find "
+        util.warn("charter frame: continuing without it — the palette may not find "
                   "this frame's own actions")
 
     # The second value the same mechanism carries: which interpreter runs charter when
-    # the hotkey (or a menu item) fires. Without it both fall back to a bare `charter`
+    # the hotkey fires. Without it both fall back to a bare `charter`
     # on the tmux server's own `$PATH`, and `run-shell` reports the resulting 127 by
     # printing it INTO THE HARNESS PANE — see `conf_text`'s own docstring.
-    py_set = tmuxctl.run("carrying charter's own interpreter to the hotkey menu",
+    py_set = tmuxctl.run("carrying charter's own interpreter to the palette",
                          _charter_py_env_argv(socket=SOCKET, session=fid), env=env)
     if py_set.returncode != 0:
-        util.warn("charter frame: continuing without it — the hotkey menu may not open "
+        util.warn("charter frame: continuing without it — the palette may not open "
                   "on this frame")
 
     # The escape hatch's other half. `conf_text`'s bind carries no identity — it reads a
@@ -2574,18 +2581,20 @@ def cmd_launch(args) -> int:
 
     # #390: the same "-m prepends the cwd to sys.path" hole `util.self_relaunch_argv`'s
     # `-P` closes for the panel argv below, closed here as `PYTHONSAFEPATH=1` because
-    # the hotkey/menu template above has no room for a per-invocation flag — see
+    # the hotkey template above has no room for a per-invocation flag — see
     # `_charter_pythonsafepath_env_argv`'s own docstring.
-    safepath_set = tmuxctl.run("carrying PYTHONSAFEPATH to the hotkey menu",
+    safepath_set = tmuxctl.run("carrying PYTHONSAFEPATH to the palette",
                                _charter_pythonsafepath_env_argv(socket=SOCKET, session=fid),
                                env=env)
     if safepath_set.returncode != 0:
-        util.warn("charter frame: continuing without it — the hotkey menu may import "
+        util.warn("charter frame: continuing without it — the palette may import "
                   "the wrong charter if this pane's directory has its own `charter/` "
                   "package")
 
-    # The menu itself: what the hotkey actually opens.
-    menu.record(fid=fid, entries=_menu_entries(fid, SOCKET, current=_current_density(fid)))
+    # Nothing is recorded for the hotkey to open. The menu was a TABLE on disk that every
+    # density change and every switch had to rewrite or it went stale (`_rerecord_menu`,
+    # deleted with it); the palette is built from live state each time it opens
+    # (`frame/builtin_actions.build`), so there is no snapshot left to keep in step.
 
     write_hook = tmuxctl.run(
         "installing the exit-status hook",
@@ -2710,138 +2719,15 @@ def cmd_launch(args) -> int:
     return 0
 
 
-#: What marks the level a frame is currently at, in the hotkey menu, and the blank that
-#: keeps the other rows aligned with it.
-#:
-#: **ASCII, deliberately.** The obvious `•` (U+2022) is East-Asian *Ambiguous*: one column
-#: in most terminals and two under a CJK locale or an ambiguous-width setting, which would
-#: shift that one row against its neighbours in a `display-menu` tmux does not pad.
-#: `statusline._persona_chips` carries a comment saying ambiguous glyphs "have broken this
-#: layout twice", and writing one in a fresh line under that rule is not a trade worth
-#: making for a prettier dot. `*` is the marker `git branch` already uses for "the one you
-#: are on", and it is unambiguously narrow everywhere.
-_DENSITY_MARK = ("*", " ")
-
-
 def _current_density(fid: str) -> str:
     """The density *fid* is at right now: its own recorded override, else the configured
     default. The same two-source order `frame/slots.verbosity` reads for verbosity, so the
-    menu's dot and the panels' own content can never disagree about which level is on."""
+    palette's mark and the panels' own content can never disagree about which level is
+    on."""
     from . import instance
     return (instance.density_level(state.density(fid))
             or instance.density_level(config.FRAME["density"])
             or "normal")
-
-
-def _menu_entries(fid: str, socket: str, *, current: str) -> list[tuple[str, list[str]]]:
-    """Every row of this frame's hotkey menu, in the order it is drawn.
-
-    **"Detach" and the three densities, and no separate key for any of them.** #387 asks
-    that a keypress change the density of the RUNNING frame; a second `bind -n` would have
-    been the obvious way and is the wrong one, because a tmux key table is server-wide with
-    no per-session form (`conf_text`'s own docstring measures what that costs). Every frame
-    on `SOCKET` would share whatever key was chosen, and an operator inside their own tmux
-    — where charter binds nothing at all — would get no density control regardless. The
-    hotkey charter already binds opens this menu, so the density lives here: one bind, one
-    server-wide cost, already paid.
-
-    **The argv is `charter frame-density <level>`, not tmux's own commands.** Re-laying out
-    a frame is several tmux calls that have to be ordered and whose results have to be
-    written back down (`_relayout`); a menu entry is one argv, run once, by
-    `cmd_action`'s plain `subprocess.run` of a LIST. `util.self_relaunch_argv()` for the
-    interpreter half, for #390's reason — a menu action starts in whatever directory the
-    pane is in, and from a charter checkout a bare `-m charter` imports the checkout.
-
-    *current* is marked, not filtered out: an operator who selects the level they are
-    already on gets a re-layout that produces the same frame, which is the harmless
-    outcome, and a menu whose rows move around depending on state is a menu nobody learns.
-
-    **Workspaces and personas are SUBMENUS, not two more top-level binds (#517).** A tmux
-    key table is server-wide with no per-session form — the same measurement that put
-    density here — so two more `bind -n` keys would cost every frame on the socket two
-    more keys and still give an operator inside their own tmux nothing. The hotkey charter
-    already binds opens this menu; the two lists hang off it, which reuses the containment
-    (`menu._safe_label`), the action-id validation (`menu._ACTION_ID_RE`) and the repaint
-    path (`frame/switch.py` → `state.bump`) that already exist, instead of opening three
-    new doors.
-
-    Each list is capped at :data:`_MENU_LIST_MAX` with a last row saying how many were
-    left out — `slots._cap_personas`' own rule, one surface over. A `display-menu` is
-    drawn inside the terminal and tmux does not scroll it; a plane with forty workspaces
-    would otherwise build a menu taller than the window, and what tmux does then is not
-    something charter should be finding out at an operator's keypress.
-    """
-    from . import instance
-    entries: list = [
-        # The spec's own words, "Detach is allowed and prints how to reattach". `-s fid`
-        # (not `-t`): `detach-client`'s `-s` targets every client attached to a SESSION,
-        # `-t` a single CLIENT — this frame normally has exactly one attached client, but
-        # `-s` is correct even if it ever has more than one.
-        ("Detach", tmuxctl.server_argv(socket, "detach-client", "-s", fid)),
-    ]
-    on, off = _DENSITY_MARK
-    for level in instance.FRAME_DENSITY:
-        mark = on if level == current else off
-        entries.append((f"{mark} density: {level}",
-                        util.self_relaunch_argv("frame-density", level)))
-    entries += _switch_entries(fid)
-    return entries
-
-
-#: How many workspaces (or personas) one submenu ever lists. `slots._MAX_PERSONA_LINES`
-#: bounds the sidebar for the same reason and this is the same trade — a bound that fits
-#: on a screen, with the overflow SAID rather than silently dropped.
-_MENU_LIST_MAX = 12
-
-
-def _switch_entries(fid: str) -> list:
-    """The two submenu openers and the rows they open — #517's whole menu surface.
-
-    `frame/switch.py` owns every name that appears here, already checked against
-    `workspace.valid_name`/`persona.valid_name`, and `contain.one_line` is applied to each
-    one BEFORE it is measured or padded — #472 was filed because a table sized its columns
-    from a raw name first, and a menu row is a table one column wide. `menu._safe_label`
-    then makes it inert against tmux's own format parser, which is a different property
-    from being one line and is applied at a different boundary (see `menu.py`).
-
-    The mark is `_DENSITY_MARK`'s, reused rather than re-chosen: it is already the answer
-    to "which one am I on" everywhere else in this menu, and `*` is unambiguously narrow
-    where `●`/`◆` are East-Asian *Ambiguous* and have broken this layout twice
-    (`statusline._persona_chips`).
-
-    An empty list still gets its opener, carrying the count — `personas 0` opening an
-    empty submenu would be a row that does nothing, so the openers say what they hold and
-    the empty submenu says so in a row of its own. `cmd_menu` refuses to draw a zero-row
-    menu outright (`display-menu` fails with `not enough arguments`), so that row is what
-    stands between an empty plane and a hotkey that silently does nothing.
-    """
-    from . import contain
-    out: list = []
-    for group, names, current, verb in (
-            (menu.WORKSPACES, switch.workspaces(), switch.current_workspace(fid),
-             "workspace"),
-            (menu.PERSONAS, switch.personas(), switch.current_persona(fid), "persona")):
-        shown = names[:_MENU_LIST_MAX]
-        out.append(menu.Entry(
-            label=f"{verb}: {contain.one_line(current) if current else '—'}  ▸",
-            opens=group))
-        on, off = _DENSITY_MARK
-        for n in shown:
-            out.append(menu.Entry(
-                label=f"{on if n == current else off} {contain.one_line(n)}",
-                argv=tuple(util.self_relaunch_argv("frame-switch", f"--{verb}", n)),
-                group=group))
-        if len(names) > len(shown):
-            # A row that names no workspace and runs nothing — the same sentence-not-an-
-            # item shape `slots._cap_personas` ends its column with. It is still a real
-            # menu row (tmux has no inert one that does not desynchronise the triples —
-            # see `menu.record`), so it resolves to an argv that does nothing observable.
-            out.append(menu.Entry(label=f"  …{len(names) - len(shown)} more — "
-                                        f"charter {verb} list",
-                                 argv=("true",), group=group))
-        elif not shown:
-            out.append(menu.Entry(label=f"  no {verb}s yet", argv=("true",), group=group))
-    return out
 
 
 def _pane_identity_env(env: dict[str, str], v: tuple[int, int]) -> dict[str, str] | None:
@@ -3220,10 +3106,10 @@ def cmd_gather(args) -> int:
 def cmd_density(args) -> int:
     """`charter frame-density <level>` — re-lay-out THIS frame, and write nothing else.
 
-    Fired by a hotkey-menu selection (`_menu_entries`), and typeable by hand from inside a
-    frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as `cmd_menu` and
-    `cmd_respawn` resolve theirs — never from anything baked into a menu action, since one
-    bind and one action template are shared by every frame on `SOCKET`.
+    Started by a palette row (`frame/builtin_actions.py`), and typeable by hand from
+    inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
+    `cmd_palette` and `cmd_respawn` resolve theirs — never from anything baked into an
+    action, since one bind is shared by every frame on `SOCKET`.
 
     **charter.toml is not touched, and that is the whole design.** `[frame] density` sets
     what a frame STARTS at; this changes what one running frame IS. Charter's rule is that
@@ -3234,8 +3120,10 @@ def cmd_density(args) -> int:
     default is back.
 
     **Always 0, and every refusal is a quiet no-op**, for `cmd_respawn`'s reason: this
-    normally runs as a `run-shell` child of a menu selection, where the only screen left to
-    report on is the agent's own — the one rectangle ADR 0018 says charter never draws in.
+    normally runs detached from a palette row, where the only screen left to report on is
+    the agent's own — the one rectangle ADR 0018 says charter never draws in. The palette
+    says the refusal BEFORE the keypress instead: `builtin_actions._laid_out` asks the
+    same question this function's third refusal asks, and the row carries the answer.
 
     Refusals, in order:
 
@@ -3277,101 +3165,175 @@ def cmd_density(args) -> int:
     panes = _relayout(socket, fid=fid, harness_pane=harness_pane, panels=panels,
                       want=want, v=v, window_cols=cols, window_rows=rows)
     state.record_panes(fid, panels=panes)
-    # Re-recorded so the menu's own mark moves with the frame. `menu.record` rewrites the
-    # table whole, and every action id is minted from position, so the ids the operator's
-    # currently-open menu is holding stay valid for the same rows.
-    #
-    # Private server only, matching `cmd_launch`, which records no menu inside an
-    # operator's tmux either: charter binds no key there, so there is nothing to open the
-    # menu with — and the "Detach" row it would grow targets `detach-client -s <fid>`, a
-    # SESSION name that does not exist on that server, where a frame is a window.
-    if not tmuxctl.is_operator_socket(socket):
-        menu.record(fid=fid, entries=_menu_entries(fid, socket, current=level))
+    # Nothing to re-record. The palette is built from live state every time it opens
+    # (`frame/builtin_actions.build`), so the mark on the density row moves with the frame
+    # by construction — where the menu was a SNAPSHOT on disk that a switch had to rewrite
+    # or it went on naming the level the frame had left.
     state.bump(fid)
     return 0
 
 
-def cmd_menu(args) -> int:
-    """Open this frame's own menu, on the screen of whoever actually pressed the hotkey.
+#: How long the palette waits, at SHUTDOWN, for an action's ``run`` to have returned.
+#:
+#: **Not a wait for the work — a wait for the START.** §4g's fire-and-report says ``run``
+#: starts something and returns, and `Invocation.join`'s own docstring names "a shutdown
+#: that wants to know whether anything is still going" as one of its two legitimate
+#: callers. This is that shutdown: the palette's pane is about to be killed, and
+#: `kill-pane` hands SIGHUP to that pane's process group, which takes the action's worker
+#: thread with it. Closing without this would race a `Popen` that has not happened yet.
+#:
+#: Two seconds because a conforming ``run`` returns in single-digit milliseconds and an
+#: action still inside one after two seconds has broken the contract — at which point the
+#: palette closes anyway rather than holding a pane open on a hung action, which is the
+#: escape hatch's own argument applied one layer up.
+_ACTION_START_GRACE = 2.0
 
-    `fid` is resolved from `$CHARTER_SESSION_ID`, carried session-scoped via
-    `_session_id_env_argv` rather than baked into the bind's own text (see
-    `conf_text`'s docstring for why that split is load-bearing, not incidental): the
-    SAME bind text is shared by every frame on `SOCKET`, so the frame it opens a menu
-    FOR has to be resolved here, at the moment the key actually fires, never earlier.
 
-    `args.client` is `#{client_name}`, expanded by tmux INSIDE the bind's own
-    `run-shell` text before this process ever starts (see `conf_text`'s docstring) — not
-    queried here. An earlier version queried `list-clients` and picked the first client
-    reported when several were attached to one frame; confirmed WRONG by observation,
-    not merely suboptimal: with two real ptys attached to one session, pressing the
-    hotkey on the SECOND-attached client drew the menu on the FIRST client's screen,
-    and the presser saw nothing — worse than tmux's own unscoped single-client default
-    this module was built to replace, which happened to guess right in that same
-    two-client, one-frame setup when given no `-c` at all (also verified by hand,
-    separately). Carrying the presser's own name through the bind removes the guess
-    rather than making it a better one — confirmed against the same two-pty setup:
-    each press now resolves to its OWN presser, never the other one's, regardless of
-    attach order (see `tests/test_frame_tmux_integration.py`'s
-    `MenuClientIntegration`). This is the one property actually verified for the
-    ORIGINAL single-frame bug this whole mechanism exists to fix: nobody ever directly
-    reproduced tmux's default guess failing for a single frame with several clients —
-    only the two-FRAME case (`display-menu -t <session>` alone, no `-c`, resolving to
-    whichever session was "current" server-wide) was. `#{client_name}` closes both
-    regardless, by construction, rather than leaving the single-frame case resting on
-    an inference.
+def cmd_palette(args) -> int:
+    """`F2`: open this frame's palette — or, with ``--pane``, BE it.
 
-    A missing client (`args.client` empty — `#{client_name}` failed to expand, or this
-    was invoked some other way) is a quiet no-op: there is no screen to draw on, and no
-    screen left to report that on either. So is an EMPTY menu (`not menu.build(fid)`):
-    `display-menu` requires at least one `name key command` triple and fails outright
-    (rc 1, `not enough arguments` — tmux's own text, confirmed against 3.7c with a real
-    attached client) without one — reachable with a genuine `$CHARTER_SESSION_ID`
-    whose frame has recorded nothing yet, and, before this guard, WOULD have been
-    reachable with none at all (`menu.build("")` is always empty — `state.frame_dir`
-    refuses an empty id — so a keypress arriving with no session id would otherwise
-    have gone on to build a zero-item `display-menu` call and fail loudly for no
-    reason the operator could see).
+    Two modes and one subcommand, because they are two halves of one keypress and
+    splitting them into two spellings would be two things to keep in step. Without
+    ``--pane`` this runs as the hotkey bind's `run-shell` child and does nothing but carve
+    the overlay's pane off the harness; with it, this IS the program inside that pane.
 
-    **`--group` is how a SUBMENU opens (#517), and it is the same command because it is
-    the same job**: resolve the frame, resolve the presser's client, draw one of this
-    frame's recorded menus. The group arrives from a menu item's own command text, which
-    charter wrote (`menu.menu_argv`) — so it is checked against `menu.GROUPS` here anyway,
-    at the point it becomes an argument, and an unknown one is the same quiet no-op as a
-    missing client rather than an argparse exit 2 from inside a `run-shell` where nothing
-    would print the reason. Deliberately NOT `choices=` in the parser, for exactly the
-    reason `frame-density`'s own `level` is not.
+    **The bind carries the presser's client and nothing else** (see `conf_text`). The
+    frame is resolved from `$CHARTER_SESSION_ID` at the moment the key fires, exactly as
+    `cmd_density`, `cmd_switch` and `cmd_respawn` resolve theirs, because one bind is
+    shared by every frame on `SOCKET`.
 
-    That membership test is a **floor, not the guard**, and is worth saying so rather than
-    testing as if it were: `menu.build(fid, <unknown>)` is empty for any group no row
-    claims, so the empty-menu refusal beside it already answers the same way. What the
-    test buys is that `menu_argv` is never called with a group charter did not choose, so
-    the `-T charter · <group>` title cannot carry a caller's string.
+    **Always 0.** `run-shell` reports a non-zero command by printing it INTO THE HARNESS
+    PANE and dropping that pane into copy-mode — charter drawing in the one rectangle ADR
+    0018 says it never draws — so every refusal here is a quiet no-op, exactly like
+    `cmd_density`'s.
+
+    **Pressing the hotkey while the palette is already open opens a second one.** A
+    `bind -n` is the ROOT key table, so tmux matches `F2` before any byte reaches the
+    palette's pane — which is measured only for a key tmux's own table claims, and is the
+    same property that makes the escape hatch work against a wedged overlay. The second
+    palette is the modal one and Escape closes it; the first is left as an ordinary
+    pane, closable by selecting it and pressing Escape, or by the hatch. Not guarded
+    here on purpose: every cheap test for "is one
+    already open" is a stale-state problem of its own (the hatch deliberately leaves the
+    window option naming a pane that is gone), and a guard that refuses the palette after
+    an escape-hatch press would be worse than the state it is preventing.
+    """
+    if getattr(args, "pane", False):
+        return _draw_palette(args)
+    return _open_palette(args)
+
+
+def _open_palette(args) -> int:
+    """Carve the overlay's pane off the harness and make it the surface.
+
+    `frame/overlay.py` owns every one of these argvs — the split, the hatch, the focus and
+    the zoom — and their ORDER is its property, not this function's: the hatch is armed
+    before the pane can capture anything, so a surface that wedges on its first paint still
+    has a way out.
+
+    The pane is told this frame's own identity through `_relayout_pane_env`, for the reason
+    that function's docstring measures: this process is a `run-shell` child of a tmux server
+    shared between every frame on the machine, so its `$CHARTER_ROOT` and
+    `$CHARTER_WORKSPACE` may be another frame's, and a palette listing another plane's
+    workspaces would offer to switch to them.
+
+    A tmux charter cannot get a version out of is a quiet no-op rather than a traceback in
+    the harness pane: `_relayout_pane_env` needs the version to decide whether `-e` can be
+    parsed at all, and there is nothing to open a palette against either way.
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
-    group = getattr(args, "group", None) or menu.MAIN
-    if not args.client or group not in menu.GROUPS or not menu.build(fid, group):
+    harness = state.harness_pane(fid) or ""
+    socket = state.frame_server(fid) or SOCKET
+    v = tmuxctl.version()
+    if v is None:
         return 0
-    # Written before the menu is drawn, so a `frame-switch` fired from it has a screen to
-    # report a refusal on — see `state.record_menu_client` for why an action's own argv
-    # cannot carry one, and what this deliberately is not.
-    state.record_menu_client(fid, args.client)
-    # `tmuxctl.interact`: `display-menu` draws on an attached client and does not return
-    # until the operator chooses or dismisses it, so it belongs with `attach` on the
-    # no-capture, no-timeout side of `tmuxctl` — time-boxing it would close a menu for
-    # the crime of being read slowly.
-    return tmuxctl.interact(
-        menu.menu_argv(fid, SOCKET, client=args.client, group=group)).returncode
+    argv = overlay.open_argv(
+        socket, harness=harness,
+        command=util.self_relaunch_argv("frame-palette", getattr(args, "client", "") or "",
+                                        "--pane"),
+        env=_relayout_pane_env(fid, v))
+    if argv is None:
+        return 0
+    opened = tmuxctl.run("opening the palette", argv)
+    for cmd in overlay.modal_argvs(socket, harness=harness,
+                                   overlay_pane=opened.stdout.strip()):
+        tmuxctl.run("making the palette the surface", cmd)
+    return 0
+
+
+def _draw_palette(args) -> int:
+    """Be the palette: draw the actions, take a choice, start it, hand the pane back.
+
+    **The close is a ``finally``**, for `overlay.Surface.run`'s reason one layer down: a
+    palette that raised must still give the operator their harness back. Whatever went
+    wrong is one traceback into a pane that is about to stop existing, which is the one
+    place charter may print it.
+
+    **The registry is built here, not carried.** `builtin_actions.build` resolves the
+    density mark, the workspace list, the persona list and every installed provider's
+    actions against the moment the palette opened — the menu's staleness (`_rerecord_menu`,
+    deleted with it) was a snapshot on disk that every other command had to remember to
+    rewrite.
+
+    **A refusal is said on the operator's own screen.** `invoke` re-asks availability, so a
+    row drawn while a plane was one way and pressed while it is another is refused with the
+    same sentence the row carried — and that sentence has nowhere else to go, because the
+    pane it would have been drawn in is the pane this is about to kill. A STARTED action
+    says nothing: what it started surfaces through `inflight`, which is the frame's
+    existing spinner and not a second clock.
+    """
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    socket = state.frame_server(fid) or SOCKET
+    harness = state.harness_pane(fid) or ""
+    reg = builtin_actions.build(fid, current_density=_current_density(fid))
+    snapshot = gather.cached(fid) or {}
+    try:
+        surface = palette.Palette(
+            catalogue=palette.rows(reg.offers(fid=fid, snapshot=snapshot)), mouse=True)
+        chosen = palette.own_the_tty(surface)
+        if chosen is not None:
+            inv = reg.invoke(chosen.id, fid=fid, snapshot=snapshot)
+            inv.join(timeout=_ACTION_START_GRACE)
+            if not inv.started:
+                _say_on_screen(fid, inv.reason, getattr(args, "client", "") or "")
+    finally:
+        _close_palette(socket, harness=harness,
+                       overlay_pane=os.environ.get("TMUX_PANE", ""))
+    return 0
+
+
+def _close_palette(socket: str, *, harness: str, overlay_pane: str) -> None:
+    """Hand the pane back — as ONE tmux invocation, because the second command kills the
+    caller.
+
+    `overlay.close_argvs` is `select-pane`, `kill-pane`, re-arm; this process is what
+    `kill-pane` is aimed at. Measured against tmux 3.7c, sent one at a time from inside
+    that pane: the first returned 0 and the process was gone before the second answered,
+    so the re-arm never ran and the overlay pane was left standing, unzoomed and unfocused,
+    drawing a dead program. `tmuxctl.chain` sends all three in one command line, which tmux
+    parses whole and runs server-side — 3 times out of 3, with the re-arm applied.
+
+    ``None`` from `chain` is an empty or mismatched list, which is `close_argvs` refusing:
+    a harness or overlay id that is not tmux's own word for a pane. Nothing is issued at
+    all rather than a command built around a value charter cannot predict the parse of —
+    `overlay.close_argvs`' own docstring records that an empty kill target kills the pane
+    the command is running against.
+    """
+    argv = tmuxctl.chain(overlay.close_argvs(socket, harness=harness,
+                                             overlay_pane=overlay_pane))
+    if argv is None:
+        return
+    tmuxctl.run("handing the palette's pane back to the harness", argv)
 
 
 def cmd_switch(args) -> int:
     """`charter frame-switch --workspace <name>` / `--persona <name>` — move THIS frame.
 
-    Fired by a hotkey-submenu selection (`_switch_entries`), and typeable by hand from
+    Started by a palette row (`frame/builtin_actions.py`), and typeable by hand from
     inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
-    `cmd_density`, `cmd_menu` and `cmd_respawn` resolve theirs, and for the same reason:
-    one bind and one action template are shared by every frame on `SOCKET`, so the frame
-    a keypress acts on is resolved at the moment it fires, never baked into a menu action.
+    `cmd_density`, `cmd_palette` and `cmd_respawn` resolve theirs, and for the same
+    reason: one bind is shared by every frame on `SOCKET`, so the frame a keypress acts on
+    is resolved at the moment it fires, never baked into anything.
 
     The switch itself is `frame/switch.py`'s — this function is the tmux half and nothing
     else: which frame, and where the answer is shown.
@@ -3379,22 +3341,23 @@ def cmd_switch(args) -> int:
     **Every outcome is put on the operator's screen, and that is the point of the command
     existing at all.** #517: "a menu that silently fails against a lock is worse than no
     menu — if a switch is refused, the frame must say so." A refusal here has no other
-    surface: this runs as a `run-shell` child of a menu selection, whose stdout tmux
-    prints INTO THE HARNESS PANE and then drops that pane into copy-mode — charter drawing
-    in the one rectangle ADR 0018 says it never draws. So the message goes through
-    `display-message`, which draws on the client's own status area and disappears on its
-    own.
+    surface: this runs detached, with its own streams on `/dev/null` — see
+    `builtin_actions._spawn` — because the palette pane it was started from is killed the
+    instant it has started. So the message goes through `display-message`, which draws on
+    the client's own status area and disappears on its own.
 
-    **Which screen.** This command's argv cannot carry `#{client_name}` — it is run by
-    `cmd_action` through `subprocess.run` as a LIST, which tmux never parses, so a format
-    in it would be four literal characters (see `state.record_menu_client`). The presser's
-    client comes from the menu that fired this instead, recorded by `cmd_menu` an instant
-    before it drew. It matters: measured against tmux 3.7c with two real ptys attached to
-    one session, `display-message -t <session>` drew on the most recently attached client
-    regardless of who pressed, and `-c` drew on exactly the named one.
+    **Which screen.** `-t <session>`, which measured against tmux 3.7c with two real ptys
+    attached to one session draws on the most recently attached client. The menu could do
+    better — it recorded the presser's own client an instant before it drew — and the
+    palette does better for the refusal it can see BEFORE the keypress (the row carries
+    the reason, on the pane every client of that session is looking at). What is left here
+    is the outcome of work that outlived the surface that started it, and there is nothing
+    at that point that knows whose keypress it was. One client is the ordinary case and
+    gets the right answer either way.
 
-    **The menu is re-recorded** (`_rerecord_menu`) — it is a snapshot, and one taken
-    before the switch names the workspace the frame left.
+    **Nothing is re-recorded.** The menu was a snapshot on disk, so a switch that did not
+    rewrite it went on naming the workspace the frame had left; the palette resolves every
+    name and every mark when it opens.
 
     **Always 0**, like `cmd_density` and `cmd_respawn`: nothing reads this status, and a
     non-zero exit is what makes tmux print into the harness pane.
@@ -3410,60 +3373,28 @@ def cmd_switch(args) -> int:
         out = switch.to_persona(fid, persona_name)
     else:
         return 0
-    _rerecord_menu(fid)
-    _say_on_screen(fid, out, state.menu_client(fid))
+    _say_on_screen(fid, out.message)
     return 0
 
 
-def _rerecord_menu(fid: str) -> None:
-    """Rewrite *fid*'s menu table so the next keypress describes the frame as it now is.
+def _say_on_screen(fid: str, message: str, client: str | None = None) -> None:
+    """Put one line on the frame's own screen. Best effort, never raises.
 
-    `menu.record` writes a SNAPSHOT: `_menu_entries` resolves the current workspace and
-    persona once, and every row's label and action id is minted from that. So a switch
-    that does not re-record leaves the menu naming the workspace the frame LEFT —
-    measured on a real plane before this call existed: after `switch.to_workspace(fid,
-    "ws05")` with `state.workspace_for(fid) == "ws05"`, `menu.build(fid, MAIN)` still
-    returned `workspace: ws00  ▸` and the submenu still marked `* ws00`. The panels
-    repainted; the menu lied. The same staleness is why a workspace or persona created
-    after launch never appeared in the submenu at all.
-
-    This is `cmd_density`'s own rule, applied to the command #517 is about rather than
-    only to the one beside it — same call, same operator-socket refusal, and for the same
-    reason: charter binds no key inside an operator's tmux, so there is nothing there to
-    open a menu with, and the "Detach" row `_menu_entries` grows targets `detach-client
-    -s <fid>`, a SESSION name that does not exist on that server.
-
-    The density argument is `_current_density(fid)` rather than a level passed in: this
-    command does not change the density, so the mark has to be re-derived from the frame's
-    own record or it would be re-recorded as whatever this function guessed.
-
-    **On a refusal too, and that is not an oversight.** A refused switch left the frame
-    where it was, so no mark moves — but the OTHER half of the staleness is the plane, and
-    that half moved regardless of what this frame did. A pinned frame whose operator keeps
-    pressing the hotkey is exactly the frame that would otherwise never see a workspace
-    made since launch. Guarding on `out.ok` would buy nothing back — the labels a refusal
-    re-records are identical, and `menu.record` mints every action id from position, so
-    the ids come out the same — and would cost that refresh.
-    """
-    socket = state.frame_server(fid) or SOCKET
-    if tmuxctl.is_operator_socket(socket):
-        return
-    menu.record(fid=fid, entries=_menu_entries(fid, socket, current=_current_density(fid)))
-
-
-def _say_on_screen(fid: str, out, client: str | None = None) -> None:
-    """Put one `switch.Outcome` on the frame's own screen. Best effort, never raises.
-
-    **The message is a tmux FORMAT, exactly as a menu label is.** `display-message`'s own
-    docs say so, and `menu._safe_label`'s measurement — a `#(...)` in a label runs during
-    format evaluation whether or not the thing goes on to display — applies here word for
-    word. `out.message` already carries a contained workspace or persona name
-    (`contain.one_line`, in `switch.py`), which closes the newline half; `_safe_label`
-    closes the `#` half. Both, because they are different properties: one line, and inert.
+    **The message is a tmux FORMAT.** `display-message`'s own docs say so, and
+    `tmuxctl.inert_format`'s measurement — a `#(...)` runs during format evaluation
+    whether or not the thing goes on to display — applies here word for word. Every
+    caller's *message* already carries contained names (`contain.one_line`, in
+    `switch.py` and in `frame/actions.py`'s own `_reason`), which closes the newline half;
+    `inert_format` closes the `#` half. Both, because they are different properties: one
+    line, and inert.
 
     A leading `-` would make tmux read the message as a flag of its own and refuse the
-    whole command — the same measured failure `_safe_label` guards a label against — so
-    the same guard is what runs here rather than a second one that "does the same thing".
+    whole command — the same measured failure `inert_format` guards against — so the same
+    guard is what runs here rather than a second one that "does the same thing".
+
+    *client* is `#{client_name}` where a caller has one: the palette carries the presser's
+    own client from the hotkey bind, and `-c` draws on exactly that terminal where `-t`
+    draws on whichever attached most recently.
 
     `-d 4000`: long enough to read a sentence, short enough that it is gone before the
     operator wants the screen back. tmux's own default comes from `display-time`, which is
@@ -3476,12 +3407,12 @@ def _say_on_screen(fid: str, out, client: str | None = None) -> None:
         argv += ["-c", client]
     else:
         argv += ["-t", fid]
-    # One prefix for both outcomes. Every refusal `switch.py` produces already reads as
+    # One prefix for every outcome. Every refusal `switch.py` produces already reads as
     # one ("cannot switch: …", "no workspace 'x' — have: …"), and a second word saying so
     # only ate columns off a status line tmux truncates without saying it did — measured
     # against a 100-column client: `charter: refused — cannot switch: …` ran off the end.
-    tmuxctl.run("reporting a switch on screen",
-                argv + [menu._safe_label("charter: " + out.message)])
+    tmuxctl.run("reporting on the frame's own screen",
+                argv + [tmuxctl.inert_format("charter: " + message)])
 
 
 def cmd_respawn(args) -> int:
@@ -3522,8 +3453,8 @@ def cmd_respawn(args) -> int:
     Refusals, in the order they are checked:
 
     * no frame on the argv and no `$CHARTER_SESSION_ID` — not fired by a frame at all, so
-      there is no frame to resolve or count against (`cmd_menu` treats the same gap the
-      same way);
+      there is no frame to resolve or count against (`cmd_palette` treats the same gap
+      the same way);
     * a *slot* with no renderer — bringing it back would recreate exactly the
       permanently-dead pane `cmd_launch`'s `unimplemented` filter exists to prevent;
     * a *pane* that is not tmux's own `%<digits>` — the value arrived through text tmux
@@ -3571,19 +3502,3 @@ def cmd_respawn(args) -> int:
     return 0
 
 
-def cmd_action(args) -> int:
-    """Run one menu entry by its opaque id. The only path from a menu to a real command.
-
-    `args.action_id` is never anything but `a<N>` shaped text arriving on `charter
-    frame-action`'s own command line (see `menu.py`'s module docstring for why that is a
-    top-level command rather than `frame action`) — `menu.resolve` is the one place an id
-    turns back into the argv it names, and `subprocess.run` below takes that argv as a
-    LIST, never a shell string, so nothing an id could ever resolve to is re-parsed by
-    anything on the way to running.
-    """
-    fid = os.environ.get("CHARTER_SESSION_ID", "")
-    argv = menu.resolve(fid, args.action_id)
-    if not argv:
-        util.err(f"charter frame-action: unknown action {args.action_id!r}")
-        return 2
-    return subprocess.run(argv).returncode

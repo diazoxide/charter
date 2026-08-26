@@ -26,7 +26,7 @@ import unittest
 from unittest import mock
 
 from charter import cli, commands_frame, config, persona, tui, workspace
-from charter.frame import menu, picker, state, switch
+from charter.frame import builtin_actions, palette, picker, state, switch
 
 from tests._isolation import PersonaIso
 
@@ -230,116 +230,35 @@ class SwitchingPersona(PersonaIso, unittest.TestCase):
         self.assertEqual(switch.current_persona(self.FID), "scribe")
 
 
-class MenuGroups(PersonaIso, unittest.TestCase):
-    """A submenu is rows of the one table, filtered — and a group is a closed set."""
-
-    FID = "f-menu"
-
-    def test_a_submenu_row_never_reaches_a_command_slot(self):
-        """The property `menu.py` exists for, extended to the rows that carry a workspace
-        name: every item's COMMAND is one of two fixed templates, and the name appears
-        only in the label slot."""
-        hostile = 'x" ; run-shell "touch /tmp/pwned'
-        menu.record(fid=self.FID, entries=[
-            menu.Entry("workspace: alpha  ▸", opens="workspace"),
-            menu.Entry(f"* {hostile}", ("charter", "frame-switch", "--workspace",
-                                        hostile), "workspace"),
-        ])
-        argv = menu.menu_argv(self.FID, "charter", client="/dev/ttys0", group="workspace")
-        label, key, command = argv[-3:]
-        self.assertIn(hostile, label)
-        self.assertNotIn(hostile, command)
-        self.assertEqual(command,
-                         'run-shell \'"$CHARTER_PY" -m charter frame-action a1\'')
-
-    def test_an_opener_carries_the_client_format_and_the_group(self):
-        """Measured against tmux 3.7c with two attached ptys: `#{client_name}` inside a
-        menu item's own command expands to the client the menu was DRAWN on, so the
-        submenu reaches the presser's screen with nothing stored and nothing guessed."""
-        menu.record(fid=self.FID,
-                    entries=[menu.Entry("workspace: alpha  ▸", opens="workspace")])
-        command = menu.menu_argv(self.FID, "charter", client="/dev/ttys0")[-1]
-        self.assertEqual(
-            command,
-            'run-shell \'"$CHARTER_PY" -m charter frame-menu #{client_name} '
-            '--group workspace\'')
-
-    def test_rows_are_filtered_by_group(self):
-        menu.record(fid=self.FID, entries=[
-            ("Detach", ["true"]),
-            menu.Entry("* alpha", ("true",), "workspace"),
-            menu.Entry("* forge", ("true",), "persona"),
-        ])
-        self.assertEqual([lbl for lbl, _ in menu.build(self.FID)], ["Detach"])
-        self.assertEqual([lbl for lbl, _ in menu.build(self.FID, "workspace")],
-                         ["* alpha"])
-        self.assertEqual([lbl for lbl, _ in menu.build(self.FID, "persona")], ["* forge"])
-
-    def test_ids_are_one_space_across_every_group(self):
-        """One table, one id space — so `cmd_action`/`menu.resolve` never have to know
-        which menu a selection came from, and a submenu adds no second thing that can go
-        stale against the first."""
-        menu.record(fid=self.FID, entries=[
-            ("Detach", ["true"]),
-            menu.Entry("* alpha", ("charter", "alpha"), "workspace"),
-        ])
-        self.assertEqual(menu.resolve(self.FID, "a1"), ["charter", "alpha"])
-
-    def test_a_group_written_before_groups_existed_is_the_main_menu(self):
-        """A frame running across the upgrade keeps the menu it already has: a table with
-        no `group` key anywhere is the top-level menu, not an empty one."""
-        menu.record(fid=self.FID, entries=[("Detach", ["true"])])
-        raw = json.loads((state.frame_dir(self.FID) / "actions.json").read_text())
-        self.assertNotIn("group", raw["a0"])
-        self.assertEqual([lbl for lbl, _ in menu.build(self.FID)], ["Detach"])
-
-    def test_a_group_this_charter_does_not_have_is_in_no_menu(self):
-        """`build` reads whatever is on disk. A row claiming an unknown group belongs to
-        no menu charter can open — and that falls out of the `g != group` filter itself,
-        which is why there is no membership test beside it: one was written, mutated out,
-        and the covering test stayed green (`rows`' own docstring records this)."""
-        menu.record(fid=self.FID, entries=[("Detach", ["true"])])
-        path = state.frame_dir(self.FID) / "actions.json"
-        path.write_text(json.dumps({"a0": {"label": "sneak", "argv": ["true"],
-                                           "group": "elsewhere"}}))
-        for group in menu.GROUPS:
-            self.assertEqual(menu.build(self.FID, group), [], group)
-
-    def test_a_corrupt_opens_cannot_reach_tmux_command_text(self):
-        """`opens` is interpolated into text tmux re-parses, so it is checked at the join
-        for `_ACTION_ID_RE`'s stated reason — a hand-edited table is not bound by what
-        `record` would have written. The row degrades to an ordinary one."""
-        menu.record(fid=self.FID, entries=[("Detach", ["true"])])
-        path = state.frame_dir(self.FID) / "actions.json"
-        path.write_text(json.dumps({"a0": {"label": "x", "argv": ["true"],
-                                           "opens": "w\'; run-shell \'touch /tmp/pwned"}}))
-        command = menu.menu_argv(self.FID, "charter", client="/dev/ttys0")[-1]
-        self.assertNotIn("pwned", command)
-        self.assertEqual(command,
-                         'run-shell \'"$CHARTER_PY" -m charter frame-action a0\'')
-
-    def test_the_tenth_row_gets_no_key_rather_than_an_impossible_one(self):
-        """`display-menu`'s middle argument is a KEY NAME: `"10"` is not one. Before
-        submenus the menu had four fixed rows and could never reach it; a workspace list
-        can.
-
-        The no-key spelling is the EMPTY STRING and the constant is pinned here because
-        the obvious-looking `-` is a real tmux key: measured against 3.7c on an attached
-        pty, a row keyed `-` renders as `(-)` and pressing `-` ran its command. On a
-        workspace submenu that is a stray keystroke performing a real switch (see
-        `menu._key`)."""
-        menu.record(fid=self.FID, entries=[(f"row {i}", ["true"]) for i in range(11)])
-        argv = menu.menu_argv(self.FID, "charter", client="/dev/ttys0")
-        # The triples begin after `tmux -L <sock> display-menu -t <fid> -c <client> -T
-        # <title>` — ten fixed elements. Sliced by position rather than by searching for a
-        # word, since the socket and the title are both spelled "charter".
-        keys = argv[10:][1::3]
-        self.assertEqual(keys[:9], [str(i) for i in range(1, 10)])
-        self.assertEqual(keys[9:], ["", ""])
-        self.assertNotIn("-", keys)
+def _rows(fid: str, *, density: str = "normal"):
+    """The palette's own rows for *fid*, built exactly the way `_draw_palette` builds
+    them — through `builtin_actions.build`, not from a hand-written list."""
+    reg = builtin_actions.build(fid, current_density=density)
+    return palette.rows(reg.offers(fid=fid, snapshot={}))
 
 
-class TheMenuOffersBothLists(PersonaIso, unittest.TestCase):
+def _titles(fid: str, kind: str, *, density: str = "normal") -> list[str]:
+    """Every row title whose ID belongs to *kind* (`workspace`, `persona`, `density`).
+
+    Selected by ID and never by what the title says, because the mark charter puts in
+    front of the current one is part of the title — a prefix match on the title would
+    silently drop exactly the row every one of these tests is about.
+    """
+    return [r.title for r in _rows(fid, density=density)
+            if r.id.startswith(kind + ".")]
+
+
+class ThePaletteOffersBothLists(PersonaIso, unittest.TestCase):
+    """#517's whole surface, moved off `display-menu`: every workspace and every persona
+    is a row, and neither list is capped any more.
+
+    The menu capped each at twelve because a `display-menu` is drawn inside the terminal
+    and tmux does not scroll it. The palette scrolls AND filters, so the cap would only
+    hide names an operator can already reach by typing three letters of one — §2's
+    "charter's nine-row cap was charter's, not tmux's", applied to the other list it
+    bounded.
+    """
+
     FID = "f-entries"
 
     def setUp(self):
@@ -348,64 +267,71 @@ class TheMenuOffersBothLists(PersonaIso, unittest.TestCase):
         state.frame_dir(self.FID, create=True)
         state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
 
-    def _labels(self, group):
-        entries = commands_frame._menu_entries(self.FID, "charter", current="normal")
-        menu.record(fid=self.FID, entries=entries)
-        return [lbl for lbl, _ in menu.build(self.FID, group)]
-
-    def test_the_top_level_grows_exactly_two_rows(self):
+    def test_charters_own_rows_come_first_and_in_a_fixed_order(self):
         _plane_workspaces("alpha")
-        labels = self._labels(menu.MAIN)
-        self.assertEqual(labels[0], "Detach")
-        self.assertTrue(labels[-2].startswith("workspace: "), labels)
-        self.assertTrue(labels[-1].startswith("persona: "), labels)
+        titles = [r.title for r in _rows(self.FID)]
+        self.assertTrue(titles[0].startswith("detach"), titles)
+        self.assertTrue(any("density: " in t for t in titles[1:4]), titles)
 
-    def test_a_long_list_is_capped_and_says_so(self):
-        """`slots._cap_personas`' rule, one surface over: a `display-menu` is drawn inside
-        the terminal and tmux does not scroll it, so a plane with forty workspaces would
-        otherwise build a menu taller than the window."""
+    def test_a_long_list_is_not_capped(self):
+        """Thirty workspaces are thirty rows. The menu answered twelve plus a row saying
+        how many it had hidden; this surface has nowhere to hide them."""
         _plane_workspaces(*[f"ws{i:02d}" for i in range(30)])
-        rows = self._labels("workspace")
-        self.assertEqual(len(rows), commands_frame._MENU_LIST_MAX + 1)
-        self.assertIn("more", rows[-1])
+        rows = _titles(self.FID, "workspace")
+        self.assertGreaterEqual(len(rows), 30, rows)
+        self.assertTrue(any("ws29" in r for r in rows), rows)
 
-    def test_an_empty_list_still_draws_a_row(self):
-        """`cmd_menu` refuses a zero-row menu outright — `display-menu` fails with tmux's
-        own `not enough arguments` — so a submenu with nothing in it would be a hotkey
-        that silently does nothing."""
-        rows = self._labels("persona")
-        self.assertEqual(rows, ["  no personas yet"])
+    def test_an_empty_list_is_simply_no_rows(self):
+        """A plane with no personas gets no persona rows — and nothing pretends otherwise.
+        The menu needed a placeholder row because `display-menu` refuses a zero-row menu
+        outright (`not enough arguments`); a palette with fewer rows is just a shorter
+        palette, and `overlay.EMPTY` covers the case where it has none at all."""
+        self.assertEqual(_titles(self.FID, "persona"), [])
 
     def test_a_name_is_contained_before_it_becomes_a_row(self):
         """#472: a table sized its columns from a raw name first. `contain.one_line` runs
-        before any width arithmetic, and a name that could hold a newline cannot put one
-        in a menu row."""
+        before any width arithmetic — twice, once where the name meets charter's marker
+        column and once where the title meets `Action`'s own contract — so a name that
+        could hold a newline cannot put one in a row."""
         (config.WORKSPACES_DIR / "alpha").mkdir(parents=True)
         with mock.patch.object(switch, "workspaces",
-                               return_value=["alpha", "line break"]):
-            rows = self._labels("workspace")
-        self.assertTrue(all(" " not in r for r in rows), rows)
+                               return_value=["alpha", "line\nbreak"]):
+            rows = _titles(self.FID, "workspace")
+        self.assertTrue(all("\n" not in r for r in rows), rows)
+
+    def test_a_hostile_name_reaches_the_title_and_never_an_id(self):
+        """The property `frame/menu.py` existed for, one surface over: the NAME is display
+        text and nothing else. A row's id is charter's own `workspace.w<N>`, held to the
+        action alphabet, and it is the id — never the title — that `invoke` dispatches on."""
+        hostile = 'x" ; run-shell "touch /tmp/pwned'
+        (config.WORKSPACES_DIR / "alpha").mkdir(parents=True)
+        with mock.patch.object(switch, "workspaces", return_value=["alpha", hostile]):
+            rows = [r for r in _rows(self.FID) if r.id.startswith("workspace.")]
+        carrying = [r for r in rows if hostile in r.title]
+        self.assertEqual(len(carrying), 1, [r.title for r in rows])
+        self.assertNotIn(";", carrying[0].id)
+        self.assertTrue(carrying[0].id.startswith("workspace.w"), carrying[0].id)
 
 
-class TheMenuFollowsTheSwitch(PersonaIso, unittest.TestCase):
-    """`cmd_switch` re-records the menu, so the next keypress describes the frame as it
-    now is rather than as it was when it launched.
+class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
+    """The menu was a SNAPSHOT on disk; the palette is not, and this is what that buys.
 
-    `menu.record` writes a snapshot — `_menu_entries` resolves the current workspace and
-    persona once, and every label is minted from that — so without this the F2 menu keeps
-    naming the workspace the frame LEFT, and a workspace made after launch never appears
-    in the submenu at all. It is `cmd_density`'s own rule ("re-recorded so the menu's own
-    mark moves with the frame"), applied to the command #517 is about.
+    `menu.record` wrote every label and every mark once, so a switch that did not
+    re-record left the F2 menu naming the workspace the frame had LEFT, and a workspace
+    made after launch never appeared at all — `_rerecord_menu` existed only to paper over
+    that, and had to be called from every command that could move the frame. Nothing calls
+    anything now: `builtin_actions.build` resolves the lists and the marks when the palette
+    opens, so there is no second copy to keep in step.
     """
 
-    FID = "f-menu-follows"
+    FID = "f-palette-follows"
 
     def setUp(self):
         super().setUp()
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID},
                                           clear=True))
         # No screen to report on in a test: `_say_on_screen` is the tmux half and is
-        # covered by its own cases. What is under test is what the menu table holds after.
+        # covered by its own cases. What is under test is what the palette offers after.
         self.said = self.enterContext(mock.patch.object(commands_frame, "_say_on_screen"))
         _plane_workspaces("alpha", "beta")
         _plane_personas("forge", "scribe")
@@ -413,70 +339,55 @@ class TheMenuFollowsTheSwitch(PersonaIso, unittest.TestCase):
         state.record_identity(self.FID, {"CHARTER_SESSION_ID": self.FID,
                                          "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
         state.record_workspace(self.FID, "alpha")
-        menu.record(fid=self.FID,
-                    entries=commands_frame._menu_entries(self.FID, "charter",
-                                                         current="normal"))
-
-    def _labels(self, group):
-        return [lbl for lbl, _ in menu.build(self.FID, group)]
 
     def _switch(self, **kw):
         return commands_frame.cmd_switch(mock.Mock(**{"workspace": None, "persona": None,
                                                       **kw}))
 
-    def test_the_top_row_names_the_workspace_the_frame_moved_TO(self):
-        self.assertIn("workspace: alpha  ▸", self._labels(menu.MAIN))
-        self.assertEqual(self._switch(workspace="beta"), 0)
-        self.assertIn("workspace: beta  ▸", self._labels(menu.MAIN))
-
-    def test_the_submenu_mark_moves_with_the_frame(self):
+    def test_the_mark_moves_with_the_frame(self):
         # `default` is folded in whether or not its directory exists — `switch.workspaces`
         # matches `commands_workspace.cmd_workspace_use` there.
-        self.assertEqual(self._labels("workspace"),
-                         ["* alpha", "  beta", "  default"])
-        self._switch(workspace="beta")
-        self.assertEqual(self._labels("workspace"),
-                         ["  alpha", "* beta", "  default"])
+        self.assertEqual(_titles(self.FID, "workspace"),
+                         ["* workspace: alpha", "  workspace: beta",
+                          "  workspace: default"])
+        self.assertEqual(self._switch(workspace="beta"), 0)
+        self.assertEqual(_titles(self.FID, "workspace"),
+                         ["  workspace: alpha", "* workspace: beta",
+                          "  workspace: default"])
 
     def test_a_persona_switch_moves_its_own_mark_too(self):
-        self.assertEqual(self._labels("persona"), ["  forge", "  scribe"])
+        self.assertEqual(_titles(self.FID, "persona"),
+                         ["  persona: forge", "  persona: scribe"])
         self._switch(persona="scribe")
-        self.assertEqual(self._labels("persona"), ["  forge", "* scribe"])
+        self.assertEqual(_titles(self.FID, "persona"),
+                         ["  persona: forge", "* persona: scribe"])
 
-    def test_a_workspace_made_after_launch_reaches_the_submenu(self):
-        """The same staleness seen from the other side: the table is a snapshot, so a
-        plane that grew a workspace since launch had no row for it."""
+    def test_a_workspace_made_after_launch_is_offered(self):
+        """The same staleness seen from the other side: the menu's table was written at
+        launch, so a plane that grew a workspace since had no row for it."""
         _plane_workspaces("gamma")
-        self._switch(workspace="beta")
-        self.assertIn("  gamma", self._labels("workspace"))
+        self.assertIn("  workspace: gamma", _titles(self.FID, "workspace"))
 
-    def test_a_refusal_refreshes_the_list_without_moving_the_mark(self):
-        """A refused switch left the frame where it was — but the plane moved anyway, and
-        a pinned frame whose operator keeps pressing the hotkey is the one frame that
-        would otherwise never see a workspace made since launch. So the mark stays on the
-        pin and the new name still arrives."""
+    def test_a_pinned_frame_is_offered_the_row_WITH_ITS_REASON(self):
+        """Step 4 of the plan, on the exact example it names. `$CHARTER_WORKSPACE` was set
+        at launch and sits in every panel pane's environment, so nothing charter writes can
+        outrank it — and a palette that silently dropped the row would leave the operator
+        unable to ask why a thing they remember is missing."""
         state.record_identity(self.FID, {"CHARTER_WORKSPACE": "alpha"})
-        _plane_workspaces("gamma")
-        self._switch(workspace="beta")
-        self.assertEqual(self._labels("workspace"),
-                         ["* alpha", "  beta", "  default", "  gamma"])
+        rows = [r for r in _rows(self.FID) if r.id.startswith("workspace.")]
+        self.assertTrue(rows, "the rows must still be offered")
+        self.assertTrue(all("$CHARTER_WORKSPACE pins this frame" in r.note for r in rows),
+                        [r.note for r in rows])
+        self.assertTrue(all("'alpha'" in r.note for r in rows), [r.note for r in rows])
 
-    def test_nothing_is_recorded_on_a_tmux_charter_is_a_guest_on(self):
-        """`cmd_launch` and `cmd_density` both refuse to write a menu inside an operator's
-        own tmux: charter binds no key there, so there is nothing to open one with, and
-        the `Detach` row would target a session name that server does not have."""
-        state.record_server(self.FID, "/tmp/operator.sock")
-        self._switch(workspace="beta")
-        self.assertEqual(self._labels("workspace"),
-                         ["* alpha", "  beta", "  default"])
-
-    def test_the_density_mark_survives_a_switch(self):
-        """The re-record has to re-derive the density from the frame's own record: a
-        switch does not change it, and a guessed level would be written over the real
-        one."""
+    def test_the_density_mark_is_read_from_the_frames_own_record(self):
+        """A switch does not change the density, and nothing re-writes it: the mark is
+        derived when the palette opens, from `_current_density`."""
         state.record_density(self.FID, "full")
         self._switch(workspace="beta")
-        self.assertIn("* density: full", self._labels(menu.MAIN))
+        titles = _titles(self.FID, "density",
+                         density=commands_frame._current_density(self.FID))
+        self.assertIn("* density: full", titles)
 
 
 class ThePickerDecidesNothingOnItsOwn(unittest.TestCase):

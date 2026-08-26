@@ -801,7 +801,7 @@ def for_session(sid: str) -> str | None:
 
     The per-session rung of :func:`_resolved`, asked about a session that is not
     necessarily this process's — the exact counterpart of `workspace.for_session`, and
-    public for the same reason. A frame's menu (`frame/switch.py`) has to mark the persona
+    public for the same reason. A frame's palette (`frame/switch.py`) has to mark the persona
     the PANELS are showing, and it runs as a `run-shell` child of a tmux server shared
     between every frame on the machine, so reading the rung out of its own environment
     would answer for whichever frame started that server (#411).
