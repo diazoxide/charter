@@ -273,6 +273,41 @@ class Conf(unittest.TestCase):
         self.assertIn("set -g escape-time 0", text)
         self.assertIn("set -g remain-on-exit on", text)
 
+    def test_focus_events_is_turned_on_or_focus_and_blur_never_fire(self):
+        """`focus-events` ships OFF in tmux, and it gates the whole path: with it off tmux
+        writes `\\x1b[?1004l` to the client and never delivers a pane focus transition, so
+        two of the six event kinds `frame/component.py` closes (`focus`, `blur`) do not
+        exist. This line is the only thing that makes them exist.
+
+        The behavioural half — that tmux itself reports the option ON once this text is
+        `source-file`'d, having reported it OFF before — is
+        `tests/test_frame_tmux_integration.py`'s `FocusEventsIntegration`. This one is the
+        text, so a machine with no tmux still fails if the line goes."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session="demo-42")
+        self.assertIn("set -g focus-events on", text)
+
+    def test_focus_events_is_global_because_tmux_has_no_session_form_for_it(self):
+        """`-g`, deliberately, and NOT the `set -t <session>` the Phase 2 plan asked for.
+
+        `focus-events` is a tmux SERVER option — measured on tmux 3.7c and on tmux 3.2
+        (`tmuxctl.FLOOR`, built from the release tarball and run): it appears in
+        `show-options -s`, is absent from `show-options -g`, and `set -t one focus-events
+        on` leaves the SIBLING session `two` reading `focus-events on` as well. Run
+        through the identical probe, `mouse` leaves the sibling reading `''` — that is
+        what a genuinely session-scoped option looks like, and this is not one.
+
+        So `set -t <session>` here would contain nothing while reading, in a list whose
+        first three lines are session-scoped exactly so frame N cannot rewrite frame
+        N-1's, as though it did. Nothing is lost by writing it globally: every frame wants
+        the identical `on`. Asserts the absence of the misleading spelling, not merely the
+        presence of the true one — a change that added `-t` beside `-g` would satisfy the
+        test above on its own."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session="demo-42")
+        self.assertNotIn("set -t demo-42 focus-events", text)
+        self.assertNotIn("set -s focus-events", text)
+
     def test_mouse_is_off_unless_asked_for(self):
         off = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                        session="x")
