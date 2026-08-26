@@ -188,22 +188,40 @@ class Fill:
 SIZES = (Fixed, Content, Fill)
 
 
-def names(name: str, owner: str, value: Any, allowed: tuple[str, ...]) -> tuple[str, ...]:
+def usable_id(value: Any) -> bool:
+    """Whether *value* is an id charter will let travel to tmux — see :data:`_ID_RE`.
+
+    Asked rather than re-spelled, because a second copy of this pattern is a second
+    answer to "what may reach a `bind` line", and the two would drift the way ``match``
+    and ``fullmatch`` already did inside this one module. `frame.action` holds an action
+    id to exactly this alphabet for exactly this reason: it reaches a palette row and a
+    key binding from the same class of place a component id does.
+    """
+    return isinstance(value, str) and _ID_RE.fullmatch(value) is not None
+
+
+def names(name: str, owner: str, value: Any, allowed: tuple[str, ...], *,
+          error: type = ComponentError) -> tuple[str, ...]:
     """*value* as a tuple of names drawn from *allowed*, or a refusal naming both.
 
     A bare string is refused rather than accepted, and that is the point of doing this in
     one helper: ``needs = "gather"`` iterates as six one-character needs, so a permissive
     reading would refuse it six times over for the wrong reason, or — worse, with a
     single-character name in play — accept part of it.
+
+    *error* is which contract is being checked. A component's ``needs`` and an action's
+    ``touches`` are the same question asked of two closed vocabularies, and each contract
+    raises its own one type so that a caller degrading rather than propagating still has
+    one thing to catch.
     """
     if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
-        raise ComponentError(
+        raise error(
             f"{owner}: {name} must be a tuple of names, not "
             f"{contain.one_line(repr(value))}")
     out = tuple(value)
     unknown = [v for v in out if v not in allowed]
     if unknown:
-        raise ComponentError(
+        raise error(
             f"{owner}: unknown {name} "
             f"{', '.join(contain.one_line(repr(u)) for u in unknown)} — "
             f"charter serves {', '.join(allowed)}")
@@ -238,7 +256,7 @@ class Component:
     def __post_init__(self) -> None:
         # The id first, because every message below names the component it is about, and
         # a component whose id could forge a line would forge those messages too.
-        if not isinstance(self.id, str) or not _ID_RE.fullmatch(self.id):
+        if not usable_id(self.id):
             raise ComponentError(
                 f"{contain.one_line(repr(self.id))} is not a usable component id — "
                 f"write {ID_HINT}")
@@ -264,7 +282,7 @@ class Component:
                 f"component {self.id}: children must be a tuple of component ids, not "
                 f"{contain.one_line(repr(self.children))}")
         for child in self.children:
-            if not isinstance(child, str) or not _ID_RE.fullmatch(child):
+            if not usable_id(child):
                 raise ComponentError(
                     f"component {self.id}: {contain.one_line(repr(child))} is not a "
                     f"usable component id — write {ID_HINT}")

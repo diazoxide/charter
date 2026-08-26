@@ -74,6 +74,19 @@ CLONE = "clone"
 #: `glstate.maybe_spawn` starts, not the parent that spawned it.
 REFRESH = "gl-refresh"
 
+#: One action of the command surface, started from the palette and still running
+#: (`frame.actions.ActionRegistry.invoke`). Actions are fire-and-report (§4g): invoke
+#: returns having STARTED the work, so this record is the only thing that knows the work
+#: is still going, and the frame's spinner — the one reader that asks for ``kind=None`` —
+#: is what shows it.
+#:
+#: A kind of its own rather than a reuse of :data:`DISPATCH`, for the reason the module
+#: docstring gives about ``clone``: the same records feed the dispatch-overlap nudge, and
+#: an action recorded as a dispatch would make that nudge say *"`switch-workspace` writes
+#: code and `x` are already running"* — wrong, and wrong in the confident, readable way
+#: that is worse than silence. Every reader that must not see one gets that by NOT asking.
+ACTION = "action"
+
 
 def _dir() -> Path:
     from . import config
@@ -211,6 +224,10 @@ def start(agent: str, *, kind: str = DISPATCH) -> str | None:
 
     *kind* is what a reader filters on — :data:`DISPATCH` unless the caller says
     otherwise, which keeps every pre-#420 call site meaning exactly what it meant.
+
+    **The token names exactly one record**, and a caller that can hold onto it should
+    hand it back to :func:`finish` rather than let the name-and-kind search pick — see
+    that function. ``None`` means nothing was written, so there is nothing to retire.
     """
     agent = (agent or "").strip()
     if not agent:
@@ -232,10 +249,21 @@ def start(agent: str, *, kind: str = DISPATCH) -> str | None:
         return None
 
 
-def finish(agent: str, *, kind: str = DISPATCH) -> None:
+def finish(agent: str, *, kind: str = DISPATCH, token: str | None = None) -> None:
     """Clear one in-flight record for *agent* of *kind* — the oldest **still-running**
     one, since a repeat dispatch of the same persona should retire the run that started
     first.
+
+    **A caller holding its own token retires that record and nothing else.** The search
+    below picks a record by name, kind and age, and picking is a race the moment two
+    workers of one agent run in the SAME process: both glob, both filter, both select the
+    identical file, one unlink wins and the loser's record survives — drawn by the frame
+    as ``⏳ 1 running`` for :data:`PRESUMED_DEAD_SECONDS` and then ``⋯ 1 stalled`` until
+    :data:`PRUNE_SECONDS`, a full day after the work ended. Across processes the old
+    dispatch and clone callers cannot do this — a process finishes what it started — but
+    `frame.actions.ActionRegistry.invoke` starts a thread per invocation, so one process
+    now holds several, and the palette makes two of them two keypresses away. *token* is
+    what :func:`start` answered; it names one file, so there is nothing to pick.
 
     "Still running" is the qualification records surviving past the presumed-dead
     threshold made necessary. Oldest-first alone would hand a finishing dispatch the
@@ -252,6 +280,17 @@ def finish(agent: str, *, kind: str = DISPATCH) -> None:
     directions, so a record written by an older charter is still findable and one written
     by this charter is still findable by an older one.
     """
+    if token is not None:
+        # A name and nothing else: a token carrying a separator, ``.`` or ``..`` is not
+        # something this ever wrote, and unlinking what it points at would be a delete
+        # outside the tracker's own directory decided by a caller's string.
+        if not token or Path(token).name != token:
+            return
+        try:
+            (_dir() / f"{token}.json").unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
     agent = (agent or "").strip()
     if not agent:
         return

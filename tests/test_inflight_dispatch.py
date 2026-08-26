@@ -115,6 +115,70 @@ class InflightStore(unittest.TestCase):
         self.assertEqual(inflight.live(), ["coder"])
 
 
+class ATokenNamesOneRecord(unittest.TestCase):
+    """`finish` can PICK a record or be TOLD one, and picking is a race.
+
+    Name, kind and age is all a caller in another process can offer, and it is enough
+    there: a process finishes what it started, so its own record is the only candidate it
+    can have created. Two workers of one agent inside ONE process is a different shape —
+    both glob, both filter, both select the identical file, one unlink wins, and the
+    loser's record outlives its work by :data:`inflight.PRUNE_SECONDS`, drawn as running
+    for the first half hour of it. `frame.actions.ActionRegistry.invoke` is the first
+    caller of that shape, and `start` has always answered a token naming exactly one file.
+    """
+
+    def setUp(self) -> None:
+        self._td = TemporaryDirectory()
+        self._orig = config.STATE_DIR
+        config.STATE_DIR = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+        self.addCleanup(lambda: setattr(config, "STATE_DIR", self._orig))
+
+    def _stems(self) -> list[str]:
+        return sorted(p.stem
+                      for p in (config.STATE_DIR / "dispatch-inflight").glob("*.json"))
+
+    def test_a_token_retires_the_record_it_names_and_not_the_pick(self):
+        """The whole difference, stated without a thread: the search would take the
+        OLDEST still-running record, and the second invocation's token is not it."""
+        first = inflight.start("coder", kind=inflight.ACTION)
+        second = inflight.start("coder", kind=inflight.ACTION)
+        inflight.finish("coder", kind=inflight.ACTION, token=second)
+        self.assertEqual(self._stems(), [first])
+
+    def test_each_token_retires_its_own_and_two_leave_nothing(self):
+        first = inflight.start("coder", kind=inflight.ACTION)
+        second = inflight.start("coder", kind=inflight.ACTION)
+        inflight.finish("coder", kind=inflight.ACTION, token=second)
+        inflight.finish("coder", kind=inflight.ACTION, token=first)
+        self.assertEqual(self._stems(), [])
+
+    def test_a_token_whose_record_is_already_gone_is_harmless(self):
+        token = inflight.start("coder", kind=inflight.ACTION)
+        inflight.finish("coder", kind=inflight.ACTION, token=token)
+        inflight.finish("coder", kind=inflight.ACTION, token=token)   # must not raise
+        self.assertEqual(self._stems(), [])
+
+    def test_a_token_that_is_not_a_bare_name_deletes_nothing(self):
+        """A token is a file name the tracker wrote. One carrying a separator would make
+        an unlink OUTSIDE the tracker's own directory a caller's string decides — the
+        same reasoning `_safe_name` applies to an agent name, on the other half of the
+        path."""
+        outside = config.STATE_DIR / "evil.json"
+        outside.write_text("{}")
+        kept = inflight.start("coder", kind=inflight.ACTION)
+        inflight.finish("coder", kind=inflight.ACTION, token="../evil")
+        self.assertTrue(outside.exists(), "finish deleted outside its own directory")
+        self.assertEqual(self._stems(), [kept])
+
+    def test_no_token_still_picks_the_way_every_older_caller_expects(self):
+        """The control: dispatch, clone and `gl-refresh` pass no token and must keep the
+        behaviour they have — otherwise this is a change of `finish`, not an addition."""
+        inflight.start("coder")
+        inflight.finish("coder")
+        self.assertEqual(self._stems(), [])
+
+
 class PresumedDead(unittest.TestCase):
     """The record outliving every reasonable expectation is the *most* interesting thing
     this tracker can hold, and deleting it rendered it as nothing at all — "presumed dead"
