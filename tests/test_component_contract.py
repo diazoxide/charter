@@ -114,6 +114,18 @@ class IdIsAContainmentBoundary(unittest.TestCase):
         self.assertNotIn("\n", str(e.exception))
         self.assertIn("PWNED", str(e.exception))       # named, not swallowed
 
+    def test_an_id_ending_in_a_newline_is_refused(self):
+        """Its own case, because it is the one a correct-looking pattern still admits.
+
+        Python's `$` matches at the end of the string OR just before a trailing newline,
+        so `_ID_RE.match("personas\\n")` succeeds against a pattern written to exclude
+        newlines outright. `frame_of` reaches for `fullmatch` on `instance._HOTKEY_RE`
+        for exactly this reason; the id in the middle of a line above is refused by a
+        pattern with the hole still in it, and only this case fails when it is there.
+        """
+        with self.assertRaises(component.ComponentError):
+            _c(id="personas\n")
+
     def test_a_namespaced_provider_id_is_accepted(self):
         self.assertEqual(_c(id="acme.metrics").id, "acme.metrics")
 
@@ -220,6 +232,27 @@ class EventsAreTheClosedFive(unittest.TestCase):
     def test_a_bare_string_is_not_a_tuple_of_events(self):
         with self.assertRaises(component.ComponentError):
             _c(events="key")
+
+
+class ChildrenAreIdsOfTheSameShape(unittest.TestCase):
+    """What a composite's parts LOOK like is this module's rule; what they refer to is
+    the registry's, because only the registry sees every component at once."""
+
+    def test_a_leaf_declares_no_children(self):
+        self.assertEqual(_c().children, ())
+
+    def test_children_are_kept_in_declared_order(self):
+        self.assertEqual(_c(children=["personas", "todos"]).children,
+                         ("personas", "todos"))
+
+    def test_a_child_id_is_held_to_the_same_alphabet_as_an_id(self):
+        for child in ("Personas", "personas\n", "../personas", ""):
+            with self.subTest(child=child), self.assertRaises(component.ComponentError):
+                _c(children=(child,))
+
+    def test_a_bare_string_is_not_a_tuple_of_children(self):
+        with self.assertRaises(component.ComponentError):
+            _c(children="personas")
 
 
 class RenderIsCallable(unittest.TestCase):

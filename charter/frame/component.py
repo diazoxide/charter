@@ -93,6 +93,15 @@ ID_HINT = ("lower-case letters, digits and underscores, starting with a letter, 
 #:
 #: The length bound is per segment and is not decoration: an id is repeated into a pane
 #: title and a menu row, both of which are width-budgeted surfaces.
+#:
+#: **Matched with ``fullmatch``, and the first version of this module used ``match`` and
+#: was wrong.** Python's ``$`` matches at the end of the string *or just before a
+#: trailing newline*, so ``_ID_RE.match("personas\\n")`` succeeds against a pattern that
+#: was written to exclude newlines entirely — an id ending in exactly the character this
+#: whole constant exists to keep away from tmux config text. `frame_of` already reaches
+#: for `fullmatch` on `instance._HOTKEY_RE`, whose pattern carries the same ``^…$``, and
+#: that is why the hotkey guard does not have this hole; it is spelled the same way here
+#: rather than fixed a second way, so the two guards keep one answer between them.
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}(?:\.[a-z][a-z0-9_]{0,31})?$")
 
 
@@ -204,11 +213,18 @@ class Component:
     render: Callable[[Any], list[str]]
     needs: tuple[str, ...] = ()
     events: tuple[str, ...] = ()
+    #: The leaf ids this component draws inside its own pane, in the order it draws
+    #: them, or ``()`` for a leaf. Charter never splits a pane (§4d), so this is how N
+    #: things share one — and it is ids rather than components because the rules that
+    #: govern it (one level, exactly one `Fill()`, no child claimed twice) need to see
+    #: every component together, which only the registry does. Their SHAPE is checked
+    #: here; what they refer to is checked at registration.
+    children: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # The id first, because every message below names the component it is about, and
         # a component whose id could forge a line would forge those messages too.
-        if not isinstance(self.id, str) or not _ID_RE.match(self.id):
+        if not isinstance(self.id, str) or not _ID_RE.fullmatch(self.id):
             raise ComponentError(
                 f"{contain.one_line(repr(self.id))} is not a usable component id — "
                 f"write {ID_HINT}")
@@ -228,7 +244,18 @@ class Component:
             raise ComponentError(
                 f"component {self.id}: render must be callable, not "
                 f"{contain.one_line(repr(self.render))}")
+        if isinstance(self.children, (str, bytes)) or \
+                not isinstance(self.children, (list, tuple)):
+            raise ComponentError(
+                f"component {self.id}: children must be a tuple of component ids, not "
+                f"{contain.one_line(repr(self.children))}")
+        for child in self.children:
+            if not isinstance(child, str) or not _ID_RE.fullmatch(child):
+                raise ComponentError(
+                    f"component {self.id}: {contain.one_line(repr(child))} is not a "
+                    f"usable component id — write {ID_HINT}")
         object.__setattr__(self, "title", contain.one_line(self.title))
         object.__setattr__(self, "needs", _tuple("needs", self.id, self.needs, NEEDS))
         object.__setattr__(
             self, "events", _tuple("events", self.id, self.events, EVENT_KINDS))
+        object.__setattr__(self, "children", tuple(self.children))
