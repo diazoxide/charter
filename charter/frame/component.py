@@ -75,7 +75,15 @@ EVENT_KINDS = ("key", "click", "scroll", "focus", "blur", "resize")
 #: a pane rather than a fixable line. Checked here instead, against the one list `ctx`
 #: serves from, for the reason `contain.py`'s docstring gives for one implementation over
 #: four near-misses: two lists for one concept drift, and the drift is the defect.
-NEEDS = ("gather", "repos", "todos", "personas", "changes")
+#:
+#: **These are the slices `gather.scan` actually carries, and no others.** §4f's extended
+#: gather adds personas and changes to the same one snapshot, and each joins this tuple
+#: *when it can be served* — not before. A name accepted here that `ctx` answered with an
+#: empty tuple would be worse than a refusal: a component would declare it, draw nothing,
+#: pass its own tests against an empty fixture, and be indistinguishable from a plane
+#: that genuinely has no personas. `ctx.SERVES` is asked against this tuple by a test, so
+#: the two cannot drift apart in either direction.
+NEEDS = ("gather", "repos", "todos")
 
 #: What a refusal tells a provider author to write instead. One sentence, held in one
 #: place, because it is repeated into every id refusal and a second spelling of it would
@@ -116,19 +124,25 @@ class ComponentError(ValueError):
     """
 
 
-def _positive(name: str, value: Any, *, allow_none: bool = False) -> None:
-    """Refuse *value* unless it is a positive whole number of terminal cells.
+def cells(name: str, value: Any, *, allow_none: bool = False, floor: int = 1) -> None:
+    """Refuse *value* unless it is a whole number of terminal cells, at least *floor*.
 
     ``bool`` is excluded explicitly. ``isinstance(True, int)`` is ``True`` in Python, so
     ``Fixed(True)`` would sail through a plain int check and mean ``Fixed(1)`` — a
     fixture VALUE carrying a meaning nobody wrote, which is a defect this suite has now
     caught in four separate shapes.
+
+    *floor* is 1 for a size policy, because a panel nobody can see is a panel nobody
+    asked for, and 0 for a measured pane in `ctx`, because tmux can genuinely leave a
+    pane with no room at all and a frame draws nothing there rather than refusing. One
+    function with a floor rather than two nearly-identical checks: the ``bool`` trap
+    above is exactly the kind of thing a second copy is written without.
     """
     if allow_none and value is None:
         return
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+    if isinstance(value, bool) or not isinstance(value, int) or value < floor:
         raise ComponentError(
-            f"{name} must be a positive whole number of cells, not "
+            f"{name} must be a whole number of cells, at least {floor}, not "
             f"{contain.one_line(repr(value))}")
 
 
@@ -139,7 +153,7 @@ class Fixed:
     n: int
 
     def __post_init__(self) -> None:
-        _positive("a fixed size", self.n)
+        cells("a fixed size", self.n)
 
 
 @dataclass(frozen=True)
@@ -154,7 +168,7 @@ class Content:
     cap: int | None = None
 
     def __post_init__(self) -> None:
-        _positive("a content cap", self.cap, allow_none=True)
+        cells("a content cap", self.cap, allow_none=True)
 
 
 @dataclass(frozen=True)
@@ -174,7 +188,7 @@ class Fill:
 SIZES = (Fixed, Content, Fill)
 
 
-def _tuple(name: str, cid: str, value: Any, allowed: tuple[str, ...]) -> tuple[str, ...]:
+def names(name: str, owner: str, value: Any, allowed: tuple[str, ...]) -> tuple[str, ...]:
     """*value* as a tuple of names drawn from *allowed*, or a refusal naming both.
 
     A bare string is refused rather than accepted, and that is the point of doing this in
@@ -184,13 +198,13 @@ def _tuple(name: str, cid: str, value: Any, allowed: tuple[str, ...]) -> tuple[s
     """
     if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
         raise ComponentError(
-            f"component {cid}: {name} must be a tuple of names, not "
+            f"{owner}: {name} must be a tuple of names, not "
             f"{contain.one_line(repr(value))}")
     out = tuple(value)
     unknown = [v for v in out if v not in allowed]
     if unknown:
         raise ComponentError(
-            f"component {cid}: unknown {name} "
+            f"{owner}: unknown {name} "
             f"{', '.join(contain.one_line(repr(u)) for u in unknown)} — "
             f"charter serves {', '.join(allowed)}")
     return out
@@ -255,7 +269,9 @@ class Component:
                     f"component {self.id}: {contain.one_line(repr(child))} is not a "
                     f"usable component id — write {ID_HINT}")
         object.__setattr__(self, "title", contain.one_line(self.title))
-        object.__setattr__(self, "needs", _tuple("needs", self.id, self.needs, NEEDS))
         object.__setattr__(
-            self, "events", _tuple("events", self.id, self.events, EVENT_KINDS))
+            self, "needs", names("needs", f"component {self.id}", self.needs, NEEDS))
+        object.__setattr__(
+            self, "events",
+            names("events", f"component {self.id}", self.events, EVENT_KINDS))
         object.__setattr__(self, "children", tuple(self.children))
