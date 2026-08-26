@@ -926,6 +926,16 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
     else:
         subset = Outcome(True, 0, "no covering module measured")
     full = box.full()
+    if not full.green:
+        # And the same for the run that has the last word. This is where the asymmetry
+        # bites hardest: a flaky full suite reads as "pinned", and "pinned" is the verdict
+        # that certifies a guard as tested and is never revisited. Six thousand tests, real
+        # tmux servers, and a machine that may be running other sweeps — one confirming run
+        # is expensive and still cheaper than one guard wrongly declared safe.
+        confirm = box.full()
+        if confirm.green:
+            return "survived", subset, Outcome(
+                True, confirm.ran, f"red once ({full.detail[:80]}), green on confirmation")
     return ("survived" if full.green else "pinned"), subset, full
 
 
@@ -1168,8 +1178,12 @@ def as_json(results: list[Result]) -> str:
         "question": r.mutation.question,
         "before": r.mutation.before, "after": r.mutation.after,
         "verdict": r.verdict,
-        "subset": None if not r.subset else {"green": r.subset.green, "ran": r.subset.ran},
-        "full": None if not r.full else {"green": r.full.green, "ran": r.full.ran},
+        # `detail` and not only the verdict: a run that went red says WHICH test went red,
+        # and that is the first thing anyone asks of a mutation reported as pinned.
+        "subset": None if not r.subset else {
+            "green": r.subset.green, "ran": r.subset.ran, "detail": r.subset.detail},
+        "full": None if not r.full else {
+            "green": r.full.green, "ran": r.full.ran, "detail": r.full.detail},
         "modules": r.modules,
         "naming": [] if not r.evidence else [
             {"module": m, "test": t, "asserts": a} for m, t, a in r.evidence.naming],

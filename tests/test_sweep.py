@@ -585,6 +585,18 @@ class _FakeBox:
         return self._full
 
 
+class _FullFlake(_FakeBox):
+    """Green subset, then a full suite that answers differently each time it is asked."""
+
+    def __init__(self, first, second):
+        super().__init__(subset=sweep.Outcome(True, 40, "OK"))
+        self._answers = [first, second]
+
+    def full(self):
+        self.full_calls += 1
+        return self._answers[min(self.full_calls - 1, len(self._answers) - 1)]
+
+
 _M = sweep.Mutation(path="charter/x.py", line=1, end_line=1, operator="drop-if",
                     question="?", before="if a: return", after="", symbol="f")
 
@@ -597,7 +609,7 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
                        full=sweep.Outcome(False, 6000, "FAILED (failures=1)"))
         verdict, _, full = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "pinned")
-        self.assertEqual(box.full_calls, 1)
+        self.assertGreaterEqual(box.full_calls, 1)
         self.assertEqual(full.ran, 6000)
 
     def test_a_survivor_of_everything_is_reported(self):
@@ -605,6 +617,26 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
                        full=sweep.Outcome(True, 6000, "OK"))
         verdict, _, _ = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "survived")
+
+    def test_a_red_full_suite_is_confirmed_before_it_pins_anything(self):
+        """This is where the asymmetry bites hardest. A red FULL suite is the verdict that
+        says 'tested', and it is never revisited — so a flake here does not mislabel a
+        mutation, it certifies a guard. Six thousand tests, real tmux servers, and a
+        machine that may be running other sweeps: one confirming run is expensive and
+        still cheaper than one guard wrongly declared safe."""
+        box = _FullFlake(sweep.Outcome(False, 6000, "FAILED (errors=1)"),
+                         sweep.Outcome(True, 6000, "OK"))
+        verdict, _, full = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "survived")
+        self.assertEqual(box.full_calls, 2)
+        self.assertIn("green on confirmation", full.detail)
+
+    def test_a_full_suite_red_twice_pins_the_guard(self):
+        box = _FullFlake(sweep.Outcome(False, 6000, "FAILED (failures=1)"),
+                         sweep.Outcome(False, 6000, "FAILED (failures=1)"))
+        verdict, _, _ = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "pinned")
+        self.assertEqual(box.full_calls, 2)
 
     def test_a_red_subset_is_confirmed_once_and_then_believed(self):
         """A red twice IS a red, and re-running the whole suite for it would spend four
