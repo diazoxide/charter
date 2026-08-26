@@ -26,17 +26,32 @@ name: release
 # The tag must match the version in pyproject.toml — the `guard` job below
 # fails the release if they disagree, because PyPI will not let you re-upload
 # a version after a mistake.
+#
+# Retry: run this workflow by hand and name the version you are retrying.
+#   gh workflow run release.yml --ref main -f version=0.1.0
+#
+# That input is not paperwork (#558). The version check used to be gated on
+# `startsWith(github.ref, 'refs/tags/v')`, so a `workflow_dispatch` run — which has a
+# branch in `github.ref`, not a tag — SKIPPED it, and a skipped step is a green step.
+# The retry path therefore carried strictly weaker checks than the path it retries, and
+# the check it dropped was the one guarding the irreversible act. Both paths now state
+# the version independently of the file being published and are refused when the two
+# disagree: the tag on one, this input on the other. Neither is skippable.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:      # lets a failed release be retried without a new tag
+    inputs:
+      version:
+        description: "The version this run publishes — must equal pyproject.toml, e.g. 0.53.0"
+        required: true
 
 permissions:
   contents: read
 
 jobs:
   guard:
-    name: Verify the tag matches the packaged version, and that it has notes
+    name: Verify the run names the packaged version, and that it has notes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -45,21 +60,62 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - name: Compare the git tag to pyproject.toml
-        if: startsWith(github.ref, 'refs/tags/v')
+      # NO `if:` ON THIS STEP, OR ON ANY STEP IN THIS JOB. A skipped step is a green step
+      # in GitHub Actions, so a condition here is a way for the one check standing between
+      # a run and an irreversible upload to report success without ever having run. That
+      # is #558 exactly, and `tests/test_workflows.py` fails if an `if:` reappears in this
+      # job. Whatever a new trigger needs, it is not a condition on the refusal.
+      - name: Compare the version this run names against pyproject.toml
+        id: version-check
+        env:
+          # Empty on the tag path, set on the dispatch path. Which one is authoritative is
+          # decided below from the event name, not from which one happens to be non-empty,
+          # so an input cannot displace the tag on a tag run.
+          #
+          # `github.event.inputs.version` rather than `inputs.version`: the `inputs`
+          # context is documented as available in a workflow triggered by
+          # `workflow_dispatch`, and this step also runs on a tag push. `github.event` is
+          # defined on every trigger and its missing members render empty, so the tag path
+          # cannot fail here on a context that is not there — which would be this workflow
+          # breaking at tag push, the failure mode #558 is about, introduced by the fix.
+          CLAIMED_VERSION: ${{ github.event.inputs.version }}
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          set -eu
           pkg=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
-          echo "tag=$tag  pyproject=$pkg"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag v$tag does not match pyproject.toml version $pkg — refusing to publish"
+          event="${GITHUB_EVENT_NAME:-}"
+          case "$event" in
+            push)
+              ref="${GITHUB_REF_NAME:-}"
+              claimed="${ref#v}"
+              said="the tag ${ref:-<none>}"
+              ;;
+            workflow_dispatch)
+              input="${CLAIMED_VERSION:-}"
+              claimed="${input#v}"
+              said="the version input ${input:-<none>}"
+              ;;
+            *)
+              # Fail closed on a trigger nobody taught this check. A third entry under
+              # `on:` must arrive here with a way to state its version, not walk past.
+              echo "::error::release.yml was triggered by '$event', and this check does not know what that run claims to publish — refusing to publish"
+              exit 1
+              ;;
+          esac
+          echo "claimed=$claimed  pyproject=$pkg  (from $said)"
+          if [ -z "$claimed" ]; then
+            echo "::error::this run did not say which version it publishes ($said) — a workflow_dispatch retry must pass -f version=$pkg — refusing to publish"
+            exit 1
+          fi
+          if [ "$claimed" != "$pkg" ]; then
+            echo "::error::this run names $claimed ($said) but pyproject.toml says $pkg — refusing to publish"
             exit 1
           fi
       - name: Refuse to publish a version whose news entries cannot be rendered
         run: |
           # The version comes from pyproject, not the tag: it is defined on BOTH trigger
           # paths (a workflow_dispatch retry has no tag to read), and the step above has
-          # already refused a tag that disagrees with it.
+          # already refused a run whose stated version disagrees with it — the tag on one
+          # path, the `version` input on the other, and on every path it actually ran.
           #
           # And charter is asked rather than the directory globbed, because this is the
           # same call that renders the Release body below. Globbing would be a second
