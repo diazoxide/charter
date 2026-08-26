@@ -18,21 +18,24 @@ leaves no trace in the diff, and nothing in the repository could tell a sweep th
 
 **`tools/sweep.py` runs it.**
 
+Run against the head of #553's third review round, it says this without being told
+anything:
+
 ```
-$ python3 tools/sweep.py
+$ python3 tools/sweep.py --ref 5b02b3f
 sweeping 5b02b3f6dd42 (paths: charter)
   diff against 97163fb4c5c7: 8 file(s), 524 added line(s)
-  selection map: cached
+  selection map: 9828 keys in 92s
+  baseline: full suite, unmutated…
+    Ran 6002 tests — OK
   57 mutations across 8 file(s)
-
-charter/frame/layout.py:291  in `_placed_here`   [drop-conjunct] — is the half pinned?
-    shipped : isinstance(name, str) and name not in SLOT_SIZE
-    mutant  : isinstance(name, str)
-    full    : Ran 6002 tests — OK, with the line gone
-    NOTE    : 4 survivors sit in `_placed_here`. Two guards in sequence
-              mask each other, so none of them is safe to call equivalent on its own.
-    covered : 31 module(s) execute this file and NOT ONE names `_placed_here`
+    [12/57] SURVIVED  charter/frame/layout.py:289 [no-fallback] config.FRAME.get("components") or ()
+    [13/57] SURVIVED  charter/frame/layout.py:291 [drop-conjunct] isinstance(name, str) and name not in SLOT_SIZE
 ```
+
+and then prints, for each survivor, the line, both spellings of the mutation, the full
+suite that stayed green without it, and what the covering tests assert about the symbol it
+lives in.
 
 It reads the diff against the merge-base, so a branch answers for the guards **it** adds.
 It mutates by statement shape rather than by line — deleting arbitrary lines mostly
