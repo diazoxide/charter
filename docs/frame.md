@@ -14,11 +14,12 @@ for a command charter has no launcher for at all. That is not just naming: once 
 frame` is on the command line, everything after it is grafted onto the harness's own argv
 verbatim, before charter's own argument parser ever sees it, so `frame claude -p hi` would
 hand `claude -p hi` to the `frame --` mechanism rather than route anywhere. The same reason
-keeps `frame-palette`, `frame-density`, `frame-switch`, `frame-resize` and
-`frame-probe` — the command tmux's hotkey calls back into (and the program the palette's
-own pane runs), the one the density rows start, the one the workspace and persona rows
-start, the one the `window-resized` hook calls back into, and the read-only probe — as
-top-level names rather than nested under `frame` too.
+keeps `frame-palette`, `frame-density`, `frame-toggle`, `frame-switch`, `frame-resize`
+and `frame-probe` — the command tmux's hotkey calls back into (and the program the
+palette's own pane runs), the one the density rows start, the one a component's own key
+runs, the one the workspace and persona rows start, the one the `window-resized` hook
+calls back into, and the read-only probe — as top-level names rather than nested under
+`frame` too.
 
 ## What it needs
 
@@ -492,9 +493,17 @@ directory and goes with the frame; relaunch and you are back to what the file sa
 same applies to `charter frame-density <level>` typed by hand from inside a frame, which
 is what the palette row starts.
 
+A level is a *name for one arrangement*, applied by hiding and showing the same components
+a component's own key does — see "A key that shows and hides one panel" below. The two
+compose, and re-picking a level always puts the arrangement back to exactly what that level
+names.
+
 Inside a tmux you already have, charter binds no key at all (see above), so there is no
 palette and no keypress route to density there — `[frame] density` is what sets it, and the
-command still works if you run it inside the frame's own window.
+command still works if you run it inside the frame's own window. The same is true of a
+component's `key`: the binds live in the config charter sources onto its own server, which
+it never does inside your tmux, so `charter frame-toggle <name>` typed in the frame's own
+window is the route there.
 
 `hotkey` is checked against the shape of a tmux key name — optional `C-`/`M-`/`S-`
 modifiers and then a key (`F2`, `Up`, `PPage`, `a`, `/`). Anything else falls back to
