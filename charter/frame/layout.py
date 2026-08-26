@@ -38,7 +38,10 @@ creation time (`-P -F '#{pane_id}'`); the caller reads it off stdout and hands i
 
 from __future__ import annotations
 
-from . import tmuxctl
+from typing import NamedTuple
+
+from . import builtins as _builtins, tmuxctl
+from .component import Fixed
 from .. import util
 
 #: The order slots are dropped in as the terminal shrinks. The side first — a side panel
@@ -58,6 +61,93 @@ from .. import util
 #: Retiring it hands those 22 columns back to the harness at every density.
 _DROP_ORDER = ("right", "repos", "top")
 
+#: The frame charter itself draws, as components — `frame/builtins.py`, asked ONCE at
+#: import for the edges and sizes every constant below is derived from.
+#:
+#: **This module used to carry four hand-written tables of per-slot facts** — which slots
+#: cost columns, which are a fixed height, which one is variable, how big each is — and a
+#: fifth spelled inline as ``slot == "top"``. Each was correct and each was a separate
+#: thing to remember, which is what a component's own declaration replaces: the registry
+#: is asked, and nothing here derives a slot's geometry from its position in a list.
+#:
+#: A module-level build is safe because `builtins.build` reads nothing and starts nothing
+#: — six frozen dataclasses whose renderers are reached lazily — and because charter's
+#: own six are fixed. A config boundary placing a plane's `[[frame.component]]` tables
+#: builds its OWN registry (see `instance.frame_components`); it does not edit this one.
+_BUILTIN = _builtins.build()
+
+#: Edges whose split takes COLUMNS off the pane it is carved from, and edges whose split
+#: takes ROWS. The `-h`/`-v` half of :func:`panel_argvs`, said once.
+_COLUMN_EDGES = ("left", "right")
+_ROW_EDGES = ("top", "bottom")
+
+#: The edges tmux has to be told to place BEFORE the harness (`split-window -b`) rather
+#: than after it. Also derived rather than spelled ``slot == "top"``: `left` is retired
+#: (#488) and would belong here the day it came back, and a second answer to "which side
+#: is this on" is what :data:`_COLUMN_EDGES` above already refuses to be.
+_BEFORE_EDGES = ("top", "left")
+
+#: The placed built-ins, in split order — the registry's own order, not this module's
+#: reading of one. `personas` and `todos` are absent: the `sidebar` composite draws them
+#: inside its own pane, so they are registered and never split for, which
+#: `registry.Registry.on_edge` is what enforces.
+_PLACED = tuple(c for c in _BUILTIN.all() if c.id in _builtins.SLOT_OF)
+
+
+def _cells(c) -> int:
+    """How many cells *c* is given when nothing has measured its content yet.
+
+    ``Fixed(n)`` is *n*, and that is the whole of `top`, `bottom` and `right`. A
+    ``Content`` or ``Fill`` slot has no answer to give here — its height is a function of
+    what is in it and of what the window can spare — so it gets the floor every size
+    policy already has (`component.cells` refuses a size below 1 cell: a panel nobody can
+    see is a panel nobody asked for). That floor is not a stand-in for the real number:
+    :func:`repos_rows` is, and :func:`slot_sizes` is what routes a caller to it.
+    """
+    return c.size.n if isinstance(c.size, Fixed) else 1
+
+
+class _Derived(NamedTuple):
+    """The five per-slot facts this module used to keep as five hand-written tables."""
+
+    size: dict[str, int]
+    edge: dict[str, str]
+    column: tuple[str, ...]
+    fixed_rows: tuple[str, ...]
+    variable_rows: frozenset[str]
+
+
+def _derive(placed) -> _Derived:
+    """Read all five off *placed* — the components, in split order, that own a pane.
+
+    One function rather than five comprehensions at module scope, and the reason is that
+    a comprehension at module scope cannot be asked a second question. This can: a test
+    hands it an arrangement whose sidebar is `Content()` or whose table sits on `top` and
+    checks that every one of the five moves together, which is the property the five
+    separate tuples never had — they agreed by having been edited in the same commit.
+
+    Keyed by the committed slot name (`builtins.SLOT_OF`) rather than the component id,
+    because that is the vocabulary `[frame] slots`, `charter panel <slot>` and every
+    caller in `commands_frame` already speak. A component with no slot name is a
+    ``KeyError`` here rather than a silently skipped pane: the caller has handed over
+    something that cannot be placed, and answering with a frame missing one panel is the
+    convincing-empty this module refuses everywhere else.
+    """
+    name = _builtins.SLOT_OF
+    return _Derived(
+        size={name[c.id]: _cells(c) for c in placed},
+        edge={name[c.id]: c.edge for c in placed},
+        column=tuple(name[c.id] for c in placed if c.edge in _COLUMN_EDGES),
+        fixed_rows=tuple(name[c.id] for c in placed
+                         if c.edge in _ROW_EDGES and isinstance(c.size, Fixed)),
+        variable_rows=frozenset(name[c.id] for c in placed
+                                if c.edge in _ROW_EDGES
+                                and not isinstance(c.size, Fixed)),
+    )
+
+
+_SHIPPED = _derive(_PLACED)
+
 #: Rows a horizontal panel occupies, and columns a vertical one does.
 #:
 #: **`repos`' entry is a FLOOR, not its size** (#488, moved off `bottom` by #515). Every
@@ -68,7 +158,15 @@ _DROP_ORDER = ("right", "repos", "top")
 #: all, where the pane says so in one line). Callers ask :func:`slot_sizes` rather than
 #: indexing this directly, so nothing has to remember which of the two questions it is
 #: asking.
-SLOT_SIZE = {"top": 1, "bottom": 1, "repos": 1, "right": 22}
+#:
+#: Derived from each component's declared size (:func:`_cells`) rather than written out,
+#: so `right`'s 22 columns and the floor under the table are stated in one place — the
+#: component — and read here.
+SLOT_SIZE = _SHIPPED.size
+
+#: Which side of the harness each slot is split off, read straight from the component
+#: that draws it. The one fact :func:`panel_argvs` needs that is not a size.
+SLOT_EDGE = _SHIPPED.edge
 
 #: Rows the harness keeps whatever the repo table would like. The frame exists to show
 #: the plane's state around an agent session, and a session squeezed into three rows is
@@ -98,7 +196,10 @@ _BORDER_COLS = 1
 #: ``== "right"`` because :func:`repos_cols` and `panel_argvs` are two places that have
 #: to agree about which splits cost columns, and the next side slot must not have to be
 #: remembered in both.
-_COLUMN_SLOTS = ("right",)
+#:
+#: Now the component's own `edge` answers it, so the next side slot is not remembered
+#: anywhere: it declares an edge and lands here.
+_COLUMN_SLOTS = _SHIPPED.column
 
 #: The horizontal strips whose height is a CONSTANT, and therefore the rows
 #: :func:`repos_rows` has to subtract before it may spend what is left. `right` is not
@@ -111,7 +212,11 @@ _COLUMN_SLOTS = ("right",)
 #: carry is `repos`. A `repos_rows` still subtracting `top` alone would hand the table
 #: two rows the status strip and its own border are already using, and tmux grants an
 #: over-large height out of the neighbour rather than refusing it — the harness.
-_FIXED_ROW_SLOTS = ("top", "bottom")
+#:
+#: Both exclusions this comment states are now the components' own declarations: `right`
+#: is out because its edge costs columns, `repos` because its size is `Content()` rather
+#: than `Fixed`. Neither was enforced by anything while this was a written-out tuple.
+_FIXED_ROW_SLOTS = _SHIPPED.fixed_rows
 
 #: The slots whose height is a function of their content rather than a constant — the
 #: ones :func:`slot_sizes` answers with :func:`repos_rows` instead of :data:`SLOT_SIZE`.
@@ -124,7 +229,13 @@ _FIXED_ROW_SLOTS = ("top", "bottom")
 #: `top,bottom,repos` left `%3 h=1` and `%2 h=6` — the two sizes swapped panes). The pane
 #: that must be left to take the remainder is the one whose size is already a function of
 #: everything else, which is this one. See `commands_frame._reassert_sizes`.
-VARIABLE_ROW_SLOTS = frozenset({"repos"})
+#:
+#: The complement of :data:`_FIXED_ROW_SLOTS` over the horizontal edges, and written as
+#: that rather than as a second list: a slot cannot be in both, or in neither, because
+#: one predicate decides it. `Content` and `Fill` both land here — a slot whose height is
+#: its content's and a slot whose height is what is left are the same kind of dependent
+#: pane as far as `resize-pane` is concerned.
+VARIABLE_ROW_SLOTS = _SHIPPED.variable_rows
 
 
 def _table_min_cols() -> int:
@@ -647,7 +758,11 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
         # COLUMNS is exactly what :func:`repos_cols` has to know to answer how wide
         # `repos` ends up, and two copies of that fact are two things to keep in step.
         direction = "-h" if slot in _COLUMN_SLOTS else "-v"
-        before = ["-b"] if slot == "top" else []
+        # `-b` is the component's EDGE, not the name `top` — see :data:`_BEFORE_EDGES`.
+        # A slot charter has no component for keeps the plain `-v`/after placement it had
+        # while this was spelled `slot == "top"`, which is the same filter-don't-refuse
+        # degrade `slot_sizes` makes one line above.
+        before = ["-b"] if SLOT_EDGE.get(slot) in _BEFORE_EDGES else []
         cmds.append(_tmux(socket, "split-window", "-t", harness_pane,
                           direction, *before, "-l", str(size),
                           *_env_argv(env),
