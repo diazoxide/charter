@@ -190,24 +190,58 @@ def test_a_component_gets_only_what_it_declared(self):
 
 **Files:** Modify `charter/frame/registry.py`; create `tests/test_component_providers.py`
 
-- [ ] **Step 1: write the failing tests** — a provider declaring `API_VERSION` loads; one
+- [x] **Step 1: write the failing tests** — a provider declaring `API_VERSION` loads; one
       declaring a different integer does NOT, and the message names the provider, its version
       and charter's; two providers claiming one id refuse BOTH and name both; a component
       named in config with no provider installed produces a message and the rest of the frame.
-- [ ] **Step 2: run them, confirm they fail.**
-- [ ] **Step 3: implement discovery** via
+      **Narrowed 2026-08-26 — see "Where the message lives" below.** The standin is built; it
+      is not placed *from config*, because there is nowhere yet for it to appear.
+- [x] **Step 2: run them, confirm they fail.**
+- [x] **Step 3: implement discovery** via
       `importlib.metadata.entry_points(group="charter.components")`. **Import lazily** — an
       installed-but-unplaced provider costs nothing.
-- [ ] **Step 4: failure isolation.** A provider that raises on import, or whose `render`
+- [x] **Step 4: failure isolation.** A provider that raises on import, or whose `render`
       raises, costs its own pane and never the session. The pane says which component failed
       and why — a blank pane is the confidently-wrong output the left sidebar was retired for.
-- [ ] **Step 5: contain the output.** A provider's returned lines go through `contain.one_line`
+- [x] **Step 5: contain the output.** A provider's returned lines go through `contain.one_line`
       and `tui.width` applied **by charter**, not trusted to the provider.
-- [ ] **Step 6: run the full suite.**
-- [ ] **Step 7: mutations** — accept a mismatched API version; let one of two colliding ids
+- [x] **Step 6: run the full suite.**
+- [x] **Step 7: mutations** — accept a mismatched API version; let one of two colliding ids
       win; let a raising provider propagate; skip the output containment. Each RED, restored
       GREEN.
-- [ ] **Step 8: commit.**
+- [x] **Step 8: commit.**
+- [x] **Step 9 (review): the arrangement is committed, and `place` was letting the provider
+      overrule it.** `Registry.place` applied the configured `edge`/`size` only to the
+      standin; a provider that loaded kept its own, so one committed table drew two frames on
+      two machines. Fixed in one function both paths call, with the mirror test the absence of
+      which is why it shipped. Recorded in §4i.
+
+#### Where the message lives — Task 7 step 1, narrowed 2026-08-26
+
+Task 6 refuses an arrangement **whole** if it carries anything charter cannot honour, falling
+back to `slots`. Task 7 step 1 as written asks for the opposite for one case: a message and
+the rest of the frame. **The whole-refusal stands, and step 1 is narrowed to match**, because
+the message has nowhere to appear. Every step between a committed table and a painted pane
+still speaks the four committed **slot names**, not component ids:
+
+| where | what stops a provider |
+|---|---|
+| `instance.component_tables` | refuses a `use` outside `builtins.SLOT_OF` |
+| `instance.frame_of` | filters against `FRAME_SLOTS = ("top","bottom","repos","right")` |
+| `instance._placement` | `SLOT_OF[cid]` — `KeyError` for a provider |
+| `layout._derive` | keyed by `SLOT_OF`; a `KeyError` **by design** for a component with no slot name |
+| `layout.SLOT_SIZE` / `SLOT_EDGE` | module constants derived at import from the built-ins |
+| `layout.panel_command` | emits `charter panel <slot>` as tmux argv |
+| `cli.py` `panel` subparser | takes a slot |
+| `frame/panel.py:run` | refuses a slot `slots.SLOTS` has no renderer for |
+| `frame/slots.py` | four renderers; a panel process builds no registry and knows no providers |
+
+`Registry.place` has **zero production callers** today — the only consumer is
+`tests/test_component_providers.py`. So implementing "a message and the rest of the frame"
+now would mean a component dropped from the arrangement with no pane, no argv and no process
+to draw its message in: a silent drop, which is #512's and #535's failure exactly. Refusing
+whole is the version of the principle charter can actually keep. **Placing a provider is
+Phase 2 work**, and that surface is what turns step 1 back on.
 
 ---
 
@@ -218,7 +252,11 @@ def test_a_component_gets_only_what_it_declared(self):
   code path.
 - charter's own components are registered through the **same public seam** a provider uses —
   no private back door.
-- A provider can be installed, placed by config, and drawn — and a broken one costs its pane
-  and nothing else.
+- ~~A provider can be installed, placed by config, and drawn~~ — **moved to Phase 2,
+  2026-08-26.** A provider can be installed, *placed through `Registry.place`*, and drawn,
+  and a broken one costs its pane and nothing else. Placed **by config** it cannot be: the
+  table above is what stands in the way, and every row of it is a surface Phase 2 builds.
+  This criterion was unreachable from Task 7 as scoped and is recorded as such rather than
+  left to be discovered as a surprise.
 - The idle-cost property still holds, verified rather than asserted.
 - Task 1's findings say whether §4c's mouse hypothesis and §4g's popup hypothesis survived.
