@@ -1,4 +1,5 @@
-"""Every action CI runs is named by something nobody else can move (#443).
+"""Every action CI runs is named by something nobody else can move (#443), and every
+trigger that can publish is cross-examined before it does (#558).
 
 `release.yml`'s `publish` job holds `id-token: write`, and PyPI's Trusted Publishing
 verifies the token minted there as charter's genuine publisher — the claim is real, so
@@ -78,6 +79,21 @@ and both run in the job holding `id-token: write`. So the property this file enf
 that runs in the publishing job is pinned", and the gap between those two sentences is
 where the next look goes.
 
+**A second question, and a second reader for it (#558).** Pinning asks *what code runs*.
+The other thing this file has to hold is *which trigger reaches the job that publishes,
+and under what checks* — and the answer was: not the same checks on both. `release.yml`'s
+version check was gated on `if: startsWith(github.ref, 'refs/tags/v')`, so a
+`workflow_dispatch` run — which has a branch in `github.ref` — **skipped** it, and a
+skipped step is a green step. The retry path published with strictly weaker checks than
+the path it retries, and the check it dropped was the one guarding the irreversible act.
+`load` reads a workflow as a tree for that question, and it exists because the shape of a
+job graph is invisible to a reference scanner and a grep for `if:` is the spelling mistake
+this whole file refuses to make. Two halves are asserted, since either alone can be
+satisfied by a lie: the **shape** — no `if:` on the guard job, none on any step in it, and
+`publish` transitively behind it — and the **behaviour**, by executing the check's own
+`run:` script against a synthetic tree on both triggers and asserting what it refuses and
+why. Not that it passed; that it ran.
+
 **The next place to look**, since that is the question this file exists to keep asking. The
 transitive hop above is the first. Then the two mismatches a reader like this always has
 with the real one: what counts as a line break — see
@@ -94,7 +110,9 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -394,6 +412,290 @@ def scan_text(text: str) -> list[Ref]:
             found.append(Ref(line, name, ref, IMAGE))
 
     return found
+
+
+# ------------------------------------------------------------------------ the structure
+
+class _Loader:
+    """The same subset, read as a tree rather than as a stream of references (#558).
+
+    `scan_text` answers one question — *which third-party code can run* — and answers it
+    without ever knowing which job a step is in. The second question this file has to
+    answer is about shape, not content: **which trigger reaches `publish`, and under what
+    checks**. A version check gated on `if: startsWith(github.ref, 'refs/tags/v')` is
+    *skipped* on a `workflow_dispatch` run, and a skipped step is a green step — so the
+    retry path published with the one check guarding an irreversible upload never having
+    run. Nothing about that is visible to a reference scanner, and grepping for `if:` is
+    the spelling mistake this file exists to refuse to make.
+
+    So: block mappings, block sequences, plain and quoted scalars through the very same
+    `_scalar` the scanner uses, and literal block scalars kept as text — because a `run:`
+    body is the check, and the tests below *execute* it. Fail-closed on everything else,
+    exactly as `scan_text` is: a construct outside the subset raises `Unparsed` and stops
+    the suite rather than being guessed at, since a mis-read structure would answer "which
+    trigger reaches publish" confidently and wrongly.
+
+    Two limits, stated rather than assumed. Scalars stay **strings** — no `true`/`123`
+    inference, so `required: true` reads as `"true"` and no test can quietly depend on this
+    reader's idea of a type. And a key is a key: `on:` is the string `"on"` here, where
+    YAML 1.1 would have made it the boolean `True` — which is GitHub's own behaviour, and
+    the reason the workflow schema is written the way it is.
+    """
+
+    def __init__(self, text: str) -> None:
+        # A private copy: `_sequence` blanks a `- ` it has consumed, so the item's first
+        # line then reads as the ordinary line it means.
+        self.lines = text.splitlines()
+        self.i = 0
+
+    # ---------------------------------------------------------------- lines
+
+    def _skip(self) -> None:
+        """Advance to the next line that carries a node — not blank, not a comment."""
+        while self.i < len(self.lines):
+            raw = self.lines[self.i]
+            if "\t" in raw:
+                raise Unparsed(self.i + 1, "a tab character")
+            stripped = raw.strip()
+            if stripped in ("---", "..."):
+                raise Unparsed(self.i + 1,
+                               "a document marker — this reader loads one document")
+            if not stripped or stripped.startswith("#"):
+                self.i += 1
+                continue
+            return
+
+    def _head(self) -> tuple[int, int | None, int]:
+        """(column of the content, column of a `- ` opening an item or None, line number)."""
+        raw = self.lines[self.i]
+        no = self.i + 1
+        col = len(raw) - len(raw.lstrip(" "))
+        dash = None
+        if raw[col] == "-" and (col + 1 >= len(raw) or raw[col + 1] == " "):
+            dash = col
+            col += 1
+            while col < len(raw) and raw[col] == " ":
+                col += 1
+            if col < len(raw) and raw[col] == "-" and (
+                    col + 1 >= len(raw) or raw[col + 1] == " "):
+                raise Unparsed(no, "a nested sequence opened on one line")
+        return col, dash, no
+
+    # ---------------------------------------------------------------- nodes
+
+    def load(self) -> object:
+        self._skip()
+        if self.i >= len(self.lines):
+            return {}
+        col, dash, _ = self._head()
+        node = self._node(dash if dash is not None else col)
+        self._skip()
+        if self.i < len(self.lines):
+            raise Unparsed(self.i + 1, "a line at a column no block above it opened")
+        return node
+
+    def _node(self, indent: int) -> object:
+        _, dash, _ = self._head()
+        return self._sequence(indent) if dash is not None else self._mapping(indent)
+
+    def _sequence(self, indent: int) -> list:
+        out: list = []
+        while True:
+            self._skip()
+            if self.i >= len(self.lines):
+                return out
+            col, dash, no = self._head()
+            if dash is None:
+                if col >= indent:
+                    raise Unparsed(no, "a mapping key where a sequence item was expected")
+                return out
+            if dash != indent:
+                if dash > indent:
+                    raise Unparsed(no, "a sequence item indented past its list")
+                return out
+            raw = self.lines[self.i]
+            rest = raw[col:] if col < len(raw) else ""
+            if not rest or rest.startswith("#"):
+                self.i += 1                    # the item's node is on a following line
+                self._skip()
+                if self.i >= len(self.lines):
+                    raise Unparsed(no, "a sequence item with nothing in it")
+                ccol, cdash, _ = self._head()
+                start = cdash if cdash is not None else ccol
+                if start <= indent:
+                    raise Unparsed(no, "a sequence item with nothing in it")
+                out.append(self._node(start) if cdash is not None
+                           else self._item(start))
+                continue
+            # Consume the dash by blanking it. `- uses: x` then reads as `uses: x` at the
+            # content column, which is what it means — and the item's later keys line up
+            # under it without this reader having to model "the first line was special".
+            self.lines[self.i] = " " * col + rest
+            out.append(self._item(col))
+
+    def _item(self, indent: int) -> object:
+        """A sequence item: a mapping (`- uses: x`) or a scalar (`- macOS`).
+
+        Only a *sequence* item may be a bare scalar. `a:\\n  b` stays refused, because a
+        scalar wrapped onto the line below its key is the one shape where guessing would
+        read a continued value as a value of its own.
+        """
+        raw = self.lines[self.i]
+        no = self.i + 1
+        if self._opens_entry(raw, indent, no):
+            return self._mapping(indent)
+        value, end = _scalar(raw, indent, no)
+        _trailing(raw, end, no)
+        self.i += 1
+        return value
+
+    def _opens_entry(self, raw: str, col: int, no: int) -> bool:
+        """Does this line begin `key:`? Indicators answer yes so `_mapping` names them."""
+        if raw[col] in _INDICATORS or raw[col] in "|>":
+            return True
+        _, k = _scalar(raw, col, no)
+        while k < len(raw) and raw[k] == " ":
+            k += 1
+        return k < len(raw) and raw[k] == ":" and (k + 1 >= len(raw) or raw[k + 1] == " ")
+
+    def _mapping(self, indent: int) -> dict:
+        out: dict = {}
+        while True:
+            self._skip()
+            if self.i >= len(self.lines):
+                return out
+            col, dash, no = self._head()
+            if (dash if dash is not None else col) < indent:
+                return out                     # a dedent: this block is finished
+            if dash is not None:
+                raise Unparsed(no, "a sequence item where a mapping key was expected")
+            if col > indent:
+                raise Unparsed(no, "a value continued on the next line")
+
+            raw = self.lines[self.i]
+            if raw[col] in _INDICATORS:
+                raise Unparsed(no, _INDICATORS[raw[col]])
+            if raw[col] in "|>":
+                raise Unparsed(no, "a block scalar in key position")
+            name, k = _scalar(raw, col, no)
+            while k < len(raw) and raw[k] == " ":
+                k += 1
+            if k >= len(raw) or raw[k] != ":" or (k + 1 < len(raw) and raw[k + 1] != " "):
+                raise Unparsed(no, "a line that is not a mapping entry")
+            if name == "<<":
+                raise Unparsed(no, "a merge key")
+            if name in out:
+                raise Unparsed(no, f"a duplicate key: {name}")
+            tail = raw[k + 1:]
+            self.i += 1
+            out[name] = self._value(tail, col, no)
+
+    def _value(self, tail: str, key_col: int, no: int) -> object:
+        tail = tail.lstrip(" ")
+        if not tail or tail.startswith("#"):
+            self._skip()
+            if self.i >= len(self.lines):
+                return None
+            col, dash, cno = self._head()
+            if dash is not None and dash == key_col:
+                raise Unparsed(cno, "a sequence indented level with its key")
+            start = dash if dash is not None else col
+            if start <= key_col:
+                return None                    # an empty value: `push:` with a key next
+            return self._node(start)
+        if _BLOCK_HEADER.match(tail):
+            return self._block(tail, key_col, no)
+        if tail[0] == "[":
+            return self._flow(tail, no)
+        if tail[0] in _INDICATORS:
+            raise Unparsed(no, _INDICATORS[tail[0]])
+        value, end = _scalar(tail, 0, no)
+        _trailing(tail, end, no)
+        return value
+
+    def _block(self, header: str, key_col: int, no: int) -> str:
+        """A literal block scalar, kept as text. This is where a `run:` script lives."""
+        style, indicators = header[0], header[1:].partition("#")[0].strip()
+        if style == ">":
+            raise Unparsed(no, "a folded block scalar — this reader does not fold")
+        if any(c.isdigit() for c in indicators):
+            raise Unparsed(no, "a block scalar with an explicit indentation indicator")
+        if "+" in indicators:
+            raise Unparsed(no, "a block scalar that keeps its trailing blank lines")
+        body: list[str] = []
+        first: int | None = None
+        while self.i < len(self.lines):
+            raw = self.lines[self.i]
+            if not raw.strip():
+                body.append("")
+                self.i += 1
+                continue
+            here = len(raw) - len(raw.lstrip(" "))
+            if here <= key_col:
+                break
+            if first is None:
+                first = here
+            elif here < first:
+                raise Unparsed(self.i + 1,
+                               "a block scalar line indented less than its first")
+            body.append(raw[first:])
+            self.i += 1
+        while body and not body[-1]:
+            body.pop()                         # trailing blanks belong to the document
+        text = "\n".join(body)
+        return text if "-" in indicators else text + "\n"
+
+    def _flow(self, tail: str, no: int) -> list:
+        """A flow sequence of scalars — `tags: ["v*"]`. A mapping in one is refused."""
+        close = tail.find("]")
+        if close < 0:
+            raise Unparsed(no, "a flow collection spanning lines")
+        if "{" in tail[:close] or ":" in tail[:close]:
+            raise Unparsed(no, "a mapping inside a flow sequence")
+        out: list[str] = []
+        i = 1
+        while True:
+            while i < len(tail) and tail[i] in " ,":
+                i += 1
+            if i >= len(tail):
+                raise Unparsed(no, "a flow collection spanning lines")
+            if tail[i] == "]":
+                _trailing(tail, i + 1, no)
+                return out
+            if tail[i] in "'\"":
+                item, i = _scalar(tail, i, no)
+            else:
+                end = i
+                while end < len(tail) and tail[end] not in ",]":
+                    end += 1
+                item, i = tail[i:end].rstrip(), end
+            out.append(item)
+
+
+def load(text: str) -> object:
+    """A workflow as a tree: mappings, sequences, scalars, and `run:` bodies as text."""
+    return _Loader(text).load()
+
+
+def needs(job: dict) -> set[str]:
+    """The jobs this one waits for, in both shapes `needs:` is written in."""
+    declared = job.get("needs")
+    if declared is None:
+        return set()
+    return {declared} if isinstance(declared, str) else set(declared)
+
+
+def reached_before(jobs: dict, name: str) -> set[str]:
+    """Every job that must have finished before `name` starts."""
+    seen: set[str] = set()
+    queue = list(needs(jobs[name]))
+    while queue:
+        job = queue.pop()
+        if job in seen:
+            continue
+        seen.add(job)
+        queue.extend(needs(jobs[job]))
+    return seen
 
 
 # --------------------------------------------------------------------------- the rule
@@ -1072,6 +1374,362 @@ class ALocalActionIsFollowedIntoTheFileItNames(unittest.TestCase):
             with self.assertRaises(Unparsed) as caught:
                 _no_symlink(tmp / "link/action.yml")
             self.assertIn("symlink", caught.exception.what)
+
+
+# ------------------------------------------------------------------ the second reader
+
+class TheStructureIsReadTheSameWayTheRefsAre(unittest.TestCase):
+    """`load` gets the corpus treatment `scan_text` gets, in both directions.
+
+    A tree reader that quietly dropped half a file would make every assertion about the
+    job graph below vacuously true — the failure mode this repository keeps re-learning —
+    so the shapes it must read assert the value it produces, the shapes outside the subset
+    assert *which* refusal they get, and the real workflows are read twice and compared.
+    """
+
+    READS = [
+        ("a nested mapping", 'on:\n  push:\n    tags: ["v*"]\n',
+         {"on": {"push": {"tags": ["v*"]}}}),
+        ("a key whose value is nothing at all", "on:\n  push:\n  pull_request:\n",
+         {"on": {"push": None, "pull_request": None}}),
+        ("a sequence of mappings",
+         'steps:\n  - uses: a\n    with:\n      x: "1"\n  - run: echo\n',
+         {"steps": [{"uses": "a", "with": {"x": "1"}}, {"run": "echo"}]}),
+        ("the dash on its own line", "steps:\n  -\n    uses: a\n",
+         {"steps": [{"uses": "a"}]}),
+        ("a sequence of scalars", "options:\n  - macOS\n  - Windows (WSL)\n",
+         {"options": ["macOS", "Windows (WSL)"]}),
+        ("a literal block scalar", "run: |\n  echo hi\n  echo there\n",
+         {"run": "echo hi\necho there\n"}),
+        ("a stripped block scalar", "run: |-\n  echo hi\n", {"run": "echo hi"}),
+        ("a block scalar keeps its blank lines and its hashes",
+         "run: |\n  a\n\n  # not a comment in here\n  b\n",
+         {"run": "a\n\n# not a comment in here\nb\n"}),
+        ("a block scalar keeps its own indentation",
+         "run: |\n  if x; then\n    y\n  fi\n", {"run": "if x; then\n  y\nfi\n"}),
+        ("a comment after a value", "id-token: write        # REQUIRED: mints it\n",
+         {"id-token": "write"}),
+        ("a whole-line comment at depth", "jobs:\n  # a note\n  p: 1\n",
+         {"jobs": {"p": "1"}}),
+        ("an expression value", "with:\n  python-version: ${{ matrix.python-version }}\n",
+         {"with": {"python-version": "${{ matrix.python-version }}"}}),
+        ("a url with a colon in it", "url: https://pypi.org/p/charter-cp\n",
+         {"url": "https://pypi.org/p/charter-cp"}),
+        ("an if expression", "if: github.event_name == 'push'\n",
+         {"if": "github.event_name == 'push'"}),
+        ("a quoted key", '"uses": a\n', {"uses": "a"}),
+        ("a flow sequence of plain scalars", "on: [push, pull_request]\n",
+         {"on": ["push", "pull_request"]}),
+        ("an empty flow sequence", "x: []\n", {"x": []}),
+        ("a document that is a sequence", "- a\n- b\n", ["a", "b"]),
+    ]
+
+    REFUSES = [
+        ("a flow mapping", "jobs: {a: b}\n", "a flow mapping"),
+        ("an anchor", "a: &x 1\n", "an anchor"),
+        ("an alias", "a: *x\n", "an alias"),
+        ("a tag", "a: !!str 1\n", "a tag"),
+        ("an explicit key", "? a\n: b\n", "an explicit key"),
+        ("a directive", "%YAML 1.2\n", "a directive"),
+        ("a merge key", "a:\n  <<: *x\n", "a merge key"),
+        ("a second document", "a: 1\n---\nb: 2\n",
+         "a document marker — this reader loads one document"),
+        ("a tab where a space belongs", "a:\tb\n", "a tab character"),
+        ("a duplicate key", "a: 1\na: 2\n", "a duplicate key: a"),
+        ("a folded block scalar", "a: >\n  x\n",
+         "a folded block scalar — this reader does not fold"),
+        ("a block scalar that keeps its trailing blanks", "a: |+\n  x\n\n",
+         "a block scalar that keeps its trailing blank lines"),
+        ("a block scalar with an indentation indicator", "a: |2\n   x\n",
+         "a block scalar with an explicit indentation indicator"),
+        ("a block scalar line indented less than its first", "a: |\n    x\n  y\n",
+         "a block scalar line indented less than its first"),
+        ("a sequence indented level with its key", "steps:\n- uses: a\n",
+         "a sequence indented level with its key"),
+        ("a value continued on the next line", "name: a job name that\n  wraps\n",
+         "a value continued on the next line"),
+        ("a mapping key where a sequence item belongs", "steps:\n  - a\n  b: 1\n",
+         "a mapping key where a sequence item was expected"),
+        ("a sequence item where a mapping key belongs", "a:\n  b: 1\n  - c\n",
+         "a sequence item where a mapping key was expected"),
+        ("a nested sequence on one line", "a:\n  - - b\n",
+         "a nested sequence opened on one line"),
+        ("a scalar where a key belongs", "a:\n  b\n",
+         "a line that is not a mapping entry"),
+        ("two values on one line", "a: b: c\n",
+         "two values on one line, or a scalar this reader misread"),
+        ("a flow collection spanning lines", "a: [\n  b]\n",
+         "a flow collection spanning lines"),
+        ("a mapping inside a flow sequence", "a: [{b: c}]\n",
+         "a mapping inside a flow sequence"),
+        ("an unterminated quote", 'a: "b\n', "an unterminated double-quoted scalar"),
+        ("a sequence item with nothing in it", "a:\n  -\n", "a sequence item with nothing in it"),
+    ]
+
+    def test_every_shape_the_real_files_use_is_read_into_the_value_it_means(self):
+        for name, text, expected in self.READS:
+            with self.subTest(shape=name):
+                self.assertEqual(load(text), expected, name)
+
+    def test_every_construct_outside_the_subset_stops_the_suite_by_name(self):
+        for name, text, expected in self.REFUSES:
+            with self.subTest(shape=name):
+                with self.assertRaises(Unparsed) as caught:
+                    load(text)
+                self.assertEqual(caught.exception.what, expected,
+                                 f"{name}: refused, but for a different reason than the "
+                                 f"one this case exists to exercise")
+
+    def test_every_workflow_in_this_repository_reads_as_a_tree(self):
+        """Fail-closed on the real files, exactly as the reference scan is. A workflow
+        written outside the subset stops the suite rather than being read as a shorter
+        workflow that happens to have no `if:` in it."""
+        for path in sorted((GITHUB / "workflows").glob("*.y*ml")):
+            with self.subTest(file=path.name):
+                try:
+                    load(path.read_text())
+                except Unparsed as exc:
+                    self.fail(f"{path.relative_to(REPO)}: {exc}. Rewrite it in the subset "
+                              f"tests/test_workflows.py reads, or teach the reader this "
+                              f"construct deliberately — do not delete the check.")
+
+    def test_the_two_readers_agree_about_what_is_in_the_file(self):
+        """The cross-check that keeps one reader from going quietly blind. Both read the
+        same files for the same key by two different routes — a line-oriented scan and a
+        tree — and a step either of them cannot see is a step neither can judge."""
+        for path in sorted((GITHUB / "workflows").glob("*.y*ml")):
+            with self.subTest(file=path.name):
+                text = path.read_text()
+                scanned = sorted(r.ref for r in scan_text(text) if r.key == "uses")
+                walked = sorted(_every(load(text), "uses"))
+                self.assertEqual(scanned, walked)
+                self.assertTrue(scanned, "neither reader found a step: both are broken")
+
+
+def _every(node: object, key: str) -> list:
+    """Every value under `key`, anywhere in a loaded tree."""
+    if isinstance(node, dict):
+        return ([node[key]] if key in node else []) + [
+            v for child in node.values() for v in _every(child, key)]
+    if isinstance(node, list):
+        return [v for child in node for v in _every(child, key)]
+    return []
+
+
+# ------------------------------------------------------- which trigger reaches publish
+
+def _release() -> dict:
+    return load((GITHUB / "workflows" / "release.yml").read_text())
+
+
+def _step(job: dict, step_id: str) -> dict:
+    """The step this job runs under a given `id:`, refused if it is not there."""
+    found = [s for s in job["steps"] if isinstance(s, dict) and s.get("id") == step_id]
+    if len(found) != 1:
+        raise AssertionError(
+            f"expected exactly one step with `id: {step_id}`, found {len(found)}. That "
+            f"step is the version cross-check #558 exists for; if it moved, move these "
+            f"tests with it rather than deleting them.")
+    return found[0]
+
+
+class _Run(NamedTuple):
+    """One run of the release workflow, as the version check would see it."""
+    name: str
+    event: str
+    ref: str | None = None        # GITHUB_REF_NAME, unset when None
+    claimed: str | None = None    # the `version` input, unset when None
+    says: str = ""                # what its refusal must name, when it refuses
+
+
+def _execute(script: str, run: _Run, packaged: str = "0.53.0") -> tuple[int, str]:
+    """Actually run the check's script, in a tree whose pyproject says `packaged`.
+
+    Reading the YAML proves the step has no `if:`; only running it proves the step
+    refuses. `python` is a shim onto this interpreter because the step's own comment says
+    why the workflow pins one: it needs `tomllib`, which is 3.11+, and the runner's
+    default `python` is a version nobody chose.
+    """
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(os.path.realpath(raw))
+        (tmp / "pyproject.toml").write_text(
+            f'[project]\nname = "charter-cp"\nversion = "{packaged}"\n')
+        (tmp / "bin").mkdir()
+        shim = tmp / "bin" / "python"
+        shim.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        shim.chmod(0o755)
+        env = {"PATH": f"{tmp / 'bin'}:/usr/bin:/bin", "GITHUB_EVENT_NAME": run.event}
+        if run.ref is not None:
+            env["GITHUB_REF_NAME"] = run.ref
+        if run.claimed is not None:
+            env["CLAIMED_VERSION"] = run.claimed
+        done = subprocess.run(["bash", "-e", "-c", script], cwd=tmp, env=env,
+                              capture_output=True, text=True)
+        return done.returncode, done.stdout + done.stderr
+
+
+class TheVersionCheckRunsOnEveryTriggerThatCanPublish(unittest.TestCase):
+    """The assertion #558 says is missing: which trigger reaches `publish`, under what.
+
+    `publish` mints an OIDC token PyPI accepts, and an upload it makes cannot be undone —
+    so the question is not whether the version check *passed* but whether it *ran*. Those
+    are the same colour in GitHub Actions: a step whose `if:` is false reports success.
+    The check was gated on `startsWith(github.ref, 'refs/tags/v')`, which is true only of
+    a tag push, so `workflow_dispatch` — the retry path, the one a human reaches for when
+    a release has already half-happened — published with the guard green and unrun.
+
+    Two halves, and both are here because either alone is satisfiable by a lie. The shape
+    says the check cannot be skipped: no `if:` on the job, none on any step in it, and
+    `publish` transitively behind it. The behaviour says the check is worth running: its
+    script is executed, on both triggers, and refused when the run cannot name what it is
+    publishing — no input, the wrong input, a trigger the check was never taught.
+    """
+
+    #: Runs that must be refused, and what each refusal must say. The message is asserted
+    #: because it is what makes the sweep honest: delete any one of the three refusals in
+    #: the script and the surviving ones still exit non-zero, so an exit-code-only test
+    #: would stay green while the run stopped being told what it did wrong.
+    REFUSED = [
+        _Run("a dispatch that names no version", "workflow_dispatch", "main", "",
+             says="did not say which version it publishes"),
+        _Run("a dispatch with no input at all", "workflow_dispatch", "main", None,
+             says="did not say which version it publishes"),
+        _Run("a dispatch naming the wrong version", "workflow_dispatch", "main", "0.52.0",
+             says="but pyproject.toml says 0.53.0"),
+        _Run("a dispatch from a tag-shaped branch, still naming nothing",
+             "workflow_dispatch", "v0.53.0", None,
+             says="did not say which version it publishes"),
+        _Run("a tag that disagrees with the packaged version", "push", "v0.52.0", None,
+             says="but pyproject.toml says 0.53.0"),
+        _Run("a tag push with no ref name", "push", "", None,
+             says="did not say which version it publishes"),
+        _Run("a trigger nobody taught this check", "schedule", "main", "0.53.0",
+             says="does not know what that run claims to publish"),
+        _Run("a repository_dispatch", "repository_dispatch", "main", "0.53.0",
+             says="does not know what that run claims to publish"),
+        _Run("no event at all", "", "main", "0.53.0",
+             says="does not know what that run claims to publish"),
+    ]
+
+    #: Runs that must be allowed: exactly the two ways to state the packaged version.
+    ACCEPTED = [
+        _Run("a tag naming the packaged version", "push", "v0.53.0", None),
+        _Run("a dispatch naming the packaged version", "workflow_dispatch", "main",
+             "0.53.0"),
+        _Run("a dispatch naming it with the tag's leading v", "workflow_dispatch", "main",
+             "v0.53.0"),
+        _Run("a tag run carrying a stale input from an earlier dispatch", "push",
+             "v0.53.0", "9.9.9"),
+    ]
+
+    def setUp(self):
+        self.release = _release()
+        self.jobs = self.release["jobs"]
+        self.check = _step(self.jobs["guard"], "version-check")
+
+    # ----------------------------------------------------------------- the shape
+
+    def test_the_job_graph_from_the_trigger_to_the_release_is_intact(self):
+        """Every job before `publish`, and `announce` behind it. If this is rearranged the
+        tests below are asserting about a job that no longer gates anything."""
+        self.assertEqual(needs(self.jobs["guard"]), set(), "guard waits for nothing")
+        self.assertEqual(needs(self.jobs["test"]), {"guard"})
+        self.assertEqual(needs(self.jobs["build"]), {"test"})
+        self.assertEqual(needs(self.jobs["publish"]), {"build"})
+        self.assertEqual(needs(self.jobs["announce"]), {"publish"})
+        self.assertEqual(reached_before(self.jobs, "publish"),
+                         {"guard", "test", "build"},
+                         "publish no longer waits on the job that refuses a bad version")
+
+    def test_no_job_between_the_trigger_and_the_upload_can_be_skipped(self):
+        """A job-level `if:` is the same trick one level up: a skipped job is a green
+        job, and `needs:` on a green job is satisfied."""
+        for name in sorted(reached_before(self.jobs, "publish") | {"publish"}):
+            with self.subTest(job=name):
+                self.assertNotIn(
+                    "if", self.jobs[name],
+                    f"the `{name}` job is between a trigger and an irreversible upload, "
+                    f"and a condition on it is a way for it to report success unrun")
+
+    def test_no_step_in_the_guard_job_can_be_skipped(self):
+        """The regression, exactly. Restore `if: startsWith(github.ref, 'refs/tags/v')`
+        on the version check — or put a condition on any other step in the job whose only
+        purpose is to refuse — and this goes red."""
+        for i, step in enumerate(self.jobs["guard"]["steps"]):
+            with self.subTest(step=step.get("name") or step.get("uses") or i):
+                self.assertNotIn(
+                    "if", step,
+                    "a conditional step in `guard`. A skipped step reports success, so "
+                    "this is how the release published with its version check unrun "
+                    "(#558). Whatever the new trigger needs, it is not a condition here.")
+
+    def test_the_dispatch_path_has_to_say_what_it_is_retrying(self):
+        """The input exists, is required, and is wired into the script that reads it. A
+        script reading an environment variable the workflow never sets would pass every
+        behavioural test below against a value only the test provides."""
+        dispatch = self.release["on"]["workflow_dispatch"]
+        self.assertIsInstance(dispatch, dict,
+                              "`workflow_dispatch:` takes no input, so a retry states "
+                              "nothing and there is nothing to cross-examine")
+        self.assertEqual(dispatch["inputs"]["version"].get("required"), "true")
+        self.assertIn("inputs.version", self.check["env"]["CLAIMED_VERSION"],
+                      "the version the check reads does not come from the dispatch input "
+                      "— in either spelling, `inputs.version` or the one defined on every "
+                      "trigger, `github.event.inputs.version`")
+
+    def test_the_publish_job_still_names_the_environment_pypi(self):
+        """Trusted Publishing's OIDC claim carries this name, so it is load-bearing for
+        the upload — and it is also where the other half of #558 hangs: a required
+        reviewer on this environment is a repository setting, not a line in this file, so
+        no test here can assert it. What this can hold is that the name is still there for
+        the rule to attach to."""
+        self.assertEqual(self.jobs["publish"]["environment"]["name"], "pypi")
+
+    # ----------------------------------------------------------------- the behaviour
+
+    def test_every_trigger_this_workflow_declares_is_one_the_check_understands(self):
+        """The link between the two halves. The tables below name the triggers they
+        exercise; adding a third entry under `on:` without teaching the check what such a
+        run claims to publish fails here, and fails in the workflow, rather than reaching
+        `build` on the strength of nobody having thought about it."""
+        declared = set(self.release["on"])
+        self.assertEqual(declared, {"push", "workflow_dispatch"})
+        for table in (self.ACCEPTED, self.REFUSED):
+            for trigger in declared:
+                self.assertIn(trigger, {run.event for run in table},
+                              f"{trigger} has no case in one of the tables")
+
+    def test_the_check_refuses_a_run_that_cannot_name_what_it_publishes(self):
+        script = self.check["run"]
+        for run in self.REFUSED:
+            with self.subTest(run=run.name):
+                code, said = _execute(script, run)
+                self.assertNotEqual(code, 0, f"{run.name} was allowed to publish:\n{said}")
+                self.assertIn("::error::", said, "refused without annotating the log")
+                self.assertIn(run.says, said,
+                              f"{run.name} was refused, but for a different reason than "
+                              f"the one this case exists to exercise")
+
+    def test_the_check_allows_a_run_that_names_the_packaged_version(self):
+        """The other direction, and it is not decoration: a check that refused everything
+        would pass every case above and take the release path with it."""
+        script = self.check["run"]
+        for run in self.ACCEPTED:
+            with self.subTest(run=run.name):
+                code, said = _execute(script, run)
+                self.assertEqual(code, 0, f"{run.name} was refused:\n{said}")
+                self.assertIn("pyproject=0.53.0", said)
+
+    def test_the_check_reads_the_packaged_version_from_pyproject_and_not_from_a_guess(self):
+        """The comparison is against the file being published, whatever it says. Pinning
+        `0.53.0` in the tables above would otherwise be indistinguishable from a script
+        that had the answer written into it."""
+        script = self.check["run"]
+        code, said = _execute(script, _Run("a tag", "push", "v9.9.9"), packaged="9.9.9")
+        self.assertEqual(code, 0, said)
+        code, said = _execute(script, _Run("the same tag", "push", "v9.9.9"),
+                              packaged="0.53.0")
+        self.assertNotEqual(code, 0, said)
 
 
 if __name__ == "__main__":
