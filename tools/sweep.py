@@ -966,9 +966,14 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         with lock:
             counter["n"] += 1
             n = counter["n"]
-        if n % 10 == 0 or verdict == "survived":
-            log(f"    [{n}/{len(plan)}] {'SURVIVED' if verdict == 'survived' else 'pinned  '}"
-                f"  {mutation}")
+        # One line per mutation, always. A survivor costs a full suite run, so a sweep
+        # can sit silent for a quarter of an hour, and a tool nobody can tell apart from
+        # a hung one is a tool that gets killed and then not re-run.
+        how = f"{len(modules)} module(s)" if modules else "no covering module"
+        if full is not None:
+            how += f", then all {full.ran or '?'}"
+        log(f"    [{n}/{len(plan)}] "
+            f"{'SURVIVED' if verdict == 'survived' else 'pinned  '}  {mutation}   ({how})")
         return Result(mutation, verdict, subset, full, modules)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
