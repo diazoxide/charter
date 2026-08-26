@@ -76,7 +76,23 @@ class Ctx:
     attribute set *exactly* — and that assertion is the point: a future field is a
     widening of what a stranger's code may reach, and it should cost a test change and
     the conversation that goes with it.
+
+    **The four class attributes below are what a second contract changes.** An action is
+    handed an object with exactly these semantics — absent rather than disabled, read-only,
+    an exact attribute set — over a different vocabulary (`frame.action.ActionCtx`), and
+    writing that twice would be two answers to "what may a stranger's code reach". Each is
+    underscore-prefixed because the exactness assertion reads ``dir()``, and a public class
+    attribute would BE an attribute a component can reach.
     """
+
+    #: name → how that name is cut out of the one snapshot.
+    _serves = SERVES
+    #: The names served whatever was declared.
+    _geometry = GEOMETRY
+    #: What a refusal calls the thing holding this ctx.
+    _noun = "component"
+    #: The field it declares what it is handed in.
+    _declared = "needs"
 
     def __init__(self, fields: Mapping[str, Any]) -> None:
         # Straight into ``__dict__``, because ``__setattr__`` below refuses everything.
@@ -91,14 +107,14 @@ class Ctx:
         guessing which of the two they had made.
         """
         shown = contain.one_line(repr(name))
-        if name in SERVES:
+        if name in self._serves:
             raise AttributeError(
-                f"this component did not declare {name}: add it to the component's "
-                f"needs to be handed it")
+                f"this {self._noun} did not declare {name}: add it to the "
+                f"{self._noun}'s {self._declared} to be handed it")
         raise AttributeError(
-            f"a component ctx has no {shown} — charter serves "
-            f"{', '.join(GEOMETRY)} and the declared needs "
-            f"({', '.join(SERVES)})")
+            f"a {self._noun} ctx has no {shown} — charter serves "
+            f"{', '.join(self._geometry)} and the declared {self._declared} "
+            f"({', '.join(self._serves)})")
 
     def __setattr__(self, name: str, value: Any) -> None:
         """A ctx is what this repaint was handed, not a place to keep state.
@@ -107,11 +123,12 @@ class Ctx:
         be a channel between them that nothing declared and nothing bounds.
         """
         raise AttributeError(
-            f"a component ctx is read-only; {contain.one_line(repr(name))} cannot be set")
+            f"a {self._noun} ctx is read-only; {contain.one_line(repr(name))} cannot "
+            f"be set")
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(
-            f"a component ctx is read-only; {contain.one_line(repr(name))} cannot be "
+            f"a {self._noun} ctx is read-only; {contain.one_line(repr(name))} cannot be "
             f"removed")
 
 

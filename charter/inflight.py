@@ -74,6 +74,19 @@ CLONE = "clone"
 #: `glstate.maybe_spawn` starts, not the parent that spawned it.
 REFRESH = "gl-refresh"
 
+#: One action of the command surface, started from the palette and still running
+#: (`frame.actions.ActionRegistry.invoke`). Actions are fire-and-report (§4g): invoke
+#: returns having STARTED the work, so this record is the only thing that knows the work
+#: is still going, and the frame's spinner — the one reader that asks for ``kind=None`` —
+#: is what shows it.
+#:
+#: A kind of its own rather than a reuse of :data:`DISPATCH`, for the reason the module
+#: docstring gives about ``clone``: the same records feed the dispatch-overlap nudge, and
+#: an action recorded as a dispatch would make that nudge say *"`switch-workspace` writes
+#: code and `x` are already running"* — wrong, and wrong in the confident, readable way
+#: that is worse than silence. Every reader that must not see one gets that by NOT asking.
+ACTION = "action"
+
 
 def _dir() -> Path:
     from . import config

@@ -110,8 +110,14 @@ class _SitePackages:
         importlib.invalidate_caches()
 
     def install(self, dist: str, version: str, entries: dict[str, str],
-                modules: dict[str, str] | None = None) -> None:
+                modules: dict[str, str] | None = None,
+                group: str = "charter.components") -> None:
         """Write one distribution: its metadata, its entry points, its modules.
+
+        *group* is which contract the entry points are declared for. It defaults to
+        components so every case here reads unchanged, and `tests.test_action_providers`
+        passes `charter.actions` — one fixture for "what an installed distribution is",
+        because two would drift and the drift would be invisible from either side.
 
         Installing over a distribution of the same name REPLACES it, module included —
         a second copy left in ``sys.modules`` would serve the previous case's renderer to
@@ -127,7 +133,7 @@ class _SitePackages:
         (info / "METADATA").write_text(
             f"Metadata-Version: 2.1\nName: {dist}\nVersion: {version}\n", encoding="utf-8")
         (info / "entry_points.txt").write_text(
-            "[charter.components]\n" + "".join(f"{k} = {v}\n" for k, v in entries.items()),
+            f"[{group}]\n" + "".join(f"{k} = {v}\n" for k, v in entries.items()),
             encoding="utf-8")
         importlib.invalidate_caches()
 

@@ -219,7 +219,16 @@ def _rectangle(c: Component, *, edge, size) -> Component:
 
 
 class Providers:
-    """The component providers installed on this machine, listed without importing one.
+    """The providers installed on this machine, listed without importing one.
+
+    **Subclassed rather than copied, and that is deliberate.** §4d gives actions their own
+    entry-point group with the same four refusals — a mismatched API version, an id two
+    distributions claim, an import that raises, an entry point answering the wrong kind of
+    thing. Written twice, the two would drift, and the drift is the defect: #547 is what a
+    second implementation of one question costs, and it was only found because the copy
+    happened to call the original. So everything that differs between the two contracts is
+    a class attribute below, and `frame.actions.ActionProviders` sets six of them and
+    inherits every refusal.
 
     **Listed, then imported one at a time, and never the other way round.** The entry
     point NAME is the component id, so charter answers "is `acme.metrics` installed, and
@@ -240,6 +249,34 @@ class Providers:
     cost argument exists to keep off it.
     """
 
+    #: The entry point group this contract's providers declare themselves in.
+    group = PROVIDER_GROUP
+    #: The module attribute charter reads the provider's API version out of. It is
+    #: per-contract rather than shared, because one module may legitimately supply both a
+    #: component and an action, and one attribute cannot mean two contracts whose
+    #: integers move independently — a component change would then refuse every action
+    #: provider on the machine for a contract it did not touch.
+    version_attr = "API_VERSION"
+    #: The integer charter speaks for this contract.
+    speaks = API_VERSION
+    #: What a loaded entry point must be an instance of.
+    kind: type = Component
+    #: The word every refusal calls this contract by.
+    contract = "component"
+    #: What an entry point is expected to name, in a refusal's own words.
+    noun = "frame component"
+    #: What a config does with one of these, for the refusal that says to stop doing it.
+    verb = "placing"
+    #: What the caller does instead of propagating — the clause that tells the operator
+    #: what they still have.
+    degrades = "Its pane says so; the rest of the frame is drawn"
+    #: Where a version charter cannot honour would land if it were hoped through instead
+    #: of refused at load (§4g).
+    too_late = "at render time inside your frame"
+    #: The one type this contract raises, so a caller degrading rather than propagating
+    #: has one thing to catch.
+    error: type = ComponentError
+
     def __init__(self) -> None:
         self._entries: dict[str, tuple] | None = None
 
@@ -247,7 +284,7 @@ class Providers:
         """id → every entry point claiming it. More than one IS the collision (§4h)."""
         if self._entries is None:
             found: dict[str, list] = {}
-            for ep in metadata.entry_points(group=PROVIDER_GROUP):
+            for ep in metadata.entry_points(group=self.group):
                 found.setdefault(ep.name, []).append(ep)
             self._entries = {name: tuple(eps) for name, eps in found.items()}
         return self._entries
@@ -266,8 +303,8 @@ class Providers:
         """Whether anything installed claims *cid* — asked without importing it."""
         return isinstance(cid, str) and cid in self._scan()
 
-    def load(self, cid: str) -> Component:
-        """The component *cid* names, imported now, or a `ComponentError` saying why not.
+    def load(self, cid: str) -> Any:
+        """The thing *cid* names, imported now, or an error saying why not.
 
         Every refusal here is one a caller is expected to DEGRADE rather than propagate —
         `Registry.place` turns each into a pane — so they are written to be read by the
@@ -275,27 +312,28 @@ class Providers:
         """
         shown = contain.one_line(repr(cid))
         if not isinstance(cid, str) or "." not in cid:
-            raise ComponentError(
+            raise self.error(
                 f"nothing on this frame is named {shown}, and no installed provider can "
                 f"be: a provider's id is namespaced by its distribution, like "
-                f"acme.metrics. Charter's own components are registered before any "
+                f"acme.metrics. Charter's own {self.contract}s are registered before any "
                 f"config is read, so a bare name that is not one of them is a typo")
         eps = self._scan().get(cid, ())
         if not eps:
-            raise ComponentError(
-                f"no installed provider supplies the component {contain.one_line(cid)} — "
-                f"install the distribution that declares it in the {PROVIDER_GROUP} "
-                f"entry point group, or stop placing it. The rest of the frame is drawn")
+            raise self.error(
+                f"no installed provider supplies the {self.contract} "
+                f"{contain.one_line(cid)} — "
+                f"install the distribution that declares it in the {self.group} "
+                f"entry point group, or stop {self.verb} it. {self.degrades}")
         if len(eps) > 1:
-            raise ComponentError(
-                f"{len(eps)} installed providers supply the component "
+            raise self.error(
+                f"{len(eps)} installed providers supply the {self.contract} "
                 f"{contain.one_line(cid)}: {', '.join(_where(ep) for ep in eps)}. "
                 f"Charter loads {'NEITHER' if len(eps) == 2 else 'NONE of them'} — "
                 f"picking one by load order would draw a pane whose origin cannot be "
                 f"determined. Uninstall one of them")
         return self._one(eps[0], cid)
 
-    def _one(self, ep, cid: str) -> Component:
+    def _one(self, ep, cid: str) -> Any:
         """The single claimant, imported, version-checked, built and identified."""
         module_name = contain.one_line(str(getattr(ep, "module", "") or ""))
         value = contain.one_line(str(getattr(ep, "value", "") or ""))
@@ -304,28 +342,27 @@ class Providers:
         except KeyboardInterrupt:
             raise
         except BaseException as exc:
-            raise ComponentError(
+            raise self.error(
                 f"{_where(ep)} supplies {contain.one_line(cid)}, and importing "
-                f"{module_name} raised {_because(exc)}. Its pane says so; the rest of "
-                f"the frame is drawn") from None
+                f"{module_name} raised {_because(exc)}. {self.degrades}") from None
 
         # Before the entry point's own attribute is even looked up, let alone called: a
         # version charter cannot honour is refused at LOAD, where the message names a
         # fixable thing, rather than hoped through to render time inside somebody's frame
         # (§4g). There is no shim band and no best-effort mode.
-        speaks = getattr(module, "API_VERSION", None)
+        speaks = getattr(module, self.version_attr, None)
         if isinstance(speaks, bool) or not isinstance(speaks, int):
-            raise ComponentError(
+            raise self.error(
                 f"{_where(ep)} supplies {contain.one_line(cid)} and {module_name} "
-                f"declares API_VERSION = {contain.one_line(repr(speaks))}. Charter "
-                f"speaks component API version {API_VERSION}, as one integer, so this "
-                f"provider is not loaded")
-        if speaks != API_VERSION:
-            raise ComponentError(
-                f"{_where(ep)} supplies {contain.one_line(cid)} for component API "
-                f"version {speaks}, and charter speaks {API_VERSION}. It is not loaded: "
-                f"a contract charter cannot honour fails at render time inside your "
-                f"frame, where you cannot act on it")
+                f"declares {self.version_attr} = {contain.one_line(repr(speaks))}. "
+                f"Charter speaks {self.contract} API version {self.speaks}, as one "
+                f"integer, so this provider is not loaded")
+        if speaks != self.speaks:
+            raise self.error(
+                f"{_where(ep)} supplies {contain.one_line(cid)} for {self.contract} API "
+                f"version {speaks}, and charter speaks {self.speaks}. It is not loaded: "
+                f"a contract charter cannot honour fails {self.too_late}, where you "
+                f"cannot act on it")
 
         obj: Any = module
         try:
@@ -334,7 +371,7 @@ class Providers:
         except KeyboardInterrupt:
             raise
         except BaseException as exc:
-            raise ComponentError(
+            raise self.error(
                 f"{_where(ep)} supplies {contain.one_line(cid)} as {value}, and "
                 f"{module_name} has no such name: {_because(exc)}") from None
 
@@ -342,32 +379,33 @@ class Providers:
         # entry point (`acme_charter.metrics:Component`) reads as an object and a factory
         # is the obvious other spelling — refusing either would refuse a provider author
         # for a choice that changes nothing charter can observe.
-        if not isinstance(obj, Component):
+        if not isinstance(obj, self.kind):
             if not callable(obj):
-                raise ComponentError(
+                raise self.error(
                     f"{_where(ep)} supplies {contain.one_line(cid)} as {value}, which is "
-                    f"{contain.one_line(repr(obj))} — an entry point names a frame "
-                    f"component, or something charter can call with no arguments to get "
-                    f"one")
+                    f"{contain.one_line(repr(obj))} — an entry point names a "
+                    f"{self.noun}, or something charter can call with no arguments to "
+                    f"get one")
             try:
                 obj = obj()
             except KeyboardInterrupt:
                 raise
             except BaseException as exc:
-                raise ComponentError(
+                raise self.error(
                     f"{_where(ep)} supplies {contain.one_line(cid)}, and building it "
                     f"raised {_because(exc)}") from None
-            if not isinstance(obj, Component):
-                raise ComponentError(
+            if not isinstance(obj, self.kind):
+                raise self.error(
                     f"{_where(ep)} supplies {contain.one_line(cid)}, and calling {value} "
-                    f"answered {contain.one_line(repr(obj))} rather than a frame "
-                    f"component")
+                    f"answered {contain.one_line(repr(obj))} rather than a "
+                    f"{self.noun}")
         if obj.id != cid:
-            raise ComponentError(
+            raise self.error(
                 f"{_where(ep)} declares the entry point {contain.one_line(cid)} and "
-                f"answers a component whose id is {contain.one_line(obj.id)}. The entry "
-                f"point name is what a committed charter.toml places and what charter "
-                f"resolves without importing anything, so the two must be one word")
+                f"answers a {self.contract} whose id is {contain.one_line(obj.id)}. The "
+                f"entry point name is what a committed charter.toml places and what "
+                f"charter resolves without importing anything, so the two must be one "
+                f"word")
         return obj
 
 
