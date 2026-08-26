@@ -736,10 +736,20 @@ def component_tables(section) -> list[dict] | None:
     the one `slots` describes: the operator sees their arrangement ignored, which is a
     visible, whole-frame difference, rather than one pane's worth of quiet fiction.
 
-    Task 7 of this plan replaces that for the one case it can improve: a component named
-    here with no provider installed gets a MESSAGE in its own pane and the rest of the
-    frame draws. That is the same principle with somewhere to say it; until the surface
-    exists, refusing the arrangement is the version of it charter can actually keep.
+    **Task 7 was expected to replace that for the one case it could improve — a component
+    named here with no provider installed getting a MESSAGE in its own pane while the rest
+    of the frame draws — and it does not, deliberately (decided 2026-08-26, §4b property
+    4).** The message has nowhere to appear. `frame.registry.Registry.place` builds the
+    standin and holds the rectangle for it, but every step from here to a painted pane
+    still speaks the four committed SLOT NAMES rather than component ids: this function's
+    own `SLOT_OF` check, :func:`frame_of`'s filter against :data:`FRAME_SLOTS`,
+    `layout._derive`'s `SLOT_OF` keying (a `KeyError` by design for a component with no
+    slot name), `layout.panel_command`'s `charter panel <slot>` argv, and
+    `frame/panel.py`'s refusal of a slot `slots.SLOTS` has no renderer for. Dropping the
+    placement here would therefore be a panel silently absent with no pane to say why —
+    #512 and #535's failure, wearing Task 7's clothes. Refusing whole is the version of
+    the principle charter can actually keep, and the surface that turns the other one on
+    is Phase 2's.
 
     **``edge`` and ``size`` are accepted only where charter can honour them, which today
     means only at the component's own declaration.** `layout` derives the whole frame's

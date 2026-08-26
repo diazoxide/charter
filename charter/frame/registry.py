@@ -56,6 +56,7 @@ Four rules hold the seam, and each of them is a refusal rather than a best effor
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 from importlib import metadata
 from types import MappingProxyType
@@ -76,9 +77,19 @@ PROVIDER_GROUP = "charter.components"
 
 #: The edge and size a component charter could not load is stood in for on, when the
 #: caller does not say. A caller that read `[[frame.component]]` DOES know — it passes the
-#: configured pair, so a machine missing one provider draws the same rectangles as a
-#: machine that has it, with a message in the one pane instead of the frame's geometry
-#: shifting under everything else.
+#: configured pair, and :func:`_rectangle` applies it to the loaded component and to the
+#: standin alike, so a machine missing one provider draws the same rectangles as a machine
+#: that has it, with a message in the one pane instead of the frame's geometry shifting
+#: under everything else.
+#:
+#: **No such caller exists yet, and that is deliberate** (§4b property 4, narrowed
+#: 2026-08-26). `instance.component_tables` refuses an arrangement naming a component
+#: charter cannot place, whole, rather than dropping the one placement — because every
+#: step from there to a painted pane still speaks the four committed SLOT NAMES
+#: (`layout._derive`, `layout.panel_command`'s `charter panel <slot>` argv,
+#: `frame/panel.py:run`), so a placement dropped here would be a panel silently absent
+#: with no pane to say why. Phase 2 builds the surface; this is what will be passed
+#: across it.
 STANDIN_EDGE = "bottom"
 #: Capped rather than open: the message is charter's, but the reason inside it quotes a
 #: provider's exception text, and an unbounded panel whose height an installed package
@@ -177,6 +188,34 @@ def _fit(lines, *, width: int, height: int, escape: bool) -> tuple[str, ...]:
             line = contain.one_line(line, limit=LINE_LIMIT)
         out.append(tui.truncate(line, width))
     return tuple(out)
+
+
+def _rectangle(c: Component, *, edge, size) -> Component:
+    """*c* in the rectangle the caller asked for, or in its own where the caller did not.
+
+    **The one place either half of a rectangle is resolved**, and that is the whole
+    point of it being a function rather than two expressions. `Registry.place` has two
+    ways to answer — the component a provider supplied, and the standin drawn when it
+    could not be — and a rectangle resolved separately on each is a rectangle that can
+    differ between them. It did: the loaded component kept its own `edge` and `size` and
+    the configured pair reached only the standin, so one committed `[[frame.component]]`
+    table drew a panel on `right` on a machine with the provider installed and on `top`
+    on a machine without it, with `on_edge` disagreeing to match.
+
+    ``None`` is the only spelling of "the caller did not say". Not falsiness: ``edge =
+    ""`` in a committed file is a value somebody wrote and charter cannot honour, and
+    quietly substituting a default for it is the config key that changes nothing this
+    phase was written against. `Component`'s own validation is what refuses it, here,
+    where the caller can still be told which value was unusable.
+
+    A frozen dataclass replaced rather than mutated, so nothing that already holds *c* —
+    a provider's own module-level singleton, most obviously — sees the frame's
+    arrangement written back into it.
+    """
+    if edge is None and size is None:
+        return c
+    return dataclasses.replace(c, edge=c.edge if edge is None else edge,
+                               size=c.size if size is None else size)
 
 
 class Providers:
@@ -439,24 +478,38 @@ class Registry:
         of the frame is drawn. A committed file must never be able to make charter
         unusable for somebody who has not installed a third-party package.
 
-        *edge* and *size* are the ones config asked for, and they are used for the
-        standin as well, so the rectangles do not move: the frame a machine missing one
-        provider draws is the frame the other machine draws, with a message in that one
-        pane. Without them the standin takes :data:`STANDIN_EDGE` and
-        :data:`STANDIN_SIZE`.
+        *edge* and *size* are the arrangement, **and the arrangement wins** (§4b:
+        *arrangement is committed, execution is local*). They are applied to the
+        component that LOADED exactly as they are to the standin, through one function
+        (:func:`_rectangle`), so the two paths cannot answer differently: the frame a
+        machine missing one provider draws is the frame the other machine draws, with a
+        message in that one pane. The alternative — a provider's own `edge` overruling
+        the committed table — is the same committed file drawing two different frames on
+        two machines, and it inverts the principle the extension model rests on. §4b's
+        `default_edge`/`default_size` are for a sensible arrangement BEFORE anyone
+        configures one; they do not beat one that exists.
+
+        Without them a loaded component keeps its own declaration and a standin takes
+        :data:`STANDIN_EDGE` and :data:`STANDIN_SIZE` — "the caller did not say" is
+        ``None`` and only ``None``, in both directions.
 
         Already registered — a built-in, or a provider placed twice by a config listing
         it twice — answers what is registered rather than refusing: this asks for *cid*
-        to be on the frame, where `register` asks for a component to be added.
+        to be on the frame, where `register` asks for a component to be added. A
+        component keeps the rectangle it went onto the frame in, because `Component` is
+        frozen and a split order already assigned is geometry that has been spent.
 
-        The one thing it does raise for is an id that could never name a component at
-        all, because there is nothing to stand in for and nowhere to draw the message:
-        that refusal belongs to whatever read the id, beside the rest of its validation.
+        The one thing it does raise for is an id, an edge or a size that could never
+        name a component or a rectangle at all: there is nothing to stand in for and
+        nowhere to draw the message, and that refusal belongs to whatever read the value,
+        beside the rest of its validation. It raises the same way whether or not the
+        provider is installed, which is the same symmetry the paragraph above is about.
         """
         if isinstance(cid, str) and cid in self._by_id:
             return self._by_id[cid]
         try:
-            c = self.register(self.providers.load(cid))
+            c = self.register(
+                _rectangle(self.providers.load(cid), edge=edge, size=size))
         except ComponentError as exc:
             return self._stand_in(cid, str(exc), edge=edge, size=size)
         # AFTER the registration that could still have refused it, so a component that
@@ -471,11 +524,16 @@ class Registry:
         skipped split. A missing panel that nothing anywhere explains is the
         confidently-wrong output #512 was about: the operator sees a frame that looks
         deliberate and has no way to find out it is not.
+
+        Built at charter's own defaults and then put through :func:`_rectangle`, the one
+        the loaded component goes through — rather than resolving the pair a second time
+        here. Two spellings of "the caller did not say" is how the two paths came to
+        disagree in the first place.
         """
-        c = self.register(Component(
-            id=cid, title=f"{cid} — not drawn", edge=edge or STANDIN_EDGE,
-            size=size or STANDIN_SIZE, needs=(), events=(),
-            render=lambda ctx: _wrap(reason, ctx.width)))
+        c = self.register(_rectangle(Component(
+            id=cid, title=f"{cid} — not drawn", edge=STANDIN_EDGE,
+            size=STANDIN_SIZE, needs=(), events=(),
+            render=lambda ctx: _wrap(reason, ctx.width)), edge=edge, size=size))
         self._failures[cid] = reason
         self._foreign.add(cid)
         return c

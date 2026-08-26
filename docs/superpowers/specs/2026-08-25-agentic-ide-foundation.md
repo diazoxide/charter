@@ -190,6 +190,15 @@ A component declares its identity and its cost, and renders on request:
 `ctx` hands over what the component is allowed to read. It does **not** hand over a way to
 run a subprocess or reach the network on the repaint path.
 
+**`default_edge` and `default_size` are defaults, and a committed arrangement beats them.**
+The word in that table row is load-bearing: they are for a sensible arrangement *before*
+anyone configures one, and where a `[[frame.component]]` table says an edge or a size, the
+table is what draws. The inverse — a provider's Python overruling a committed file — is
+*execution* deciding *arrangement*, which is the safety principle above run backwards, and
+its symptom is one committed table drawing two different frames on two machines depending
+on whether a package happens to be installed. Charter shipped exactly that inversion once
+in `Registry.place` (§4i).
+
 ### Four properties that must survive a stranger's code
 
 These are what make the extension model real rather than a hole:
@@ -210,10 +219,23 @@ These are what make the extension model real rather than a hole:
    `contain.one_line` and `tui.width` path as a built-in, applied by charter after the
    component returns, not trusted to the component.
 
-4. **A missing provider is a message, not a crash.** `charter.toml` naming `acme.metrics`
-   on a machine without it says so plainly and draws the rest of the frame. A committed
-   config must never make charter unusable for someone who has not installed a third-party
-   package.
+4. **A missing provider is a message, not a crash** — *and the message needs a surface to
+   live on, which Phase 1 does not build.* `charter.toml` naming `acme.metrics` on a
+   machine without it must never make charter unusable for someone who has not installed a
+   third-party package. **Where the message goes, narrowed 2026-08-26:** in Phase 1 it is a
+   standin *component* in the registry (`Registry.place`), holding the rectangle config
+   asked for and drawing the reason — but nothing places it, because every step between a
+   committed table and a painted pane still speaks the four committed **slot names**:
+   `instance.component_tables` refuses a `use` outside `builtins.SLOT_OF`, `frame_of`
+   filters against `FRAME_SLOTS`, `layout._derive` keys off `SLOT_OF` (a `KeyError`, by
+   design, for a component with no slot name), `layout.panel_command` emits
+   `charter panel <slot>` as tmux argv, and `frame/panel.py:run` refuses a slot
+   `slots.SLOTS` has no renderer for. **So until Phase 2 gives the frame a surface that can
+   SAY a component is missing, an arrangement carrying one charter cannot honour is refused
+   whole and the frame falls back to `slots`** — the operator sees their whole arrangement
+   not take effect, which is visible and actionable, rather than one pane quietly absent.
+   A message with nowhere to appear is a silent drop, and a silent drop is #512 and #535.
+   Placing a provider is Phase 2 work, and this property is what it must deliver.
 
 ### What `charter.toml` gets to say
 
@@ -510,6 +532,37 @@ keyboard, and is modal; charter's session-scoped `mouse off` cleanly overrides a
 global `mouse on` with no leak; and **all four `tmuxctl` version floors were confirmed by
 running 3.1c and 3.2**, where before they were justified from CHANGES with a note that no
 binary existed to check.
+
+### A safety principle found running backwards in the code — 2026-08-26
+
+**`Registry.place` ignored the committed `edge` and `size` whenever the provider actually
+loaded**, applying them only to the standin drawn when it did not. Measured, before the fix:
+
+```
+place("acme.metrics", edge="top", size=Fixed(3))
+  package installed  -> edge='right', size=Fixed(12)   (the provider's own declaration)
+  package absent     -> edge='top',   size=Fixed(3)    (what the arrangement asked for)
+```
+
+So one committed `[[frame.component]]` table drew two different frames on two machines, and
+`on_edge('top')` answered `['acme.metrics']` on one and `[]` on the other — and order is
+geometry, so every panel split after it moved too. **This is §4b's own principle inverted:**
+the provider's *code* overruled the *committed arrangement*, which is execution deciding
+arrangement. `default_edge`/`default_size` are for a sensible arrangement before anyone
+configures one; they do not beat one that exists.
+
+**It was unasserted in both directions and 37 tests stayed green with it fixed.** The
+standin half was pinned; the loading half — the half that runs on the machine the provider
+is actually installed on — was pinned nowhere, and `place`'s own docstring asserted the
+opposite of what it did. Fixed by resolving the rectangle in ONE function both paths call,
+with `None` and only `None` meaning "the caller did not say"; the mirror test asserts edge,
+size, split order and `on_edge` for a provider that loads, and asserts the two paths give
+one answer in a single case so neither can be fixed without the other.
+
+**The general lesson, which is the reusable half:** a guard written on the degraded path and
+not on the succeeding one passes every test the degraded path has, and the succeeding path
+is the one operators run. Two code paths that must agree need a test that asks *both in one
+assertion*, not one test each.
 
 ### And a stale number, corrected
 

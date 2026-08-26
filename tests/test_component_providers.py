@@ -24,6 +24,12 @@ closing paragraph, each with a case that fails without the guard:
    `contain.one_line` before the width arithmetic and `tui.width` rather than `len`.
 5. **A missing provider is a message**, in the rectangle config asked for, and the rest of
    the frame is drawn.
+6. **The rectangle config asked for is the one that draws, provider installed or not.**
+   *Arrangement is committed, execution is local* — so a provider's own `edge` and `size`
+   are defaults for before anyone configures one, and they do not beat a table that does.
+   The other five were each pinned on the failing path first; this one shipped inverted
+   because only its failing path was pinned, which is why every case in
+   `TheArrangementIsCommittedAndAProviderDoesNotOverruleIt` asks about both.
 
 **Nothing here reads the machine.** Each case asserts about ids its own fixture installed,
 never about the set of providers this machine happens to carry, so a suite run on a
@@ -362,6 +368,140 @@ class AMissingProviderIsAMessage(unittest.TestCase):
         """A panel that is simply absent is the frame lying about the plane (#512)."""
         self.r.place(CID, edge="right", size=component.Fixed(12))
         self.assertEqual([c.id for c in self.r.on_edge("right")], [CID])
+
+
+class TheArrangementIsCommittedAndAProviderDoesNotOverruleIt(unittest.TestCase):
+    """§4b's principle in the one place a provider's CODE could beat a committed FILE.
+
+    > **Arrangement is committed. Execution is local.**
+
+    §4b gives a provider a `default_edge` and a `default_size` for "a sensible
+    arrangement **before anyone configures one**". Once one is configured, the committed
+    table is what draws. The inverse — the provider's declaration winning — means one
+    `[[frame.component]]` table draws a panel on `right` on the machine with the package
+    installed and on `top` on the machine without it, with `on_edge` disagreeing to
+    match, and order is geometry so every panel split after it moves too.
+
+    **This class exists because that shipped.** `Registry.place` applied the configured
+    pair to the standin and dropped it for the component that loaded, its own docstring
+    asserted the opposite, and the suite was green in both directions: the standin half
+    was pinned (`test_the_standin_keeps_the_rectangle_config_asked_for` above) and the
+    loading half — the half that runs on the machine the provider is actually installed
+    on — was pinned nowhere. So every case below asserts the two paths give ONE answer,
+    and the fixture's provider declares `right`/`Fixed(12)` precisely so that a
+    regression has somewhere different to go.
+    """
+
+    def setUp(self):
+        self.site = _SitePackages(self)
+        self.r = registry.Registry()
+
+    def _install(self):
+        """A provider declaring `right` and twelve columns as its own arrangement."""
+        self.site.install("acme-charter", "1.4.0", {CID: ENTRY}, {MODULE: _source()})
+
+    def test_a_provider_that_loads_takes_the_rectangle_config_asked_for(self):
+        """The mirror of `test_the_standin_keeps_the_rectangle_config_asked_for`.
+
+        Registered rather than merely answered, and the split order asserted with the
+        edge: a component whose rectangle is right and whose split number is wrong is
+        still a frame that moved.
+        """
+        self._install()
+        self.r.register(_builtin("identity", edge="top"))
+        placed = self.r.place(CID, edge="top", size=component.Fixed(3))
+        self.assertEqual(placed.edge, "top")
+        self.assertEqual(placed.size, component.Fixed(3))
+        self.assertEqual(self.r.get(CID).edge, "top")
+        self.assertEqual(self.r.get(CID).size, component.Fixed(3))
+        self.assertEqual([c.id for c in self.r.on_edge("top")], ["identity", CID])
+        self.assertEqual(self.r.on_edge("right"), ())
+        self.assertEqual(self.r.split_order("identity"), 1)
+        self.assertEqual(self.r.split_order(CID), 2)
+        # The arrangement moved and nothing else did: it is still the provider drawing.
+        self.assertEqual(self.r.failures, {})
+        self.assertEqual(self.r.draw(CID, _ctx()), ("ok",))
+
+    def test_the_same_table_draws_the_same_frame_whether_or_not_it_is_installed(self):
+        """One committed table, two machines, and the frame is the same on both.
+
+        The property `place`'s docstring claims, asked of both paths in one case so that
+        neither can be fixed without the other. The two `assertIn`/`assertEqual` on
+        `failures` are what stop this passing on two standins, which is the shape a test
+        of "they agree" fails silently in.
+        """
+        def frame(r):
+            r.register(_builtin("identity", edge="top"))
+            c = r.place(CID, edge="top", size=component.Fixed(3))
+            return (c.edge, c.size, r.split_order(CID),
+                    tuple(x.id for x in r.on_edge("top")),
+                    tuple(x.id for x in r.on_edge("right")))
+
+        absent, present = registry.Registry(), registry.Registry()
+        without = frame(absent)                 # nothing installed yet: a standin
+        self._install()
+        with_it = frame(present)                # the provider itself
+        self.assertIn(CID, absent.failures)
+        self.assertEqual(present.failures, {})
+        self.assertEqual(without, with_it)
+        self.assertEqual(with_it,
+                         ("top", component.Fixed(3), 2, ("identity", CID), ()))
+
+    def test_a_provider_keeps_its_own_rectangle_when_nothing_configured_one(self):
+        """The other half of §4b, and the reason this is not simply "charter decides".
+
+        A `default_edge` is what a provider gets to say, and a `place` that was asked for
+        nothing must leave it alone rather than flattening it to charter's standin
+        defaults — otherwise every provider lands on `bottom` until somebody writes a
+        table, which is a worse default than the one its author chose.
+        """
+        self._install()
+        placed = self.r.place(CID)
+        self.assertEqual((placed.edge, placed.size), ("right", component.Fixed(12)))
+
+    def test_the_half_config_did_not_ask_for_is_left_as_it_was(self):
+        """`edge` and `size` are two questions and a file may answer one of them.
+
+        Both paths, because "the caller did not say" is where the two spellings diverged:
+        the standin resolved it by FALSINESS and the loaded component not at all.
+        """
+        self._install()
+        self.assertEqual(self.r.place(CID, edge="bottom").size, component.Fixed(12))
+        standin = registry.Registry().place("acme.absent", size=component.Fixed(4))
+        self.assertEqual((standin.edge, standin.size),
+                         (registry.STANDIN_EDGE, component.Fixed(4)))
+
+    def test_a_rectangle_charter_could_never_draw_is_refused_either_way(self):
+        """And refused IDENTICALLY, which is the same symmetry the rest of the class is
+        about: a committed value that raises only on the machine without the package is a
+        defect that reproduces on one laptop and nowhere else.
+
+        ``edge = ""`` is in here deliberately. It is falsy, and the standin used to
+        substitute `STANDIN_EDGE` for it silently — a config key read, stored and
+        changing nothing, which is the convincing empty this phase was written against.
+        """
+        self._install()
+        for asked in ({"edge": "sideways"}, {"edge": ""}, {"size": 12},
+                      {"size": "content"}):
+            with self.subTest(asked=asked):
+                with self.assertRaises(component.ComponentError):
+                    registry.Registry().place(CID, **asked)
+                with self.assertRaises(component.ComponentError):
+                    registry.Registry().place("acme.absent", **asked)
+
+    def test_the_providers_own_component_is_not_written_back_to(self):
+        """A frame's arrangement stays in the frame.
+
+        `acme_charter.metrics:Component` — the spec's own example entry point — is a
+        module-level singleton, and a module is imported once per interpreter. Writing
+        this frame's edge into it would hand the next frame that places it an
+        arrangement it never asked for, from a config it may not even have read.
+        """
+        self.site.install("acme-charter", "1.4.0", {CID: f"{MODULE}:widget"},
+                          {MODULE: _source() + "\nwidget = metrics()\n"})
+        self.r.place(CID, edge="top", size=component.Fixed(3))
+        self.assertEqual(sys.modules[MODULE].widget.edge, "right")
+        self.assertEqual(registry.Registry().place(CID).edge, "right")
 
 
 class AProviderThatRaisesCostsItsOwnPane(unittest.TestCase):
