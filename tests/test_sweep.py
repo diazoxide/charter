@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -578,17 +579,51 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
         self.assertIn("no covering module", subset.detail)
 
 
+_Completed = sweep._Finished
+
+
 class AHangIsNotAPass(unittest.TestCase):
-    def test_a_run_that_times_out_is_red_and_never_a_survivor(self):
-        """Round three had a mutation that wedged the suite for 1800s rather than
-        failing. Reading that as green would pin a guard on a timeout."""
-        outcome = sweep._verdict(_Completed(0, "Ran 10 tests in 1s\n\nOK\n"))
-        self.assertTrue(outcome.green)
+    """Round three had a mutation that wedged the suite for 1800s rather than failing.
 
+    Reading that as green would have pinned a guard on a timeout — the loudest possible
+    version of the false pin this whole file exists to prevent.
+    """
 
-class _Completed:
-    def __init__(self, rc, out):
-        self.returncode, self.stdout, self.stderr = rc, out, ""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-hang-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        (self.tmp / "tests").mkdir()
+        (self.tmp / "tests" / "__init__.py").write_text("")
+        (self.tmp / "tests" / "test_hang.py").write_text(textwrap.dedent(f"""
+            import subprocess, unittest
+            class T(unittest.TestCase):
+                def test_wedges(self):
+                    kid = subprocess.Popen(["sleep", "120"])
+                    open({str(self.tmp / "kid.pid")!r}, "w").write(str(kid.pid))
+                    kid.wait()
+        """))
+        self.box = object.__new__(sweep.Sandbox)
+        self.box.path = self.tmp
+        self.box._pristine = {}
+
+    def test_a_run_that_wedges_is_red_and_never_a_survivor(self):
+        outcome = self.box.run(["tests.test_hang"], timeout=5)
+        self.assertFalse(outcome.green)
+        self.assertIn("timed out", outcome.detail)
+
+    def test_a_wedged_runs_grandchildren_die_with_it(self):
+        """`subprocess.run(timeout=…)` kills only the direct child. This suite starts
+        real tmux servers, and one left behind by a timed-out mutation would be inherited
+        by the next mutation and reported as ITS failure."""
+        self.box.run(["tests.test_hang"], timeout=5)
+        pid = int((self.tmp / "kid.pid").read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
+    def test_killing_a_group_that_has_already_gone_is_not_an_error(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        proc.wait()
+        sweep._kill_group(proc)
 
 
 class TheVerdictIsReadFromTheRun(unittest.TestCase):
@@ -607,6 +642,34 @@ class TheVerdictIsReadFromTheRun(unittest.TestCase):
         self.assertFalse(v.green)
         self.assertEqual(v.ran, 42)
         self.assertIn("test_x", v.detail)
+
+
+class TheSubsetIsNarrowedByFunctionAndWidenedByDoubt(unittest.TestCase):
+    """Selection narrows to the function, and every fallback runs MORE, never less."""
+
+    MAP = {"charter/frame/overlay.py": ["tests.test_a", "tests.test_b", "tests.test_c"],
+           "charter/frame/overlay.py::_window": ["tests.test_a"]}
+
+    def _m(self, symbol):
+        return sweep.Mutation(path="charter/frame/overlay.py", line=1, end_line=1,
+                              operator="unclamp", question="?", before="max(1, h)",
+                              after="h", symbol=symbol)
+
+    def test_a_measured_function_selects_only_the_modules_that_ran_it(self):
+        """File granularity is not enough in this tree: `layout`, `slots` and `builtins`
+        are reached by nearly every test module through a shared fixture, so a file-keyed
+        map answers 'run all 322' for a helper only four modules ever call."""
+        self.assertEqual(sweep.select_for(self.MAP, self._m("_window")), ["tests.test_a"])
+
+    def test_a_function_the_trace_never_saw_falls_back_to_the_whole_file(self):
+        """A `<lambda>`, or a comprehension frame on 3.11, is never seen under its own
+        name. Falling back to the file runs more than needed; guessing narrower would
+        certify a guard as tested by a subset that never ran it."""
+        self.assertEqual(sweep.select_for(self.MAP, self._m("_paint")),
+                         ["tests.test_a", "tests.test_b", "tests.test_c"])
+
+    def test_a_file_the_trace_never_saw_selects_nothing_and_decide_runs_everything(self):
+        self.assertEqual(sweep.select_for({}, self._m("_window")), [])
 
 
 # ======================================================================================

@@ -509,32 +509,55 @@ def compose(pristine: bytes, pair: tuple[Mutation, Mutation]) -> bytes | None:
 #: events are generated for the frame, which is the difference between a map that takes
 #: minutes and one that takes an hour.
 _TRACE_RUNNER = r'''
-import json, os, sys, threading, unittest
+import json, os, sys, threading, traceback, unittest
 
 module, out_path, prefix = sys.argv[1], sys.argv[2], sys.argv[3]
+# The runner lives in the cache directory, so Python puts THAT on `sys.path` and not the
+# tree under test. Without this the import of every `tests.*` module fails, the tracer
+# sees nothing, and the map comes back empty — which still produces correct answers, by
+# sending every mutation to the full suite, and takes a hundred times as long to do it.
+sys.path.insert(0, os.getcwd())
 seen = set()
+error = ""
 
 def tracer(frame, event, arg):
-    name = frame.f_code.co_filename
-    if name.startswith(prefix):
-        seen.add(name)
+    code = frame.f_code
+    # `<module>` frames are import-time execution, and importing anything from `charter`
+    # pulls in most of the package. Counted, they map every source file to every test
+    # module and the selection map answers "run everything" for everything — measured:
+    # `layout.py` mapped to all 322. What matters is which files a test module RUNS.
+    if code.co_name != "<module>" and code.co_filename.startswith(prefix):
+        # File AND function. File alone is far too coarse in this tree: `layout`,
+        # `slots` and `builtins` are reached by almost every test module through some
+        # shared fixture, so a file-keyed map answers "run all 322" for a mutation inside
+        # one private helper nothing but four modules ever call.
+        seen.add(code.co_filename)
+        seen.add(code.co_filename + "::" + code.co_name)
     return None
 
-sys.settrace(tracer)
-threading.settrace(tracer)
 try:
+    # Armed AFTER the import, for the same reason: a module body that calls its own
+    # helpers at import — `layout` derives the built-in geometry there — would otherwise
+    # register itself for every test module that imports it, however little it uses.
+    suite = unittest.defaultTestLoader.loadTestsFromName(module)
+except Exception:
+    error = traceback.format_exc(limit=3)
+    suite = None
+
+if suite is not None:
+    sys.settrace(tracer)
+    threading.settrace(tracer)
     try:
-        suite = unittest.defaultTestLoader.loadTestsFromName(module)
         with open(os.devnull, "w") as null:
             unittest.TextTestRunner(stream=null, verbosity=0).run(suite)
     except Exception:
-        pass
-finally:
-    sys.settrace(None)
-    threading.settrace(None)
+        error = traceback.format_exc(limit=3)
+    finally:
+        sys.settrace(None)
+        threading.settrace(None)
 
 with open(out_path, "w") as fh:
-    json.dump(sorted(seen), fh)
+    json.dump({"files": sorted(seen), "error": error}, fh)
 '''
 
 
@@ -566,25 +589,43 @@ def build_map(root: Path, paths: tuple[str, ...], jobs: int, scratch: Path,
     hits: dict[str, list[str]] = {}
     done = 0
 
-    def one(module: str) -> tuple[str, list[str]]:
+    def one(module: str) -> tuple[str, list[str], str]:
         out = scratch / f"{module}.json"
         subprocess.run([sys.executable, str(runner), module, str(out), prefix],
                        cwd=str(root), check=False, timeout=SUBSET_TIMEOUT,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            files = json.loads(out.read_text())
+            payload = json.loads(out.read_text())
         except (OSError, ValueError):
-            files = []
-        return module, files
+            return module, [], "the trace runner wrote nothing"
+        return module, payload["files"], payload["error"]
 
+    broken: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        for module, files in pool.map(one, modules):
+        for module, files, error in pool.map(one, modules):
             done += 1
             if done % 40 == 0:
                 log(f"    traced {done}/{len(modules)} modules")
+            if error:
+                broken.append(f"{module}: {error.strip().splitlines()[-1]}")
             for f in files:
-                rel = Path(f).resolve().relative_to(root.resolve()).as_posix()
-                hits.setdefault(rel, []).append(module)
+                name, _, symbol = f.partition("::")
+                rel = Path(name).resolve().relative_to(root.resolve()).as_posix()
+                hits.setdefault(f"{rel}::{symbol}" if symbol else rel, []).append(module)
+
+    # An empty or near-empty map is a broken map, not a tree with no coverage, and it is
+    # the failure mode that hides: every mutation still gets the right verdict, because
+    # a file with no covering module goes to the full suite — it just takes a hundred
+    # times as long and looks like the tool working.
+    if len(hits) < 2 or len(broken) > len(modules) // 4:
+        log(f"  ! the trace produced {len(hits)} file(s) and {len(broken)} broken "
+            f"module(s). The map is not usable:")
+        for line in broken[:3]:
+            log(f"  !   {line}")
+        raise RuntimeError("the selection map is empty — refusing to sweep blind")
+    if broken:
+        log(f"  selection map: {len(broken)} module(s) would not load; "
+            f"their files fall back to the full suite")
     return {k: sorted(v) for k, v in sorted(hits.items())}
 
 
@@ -618,7 +659,24 @@ class Outcome:
     detail: str
 
 
-def _verdict(proc: subprocess.CompletedProcess) -> Outcome:
+@dataclasses.dataclass
+class _Finished:
+    """What :func:`_verdict` needs from a run, whoever ran it."""
+
+    returncode: int
+    stdout: str
+    stderr: str = ""
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the whole process group a wedged run belongs to."""
+    try:
+        os.killpg(os.getpgid(proc.pid), 9)
+    except (ProcessLookupError, PermissionError):       # pragma: no cover - it is gone
+        proc.kill()
+
+
+def _verdict(proc) -> Outcome:
     text = (proc.stdout or "") + (proc.stderr or "")
     m = _RAN.search(text)
     ran = int(m.group(1)) if m else 0
@@ -655,9 +713,13 @@ class Sandbox:
         self._pristine: dict[str, bytes] = {}
 
     def apply(self, mutation: Mutation) -> None:
-        target = self.path / mutation.path
-        self._pristine[mutation.path] = target.read_bytes()
-        target.write_bytes(mutation.source)
+        self.apply_source(mutation.path, mutation.source)
+
+    def apply_source(self, rel: str, blob: bytes) -> None:
+        """Write one file, remembering what was there so :meth:`restore` can undo it."""
+        target = self.path / rel
+        self._pristine.setdefault(rel, target.read_bytes())
+        target.write_bytes(blob)
 
     def restore(self) -> None:
         for rel, blob in self._pristine.items():
@@ -667,15 +729,25 @@ class Sandbox:
     def run(self, argv: list[str], timeout: int) -> Outcome:
         env = dict(os.environ)
         env.pop("PYTHONDONTWRITEBYTECODE", None)
+        # Its own process group, so a timeout can take the whole tree of children with
+        # it. `subprocess.run(timeout=…)` kills only the direct child, and this suite
+        # starts real tmux servers — a wedged run that left one behind would be inherited
+        # by the next mutation and reported as ITS failure.
+        proc = subprocess.Popen([sys.executable, "-m", "unittest", *argv],
+                                cwd=str(self.path), text=True, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True)
         try:
-            proc = subprocess.run([sys.executable, "-m", "unittest", *argv],
-                                  cwd=str(self.path), check=False, text=True, env=env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                  timeout=timeout)
+            out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # A mutation that HANGS the suite has not survived it. Round three had one.
+            # A mutation that HANGS the suite has not survived it. Round three had one:
+            # deleting `Surface.run`'s `if chunk is None: return None` wedged the suite
+            # for 1800s rather than failing, and reading that as green would have pinned
+            # the guard on a timeout.
+            _kill_group(proc)
+            proc.communicate()
             return Outcome(False, 0, f"timed out after {timeout}s")
-        return _verdict(proc)
+        return _verdict(_Finished(proc.returncode, out))
 
     def subset(self, modules: list[str]) -> Outcome:
         return self.run(list(modules), SUBSET_TIMEOUT)
@@ -770,6 +842,27 @@ class Result:
     evidence: Evidence | None = None
 
 
+def select_for(selection: dict[str, list[str]], mutation: Mutation) -> list[str]:
+    """Which test modules to run for one mutation, narrowest first.
+
+    Three levels, and each fallback is deliberately toward running MORE:
+
+    1. the modules measured executing the mutated function — the usual case, and the
+       one that turns a four-minute suite into a two-second one;
+    2. the modules measured executing the mutated *file*, when the function was never
+       seen under its own name (a `<lambda>`, a 3.11 comprehension frame, a constant at
+       module scope);
+    3. nothing at all, which :func:`decide` reads as "go straight to the full suite".
+
+    Never the other way. A narrower answer than the truth is how a guard gets certified
+    as tested by a subset that never ran it.
+    """
+    at_symbol = selection.get(f"{mutation.path}::{mutation.symbol}")
+    if at_symbol:
+        return at_symbol
+    return selection.get(mutation.path, [])
+
+
 def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, Outcome | None]:
     """One mutation's verdict. The FULL suite has the last word, always.
 
@@ -832,7 +925,7 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
             free.append(box)
 
     def run_one(mutation: Mutation) -> Result:
-        modules = selection.get(mutation.path, [])
+        modules = select_for(selection, mutation)
         box = take()
         try:
             verdict, subset, full = decide(box, mutation, modules)
@@ -911,9 +1004,7 @@ def _second_order(results: list[Result], boxes: list["Sandbox"],
                     break
             time.sleep(0.05)
         try:
-            target = box.path / pair[0].path
-            box._pristine[pair[0].path] = target.read_bytes()
-            target.write_bytes(combined)
+            box.apply_source(pair[0].path, combined)
             outcome = box.full()
         finally:
             box.restore()
@@ -1088,12 +1179,12 @@ def main(argv: list[str] | None = None) -> int:
         Path(tempfile.gettempdir())
         / f"charter-sweep-{hashlib.sha256(str(root).encode()).hexdigest()[:12]}")
     workdir.mkdir(parents=True, exist_ok=True)
-    log(f"  workdir: {workdir}")
     cache_dir = workdir / "cache"
 
     def log(*a):
         print(*a, flush=True)
 
+    log(f"  workdir: {workdir}")
     started = time.time()
     log(f"sweeping {ref[:12]} (paths: {', '.join(paths)})")
     dirty = dirty_files(root, paths) if args.ref == "HEAD" else {}
