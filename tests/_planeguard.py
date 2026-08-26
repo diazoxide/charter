@@ -104,9 +104,12 @@ was weaker than the one production already had.
 So `_launcher_argv` calls `hooks._split_env_chdir`, `_COMMAND_WRAPPERS` derives from
 `hooks._WRAPPERS`, and `_CHARTER_WORD` from `hooks._CHARTER_PROGS`. What is left here is
 what production deliberately does not ask — a shell's ``-c`` string, Python source, a script
-file — plus one repair, `_unpack_split_strings`, for a defect in production's `-S` parse
-that reuse would otherwise inherit (#547). `TheHarnessGuardIsNotASecondCopyOfProductions`
-in `test_plane_spawn_guard.py` fails if the two drift apart again.
+file. There was one repair on the way in as well, `_unpack_split_strings`, for the defect in
+production's `-S` parse that reuse would otherwise inherit; #547 fixed that parse and the
+repair is gone, which is a regression test in its own right — nothing here re-orders
+anything any more, so the harness's answer to ``env -Sfoo=1 charter docs`` is production's.
+`TheHarnessGuardIsNotASecondCopyOfProductions` in `test_plane_spawn_guard.py` fails if the
+two drift apart again.
 
 **Charter's own spawners now hand the plane over** (`util.child_env`), so an isolated case
 satisfies this without knowing it exists. What is left for the tripwire is the case that
@@ -629,56 +632,6 @@ def _script_imports_charter(path: str) -> bool:
         return True
 
 
-def _unpack_split_strings(parts: list[str]) -> list[str]:
-    """``env -S '<command>'`` with its packed command put back as ordinary tokens.
-
-    Production unpacks this too, and for the reason its own comment gives
-    (:data:`charter.hooks._SPLIT_STRING_FLAGS`): the value IS the command word, so skipping
-    it leaves an empty argv. It reads the ``--split-string=`` spelling BEFORE the glued
-    ``-S…`` one, though, so a packed command that itself contains an ``=`` is split at the
-    wrong one — ``env -Sfoo=1 charter docs`` yields ``1`` as the program and the charter is
-    never seen at all.
-
-    That is not only this guard's problem: measured against `main`'s Bash tool-gate, both
-    ``env -Sfoo=1 charter secret get v k --reveal --force`` and ``env -Sfoo=1 cat
-    .charter/vaults/x.json`` are ALLOWED while the same commands unwrapped are denied.
-    Filed as #547 — this is not the place to change a production guard's decisions. What is
-    repaired here is only the ordering, on the way IN: the flag names are still production's
-    constant, and the result goes straight back to production's splitter, so there is still
-    one reader of what a wrapper run means.
-
-    Only a ``-S`` that an `env` could be taking is unpacked. `ssh -S <control-socket>` is a
-    different flag on a different program, and a guard that unpacked it would be inventing
-    an arity for a program it has not identified — the mistake this function's neighbour
-    was sent back over.
-    """
-    out: list[str] = []
-    env_seen = False
-    i, n = 0, len(parts)
-    while i < n:
-        tok = parts[i]
-        if env_seen and tok.startswith(_hooks._SPLIT_STRING_FLAGS):
-            if tok.startswith("--") and "=" in tok:
-                packed = tok.split("=", 1)[1]
-            elif not tok.startswith("--") and len(tok) > 2:
-                packed = tok[2:]
-            elif i + 1 < n:
-                packed, i = parts[i + 1], i + 1
-            else:
-                packed = ""
-            try:
-                out.extend(shlex.split(packed))
-            except ValueError:            # will not lex; the words are still the words
-                out.extend(packed.split())
-            i += 1
-            continue
-        if os.path.basename(tok).lower() == "env":
-            env_seen = True
-        out.append(tok)
-        i += 1
-    return out
-
-
 def _launcher_argv(parts: list[str]) -> tuple[list[str], list[str]]:
     """``(the argv the launcher run really reaches, the words consumed getting there)``.
 
@@ -698,6 +651,13 @@ def _launcher_argv(parts: list[str]) -> tuple[list[str], list[str]]:
       leave an empty argv and the guard would see no program at all — fail-open on the exact
       input the rest of this table exists to catch."*
 
+    Delegation used to come with ONE repair on the way in, `_unpack_split_strings`, because
+    production read the ``--split-string=`` spelling before the glued ``-S…`` one and split
+    ``-Sfoo=1`` at the packed value's own ``=``. That was #547, it is fixed in
+    :func:`~charter.hooks._flag_name_value`, and the repair is deleted rather than left
+    standing: a second implementation of one question is what #543 collapsed, and a repair
+    that outlives its defect quietly becomes the thing hiding the next one.
+
     *consumed* is what was dropped on the way, and it is asked separately because the name
     can be IN it: ``c=charter; eval $c`` puts charter in an assignment and nothing else,
     and ``env -S`` packs a whole command into one token. Computed as "in *parts* and not in
@@ -709,8 +669,7 @@ def _launcher_argv(parts: list[str]) -> tuple[list[str], list[str]]:
     direction it is safe to be wrong in.
     """
     try:
-        unpacked = _unpack_split_strings(list(parts))
-        _prog, _env, argv, _chdir, _reads = _hooks._split_env_chdir(unpacked)
+        _prog, _env, argv, _chdir, _reads = _hooks._split_env_chdir(list(parts))
     except Exception:
         return list(parts), list(parts)
     return list(argv), [tok for tok in parts if tok not in argv]

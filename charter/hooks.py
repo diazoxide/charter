@@ -1786,6 +1786,39 @@ _SPLIT_STRING_FLAGS = ("-S", "--split-string")
 _DURATION_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 
 
+def _flag_name_value(tok: str, spellings: tuple[str, ...]) -> tuple[str, str]:
+    """``(flag name, the value ATTACHED to it)`` for one option token, given every spelling
+    of the flags whose value can be attached. An empty value means "not attached here" —
+    the caller decides whether the NEXT token is it.
+
+    **The glued SHORT form is read before the long form's `=`, and #547 is what happens
+    when it is not.** getopt gives a short option everything glued after it, `=` included,
+    so `-Sfoo=1` packs `foo=1` — while `--split-string=foo=1` splits at its FIRST `=` and
+    packs the same thing. Reading the `=` rule first splits the glued form at the packed
+    value's OWN `=`: `env -Sfoo=1 cat .charter/vaults/x.json` came back with `1` as the
+    program, the `cat` never named, and the vault printed on a plane where the same command
+    unwrapped was denied. Its four neighbours — `-S <string>`, `--split-string=…`,
+    `env NAME=value`, and a glued value with no `=` in it — all denied, which is why the
+    one that did not survived a hand probe (#547 has the six-row measurement, and
+    `tests/test_guard_attached_option_values.py` pins all six).
+
+    The two rules are now DISJOINT rather than merely ordered — a glued short form never
+    starts with `--`, and the `=` rule now requires it — so the ordering cannot silently
+    come back. Same repair, same reason, for every other attached value in
+    :data:`_WRAPPER_VALUE_FLAGS`: `env -C<dir>` has exactly this shape, and
+    `env -Cx=y/../.charter/vaults cat x.json` was allowed and printed the vault — verified
+    live, the same way, with the same `mkdir x=y` a shell will do without being asked twice.
+    """
+    glued = next((f for f in spellings if not f.startswith("--")
+                  and tok.startswith(f) and len(tok) > len(f)), None)
+    if glued is not None:                   # `env -Sfoo=1`, `env -C<dir>`, `stdbuf -o0`
+        return glued, tok[len(glued):]
+    if tok.startswith("--") and "=" in tok:  # `env --split-string=…`, `sudo --chdir=<dir>`
+        name, value = tok.split("=", 1)
+        return name, value
+    return tok, ""
+
+
 def _split_env(toks: list[str]) -> tuple[str, list[str], list[str]]:
     """``(program, env-assignment prefixes, argv)`` — :func:`_split_env_chdir` without the
     directory or the files this command opens, for the guards that only name a program."""
@@ -1850,8 +1883,7 @@ def _split_env_chdir(
             nxt = toks[0]
             if base == "env" and nxt.startswith(_SPLIT_STRING_FLAGS):
                 toks.pop(0)
-                rest = nxt.split("=", 1)[1] if "=" in nxt else (
-                    nxt[2:] if nxt.startswith("-S") and len(nxt) > 2 else "")
+                rest = _flag_name_value(nxt, _SPLIT_STRING_FLAGS)[1]
                 if not rest and toks:
                     rest = toks.pop(0)
                 try:
@@ -1866,16 +1898,9 @@ def _split_env_chdir(
                 # what decides whether the next token is the program, the value is where a
                 # chdir flag relocates to. Two readings is how the value came to be lost.
                 takes = _WRAPPER_VALUE_FLAGS.get(base, ())
-                name, value = nxt, ""
-                if "=" in nxt:
-                    name, value = nxt.split("=", 1)
-                else:
-                    glued = next((f for f in takes if not f.startswith("--")
-                                  and nxt.startswith(f) and len(nxt) > len(f)), None)
-                    if glued is not None:           # `env -C<dir>`, `stdbuf -o0`
-                        name, value = glued, nxt[len(glued):]
-                    elif nxt in takes and toks:
-                        value = toks.pop(0)         # the value is the NEXT token
+                name, value = _flag_name_value(nxt, takes)
+                if not value and nxt in takes and toks:
+                    value = toks.pop(0)             # the value is the NEXT token
                 if value and name in _WRAPPER_CHDIR_FLAGS.get(base, ()):
                     chdir = value
                 if value and name in _WRAPPER_READ_FLAGS.get(base, ()):

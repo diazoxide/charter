@@ -376,17 +376,18 @@ class EverySpellingThatReachesCharter(_FakePlane):
     def test_a_packed_command_that_itself_contains_an_equals_sign(self):
         """``env -Sfoo=1 charter docs``, which reusing production's reader let through.
 
-        `hooks._split_env_chdir` reads the ``--split-string=`` spelling before the glued
-        ``-S…`` one, so it splits this at the FIRST ``=`` — the program becomes ``1`` and
-        the charter after it is never looked at. Reuse means inheriting that, so the
-        ORDERING is repaired on the way in (`_unpack_split_strings`) using production's own
-        flag names, and the repaired tokens go back to production's splitter.
+        `hooks._split_env_chdir` used to read the ``--split-string=`` spelling before the
+        glued ``-S…`` one, so it split this at the FIRST ``=`` — the program came back ``1``
+        and the charter after it was never looked at. Reuse means inheriting that, so the
+        ordering was repaired here on the way in while #547 was open.
 
-        The same input is a live bypass of charter's Bash tool-gate on `main` — measured:
+        The same input was a live bypass of charter's Bash tool-gate — measured:
         ``env -Sfoo=1 cat .charter/vaults/x.json`` and ``env -Sfoo=1 charter secret get v k
-        --reveal --force`` are both ALLOWED there while the unwrapped commands are denied.
-        That is production's to fix (#547); this case is only about the harness not
-        shipping the same hole.
+        --reveal --force`` were both ALLOWED while the unwrapped commands were denied. #547
+        fixed the ordering in production (`hooks._flag_name_value`), the repair here is
+        deleted, and this case now passes on production's parse alone — which is the second,
+        free regression test that fix came with. `tests/test_guard_attached_option_values.py`
+        holds the six-row table on the production side.
         """
         for argv in ([str(self.fake), "docs"],
                      ["env", f"-Sfoo=1 {self.fake} docs"],
