@@ -22,3 +22,7 @@ Written by the persona as it learns; committed and shared.
 - [Nudge standard (#371, PR 379): a prompt is worth its interruption only i](nudge-standard-371-pr-379-a-prompt-is-worth-its-.md)
 - [The frame (charter <harness>, #345) is built on tmux and lives in charte](the-frame-charter-harness-345-is-built-on-tmux-a.md)
 - [tmux captures a client's environment into the SERVER only when new-sessi](tmux-captures-a-client-s-environment-into-the-se.md)
+- [release.yml's tag/version check is gated 'if: startsWith(github.ref, ref](release-yml-s-tag-version-check-is-gated-if-star.md)
+- [Guard-bypass technique that keeps working: when a parse bug is found, se](guard-bypass-technique-that-keeps-working-when-a.md)
+- [Deletion-sweep methodology gap, measured on release.yml's version check](deletion-sweep-methodology-gap-measured-on-relea.md)
+- [MERGE GATE: never trust 'gh pr checks' or mergeStateStatus=CLEAN to mean](merge-gate-never-trust-gh-pr-checks-or-mergestat.md)
