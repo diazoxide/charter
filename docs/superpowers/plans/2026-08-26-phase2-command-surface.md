@@ -109,20 +109,20 @@ constants, `panel_command`'s `charter panel <slot>` argv, `cli.py`'s `panel` sub
 
 ### Task 2: The overlay surface
 
-- [ ] **Step 1:** write the failing test — an overlay renders rows into a pane charter owns,
+- [x] **Step 1:** write the failing test — an overlay renders rows into a pane charter owns,
       returns a selection, and restores what was there.
-- [ ] **Step 2:** run it, confirm it fails.
-- [ ] **Step 3:** implement a **full-pane** overlay: charter draws it, owns its input loop, and
+- [x] **Step 2:** run it, confirm it fails.
+- [x] **Step 3:** implement a **full-pane** overlay: charter draws it, owns its input loop, and
       is modal. Not `display-popup`. Not `display-menu`.
-- [ ] **Step 4:** input — keys always; mouse **only when the overlay's own pane requests
+- [x] **Step 4:** input — keys always; mouse **only when the overlay's own pane requests
       reporting**, per §4c. Handle a release with no press.
-- [ ] **Step 5:** **the escape hatch.** One key returns to the harness unconditionally, from any
+- [x] **Step 5:** **the escape hatch.** One key returns to the harness unconditionally, from any
       state, including a wedged renderer. Operate it at the **tmux level** (§4e) so it works
       when charter's own loop is stuck. Test it against a deliberately hung overlay.
-- [ ] **Step 6:** resize — the overlay must survive `window-resized`, redraw, and keep selection.
-- [ ] **Step 7:** mutations — remove the escape hatch; make the overlay non-modal; drop the
+- [x] **Step 6:** resize — the overlay must survive `window-resized`, redraw, and keep selection.
+- [x] **Step 7:** mutations — remove the escape hatch; make the overlay non-modal; drop the
       release-with-no-press tolerance. Each RED.
-- [ ] **Step 8:** commit.
+- [x] **Step 8:** commit.
 
 ---
 

@@ -40,7 +40,7 @@ from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter import commands_frame, config, instance, statusline, util
-from charter.frame import gather, layout, menu, slots, state, tmuxctl
+from charter.frame import gather, layout, menu, overlay, slots, state, tmuxctl
 from tests import _envguard
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
@@ -1426,7 +1426,8 @@ class _FakeTmux:
                 panel_pane_ids=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
-                kill_rc=0, arm_rc=0, chrome_rc=0, resize_hook_rc=0, capture_rc=0,
+                kill_rc=0, arm_rc=0, hatch_rc=0, chrome_rc=0, resize_hook_rc=0,
+                capture_rc=0,
                 respawn_hook_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
@@ -1452,6 +1453,7 @@ class _FakeTmux:
         self.dm_rc = dm_rc
         self.kill_rc = kill_rc
         self.arm_rc = arm_rc
+        self.hatch_rc = hatch_rc
         self.chrome_rc = chrome_rc
         self.resize_hook_rc = resize_hook_rc
         self.capture_rc = capture_rc
@@ -1485,6 +1487,14 @@ class _FakeTmux:
             # file, never as a bare tmux argv command).
             return subprocess.CompletedProcess(cmd, self.arm_rc, stdout="",
                                                stderr="" if self.arm_rc == 0 else "cannot set")
+        if overlay.HATCH_OPTION in cmd:
+            # The escape hatch's window option. Matched on the PRODUCTION constant, and
+            # BEFORE the `select-pane` branch below, because the option's VALUE is a
+            # `select-pane` command line and a value that ever arrived as its own argv
+            # element would otherwise be answered by the wrong fake.
+            return subprocess.CompletedProcess(cmd, self.hatch_rc, stdout="",
+                                               stderr="" if self.hatch_rc == 0
+                                               else "cannot set")
         if _is_chrome(cmd):
             return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
                                                stderr="" if self.chrome_rc == 0
@@ -1787,6 +1797,117 @@ class Launch(PersonaIso, unittest.TestCase):
                          "session-scoped, same reasoning as CHARTER_PY: two planes on "
                          "one laptop can be two different charter installs")
         self.assertEqual(cmd[-1], "1")
+
+    def test_the_escape_hatch_is_armed_with_this_frames_own_harness_pane(self):
+        """Charter's HALF of the escape hatch, which nothing pinned.
+
+        `conf_text`'s `bind -n F12 run-shell -C '#{@charter_hatch}'` carries no identity
+        — it reads a WINDOW option — so the bind alone is inert. This call is what puts
+        a value in it. Deleting the whole arming block from `cmd_launch` left the entire
+        suite green (5933 tests, OK), and the shipped consequence was measured against a
+        real tmux 3.7c: with `@charter_hatch` unset the bind expands to nothing and F12
+        is a **silent no-op** — no pane killed, no focus moved, no error. The safety
+        property of the whole command surface, gone, with every test still passing.
+
+        Why `tests/test_frame_overlay_escape_hatch.py`'s real-tmux tests do not cover
+        this: each of them ARMS THE OPTION ITSELF (directly via `overlay.arm_hatch_argv`,
+        or through `overlay.modal_argvs`) before pressing the key. They prove tmux's half
+        of the mechanism — that a bind reading this option does the right thing once the
+        option holds the right text — and never charter's half, that anything ever writes
+        it. A test that arms the mechanism it is verifying proves the other party's half.
+
+        `%41` rather than the fake's default `%7`: the value asserted here is a command
+        line that has to NAME the harness pane, and a distinctive id is what tells "the
+        launcher passed the pane tmux reported" from "some pane id got in there".
+        """
+        fake = _FakeTmux(exit_code=0, pane_id="%41")
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        arm_calls = [c for c in fake.calls if overlay.HATCH_OPTION in c]
+        self.assertEqual(len(arm_calls), 1,
+                         f"the frame's escape hatch must be armed exactly once: "
+                         f"{fake.calls}")
+        cmd = arm_calls[0]
+        self.assertIn("set-option", cmd)
+        self.assertIn("-w", cmd)
+        self.assertNotIn("-g", cmd,
+                         "a global write would hand frame N's harness pane to frame "
+                         "N-1 — the `last launched wins` trap `conf_text` names")
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%41",
+                         "the window is resolved through the harness pane's own id, so "
+                         "the value lands on the window whose presser it answers for")
+        self.assertEqual(cmd[-1], "select-pane -t %41",
+                         "the armed value must return the presser to THIS frame's "
+                         "harness, and with no overlay open must carry no `kill-pane` "
+                         "at all — an empty kill target kills the current pane")
+
+    def test_the_hatch_is_armed_before_the_first_panel_is_split(self):
+        """The ordering `frame/overlay.py`'s docstring calls load-bearing, at the one
+        call site that can get it wrong.
+
+        A frame with panes drawn and no way back to the harness is exactly the state the
+        hatch exists for, so the window between "the harness pane exists" and "the hatch
+        answers for it" must contain nothing that can wedge. `modal_argvs` makes the same
+        argument for its own three commands (arm, then focus, then zoom) and
+        `cmd_launch` makes it for the two `pane-died` hooks; this is the third instance
+        of it and the only one nothing asserted.
+
+        The assertion is the ORDER, not the presence — moving the block below
+        `_draw_panels` leaves the test above green.
+        """
+        fake = _FakeTmux(exit_code=0)
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        arm_idx = next((i for i, c in enumerate(fake.calls)
+                        if overlay.HATCH_OPTION in c), None)
+        self.assertIsNotNone(arm_idx, f"the hatch was never armed: {fake.calls}")
+        split_idxs = [i for i, c in enumerate(fake.calls) if "split-window" in c]
+        self.assertTrue(split_idxs,
+                        "no panel was drawn — this ordering test would be vacuous")
+        self.assertLess(arm_idx, split_idxs[0],
+                        "the escape hatch must answer for the harness before the first "
+                        "panel is split, not after")
+
+    def test_a_hatch_that_cannot_be_armed_is_said_out_loud_and_is_not_fatal(self):
+        """The degrade every other cosmetic-to-the-launch tmux failure here gets — with
+        one difference worth naming in the message, which is that this one is not
+        cosmetic. The harness pane is already live by now, so refusing to attach over it
+        would cost the operator the session they asked for; but a frame whose F12 does
+        nothing is a frame with no way out of a wedged pane, and an operator who is
+        never told is an operator who finds out by pressing it.
+        """
+        fake = _FakeTmux(exit_code=4, hatch_rc=1)
+        warned = []
+        with mock.patch("charter.util.warn", side_effect=lambda m: warned.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 4, "an unarmed hatch must not cost the harness's own code")
+        self.assertTrue(any(overlay.HATCH_KEY in m and "continuing without it" in m
+                            for m in warned),
+                        f"a hatch that failed to arm was never named: {warned}")
+        self.assertTrue(any("attach" in c for c in fake.calls))
+
+    def test_a_harness_tmux_will_not_name_as_a_pane_arms_nothing_and_says_so(self):
+        """The other refusal, and the one that must not be quiet.
+
+        `overlay.hatch_command` holds both ids to `tmuxctl.PANE_ID_RE` because the value
+        is stored in an option tmux later **re-parses as a command line**, so a harness
+        tmux reports as something other than `%N` arms nothing at all rather than arming
+        something charter cannot predict the parse of. What the launcher owes on top of
+        that is the sentence: the operator's frame comes up perfectly, and the one key
+        that always leaves it does nothing, and the only difference between finding that
+        out here and finding it out by pressing F12 on a wedged pane is this warning.
+        """
+        fake = _FakeTmux(exit_code=0, pane_id="not-a-pane-id")
+        warned = []
+        with mock.patch("charter.util.warn", side_effect=lambda m: warned.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual([c for c in fake.calls if overlay.HATCH_OPTION in c], [],
+                         "a pane id tmux's own regex refuses must never reach the "
+                         "option tmux re-parses as a command line")
+        self.assertTrue(any(overlay.HATCH_KEY in m and "escape hatch" in m
+                            for m in warned),
+                        f"an unarmable hatch was never named: {warned}")
 
     def test_panels_are_launched_via_self_relaunch_argv(self):
         """#390's visible failure: the panel argv (built inside `layout.panel_command`)
