@@ -62,6 +62,32 @@ EDGES = ("top", "bottom", "left", "right")
 #: to get right across terminals, and the most likely to fight tmux's own selection —
 #: and the asymmetry is the whole argument: adding it in a later API version costs
 #: nothing, while removing it after a provider has shipped against it costs everything.
+#:
+#: **Declaring one of these is a declaration of what you HANDLE, never a promise that it
+#: FIRES — and for three of the six, charter cannot make that promise.** Written here
+#: because this constant is where a provider author meets the question;
+#: `docs/frame.md`'s "Mouse is off by default" says the operator's half of the same fact.
+#:
+#: * ``click`` and ``scroll`` — **charter does not control whether pointer events reach
+#:   your pane** (§4i). tmux asks the outer terminal to report the mouse from the ACTIVE
+#:   pane's own request alone: with `[frame] mouse` off and the harness pane active,
+#:   nothing has asked the terminal to report, so a click on your panel produces no bytes
+#:   at all and there is nothing for tmux to route. It is not that charter drops the
+#:   event — the event never happens. The harness (Claude Code, or whatever the operator
+#:   ran) is the program that decides, and charter does not own it. `[frame] mouse = true`
+#:   is the only setting that makes reporting unconditional, and it costs the operator
+#:   their terminal's own text-selection (see `instance.FRAME_FIELDS`). **So a component
+#:   whose only route to a piece of state is a click has no route to it on most planes.**
+#:   Give every pointer affordance a ``key`` as well.
+#: * ``focus``/``blur`` — needs tmux's ``focus-events``, which ships OFF.
+#:   `commands_frame.conf_text` turns it on for every frame charter launches, so on
+#:   charter's own server these fire; inside an operator's existing tmux charter sources
+#:   no config at all, and they do not. They also require the operator's terminal
+#:   emulator to report focus in the first place, which not all do.
+#:
+#: The rule that follows, and the one thing this constant is asking of you: **degrade to
+#: "never fires", never to "fires wrongly".** A component that treats a missing ``blur``
+#: as "still focused" is correct; one that infers focus from elapsed time is not.
 EVENT_KINDS = ("key", "click", "scroll", "focus", "blur", "resize")
 
 #: The slices of the plane snapshot a component may declare in ``needs`` — and therefore

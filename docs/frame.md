@@ -59,9 +59,28 @@ first.** The frame raises tmux's `history-limit` (50 000 lines, configurable) an
 mouse wheel to enter copy-mode, but it is tmux's buffer you are scrolling, not the
 terminal emulator's.
 
-**Mouse is off by default.** `set -g mouse on` takes over drag-select, so turning it on
-trades your terminal's own text-selection for clickable panels — a trade this release does
-not make for you. `[frame] mouse = true` opts in.
+**Mouse is off by default, and turning it on costs you your terminal's own text-selection.**
+That is not a trade charter can soften and not one a later release will remove — it is how
+tmux works. tmux asks your terminal to report the mouse, and from that moment your terminal
+stops doing its own drag-select over the whole window. Measured on tmux 3.1c, 3.2 and 3.7c:
+there is no state in which charter's panels are clickable and native selection survives.
+`[frame] mouse = true` opts in with your eyes open.
+
+**With mouse off, whether a panel is clickable is decided by the harness, not by charter.**
+tmux asks your terminal to report the mouse from the *active* pane's own request alone. With
+`[frame] mouse` off and the harness pane active, nothing has asked, so a click on a panel
+produces no bytes at all — there is nothing for charter to receive and nothing for tmux to
+route. If the harness you ran (Claude Code, say) does request mouse reporting, panels become
+clickable while it is active, and you lose drag-select for as long as it is. Charter does not
+control that program and cannot promise you either behaviour. Keys always work. A surface
+charter draws over a whole pane and drives itself is the exception — while it is open it
+*is* the active pane, so its own request is the one that reaches your terminal.
+
+**Focus events are on inside a frame charter launched, and off inside your own tmux.** tmux
+ships `focus-events` off, and it is a server-wide setting; charter turns it on for its own
+private server, which is what lets a panel know it stopped being the active pane. Inside a
+tmux you already have, charter writes no config at all (see below), so panels there never
+learn it. Your terminal emulator also has to report focus for any of it to work.
 
 **Panels repaint when charter's own hooks say something changed**, not by reaching out for
 anything themselves: every `posttooluse*` hook bumps a version marker charter already
@@ -158,6 +177,11 @@ the sentence above:
   and `mouse` are session options in tmux; setting them for the frame would set them for
   every other window in that session too. `[frame] history-limit` and `[frame] mouse` are
   ignored inside your tmux.
+- **Your `focus-events` setting applies, and panels get no focus events unless you have
+  turned it on.** `focus-events` is a tmux *server* option — measured on 3.2 and 3.7c, it
+  sits in `show-options -s` and setting it for one session sets it for every session on
+  that server. Charter turns it on for its own private server and will not touch yours.
+  `set -s focus-events on` in your own config is how you get it here.
 - **No hotkey.** tmux key tables are server-wide with no per-window form, so any key
   charter bound would be taken from every window you have open. The spec allowed a
   prefix-scoped bind here; charter takes the stricter option, because the menu's one

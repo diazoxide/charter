@@ -4756,5 +4756,157 @@ class EveryBorderOptionThisTmuxHasIsPinned(_TmuxServerFixture, PersonaIso,
             self.assertIn(name, theirs, f"{name} is not a window option on this tmux")
 
 
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class FocusEventsIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase):
+    """`conf_text`'s `set -g focus-events on`, and the reason it is a CONFIG LINE rather
+    than something charter could detect at runtime and decide about.
+
+    Spec §4f closes a component's event kinds at six, two of which are `focus` and `blur`.
+    tmux ships `focus-events` OFF; with it off tmux writes `\\x1b[?1004l` to the client and
+    never delivers a pane focus transition, so those two kinds do not exist until charter
+    turns the option on. `tests/test_frame_launcher.py`'s `Conf` pins the TEXT (and fails
+    on a machine with no tmux at all); this class pins what tmux does with it.
+
+    **The second test here is the interesting one, and it is a refutation.** The obvious
+    alternative to a config line is a runtime guard — ask tmux whether the client is
+    focused and behave accordingly — and `#{client_flags}` is the format that looks like
+    the answer. It is not: it reports `focused` whether or not focus events are being
+    delivered, so a guard written against it passes with the feature dead. Measured on
+    3.7c and on 3.2 (`tmuxctl.FLOOR`, built from the release tarball and run) with one
+    attached pty client and the option flipped underneath it, all three readings were
+    `attached,focused,UTF-8`. That test asserts the flags are IDENTICAL across the flip,
+    which is the property that makes them useless as a guard — an `assertIn("focused")`
+    alone would pass on a tmux where the flag had started telling the truth.
+
+    The third pins the SCOPE, and exists so nobody "corrects" `-g` back to the
+    `set -t <session>` the Phase 2 plan asked for. `focus-events` is a server option on
+    both versions; a session-scoped write of it lands on every session on the server, so
+    the `-t` spelling would read as containment while containing nothing. `mouse` is the
+    control: run through the same probe it leaves the sibling untouched, which is what a
+    genuinely session-scoped option looks like.
+
+    Its own server, its own socket, and no attached client except in the one test that
+    needs one (`_NeedsAttachedClient` skips where tmux will not attach one at all).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # kill-server THEN unlink, registered so LIFO runs them in that order — see
+        # `PanelIntegration._teardown_socket`'s own docstring. `conf_text` emits
+        # `set -g remain-on-exit on`, which this class sources for real, so its panes
+        # outlive their commands exactly as `MenuClientIntegration`'s do.
+        self.addCleanup(self._teardown_socket)
+
+    def _teardown_socket(self) -> None:
+        _tmux("kill-server")
+        (Path("/tmp") / f"tmux-{os.getuid()}" / SOCKET).unlink(missing_ok=True)
+
+    def _new_session(self, fid: str) -> None:
+        """A `cat`-backed session with its pane's own pid registered for cleanup —
+        `kill-server` alone is documented in `_kill_pid` as unreliable at reaping one."""
+        r = _tmux("new-session", "-d", "-s", fid, "-x", "80", "-y", "24", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pid = _tmux("display-message", "-p", "-t", fid, "#{pane_pid}").stdout.strip()
+        self.addCleanup(_kill_pid, pid)
+
+    def _source_conf(self, fid: str) -> None:
+        """`commands_frame.conf_text`'s own output, `source-file`'d for real — byte for
+        byte, never a hand-retyped `set`. The point is that the PRODUCTION text is what
+        turns the option on."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session=fid)
+        conf = Path(tempfile.mkdtemp(prefix="charter-integ-focusconf-")) / "tmux.conf"
+        self.addCleanup(shutil.rmtree, conf.parent, True)
+        conf.write_text(text)
+        r = _tmux("source-file", str(conf))
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    @staticmethod
+    def _focus_events(target: str) -> str:
+        return _tmux("show-options", "-t", target, "focus-events").stdout.strip()
+
+    def test_charters_own_conf_text_turns_focus_events_on_for_real(self):
+        """The behavioural pin for `set -g focus-events on`: tmux reports the option OFF
+        before charter's config is sourced and ON after it, with nothing hand-retyped in
+        between.
+
+        The BEFORE half is read from tmux rather than assumed, per this module's rule
+        against asserting on a version string — a tmux that had changed its own default
+        would make this test say so instead of quietly passing on a coincidence.
+        """
+        fid = "focus-conf"
+        self._new_session(fid)
+        self.assertEqual(self._focus_events(fid), "focus-events off",
+                         "this tmux does not ship focus-events off, so what the line "
+                         "below proves is no longer what it was written to prove")
+        self._source_conf(fid)
+        self.assertEqual(self._focus_events(fid), "focus-events on",
+                         "charter's own frame config left focus-events off — §4f's "
+                         "`focus`/`blur` event kinds do not exist without it")
+
+    def test_client_flags_cannot_serve_as_the_guard_this_line_replaces(self):
+        """`#{client_flags}` LIES, so no runtime guard can stand in for the config line.
+
+        It reads `focused` with focus events being delivered and `focused` with them
+        dead. Asserted as an EQUALITY across the flip rather than as "the string contains
+        focused": the defect is that the flag cannot distinguish the two states, and only
+        comparing them can catch a tmux where it started to.
+        """
+        fid = "focus-flags"
+        self._new_session(fid)
+        self._attach_pty(fid)
+
+        def flags() -> str:
+            r = _tmux("list-clients", "-t", fid, "-F", "#{client_flags}")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return r.stdout.strip()
+
+        self.assertEqual(_tmux("set", "-g", "focus-events", "off").returncode, 0)
+        dead = flags()
+        self.assertEqual(_tmux("set", "-g", "focus-events", "on").returncode, 0)
+        live = flags()
+        self.assertEqual(_tmux("set", "-g", "focus-events", "off").returncode, 0)
+        dead_again = flags()
+
+        self.assertTrue(dead, "no client was attached, so nothing was measured")
+        self.assertIn("focused", dead,
+                      "this tmux stopped reporting `focused` while focus events were "
+                      "off — the flag may have become honest; re-measure before relying "
+                      "on it")
+        self.assertEqual(dead, live,
+                         "`#{client_flags}` now distinguishes focus-events on from off; "
+                         "the reason `conf_text` sets the option rather than probing a "
+                         "flag no longer holds and should be re-argued")
+        self.assertEqual(live, dead_again)
+
+    def test_focus_events_is_a_server_option_so_a_session_scoped_write_would_not_contain_it(self):
+        """Why the line is `-g` and not the `set -t <session>` the plan asked for.
+
+        Two sessions on one server. Setting `focus-events` for one sets it for BOTH,
+        because it lives in tmux's server table — so the `-t` spelling would read as
+        containment while containing nothing, in a config whose first three lines are
+        session-scoped precisely so one frame cannot rewrite another's. `mouse` is the
+        control that stops this test passing on a broken probe: run through exactly the
+        same two calls it leaves the sibling reading empty, which is what a genuinely
+        session-scoped option does.
+        """
+        self._new_session("focus-one")
+        self._new_session("focus-two")
+        self.assertIn("focus-events", _tmux("show-options", "-s").stdout,
+                      "focus-events is no longer a tmux SERVER option on this version — "
+                      "`conf_text`'s `-g` should be re-argued against a per-session form")
+
+        self.assertEqual(_tmux("set", "-t", "focus-one", "focus-events", "on").returncode, 0)
+        self.assertEqual(self._focus_events("focus-two"), "focus-events on",
+                         "a session-scoped focus-events write did NOT reach the sibling, "
+                         "so tmux grew a per-session form and `conf_text` can use it")
+
+        self.assertEqual(_tmux("set", "-t", "focus-one", "mouse", "on").returncode, 0)
+        self.assertEqual(
+            _tmux("show-options", "-t", "focus-two", "mouse").stdout.strip(), "",
+            "the control failed: even `mouse`, which conf_text relies on being "
+            "session-scoped, reached the sibling here — this probe measures nothing")
+
+
 if __name__ == "__main__":
     unittest.main()

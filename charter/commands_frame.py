@@ -376,6 +376,47 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     identical binding anyway, so nothing is lost by sharing it the same way
     `remain-on-exit` is (see `_PLACEHOLDER_CONF`).
 
+    **`focus-events` is the THIRD genuine server option here, and it is written `-g` for
+    exactly `escape-time`'s reason.** Spec §4f closes the component event kinds at six,
+    two of which are `focus` and `blur`; tmux ships `focus-events` OFF, and with it off
+    tmux writes `\\x1b[?1004l` to the client and never delivers a pane focus transition,
+    so those two kinds do not exist at all until this line runs. The Phase 2 plan asked
+    for `set -t <session> focus-events on`; measured on this machine, that spelling is a
+    lie about scope and the `-g` above is the true one. tmux 3.7c AND tmux 3.2 —
+    charter's own `tmuxctl.FLOOR`, built from the release tarball and run — both answer::
+
+        $ tmux -L t7 show-options -s | grep focus-events
+        focus-events off                 # server table
+        $ tmux -L t7 show-options -g | grep focus-events
+        (absent from -g)                 # NOT a session option, on either version
+        $ tmux -L t7 set -t one focus-events on
+        $ tmux -L t7 show-options -t two focus-events
+        focus-events on                  # the SIBLING session, which nobody set
+
+    `mouse`, run through the identical probe, answers `''` for the sibling — that is what
+    a genuinely session-scoped option looks like, and `focus-events` is not one. So
+    `set -t <session>` here would not contain anything; it would only read as though it
+    did, sitting in a list whose first three lines are session-scoped precisely so frame
+    N cannot rewrite frame N-1's settings. Nothing is actually lost by writing it
+    globally — every frame wants the identical `on`, like `escape-time` and
+    `remain-on-exit` — and tmux's own source says the same thing outright: 3.2's
+    `options-table.c` carries `.name = "focus-events"` with `.scope =
+    OPTIONS_TABLE_SERVER` and `.default_num = 0`.
+
+    **Do not replace this with a runtime check against `#{client_flags}`.** That format
+    reports `focused` whether or not focus events are being delivered, so a guard written
+    against it passes with the feature dead. Measured on 3.7c and 3.2, one attached pty
+    client, flipping the option underneath it::
+
+        focus-events off (feature DEAD)  client_flags='attached,focused,UTF-8'
+        focus-events on  (feature LIVE)  client_flags='attached,focused,UTF-8'
+        focus-events off again           client_flags='attached,focused,UTF-8'
+
+    Identical in all three states. The only readable evidence is the OPTION
+    (`show-options -t <session> focus-events`), which is why this line — not a probe — is
+    what makes §4f's `focus`/`blur` exist. Pinned by
+    `tests/test_frame_tmux_integration.py`'s `FocusEventsIntegration`.
+
     Neither `pane-died` hook lives here — see `_pane_died_write_hook_argv` and
     `_pane_died_teardown_hook_argv` for why they are issued as their own tmux commands
     instead of text baked into this string.
@@ -451,6 +492,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
         f"set -t {session} history-limit {int(history_limit)}",
         "set -g escape-time 0",
         "set -g remain-on-exit on",
+        "set -g focus-events on",
         f"bind -n {hotkey} run-shell "
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-menu \"#{{client_name}}\"'",
         "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"

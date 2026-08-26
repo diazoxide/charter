@@ -542,9 +542,33 @@ FRAME_FIELDS = {
     #: `normal` -> `full` when #386 raised the `slots` default above, and that test is
     #: what made the move happen at merge time instead of being noticed later.
     "density": ("full", "density"),
-    #: Off by default: tmux's `set -g mouse on` takes over drag-select, so turning this on
-    #: trades the operator's terminal text-selection for clickable panels. That trade
-    #: belongs to a later release that actually ships clickable panels, not this one.
+    #: Off by default, and the trade it makes is UNAVOIDABLE rather than conditional.
+    #:
+    #: An earlier version of this comment said the trade "belongs to a later release that
+    #: actually ships clickable panels, not this one". Both halves of that are now wrong.
+    #: This IS that release — Phase 2 ships a clickable surface — and measurement says
+    #: there was never a later release in which the trade could be avoided.
+    #: `docs/superpowers/specs/2026-08-26-tmux-input-findings.md` §5, on tmux 3.1c, 3.2
+    #: and 3.7c: tmux enables mouse reporting on the OUTER terminal from the active pane's
+    #: mode alone, so the instant any mouse-requesting pane is active the terminal is
+    #: reporting and its own drag-select is gone for the whole window. **There is no state
+    #: in which charter's panels are clickable and native selection survives.** Turning
+    #: tmux's own `mouse` off does not dodge the trade; it only makes it conditional on
+    #: which pane happens to be focused.
+    #:
+    #: Which is the second thing this flag really controls, and the reason it stays a
+    #: flag: with it OFF, whether a panel is clickable is decided by the ACTIVE pane's
+    #: request — that is the harness (Claude Code, or whatever the operator ran), a
+    #: program charter does not own. So "clickable panels" is not a property charter can
+    #: promise for its panes at all with this off (§4i); with it on, reporting is
+    #: unconditional from attach and the cost is unconditional too. Off is the default
+    #: because an operator who has not asked for it keeps their selection.
+    #:
+    #: A component declaring `click`/`scroll` therefore declares what it HANDLES, never
+    #: that the event fires — `frame/component.py`'s `EVENT_KINDS` says that to the
+    #: provider author, `docs/frame.md` says it to the operator, and both point back here.
+    #: The palette is the exception and does not need this flag: while it is open it is
+    #: the active surface, so its own request is the one that reaches the terminal.
     "mouse": (False, "mouse"),
     "hotkey": ("F2", "hotkey"),
     "history_limit": (50000, "history-limit"),
