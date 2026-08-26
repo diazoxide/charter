@@ -678,7 +678,147 @@ def frame_of(cfg: dict) -> dict:
             out[key] = value
     if "density" in section and not took_slots:
         out["slots"] = density_slots(out["density"])
+    placed = component_tables(section)
+    if placed is not None:
+        out["slots"] = [p["slot"] for p in placed if p["visible"]]
     return out
+
+
+#: The TOML key the arrangement is spelled with: ``[[frame.component]]``, an ARRAY of
+#: tables, so file order is split order and the geometry is written down the way it is
+#: read. ``slots`` says the same thing in four words and can say nothing else; this can
+#: name a component charter did not write.
+FRAME_COMPONENT_KEY = "component"
+
+#: Every key a ``[[frame.component]]`` table may carry, and the whole of the form.
+#:
+#: * ``use`` — the component id, which is `frame/builtins.py`'s vocabulary and NOT
+#:   ``slots``' one: `identity`, `attention`, `repos`, `sidebar`. The two names for one
+#:   panel exist because `slots` is committed on every plane that has a charter.toml and
+#:   `charter panel <slot>` is a tmux argv (`builtins.SLOT_OF` is the one table between
+#:   them); `use` is the new vocabulary and does not accept the old spelling, so a file
+#:   says which of the two it is written in.
+#: * ``edge`` — which side of the harness it attaches to.
+#: * ``size`` — how many cells it is given, for a component whose size is `Fixed`.
+#: * ``visible`` — whether it is drawn at all. The one key `slots` could only express by
+#:   deleting a name, which loses the position with it.
+FRAME_COMPONENT_FIELDS = ("use", "edge", "size", "visible")
+
+
+def _placement(reg, cid: str, *, visible: bool = True) -> dict:
+    """One resolved placement: the component, where it sits, how big, and whether drawn.
+
+    ``size`` is the size POLICY (`component.Fixed`/`Content`/`Fill`), not a number.
+    Turning a policy into cells is `layout`'s job and it does it in one place
+    (`layout._cells`); a second answer here is the two-implementations shape that let the
+    test harness keep a worse copy of what runs charter (#547).
+    """
+    c = reg.get(cid)
+    from .frame import builtins as _builtins
+    return {"use": cid, "slot": _builtins.SLOT_OF[cid], "edge": c.edge, "size": c.size,
+            "visible": visible}
+
+
+def component_tables(section) -> list[dict] | None:
+    """The ``[[frame.component]]`` arrangement *section* declares, or ``None``.
+
+    ``None`` means "nothing usable was declared here" — no tables at all, or an
+    arrangement charter cannot draw — and the caller falls back to ``slots``, which falls
+    back to ``density``, which falls back to the shipped default. Every layer of that is
+    a frame charter is certain it can build.
+
+    **An arrangement is refused whole, and #535 is the reason it is not refused one table
+    at a time.** The obvious design — drop the table charter cannot make sense of, keep
+    the rest — hands the operator a frame with a panel silently missing from it, and a
+    missing repo table is a plane that appears to have no clones. That is the exact change
+    #535 shipped, and it was caught by a reviewer rather than by a test. So a single
+    unusable value takes the whole arrangement out of play and the frame charter draws is
+    the one `slots` describes: the operator sees their arrangement ignored, which is a
+    visible, whole-frame difference, rather than one pane's worth of quiet fiction.
+
+    Task 7 of this plan replaces that for the one case it can improve: a component named
+    here with no provider installed gets a MESSAGE in its own pane and the rest of the
+    frame draws. That is the same principle with somewhere to say it; until the surface
+    exists, refusing the arrangement is the version of it charter can actually keep.
+
+    **``edge`` and ``size`` are accepted only where charter can honour them, which today
+    means only at the component's own declaration.** `layout` derives the whole frame's
+    geometry from those declarations (`layout._derive`), and nothing between here and
+    `split-window` carries a per-plane override yet — so an ``edge = "top"`` on the repo
+    table would be a value read, validated, stored and then ignored, and the frame would
+    draw exactly as if the line were not there. A config key that changes nothing is
+    exactly the convincing empty this phase was written against, so a value charter would
+    not honour refuses the arrangement instead of being quietly absorbed. What the pair IS
+    good for meanwhile is writing the arrangement out in full: `frame_components` answers
+    every `slots` list as tables that resolve back to the same frame, which is what makes
+    the mapping lossless in both directions.
+    """
+    tables = section.get(FRAME_COMPONENT_KEY) if isinstance(section, dict) else None
+    if not isinstance(tables, list) or not tables:
+        return None
+    from .frame import builtins as _builtins
+    from .frame.component import Fixed
+    reg = _builtins.build()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for table in tables:
+        if not isinstance(table, dict):
+            return None
+        if any(k not in FRAME_COMPONENT_FIELDS for k in table):
+            return None
+        cid = table.get("use")
+        # A component charter cannot place — a typo, a provider this machine has not
+        # installed, or `slots`' vocabulary written into `use` by mistake.
+        if not isinstance(cid, str) or cid not in _builtins.SLOT_OF or cid in seen:
+            return None
+        seen.add(cid)
+        c = reg.get(cid)
+        if "edge" in table and table["edge"] != c.edge:
+            return None
+        if "size" in table and not (isinstance(c.size, Fixed)
+                                    and table["size"] == c.size.n
+                                    and not isinstance(table["size"], bool)):
+            return None
+        visible = table.get("visible", True)
+        if not isinstance(visible, bool):
+            return None
+        out.append(_placement(reg, cid, visible=visible))
+    return out
+
+
+def frame_components(cfg: dict) -> list[dict]:
+    """The frame *cfg* asks for, as placements in split order — the one resolved answer.
+
+    Three ways of asking for a frame, and this is where they become one thing:
+
+    * ``[[frame.component]]`` is the arrangement written out, and wins when it is usable.
+    * ``slots`` is shorthand for placing built-ins on their own edges in the given split
+      ORDER — which is the geometry, not a reading order. Measured on tmux 3.7c at
+      200x50: ``["top", "bottom", "right"]`` gives a **200-column** bottom row and
+      ``["top", "right", "bottom"]`` gives **177**, inset beside the one sidebar and its
+      border. (The 154 the spec's §4/§4b carry is the pre-#488 arrangement, with two
+      22-column sidebars coming off the row; §4i corrects it.)
+    * ``density`` is a named arrangement — three level names, each expanding to a ``slots``
+      list an operator could have written by hand.
+
+    All three go through :func:`frame_of` for the slot list, so nothing here is a second
+    reading of a committed value: the filtering, the type checks and the density expansion
+    happen once, where they always did.
+
+    **Lossless in both directions.** Every list this answers can be written back out as
+    ``[[frame.component]]`` tables — one per placement, carrying its ``use``, ``edge`` and
+    ``size`` — and :func:`component_tables` resolves those to the same placements again.
+    That round trip is what "the config maps onto the registry" has to mean if `slots` is
+    to be retired later without an operator's committed frame changing under them.
+    """
+    section = cfg.get("frame")
+    placed = component_tables(section)
+    if placed is not None:
+        return placed
+    from .frame import builtins as _builtins
+    reg = _builtins.build()
+    return [_placement(reg, _builtins.COMPONENT_OF[slot])
+            for slot in frame_of(cfg)["slots"]]
 
 
 #: The channels ``[update] channel`` may name, and a CLOSED set — the single most

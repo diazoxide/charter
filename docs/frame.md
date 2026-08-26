@@ -515,6 +515,67 @@ the other way for `repos`, which is a *new* name: a committed `slots = ["top", "
 primitive and charter does not add to a list you wrote by hand. Add `repos` to it, or
 delete the line and take the default.
 
+### Writing the arrangement out
+
+`slots` is shorthand. Each name in it places one of charter's built-in components on the
+edge that component declares, in the split order you wrote. The long form says the same
+thing one table per panel, and file order is split order:
+
+```toml
+[[frame.component]]
+use = "identity"
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
+use = "repos"
+
+[[frame.component]]
+use = "sidebar"
+```
+
+That is exactly the shipped frame — the same panels, the same order, the same geometry as
+`slots = ["top", "bottom", "repos", "right"]`. Note the names: `use` takes a **component
+id**, which is the vocabulary the frame reasons in, and not a `slots` name. The four are
+`identity`, `attention`, `repos` and `sidebar`; the sidebar is one pane drawing two parts,
+`personas` and `todos`, which is why it has one name here and shows two headings on screen.
+Mixing the vocabularies is refused rather than half-understood, so a file says which of the
+two it is written in.
+
+A component can be kept in the arrangement and not drawn:
+
+```toml
+[[frame.component]]
+use = "repos"
+visible = false
+```
+
+That is the one thing `slots` cannot express. Deleting a name from `slots` loses its
+*position* along with it, so turning the panel back on later means remembering where in the
+order it went; `visible = false` keeps the order and turns off the panel.
+
+`edge` and `size` may be written down, and today they may only say what the component
+already declares — `edge = "right"` and `size = 22` on the sidebar, `edge = "top"` on
+identity. Charter derives the whole frame's geometry from those declarations, and nothing
+between `charter.toml` and tmux carries a per-plane override yet, so a value charter cannot
+honour is not quietly accepted and ignored: it takes the arrangement out of play. Writing
+them is still worth it if you like your config explicit — and it is what makes the two
+forms round-trip.
+
+**An arrangement charter cannot draw is refused whole, and your frame falls back to
+`slots`.** Not one table at a time — dropping just the line charter could not make sense of
+would hand you a frame with a panel silently missing from it, and a missing repo table is a
+plane that looks like it has no clones. So a component charter has never heard of, an edge
+it cannot place, a duplicate, a key that is not one of the four, or a `visible` that is not
+`true`/`false` all mean the same thing: the arrangement is ignored and you get the frame
+your `slots` (or `density`, or the default) describes. You see your whole arrangement not
+take effect, which is something you can act on, rather than one pane's worth of quiet
+fiction.
+
+Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then
+`density`, then the shipped default.
+
 `slots`/`density`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`,
 `min-cols` and `min-rows` are the three that are not: charter.toml spells them with a
 hyphen: the
