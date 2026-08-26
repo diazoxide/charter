@@ -45,21 +45,21 @@ them before anything is built on them. **This task ships a findings document, no
 
 **Files:** Create `docs/superpowers/specs/2026-08-26-tmux-input-findings.md`
 
-- [ ] **Step 1: mouse routing.** With tmux's own `mouse` OFF, have a program in a pane request
+- [x] **Step 1: mouse routing.** With tmux's own `mouse` OFF, have a program in a pane request
       SGR mouse reporting (`\x1b[?1006h\x1b[?1000h`) and record whether it receives click and
       scroll events. Repeat with tmux's `mouse` ON. Repeat both inside the operator's own
       server where their `.tmux.conf` may already set `mouse on`.
-- [ ] **Step 2: what scroll does** in a pane with scrollback, under each of the four
+- [x] **Step 2: what scroll does** in a pane with scrollback, under each of the four
       combinations above — does it reach the program or enter copy-mode?
-- [ ] **Step 3: `display-popup`.** Confirm the version it appeared in against the shipped
+- [x] **Step 3: `display-popup`.** Confirm the version it appeared in against the shipped
       CHANGES file, then measure: does a program in a popup get its own tty, can it request
       mouse reporting, does it receive focus events, and what happens to the popup on
       `window-resized`?
-- [ ] **Step 4: the sub-3.2 band.** `tmuxctl.below_floor_message` promises charter still
+- [x] **Step 4: the sub-3.2 band.** `tmuxctl.below_floor_message` promises charter still
       launches there. Record what is available instead of `display-popup`.
-- [ ] **Step 5: write the findings**, each with the exact commands run and the raw bytes
+- [x] **Step 5: write the findings**, each with the exact commands run and the raw bytes
       observed. State plainly where a hypothesis was **wrong** — that is the valuable half.
-- [ ] **Step 6: commit.**
+- [x] **Step 6: commit.**
 
 ---
 
