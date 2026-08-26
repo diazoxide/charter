@@ -537,6 +537,73 @@ gather grows.
 
 ---
 
+## 4j. Many chats, many workspaces, many harnesses — settled 2026-08-26
+
+The IDE holds **workspace tabs**, and under them **chat tabs**. Switching a workspace does not
+lose the chats open in it. Each chat picks its harness when it starts, so several harnesses run
+in parallel in one IDE.
+
+### Most of this already exists
+
+Three facts found before designing anything:
+
+- **`state.frame_id(workspace, pid)` already mints `{workspace}-{pid}`** — the naming scheme
+  this idea proposed is already the frame id.
+- **`state.record_harness_session(fid, sid)` / `harness_session(fid)` already exist** — charter
+  already records which harness session belongs to which frame.
+- **tmux already provides the persistence.** A server holds sessions; detaching does not kill
+  them. "Do not lose the open chats" is not a feature to build, it is a property to stop
+  discarding.
+
+So this is not a rewrite. It is: let a workspace hold **several** frames, and put a selector
+over them.
+
+### The four decisions
+
+**A chat is a tmux WINDOW, on one session per workspace.** Switching chats is `select-window`;
+switching workspaces is `switch-client -t`. Both preserve everything and neither reattaches the
+client. A session-per-chat would force a client reattach on every tab switch, which is visible
+to the operator.
+
+**Panels duplicate per chat for now — measure before optimising.** Panes belong to windows, so
+N chats means N sets of panel processes, each rendering the same plane state. Four panels at one
+`stat` per tick is trivial; the real cost is N× the *rendering*, and `_right` measured 4.8 ms.
+**Ship it duplicated, measure at 5 and 10 chats, then decide.** Building shared panels
+speculatively is the layout engine §4d refused, arriving through the back door.
+
+**Charter names its own container and records the mapping — it never enumerates the harness's
+sessions.** Asking each harness "what sessions do you have" is harness-specific work that fights
+the point of being harness-agnostic, and Claude Code, codex and opencode store sessions three
+different ways. Charter knows what it started, and `record_harness_session` already records it.
+
+**A chat belongs to its workspace for life.** `{workspace}-{hash}` is identity, not a property.
+Moving a chat between workspaces sounds convenient and means the harness's own context — its
+cwd, its files, its history — is suddenly about a different plane. A conversation wanted
+elsewhere is a new chat.
+
+### What is genuinely new
+
+- A **workspace tab bar** and a **chat tab bar**, both components in the Phase 1 registry.
+- The chat bar **hides itself when there is one chat**, showing only "add chat" — the tab bar
+  earns its row only when there is something to choose between.
+- **Harness selection at chat creation**, which is the first place charter asks rather than
+  detects.
+- A frame model that holds **several** frames per workspace instead of one, and a switcher that
+  moves between them without tearing anything down.
+
+### Sequencing — Phase 5, after the command surface
+
+The tab bars **are** components and the switcher **is** an action, so this becomes materially
+cheaper once Phases 1 and 2 exist. Built before them it would need its own chrome, its own
+key handling and its own selector, all of which Phase 2 provides.
+
+It also interacts with **§3.2's cross-repo change**: a change spans repos, a chat happens in a
+workspace, and the obvious next question — "show me the chats working on this change" — needs
+both to exist first. Phase 5 does not answer it; it makes it askable.
+
+
+---
+
 ## 5. The command surface
 
 One mechanism, three faces.
@@ -633,6 +700,16 @@ output.
 
 **Exit test:** a name containing a newline, U+2028, an escape sequence, a duplicate key or a
 mis-cased key produces exactly one row, and never a second command.
+
+### Phase 5 — many chats, many workspaces, many harnesses
+
+Workspace tabs, chat tabs, harness-per-chat, and a switcher that loses nothing. See §4j — the
+naming, the harness-session record and tmux's own persistence already exist; what is new is
+holding several frames per workspace and the two tab bars, both of which are Phase 1 components
+and Phase 2 actions.
+
+**Exit test:** ten chats across three workspaces, switching between any two in one keystroke,
+nothing torn down, and the panel cost measured at 5 and 10 rather than assumed.
 
 ### Phase 4 — the cross-repo change
 *The IDE's actual subject.*
