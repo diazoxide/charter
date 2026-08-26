@@ -96,7 +96,7 @@ import signal
 import sys
 import time
 
-from .. import tui
+from .. import contain, tui
 from . import slots, state
 
 #: How often the version file is checked when nothing else has woken this panel. A
@@ -155,6 +155,60 @@ def _paint(slot: str, fid: str) -> None:
     docstring's "Height is this module's job" section.
     """
     _write(slots.render(slot, fid))
+
+
+def _component_painter(reg, cid: str):
+    """A paint function for *cid*, drawn out of *reg* — `_paint`'s shape for a component.
+
+    **The registry is built once and closed over, not rebuilt per tick.** A panel drawing
+    a provider's component repaints on the same clock as any other, and rebuilding would
+    re-scan the installed distributions five times a second for an answer that cannot
+    change inside one process — the kind of cost §4's whole budget argument exists to keep
+    off the repaint path.
+
+    The *name* the loop hands back is ignored: `_watch` carries the name it was started
+    with, and what this draws was decided once, when `run` resolved that name. Taking the
+    argument and not reading it keeps one signature for both painters rather than a second
+    shape for `_tick` to know about.
+    """
+    def paint(_name: str, fid: str) -> None:
+        _write(_component_text(reg, cid, fid))
+    return paint
+
+
+def _component_text(reg, cid: str, fid: str) -> str:
+    """*cid*'s rows for this pane, as the one string `_write` takes.
+
+    ``ctx`` is built from what the component DECLARED (§4e), so a component that declared
+    nothing costs this tick no `gather.read` at all — the idle-cost property survives a
+    renderer charter did not write only if the declaration is what decides, rather than
+    the snapshot being handed over and the declaration describing it afterwards.
+
+    **Never raises**, which is `slots.render`'s promise said again for the other kind of
+    renderer. Everything a stranger's code does wrong is already contained one layer down
+    — `Registry.draw` catches, names the component, escapes what it returned and clips it
+    to the rectangle (§4b properties 1 and 3) — so what is caught here is the ways THIS
+    function can fail: a snapshot that cannot be read, a pane whose size cannot be
+    measured. A panel that stops repainting has already lost the pane, whatever the
+    traceback would have said.
+    """
+    from . import ctx as _ctx, gather
+    try:
+        c = reg.get(cid)
+        snapshot = gather.read(fid) if c.needs else {}
+        drew = reg.draw(cid, _ctx.build(c.needs, width=slots._width(),
+                                        height=_rows(), fid=fid, snapshot=snapshot))
+        return "\n".join(drew)
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        # `contain.one_line` BEFORE the width arithmetic, the order the rest of charter
+        # keeps: *cid* arrived on this process's own command line, an escape sequence in
+        # it is an instruction to the terminal rather than a character, and measuring
+        # first would measure a string that is not what the terminal is about to do.
+        return tui.truncate(
+            f" charter: {contain.one_line(cid)} unavailable ({type(e).__name__})",
+            slots._width())
 
 
 def _hold(reason: str, *, once: bool, rc: int) -> int:
@@ -272,7 +326,7 @@ def _install_sigwinch(resized: dict) -> object:
 
 
 def _tick(resized: dict, seen: str, slot: str, fid: str, *,
-          animating: bool = False) -> str:
+          animating: bool = False, paint=None) -> str:
     """One loop iteration's decision AND its effect — split out of `run` so the
     DECISION (paint now, or wait) can be exercised without also exercising `run`'s
     `while True`/`time.sleep`, which a test cannot call directly without either hanging
@@ -310,16 +364,22 @@ def _tick(resized: dict, seen: str, slot: str, fid: str, *,
     that mean "repaint only on news" — every test in this module that exercises the
     decision directly — keep saying exactly that. `_watch` is what decides it, from
     :func:`_running`.
+
+    *paint* is WHAT to draw, defaulting to :func:`_paint` — charter's own renderer for
+    this slot. A panel hosting a provider's component passes :func:`_component_painter`'s
+    instead. A parameter rather than a branch inside the loop, because the choice is made
+    once, where `run` resolves the name: asking "is this a component?" every tick would
+    put an installed-distribution scan on the repaint path.
     """
     now = state.version(fid)
     if resized["flag"] or now != seen or animating:
         resized["flag"] = False
-        _paint(slot, fid)
+        (paint or _paint)(slot, fid)
         return now
     return seen
 
 
-def _watch(slot: str, fid: str, *, once: bool) -> int:
+def _watch(slot: str, fid: str, *, once: bool, paint=None) -> int:
     """The live loop: paint on every version bump, resize, or spinner frame, until killed.
 
     The third reason is the only one that repeats on its own, and it is bounded twice over
@@ -348,7 +408,7 @@ def _watch(slot: str, fid: str, *, once: bool) -> int:
     try:
         seen = ""
         while True:
-            seen = _tick(resized, seen, slot, fid,
+            seen = _tick(resized, seen, slot, fid, paint=paint,
                          animating=animates and bool(_running(inflight_cache)))
             if once:
                 return 0
@@ -358,14 +418,28 @@ def _watch(slot: str, fid: str, *, once: bool) -> int:
 
 
 def run(slot: str, fid: str, *, once: bool = False) -> int:
-    """Run one panel: refuse an unknown slot, then paint on every version bump or
+    """Run one panel: refuse a name nothing can draw, then paint on every version bump or
     resize until killed (`once=True` — never passed by `charter panel` itself, only by
     tests — paints exactly once and returns).
 
-    Refuses rather than drawing an empty pane for a *slot* not in `slots.SLOTS`: an
-    empty pane reads as a broken frame, and `layout.panel_argvs` can in principle be
-    handed a slot name `slots.py` does not (yet) implement a renderer for (`left`/
-    `right` today — see `layout.SLOT_SIZE`).
+    **`slot` is a component NAME, and this is the link Phase 1 could not build.** A panel
+    process builds no registry and knows no providers, so `charter panel acme.metrics` was
+    `unknown slot` however correctly the config boundary had placed it — which is why
+    `Registry.place` shipped with zero production callers. Three names reach the same
+    component here: a committed slot name (`top`), the id behind it (`identity`), and a
+    provider's own id, resolved through `builtins.component_id` and `slots.drawable`.
+
+    **Charter's own components never fall through to the providers.** A built-in whose
+    renderer is missing from `slots.SLOTS` is refused as it always was, rather than sent
+    off to look for an installed distribution called `sidebar` — a provider must not be
+    able to answer a question about charter's own component by claiming its name.
+
+    Refuses rather than drawing an empty pane for a name nothing can draw: an empty pane
+    reads as a broken frame, and `layout.panel_argvs` can in principle be handed a slot
+    name `slots.py` does not (yet) implement a renderer for (`left`/`right` were, for a
+    release — see `layout.SLOT_SIZE`). An id an installed provider DOES supply is never
+    refused here, even when loading it fails: that is a pane saying which distribution
+    failed and why (§4b property 4), and a refusal would be the silent drop instead.
 
     **Neither refusal nor a crash exits.** Both end in `_hold`, which paints the reason
     into the pane and stays there, because a panel process that returns hands its pane
@@ -380,15 +454,32 @@ def run(slot: str, fid: str, *, once: bool = False) -> int:
     `KeyboardInterrupt` and `SystemExit` are how this process is MEANT to end, and
     swallowing either would hold a pane open against the operator killing it.
     """
-    if slot not in slots.SLOTS:
-        reason = (f"unknown slot {slot!r} "
+    if not slots.drawable(slot):
+        reason = (f"unknown slot {contain.one_line(repr(slot))} "
                   f"(known: {', '.join(sorted(slots.SLOTS))})")
         print(f"charter panel: {reason}", file=sys.stderr)
         return _hold(reason, once=once, rc=2)
 
+    from . import builtins as _builtins
+    cid = _builtins.component_id(slot)
     try:
-        return _watch(slot, fid, once=once)
+        painter = None
+        if cid in _builtins.SLOT_OF:
+            # One of charter's own, under either spelling: `slots.SLOTS` draws it,
+            # exactly as it has since there were four names and nothing else.
+            slot = _builtins.SLOT_OF[cid]
+        else:
+            reg = _builtins.build()
+            # The one production caller `Registry.place` was written for. It does not
+            # propagate a provider's failure: one that cannot be loaded becomes a standin
+            # component holding this pane and drawing the reason, which is what makes a
+            # missing or broken provider a message rather than a hole (§4b). Inside the
+            # `try` all the same — this is a stranger's distribution metadata being read,
+            # and the promise this function makes is that a panel PAINTS why it stopped.
+            reg.place(cid)
+            painter = _component_painter(reg, cid)
+        return _watch(slot, fid, once=once, paint=painter)
     except Exception as e:
-        reason = f"{slot} panel stopped ({type(e).__name__}: {e})"
+        reason = f"{contain.one_line(slot)} panel stopped ({type(e).__name__}: {e})"
         print(f"charter panel: {reason}", file=sys.stderr)
         return _hold(reason, once=once, rc=1)

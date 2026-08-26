@@ -762,11 +762,18 @@ def _add_frame_parsers(sub) -> None:
     _wire(fr, "")
 
     # Internal: one pane of a running frame, spawned by `layout.panel_argvs` — never
-    # typed by an operator. The argv shape here (`panel <slot> --session <fid>`) must
-    # match what that function emits EXACTLY: it is the only thing standing between a
-    # tmux pane and a process that fails at startup, leaving a hole in the frame.
+    # typed by an operator. The argv shape here (`panel <component> --session <fid>`)
+    # must match what that function emits EXACTLY: it is the only thing standing between
+    # a tmux pane and a process that fails at startup, leaving a hole in the frame.
+    #
+    # The word is a component NAME, not a key of `frame.slots.SLOTS`: one of the four
+    # committed slot names, the id of the built-in behind one, or the id of a component
+    # an installed provider supplies. `frame.panel.run` is what resolves it, and it is
+    # the only validation — argparse takes any word, because the value arrives from
+    # charter's own `layout.panel_command` and a second, weaker copy of that resolution
+    # here is the two-answers shape #547 measured.
     pn = sub.add_parser("panel")
-    pn.add_argument("slot")
+    pn.add_argument("slot", metavar="<component>")
     pn.add_argument("--session", dest="session", required=True)
     pn.set_defaults(func=lambda args: frame_panel.run(args.slot, args.session))
 

@@ -82,14 +82,19 @@ PROVIDER_GROUP = "charter.components"
 #: that has it, with a message in the one pane instead of the frame's geometry shifting
 #: under everything else.
 #:
-#: **No such caller exists yet, and that is deliberate** (§4b property 4, narrowed
-#: 2026-08-26). `instance.component_tables` refuses an arrangement naming a component
-#: charter cannot place, whole, rather than dropping the one placement — because every
-#: step from there to a painted pane still speaks the four committed SLOT NAMES
-#: (`layout._derive`, `layout.panel_command`'s `charter panel <slot>` argv,
-#: `frame/panel.py:run`), so a placement dropped here would be a panel silently absent
-#: with no pane to say why. Phase 2 builds the surface; this is what will be passed
-#: across it.
+#: **The caller is `frame/panel.py:run`, and it does not say** (§4b property 4). A panel
+#: process is handed one component NAME on its own command line and draws it into the pane
+#: tmux already split at the size the launcher already chose, so there is no rectangle left
+#: for it to pass and the pair here is what a standin's message is laid out in.
+#:
+#: The caller that DOES know is `instance.component_tables`, which resolves the committed
+#: `edge` and `size` — and it refuses the whole arrangement when nothing on this machine
+#: supplies the component, because charter cannot split a pane for a rectangle it has no
+#: placement for and a placement dropped there would be a panel silently absent with no
+#: pane to say why (#512, #535). What reaches a standin is therefore the case where the
+#: distribution IS installed and then fails: an import that raises, an API version charter
+#: does not speak, two claimants. Phase 1 had nowhere for that message to appear; the pane
+#: is it.
 STANDIN_EDGE = "bottom"
 #: Capped rather than open: the message is charter's, but the reason inside it quotes a
 #: provider's exception text, and an unbounded panel whose height an installed package
@@ -509,6 +514,12 @@ class Registry:
               size: Any = None) -> Component:
         """Put *cid* on this frame, importing the provider that supplies it if need be.
 
+        **`frame/panel.py:run` is what calls this in production**, once, when a panel
+        process resolves the component name on its own command line. It had none through
+        Phase 1 — every step between a committed table and a painted pane spoke the four
+        committed slot names, so nothing could ever ask for a component charter did not
+        write.
+
         **This never propagates a provider's failure**, and that is the point of it
         (§4b): a committed config naming `acme.metrics` on a machine without it, an
         installed provider that raises on import, a version charter does not speak, two
@@ -529,7 +540,9 @@ class Registry:
 
         Without them a loaded component keeps its own declaration and a standin takes
         :data:`STANDIN_EDGE` and :data:`STANDIN_SIZE` — "the caller did not say" is
-        ``None`` and only ``None``, in both directions.
+        ``None`` and only ``None``, in both directions. That is the shape a PANEL calls
+        this in (`frame/panel.py:run`): the pane is already split at the size the launcher
+        chose, so a panel has no rectangle to pass and asks only for the component.
 
         Already registered — a built-in, or a provider placed twice by a config listing
         it twice — answers what is registered rather than refusing: this asks for *cid*

@@ -126,21 +126,27 @@ def _derive(placed) -> _Derived:
     checks that every one of the five moves together, which is the property the five
     separate tuples never had — they agreed by having been edited in the same commit.
 
-    Keyed by the committed slot name (`builtins.SLOT_OF`) rather than the component id,
-    because that is the vocabulary `[frame] slots`, `charter panel <slot>` and every
-    caller in `commands_frame` already speak. A component with no slot name is a
-    ``KeyError`` here rather than a silently skipped pane: the caller has handed over
-    something that cannot be placed, and answering with a frame missing one panel is the
-    convincing-empty this module refuses everywhere else.
+    Keyed by the name the component is SPELLED with — its committed slot name where it
+    has one (`builtins.SLOT_OF`), and its own id where it does not. The four aliases are
+    what `[frame] slots`, `charter panel top` and every caller in `commands_frame` already
+    say, so they keep answering; a provider's component has no committed spelling and is
+    keyed by the id it was placed under, which is what lets a plane's own arrangement be
+    derived here at all.
+
+    That fallback is the line Phase 1 could not cross: this used to be `SLOT_OF[c.id]`,
+    a `KeyError` by design for any component charter did not write, so the one function
+    every per-slot fact in this module is derived from could not be shown a provider.
     """
-    name = _builtins.SLOT_OF
+    def name(c) -> str:
+        return _builtins.SLOT_OF.get(c.id, c.id)
+
     return _Derived(
-        size={name[c.id]: _cells(c) for c in placed},
-        edge={name[c.id]: c.edge for c in placed},
-        column=tuple(name[c.id] for c in placed if c.edge in _COLUMN_EDGES),
-        fixed_rows=tuple(name[c.id] for c in placed
+        size={name(c): _cells(c) for c in placed},
+        edge={name(c): c.edge for c in placed},
+        column=tuple(name(c) for c in placed if c.edge in _COLUMN_EDGES),
+        fixed_rows=tuple(name(c) for c in placed
                          if c.edge in _ROW_EDGES and isinstance(c.size, Fixed)),
-        variable_rows=frozenset(name[c.id] for c in placed
+        variable_rows=frozenset(name(c) for c in placed
                                 if c.edge in _ROW_EDGES
                                 and not isinstance(c.size, Fixed)),
     )
@@ -191,14 +197,15 @@ _BORDER_ROWS = 1
 #: as an 87-column harness and a 22-column sidebar, which is 109.
 _BORDER_COLS = 1
 
-#: Slots that take COLUMNS off the pane they are split from rather than rows — the `-h`
-#: half of :func:`panel_argvs`' `direction`. Kept as a name rather than an inline
-#: ``== "right"`` because :func:`repos_cols` and `panel_argvs` are two places that have
-#: to agree about which splits cost columns, and the next side slot must not have to be
-#: remembered in both.
+#: Which of the SHIPPED slots take COLUMNS off the pane they are split from rather than
+#: rows — the statement of charter's own frame, derived from each component's declared
+#: edge rather than written out as ``== "right"``.
 #:
-#: Now the component's own `edge` answers it, so the next side slot is not remembered
-#: anywhere: it declares an edge and lands here.
+#: :func:`repos_cols` and :func:`panel_argvs` both have to agree about which splits cost
+#: columns, and they now ask :func:`_edge_of` rather than this tuple — one predicate,
+#: ``edge in _COLUMN_EDGES``, which answers for a component this plane placed as well as
+#: for charter's own. This is that same predicate frozen over the shipped frame, which is
+#: what the geometry test asserts against literals.
 _COLUMN_SLOTS = _SHIPPED.column
 
 #: The horizontal strips whose height is a CONSTANT, and therefore the rows
@@ -216,6 +223,9 @@ _COLUMN_SLOTS = _SHIPPED.column
 #: Both exclusions this comment states are now the components' own declarations: `right`
 #: is out because its edge costs columns, `repos` because its size is `Content()` rather
 #: than `Fixed`. Neither was enforced by anything while this was a written-out tuple.
+#:
+#: Read through :func:`_is_fixed_row`, which is where a component this plane placed gets
+#: the same question answered from its own edge.
 _FIXED_ROW_SLOTS = _SHIPPED.fixed_rows
 
 #: The slots whose height is a function of their content rather than a constant — the
@@ -236,6 +246,97 @@ _FIXED_ROW_SLOTS = _SHIPPED.fixed_rows
 #: its content's and a slot whose height is what is left are the same kind of dependent
 #: pane as far as `resize-pane` is concerned.
 VARIABLE_ROW_SLOTS = _SHIPPED.variable_rows
+
+
+def _key(name):
+    """*name* as the five tables above key it: a built-in id resolved to its alias.
+
+    The tables are keyed by the committed spelling because that spelling is committed, and
+    a component id is the currency — so `identity` and `top` must reach one entry, not
+    two. `builtins.SLOT_OF` is the same one table `_derive` keyed them with, read in the
+    same direction.
+    """
+    return _builtins.SLOT_OF.get(name, name) if isinstance(name, str) else name
+
+
+def _placed_here() -> dict[str, tuple[str, int]]:
+    """name → (edge, cells) for what THIS PLANE places and charter did not write.
+
+    Empty on every plane that spells its frame with `[frame] slots`, which is charter's
+    own and very nearly everyone's — the five tables above are the whole answer there, and
+    this costs a `dict.get` on a mapping that is already resolved.
+
+    **Read from the resolved config rather than passed down through six signatures.**
+    `instance.frame_of` already resolves a plane's `[[frame.component]]` tables into
+    placements carrying an edge and a size policy, and `config.FRAME` already holds them;
+    threading an extra argument through `slot_sizes`, `panel_argvs`, `repos_cols`,
+    `repos_rows` and `harness_rows` would be five more parameters each caller could get
+    wrong and each test could omit — which is how the two answers to "how wide is the
+    table's pane" came apart in #500.
+
+    Imported inside the call, the way :func:`_table_min_cols` reaches for `statusline` and
+    for the same reason: this module is imported by every launch path, and `config`'s
+    import resolves the plane root.
+
+    Only names the shipped tables do not already carry. A plane cannot move charter's own
+    `right` from here — `component_tables` refuses an edge or a size on a built-in that
+    disagrees with its declaration, because `layout` derives the built-in geometry at
+    import and a value read, validated and then ignored is the convincing empty this phase
+    was written against.
+    """
+    from .. import config
+    out: dict[str, tuple[str, int]] = {}
+    for placed in config.FRAME.get("components") or ():
+        name = placed.get("slot")
+        if isinstance(name, str) and name not in SLOT_SIZE:
+            out[name] = (placed["edge"], _policy_cells(placed["size"]))
+    return out
+
+
+def _policy_cells(size) -> int:
+    """A size POLICY as cells, by the one rule :func:`_cells` already states."""
+    return size.n if isinstance(size, Fixed) else 1
+
+
+def _edge_of(name):
+    """Which side of the harness *name* attaches to, or ``None`` for a name nothing placed.
+
+    ``None`` and not a default. Every caller below asks a membership question of the
+    answer (`in _COLUMN_EDGES`, `in _ROW_EDGES`, `in _BEFORE_EDGES`), and a name charter
+    knows nothing about must fall out of all three rather than be assigned a side — which
+    is the same filter-don't-refuse degrade `slot_sizes` has always made one line up.
+    """
+    key = _key(name)
+    if key in SLOT_EDGE:
+        return SLOT_EDGE[key]
+    placed = _placed_here().get(key)
+    return placed[0] if placed else None
+
+
+def _size_of(name):
+    """How many cells *name* is given, or ``None`` for a name nothing placed."""
+    key = _key(name)
+    if key in SLOT_SIZE:
+        return SLOT_SIZE[key]
+    placed = _placed_here().get(key)
+    return placed[1] if placed else None
+
+
+def _is_fixed_row(name) -> bool:
+    """Whether *name* is a horizontal strip whose height :func:`repos_rows` must subtract.
+
+    Two sources, one question, and the branch is which of them knows about *name*.
+    Charter's own components answer from :data:`_FIXED_ROW_SLOTS`, the table `_derive`
+    built from their declared size and edge — so `repos` stays out of it for being
+    `Content()` and `right` for costing columns, exactly as before. A component this plane
+    placed answers from its edge alone, because a committed size is a NUMBER: the config
+    boundary refuses a `[[frame.component]]` table that does not carry one, so there is no
+    third kind for the second branch to be wrong about.
+    """
+    key = _key(name)
+    if key in SLOT_EDGE:
+        return key in _FIXED_ROW_SLOTS
+    return _edge_of(key) in _ROW_EDGES
 
 
 def _table_min_cols() -> int:
@@ -294,10 +395,10 @@ def repos_cols(slots: list[str] | tuple[str, ...], *, window_cols: int) -> int:
     """
     out = window_cols
     for slot in slots:
-        if slot == "repos":
+        if _key(slot) == "repos":
             break
-        if slot in _COLUMN_SLOTS:
-            out -= SLOT_SIZE[slot] + _BORDER_COLS
+        if _edge_of(slot) in _COLUMN_EDGES:
+            out -= _size_of(slot) + _BORDER_COLS
     return max(0, out)
 
 
@@ -388,8 +489,7 @@ def repos_rows(*, content_rows: int, window_rows: int,
     every slot below half the size floors.
     """
     floor = SLOT_SIZE["repos"]
-    other = sum(SLOT_SIZE[s] + _BORDER_ROWS
-                for s in slots if s in _FIXED_ROW_SLOTS)
+    other = sum(_size_of(s) + _BORDER_ROWS for s in slots if _is_fixed_row(s))
     cap = window_rows - other - _BORDER_ROWS - HARNESS_MIN_ROWS
     return max(floor, min(content_rows, cap))
 
@@ -410,11 +510,13 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int) -> dict
     """
     out: dict[str, int] = {}
     for slot in slots:
-        if slot in VARIABLE_ROW_SLOTS:
+        if _key(slot) in VARIABLE_ROW_SLOTS:
             out[slot] = repos_rows(content_rows=content_rows,
                                    window_rows=window_rows, slots=slots)
-        elif slot in SLOT_SIZE:
-            out[slot] = SLOT_SIZE[slot]
+            continue
+        cells = _size_of(slot)
+        if cells is not None:
+            out[slot] = cells
     return out
 
 
@@ -446,7 +548,7 @@ def harness_rows(sizes: dict[str, int], *, window_rows: int) -> int:
     than a harness squeezed to one row in a window that has no rows for it anyway.
     """
     used = sum(n + _BORDER_ROWS for slot, n in sizes.items()
-               if slot not in _COLUMN_SLOTS)
+               if _edge_of(slot) not in _COLUMN_EDGES)
     return max(1, window_rows - used)
 
 
@@ -665,6 +767,12 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
 def panel_command(*, slot: str, session: str) -> list[str]:
     """The command one panel pane runs — the part after `split-window`'s own `--`.
 
+    *slot* is a component NAME: one of the four committed slot names, the id of the
+    built-in behind one, or the id of a component an installed provider supplies. It is
+    the argument `frame/panel.py:run` resolves, and the keyword keeps its old spelling
+    because `commands_frame.cmd_respawn` and every test that pins this argv byte for byte
+    already say it.
+
     Split out of :func:`panel_argvs` because a panel is started TWICE by two different
     modules: once by the launcher's `split-window`, and again by
     `commands_frame.cmd_respawn`'s `respawn-pane` after the pane's `pane-died` hook
@@ -753,16 +861,27 @@ def panel_argvs(*, slots: list[str], session: str, socket: str,
     """
     cmds: list[list[str]] = []
     for slot in slots:
-        size = (sizes or SLOT_SIZE).get(slot, SLOT_SIZE[slot])
-        # :data:`_COLUMN_SLOTS` rather than a second list of names: which splits take
-        # COLUMNS is exactly what :func:`repos_cols` has to know to answer how wide
-        # `repos` ends up, and two copies of that fact are two things to keep in step.
-        direction = "-h" if slot in _COLUMN_SLOTS else "-v"
+        size = (sizes or {}).get(slot)
+        if size is None:
+            # `SLOT_SIZE[slot]` is still the last resort, and still a `KeyError` for a
+            # name nothing placed: a caller has asked for a pane charter cannot size, and
+            # splitting one anyway is the permanently-dead rectangle `_drawable_slots`
+            # exists to prevent.
+            size = _size_of(slot)
+            if size is None:
+                size = SLOT_SIZE[slot]
+        # The component's EDGE, not a second list of names: which splits take COLUMNS is
+        # exactly what :func:`repos_cols` has to know to answer how wide `repos` ends up,
+        # and two copies of that fact are two things to keep in step. :data:`_COLUMN_SLOTS`
+        # is that same predicate over the SHIPPED frame; asking the edge is what also
+        # answers it for a component this plane placed.
+        edge = _edge_of(slot)
+        direction = "-h" if edge in _COLUMN_EDGES else "-v"
         # `-b` is the component's EDGE, not the name `top` — see :data:`_BEFORE_EDGES`.
         # A slot charter has no component for keeps the plain `-v`/after placement it had
         # while this was spelled `slot == "top"`, which is the same filter-don't-refuse
         # degrade `slot_sizes` makes one line above.
-        before = ["-b"] if SLOT_EDGE.get(slot) in _BEFORE_EDGES else []
+        before = ["-b"] if edge in _BEFORE_EDGES else []
         cmds.append(_tmux(socket, "split-window", "-t", harness_pane,
                           direction, *before, "-l", str(size),
                           *_env_argv(env),
