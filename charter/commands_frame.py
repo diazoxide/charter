@@ -133,7 +133,7 @@ import sys
 import time
 
 from . import config, contain, harness, tui, util, workspace
-from .frame import gather, layout, menu, picker, state, switch, tmuxctl
+from .frame import gather, layout, menu, overlay, picker, state, switch, tmuxctl
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -413,6 +413,18 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
     default single-client guess this module was replacing. Carrying the presser by name
     removes the guess entirely rather than making it a better one.
 
+    The last line is `frame/overlay.hatch_bind()` — **the escape hatch**, and it is here
+    rather than beside the hotkey because it is the one bind that must keep working when
+    charter's own code does not. It carries no frame identity at all (the pane ids live
+    in a window option the presser's own window answers for, see that module), and it
+    runs `run-shell -C`, which is tmux executing tmux commands with no shell and no
+    second charter process. `run-shell -C` first exists in tmux 3.2 — `tmuxctl.FLOOR`
+    exactly — so below the floor this one line fails to parse where the rest of this text
+    still applies. That is the same band `below_floor_message` already warns about, and
+    it is why the line goes LAST: whatever a tmux too old to parse it does with the rest
+    of the file, everything charter needs has already been applied by the time it gets
+    there.
+
     This also satisfies correction 2's "only in charter's own server" rule by
     construction rather than by discipline at each call site: `conf_text`'s only caller
     (`cmd_launch`) sources this text against `SOCKET`, charter's own private server —
@@ -455,6 +467,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str) -> 
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-menu \"#{{client_name}}\"'",
         "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
+        overlay.hatch_bind(),
         "",
     ])
 
@@ -799,27 +812,11 @@ def _panel_died_hook_argv(*, socket: str, panel_pane: str, slot: str,
 #: asserts the whole set of `-y`s issued, not merely that each one present is right.
 _RESIZE_FLAG = {"top": "-y", "bottom": "-y", "right": "-x"}
 
-#: Every real pane id tmux's own `-P -F '#{pane_id}'` has ever reported (`%<digits>`,
-#: confirmed against tmux 3.7c and never observed otherwise). Checked before a value
-#: read off `split-window`'s stdout is trusted as a pane id, because `_resize_hook_argv`
-#: interpolates it directly into a hook ACTION STRING tmux later re-parses as a command
-#: line — the exact construction the module docstring's "constant string" section bans
-#: for `status_path`, for the same reason: something interpolated into an action must be
-#: safe BY CONSTRUCTION, not merely safe because the one program that currently produces
-#: it (tmux itself) happens to be well-behaved. A value that fails this check is treated
-#: the same as `split-window` reporting no id at all (see the empty-string check right
-#: below this) — that one panel simply gets no resize-hook entry, rather than gambling
-#: that whatever the string actually was cannot corrupt the action tmux re-parses.
-#:
-#: **`[0-9]`, not `\d`, and the difference is the property.** Python's `\d` is Unicode by
-#: default: `re.fullmatch(r"%\d+", "%١٢")` is a MATCH, and so is the fullwidth `"%１１"`.
-#: Neither is a pane id tmux ever minted, and neither is dangerous on its own — a
-#: Unicode digit carries no meaning to any of the three parsers a hook action passes
-#: through — but the check is here to say "this is tmux's own word for a pane", and a
-#: class that also admits Arabic-Indic digits is answering a different question. The
-#: same spelling-instead-of-the-property gap this module keeps paying for, caught before
-#: it cost anything rather than after.
-_PANE_ID_RE = re.compile(r"%[0-9]+")
+#: Every real pane id tmux ever reports, held in `tmuxctl` because a SECOND module
+#: now interpolates one into text tmux re-parses (`frame/overlay.py`'s escape
+#: hatch), and two copies of one guard is the drift this repo keeps paying for.
+#: The reasoning — including why the class is `[0-9]` and not `\d` — moved with it.
+_PANE_ID_RE = tmuxctl.PANE_ID_RE
 
 #: tmux's own answer, verbatim, for a `set-hook` call naming an event this binary does
 #: not recognise at all — confirmed by hand against a real tmux 3.7c with a fabricated
@@ -1541,6 +1538,16 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, ws: str,
     which an operator already inside tmux has their own prefix key for. A key taken from
     every window on their server to reach a redundant menu is a worse trade than no key
     — `frame/slots.py` drops the hotkey hint from the bottom panel to match.
+
+    **And `frame/overlay.py`'s escape hatch is bound here no more than the hotkey is**,
+    for the identical reason and at a higher cost worth stating rather than discovering.
+    A root key table is server-wide with no per-window form, so `bind -n F12` here would
+    take F12 from every window the operator has open — which is precisely the sentence
+    above, unchanged. The cost is that the hatch's promise ("one key back to the harness
+    from any state, even a wedged one") is a promise of charter's OWN server, and on this
+    path the way out of a pane that has stopped answering is the operator's own prefix
+    key, which charter has not taken and cannot take. `docs/frame.md`'s list of what this
+    path costs says it in the operator's words; this is the reason it is on that list.
 
     Four things that ARE written are charter's own and reach nothing of theirs, because
     every one of them is scoped to a pane charter created or to the window charter
@@ -2497,6 +2504,22 @@ def cmd_launch(args) -> int:
     if py_set.returncode != 0:
         util.warn("charter frame: continuing without it — the hotkey menu may not open "
                   "on this frame")
+
+    # The escape hatch's other half. `conf_text`'s bind carries no identity — it reads a
+    # WINDOW option, and this is what puts this frame's own answer in it, so a key table
+    # every frame on `SOCKET` shares still returns each presser to their OWN harness (see
+    # `frame/overlay.py`). Armed the moment the harness pane exists and before any panel
+    # is split, because a frame with panes and no way back to the harness is exactly the
+    # state the hatch is for.
+    hatch = overlay.arm_hatch_argv(SOCKET, harness=harness_pane)
+    if hatch is None:
+        util.warn("charter frame: tmux did not report this frame's harness as a pane id "
+                  f"— the {overlay.HATCH_KEY} escape hatch will not be armed for it")
+    else:
+        armed_hatch = tmuxctl.run("arming the frame's escape hatch", hatch, env=env)
+        if armed_hatch.returncode != 0:
+            util.warn(f"charter frame: continuing without it — {overlay.HATCH_KEY} may "
+                      "not return to the harness in this frame")
 
     # #390: the same "-m prepends the cwd to sys.path" hole `util.self_relaunch_argv`'s
     # `-P` closes for the panel argv below, closed here as `PYTHONSAFEPATH=1` because

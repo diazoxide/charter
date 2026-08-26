@@ -40,7 +40,7 @@ from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter import commands_frame, config, instance, statusline, util
-from charter.frame import gather, layout, menu, slots, state, tmuxctl
+from charter.frame import gather, layout, menu, overlay, slots, state, tmuxctl
 from tests import _envguard
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
@@ -1391,7 +1391,8 @@ class _FakeTmux:
                 panel_pane_ids=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
-                kill_rc=0, arm_rc=0, chrome_rc=0, resize_hook_rc=0, capture_rc=0,
+                kill_rc=0, arm_rc=0, hatch_rc=0, chrome_rc=0, resize_hook_rc=0,
+                capture_rc=0,
                 respawn_hook_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
@@ -1417,6 +1418,7 @@ class _FakeTmux:
         self.dm_rc = dm_rc
         self.kill_rc = kill_rc
         self.arm_rc = arm_rc
+        self.hatch_rc = hatch_rc
         self.chrome_rc = chrome_rc
         self.resize_hook_rc = resize_hook_rc
         self.capture_rc = capture_rc
@@ -1450,6 +1452,14 @@ class _FakeTmux:
             # file, never as a bare tmux argv command).
             return subprocess.CompletedProcess(cmd, self.arm_rc, stdout="",
                                                stderr="" if self.arm_rc == 0 else "cannot set")
+        if overlay.HATCH_OPTION in cmd:
+            # The escape hatch's window option. Matched on the PRODUCTION constant, and
+            # BEFORE the `select-pane` branch below, because the option's VALUE is a
+            # `select-pane` command line and a value that ever arrived as its own argv
+            # element would otherwise be answered by the wrong fake.
+            return subprocess.CompletedProcess(cmd, self.hatch_rc, stdout="",
+                                               stderr="" if self.hatch_rc == 0
+                                               else "cannot set")
         if _is_chrome(cmd):
             return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
                                                stderr="" if self.chrome_rc == 0

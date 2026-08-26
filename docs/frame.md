@@ -163,6 +163,12 @@ the sentence above:
   prefix-scoped bind here; charter takes the stricter option, because the menu's one
   entry is "Detach" and your own prefix key already does that better. The bottom panel
   drops its hotkey hint to match rather than advertising a key that does nothing.
+- **No `F12` escape hatch either, and this is the one that is worth knowing.** In charter's
+  own tmux, `F12` returns you to your agent session from anywhere in the frame, including
+  from a pane that has stopped answering its keyboard. It is a root key-table entry, which
+  is the same server-wide thing the hotkey is, so the same rule applies here and charter
+  binds nothing. Inside your tmux the way out of a stuck pane is your own prefix key,
+  which charter has not taken and cannot take.
 - **Your status bar stays.** The frame gets the window, not the screen.
 - **Your pane-border styling does not apply inside the frame's window.** Charter pins all
   five of the options tmux draws a border from — both border styles, plus

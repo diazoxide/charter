@@ -136,6 +136,32 @@ _TMUX_ENV = re.compile(r"^(/[^,]*),\d+,(\d+)$")
 #: cannot drift apart.
 _TMUX_ENV_NAME = "TMUX"
 
+#: Every real pane id tmux's own `-P -F '#{pane_id}'` has ever reported (`%<digits>`,
+#: confirmed against tmux 3.7c and never observed otherwise). Checked before a value read
+#: off `split-window`'s stdout is trusted as a pane id, because two callers interpolate
+#: one directly into text tmux later **re-parses as a command line**:
+#: `commands_frame._resize_hook_argv`'s hook ACTION, and `frame/overlay.hatch_command`'s
+#: escape-hatch option. That is the exact construction `commands_frame`'s module
+#: docstring bans for `status_path`, and for the same reason: something interpolated into
+#: a command tmux re-parses must be safe BY CONSTRUCTION, not merely safe because the one
+#: program that currently produces it (tmux itself) happens to be well-behaved. A value
+#: that fails this check arms nothing at all, rather than gambling that whatever the
+#: string actually was cannot corrupt the parse.
+#:
+#: **`[0-9]`, not `\d`, and the difference is the property.** Python's `\d` is Unicode by
+#: default: `re.fullmatch(r"%\d+", "%١٢")` is a MATCH, and so is the fullwidth `"%１１"`.
+#: Neither is a pane id tmux ever minted, and neither is dangerous on its own — a Unicode
+#: digit carries no meaning to any of the parsers a command string passes through — but
+#: the check is here to say "this is tmux's own word for a pane", and a class that also
+#: admits Arabic-Indic digits is answering a different question. The same
+#: spelling-instead-of-the-property gap this repo keeps paying for, caught before it cost
+#: anything rather than after.
+#:
+#: **Here rather than in `commands_frame`**, where it was first written, because it is a
+#: fact about tmux's own vocabulary and this is the module that owns those; a second copy
+#: beside the second caller is how one guard becomes two that disagree.
+PANE_ID_RE = re.compile(r"%[0-9]+")
+
 
 def operator_server(env: Mapping[str, str] | None = None) -> tuple[str, str] | None:
     """``(socket path, session target)`` for the tmux the operator is ALREADY inside.
