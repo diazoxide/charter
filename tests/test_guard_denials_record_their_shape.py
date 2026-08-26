@@ -114,10 +114,6 @@ class TestTheHumanReasonIsUnchanged(InAControlPlane):
         self.assertIsNone(hooks._single_credential_reason("git status"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestTheCmdFieldLeaksNoValueEither(ShapeCase):
     """`cmd` records the command's first token, which for `VAR=value cmd` is the whole
     assignment — value included. Live traces held `D=/private/tmp/.../demo-plane;` and
@@ -141,3 +137,7 @@ class TestTheCmdFieldLeaksNoValueEither(ShapeCase):
 
     def test_an_ordinary_binary_is_unchanged(self):
         self.assertEqual("git", self.head_of("git clone git@github.com:acme/x.git"))
+
+
+if __name__ == "__main__":
+    unittest.main()

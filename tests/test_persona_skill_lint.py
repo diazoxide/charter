@@ -52,10 +52,6 @@ class SkillRefLintCase(unittest.TestCase):
         self.assertEqual(persona._skill_ref_issues("`mattpocock-skills:ask-matt`"), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UnknownFrontmatterKey(unittest.TestCase):
     """#8: a charter key charter neither reads nor emits reaches nothing.
 
@@ -75,3 +71,7 @@ class UnknownFrontmatterKey(unittest.TestCase):
         """A key in both would mean charter reads it AND emits it — say which."""
         from charter.commands_persona import _AGENT_PASSTHROUGH_KEYS, _CHARTER_OWN_KEYS
         self.assertEqual(set(_AGENT_PASSTHROUGH_KEYS) & set(_CHARTER_OWN_KEYS), set())
+
+
+if __name__ == "__main__":
+    unittest.main()

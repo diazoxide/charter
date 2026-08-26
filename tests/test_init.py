@@ -186,10 +186,6 @@ class TestGitignorePresenceCheckIsPrecise(InitIso):
         self.assertEqual(before, after)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestSummaryStaysReadable(InitIso):
     """One line naming every file charter wrote is unreadable once there are three
     harnesses to wire — it reached 254 characters, which is also what made the README's
@@ -228,3 +224,7 @@ class TestSummaryStaysReadable(InitIso):
         # new file, never on a longer way of naming an old one. Past this the README's
         # demo capture stops being legible at GitHub's column width.
         self.assertLess(len(line), 195, f"{len(line)} chars:\n{line}")
+
+
+if __name__ == "__main__":
+    unittest.main()

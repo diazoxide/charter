@@ -174,10 +174,6 @@ class TestItIsMeasured(RosterCase):
         self.assertNotIn("SECRETVALUE", blob)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestItIsReported(RosterCase):
     """The fired-vs-followed pair has to reach a human surface, or measuring it is the
     same write-only gesture the todo store's docstring warns about."""
@@ -228,3 +224,7 @@ class TestDoctorSaysWhenRoutingIsInert(RosterCase):
         (config.ROOT / "charter.toml").write_text("schema = 1\n")
         r = doctor.check_front_door()
         self.assertNotIn("inert", (r.detail + " " + (r.hint or "")).lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

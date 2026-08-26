@@ -216,10 +216,6 @@ class TestItNeverReachesDisk(PlaneRepoCase):
         self.assertEqual([r["name"] for r in on_disk], ["web"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCloneToleratesAThinRecord(PlaneRepoCase):
     """`cmd_clone` read `r['default_branch']` directly, so ANY record without it took the
     whole command down with a KeyError rather than cloning. Found by cloning the plane
@@ -236,3 +232,7 @@ class TestCloneToleratesAThinRecord(PlaneRepoCase):
         rec = {"name": "api", "path_with_namespace": "acme/api", "forge": "github",
                "default_branch": "trunk"}
         self.assertIn("trunk", commands._clone_announcement(rec))
+
+
+if __name__ == "__main__":
+    unittest.main()

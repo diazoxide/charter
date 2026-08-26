@@ -79,10 +79,6 @@ class TestBridgeGuidanceSurvives(unittest.TestCase):
         self.assertIn("never read a filled secret back", body)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestTheGeneratorCannotHangOrPromptInvisibly(unittest.TestCase):
     """Two ways the same command stalls with nothing on screen.
 
@@ -210,3 +206,7 @@ class TestTheInstallStatesBothPostures(unittest.TestCase):
         self.assertIn(str(browser.SKILL_DIR), said)
         self.assertIn(str(browser.CONFIG_DIR), said)
         self.assertIn("docs/browser.md", said)
+
+
+if __name__ == "__main__":
+    unittest.main()

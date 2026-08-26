@@ -441,10 +441,6 @@ class TestGuardsAreScopedToAPlane(PersonaIso):
         self.assertEqual(self._decide("charter secret get devops API_TOKEN --reveal"), "deny")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestLeakGuardInspectsInvocationsNotProse(PersonaIso):
     """Both patterns were substring scans over the whole command line, so a command that
     merely MENTIONED the words was hard-denied with a reason misdescribing what it did.
@@ -493,3 +489,7 @@ class TestAbbreviationsCannotWalkPastTheGuard(unittest.TestCase):
         from charter import cli
         ns = cli.build_parser().parse_args(["secret", "get", "v", "k", "--reveal"])
         self.assertTrue(ns.reveal)
+
+
+if __name__ == "__main__":
+    unittest.main()

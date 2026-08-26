@@ -539,10 +539,6 @@ class DotenvExec(PersonaIso):
                          f"leaked a tmpfile after a non-VaultError exception: {written[0]}")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AnEmptySecretIsRefused(PersonaIso):
     """`charter secret set devops API_TOKEN` typed without a value read EOF, stored `""`
     and exited 0. Afterwards `get` says the key is present, `vault list` counts it and
@@ -613,3 +609,7 @@ class AnEmptySecretIsRefused(PersonaIso):
         with mock.patch.object(sys, "stdin", io.StringIO("")):
             self._set()
         self.assertEqual(registry.provider_for("dev").get("API_TOKEN"), "real-token")
+
+
+if __name__ == "__main__":
+    unittest.main()

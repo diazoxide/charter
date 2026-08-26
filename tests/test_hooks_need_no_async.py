@@ -78,10 +78,6 @@ class Detaching(unittest.TestCase):
             self.assertFalse(util.detach_self(["gl-refresh"]))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheCommandsHonourTheFlag(unittest.TestCase):
     """The manifest passing `--detach` proves nothing on its own.
 
@@ -121,3 +117,7 @@ class TheCommandsHonourTheFlag(unittest.TestCase):
                 mock.patch.object(commands.workspace, "repo_trees", return_value=[]):
             commands.cmd_gl_refresh(SimpleNamespace(detach=False, workspace=None))
         spawn.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

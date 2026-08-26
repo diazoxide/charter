@@ -53,10 +53,6 @@ class EnsureShim(unittest.TestCase):
         self.assertIn("input.sessionID", src)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class GuardForwarding(unittest.TestCase):
     """The shim turns an opencode tool call into the hook payload charter already reads.
 
@@ -208,3 +204,7 @@ class MidSessionNudges(unittest.TestCase):
     def test_the_appended_text_is_fenced_so_it_cannot_be_mistaken_for_output(self):
         self.assertIn("charter", self.src.lower())
         self.assertIn("additionalContext", self.src)
+
+
+if __name__ == "__main__":
+    unittest.main()

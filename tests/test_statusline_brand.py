@@ -192,10 +192,6 @@ class NeverBlocks(unittest.TestCase):
             update.maybe_spawn = orig
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UpgradeAdviceIsRunnable(unittest.TestCase):
     """Every upgrade command charter prints must actually work.
 
@@ -227,3 +223,7 @@ class UpgradeAdviceIsRunnable(unittest.TestCase):
                     continue
                 with self.subTest(file=rel):
                     self.assertNotIn("uv tool upgrade", line)
+
+
+if __name__ == "__main__":
+    unittest.main()

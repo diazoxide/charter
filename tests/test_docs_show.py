@@ -145,10 +145,6 @@ class TestDocsCli(unittest.TestCase):
         self.assertIs(args.func, commands.cmd_docs)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestTheContainmentCheckIsReal(unittest.TestCase):
     """`page.parent` is `root` by construction, so checking it asked a question whose
     answer was always yes. A symlink inside the docs directory pointed anywhere on disk,
@@ -205,3 +201,7 @@ class TestTheCheckoutFallbackIsNotSitePackages(unittest.TestCase):
         docsrc._CHECKOUT = repo / "docs"
         self.assertEqual(docsrc.source(), repo / "docs")
         self.assertEqual(docsrc.read("install"), "# ours\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

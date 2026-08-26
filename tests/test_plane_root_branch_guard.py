@@ -160,10 +160,6 @@ class TestItIsScopedToAPlane(PlaneRootCase):
         self.assertIsNone(_decision(self.run_cmd("git checkout feature")))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestTheSeparatorIsNotProofOfARestore(PlaneRootCase):
     """`--` separates refs from PATHS, and only what follows it is a path.
 
@@ -198,3 +194,7 @@ class TestTheSeparatorIsNotProofOfARestore(PlaneRootCase):
 
     def test_the_remedy_still_runs_with_a_separator(self):
         self.assertNotEqual(_decision(self.run_cmd("git checkout main --")), "deny")
+
+
+if __name__ == "__main__":
+    unittest.main()
