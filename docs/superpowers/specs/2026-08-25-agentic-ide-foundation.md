@@ -199,6 +199,29 @@ its symptom is one committed table drawing two different frames on two machines 
 on whether a package happens to be installed. Charter shipped exactly that inversion once
 in `Registry.place` (§4i).
 
+**Where they apply, exactly: `Registry.place` with no rectangle passed, and nowhere else.**
+They are a *runtime* default, read from the loaded component, and the config boundary never
+reads them — so a `[[frame.component]]` table naming a provider must carry **both** `edge`
+and `size`, and one that omits either is refused whole (`instance.component_tables` answers
+`None` and the frame falls back). That is not an oversight to be tidied up later. Filling a
+missing key from the provider's declaration means *importing a stranger's module to answer a
+geometry question*, and `config.FRAME` is resolved at `import charter.config` — on `charter
+--version` as much as on `charter frame`. The choice is between a table that says what it
+wants and a package import on every command, and it is the table.
+
+**The same boundary refuses a rectangle it cannot honour**, not only an absent one: `size`
+must be a whole number of cells of at least 1 — a `bool` is not one, because
+`isinstance(True, int)` is `True` in Python and `Fixed(True)` would otherwise mean
+`Fixed(1)` — and `edge` must be one of the four. `component.cells` already refuses every
+one of those sizes, and the boundary still checks them itself, because the two differ in
+what the refusal *costs*. This is a guard on the **import path**: `derive` resolves `FRAME`
+outside the try/except that catches a malformed charter.toml, so a `ComponentError` from
+`Fixed` does not degrade to the default frame — it takes down every charter command on that
+clone, `charter --version` included. Checked here, the same value is a `None` and the whole
+arrangement falls back to `slots`, which is what every other unusable value in that table
+already does. A committed file arrives from someone else's machine; "committed" is not
+"trusted".
+
 ### Four properties that must survive a stranger's code
 
 These are what make the extension model real rather than a hole:

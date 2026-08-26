@@ -39,6 +39,7 @@ import io
 import os
 import pathlib
 import sys
+import tempfile
 import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -267,6 +268,80 @@ class ConfigPlacesAProvider(unittest.TestCase):
             with self.subTest(table=table):
                 self.assertIsNone(
                     instance.component_tables({"component": [table]}))
+
+    def test_a_rectangle_charter_cannot_honour_refuses_the_arrangement(self):
+        """A key that is PRESENT and unusable, which the absent-key case above never
+        reaches — and the two are separate cases because the consequences are not the
+        same shape.
+
+        A bad ``size`` is the expensive one. ``Fixed.__post_init__`` calls
+        `component.cells`, which refuses `0`, a negative, a `str` and — explicitly —
+        a `bool`, since `isinstance(True, int)` would otherwise make ``size = true``
+        mean ``Fixed(1)``. That raise would come out of `component_tables` →
+        `frame_of` → `config.derive`, and `derive` resolves ``FRAME`` **outside** the
+        try/except that catches a malformed charter.toml. So the whole of
+        `import charter.config` dies, and every command on that clone dies with it —
+        `charter --version` included. `test_a_committed_rectangle_charter_cannot_honour
+        _still_leaves_charter_runnable` below pins that consequence end to end.
+
+        A bad ``edge`` is quieter and still wrong: unvalidated, ``"sideways"`` is placed
+        and travels into `layout._edge_of`, falls out of `_COLUMN_EDGES`/`_ROW_EDGES`/
+        `_BEFORE_EDGES` and silently becomes a plain `-v` after-split — a pane on an
+        edge nobody asked for.
+        """
+        for table in ({"use": CID, "edge": "right", "size": 0},
+                      {"use": CID, "edge": "right", "size": True},
+                      {"use": CID, "edge": "right", "size": -4},
+                      {"use": CID, "edge": "right", "size": "12"},
+                      {"use": CID, "edge": "sideways", "size": 12},
+                      {"use": CID, "edge": "", "size": 12}):
+            with self.subTest(table=table):
+                self.assertIsNone(
+                    instance.component_tables({"component": [table]}))
+
+
+class ABrokenRectangleCostsTheFrameAndNotTheCLI(unittest.TestCase):
+    """The consequence of the guard above, asked of `config.derive` itself.
+
+    `derive` is what runs at `import charter.config`, which is to say on **every**
+    charter command. It wraps `instance.load` in a try/except so a malformed
+    charter.toml degrades instead of raising — but `FRAME` is resolved after that block,
+    not inside it, so anything `frame_of` raises is uncatchable and terminal. A
+    committed `[[frame.component]]` table arrives from someone else's machine (the
+    containment rule in README.md), so "committed" is not "trusted".
+
+    **The good-value case is the control, and it is load-bearing.** Without it, a run
+    where the fixture's distribution was not visible to `derive` would answer the
+    defaults for the reason the mutation is supposed to be caught by — `supplies()`
+    saying no, long before any size is read — and the refusal case would stay green
+    with the guard deleted. It is asked FIRST for the same reason.
+    """
+
+    def setUp(self):
+        _installed(self)
+        self._tmp = tempfile.TemporaryDirectory(prefix="charter-plane-")
+        self.addCleanup(self._tmp.cleanup)
+        self.root = pathlib.Path(self._tmp.name)
+
+    def _derived(self, size: str) -> dict:
+        """``config.derive`` against a plane whose committed table asks for *size*."""
+        (self.root / "charter.toml").write_text(
+            f'schema = 1\n\n[[frame.component]]\nuse = "{CID}"\n'
+            f'edge = "right"\nsize = {size}\n', encoding="utf-8")
+        return config.derive(self.root)["FRAME"]
+
+    def test_a_committed_rectangle_charter_can_honour_is_the_frame_it_derives(self):
+        frame = self._derived("12")
+        self.assertEqual(frame["slots"], [CID])
+        self.assertEqual([(p["slot"], p["edge"], p["size"]) for p in frame["components"]],
+                         [(CID, "right", component.Fixed(12))])
+
+    def test_a_committed_rectangle_charter_cannot_honour_still_leaves_charter_runnable(self):
+        for size in ("0", "true", "-4", '"12"'):
+            with self.subTest(size=size):
+                frame = self._derived(size)      # must not raise: `charter --version`
+                self.assertEqual(frame["slots"], instance.FRAME_DEFAULTS["slots"])
+                self.assertEqual(frame["components"], [])
 
 
 class TheLauncherSplitsAPaneForIt(unittest.TestCase):

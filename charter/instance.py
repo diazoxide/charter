@@ -793,6 +793,24 @@ def component_tables(section) -> list[dict] | None:
     arrangement before anyone configures one, which is a `Registry.place` with nothing
     passed, not a config boundary reading a package.
 
+    **Present is not the same as usable, and the difference is what a charter command
+    costs.** The ``size`` is checked here rather than left to `Fixed`, because this
+    function runs on the IMPORT path: `config.derive` resolves ``FRAME`` *outside* the
+    try/except that catches a malformed charter.toml, so a `ComponentError` raised out of
+    `Fixed.__post_init__` does not degrade to the default frame — it takes down
+    `import charter.config`, and with it every command on that clone, ``charter
+    --version`` included. `size = 0`, `true`, `-4` and `"12"` each reach that raise if
+    this line does not answer first — `component.cells` refuses all four, ``bool``
+    explicitly, since `isinstance(True, int)` is `True` in Python and `Fixed(True)` would
+    otherwise mean `Fixed(1)`. So the two checks agree on the answer and differ on what it
+    costs: `cells` raises, which is right where a caller can catch it, and this returns
+    ``None``, which is the whole-arrangement degrade the rest of this function makes. That
+    is why ``bool`` is spelled out here as well and not left to the `isinstance(size,
+    int)` beside it. An ``edge`` outside `EDGES` is quieter and no more correct —
+    `layout._edge_of` falls through `_COLUMN_EDGES`/`_ROW_EDGES`/`_BEFORE_EDGES` and
+    `"sideways"` becomes a plain ``-v`` after-split, a pane on an edge nobody asked for.
+    A committed file arrives from someone else's machine; "committed" is not "trusted".
+
     **On a BUILT-IN, ``edge`` and ``size`` are still accepted only where charter can
     honour them, which means only at the component's own declaration.** `layout` derives
     the built-in geometry at import (`layout._derive`), so an ``edge = "top"`` on the repo
