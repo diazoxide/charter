@@ -912,10 +912,19 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
     box.apply(mutation)
     if modules:
         subset = box.subset(modules)
+        if not subset.green:
+            # A red is the one verdict this tool never revisits, so it had better be a
+            # real one. The suite starts real tmux servers, several sweeps share a
+            # machine, and a flaky red here does not merely mislabel one mutation — it
+            # certifies a guard as tested by a failure that had nothing to do with it.
+            # One confirming run is seconds against a median subset of seven modules.
+            again = box.subset(modules)
+            if again.green:
+                subset = Outcome(True, again.ran, "red once, green on confirmation")
+            else:
+                return "pinned", subset, None
     else:
         subset = Outcome(True, 0, "no covering module measured")
-    if not subset.green:
-        return "pinned", subset, None
     full = box.full()
     return ("survived" if full.green else "pinned"), subset, full
 

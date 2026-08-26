@@ -557,11 +557,15 @@ class TheDiffIsReadWithNoContext(unittest.TestCase):
 # ======================================================================================
 
 class _FakeBox:
-    """A sandbox that answers whatever the case needs it to."""
+    """A sandbox that answers whatever the case needs it to.
 
-    def __init__(self, subset: sweep.Outcome | None = None,
-                 full: sweep.Outcome | None = None):
-        self._subset, self._full = subset, full
+    `subset` may be a list, which is then consumed one answer per call — that is how a
+    run that goes red once and green on confirmation is spelled.
+    """
+
+    def __init__(self, subset=None, full: sweep.Outcome | None = None):
+        self._subset = subset if isinstance(subset, list) else [subset] * 4
+        self._full = full
         self.applied: list[sweep.Mutation] = []
         self.subset_calls = 0
         self.full_calls = 0
@@ -574,7 +578,7 @@ class _FakeBox:
 
     def subset(self, modules):
         self.subset_calls += 1
-        return self._subset
+        return self._subset[min(self.subset_calls - 1, len(self._subset) - 1)]
 
     def full(self):
         self.full_calls += 1
@@ -602,14 +606,28 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
         verdict, _, _ = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "survived")
 
-    def test_a_red_subset_is_believed_without_a_full_run(self):
-        """A red IS a red — some test really did go red — and re-confirming it would
-        spend four minutes to learn nothing. The asymmetry runs one way only."""
+    def test_a_red_subset_is_confirmed_once_and_then_believed(self):
+        """A red twice IS a red, and re-running the whole suite for it would spend four
+        minutes to learn nothing. The asymmetry runs one way only."""
         box = _FakeBox(subset=sweep.Outcome(False, 40, "FAILED"))
         verdict, _, full = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "pinned")
+        self.assertEqual(box.subset_calls, 2)
         self.assertEqual(box.full_calls, 0)
         self.assertIsNone(full)
+
+    def test_a_red_that_does_not_reproduce_is_not_allowed_to_pin_anything(self):
+        """The suite starts real tmux servers and several sweeps share a machine. A flaky
+        red does not merely mislabel one mutation — it certifies a guard as tested by a
+        failure that had nothing to do with it, which is the exact defect this tool was
+        written to catch. So a red that does not reproduce goes to the full suite."""
+        box = _FakeBox(subset=[sweep.Outcome(False, 40, "FAILED"),
+                               sweep.Outcome(True, 40, "OK")],
+                       full=sweep.Outcome(True, 6000, "OK"))
+        verdict, subset, _ = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "survived")
+        self.assertEqual(box.full_calls, 1)
+        self.assertIn("green on confirmation", subset.detail)
 
     def test_a_file_no_traced_module_reaches_goes_to_the_full_suite(self):
         """Absence of evidence is not a pin. A file the trace never saw — because its
