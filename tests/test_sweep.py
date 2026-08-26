@@ -440,6 +440,50 @@ class TheSplicePreservesEveryLineNumber(unittest.TestCase):
         self.assertRegex(text, r"return (0|x)\n")
 
 
+class EverySpliceChecksItsOwnSpan(unittest.TestCase):
+    """A mutation reported at a line it did not change is worse than one not offered."""
+
+    def _first_expr(self, source: str):
+        blob = textwrap.dedent(source).lstrip("\n").encode()
+        tree = ast.parse(blob)
+        sp = sweep._Spans(blob)
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.IfExp))
+        return sp, node
+
+    def test_a_span_that_reparses_into_the_same_tree_is_sound(self):
+        sp, node = self._first_expr("x = a if c else b\n")
+        self.assertTrue(sweep.span_is_sound(sp, node))
+
+    def test_an_expression_broken_over_two_lines_is_still_sound(self):
+        """An expression's span stops INSIDE the brackets that made the line break legal,
+        so `a if c\\n else b` is a SyntaxError on its own and a perfectly good mutation in
+        place. Without the parentheses this check rejects it, and two real `decode`
+        mutations on #554 went missing."""
+        sp, node = self._first_expr("""
+            key = (_TILDE_KEYS.get(params) if final == b"~"
+                   else _CSI_KEYS.get(final))
+        """)
+        self.assertTrue(sweep.span_is_sound(sp, node))
+
+    def test_a_span_pointing_at_the_wrong_bytes_is_refused(self):
+        """Before 3.12 and PEP 701, `ast` gave only approximate positions for expressions
+        inside an f-string — and `contain.one_line(…)` is inside an f-string nearly
+        everywhere it appears here, which is what `uncontain` exists to mutate. A splice
+        a few bytes off can still PARSE, so the parse check alone would not catch it."""
+        blob = b"x = a if c else b\n"
+        tree = ast.parse(blob)
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.IfExp))
+        shifted = sweep._Spans(b"# a comment first\n" + blob)
+        self.assertFalse(sweep.span_is_sound(shifted, node))
+
+    def test_a_statement_span_round_trips_with_its_body(self):
+        blob = b"def f(a):\n    if a is None:\n        return []\n"
+        tree = ast.parse(blob)
+        sp = sweep._Spans(blob)
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.If))
+        self.assertTrue(sweep.span_is_sound(sp, node))
+
+
 class TheScopeIsTheDiff(unittest.TestCase):
     def test_a_mutation_outside_the_charged_lines_is_not_offered(self):
         """A PR is answerable for the guards IT adds."""

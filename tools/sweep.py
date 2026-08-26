@@ -411,6 +411,35 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
                    "is this branch pinned?")
 
 
+def span_is_sound(sp: _Spans, node: ast.AST) -> bool:
+    """Does the source at *node*'s span actually parse back into *node*?
+
+    Before 3.12 and PEP 701, `ast` gave only approximate positions for expressions
+    **inside an f-string** — and `contain.one_line(…)` lives inside an f-string almost
+    everywhere it appears in this tree, which is exactly what the `uncontain` operator
+    exists to mutate. Splicing on a position that is off by a few bytes produces a mutant
+    that is not the mutation the report claims, and it can still parse, so the parse check
+    alone would not catch it.
+
+    Re-parsing the span and comparing the tree (`ast.dump` omits positions) is the cheap
+    way to be certain the tool is editing what it says it is. A node whose span does not
+    round-trip is dropped rather than guessed at: a mutation reported at a line it did not
+    change is worse than one not offered.
+    """
+    text = sp.text(node)
+    try:
+        if isinstance(node, ast.stmt):
+            reparsed = ast.parse(text).body
+            return len(reparsed) == 1 and ast.dump(reparsed[0]) == ast.dump(node)
+        # Parenthesised, because an expression's span stops inside the brackets that
+        # made it legal to break over two lines: `a if c\n else b` is a SyntaxError on
+        # its own and a perfectly good mutation in place. Parentheses leave no trace in
+        # the tree, so the comparison is still exact.
+        return ast.dump(ast.parse(f"({text}\n)", mode="eval").body) == ast.dump(node)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return False
+
+
 def _is_isinstance(node: ast.AST) -> bool:
     return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id == "isinstance")
@@ -441,6 +470,8 @@ def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
     seen: set[tuple[int, int, str, str]] = set()
     for node, replacement, operator, question in _iter_operators(tree, sp):
         if not (set(range(node.lineno, (node.end_lineno or node.lineno) + 1)) & lines):
+            continue
+        if not span_is_sound(sp, node):
             continue
         before = sp.text(node)
         if before.strip() == replacement.strip():
