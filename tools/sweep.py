@@ -1118,6 +1118,7 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
 def as_json(results: list[Result]) -> str:
     return json.dumps([{
         "path": r.mutation.path, "line": r.mutation.line,
+        "end_line": r.mutation.end_line,
         "operator": r.mutation.operator, "symbol": r.mutation.symbol,
         "question": r.mutation.question,
         "before": r.mutation.before, "after": r.mutation.after,
