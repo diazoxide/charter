@@ -62,12 +62,19 @@ _CHARTERS = object()
 
 
 def _source(*, cid: str = CID, api: object = _CHARTERS,
-            render: str = "lambda ctx: ['ok']", head: str = "") -> str:
+            render: str = "lambda ctx: ['ok']", head: str = "",
+            needs: tuple[str, ...] = ()) -> str:
     """A provider module: a version, a factory, and a record of whether it ran.
 
     ``built`` is what makes "refused before the provider built anything" an assertion
     rather than a hope — the module object survives the refusal in ``sys.modules``, so a
     test can ask it afterwards.
+
+    *needs* is the DECLARATION, not a snapshot — §4e's idle cost is decided by it, so a
+    case that wants to watch `gather.read` being made or being skipped needs a component
+    on each side of that branch. A knob here rather than a second module fixture beside
+    this one, for the reason `_SitePackages.install` already gives: two fixtures for one
+    idea drift, and the drift is invisible from either side.
     """
     api = component.API_VERSION if api is _CHARTERS else api
     return textwrap.dedent(f"""\
@@ -82,7 +89,7 @@ def _source(*, cid: str = CID, api: object = _CHARTERS,
             built = True
             return component.Component(
                 id={cid!r}, title="Metrics", edge="right",
-                size=component.Fixed(12), needs=(), events=(),
+                size=component.Fixed(12), needs={needs!r}, events=(),
                 render={render})
         """)
 

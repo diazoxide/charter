@@ -31,6 +31,18 @@ is shorthand for four built-in ids now, and `CharterOwnConfigIsUnchanged` reads 
 OWN `charter.toml` off disk and pins the whole resolved arrangement — because a change
 that silently removed the repo table from charter's own plane shipped once (#535) and was
 caught by a reviewer, not by a test.
+
+**The classes below `CharterOwnConfigIsUnchanged` pin the branch's GUARDS**, one case per
+line that refuses, clamps, contains or falls back. Each was written by deleting the line,
+running the whole suite and watching it stay green — twelve of them did, and every one of
+those twelve is a `if`/fallback/`except` that only fires for a component charter did not
+write, or for a value that is not text. The cases above could not see any of them, and
+the reason is the same one every time: **the payload passed either way.** The three
+drawing cases all draw eleven columns into a forty-column pane, so the pane's real width
+is never used; `_derive` is only ever handed charter's own components, which have a
+committed spelling for the fallback to skip; `slot_sizes` is called by one case, on a
+frame with no provider in it. A test that cannot fail is not a pin, and this repo has
+shipped that kind believing it was the other.
 """
 
 from __future__ import annotations
@@ -45,7 +57,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from charter import commands_frame, config, instance
+from charter import commands_frame, config, instance, tui
 from charter.frame import builtins, component, layout, panel, slots
 
 from tests._isolation import PersonaIso
@@ -61,11 +73,12 @@ _COMMITTED = pathlib.Path(__file__).resolve().parents[1] / "charter.toml"
 _DREW = "metrics 42"
 
 
-def _installed(case, *, render: str = f"lambda ctx: [{_DREW!r}]", head: str = "") -> None:
+def _installed(case, *, render: str = f"lambda ctx: [{_DREW!r}]", head: str = "",
+               needs: tuple[str, ...] = ()) -> None:
     """Put one real provider distribution supplying :data:`CID` on ``sys.path``."""
     site = _SitePackages(case)
     site.install("acme-charter", "1.0", {CID: ENTRY},
-                 {MODULE: _source(render=render, head=head)})
+                 {MODULE: _source(render=render, head=head, needs=needs)})
     return site
 
 
@@ -483,3 +496,301 @@ class CharterOwnConfigIsUnchanged(unittest.TestCase):
             ["-t", "%0", "-h", "-l", "22", "-P", "-F", "#{pane_id}", "--",
              *layout.panel_command(slot="right", session="f-1")],
         ])
+
+
+class TheStackIsSizedInTheUnitEachPaneWasDeclaredIn(unittest.TestCase):
+    """`slot_sizes` answers for a component this plane placed, and a pane that costs
+    COLUMNS is charged the harness no ROWS.
+
+    Both halves were correct and neither was pinned, for the same reason: every existing
+    case that calls either function calls it on a frame with no provider in it —
+    `CharterOwnConfigIsUnchanged` reads charter's own committed file, which places four
+    built-ins and nothing else, and the four are already in `layout`'s shipped tables. A
+    per-slot table keyed by four names answers those four correctly whatever it does with
+    a fifth.
+
+    `commands_frame._reassert_sizes` calls both on every window resize and every density
+    relayout, so what is measured here is not a startup path.
+    """
+
+    def setUp(self):
+        _installed(self)
+        self.frame = instance.frame_of({"frame": {"component": [
+            {"use": "identity"}, {"use": "attention"}, {"use": "repos"},
+            {"use": CID, "edge": "right", "size": 12}]}})
+        self.assertEqual(self.frame["slots"], ["top", "bottom", "repos", CID])
+
+    def _sizes(self) -> dict[str, int]:
+        with mock.patch.dict(config.FRAME, self.frame):
+            return layout.slot_sizes(self.frame["slots"], window_rows=50, content_rows=6)
+
+    def test_a_component_this_plane_placed_is_in_the_map_at_its_committed_size(self):
+        """Dropped from the map, the provider is a pane the launcher splits at nothing
+        and `_reassert_sizes` never re-asserts — and every other slot is then sized
+        against a stack one pane short."""
+        self.assertEqual(self._sizes(), {"top": 1, "bottom": 1, "repos": 6, CID: 12})
+
+    def test_the_harness_is_charged_no_rows_for_a_pane_that_costs_columns(self):
+        """The sidebar's 12 are COLUMNS. Charged as rows they come straight off the
+        harness — 39 rows becomes 26 in this 50-row window — and that number is what
+        `resize-pane -y` is given, so the frame is wrong on screen and not only in a
+        dict. Asked twice: against the arithmetic, and against the same map with the
+        provider taken out of it, because a column edge that costs rows is exactly the
+        difference between those two answers.
+        """
+        sizes = self._sizes()
+        with mock.patch.dict(config.FRAME, self.frame):
+            got = layout.harness_rows(sizes, window_rows=50)
+            without = layout.harness_rows(
+                {k: v for k, v in sizes.items() if k != CID}, window_rows=50)
+        rows = sum(sizes[s] + layout._BORDER_ROWS for s in ("top", "bottom", "repos"))
+        self.assertEqual(got, 50 - rows)
+        self.assertEqual(got, without,
+                         "a pane on a column edge changed the harness's row count")
+
+
+class LayoutDerivesEveryFactFromTheComponentItself(unittest.TestCase):
+    """`_derive` is where all five per-slot tables come from, and it must survive being
+    shown a component charter did not write.
+
+    Its own docstring calls the fallback on that line "the line Phase 1 could not cross":
+    it used to be `SLOT_OF[c.id]`, a `KeyError` by design for any id charter has no
+    committed spelling for. The three existing callers in `test_builtin_components.py`
+    all hand it charter's own components, which have one — so the tables they check are
+    built by the branch that was already there.
+    """
+
+    def _metrics(self):
+        return component.Component(id=CID, title="Metrics", edge="right",
+                                   size=component.Fixed(12), needs=(), events=(),
+                                   render=lambda ctx: [_DREW])
+
+    def test_a_component_with_no_committed_spelling_is_keyed_by_its_own_id(self):
+        got = layout._derive([self._metrics()])
+        self.assertEqual(got.size, {CID: 12})
+        self.assertEqual(got.edge, {CID: "right"})
+        self.assertEqual(got.column, (CID,))
+        self.assertEqual(got.fixed_rows, ())
+        self.assertEqual(got.variable_rows, frozenset())
+
+    def test_a_built_in_beside_it_still_answers_to_its_committed_spelling(self):
+        """The other half of the same line: the fallback must not cost `identity` the
+        alias `[frame] slots`, `charter panel top` and every caller in `commands_frame`
+        already spell it with."""
+        got = layout._derive([
+            component.Component(id="identity", title="Identity", edge="top",
+                                size=component.Fixed(1), needs=(), events=(),
+                                render=lambda ctx: ["id"]),
+            self._metrics()])
+        self.assertEqual(got.size, {"top": 1, CID: 12})
+        self.assertEqual(got.column, (CID,))
+        self.assertEqual(got.fixed_rows, ("top",))
+
+
+class TheFrameHasOneShapeWhateverTheConfigSaid(unittest.TestCase):
+    """`frame_of` answers a `components` key on **every** path, the early return
+    included.
+
+    That early return is the path very nearly every plane takes, and its answer is what
+    `layout._placed_here` reads on every command — `config.FRAME` is this function's
+    return value. A key present on one path and absent on another is the
+    two-shapes-for-one-answer the comment on that line exists to prevent, and the early
+    return is the path nothing had ever asked for the key on.
+    """
+
+    def test_a_plane_with_no_usable_frame_section_still_carries_the_key(self):
+        for cfg in ({}, {"frame": "nonsense"}, {"frame": []}, {"other": 1},
+                    {"frame": None}):
+            with self.subTest(cfg=cfg):
+                self.assertEqual(instance.frame_of(cfg)["components"], [])
+
+    def test_it_is_the_same_shape_the_configured_path_answers(self):
+        """Asked of both paths in one case, so "the shapes agree" is the assertion
+        rather than two separate ones that could drift apart."""
+        _installed(self)
+        placed = instance.frame_of(
+            {"frame": {"component": [{"use": CID, "edge": "right", "size": 12}]}})
+        self.assertEqual(sorted(instance.frame_of({})), sorted(placed))
+
+
+class ANameThatIsNotTextIsAnAnswerRatherThanACrash(unittest.TestCase):
+    """Three lookups that resolve a component name, each asked something unhashable.
+
+    Every one of them is reached with a value that came out of a committed file — a
+    `[frame] slots` list, a `[[frame.component]]` table's `use` — and a committed file
+    arrives from someone else's machine (README.md's containment rule). `charter.toml` is
+    TOML, so a list or an inline table under a key that wants a string is one keystroke
+    away and neither is hashable: a `dict.get` on it raises `TypeError` from inside a
+    lookup, half a frame away from the line that was actually wrong, where the refusal
+    belongs beside the rest of that value's validation.
+
+    `slots.drawable` is the expensive one — `commands_frame`'s two respawn guards ask it
+    before a name reaches tmux CONFIG TEXT, so a `TypeError` there is a launch that dies
+    with panes already split.
+    """
+
+    #: Unhashable on purpose. A hashable non-string takes the `dict.get` miss path and
+    #: answers the same with the guard or without it, so it could not tell one from the
+    #: other — it is asked below all the same, because "answers rather than raises" is
+    #: the property and it should hold for both kinds.
+    _UNHASHABLE = (["top"], {"top": 1}, {"top"}, bytearray(b"top"))
+    _HASHABLE = (3, None, b"top", ("top",), True)
+
+    def test_drawable_answers_false(self):
+        for value in self._UNHASHABLE + self._HASHABLE:
+            with self.subTest(value=value):
+                self.assertIs(slots.drawable(value), False)
+
+    def test_component_id_answers_the_value_it_was_given(self):
+        for value in self._UNHASHABLE + self._HASHABLE:
+            with self.subTest(value=value):
+                self.assertIs(builtins.component_id(value), value)
+
+    def test_layouts_key_answers_the_value_it_was_given(self):
+        """`layout._key`'s own contract, and stated as that rather than as a consequence
+        somewhere else: the three lookups reading it (`_edge_of`, `_size_of`,
+        `_is_fixed_row`) each ask a membership question of the result, so an unhashable
+        raises at THEIR line whether or not this one filtered it first. What the guard
+        decides is which of the two `_key` is — a resolve that answers, or a lookup that
+        raises — and `_derive` reads the same `SLOT_OF` in the same direction.
+        """
+        for value in self._UNHASHABLE + self._HASHABLE:
+            with self.subTest(value=value):
+                self.assertIs(layout._key(value), value)
+
+    def test_a_hashable_name_nothing_placed_falls_out_of_every_side(self):
+        """`_edge_of`'s filter-don't-refuse degrade, which is what makes a name charter
+        knows nothing about fall out of `_COLUMN_EDGES`, `_ROW_EDGES` and
+        `_BEFORE_EDGES` alike rather than be assigned a side."""
+        for value in self._HASHABLE:
+            with self.subTest(value=value):
+                self.assertIsNone(layout._edge_of(value))
+                self.assertIsNone(layout._size_of(value))
+                self.assertIs(layout._is_fixed_row(value), False)
+
+
+class APanelPaintsInsideItsOwnRectangle(PersonaIso, unittest.TestCase):
+    """What `_component_text` promises about the pane it paints into, asked with payloads
+    that can tell the promises apart.
+
+    The three drawing cases at the top of this file all draw `metrics 42` — eleven
+    columns into a forty-column pane, short enough that a width of 40, a width of 80 and
+    a width of 1000 all paint the same bytes. So none of them can see the pane's real
+    rectangle being used at all.
+    """
+
+    def test_a_providers_rows_are_clipped_to_THIS_pane_and_not_to_a_constant(self):
+        """§4b property 3 on the one path that actually paints a provider. The width
+        `_component_text` builds the ctx with is what `Registry.draw` clips to, so a
+        constant there is a line that wraps — and a wrapped line in a pane sized to the
+        one row it was supposed to be destroys the frame around it, not only its own
+        pane.
+
+        Two pane widths, one narrower than any plausible constant and one wider, because
+        a single width can only show that the number is not that one number.
+        """
+        _installed(self, render="lambda ctx: ['X' * 200]")
+        for cols in (40, 100):
+            with self.subTest(cols=cols):
+                rc, painted, _err = _painted(CID, cols=cols)
+                self.assertEqual(rc, 0, painted)
+                self.assertEqual([tui.width(line) for line in painted.split("\n")],
+                                 [cols])
+
+    def test_a_component_that_declared_nothing_costs_the_tick_no_snapshot(self):
+        """§4e's idle cost, and the DECLARATION is what decides it. A provider with an
+        empty `needs` is handed an empty ctx, so the plane scan behind `gather.read` is
+        never paid for a pane that could not read it anyway — every tick, on every
+        frame, for as long as the frame is up.
+        """
+        _installed(self)
+        with mock.patch("charter.frame.gather.read") as read:
+            rc, painted, _err = _painted(CID)
+        self.assertEqual(rc, 0, painted)
+        self.assertIn(_DREW, painted)
+        read.assert_not_called()
+
+    def test_a_component_that_declared_a_need_is_handed_the_snapshot(self):
+        """The other side of the same branch, so "never reads" cannot be passing for
+        "never reads for anybody"."""
+        _installed(self, needs=("repos",))
+        with mock.patch("charter.frame.gather.read", return_value={}) as read:
+            rc, painted, _err = _painted(CID)
+        self.assertEqual(rc, 0, painted)
+        self.assertIn(_DREW, painted)
+        read.assert_called_once_with("f-1")
+
+    def test_a_snapshot_that_cannot_be_read_is_a_line_and_not_a_lost_pane(self):
+        """`_component_text`'s own **Never raises**, which is about THIS function's
+        failure modes and not the renderer's — a renderer is already contained one layer
+        down by `Registry.draw`, which is what
+        `test_a_component_that_raises_costs_its_own_pane_and_names_itself` exercises.
+
+        A `gather.read` that fails is transient: the cache directory is on a volume that
+        went away, the scan raced an `rm -rf`. Let out, it reaches `run`'s outer handler,
+        and `run`'s outer handler `_hold`s the pane — permanently, for a failure that
+        would have been over by the next tick.
+        """
+        _installed(self, needs=("repos",))
+        with mock.patch("charter.frame.gather.read",
+                        side_effect=OSError("volume went away")):
+            rc, painted, err = _painted(CID, cols=78)
+        self.assertEqual(rc, 0, painted)
+        self.assertIn(CID, painted)
+        self.assertIn("OSError", painted)
+        self.assertNotIn("panel stopped", err)
+
+    def test_the_failure_line_contains_the_id_before_it_measures_it(self):
+        """The order that line is written in, asked in both directions at once.
+
+        *cid* arrived on this process's own command line. Contained FIRST, an escape in
+        it becomes four visible characters the width arithmetic then budgets for, and the
+        pane names the component that failed. Measured first, `tui.truncate`'s own
+        `sanitize` DELETES the escape instead — and the pane names `acme.m`, a component
+        that does not exist, which is a confidently wrong answer rather than a contained
+        one.
+
+        `_component_text` is asked directly because `run` cannot reach it with such an id
+        — `Registry.place` refuses one that is not `_ID_RE`-shaped before a painter is
+        ever built, which is `TheProviderNameThatReachesThePaneIsContained` below. The
+        containment here is this function's own, on the value this function was handed.
+        """
+        hostile = "acme.\x1b[2Jm"
+        with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((40, 6))):
+            line = panel._component_text(builtins.build(), hostile, "f-1")
+        self.assertNotIn("\x1b", line)
+        self.assertIn("\\x1b", line)
+        self.assertNotIn("acme.m", line)
+        self.assertLessEqual(tui.width(line), 40)
+
+
+class TheProviderNameThatReachesThePaneIsContained(PersonaIso, unittest.TestCase):
+    """A component name a stranger's distribution chose, on `run`'s failure path.
+
+    An entry point NAME is not an id charter validated — `builtins.supplies` reads
+    distribution metadata and nothing else, so `acme.\\x1b[2Jm` is supplied, and
+    `slots.drawable` therefore answers True and `run` goes on to place it. `_stand_in` is
+    where it is finally refused, and by then the name is in `run`'s hands and on its way
+    to two surfaces: the pane, and stderr.
+
+    **stderr is the one with no other guard.** The pane's line goes through
+    `tui.truncate`, whose `sanitize` deletes the escape — leaving `acme.m`, a name that
+    is not the one that failed. `print(..., file=sys.stderr)` reaches the operator's
+    terminal exactly as written, and an erase-in-display there is an instruction rather
+    than a character.
+    """
+
+    def test_an_escape_in_a_suppliers_name_reaches_neither_surface_raw(self):
+        hostile = "acme.\x1b[2Jm"
+        site = _SitePackages(self)
+        site.install("hostile-charter", "1.0", {hostile: ENTRY}, {MODULE: _source()})
+        self.assertTrue(slots.drawable(hostile), "the fixture never reached `run`")
+
+        rc, painted, err = _painted(hostile)
+        self.assertEqual(rc, 1, painted)
+        self.assertNotIn("\x1b", err)
+        self.assertIn("\\x1b", err)
+        self.assertNotIn("acme.m panel stopped", painted)
+        self.assertIn("\\x1b", painted)
