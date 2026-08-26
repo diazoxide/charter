@@ -555,22 +555,78 @@ That is the one thing `slots` cannot express. Deleting a name from `slots` loses
 *position* along with it, so turning the panel back on later means remembering where in the
 order it went; `visible = false` keeps the order and turns off the panel.
 
-`edge` and `size` may be written down, and today they may only say what the component
-already declares — `edge = "right"` and `size = 22` on the sidebar, `edge = "top"` on
-identity. Charter derives the whole frame's geometry from those declarations, and nothing
-between `charter.toml` and tmux carries a per-plane override yet, so a value charter cannot
-honour is not quietly accepted and ignored: it takes the arrangement out of play. Writing
-them is still worth it if you like your config explicit — and it is what makes the two
-forms round-trip.
+For one of charter's own four, `edge` and `size` may be written down and may only say what
+the component already declares — `edge = "right"` and `size = 22` on the sidebar, `edge =
+"top"` on identity. Charter derives the built-in geometry from those declarations, and
+nothing between `charter.toml` and tmux carries a per-plane override for them, so a value
+charter cannot honour is not quietly accepted and ignored: it takes the arrangement out of
+play. Writing them is still worth it if you like your config explicit — and it is what
+makes the two forms round-trip.
+
+### A component charter did not write
+
+`use` is a component id, and not every component id is one of charter's four. A Python
+distribution you install can supply one:
+
+```toml
+[project.entry-points."charter.components"]
+"acme.metrics" = "acme_charter.metrics:Component"
+```
+
+With that installed, your arrangement can place it:
+
+```toml
+[[frame.component]]
+use  = "identity"
+
+[[frame.component]]
+use  = "acme.metrics"
+edge = "right"
+size = 12
+
+[[frame.component]]
+use  = "attention"
+```
+
+File order is split order here as everywhere else, so `acme.metrics` is split off before
+the attention strip and the strip is inset beside it.
+
+**`edge` and `size` are required here, and they win.** Required, because the only way to
+ask a package where it would like to sit is to import it — and your config is resolved by
+`charter --version` as much as by `charter frame`, so charter will not run a stranger's
+code to answer a geometry question on every command. And they win, because your
+`charter.toml` is committed and shared: a package's own preference overruling it would mean
+one file drawing two different frames on two machines depending on what happens to be
+installed. Arrangement is committed; execution is local.
+
+**Charter never runs code your config names.** `use` is a *name*, resolved against what is
+installed on this machine. If nothing supplies it, nothing runs and your arrangement is
+refused — which is the whole reason components bind by name rather than by a `command =
+"…"` string.
+
+If the package is installed and then goes wrong — it raises when imported, it speaks a
+component API charter does not, two packages claim the same id, or its `render` throws —
+that costs **its own pane and nothing else**. The pane names the distribution and says what
+happened, and the rest of your frame draws around it.
+
+You can run one by hand, which is what charter itself runs in the pane:
+
+```
+charter panel acme.metrics --session <frame-id>
+```
+
+That takes a component id — or one of the four slot names, which are shorthand for the
+built-in ids, so `charter panel identity` and `charter panel top` draw the same strip.
 
 **An arrangement charter cannot draw is refused whole, and your frame falls back to
 `slots`.** Not one table at a time — dropping just the line charter could not make sense of
 would hand you a frame with a panel silently missing from it, and a missing repo table is a
-plane that looks like it has no clones. So a component charter has never heard of, an edge
-it cannot place, a duplicate, a key that is not one of the four, or a `visible` that is not
-`true`/`false` all mean the same thing: the arrangement is ignored and you get the frame
-your `slots` (or `density`, or the default) describes. You see your whole arrangement not
-take effect, which is something you can act on, rather than one pane's worth of quiet
+plane that looks like it has no clones. So a component charter has never heard of and no
+installed distribution supplies, an edge it cannot place, a duplicate, a key that is not
+one of the four, a provider placed without an `edge` and a `size`, or a `visible` that is
+not `true`/`false` all mean the same thing: the arrangement is ignored and you get the
+frame your `slots` (or `density`, or the default) describes. You see your whole arrangement
+not take effect, which is something you can act on, rather than one pane's worth of quiet
 fiction.
 
 Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then

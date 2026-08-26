@@ -1451,6 +1451,13 @@ ANIMATED = frozenset({"bottom"})
 def unimplemented(configured) -> list[str]:
     """Which of *configured* charter sizes and accepts but has no renderer for.
 
+    **A name, not a key of :data:`SLOTS`.** This is the filter a placed provider had to
+    survive and did not: it asked "is there a renderer in charter's own table", and a
+    component supplied by an installed distribution never is one, so every provider was
+    dropped before `panel_argvs` could split a pane for it. It asks the frame's question
+    now — *can anything draw this* — of which charter's own four renderers are one half
+    and `builtins.supplies` the other. Metadata only; nothing here imports a provider.
+
     Answers empty: every slot `instance.FRAME_SLOTS` accepts and `layout.SLOT_SIZE`
     sizes has a renderer in :data:`SLOTS`. It stayed non-empty for a whole release
     while `left`/`right` were sized but not drawn, and #488 closed the question from
@@ -1465,7 +1472,42 @@ def unimplemented(configured) -> list[str]:
     stays answered here, next to the registry that answers it, rather than
     three times over.
     """
-    return sorted({s for s in configured if s not in SLOTS})
+    return sorted({s for s in configured if not drawable(s)})
+
+
+def drawable(name) -> bool:
+    """Whether `charter panel <name>` has anything to draw — the ONE answer.
+
+    Four callers need it and must agree, which is why it is a function and not four
+    membership tests: :func:`unimplemented` (so a pane is not split for a name nothing can
+    fill), `frame/panel.py:run` (so a panel refuses rather than painting an empty pane),
+    and `commands_frame`'s two respawn guards (so a name charter cannot resolve never
+    reaches tmux config text). Two implementations of one question hide each other's
+    defects (#547), and this question now has a second half — a provider's component —
+    that all four have to see the same way.
+
+    A committed slot name and the component id behind it both answer yes, because they are
+    one component (`builtins.component_id`). A name an installed provider supplies answers
+    yes because its module can draw it. Everything else answers no, and the caller says so
+    where it can be read.
+
+    **A property, never a spelling.** `acme.metrics` is not admitted for having a dot in
+    it: it is admitted because a distribution on this machine declares it in the
+    `charter.components` entry point group. `top.` looks exactly as namespaced and is
+    refused, which is what keeps the respawn hook's guard a guard.
+    """
+    from . import builtins as _builtins
+    if not isinstance(name, str):
+        return False
+    if name in SLOTS:
+        return True
+    cid = _builtins.component_id(name)
+    if cid in _builtins.SLOT_OF:
+        # A built-in whose renderer has been taken out of :data:`SLOTS`. It does not fall
+        # through to the providers: a distribution declaring `sidebar` must not become
+        # the answer to a question about charter's own component.
+        return _builtins.SLOT_OF[cid] in SLOTS
+    return _builtins.supplies(cid)
 
 
 def render(slot: str, fid: str) -> str:

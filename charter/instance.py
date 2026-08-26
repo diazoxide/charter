@@ -640,6 +640,13 @@ def frame_of(cfg: dict) -> dict:
     density declared the shipped default holds exactly as it did before.
     """
     out = dict(FRAME_DEFAULTS)
+    # Set before the early return, not only on the way out: a key present on one path and
+    # absent on another is two shapes for one answer, and `layout._placed_here` would then
+    # be reading a `KeyError` on exactly the planes that declare no `[frame]` section at
+    # all. Not in :data:`FRAME_DEFAULTS` because it is not a SETTING — nothing in the
+    # `[frame]` table is spelled `components`, and the generic type check below would read
+    # `[[frame.component]]`'s raw tables straight into it without resolving one.
+    out["components"] = []
     section = cfg.get("frame")
     if not isinstance(section, dict):
         return out
@@ -681,6 +688,13 @@ def frame_of(cfg: dict) -> dict:
     placed = component_tables(section)
     if placed is not None:
         out["slots"] = [p["slot"] for p in placed if p["visible"]]
+    # The arrangement itself, and not only the names it comes down to. `slots` carries
+    # what to split; a placement also carries WHERE and HOW BIG, which for a component
+    # charter did not write is a rectangle nothing else on this machine knows —
+    # `layout._placed_here` is what reads it back. Empty on every plane spelled with
+    # `slots`, which is charter's own: there is no per-plane rectangle to read, and
+    # `layout`'s shipped tables are the whole answer exactly as they were.
+    out["components"] = placed or []
     return out
 
 
@@ -692,31 +706,50 @@ FRAME_COMPONENT_KEY = "component"
 
 #: Every key a ``[[frame.component]]`` table may carry, and the whole of the form.
 #:
-#: * ``use`` — the component id, which is `frame/builtins.py`'s vocabulary and NOT
-#:   ``slots``' one: `identity`, `attention`, `repos`, `sidebar`. The two names for one
-#:   panel exist because `slots` is committed on every plane that has a charter.toml and
-#:   `charter panel <slot>` is a tmux argv (`builtins.SLOT_OF` is the one table between
-#:   them); `use` is the new vocabulary and does not accept the old spelling, so a file
-#:   says which of the two it is written in.
-#: * ``edge`` — which side of the harness it attaches to.
+#: * ``use`` — a component id, which is `frame/builtins.py`'s vocabulary and NOT
+#:   ``slots``' one: charter's own four are `identity`, `attention`, `repos`, `sidebar`,
+#:   and anything else is a component an installed distribution supplies. The two names
+#:   for one built-in panel exist because `slots` is committed on every plane that has a
+#:   charter.toml and `charter panel <slot>` is a tmux argv (`builtins.SLOT_OF` is the one
+#:   table between them); `use` does not accept the old spelling, so a file says which of
+#:   the two it is written in.
+#: * ``edge`` — which side of the harness it attaches to. Optional on one of charter's
+#:   own and REQUIRED on anything else, with ``size``: see :func:`component_tables`.
 #: * ``size`` — how many cells it is given, for a component whose size is `Fixed`.
 #: * ``visible`` — whether it is drawn at all. The one key `slots` could only express by
 #:   deleting a name, which loses the position with it.
 FRAME_COMPONENT_FIELDS = ("use", "edge", "size", "visible")
 
 
-def _placement(reg, cid: str, *, visible: bool = True) -> dict:
+def _placement(cid: str, *, edge: str, size, visible: bool = True) -> dict:
     """One resolved placement: the component, where it sits, how big, and whether drawn.
+
+    **The one place a placement is spelled**, which is why the rectangle is passed in
+    rather than read here: it comes from the component's own declaration for a built-in
+    and from the committed table for a provider, and a second dict literal on the second
+    path is the two-implementations shape that let the test harness keep a worse copy of
+    what runs charter (#547).
 
     ``size`` is the size POLICY (`component.Fixed`/`Content`/`Fill`), not a number.
     Turning a policy into cells is `layout`'s job and it does it in one place
-    (`layout._cells`); a second answer here is the two-implementations shape that let the
-    test harness keep a worse copy of what runs charter (#547).
+    (`layout._policy_cells`).
+
+    ``slot`` is the name this placement TRAVELS under — into `frame_of`'s slot list, into
+    `layout`'s per-name geometry, and into `charter panel <name>`'s argv. A built-in
+    travels under its committed spelling, because that argv and that config key exist on
+    every plane that has a charter.toml; a component charter did not write has no
+    committed spelling and travels under its id, which is the whole of "a component id is
+    the frame's currency".
     """
-    c = reg.get(cid)
     from .frame import builtins as _builtins
-    return {"use": cid, "slot": _builtins.SLOT_OF[cid], "edge": c.edge, "size": c.size,
-            "visible": visible}
+    return {"use": cid, "slot": _builtins.SLOT_OF.get(cid, cid), "edge": edge,
+            "size": size, "visible": visible}
+
+
+def _built_in_placement(reg, cid: str, *, visible: bool = True) -> dict:
+    """:func:`_placement` for one of charter's own, in the rectangle it declares."""
+    c = reg.get(cid)
+    return _placement(cid, edge=c.edge, size=c.size, visible=visible)
 
 
 def component_tables(section) -> list[dict] | None:
@@ -736,38 +769,45 @@ def component_tables(section) -> list[dict] | None:
     the one `slots` describes: the operator sees their arrangement ignored, which is a
     visible, whole-frame difference, rather than one pane's worth of quiet fiction.
 
-    **Task 7 was expected to replace that for the one case it could improve — a component
-    named here with no provider installed getting a MESSAGE in its own pane while the rest
-    of the frame draws — and it does not, deliberately (decided 2026-08-26, §4b property
-    4).** The message has nowhere to appear. `frame.registry.Registry.place` builds the
-    standin and holds the rectangle for it, but every step from here to a painted pane
-    still speaks the four committed SLOT NAMES rather than component ids: this function's
-    own `SLOT_OF` check, :func:`frame_of`'s filter against :data:`FRAME_SLOTS`,
-    `layout._derive`'s `SLOT_OF` keying (a `KeyError` by design for a component with no
-    slot name), `layout.panel_command`'s `charter panel <slot>` argv, and
-    `frame/panel.py`'s refusal of a slot `slots.SLOTS` has no renderer for. Dropping the
-    placement here would therefore be a panel silently absent with no pane to say why —
-    #512 and #535's failure, wearing Task 7's clothes. Refusing whole is the version of
-    the principle charter can actually keep, and the surface that turns the other one on
-    is Phase 2's.
+    **A provider's component is placeable here as of Phase 2, and that is what this
+    function was blocking** (§4b property 4). It used to refuse any ``use`` outside
+    `builtins.SLOT_OF` — charter's own four — because a placement dropped downstream would
+    have been a panel silently absent with no pane to say why: every step from here to a
+    painted pane spoke the four committed slot names. Those steps speak component ids now
+    (`layout._derive`, `layout.panel_argvs`, `frame/slots.py:drawable`,
+    `frame/panel.py:run`), so a component an installed distribution supplies is placed,
+    split for, and drawn — and a provider that then fails to load costs its own pane and
+    says why, which is where §4b's message finally has a surface to live on.
 
-    **``edge`` and ``size`` are accepted only where charter can honour them, which today
-    means only at the component's own declaration.** `layout` derives the whole frame's
-    geometry from those declarations (`layout._derive`), and nothing between here and
-    `split-window` carries a per-plane override yet — so an ``edge = "top"`` on the repo
+    **A provider this machine has no distribution for still refuses the arrangement
+    whole**, and #535 is why that half did not change: charter cannot honour a rectangle
+    for a component it cannot find, and dropping the one table would hand the operator a
+    frame with a panel missing from it.
+
+    **A provider's placement carries its own ``edge`` and ``size``, and both are
+    required.** `config.FRAME` is resolved by every charter command, `charter --version`
+    included, and the only way to ask a provider where it would like to sit is to IMPORT
+    it — so a table that does not say is one charter would have to run a stranger's code
+    to resolve, on every command, before anything was drawn. §4b's own example writes both
+    keys. `default_edge`/`default_size` remain what they are documented as: a sensible
+    arrangement before anyone configures one, which is a `Registry.place` with nothing
+    passed, not a config boundary reading a package.
+
+    **On a BUILT-IN, ``edge`` and ``size`` are still accepted only where charter can
+    honour them, which means only at the component's own declaration.** `layout` derives
+    the built-in geometry at import (`layout._derive`), so an ``edge = "top"`` on the repo
     table would be a value read, validated, stored and then ignored, and the frame would
     draw exactly as if the line were not there. A config key that changes nothing is
-    exactly the convincing empty this phase was written against, so a value charter would
-    not honour refuses the arrangement instead of being quietly absorbed. What the pair IS
-    good for meanwhile is writing the arrangement out in full: `frame_components` answers
-    every `slots` list as tables that resolve back to the same frame, which is what makes
-    the mapping lossless in both directions.
+    exactly the convincing empty this phase was written against. What the pair IS good for
+    meanwhile is writing the arrangement out in full: `frame_components` answers every
+    `slots` list as tables that resolve back to the same frame, which is what makes the
+    mapping lossless in both directions.
     """
     tables = section.get(FRAME_COMPONENT_KEY) if isinstance(section, dict) else None
     if not isinstance(tables, list) or not tables:
         return None
     from .frame import builtins as _builtins
-    from .frame.component import Fixed
+    from .frame.component import EDGES, Fixed
     reg = _builtins.build()
     out: list[dict] = []
     seen: set[str] = set()
@@ -777,22 +817,31 @@ def component_tables(section) -> list[dict] | None:
         if any(k not in FRAME_COMPONENT_FIELDS for k in table):
             return None
         cid = table.get("use")
-        # A component charter cannot place — a typo, a provider this machine has not
-        # installed, or `slots`' vocabulary written into `use` by mistake.
-        if not isinstance(cid, str) or cid not in _builtins.SLOT_OF or cid in seen:
+        if not isinstance(cid, str) or cid in seen:
             return None
         seen.add(cid)
-        c = reg.get(cid)
-        if "edge" in table and table["edge"] != c.edge:
-            return None
-        if "size" in table and not (isinstance(c.size, Fixed)
-                                    and table["size"] == c.size.n
-                                    and not isinstance(table["size"], bool)):
-            return None
         visible = table.get("visible", True)
         if not isinstance(visible, bool):
             return None
-        out.append(_placement(reg, cid, visible=visible))
+        if cid in _builtins.SLOT_OF:
+            c = reg.get(cid)
+            if "edge" in table and table["edge"] != c.edge:
+                return None
+            if "size" in table and not (isinstance(c.size, Fixed)
+                                        and table["size"] == c.size.n
+                                        and not isinstance(table["size"], bool)):
+                return None
+            out.append(_built_in_placement(reg, cid, visible=visible))
+            continue
+        # Not one of charter's own: a component id, which is placeable exactly when an
+        # installed distribution declares it. Asked of entry point METADATA — nothing is
+        # imported here, and a machine without the distribution refuses the arrangement
+        # rather than drawing a frame with a hole where the panel was.
+        edge, size = table.get("edge"), table.get("size")
+        if (not reg.providers.supplies(cid) or edge not in EDGES
+                or not isinstance(size, int) or isinstance(size, bool) or size < 1):
+            return None
+        out.append(_placement(cid, edge=edge, size=Fixed(size), visible=visible))
     return out
 
 
@@ -827,7 +876,7 @@ def frame_components(cfg: dict) -> list[dict]:
         return placed
     from .frame import builtins as _builtins
     reg = _builtins.build()
-    return [_placement(reg, _builtins.COMPONENT_OF[slot])
+    return [_built_in_placement(reg, _builtins.COMPONENT_OF[slot])
             for slot in frame_of(cfg)["slots"]]
 
 

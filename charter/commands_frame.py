@@ -729,7 +729,11 @@ def _panel_died_hook_argv(*, socket: str, panel_pane: str, slot: str,
 
     ``None`` back means charter will not arm this pane, and every value that reaches the
     text is what decides — never where it came from. *panel_pane* must be tmux's own
-    `%<digits>` (`_PANE_ID_RE`), *slot* a key of `frame_slots.SLOTS`, *fid* a
+    `%<digits>` (`_PANE_ID_RE`), *slot* a name `frame_slots.drawable` resolves to a
+    component — one of charter's own under either spelling, or one an installed
+    distribution supplies, and never merely a name SHAPED like one: `top.` is as
+    namespaced-looking as `acme.metrics` and is refused, because the property being
+    checked is "charter can draw this", not "this has a dot in it" — *fid* a
     `state.frame_id` (`_FRAME_ID_RE`), and every word including the interpreter path must
     pass :func:`_action_word_is_safe`. `sys.executable` is the one that is genuinely
     machine-shaped: a path holding a space, `;`, `&`, `(` or `*` was measured to survive
@@ -763,7 +767,7 @@ def _panel_died_hook_argv(*, socket: str, panel_pane: str, slot: str,
     """
     words = util.self_relaunch_argv("frame-respawn", slot, "--pane", panel_pane,
                                     "--frame", fid)
-    if (not _PANE_ID_RE.fullmatch(panel_pane) or slot not in frame_slots.SLOTS
+    if (not _PANE_ID_RE.fullmatch(panel_pane) or not frame_slots.drawable(slot)
             or not _FRAME_ID_RE.fullmatch(fid)
             or not all(_action_word_is_safe(w) for w in words)
             or any(w.split() != [w] for w in words[1:])):
@@ -1195,9 +1199,8 @@ def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -
     in the same order, and a slot with no renderer is skipped for the same reason.
 
     `[frame] slots` can accept a slot (`instance.FRAME_SLOTS`, sized by
-    `layout.SLOT_SIZE`) that `frame.slots.SLOTS` — the RENDERER registry — has no
-    renderer for (as `left`/`right` were until Task 3 (#385) gave them one, and as the
-    next slot this frame grows will be on its first day). Left
+    `layout.SLOT_SIZE`) that nothing can draw (as `left`/`right` were until Task 3 (#385)
+    gave them one, and as the next slot this frame grows will be on its first day). Left
     unfiltered, `panel_argvs` would still split a real pane for it; `panel.run`
     correctly refuses or exits 2 (Task 7's own "no empty pane" rule), but with
     `remain-on-exit on` keeping that pane alive, the operator is left with a permanently
@@ -1212,6 +1215,12 @@ def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -
     tmux's alternate screen, where nobody reads it (measured; see `frame_ready`'s own
     docstring). `--probe`, `charter frame-probe` and `charter doctor` all name it on
     demand instead, from the same `frame_slots.unimplemented` this filters on.
+
+    **"Has a renderer" is not "is one of charter's four" any more.** A name an installed
+    distribution supplies is drawable too (`frame_slots.drawable`), which is what lets a
+    placed provider survive as far as `panel_argvs` — this filter is where every one of
+    them was dropped before a pane could be split for it. On a machine with no component
+    providers installed the answer is exactly what it always was.
     """
     frame = config.FRAME
     slots = layout.visible_slots(frame["slots"] if configured is None else configured,
@@ -3469,7 +3478,13 @@ def cmd_respawn(args) -> int:
     panel, for nothing being wrong) is avoided rather than reported.
     """
     fid = getattr(args, "frame", None) or os.environ.get("CHARTER_SESSION_ID", "")
-    if not fid or args.slot not in frame_slots.SLOTS:
+    # `frame_slots.drawable`, not a key of `frame_slots.SLOTS`: the panel this is
+    # bringing back may be hosting a component an installed provider supplies, and a
+    # membership test against charter's own four renderers refused every one of them.
+    # It is still a whitelist — the name is interpolated into a `respawn-pane` argv
+    # read back off a tmux hook — and it still admits only names charter can resolve
+    # to a component, never a SHAPE that looks like one.
+    if not fid or not frame_slots.drawable(args.slot):
         return 0
     if not _PANE_ID_RE.fullmatch(args.pane or ""):
         return 0

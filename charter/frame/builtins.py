@@ -16,13 +16,20 @@ strips are a fixed height, which one takes what its content needs — from
 what those renderers already do, not a new arrangement. The before/after render at 200x50
 and 80x24 is byte-identical.
 
-**The slot names survive, as a mapping, because they are committed** (:data:`SLOT_OF`).
+**The slot names survive as SHORTHAND, because they are committed** (:data:`SLOT_OF`).
 `[frame] slots = ["top", "bottom", "repos", "right"]` sits in charter.toml on every plane
 that has one, `charter panel top --session …` is the argv `layout.panel_command` emits
-into a tmux pane, and both are compatibility surfaces. So a slot name is what the outside
-world says and a component id is what charter reasons with, with exactly one table
-between them rather than a rename rippling through tmux argv, config files and the
-renderer registry at once.
+into a tmux pane, and both are compatibility surfaces. A component id is the frame's
+currency and a slot name is one of four aliases for a built-in id, resolved by
+:func:`component_id` — one table, rather than a rename rippling through tmux argv, config
+files and the renderer registry at once.
+
+**Which is why a name that is NOT one of those four is a component id, not a typo.** That
+is the whole of Phase 2's Task 1: `charter panel acme.metrics` reaches a component an
+installed provider supplies (:func:`supplies`), because every step between a committed
+`[[frame.component]]` table and a painted pane now resolves a NAME rather than looking one
+up in a table of four. Phase 1 could place a provider and never draw it for exactly the
+opposite reason.
 
 **What each component declares in ``needs`` is what its RENDERER actually reads, which is
 not the same as what the slice names suggest.**
@@ -77,6 +84,46 @@ SLOT_OF = {
 #: the component that draws it. Derived rather than written out, so the two cannot
 #: disagree about a name — the shape `instance.FRAME_DEFAULTS` already uses.
 COMPONENT_OF = {slot: cid for cid, slot in SLOT_OF.items()}
+
+
+def component_id(name):
+    """The component *name* names: a committed slot name resolved, anything else itself.
+
+    **The one direction the two vocabularies are read in**, and the reason `[frame] slots`
+    could be called shorthand rather than a second system. `top` is `identity`'s committed
+    spelling; `acme.metrics` is a provider's id and has no committed spelling, so it is
+    already what it resolves to.
+
+    Unambiguous by inspection and not by luck: no slot name is another component's id
+    (`test_component_registry` asks it of the tables rather than of this sentence), so a
+    name resolves one way whichever vocabulary it was written in.
+
+    Anything that is not text comes back as it went in. This is asked of values that came
+    out of a committed file, and the refusal belongs to whatever validates the value, with
+    the rest of its message — not to a lookup that would raise `TypeError` half a frame
+    away from the line that was wrong.
+    """
+    return COMPONENT_OF.get(name, name) if isinstance(name, str) else name
+
+
+def supplies(cid) -> bool:
+    """Whether an installed distribution supplies the component *cid* — without importing.
+
+    Entry point METADATA only, which is what makes this askable from the places that ask
+    it: `frame/panel.py` before it draws, `frame/slots.py:unimplemented` before a pane is
+    split, and `commands_frame._arm_panel_respawn` before a name reaches tmux config text.
+    None of them may import a stranger's module to find out whether one exists, and the
+    respawn hook in particular must not: it runs while charter is arming a pane, on a name
+    that has been read back off disk.
+
+    A fresh :class:`registry.Providers` per call rather than one cached at module scope.
+    The scan is ~0.2 ms and `importlib.metadata` caches underneath it, so the cache would
+    buy nothing measurable — and it would answer for the ``sys.path`` charter had the
+    first time anything asked, which is wrong for a long-lived process, wrong for a test
+    that installs a distribution, and wrong in the direction that is hard to see: a stale
+    "no such provider" is a pane that never appears.
+    """
+    return Registry().providers.supplies(cid)
 
 
 def _panel(slot: str):
