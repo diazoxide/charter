@@ -44,6 +44,19 @@ def _rows(n: int = 4) -> tuple[overlay.Row, ...]:
                  for i in range(n))
 
 
+def _numbered(n: int = 20) -> tuple[overlay.Row, ...]:
+    """*n* rows whose titles are zero-padded, so no title is a prefix of another.
+
+    :func:`_rows`' `action 1` **is** a prefix of `action 10`, which is harmless for a
+    test asking whether one title reached the pane and wrong for one asking WHICH rows
+    the window is showing. Every scrolling test below asserts both halves — the row that
+    must be drawn and the row that must not be — and only distinguishable titles can
+    carry the second half.
+    """
+    return tuple(overlay.Row(id=f"r{i}", title=f"row-{i:02d}", note=f"why-{i:02d}")
+                 for i in range(n))
+
+
 class _Tty:
     """A pane's tty, faked: a script of reads and everything that was written to it.
 
@@ -451,6 +464,40 @@ class TheOverlaySurvivesAResize(unittest.TestCase):
         self.assertLessEqual(len(shown), 6, shown)
         self.assertTrue(any(_rows(20)[9].title in ln for ln in shown), shown)
 
+    def test_a_pane_that_grew_fills_with_rows_and_not_with_blank_lines(self):
+        """The resize the other way, and the clamp only this direction can reach.
+
+        `_top` is wherever the last paint left the window, and a pane that GROWS can make
+        it a top the list has too few rows to sit at: ten rows scrolled to `_top` 8 for a
+        window two rows tall, and then a window ten rows tall. `_window`'s last line is
+        what pulls the top back to 0 so the whole list fills the pane; without it the
+        pane draws the last two rows and eight blank lines, and eight of the operator's
+        ten choices are simply not on screen.
+
+        **The test above only ever SHRINKS**, which is the one direction where that clamp
+        cannot bind — a smaller window always has a top its list can sit at. So the
+        clamp went unpinned, and deleting it left the whole suite green.
+        """
+        rows = _numbered(10)
+        # Precondition, and not decoration: four rows really is too short for this list,
+        # so the window really is scrolled away from row 0 before the pane grows. Without
+        # this the assertion below would hold for a surface that never scrolled at all.
+        _, small = _run(rows, [b"\x1b[F", b"\r"], size=(60, 4))
+        self.assertNotIn(rows[0].title, "\n".join(_lines(small)))
+
+        tty = _Tty([b"\x1b[F", b"", b"\r"], size=(60, 4))
+        surface = overlay.Surface(rows=rows)
+
+        def size():
+            # The pane grows on the tick — a `read` a SIGWINCH interrupted — which is
+            # how the test above delivers its shrink, in the other direction.
+            return (60, 12) if tty.reads >= 2 else (60, 4)
+
+        self.assertEqual(surface.run(read=tty.read, write=tty.write, size=size), rows[9])
+        drawn = _lines(tty)
+        for row in rows:
+            self.assertIn(row.title, "\n".join(drawn), drawn)
+
     def test_a_narrow_pane_still_has_a_note_column(self):
         """Fitting inside the width is not the same as being readable at it.
 
@@ -479,6 +526,51 @@ class TheOverlaySurvivesAResize(unittest.TestCase):
                                        size=lambda: tty.size)
         for line in _lines(tty):
             self.assertLessEqual(tui.width(line), 20, repr(line))
+
+
+class TheWindowFollowsTheSelectionBothWays(unittest.TestCase):
+    """`_window`'s two scroll branches are a mirror pair, and only one of them had a test.
+
+    One moves the window DOWN when the selection goes off the bottom; the other moves it
+    back UP when the selection goes off the top. The downward one was pinned by
+    `TheOverlaySurvivesAResize`, which was also the only test in this file that scrolled
+    at all — and it moves the selection down and shrinks the pane, so the upward branch
+    was never asked for anything. Deleting it left the full suite green while `Home` drew
+    the operator's selection **nowhere at all**, which is the outcome `_window`'s own
+    docstring exists to rule out: "drawn nowhere, so the next keypress appears to come
+    from nothing".
+    """
+
+    def test_home_scrolls_the_window_back_up_to_the_row_it_selected(self):
+        rows = _numbered(20)
+        # Precondition: `End` really does scroll the window off the top of the list. If
+        # it did not, `Home` would have nothing to scroll back and everything below would
+        # hold for a surface that never scrolls in either direction.
+        _, down = _run(rows, [b"\x1b[F", b"\r"], size=(60, 8))
+        self.assertIn(rows[19].title, "\n".join(_lines(down)))
+        self.assertNotIn(rows[0].title, "\n".join(_lines(down)))
+
+        chosen, up = _run(rows, [b"\x1b[F", b"\x1b[H", b"\r"], size=(60, 8))
+        # The selection is an index and `move` clamps it, so it is on row 0 whether or
+        # not the window followed — which is exactly why this cannot be the assertion.
+        self.assertEqual(chosen, rows[0])
+        drawn = _lines(up)
+        self.assertTrue(any(rows[0].title in ln for ln in drawn),
+                        f"the selected row is drawn nowhere: {drawn}")
+        self.assertFalse(any(rows[19].title in ln for ln in drawn),
+                         f"the window never left the bottom of the list: {drawn}")
+
+    def test_arrowing_back_up_past_the_top_of_the_window_scrolls_too(self):
+        """The same branch reached one row at a time rather than in one jump, because
+        `home` is a `move` of the whole list length and a single `up` is not — a window
+        that only recovered from the extreme would still lose the operator one row above
+        the fold."""
+        rows = _numbered(20)
+        chosen, tty = _run(rows, [b"\x1b[F"] + [b"\x1b[A"] * 7 + [b"\r"], size=(60, 8))
+        self.assertEqual(chosen, rows[12])
+        drawn = _lines(tty)
+        self.assertTrue(any(rows[12].title in ln for ln in drawn),
+                        f"the selected row is drawn nowhere: {drawn}")
 
 
 class RowsAreContainedBeforeTheyAreMeasured(unittest.TestCase):
@@ -640,6 +732,29 @@ class ThePaneChromeIsCountedOnce(unittest.TestCase):
                          overlay.Surface(rows=_rows(20)).render(60, height)]
                 self.assertLessEqual(len(drawn), height, drawn)
                 self.assertIn("esc cancel", drawn[-1], drawn)
+
+    def test_a_pane_with_room_for_only_one_line_of_list_spends_it_on_a_ROW(self):
+        """The floor under the window's height, at the only height where it binds.
+
+        Chrome is two rows and a two-row pane has nothing left over, so the window's
+        height is a **floor** rather than the subtraction: one row, and the key hint is
+        what `out[:height]` drops. Take the floor away and the subtraction answers zero,
+        the slice of rows comes back empty, and a pane with room for exactly one row
+        draws the hint instead — an overlay offering nothing at all, which is the one
+        state the operator cannot act from. (One row shorter still, the subtraction
+        answers **-1**, and `_window` starts walking `_top` forward on every paint.)
+
+        `test_the_key_hint_survives_at_every_height` starts at three, which is why this
+        was never asked: two is the height where the two rows of chrome and one row of
+        list stop both fitting, and something has to give. What gives is the hint, and
+        that is the trade this pins — the hint is where `esc` is written down, but a
+        list with no rows in it has nothing for `esc` to cancel out of.
+        """
+        rows = _numbered(20)
+        drawn = [tui.strip_ansi(ln) for ln in overlay.Surface(rows=rows).render(60, 2)]
+        self.assertEqual(len(drawn), 2, drawn)
+        self.assertIn(rows[0].title, drawn[1],
+                      f"a two-row pane drew no rows at all: {drawn}")
 
     def test_a_click_selects_the_row_that_was_drawn_where_it_landed(self):
         """Agreement between the two halves, asserted against `render`'s own output

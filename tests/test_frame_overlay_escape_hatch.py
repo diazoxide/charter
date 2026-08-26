@@ -43,6 +43,17 @@ _HAS_TMUX = shutil.which("tmux") is not None
 #: socket can never be mistaken for this one's.
 SOCKET = f"charter-overlay-hatch-{os.getpid()}"
 
+#: Where tmux puts :data:`SOCKET`'s FILE, computed the way tmux computes it — and only
+#: the FALLBACK for it. `TheHatch._teardown_socket` asks the live server for
+#: `#{socket_path}` first, because tmux is the authority on its own path and this
+#: expression is only a COPY of a rule that lives in tmux's source (`$TMUX_TMPDIR` or
+#: `/tmp`, then `tmux-<uid>/<name>`) — a copy that can silently drift out of date, which
+#: is why nothing is ever *asserted* about it. It is spent on the one teardown that has
+#: no server left to ask, and every teardown that does have one makes its claim against
+#: what tmux said instead.
+SOCKET_PATH = os.path.join(os.environ.get("TMUX_TMPDIR") or "/tmp",
+                           f"tmux-{os.getuid()}", SOCKET)
+
 #: How long a tmux state change gets before this gives up on it. Generous, and spent only
 #: on the way to a failure: every wait below returns the instant the state is right.
 _DEADLINE = 20.0
@@ -101,7 +112,9 @@ class TheHatch(unittest.TestCase):
         if v is None or v < tmuxctl.FLOOR:
             self.skipTest(f"`run-shell -C` first exists in tmux {tmuxctl.FLOOR[0]}."
                           f"{tmuxctl.FLOOR[1]}; this machine has {v}")
-        self.addCleanup(lambda: _tmux("kill-server"))
+        # Registered FIRST so it runs LAST — `addCleanup` is LIFO, and every client this
+        # test forks onto a pty must be reaped before the server it is attached to goes.
+        self.addCleanup(self._teardown_socket)
         started = _tmux("-f", "/dev/null", "new-session", "-d", "-s", "s",
                         "-x", "100", "-y", "30", "-P", "-F", "#{pane_id}", "cat")
         self.assertEqual(started.returncode, 0, started.stderr)
@@ -132,6 +145,79 @@ class TheHatch(unittest.TestCase):
         self.assertEqual(len(bound), 1, bound)
         self.assertIn(overlay.HATCH_OPTION, bound[0])
         self.assertIn("run-shell -C", bound[0])
+
+    def _teardown_socket(self) -> None:
+        """End the server and take its socket FILE with it, in that order and in ONE
+        cleanup — `tests/test_frame_tmux_integration.py::_TmuxServerFixture` verbatim,
+        because this module had the same shared socket and was missing the second half.
+
+        **`kill-server` is a signal, not a wait, and the socket keeps ANSWERING while
+        the server is on its way out.** tmux's `cmd_kill_server_exec` is two statements —
+        `kill(getpid(), SIGTERM)` and `return (CMD_RETURN_NORMAL)` — so the server
+        signals ITSELF and then answers this client normally: `kill-server` returns 0
+        with the listening socket still bound and still accepting. A client that connects
+        in that window reads EOF where a reply should be, which is `client_dispatch`'s
+        `imsg == NULL` branch setting `CLIENT_EXIT_LOST_SERVER`, whose message is the
+        string `server exited unexpectedly` and whose status is 1. That is the whole of
+        the CI failure at `c735efc`: every test here shares one socket, so the next
+        test's `new-session` was racing the previous test's teardown, and it lost two of
+        the five matrix jobs that got far enough to run.
+
+        Measured rather than reasoned: on tmux 3.7c, connecting to the socket kept
+        SUCCEEDING for a median of 0.4 ms and up to 1.3 ms after `kill-server` had
+        already returned (24 of 25 trials landed at least one connect), and the socket
+        file was still on disk in 25 of 25. That is why no local run sees this — a whole
+        `subprocess` round trip between two tests is 10-20 ms on an unloaded machine,
+        which steps clean over a sub-millisecond window — and why a loaded four-core
+        runner walks straight into it: the CI log has the previous test finishing at
+        `.0170` and this one failing at `.0221`, 5 ms later.
+
+        Unlinking closes the window rather than waiting it out. A client whose socket
+        path is not there does not connect to a dying server at all: it starts a fresh
+        one. There is nothing left to wait FOR, which is the discipline the news entry
+        slugged `a-green-tmux-run-now-means-something` states for this whole module
+        family — a `sleep` long enough to cover the window would be a guess at a number
+        that was measured right here, and a poll for the server's absence would still be
+        polling the one call that can fail.
+
+        ONE cleanup doing both, never two registered separately: `addCleanup` runs LIFO,
+        so `addCleanup(kill-server)` followed by `addCleanup(unlink)` unlinks FIRST and
+        kills SECOND — which points `kill-server` at a path with no server on it, leaves
+        the real one running, and hands the next test a socket file it did not make.
+
+        **And the path comes from tmux, which is the only reason the check below is
+        worth anything.** The first version of this asserted that the paths it had
+        already decided to unlink were gone — which a wrong :data:`SOCKET_PATH` satisfies
+        for free, because a path that was never the socket does not exist either before
+        or after. Measured: with tmux's answer suppressed and `SOCKET_PATH` pointed at a
+        path that is not the socket, the module went green and left the real socket file
+        standing, race and all. So the claim is made against tmux's OWN answer, and a
+        running server that will not give one is a failure rather than a fallback.
+        """
+        said = _tmux("display-message", "-p", "#{socket_path}")
+        # rc tells "no server to ask" apart from "a server that would not answer", and
+        # only the second one is a defect: a teardown with no server has nothing to
+        # claim, and a tmux whose `#{socket_path}` expands to nothing has hidden the one
+        # fact this depends on.
+        was_running = said.returncode == 0
+        path = said.stdout.strip()
+        _tmux("kill-server")
+        for candidate in {SOCKET_PATH, path if path.startswith("/") else SOCKET_PATH}:
+            try:
+                os.unlink(candidate)
+            except OSError:
+                pass
+        if not was_running:
+            return
+        self.assertTrue(
+            path.startswith("/"),
+            f"tmux would not say where its socket is — `#{{socket_path}}` gave {path!r}, "
+            f"so this teardown is unlinking a guess ({SOCKET_PATH}) and cannot tell "
+            f"whether it removed the socket the next test will race")
+        self.assertFalse(
+            os.path.exists(path),
+            f"{path} survived this test's teardown, so the next test's `new-session` "
+            f"can still reach a server that is exiting")
 
     def _open_a_wedged_overlay(self) -> str:
         """Charter's own open path, with a program that will never answer in the pane."""
