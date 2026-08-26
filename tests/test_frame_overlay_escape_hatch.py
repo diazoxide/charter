@@ -238,6 +238,53 @@ class TheHatch(unittest.TestCase):
         self.assertIn(self.panel, _panes(),
                       "the hatch killed a pane when there was no overlay to kill")
 
+    def test_the_overlay_pane_is_split_in_rows_and_tmux_accepts_the_size(self):
+        """Both halves of `open_argv`'s split, measured rather than restated.
+
+        `-l` is rows under `-v` and columns under `-h`, so the flag and the number are
+        one decision: under the other flag this same `5` is a five-COLUMN pane. And
+        `_SPLIT_ROWS`' own docstring names the single way the number can cost anything —
+        tmux refusing the split for want of room — which is a non-zero return code from
+        the very command this runs, in a window deliberately shorter than a laptop's.
+        """
+        short = _tmux("new-window", "-t", "s", "-P", "-F", "#{pane_id}", "cat")
+        self.assertEqual(short.returncode, 0, short.stderr)
+        harness = short.stdout.strip()
+        self.assertEqual(_tmux("resize-window", "-t", "s", "-x", "80", "-y", "14")
+                         .returncode, 0)
+        argv = overlay.open_argv(SOCKET, harness=harness, command=["cat"])
+        self.assertIsNotNone(argv)
+        opened = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+        self.assertEqual(opened.returncode, 0,
+                         f"tmux refused the split: {opened.stderr}")
+        pane = opened.stdout.strip()
+        size = _tmux("display-message", "-p", "-t", pane,
+                     "#{pane_height} #{pane_width}").stdout.split()
+        self.assertEqual(size[0], str(overlay._SPLIT_ROWS),
+                         f"the overlay pane came out {size} — `-l` counted columns")
+        self.assertEqual(size[1], "80", f"the overlay pane came out {size}")
+
+    def test_a_close_that_cannot_name_the_overlay_kills_nothing(self):
+        """The module's leading measurement, run rather than described.
+
+        `kill-pane -t ""` is not a no-op: measured again for this call site — a plain
+        CLI invocation, not the hatch's `run-shell` — `tmux -L … kill-pane -t ""`
+        returns 0 and kills the session's ACTIVE pane, silently. `close_argvs` takes the
+        overlay's id as a plain string with no `None` spelling, so an unset variable or
+        a `#{pane_id}` capture that came back empty arrives here as `""`; what this
+        asserts is that whatever it produces for one can be run against a real server
+        with the harness and a panel standing and leave both of them standing.
+        """
+        before = set(_panes())
+        self.assertGreaterEqual(len(before), 2, before)
+        for bad in ("", " ", "%", "$overlay"):
+            with self.subTest(overlay_pane=bad):
+                for cmd in overlay.close_argvs(SOCKET, harness=self.harness,
+                                               overlay_pane=bad):
+                    subprocess.run(cmd, capture_output=True, timeout=15)
+                self.assertEqual(set(_panes()), before,
+                                 f"a close naming {bad!r} took a pane with it")
+
     def test_charter_own_close_path_hands_the_pane_back_too(self):
         """The ordinary exit, so the hatch is the exception rather than the mechanism."""
         pane = self._open_a_wedged_overlay()

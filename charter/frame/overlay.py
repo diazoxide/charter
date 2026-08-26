@@ -329,10 +329,18 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
             button, col, row_, kind = int(m[1]), int(m[2]), int(m[3]), m[4]
             buf = buf[m.end():]
             if button & 64:
-                # Wheel. 64 is up and 65 is down on every terminal measured, and the
-                # wheel is reported as a press with no release — which is the second
-                # reason this module keeps no press state.
-                evs.append(Event(SCROLL, "up" if button == 64 else "down",
+                # Wheel, and it is reported as a press with no release — which is the
+                # second reason this module keeps no press state.
+                #
+                # **The direction is the low bit, never the whole number.** An SGR
+                # button number is a bitfield: bit 6 (64) says "wheel", the low two bits
+                # say which one (0 up, 1 down, 2 and 3 the horizontal wheel a trackpad
+                # swipe reports), and bits 2–4 are shift/meta/ctrl. So shift with the
+                # wheel is 68, not 64, and reading it as "not 64, therefore down"
+                # scrolls the list the way the operator did not.
+                if button & 2:
+                    continue           # the horizontal wheel; this list has one axis
+                evs.append(Event(SCROLL, "down" if button & 1 else "up",
                                  row=row_ - 1, col=col - 1))
             else:
                 # A release with no press is a click. See the module docstring: it is
@@ -636,7 +644,17 @@ def open_argv(server: str, *, harness: str, command: list[str],
 
     The pane is split small and zoomed on the very next command (:func:`modal_argvs`), so
     :data:`_SPLIT_ROWS` is the size it holds for an instant rather than the size the
-    operator sees.
+    operator sees. `-v`, so that `-l` is a count of ROWS: under `-h` the same number is
+    columns, and a five-column overlay is a pane nothing can be drawn in.
+
+    *env* rides on `-e` through `layout._env_argv`, the single funnel every `-e` charter
+    builds goes through — #411's measurement is why the overlay needs one at all: every
+    frame shares one tmux server, so a pane inherits the SERVER's environment, captured
+    from whichever launcher started it, possibly days ago. A name outside
+    `layout.CARRIABLE` **raises** there rather than returning ``None`` here, and that
+    asymmetry is deliberate: a pane id charter read back off tmux is a value a launch
+    must survive, while a `-e` name is something charter's own code chose, so it is a
+    defect at the first call that builds it rather than a launch to degrade.
     """
     if not tmuxctl.PANE_ID_RE.fullmatch(harness):
         return None

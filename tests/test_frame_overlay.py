@@ -23,10 +23,19 @@ first implementation goes wrong:
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from charter import commands_frame, config, tui
-from charter.frame import overlay
+from charter.frame import layout, overlay
+
+#: The two DEC private modes the overlay turns on and has to turn back off, spelled out
+#: here rather than reached for through `overlay.ENTER`/`overlay.LEAVE`. A constant
+#: compared against itself agrees with itself: an `ENTER` that lost its `\x1b[?25l` and a
+#: `LEAVE` that lost its `\x1b[?25h` both still satisfy "starts with ENTER, ends with
+#: LEAVE", and the operator is left on their own screen with no cursor either way.
+_ALT_ON, _ALT_OFF = "\x1b[?1049h", "\x1b[?1049l"
+_CURSOR_OFF, _CURSOR_ON = "\x1b[?25l", "\x1b[?25h"
 
 
 def _rows(n: int = 4) -> tuple[overlay.Row, ...]:
@@ -72,6 +81,25 @@ def _lines(tty: "_Tty") -> list[str]:
     for tail in (overlay.MOUSE_OFF, overlay.LEAVE):
         paint = paint.split(tail)[0]
     return [tui.strip_ansi(ln) for ln in paint.split("\r\n")]
+
+
+def _paint(tty: "_Tty") -> str:
+    """The last whole-pane write, as the bytes the pane's terminal received.
+
+    :func:`_lines` is the same paint *as the operator sees it* and runs `tui.strip_ansi`
+    on the way — which turns a control character into something printable, and so cannot
+    be asked whether one reached the pane at all. This is the unstripped half, for the
+    tests that are about exactly that.
+    """
+    paint = tty.out().rsplit("\x1b[H\x1b[2J", 1)[-1]
+    for tail in (overlay.MOUSE_OFF, overlay.LEAVE):
+        paint = paint.split(tail)[0]
+    return paint
+
+
+def _modes(s: str) -> list[tuple[int, str]]:
+    """The DEC private modes in *s*, in order, as ``(number, "h" set / "l" reset)``."""
+    return [(int(n), sl) for n, sl in re.findall(r"\x1b\[\?(\d+)([hl])", s)]
 
 
 def _run(rows, script, size=(60, 12), **kw):
@@ -280,6 +308,85 @@ class TheInputContract(unittest.TestCase):
         evs, _ = overlay.decode(tail + b"3M")
         self.assertEqual([e.kind for e in evs], [overlay.CLICK])
 
+    def test_a_sequence_whose_end_never_arrives_is_not_an_escape_keypress(self):
+        """`\\x1b[12` and then nothing is a CSI whose final byte will never come — the
+        `final=True` path with a buffer `_CSI_PARTIAL` would have held a moment earlier.
+
+        The one thing it must not become is `escape`, which is the single input this
+        surface reads as "leave now": a terminal that stopped mid-sequence would then
+        close the overlay the operator was typing into. So the introducer is dropped and
+        what is left takes its chances as ordinary keys, which a modal surface swallows.
+        """
+        evs, tail = overlay.decode(b"\x1b[12", final=True)
+        self.assertNotIn("escape", [e.name for e in evs], evs)
+        self.assertEqual([(e.kind, e.name) for e in evs],
+                         [(overlay.KEY, "1"), (overlay.KEY, "2")])
+        self.assertEqual(tail, b"")
+
+    def test_an_unfinished_sequence_does_not_cancel_the_overlay(self):
+        """The same fact one layer up, which is the layer it costs something on: the
+        half-sequence arrives, the read after it times out (`b""` — a tick), and the
+        overlay is still there to take the next keypress."""
+        chosen, _ = _run(_rows(3), [b"\x1b[12", b"", b"\x1b[B", b"\r"])
+        self.assertEqual(chosen, _rows(3)[1])
+
+    def test_ctrl_c_is_a_key_that_means_leave(self):
+        """The surface has the tty in RAW mode, so nothing downstream is going to turn
+        `\\x03` into a signal — there is no "and then the interrupt fires" to fall back
+        on. Dropped by the printable filter instead, it is a modal surface that does not
+        answer the first key an operator tries."""
+        evs, _ = overlay.decode(b"\x03")
+        self.assertEqual([(e.kind, e.name) for e in evs], [(overlay.KEY, "escape")])
+        tty = _Tty([b"\x03"])
+        surface = overlay.Surface(rows=_rows(3))
+        self.assertIsNone(surface.run(read=tty.read, write=tty.write,
+                                      size=lambda: tty.size))
+        self.assertEqual(tty.reads, 1, "the overlay read on past a Ctrl-C")
+
+    def test_a_control_byte_this_surface_has_no_name_for_is_not_a_keypress(self):
+        """Everything `decode` answers for, it names by hand; the filter is what keeps
+        the rest from arriving as keys. Without it a stray `\\x01`, or the `\\x00`s a
+        closing pty can deliver, become keypresses that Task 4's palette types into its
+        filter box — and every one of them repaints the pane."""
+        evs, tail = overlay.decode(b"\x01\x02\x0b\x1f", final=True)
+        self.assertEqual(evs, [])
+        self.assertEqual(tail, b"")
+
+    def test_half_a_utf_8_character_is_not_a_keypress(self):
+        """`decode` walks BYTES and a multi-byte character arrives as several of them,
+        so an undecodable byte is a *fragment*, not input. Replaced rather than dropped
+        it becomes a U+FFFD keypress — a key the operator never pressed, out of half of
+        one they did."""
+        evs, _ = overlay.decode("é".encode()[:1], final=True)
+        self.assertEqual(evs, [])
+
+    def test_the_wheel_is_a_scroll_whatever_modifier_is_held(self):
+        """An SGR button number is a BITFIELD, and both halves of that matter here.
+
+        Bit 6 (64) is what makes a report a wheel; bits 2–4 are shift/meta/ctrl, so
+        shift with the wheel is 68 and ctrl with it is 80. A test written against the
+        bare `64`/`65` lets a modifier turn a scroll into a CLICK, and on this surface a
+        click SELECTS the row under the pointer — so a shift-wheel would jump the
+        selection to wherever the pointer happened to rest instead of moving the list.
+
+        The low two bits are which wheel: 0 up, 1 down, and 2/3 the horizontal one a
+        trackpad swipe reports. Direction therefore comes from the low bit and never
+        from the whole number, and a horizontal swipe moves nothing at all — this list
+        has one axis, and scrolling it sideways-means-down is worse than not answering.
+        """
+        for button, want in ((64, [(overlay.SCROLL, "up")]),
+                             (65, [(overlay.SCROLL, "down")]),
+                             (68, [(overlay.SCROLL, "up")]),     # shift + wheel up
+                             (69, [(overlay.SCROLL, "down")]),   # shift + wheel down
+                             (80, [(overlay.SCROLL, "up")]),     # ctrl + wheel up
+                             (81, [(overlay.SCROLL, "down")]),   # ctrl + wheel down
+                             (66, []),                           # wheel left
+                             (67, [])):                          # wheel right
+            with self.subTest(button=button):
+                evs, tail = overlay.decode(f"\x1b[<{button};10;5M".encode())
+                self.assertEqual([(e.kind, e.name) for e in evs], want)
+                self.assertEqual(tail, b"")
+
 
 class TheMouseIsConditional(unittest.TestCase):
     """§4c, as the measurement leaves it: pointer events belong to the overlay only
@@ -392,6 +499,22 @@ class RowsAreContainedBeforeTheyAreMeasured(unittest.TestCase):
         rendered = [ln for ln in _lines(tty) if "line" in ln or "plain" in ln]
         self.assertEqual(len(rendered), 2, rendered)
 
+    def test_a_heading_is_contained_the_way_a_row_is(self):
+        """The heading is a committed value too — a workspace or persona name in Task 6 —
+        and the pane's entire layout is ONE write split on `\\r\\n`.
+
+        U+2028 is the character #498 was filed about, and it is what tells the heading's
+        own `contain.one_line` apart from the `tui.sanitize` every `truncate` already
+        runs: sanitize folds a `\\n` into a space and leaves a LINE SEPARATOR alone, so
+        without the containing step this one reaches the pane, is counted as one cell,
+        and breaks the line on any terminal that honours it.
+        """
+        tty = _Tty([b"\r"], size=(60, 10))
+        overlay.Surface(rows=_rows(2), heading="repo\u2028two").run(
+            read=tty.read, write=tty.write, size=lambda: tty.size)
+        self.assertNotIn("\u2028", _paint(tty), repr(_paint(tty)))
+        self.assertIn("\\u2028", _lines(tty)[0], _lines(tty))
+
     def test_an_escape_sequence_in_a_title_never_reaches_the_pane(self):
         rows = (overlay.Row(id="a", title="\x1b[31mred\x1b[0m\x1b]0;title\x07", note=""),)
         tty = _Tty([b"\r"], size=(60, 10))
@@ -400,6 +523,198 @@ class RowsAreContainedBeforeTheyAreMeasured(unittest.TestCase):
         body = tty.out()
         self.assertNotIn("\x1b]0;", body)
         self.assertNotIn("\x07", body)
+
+
+class TheSelectionNeverWraps(unittest.TestCase):
+    """`move` clamps to the ends, and the clamp carries more than the docstring's own
+    reason for it.
+
+    `home` and `end` are *spelled* as a move the whole length of the list
+    (`move(-len(rows))`, `move(+len(rows))`), so a `move` that wrapped instead of
+    clamping would not merely lose the operator's sense of place — it would turn both
+    keys into exact no-ops, because a move of `len(rows)` modulo `len(rows)` is zero.
+    Home and End would stop working with nothing to see.
+    """
+
+    def test_home_and_end_reach_the_ends_of_the_list(self):
+        chosen, _ = _run(_rows(10), [b"\x1b[B"] * 5 + [b"\x1b[H", b"\r"])
+        self.assertEqual(chosen, _rows(10)[0])
+        chosen, _ = _run(_rows(10), [b"\x1b[B"] * 5 + [b"\x1b[F", b"\r"])
+        self.assertEqual(chosen, _rows(10)[9])
+
+    def test_up_at_the_top_stays_at_the_top(self):
+        chosen, _ = _run(_rows(10), [b"\x1b[A", b"\x1b[A", b"\r"])
+        self.assertEqual(chosen, _rows(10)[0])
+
+    def test_down_past_the_bottom_stays_at_the_bottom(self):
+        chosen, _ = _run(_rows(10), [b"\x1b[B"] * 25 + [b"\r"])
+        self.assertEqual(chosen, _rows(10)[9])
+
+
+class ThePaneIsHandedBackTheWayItWasFound(unittest.TestCase):
+    """Every mode the overlay turns on is turned back off before it lets go.
+
+    On the LITERAL bytes: `test_what_was_on_the_pane_comes_back` above asserts against
+    `overlay.ENTER`/`overlay.LEAVE`, which is the right assertion for "the alternate
+    screen is the restore" and no assertion at all about what those constants contain —
+    an `ENTER` that lost its `\\x1b[?25l` and a `LEAVE` that lost its `\\x1b[?25h` both
+    still start and end the output. What `LEAVE`'s docstring is about is the operator's
+    terminal afterwards: a hidden cursor on their own screen looks broken and takes a
+    `reset` to fix.
+    """
+
+    def test_the_cursor_and_the_screen_both_come_back(self):
+        _, tty = _run(_rows(3), [b"\r"])
+        out = tty.out()
+        for on, off in ((_ALT_ON, _ALT_OFF), (_CURSOR_OFF, _CURSOR_ON)):
+            with self.subTest(mode=repr(on)):
+                self.assertEqual(out.count(on), 1, repr(out))
+                self.assertEqual(out.count(off), 1, repr(out))
+                self.assertLess(out.index(on), out.index(off), repr(out))
+
+    def test_they_come_back_even_when_the_overlay_raises(self):
+        """`frame/panel.py`'s `_hold` argument, one pane over: the pane that could not
+        finish is exactly the pane nobody is left to restore."""
+        tty = _Tty([b"\r"])
+
+        def size():
+            raise OSError("the pane's tty went away")
+
+        with self.assertRaises(OSError):
+            overlay.Surface(rows=_rows(2)).run(read=tty.read, write=tty.write, size=size)
+        self.assertIn(_CURSOR_ON, tty.out(), repr(tty.out()))
+        self.assertIn(_ALT_OFF, tty.out(), repr(tty.out()))
+
+
+class TheMouseRequestIsTheOneThisSurfaceCanAnswer(unittest.TestCase):
+    """What the overlay asks its terminal for is bounded by what `decode` and `handle`
+    can do with the answers."""
+
+    def test_it_never_asks_for_motion(self):
+        """1002 and 1003 add MOTION reports — one per cell the pointer crosses, on a
+        pane that is zoomed over the whole window.
+
+        This module keeps no press state by design (§4i: the first component that keeps
+        it wedges on it) and §4f closed the event kinds without a `drag`, so a motion
+        report is an event with nowhere to go: `decode` would emit a click for every
+        one, and `handle` would move the selection under a pointer that is merely
+        passing over. The request and the handling are one declaration here, and this is
+        the half that says what the declaration may contain.
+        """
+        asked = _modes(overlay.MOUSE_ON)
+        self.assertTrue(all(sl == "h" for _, sl in asked), asked)
+        numbers = [n for n, _ in asked]
+        self.assertNotIn(1002, numbers, "motion on button-press")
+        self.assertNotIn(1003, numbers, "motion always")
+        self.assertIn(1000, numbers, "press/release, the two kinds `decode` names")
+        self.assertIn(1006, numbers, "SGR, so a column past 223 still arrives")
+
+    def test_every_mode_asked_for_is_withdrawn_in_the_reverse_order(self):
+        """The pane hands its terminal back in the state it found it, which is an
+        ordering claim as well as a membership one: modes are a stack, and 1006 is the
+        ENCODING the 1000 reports arrive in — dropped first, a report already in flight
+        arrives in the other encoding."""
+        asked = _modes(overlay.MOUSE_ON)
+        dropped = _modes(overlay.MOUSE_OFF)
+        self.assertTrue(all(sl == "l" for _, sl in dropped), dropped)
+        self.assertEqual([n for n, _ in dropped],
+                         list(reversed([n for n, _ in asked])))
+
+
+class ThePaneChromeIsCountedOnce(unittest.TestCase):
+    """`_CHROME_ROWS` is both what `render` spends on itself and what the click
+    arithmetic subtracts back off — two answers to "where does row 0 start" is the
+    off-by-one nobody sees until a click selects the wrong thing."""
+
+    def test_the_key_hint_survives_at_every_height(self):
+        """The footer is a row `render` has to LEAVE FOR, not one it appends and hopes
+        fits: `out[:height]` is the last thing that happens, so a chrome count that
+        forgot the footer fills the pane with rows and then drops the hint off the
+        bottom — at every height where there are more rows than fit. The hint is where
+        `esc` and the hatch key are written down, which makes it the one line an
+        operator who is stuck needs.
+        """
+        for height in range(3, 13):
+            with self.subTest(height=height):
+                drawn = [tui.strip_ansi(ln) for ln in
+                         overlay.Surface(rows=_rows(20)).render(60, height)]
+                self.assertLessEqual(len(drawn), height, drawn)
+                self.assertIn("esc cancel", drawn[-1], drawn)
+
+    def test_a_click_selects_the_row_that_was_drawn_where_it_landed(self):
+        """Agreement between the two halves, asserted against `render`'s own output
+        rather than against `_HEADER_ROWS` restated in the test: whatever row the
+        operator can see on pane row N is the row a click on pane row N selects. Once
+        with the list at the top and once with it scrolled, because the window offset is
+        the other half of the same arithmetic.
+        """
+        rows = tuple(overlay.Row(id=f"r{i}", title=f"row-{i:02d}", note=f"why-{i:02d}")
+                     for i in range(20))
+        for start in (0, 15):
+            with self.subTest(selection=start):
+                surface = overlay.Surface(rows=rows, mouse=True)
+                surface.move(start)
+                drawn = [tui.strip_ansi(ln) for ln in surface.render(60, 10)]
+                landed = 0
+                for pane_row, line in enumerate(drawn):
+                    here = [r for r in rows if r.title in line]
+                    if not here:
+                        continue
+                    landed += 1
+                    surface.handle(overlay.Event(overlay.CLICK, row=pane_row), 10)
+                    self.assertEqual(surface.selected, here[0], (pane_row, line))
+                self.assertGreaterEqual(landed, 4, drawn)
+
+    def test_a_note_never_abuts_the_title_it_belongs_to(self):
+        """Two columns are two columns because there is a gap between them. With none, a
+        title and its note read as one string — `frame/statusline.py`'s chips are where
+        charter measured what that costs a reader — and the row's own identity is the
+        half that stops being findable."""
+        line = tui.strip_ansi(overlay.Surface(
+            rows=(overlay.Row(id="a", title="abc", note="xyz"),)).render(40, 5)[1])
+        self.assertRegex(line, r"abc {2,}xyz")
+
+
+class TheColumnsAreSizedInCells(unittest.TestCase):
+    """`_title_width`, at the two widths where its two rules bind."""
+
+    def test_a_narrow_pane_shortens_a_title_rather_than_erasing_it(self):
+        """A floor can only be seen from below it. At 34 columns — the width
+        `test_a_narrow_pane_still_has_a_note_column` renders at — the cap answers 15 and
+        `_MIN_TITLE` is never consulted, so that test passes with the floor deleted. This
+        renders at twelve, where the cap alone would leave four columns for the title and
+        identify the row by nothing: a row that cannot be told from its neighbour is
+        worse than a row with no note, which is the trade the floor refuses to make.
+        """
+        rows = (overlay.Row(id="a", title="workspace-alpha", note="ready"),)
+        line = tui.strip_ansi(overlay.Surface(rows=rows).render(12, 6)[1])
+        # One cell of the column goes to the ellipsis marking the cut.
+        self.assertIn(rows[0].title[:overlay._MIN_TITLE - 1], line, line)
+
+    def test_a_title_is_measured_in_cells_and_not_in_characters(self):
+        """`_MARK`'s own comment makes this argument for the two-character marker; the
+        titles are the values that actually vary. A CJK title is half as many characters
+        as it is cells, so sizing the column with `len` gives it half the room it needs
+        and truncates every such title — a workspace or persona name in Task 6, which is
+        the name the operator is picking BY.
+        """
+        rows = (overlay.Row(id="a", title="日本語のタイトル", note="reason"),
+                overlay.Row(id="b", title="short", note="ready"))
+        drawn = [tui.strip_ansi(ln) for ln in overlay.Surface(rows=rows).render(60, 8)]
+        self.assertTrue(any(rows[0].title in ln for ln in drawn), drawn)
+        self.assertTrue(any("reason" in ln for ln in drawn), drawn)
+
+    def test_moving_the_selection_never_moves_the_text_beside_it(self):
+        """`_MARK`'s two entries are the same width by construction, and this is the
+        property that construction is for: an operator holding `down` watches the text
+        stand still and the highlight move, not every row shift a column each time."""
+        surface = overlay.Surface(rows=_rows(4))
+        before = [tui.strip_ansi(ln) for ln in surface.render(60, 8)]
+        surface.move(1)
+        after = [tui.strip_ansi(ln) for ln in surface.render(60, 8)]
+        for a, b in zip(before[1:5], after[1:5]):
+            with self.subTest(row=a):
+                self.assertEqual(a.index("action"), b.index("action"), (a, b))
 
 
 class TheEscapeHatch(unittest.TestCase):
@@ -482,6 +797,23 @@ class TheEscapeHatch(unittest.TestCase):
                                         session="s1")
         self.assertIn(overlay.hatch_bind(), text.split("\n"))
 
+    def test_the_hatch_bind_is_the_last_line_of_the_config(self):
+        """POSITION, and it is this branch's whole compatibility story below
+        `tmuxctl.FLOOR`.
+
+        `run-shell -C` first exists in tmux 3.2, which is the floor exactly, and
+        `below_floor_message` still launches beneath it — so on those versions this one
+        line does not parse where the rest of the file does. Last is what makes that
+        cost only the hatch: `status`, `mouse`, `history-limit`, the hotkey bind and the
+        wheel bind have all been applied by the time tmux reaches it, whatever it then
+        does with the remainder. First, the same failure takes the frame's own settings
+        with it.
+        """
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=100,
+                                        session="s1")
+        lines = [ln for ln in text.split("\n") if ln]
+        self.assertEqual(lines[-1], overlay.hatch_bind(), lines)
+
     def test_the_hatch_key_is_not_the_key_that_opens_things(self):
         """Two answers to one keypress is one answer that never fires."""
         self.assertNotEqual(overlay.HATCH_KEY, config.FRAME["hotkey"])
@@ -505,12 +837,110 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
     def test_a_target_that_is_not_a_pane_id_opens_nothing(self):
         self.assertIsNone(overlay.open_argv("charter", harness="0", command=["true"]))
 
+    def test_the_pane_is_split_off_in_rows_and_not_in_columns(self):
+        """`-l` is a count of ROWS under `-v` and of COLUMNS under `-h`, and
+        `_SPLIT_ROWS` is a row count. The same number under the other flag is a
+        five-column pane — one nothing can be drawn in, and one the zoom that follows
+        would inherit its aspect from."""
+        argv = overlay.open_argv("charter", harness="%0", command=["true"])
+        self.assertIn("-v", argv)
+        self.assertNotIn("-h", argv)
+        self.assertEqual(argv[argv.index("-l") + 1], str(overlay._SPLIT_ROWS))
+
+    def test_the_split_fits_the_shortest_harness_the_frame_will_lay_out(self):
+        """The one way this number can cost anything, in its own docstring's words: tmux
+        refuses a split it has no room for, and a refused split is a launch with no
+        overlay in it. `layout.HARNESS_MIN_ROWS` is the floor the frame's own layout
+        leaves the harness pane, the overlay is split off THAT pane, and the split takes
+        its own rows plus the border between them."""
+        self.assertLess(overlay._SPLIT_ROWS + 1, layout.HARNESS_MIN_ROWS)
+
+    def test_the_overlay_pane_carries_the_frame_identity_the_panels_carry(self):
+        """#411's measurement is why a pane charter opens needs `-e` at all: every frame
+        shares one tmux server, so a new pane's environment comes from the SERVER's —
+        captured from whichever launcher happened to start it, possibly days ago. The
+        overlay runs charter's own code and resolves the frame from
+        `$CHARTER_SESSION_ID`, so a pane opened without this reads another frame's."""
+        argv = overlay.open_argv("charter", harness="%0", command=["true"],
+                                 env={"CHARTER_SESSION_ID": "s-1", "CHARTER_ROOT": "/r"})
+        carried = [argv[i + 1] for i, x in enumerate(argv) if x == "-e"]
+        self.assertEqual(sorted(carried), ["CHARTER_ROOT=/r", "CHARTER_SESSION_ID=s-1"])
+        # tmux's own options, so before the `--`: after it they would be the program's
+        # argv, which is `_env_argv`'s own rule and this call site's to keep.
+        self.assertLess(max(i for i, x in enumerate(argv) if x == "-e"),
+                        argv.index("--"))
+
+    def test_a_name_the_frame_may_not_carry_is_refused_loudly_here_too(self):
+        """`layout._env_argv` is the single funnel every `-e` charter builds goes
+        through, and it RAISES — #446's lesson being that a rule enforced at each call
+        site is a rule the next call site skips. Loud is the point: a launch that
+        believed it handed the overlay a variable which never arrived is the failure a
+        silent drop produces. Only the NAME is in the message; a value that does not
+        belong on a command line does not belong in a traceback either."""
+        with self.assertRaises(ValueError) as caught:
+            overlay.open_argv("charter", harness="%0", command=["true"],
+                              env={"AWS_SESSION_TOKEN": "s3cr3t-value"})
+        self.assertIn("AWS_SESSION_TOKEN", str(caught.exception))
+        self.assertNotIn("s3cr3t-value", str(caught.exception))
+
     def test_closing_hands_the_pane_back_and_disarms_the_hatch(self):
         cmds = [" ".join(c) for c in
                 overlay.close_argvs("charter", harness="%0", overlay_pane="%7")]
         self.assertTrue(any("select-pane" in c and "%0" in c for c in cmds), cmds)
         self.assertTrue(any("kill-pane" in c and "%7" in c for c in cmds), cmds)
         self.assertTrue(cmds[-1].endswith("select-pane -t %0"), cmds)
+
+    def test_closing_returns_to_the_harness_before_it_kills_anything(self):
+        """The same order the hatch itself runs in, and the same reason: a kill that
+        cannot happen — a stale id, an overlay already gone — costs nothing that has not
+        already been delivered.
+
+        Measured on tmux 3.7c with harness `%0`, a panel `%1` and a zoomed overlay `%2`:
+        shipped, focus lands on the harness; with the kill first, tmux moves focus off
+        the dying pane by itself and it lands on the PANEL, and the `select-pane` that
+        follows is then correcting a jump the operator already saw.
+
+        On the tmux SUBCOMMAND rather than a substring of the line, for the reason
+        `test_the_hatch_is_armed_before_the_surface_can_capture_anything` gives: the
+        armed value itself contains the text `select-pane`.
+        """
+        cmds = overlay.close_argvs("charter", harness="%0", overlay_pane="%7")
+        names = [c[3] for c in cmds]
+        self.assertLess(names.index("select-pane"), names.index("kill-pane"), names)
+
+    def test_a_refused_overlay_id_kills_nothing_rather_than_naming_the_current_pane(self):
+        """MEASURED on tmux 3.7c, and it is the measurement this module's docstring
+        leads with: `kill-pane -t ""` does not fail and is not a no-op — it kills the
+        pane the command is running against. Re-measured for THIS call site, which is a
+        CLI invocation rather than the hatch's `run-shell`: `tmux -L … kill-pane -t ""`
+        returned 0 and killed the session's active pane.
+
+        `close_argvs` is the one call site that can produce one. `hatch_command` takes
+        `None` for "there is no overlay" and every test above feeds it a well-formed
+        `%7`; this function takes the id as a plain string, so an unset variable, a
+        `#{pane_id}` that came back empty from a pane that had already died, or a
+        capture that failed all arrive here spelled `""`.
+        """
+        for bad in ("", " ", "%", "%0; kill-server", "%0\nkill-server", "harness",
+                    "%１１", "#{q:x}", "-t"):
+            with self.subTest(overlay_pane=bad):
+                self.assertEqual(
+                    overlay.close_argvs("charter", harness="%0", overlay_pane=bad), [],
+                    "a close that cannot name the overlay must emit no command at all")
+        self.assertEqual(overlay.close_argvs("charter", harness="0", overlay_pane="%7"),
+                         [], "and a harness it cannot name is no better")
+
+    def test_a_refused_id_opens_no_modal_overlay_at_all(self):
+        """"Charter would rather open no overlay than open one it cannot promise a way
+        out of" — the ids that fail `PANE_ID_RE` are exactly the ids the hatch cannot be
+        armed with, so selecting and zooming on them is the wedge the hatch exists for,
+        entered deliberately."""
+        for bad in ("", "%0; kill-server", "harness", "#{q:x}"):
+            with self.subTest(bad=bad):
+                self.assertEqual(
+                    overlay.modal_argvs("charter", harness="%0", overlay_pane=bad), [])
+                self.assertEqual(
+                    overlay.modal_argvs("charter", harness=bad, overlay_pane="%7"), [])
 
 
 if __name__ == "__main__":
