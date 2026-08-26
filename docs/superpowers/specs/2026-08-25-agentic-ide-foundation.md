@@ -457,6 +457,84 @@ everything else is reachable through the palette. Keeping both would leave two a
 empty.** What remains is Phase 4 (what identifies a change on disk, and its lifecycle) and
 implementation detail that now follows from the above rather than needing a decision.
 
+## 4i. Corrected by measurement — 2026-08-26
+
+Task 1 of the Phase 1 plan measured the two hypotheses this spec was carrying. **Five were
+refuted.** Findings in full: `docs/superpowers/specs/2026-08-26-tmux-input-findings.md`.
+
+**§4c's drag-select claim is FALSE — delete it.** "which also preserves the drag-select the
+comment worried about losing" is wrong. tmux enables mouse reporting on the outer terminal
+from the **active pane's mode alone**: with a non-mouse pane active it writes
+`1006l 1000l 1002l 1003l` to the client; `select-pane` onto a mouse-requesting pane and it
+writes `1006h 1000h`. **There is no state where charter's panels are clickable and native
+selection survives.** The trade `instance.FRAME_FIELDS` describes is real whichever way
+`mouse` is set; leaving tmux's mouse off only makes it conditional on focus.
+
+**§4c's omitted condition, and it changes Phase 2.** Charter's panels receive pointer events
+only while the **active** pane requests reporting — and charter does not control what the
+harness requests. So with `[frame] mouse` off, "clickable panels" is not a property charter
+can promise.
+
+**But this is a new argument FOR the popup, which the spec had not made:** a palette drawn in
+a `display-popup` sidesteps the problem entirely, because the popup **is** the active surface
+and its own request is what reaches the terminal.
+
+**§4g's popup floor is 3.3, not 3.2.** `display-popup` appeared in 3.2, but on 3.2 **any
+client resize kills it** — measured `rc 129` (SIGHUP), log ending mid-stream. 3.7c instead
+delivers SIGWINCH and survives (CHANGES 3.2a→3.3: "Do not close popups on resize, instead
+adjust them to fit"). **Recommendation, not yet a decision:** a full-pane palette everywhere
+with the popup as an enhancement gated at 3.3 — rather than a popup with a fallback, which is
+two surfaces to keep in step plus a resize-shaped bug on exactly one version.
+
+**A popup's own program never receives focus events.** Measured on 3.7c and 3.2 with the
+client's focus genuinely toggling. Only the pane **underneath** gets them, and only from 3.6.
+Any design wanting a popup palette to know it lost focus needs another mechanism.
+
+**§4f's `focus`/`blur` does not exist yet.** `focus-events` is off by default in tmux and
+gates the whole path — and with it off, `#{client_flags}` still reads `attached,focused`, so a
+guard written against that flag **passes with the feature dead**. Charter's `conf_text` does
+not set `focus-events on` today.
+
+**§4f's `click` must admit a release with no press.** Measured with `mouse` off: a drag
+beginning on a border and ending in a pane delivers exactly one release,
+`b'\x1b[<0;70;4m'`. The first third-party component that keeps press state wedges on it.
+
+**§2 blamed tmux for charter's own cap.** "a nine-row cap with no way to page" — tmux 3.1c
+drew 20 rows fine. The cap is `frame/menu.py:434`, and those rows are still drawn and
+arrow-selectable; they lose only a digit shortcut. The rest of that sentence stands.
+
+**Confirmed right:** §4c's per-pane routing mechanism works identically on 3.1c, 3.2 and 3.7c
+(each pane receives its own rectangle's events, pane-relative, active pane unchanged); a popup
+has its own tty, can request mouse, receives click and scroll popup-relative, owns the
+keyboard, and is modal; charter's session-scoped `mouse off` cleanly overrides an operator's
+global `mouse on` with no leak; and **all four `tmuxctl` version floors were confirmed by
+running 3.1c and 3.2**, where before they were justified from CHANGES with a note that no
+binary existed to check.
+
+### And a stale number, corrected
+
+**The "200 versus 154" measurement this spec repeated in §4 and §4b is dated.** charter's
+committed measurement for the slot set it ships **today** is **200 versus 177**:
+`["top","bottom","right"]` gives a 200-column bottom row; `["top","right","bottom"]` gives 177,
+inset beside one 22-column sidebar plus its border. **154 was the pre-#488 arrangement** — two
+sidebars and two borders — and #488 deleted that comment along with the `left` slot.
+
+The decision is untouched; only the number illustrating it moved. **The number moved when a
+panel was retired; the property did not, and the property is what the registry stores.**
+
+### One extension of a settled decision, flagged for overruling
+
+`component.NEEDS` ships as `("gather", "repos", "todos")` — the slices `gather.scan` actually
+carries — not the four names §4f anticipates. `personas` and `changes` join when the extended
+gather can serve them.
+
+The reason is the rule this project keeps relearning: a name accepted by `needs` that `ctx`
+answered with an empty tuple would let a component declare it, draw nothing, pass its own tests
+against an empty fixture, and be **indistinguishable from a plane that genuinely has none**. A
+convincing empty is worse than a refusal — the same defect as the "no repos" panel #512 fixed.
+`ctx.SERVES` and `component.NEEDS` are asserted against each other so they cannot drift as the
+gather grows.
+
 ---
 
 ## 5. The command surface
