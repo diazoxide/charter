@@ -943,9 +943,13 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
         results = list(pool.map(run_one, plan))
 
+    # A sandbox and not the checkout: the tests that are supposed to hold a guard are the
+    # ones that existed AT THE REF. Reading the working tree's `tests/` instead would
+    # answer with a test written after the fact — which, sweeping a historical head, is
+    # precisely the test that was missing.
     for r in results:
         if r.verdict == "survived":
-            r.evidence = evidence_for(root, r.mutation, r.modules)
+            r.evidence = evidence_for(boxes[0].path, r.mutation, r.modules)
 
     pairs: list[Pair] = []
     if second_order:
