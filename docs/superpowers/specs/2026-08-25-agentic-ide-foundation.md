@@ -655,6 +655,26 @@ workspace, and the obvious next question — "show me the chats working on this 
 both to exist first. Phase 5 does not answer it; it makes it askable.
 
 
+## 4k. Settled 2026-08-26 — the palette is a full pane, the popup is an enhancement
+
+§4i left this as a recommendation. **Decided: full-pane palette everywhere; `display-popup`
+becomes a 3.3-gated enhancement, or is skipped.**
+
+The measurements forced it. On tmux 3.2 — a version `below_floor_message` explicitly still
+launches on — **any client resize kills a popup** (`rc 129`, SIGHUP, log ending mid-stream).
+And a popup's own program **never receives focus events**, on 3.7c or 3.2; only the pane
+underneath does, and only from 3.6.
+
+Popup-first would mean two surfaces to keep in step plus a resize-shaped bug on exactly one
+version. Full-pane-first means one surface that always works, and the popup becomes an
+optimisation that can be added or skipped without the palette depending on it.
+
+The popup's real advantage from §4i still stands and is why it remains worth adding later: a
+popup **is** the active surface, so its own mouse request is what reaches the terminal —
+sidestepping the active-pane problem that makes "clickable panels" something charter cannot
+promise for its panes.
+
+
 ---
 
 ## 5. The command surface
