@@ -39,6 +39,30 @@ override anything earlier they contradict.**
   once achieved code execution at launch. Contain every name before it is drawn.
 - No version bump, no stamping, no tag.
 
+## The deletion sweep — required before any PR in this phase
+
+Round two found **thirty unpinned guards across two branches**, every one by the same move:
+**delete the guard, run the FULL suite, and see whether it stays green.** Each was correct
+code with no test behind it, so a later refactor could remove it silently.
+
+Examples of what that missed, each measured with a real consequence:
+
+- `layout.harness_rows`' edge check — reverting it charged a provider's **12 columns to the
+  harness as rows** (39 → 26 rows on a 50-row window), live on every resize and relayout.
+- `panel._component_text`'s `width=slots._width()` — replacing it with a constant `80` made a
+  provider's output **wrap and destroy the frame** in a 40-column pane. The three drawing tests
+  all used a payload short enough that either width passed.
+- `overlay.close_argvs`' refusal guard — without it, an empty pane id emits `kill-pane -t ""`,
+  and the module's own docstring records measuring that this **kills the pane the command is
+  running against**. The one measurement the module leads with was undefended at the one call
+  site that can produce it.
+
+**So: for every `if` you add that refuses, clamps, contains or falls back, write the test that
+goes RED when that line is deleted.** Then run the sweep yourself — delete each new guard in
+turn, run the full suite, and report any that stayed green **before** submitting.
+
+A guard nothing pins is a comment with a runtime cost.
+
 ---
 
 ### Task 1: Retire the slot vocabulary
