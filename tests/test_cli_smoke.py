@@ -29,17 +29,33 @@ _CRASH_MARKERS = ("Traceback (most recent call last):", "ModuleNotFoundError", "
 
 
 class CliSmokeTest(unittest.TestCase):
-    """Runs `python3 -m charter ...` as a real subprocess, isolated from the
-    developer's own ~/.charter and the umbrella's own inventory/vaults via a throwaway
-    CHARTER_HOME, so a doctor run here can't read or write real secrets/state."""
+    """Runs `python3 -m charter ...` as a real subprocess, isolated from the developer's
+    own ~/.charter and the umbrella's own inventory/vaults via a throwaway CHARTER_HOME —
+    **and from their control plane**, via a throwaway ``$CHARTER_ROOT``.
+
+    The plane half was missing, and `CHARTER_HOME` reads like it covered it. It did not:
+    the child ran with ``cwd=REPO_ROOT`` and no ``$CHARTER_ROOT``, so it walked up from
+    the checkout and resolved the developer's live plane. ``charter doctor`` then reported
+    on that plane — its personas, its workspaces, its vault registry — from a smoke test
+    that had already declared itself isolated. The suite's spawn tripwire refuses it now
+    (#527); this is the fix it names.
+
+    The cwd stays at the checkout: ``-m`` needs the tree on ``sys.path`` to import the
+    charter under test, and it is ``$CHARTER_ROOT`` — which wins outright in
+    `root.find_root` — that decides the plane.
+    """
 
     def setUp(self) -> None:
         import os
         import tempfile
 
         self.tmp = tempfile.mkdtemp(prefix="charter-smoke-")
+        self.plane = Path(self.tmp) / "plane"
+        self.plane.mkdir()
+        (self.plane / "charter.toml").write_text("schema = 1\n")
         self.env = dict(os.environ)
         self.env["CHARTER_HOME"] = str(Path(self.tmp) / ".charter")
+        self.env["CHARTER_ROOT"] = str(self.plane)
         # Force non-tty color codes off / deterministic output.
         self.env.pop("FORCE_COLOR", None)
 

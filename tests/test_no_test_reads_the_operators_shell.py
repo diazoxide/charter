@@ -28,7 +28,7 @@ from unittest import mock
 
 from charter import commands_frame, legacyenv, session, workspace
 from tests import _envguard
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, child_plane_env
 
 
 class WhatIsGuarded(unittest.TestCase):
@@ -243,6 +243,13 @@ class WhatIsScrubbed(unittest.TestCase):
         A child rather than an in-process check because the scrub runs once, at import of
         the `tests` package, and by the time any test executes it has long since happened.
 
+        The child imports that package, which imports `charter.config`, which resolves a
+        plane — so it runs from a THROWAWAY plane with ``$PYTHONPATH`` carrying the tree,
+        rather than from a cwd of the checkout. This was the last child in the suite still
+        resolving the operator's live plane (`_planeguard.RealPlaneSpawn`). ``$CHARTER_ROOT``
+        would not have fixed it: the scrub this case is about removes that pointer *before*
+        charter loads, so for a child that imports this package the cwd is the only lever.
+
         ``$EDM_WORKSPACE`` is planted alongside them because it is the one that got away:
         every other name here was already gone when this case was written, and that one
         walked straight through the property into `charter init`'s stderr (#540). Planting
@@ -257,10 +264,12 @@ class WhatIsScrubbed(unittest.TestCase):
                  "'left': sorted(k for k in os.environ.copy() "
                  "if _envguard._in_namespace(k)),"
                  "'recovered': sorted(_envguard.scrubbed())}))")
+        tree = pathlib.Path(__file__).resolve().parent.parent
+        plane, _ = child_plane_env(self)
         out = subprocess.run(
             [sys.executable, "-c", probe],
-            env={**os.environ.copy(), **planted},
-            cwd=str(pathlib.Path(__file__).resolve().parent.parent),
+            env={**os.environ.copy(), **planted, "PYTHONPATH": str(tree)},
+            cwd=str(plane),
             capture_output=True, text=True, check=True)
         got = json.loads(out.stdout)
         self.assertEqual(got["left"], [],

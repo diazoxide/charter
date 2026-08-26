@@ -41,8 +41,8 @@ from unittest import mock
 
 import charter
 from charter import (commands, commands_persona, commands_update, doctor, harness,
-                     instance, news)
-from tests._isolation import pin_update_channel
+                     instance, news, root)
+from tests._isolation import child_plane_env, pin_update_channel
 
 #: The `check:` every test here plants, and the handler it stands on. A `check:` may
 #: only name a command `news._PROBEABLE` lists (#317), so the stand-in has to be one
@@ -124,6 +124,7 @@ class CrossProcessReentry(unittest.TestCase):
     """
 
     def setUp(self):
+        self.plane, _ = child_plane_env(self)
         self.dir = Path(tempfile.mkdtemp())
         (self.dir / "0.44.0-loop.md").write_text(
             "---\nversion: 0.44.0\nheadline: h\ncheck: persona lint\nadopt: version\n---\nbody\n")
@@ -144,7 +145,18 @@ class CrossProcessReentry(unittest.TestCase):
         self.assertEqual(len(news.released()), 1)
 
     def _env(self, hop: int) -> dict:
-        return {**os.environ, "PROBE_SRC": SRC, "PROBE_NEWSDIR": str(self.dir),
+        # `HOP` opens with ``from charter import commands_persona, config, news``, and a
+        # charter import resolves a plane from the importing process's own cwd. Every hop
+        # runs from the checkout, so every hop — and each one it spawns in turn — used to
+        # resolve the developer's LIVE plane. `child_plane_env` makes a throwaway one and
+        # ``$CHARTER_ROOT`` points every hop at it instead.
+        #
+        # Read from `os.environ` at CALL time, not from a snapshot taken in `setUp`: the
+        # re-entry marker this whole file is about (`news._ENV`) is set by `_dispatch`
+        # while the probe is running, and it is inherited, not passed. A snapshot predates
+        # it, and the chain would go on hopping with every guard intact.
+        return {**os.environ, root.ENV_VAR: str(self.plane),
+                "PROBE_SRC": SRC, "PROBE_NEWSDIR": str(self.dir),
                 "PROBE_SCRIPT": str(self.script), "PROBE_LOG": str(self.log),
                 "PROBE_HOP": str(hop), "PROBE_CAP": str(HOP_CAP),
                 "PROBE_TIMEOUT": str(HOP_TIMEOUT)}

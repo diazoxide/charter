@@ -142,6 +142,51 @@ class ReportIso(PersonaIso):
         self.consent_home = home
 
 
+def child_plane_env(case, **extra: str) -> tuple[Path, dict]:
+    """A throwaway plane, and the environment that points a CHILD charter at it.
+
+    The way out `tests._planeguard.RealPlaneSpawn` names for a test that genuinely wants
+    to run charter as a subprocess. ``$CHARTER_ROOT`` wins outright in `root.find_root`,
+    so the child resolves THIS plane wherever it is standing — which is the point, because
+    ``python3 -m charter`` normally needs a cwd of the checkout to import the tree under
+    test, and that cwd is exactly what used to resolve the developer's own plane instead.
+
+    A ``charter.toml`` is written, so the child finds a plane rather than raising and
+    falling back to its cwd — the fallback being the hazard, not the fix.
+
+    Returns the plane too, so a case can assert on what the child left in it.
+    """
+    plane = Path(tempfile.mkdtemp(prefix="charter-child-plane-"))
+    case.addCleanup(shutil.rmtree, plane, True)
+    (plane / root.MARKER).write_text("schema = 1\n")
+    return plane, {**os.environ, root.ENV_VAR: str(plane), **extra}
+
+
+def make_plane(case, body: str = "schema = 1\n") -> Path:
+    """Turn a `PersonaIso` case's throwaway root into a REAL control plane, and re-derive.
+
+    `PersonaIso` hands every case a root; it deliberately does not put a ``charter.toml``
+    at it, so `config.HAS_CONTROL_PLANE` is False and every setting derives to its default.
+    That is right for most cases and wrong for any case driving a path charter gates on
+    having a plane at all — `glstate.maybe_spawn` and `update.maybe_spawn` both refuse to
+    fork a background refresh without one, because outside a plane `config.STATE_DIR` is
+    ``<cwd>/.charter`` and there is nowhere legitimate for the child to cache.
+
+    **Re-derives rather than setting the flag by hand.** ``config.HAS_CONTROL_PLANE = True``
+    over a root with no marker is a fixture that tells this process one thing and the
+    child process charter is about to spawn another: the child reads ``$CHARTER_ROOT``,
+    finds no ``charter.toml`` there, and goes looking for a plane of its own. On the
+    machine this was written on that walk landed on the operator's live plane (#527). A
+    plane a test claims to have should be one a subprocess can also find.
+
+    Safe to call after `PersonaIso.setUp`: `config.use` snapshots, and the snapshot the
+    base class already took is the one `restore` puts back.
+    """
+    (case.tmp / root.MARKER).write_text(body)
+    config.use(case.tmp)
+    return case.tmp
+
+
 def isolate_state_dir(case) -> Path:
     """Point ``config.STATE_DIR`` at a throwaway dir for one test case, restoring after.
 

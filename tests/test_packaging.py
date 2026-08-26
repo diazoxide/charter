@@ -13,8 +13,13 @@ class TestPackaging(unittest.TestCase):
         self.assertRegex(charter.__version__, r"^\d+\.\d+\.\d+")
 
     def test_module_entry_point_runs(self):
+        """A real child, pointed at a throwaway plane. It inherits this process's cwd —
+        the checkout — which is how it used to resolve the developer's own plane (#527).
+        """
+        from tests._isolation import child_plane_env
+        _plane, env = child_plane_env(self)
         p = subprocess.run([sys.executable, "-m", "charter", "--version"],
-                           capture_output=True, text=True)
+                           env=env, capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("charter", p.stdout.lower())
 

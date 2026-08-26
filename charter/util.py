@@ -317,6 +317,46 @@ def self_relaunch_argv(*args: str) -> list[str]:
     return [sys.executable, "-P", "-m", "charter", *args]
 
 
+def child_env() -> dict:
+    """This process's environment plus **the plane this process actually resolved**.
+
+    The environment for a charter that charter spawns. Every self-relaunch site used to
+    hand the child a bare ``os.environ.copy()`` and let it work its own plane out by
+    walking up from its own cwd — the same defect `glstate.maybe_spawn` already argues
+    against for the *workspace*: "the status line resolves the workspace for the SESSION …
+    while the child would resolve it for ITSELF, from its own environment and its own
+    directory". The plane is that argument one level up, and it is the bigger half: the
+    workspace decides which rows get refreshed, the plane decides whose ``.charter/`` gets
+    written.
+
+    Measured, from a linked worktree of a charter checkout: a ``gl-refresh`` spawned off
+    the status line landed on the MAIN tree's plane, because `root._plane_of` redirects a
+    worktree to the tree it was cut from and the child had nothing else to go on. A render
+    for one plane refreshed a different one, silently, on every stale render (#527).
+
+    **Only when this process has a plane.** ``$CHARTER_ROOT`` wins outright in
+    `root.find_root`, and a value with no ``charter.toml`` at it RAISES rather than falling
+    back to a walk — so handing a planeless child an empty-handed pointer would be worse
+    than handing it nothing, which is what it gets. Both `maybe_spawn` sites decline to
+    fork at all in that state.
+
+    Overwrites rather than deferring to an inherited ``$CHARTER_ROOT``. When this process
+    was itself resolved from that variable the two agree; when they disagree, `config.ROOT`
+    is the plane whose state this process is actually reading and writing, and the child's
+    job is to agree with its parent rather than with the shell.
+
+    Imports are deferred because `util` sits below `config` and `root` in the import order
+    and must stay there.
+    """
+    from . import config
+    from . import root as _root
+
+    env = os.environ.copy()
+    if config.HAS_CONTROL_PLANE:
+        env[_root.ENV_VAR] = str(config.ROOT)
+    return env
+
+
 def detach_self(args: list[str]) -> bool:
     """Re-run ``charter <args>`` in a process that outlives this one. True if it started.
 
@@ -328,12 +368,15 @@ def detach_self(args: list[str]) -> bool:
 
     Never raises. The caller is a session-start hook, and a plane that cannot spawn a
     background refresh must still open a session.
+
+    The child is handed :func:`child_env`, so ``persona _gc`` collects the plane the hook
+    fired for rather than whichever one its own cwd happens to sit under.
     """
     try:
         subprocess.Popen(
             self_relaunch_argv(*args),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
+            stdin=subprocess.DEVNULL, start_new_session=True, env=child_env(),
         )
     except Exception:
         return False

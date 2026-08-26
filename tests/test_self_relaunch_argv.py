@@ -40,7 +40,7 @@ import charter
 from charter import glstate, planegit, update, util
 from charter import commands_workspace as cw
 
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, make_plane
 
 #: The package directory this test process actually imported, not a path guessed from
 #: `__file__`'s neighbours — whatever `charter` means to the rest of the suite is what
@@ -108,6 +108,10 @@ class GlstateMaybeSpawnUsesIt(PersonaIso):
     path. The quiet one: on any charter checkout this ran the wrong charter on every
     render, indefinitely, until fixed."""
 
+    def setUp(self):
+        super().setUp()
+        make_plane(self)      # `maybe_spawn` refuses to fork without one (#527)
+
     def test_argv_carries_dash_p(self):
         d = self.tmp / "somerepo"
         d.mkdir(parents=True, exist_ok=True)
@@ -128,6 +132,10 @@ class UpdateMaybeSpawnUsesIt(PersonaIso):
     """charter/update.py:185 — `_version-check`, ALSO spawned from the status line's own
     render path. Not one of the five sites #390 originally named; found by grepping the
     tree for every `sys.executable`."""
+
+    def setUp(self):
+        super().setUp()
+        make_plane(self)      # `maybe_spawn` refuses to fork without one (#527)
 
     def test_argv_carries_dash_p(self):
         captured = {}
