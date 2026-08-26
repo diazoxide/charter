@@ -63,6 +63,26 @@ turn, run the full suite, and report any that stayed green **before** submitting
 
 A guard nothing pins is a comment with a runtime cost.
 
+### Assert the reason, not just the refusal
+
+A sweep that only checks the exit code is itself a guard with nothing behind it. Measured on
+`release.yml`'s version check (#558): deleting the `-z "$claimed"` refusal — the one that
+catches a `workflow_dispatch` with no version input — leaves the run **still exiting 1**,
+because the mismatch check below it then catches the empty string instead:
+
+```
+shipped:  rc=1  this run did not say which version it publishes (the version input <none>)
+mutant:   rc=1  this run names  (the version input <none>) but pyproject.toml says 0.53.0
+```
+
+Same exit code, different reason, and the second one is a worse answer to a different
+question. **Two guards in sequence mask each other**, so an exit-code assertion cannot tell
+them apart and stays green over a real deletion.
+
+So a refusal test asserts **which** refusal fired. This is the same failure the sweep exists
+to catch, one level up: a test that matches a *symptom* rather than the *property*, which is
+the shape behind every bypass this repo has shipped.
+
 ---
 
 ### Task 1: Retire the slot vocabulary

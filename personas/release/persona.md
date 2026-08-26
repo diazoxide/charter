@@ -105,7 +105,17 @@ want a reader to see if they stopped after two screens.
 
 That job carries `contents: write`
 alone — the workflow's top-level grant stays `contents: read` — and it leaves an existing
-Release untouched, so a `workflow_dispatch` retry after a partial failure is safe to run.
+Release untouched, so a `workflow_dispatch` retry after a partial failure is safe to run —
+but it must now say which version it is retrying (#558):
+
+```
+gh workflow run release.yml --ref main -f version=<X.Y.Z>
+```
+
+Without `-f version=`, `guard` refuses. That check used to be gated on the ref being a tag,
+so on the retry path it was skipped — and a skipped step reports success, which is how a
+retry could publish with its version cross-check never having run. Passing the version is
+what gives the guard a claim it can refuse.
 
 ## Then upgrade this machine — CLI first, pinned
 
