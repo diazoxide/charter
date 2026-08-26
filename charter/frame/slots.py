@@ -968,6 +968,60 @@ def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
     return rows
 
 
+def persona_section(width: int, height: int, *, terse: bool) -> list[str]:
+    """The sidebar's persona rows: the heading, and every chip a *height*-row pane fits.
+
+    Named because the registry names it — `frame/builtins.py` places this as the
+    `personas` component, one of the two parts of the `sidebar` composite. It is
+    :func:`_right`'s own first half, moved rather than rewritten: `_right` calls it, so
+    there is one implementation of "what the persona column says" and not a component's
+    copy sitting beside the panel's.
+
+    Takes *terse* rather than reading `verbosity(fid)` itself, so the pane that draws BOTH
+    sections asks the frame's density once and hands the same answer to each. Two reads
+    would be two small file reads per repaint where one was enough, and — worse — two
+    chances for the halves of one pane to disagree if the density changed between them.
+
+    A plane with no personas at all says so in one line. It is not an empty column:
+    an empty column is indistinguishable from a pane that failed to draw, which is the
+    reading the frame refuses everywhere else.
+    """
+    from .. import statusline as sl
+    cells = sl._persona_chip_cells()
+    if not cells:
+        return [tui.truncate(f"{sl._DIM}no personas{sl._R}", width)]
+    keep = height - 1                       # the heading takes a row off the list
+    if terse:
+        keep = min(keep, _TERSE_ROWS)
+    cells = _cap_personas(cells, keep)
+    return [_sidebar_head("personas", _persona_total(cells), width),
+            *_persona_rows(cells, width)]
+
+
+def todo_section(fid: str, width: int, budget: int, *, terse: bool) -> list[str]:
+    """This workspace's open todos, in at most *budget* rows — the `todos` component.
+
+    :func:`_right`'s own second half, moved for the reason :func:`persona_section` gives.
+    *budget* is what the pane has left after the personas; the density's own cap
+    (:data:`_TERSE_ROWS` or :data:`_MAX_TODO_LINES`) is applied here rather than by the
+    caller, so a caller that has rows to spare cannot spend more of them on todos than
+    the density allows.
+
+    **The cache is opened only when there is a row to draw it into.** `gather.read` is
+    reached after the budget is known to be positive, never before — a pane with no room
+    must not open a file it is about to discard, which is the same ordering
+    :func:`repos_rows_wanted` keeps and the same reason.
+
+    How SHORT is too short is `_todo_rows`' rule and is asked there once: this decides
+    only whether there is any room at all.
+    """
+    from . import gather
+    budget = min(budget, _TERSE_ROWS if terse else _MAX_TODO_LINES)
+    if budget <= 0:
+        return []
+    return _todo_rows(gather.read(fid), width, budget)
+
+
 def _right(fid: str) -> str:
     """The plane's personas, and this workspace's open todos underneath them.
 
@@ -1017,39 +1071,27 @@ def _right(fid: str) -> str:
     one that is not. How SHORT is too short is `_todo_rows`' own rule and is asked there
     once — this function only decides whether there is any room at all to be worth
     opening the cache for, which is a question about a file read rather than about a row.
-    """
-    from .. import statusline as sl
-    from . import gather
 
+    **The two sections are :func:`persona_section` and :func:`todo_section`**, and this is
+    what composes them into one pane. The registry says the same thing in its own
+    vocabulary — `frame/builtins.py` registers them as the `personas` and `todos` parts of
+    the `sidebar` composite, with `personas` taking what is left (`Fill()`) and the todos
+    capped — and it says it by pointing at these two functions, not by keeping a second
+    copy of them. Charter never splits a pane (§4d); a composite is how two things share
+    one, and this function is that composition for the one composite charter ships.
+    """
     w, h = _width(), _height()
+    # Asked ONCE and handed to both sections: one pane draws them, so one density decides
+    # how much both of them say.
     terse = verbosity(fid) == "terse"
-    cells = sl._persona_chip_cells()
-    if cells:
-        keep = h - 1                        # the heading takes a row off the list
-        if terse:
-            keep = min(keep, _TERSE_ROWS)
-        cells = _cap_personas(cells, keep)
-        lines = [_sidebar_head("personas", _persona_total(cells), w),
-                 *_persona_rows(cells, w)]
-    else:
-        lines = [tui.truncate(f"{sl._DIM}no personas{sl._R}", w)]
+    lines = persona_section(w, h, terse=terse)
 
     # The blank row between the two sections is counted OUT of the todo budget rather
     # than added on top of it, so the section can never be the row that overflows the
     # pane — the same reservation `_table_lines` makes for its own overflow line.
-    #
-    # `> 0` and NOT the two-row floor, which is `_todo_rows`' to keep: this test is only
-    # "is there any room at all", asked so a pane with none does not open a cache file it
-    # is about to discard (`repos_rows_wanted` orders its own two questions the same way,
-    # and for the same reason). Repeating the floor here would put one rule in two places,
-    # where the outer copy silently decides the case and the inner one can be broken
-    # without anything noticing — which is exactly what a mutation of the inner guard
-    # proved while both existed.
-    budget = min(h - len(lines) - 1, _TERSE_ROWS if terse else _MAX_TODO_LINES)
-    if budget > 0:
-        rows = _todo_rows(gather.read(fid), w, budget)
-        if rows:
-            lines.extend(["", *rows])
+    rows = todo_section(fid, w, h - len(lines) - 1, terse=terse)
+    if rows:
+        lines.extend(["", *rows])
     return "\n".join(lines)
 
 
