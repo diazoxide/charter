@@ -26,10 +26,14 @@ suite once under `sys.settrace`, one test module at a time, says which source fi
 module executes, and a mutation then runs only the modules that reach its file — seconds
 instead of minutes. The map is cached against a hash of the tree it was measured on.
 
-**Never trusted when it says "survived".** Selection is an optimisation and must never be
-the final word. Any mutation that survives its subset is re-run against the FULL suite
-before it is reported. A false survivor costs one full run; a false *pin* would be the
-exact bug this file exists to prevent, so the asymmetry decides the design.
+**Never trusted when it says "survived", and never allowed to guess when it says
+"pinned".** Selection is an optimisation and must never be the final word: anything that
+survives its subset is re-run against the FULL suite. A false survivor costs one full run;
+a false *pin* is the exact bug this file exists to prevent, so the asymmetry decides the
+design — a red is confirmed before it pins anything, and a run that TIMED OUT is neither
+green nor red but **unresolved**, because no test failed there and machine load must not
+become evidence. That last distinction was learned the hard way: on a box under a load
+average of 100, two of #553's six known-unpinned guards came back "pinned" with `ran=0`.
 
 There is deliberately **no suppression list.** The usual escape hatch — mark a mutant
 "equivalent" and move on — is how this kind of gate becomes a rubber stamp, and charter
@@ -685,9 +689,21 @@ def load_map(root: Path, paths: tuple[str, ...], cache_dir: Path, jobs: int,
 
 @dataclasses.dataclass
 class Outcome:
+    """What one run said — and whether it said anything at all.
+
+    `conclusive` is the distinction this tool got wrong once and had to be taught. A run
+    that TIMED OUT is not a red run: no test failed, the suite simply could not be
+    measured. Folding the two together turns machine load into evidence, and the evidence
+    it manufactures is "pinned" — the verdict that certifies a guard as tested and is
+    never revisited. Measured, on a box under a load average of 100 with two other agents
+    on it: two of #553's six known-unpinned guards came back "pinned" with `ran=0`, which
+    is not a failure, it is a stopwatch.
+    """
+
     green: bool
     ran: int
     detail: str
+    conclusive: bool = True
 
 
 @dataclasses.dataclass
@@ -771,20 +787,28 @@ class Sandbox:
         try:
             out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # A mutation that HANGS the suite has not survived it. Round three had one:
-            # deleting `Surface.run`'s `if chunk is None: return None` wedged the suite
-            # for 1800s rather than failing, and reading that as green would have pinned
-            # the guard on a timeout.
+            # Not green — round three had a mutation that wedged the suite for 1800s
+            # instead of failing, and reading that as a pass would pin a guard on a
+            # stopwatch. But not RED either, and that is the harder half: no test failed
+            # here, so this run is `conclusive=False` and is not allowed to decide
+            # anything on its own.
             _kill_group(proc)
             proc.communicate()
-            return Outcome(False, 0, f"timed out after {timeout}s")
+            return Outcome(False, 0, f"timed out after {timeout}s", conclusive=False)
         return _verdict(_Finished(proc.returncode, out))
+
+    #: Set from the baseline's measured wall time, so the cap tracks the machine the
+    #: sweep is actually running on rather than the one it was written on. A fixed
+    #: forty-minute cap is generous on an idle box and far too tight on a shared one:
+    #: measured, at a load average of 100, a five-minute suite ran past 2400 s and two
+    #: known-unpinned guards came back "pinned" on the strength of a stopwatch.
+    full_timeout: float = FULL_TIMEOUT
 
     def subset(self, modules: list[str]) -> Outcome:
         return self.run(list(modules), SUBSET_TIMEOUT)
 
     def full(self) -> Outcome:
-        return self.run(["discover", "-s", "tests", "-t", "."], FULL_TIMEOUT)
+        return self.run(["discover", "-s", "tests", "-t", "."], self.full_timeout)
 
 
 def dirty_files(root: Path, paths: tuple[str, ...]) -> dict[str, bytes]:
@@ -912,6 +936,10 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
     box.apply(mutation)
     if modules:
         subset = box.subset(modules)
+        if not subset.conclusive:
+            subset = box.subset(modules)
+            if not subset.conclusive:
+                return "unresolved", subset, None
         if not subset.green:
             # A red is the one verdict this tool never revisits, so it had better be a
             # real one. The suite starts real tmux servers, several sweeps share a
@@ -936,12 +964,19 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
         if confirm.green:
             return "survived", subset, Outcome(
                 True, confirm.ran, f"red once ({full.detail[:80]}), green on confirmation")
+        if not (full.conclusive or confirm.conclusive):
+            # Twice unmeasurable. The honest answer is that this mutation has no verdict,
+            # and saying so is the whole point: "pinned" here would be a guard certified
+            # as tested by a machine that was too busy to run its tests.
+            return "unresolved", subset, confirm
+        full = full if full.conclusive else confirm
     return ("survived" if full.green else "pinned"), subset, full
 
 
 def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str, list[str]],
           workdir: Path, jobs: int, dirty: dict[str, bytes], second_order: int = 0,
-          log=print) -> tuple[list[Result], list["Pair"]]:
+          log=print, full_timeout: float = FULL_TIMEOUT
+          ) -> tuple[list[Result], list["Pair"]]:
     """Every mutation, run; every survivor, re-run against the whole suite."""
     plan: list[Mutation] = []
     sources: dict[str, bytes] = {}
@@ -957,6 +992,8 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
 
     log(f"  building {jobs} sandbox(es)…")
     boxes = [Sandbox(root, workdir / f"w{i}", ref, dirty) for i in range(jobs)]
+    for box in boxes:
+        box.full_timeout = full_timeout
     free: list[Sandbox] = list(boxes)
     import threading
     lock = threading.Lock()
@@ -991,8 +1028,9 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         how = f"{len(modules)} module(s)" if modules else "no covering module"
         if full is not None:
             how += f", then all {full.ran or '?'}"
-        log(f"    [{n}/{len(plan)}] "
-            f"{'SURVIVED' if verdict == 'survived' else 'pinned  '}  {mutation}   ({how})")
+        label = {"survived": "SURVIVED", "pinned": "pinned  ",
+                 "unresolved": "UNRESOLVED"}[verdict]
+        log(f"    [{n}/{len(plan)}] {label}  {mutation}   ({how})")
         return Result(mutation, verdict, subset, full, modules)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -1082,6 +1120,8 @@ def _second_order(results: list[Result], boxes: list["Sandbox"],
 def report(results: list[Result], root: Path, ref: str, base: str, baseline: Outcome | None,
            elapsed: float, pairs: list["Pair"] | None = None) -> str:
     survivors = [r for r in results if r.verdict == "survived"]
+    unresolved = [r for r in results if r.verdict == "unresolved"]
+    pinned = [r for r in results if r.verdict == "pinned"]
     pairs = pairs or []
     out: list[str] = []
     w = out.append
@@ -1091,10 +1131,25 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     if baseline is not None:
         w(f"baseline          : Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}")
     w(f"mutations applied : {len(results)}")
-    w(f"pinned            : {len(results) - len(survivors)}")
+    w(f"pinned            : {len(pinned)}")
     w(f"SURVIVED          : {len(survivors)}")
+    w(f"UNRESOLVED        : {len(unresolved)}")
     w(f"wall clock        : {elapsed / 60:.1f} min")
     w("")
+
+    if unresolved:
+        w("-" * 86)
+        w("UNRESOLVED — these mutations have no verdict")
+        w("-" * 86)
+        w("Twice the run could not be measured: it timed out rather than failing. That is")
+        w("not a red and it is emphatically not a pin — nothing here has been shown to be")
+        w("tested. Re-run these on a quieter machine, or raise the timeout, before reading")
+        w("this sweep as clean.")
+        for r in sorted(unresolved, key=lambda r: (r.mutation.path, r.mutation.line)):
+            m = r.mutation
+            w(f"  {m.path}:{m.line}  in `{m.symbol}`  [{m.operator}]  "
+              f"{(r.full or r.subset).detail if (r.full or r.subset) else ''}")
+        w("")
 
     if not survivors:
         w("Every mutation this diff offered goes red. Nothing added here is a line the")
@@ -1273,17 +1328,27 @@ def main(argv: list[str] | None = None) -> int:
     selection = load_map(ref_box.path, paths, cache_dir, args.jobs, args.refresh_map, log)
 
     baseline = None
+    full_timeout = FULL_TIMEOUT
     if not args.no_baseline:
         log("  baseline: full suite, unmutated…")
+        started_baseline = time.time()
         baseline = ref_box.full()
-        log(f"    Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}")
+        took = time.time() - started_baseline
+        log(f"    Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}"
+            f" in {took:.0f}s")
+        # Six times what this machine, right now, took to run the suite once — and never
+        # below the floor. The mutants that matter are the ones that make the suite SLOW,
+        # and the sweep may be sharing the box with itself.
+        full_timeout = max(FULL_TIMEOUT, took * 6)
+        if full_timeout > FULL_TIMEOUT:
+            log(f"    full-suite timeout raised to {full_timeout / 60:.0f} min for this box")
         if not baseline.green:
             log("  ! the tree is RED before any mutation. Every mutation below will look")
             log("  ! pinned for a reason that has nothing to do with the guard. Fix first.")
             return 2
 
     results, pairs = sweep(root, ref, scope, selection, workdir, args.jobs, dirty,
-                           args.second_order, log)
+                           args.second_order, log, full_timeout)
     elapsed = time.time() - started
     text = report(results, root, ref, base, baseline, elapsed, pairs)
     log("")
@@ -1294,7 +1359,12 @@ def main(argv: list[str] | None = None) -> int:
         for child in workdir.glob("w*"):
             shutil.rmtree(child, ignore_errors=True)
         shutil.rmtree(workdir / "ref", ignore_errors=True)
-    return 1 if any(r.verdict == "survived" for r in results) else 0
+    if any(r.verdict == "survived" for r in results):
+        return 1
+    # 3, not 0: a sweep that could not measure some of its mutations has not shown the
+    # branch to be clean, and a gate reading this must not treat "I could not look" as
+    # "nothing to see".
+    return 3 if any(r.verdict == "unresolved" for r in results) else 0
 
 
 if __name__ == "__main__":       # pragma: no cover - entry point

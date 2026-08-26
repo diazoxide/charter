@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -708,16 +709,90 @@ class AHangIsNotAPass(unittest.TestCase):
     def test_a_wedged_runs_grandchildren_die_with_it(self):
         """`subprocess.run(timeout=…)` kills only the direct child. This suite starts
         real tmux servers, and one left behind by a timed-out mutation would be inherited
-        by the next mutation and reported as ITS failure."""
+        by the next mutation and reported as ITS failure.
+
+        Polled rather than asserted once: SIGKILL is delivered synchronously but the
+        orphan is reaped by init a moment later, and until it is reaped its pid still
+        answers `kill(pid, 0)`. Asserting immediately made this case flaky on CI — it
+        failed on 3.11 in one run and passed in the next at the same commit, which is
+        exactly the kind of red this whole tool exists to stop anybody trusting.
+        """
         self.box.run(["tests.test_hang"], timeout=5)
         pid = int((self.tmp / "kid.pid").read_text())
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        self.fail(f"pid {pid} outlived the run it was started from")
 
     def test_killing_a_group_that_has_already_gone_is_not_an_error(self):
         proc = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
         proc.wait()
         sweep._kill_group(proc)
+
+
+class ACouldNotMeasureIsNotAPin(unittest.TestCase):
+    """The distinction this tool got wrong and had to be taught.
+
+    Measured, on a box under a load average of 100 with two other agents on it: two of
+    #553's six known-unpinned guards came back "pinned" with `ran=0` — the full suite had
+    run past its timeout and been killed. No test failed. The harness had turned machine
+    load into evidence, and the evidence it manufactured was the one verdict that
+    certifies a guard as tested and is never revisited. Both were confirmed by hand
+    afterwards as genuine survivors.
+    """
+
+    def test_a_timeout_is_marked_inconclusive_and_not_merely_red(self):
+        tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-incon-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        (tmp / "tests").mkdir()
+        (tmp / "tests" / "__init__.py").write_text("")
+        (tmp / "tests" / "test_slow.py").write_text(textwrap.dedent("""
+            import time, unittest
+            class T(unittest.TestCase):
+                def test_slow(self):
+                    time.sleep(120)
+        """))
+        box = object.__new__(sweep.Sandbox)
+        box.path, box._pristine = tmp, {}
+        outcome = box.run(["tests.test_slow"], timeout=4)
+        self.assertFalse(outcome.green)
+        self.assertFalse(outcome.conclusive)
+
+    def test_a_real_failure_is_conclusive(self):
+        self.assertTrue(sweep._verdict(
+            _Completed(1, "Ran 3 tests in 1s\n\nFAILED (failures=1)\n")).conclusive)
+
+    def test_a_mutation_the_machine_could_not_measure_twice_has_no_verdict(self):
+        """Not pinned. "I could not look" must never render as "nothing to see" — the same
+        distinction `plugincache.content_hash` keeps when it answers None rather than an
+        empty hash."""
+        box = _FullFlake(sweep.Outcome(False, 0, "timed out after 2400s", conclusive=False),
+                         sweep.Outcome(False, 0, "timed out after 2400s", conclusive=False))
+        verdict, _, _ = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "unresolved")
+
+    def test_a_timeout_that_does_not_repeat_is_decided_by_the_run_that_worked(self):
+        box = _FullFlake(sweep.Outcome(False, 0, "timed out", conclusive=False),
+                         sweep.Outcome(True, 6000, "OK"))
+        verdict, _, _ = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "survived")
+
+    def test_an_unresolved_mutation_is_named_in_the_report_and_not_buried(self):
+        m = sweep.Mutation(path="charter/frame/layout.py", line=298, end_line=298,
+                           operator="collapse-ifexp", question="?",
+                           before="size.n if isinstance(size, Fixed) else 1",
+                           after="size.n", symbol="_policy_cells")
+        r = sweep.Result(m, "unresolved", sweep.Outcome(True, 45, "OK"),
+                         sweep.Outcome(False, 0, "timed out after 2400s", conclusive=False),
+                         [])
+        text = sweep.report([r], Path("."), "abc", "def", None, 1.0)
+        self.assertIn("UNRESOLVED        : 1", text)
+        self.assertIn("charter/frame/layout.py:298", text)
+        self.assertIn("timed out", text)
+        self.assertIn("emphatically not a pin", text)
 
 
 class TheVerdictIsReadFromTheRun(unittest.TestCase):
