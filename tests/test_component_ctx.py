@@ -137,6 +137,42 @@ class NoEscapeHatches(unittest.TestCase):
         self.assertEqual(set(ctx.SERVES), set(component.NEEDS))
 
 
+class TheVocabularyIsLookedUpBesideTheClass(unittest.TestCase):
+    """Which contract a ctx answers over is registered beside its class, never ON it.
+
+    The first cut of the second contract (`frame.action.ActionCtx`) put the table on the
+    ctx class as four underscore-prefixed attributes. `type(ctx)._serves["vault"]` is a
+    callable that reads this plane's vault registry and ignores the snapshot handed to
+    it, so an action that declared NOTHING reached the whole inventory straight off its
+    own ctx's class — and every assertion about the attribute set above missed it,
+    because all of them filter names starting with ``_``. `frame.ctx.declare` and
+    :data:`frame.ctx._CONTRACTS` are the fix; `test_action_registry` proves the escape is
+    shut for the capability that touches the filesystem, and these two are the registry's
+    own guards, which nothing else exercises.
+    """
+
+    def test_a_ctx_class_that_declared_nothing_answers_over_its_base_s_contract(self):
+        """The walk up ``__mro__``, and why it is a walk rather than one lookup: `Ctx`'s
+        semantics are taken by subclassing, and a subclass that adds no vocabulary has to
+        speak its base's rather than not speak at all."""
+        class Quiet(ctx.Ctx):
+            pass
+
+        got = ctx.contract_of(Quiet({"fid": "f1"}))
+        self.assertIs(got, ctx.contract_of(_ctx_for()))
+        self.assertEqual(got.noun, "component")
+        self.assertEqual(Quiet({"fid": "f1"}).fid, "f1")
+
+    def test_a_ctx_class_nobody_declared_is_named_rather_than_answered_for(self):
+        """Falling back to `Ctx`'s contract would answer a stranger's class in charter's
+        words — a refusal naming ``needs`` for a thing that has no ``needs`` — and a bare
+        `KeyError` would name a dict instead of the mistake that produced it."""
+        with self.assertRaises(TypeError) as e:
+            ctx.contract_of(object())
+        self.assertIn("object", str(e.exception))
+        self.assertIn("declare", str(e.exception))
+
+
 class SlicesComeFromTheOneSnapshot(unittest.TestCase):
     def test_a_slice_carries_the_snapshot_s_own_content(self):
         c = _ctx_for(needs=("repos", "todos"))

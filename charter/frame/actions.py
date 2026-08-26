@@ -116,14 +116,24 @@ class Invocation:
     SO FAR, and while :attr:`running` they mean "nothing yet" rather than "nothing". A
     caller that renders this renders the present state of the work, which is the whole
     point of the surface being non-blocking.
+
+    **It carries its own in-flight token**, so the record it retires is the record it
+    started. Two invocations of one action are two threads of one process; a `finish`
+    that picked by name and kind would have both of them selecting the identical file,
+    and the loser's record would outlive its work by a day (`inflight.finish`).
     """
 
-    def __init__(self, aid: str, *, started: bool, reason: str = "") -> None:
+    def __init__(self, aid: str, *, started: bool, reason: str = "",
+                 token: str | None = None) -> None:
         self.id = aid
         #: Whether the work was started. False for an action that refused to be run —
         #: the reason is on :attr:`reason`, and it is the one the listing would have shown.
         self.started = started
         self.reason = reason
+        #: What `inflight.start` answered, or ``None`` when it wrote nothing. Never a
+        #: fallback to the name-and-kind search: no record of this invocation's exists,
+        #: so a search would retire a CONCURRENT invocation's — the same leak, inverted.
+        self._token = token
         self._thread: threading.Thread | None = None
         self._note = ""
         self._error = ""
@@ -191,7 +201,8 @@ class Invocation:
         except BaseException as exc:
             self._error = _because(exc)
         finally:
-            inflight.finish(self.id, kind=inflight.ACTION)
+            if self._token is not None:
+                inflight.finish(self.id, kind=inflight.ACTION, token=self._token)
 
 
 class ActionRegistry:
@@ -341,14 +352,15 @@ class ActionRegistry:
 
         The record goes into `inflight` BEFORE the thread starts, so the frame's spinner
         cannot miss a fast action: a record written from inside the worker could land after
-        the work was already over.
+        the work was already over. **Its token goes onto the receipt**, which is the only
+        thing that knows which of several concurrent records is this invocation's.
         """
         a = self.get(aid)
         available, reason, ctx = self._check(a, fid=fid, snapshot=snapshot)
         if not available:
             return Invocation(aid, started=False, reason=reason)
-        inv = Invocation(aid, started=True)
-        inflight.start(aid, kind=inflight.ACTION)
+        inv = Invocation(aid, started=True,
+                         token=inflight.start(aid, kind=inflight.ACTION))
         inv._begin(a, ctx)
         return inv
 

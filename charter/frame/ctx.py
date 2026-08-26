@@ -29,6 +29,7 @@ discovered in a profile.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -68,6 +69,53 @@ SERVES = {
 GEOMETRY = ("width", "height", "fid")
 
 
+@dataclass(frozen=True)
+class Contract:
+    """One ctx class's vocabulary: what it serves, and what it calls its holder.
+
+    A value rather than four class attributes, because it is looked up as a unit and
+    because a second contract must differ from the first in all four or in none.
+    """
+
+    #: name → how that name is cut out of the one snapshot.
+    serves: Mapping[str, Any]
+    #: The names served whatever was declared.
+    geometry: tuple[str, ...]
+    #: What a refusal calls the thing holding this ctx.
+    noun: str
+    #: The field it declares what it is handed in.
+    declared: str
+
+
+#: class → its :class:`Contract`. **Module state, and that is the whole point** — see
+#: :class:`Ctx`. Nothing reachable from a ctx object reaches this dict: a method's
+#: ``__globals__`` does, but that is this module, and reaching a module is ``import``,
+#: which this contract has never claimed to prevent.
+_CONTRACTS: dict[type, Contract] = {}
+
+
+def declare(cls: type, contract: Contract) -> Contract:
+    """Register *cls*'s vocabulary — the only way a ctx class gets one."""
+    _CONTRACTS[cls] = contract
+    return contract
+
+
+def contract_of(obj) -> Contract:
+    """The contract *obj*'s class was declared with, or its nearest base's.
+
+    The walk up ``__mro__`` is what lets `frame.action.ActionCtx` inherit `Ctx`'s
+    behaviour while declaring its own vocabulary, and a class nobody declared is a
+    charter bug named at the moment it would otherwise answer with somebody else's words.
+    """
+    for cls in type(obj).__mro__:
+        got = _CONTRACTS.get(cls)
+        if got is not None:
+            return got
+    raise TypeError(
+        f"{type(obj).__name__} is a ctx class nobody declared a contract for — "
+        f"call frame.ctx.declare() beside the class")
+
+
 class Ctx:
     """One repaint's worth of what one component may read.
 
@@ -77,22 +125,21 @@ class Ctx:
     widening of what a stranger's code may reach, and it should cost a test change and
     the conversation that goes with it.
 
-    **The four class attributes below are what a second contract changes.** An action is
-    handed an object with exactly these semantics — absent rather than disabled, read-only,
-    an exact attribute set — over a different vocabulary (`frame.action.ActionCtx`), and
-    writing that twice would be two answers to "what may a stranger's code reach". Each is
-    underscore-prefixed because the exactness assertion reads ``dir()``, and a public class
-    attribute would BE an attribute a component can reach.
-    """
+    **A second contract changes the vocabulary, not the semantics.** An action is handed
+    an object with exactly these — absent rather than disabled, read-only, an exact
+    attribute set — over a different vocabulary (`frame.action.ActionCtx`), and writing
+    that twice would be two answers to "what may a stranger's code reach".
 
-    #: name → how that name is cut out of the one snapshot.
-    _serves = SERVES
-    #: The names served whatever was declared.
-    _geometry = GEOMETRY
-    #: What a refusal calls the thing holding this ctx.
-    _noun = "component"
-    #: The field it declares what it is handed in.
-    _declared = "needs"
+    **That vocabulary is not ON this class, and that is a fix rather than a style.** It
+    was four underscore-prefixed class attributes, which looked private and were nothing
+    of the sort: ``type(ctx)._serves["vault"]`` is a callable that reads the vault
+    registry and IGNORES the snapshot handed to it, so an action that declared nothing at
+    all reached the plane's whole vault inventory — the names, and every key name in each
+    — straight off its own ctx's class. Every test that asserts the attribute set exactly
+    filtered names starting with ``_`` and saw nothing wrong. So the table lives in
+    :data:`_CONTRACTS`, keyed by class, and `dir(ctx)`, `vars(ctx)` and every class in
+    ``type(ctx).__mro__`` now carry no callable of charter's at all.
+    """
 
     def __init__(self, fields: Mapping[str, Any]) -> None:
         # Straight into ``__dict__``, because ``__setattr__`` below refuses everything.
@@ -106,15 +153,16 @@ class Ctx:
         all. Answering both with a bare ``AttributeError`` would leave a provider author
         guessing which of the two they had made.
         """
+        c = contract_of(self)
         shown = contain.one_line(repr(name))
-        if name in self._serves:
+        if name in c.serves:
             raise AttributeError(
-                f"this {self._noun} did not declare {name}: add it to the "
-                f"{self._noun}'s {self._declared} to be handed it")
+                f"this {c.noun} did not declare {name}: add it to the "
+                f"{c.noun}'s {c.declared} to be handed it")
         raise AttributeError(
-            f"a {self._noun} ctx has no {shown} — charter serves "
-            f"{', '.join(self._geometry)} and the declared {self._declared} "
-            f"({', '.join(self._serves)})")
+            f"a {c.noun} ctx has no {shown} — charter serves "
+            f"{', '.join(c.geometry)} and the declared {c.declared} "
+            f"({', '.join(c.serves)})")
 
     def __setattr__(self, name: str, value: Any) -> None:
         """A ctx is what this repaint was handed, not a place to keep state.
@@ -123,13 +171,17 @@ class Ctx:
         be a channel between them that nothing declared and nothing bounds.
         """
         raise AttributeError(
-            f"a {self._noun} ctx is read-only; {contain.one_line(repr(name))} cannot "
-            f"be set")
+            f"a {contract_of(self).noun} ctx is read-only; "
+            f"{contain.one_line(repr(name))} cannot be set")
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError(
-            f"a {self._noun} ctx is read-only; {contain.one_line(repr(name))} cannot be "
-            f"removed")
+            f"a {contract_of(self).noun} ctx is read-only; "
+            f"{contain.one_line(repr(name))} cannot be removed")
+
+
+declare(Ctx, Contract(serves=SERVES, geometry=GEOMETRY, noun="component",
+                      declared="needs"))
 
 
 def build(needs, *, width: int, height: int, fid: str, snapshot: Mapping) -> Ctx:

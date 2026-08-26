@@ -231,12 +231,18 @@ class ActionCtx(_ctx.Ctx):
     Absent rather than disabled, read-only, and an exactly-assertable attribute set — all
     inherited, because they are the same property, and two implementations of "what may a
     stranger's code reach" is the shape #547 is about.
+
+    **Its vocabulary is declared beside it, not on it.** :data:`SERVES` holds `_vault`,
+    which reads the vault registry and ignores the snapshot it is handed; as a class
+    attribute — even an underscore-prefixed one — it was a live route from the ctx of an
+    action that declared NOTHING to this plane's whole vault inventory, past every test
+    that asserts the attribute set exactly. `frame.ctx.declare` keeps the table off the
+    class; `NoRouteFromAnActionToAVaultValue` walks the class as well as the object.
     """
 
-    _serves = SERVES
-    _geometry = IDENTITY
-    _noun = "action"
-    _declared = "touches"
+
+_ctx.declare(ActionCtx, _ctx.Contract(serves=SERVES, geometry=IDENTITY, noun="action",
+                                      declared="touches"))
 
 
 def build(touches, *, fid: str, snapshot: Mapping) -> ActionCtx:

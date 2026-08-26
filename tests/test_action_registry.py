@@ -35,11 +35,14 @@ newline is what a committed value reaching an overlay row costs).
 
 from __future__ import annotations
 
+import itertools
 import threading
 import unittest
 from collections.abc import Mapping
+from typing import Any
+from unittest import mock
 
-from charter import inflight
+from charter import config, inflight
 from charter.frame import action, actions
 from charter.secrets import registry as vaults
 from tests._isolation import PersonaIso
@@ -111,6 +114,108 @@ def _reachable(obj, depth: int = 8) -> list[str]:
             walk(getattr(o, name, None), d - 1)
 
     walk(obj, depth)
+    return out
+
+
+#: Names never followed by :func:`_handed`. ``__globals__`` is a function's defining
+#: MODULE, and reaching a module is ``import`` — which `action.py` says in plain words it
+#: does not prevent. Following it would make every walk below find everything in charter
+#: and assert nothing about what was handed over.
+_NOT_HANDED_OVER = ("__globals__", "__builtins__")
+
+
+def _handed(obj, depth: int = 6) -> list:
+    """Every OBJECT charter handed over with *obj* — its class and that class's bases too.
+
+    `_reachable` walks the instance and collects strings; this walks the type as well and
+    collects objects, because the type is the route the first cut of this contract left
+    wide open. The vocabulary table sat on the ctx class as ``_serves``, so
+    ``type(ctx)._serves["vault"]`` was a callable that reads the vault registry and
+    ignores its argument — reachable from the ctx of an action that declared NOTHING, and
+    invisible to all three assertions about the attribute set, because every one of them
+    filtered names starting with ``_``. A walk that stops at the instance cannot see that;
+    this one has to.
+    """
+    from types import ModuleType
+
+    seen: dict[int, Any] = {}
+
+    def charters(o) -> bool:
+        """Is *o* something charter wrote? Only charter's own classes are opened up
+        attribute by attribute, and only charter's own class dicts are read. `object`
+        and `dict` are shared, immutable and cannot be where charter left a table; going
+        through them costs minutes and finds nothing."""
+        mod = getattr(o if isinstance(o, type) else type(o), "__module__", "") or ""
+        return mod.split(".")[0] == "charter"
+
+    def classes(o):
+        yield from type(o).__mro__
+        if isinstance(o, type):
+            yield from o.__mro__
+
+    def walk(o, d):
+        if d < 0 or o is None or id(o) in seen or isinstance(o, ModuleType):
+            return
+        seen[id(o)] = o
+        if isinstance(o, (str, bytes, bytearray, int, float, bool)):
+            return
+        if isinstance(o, Mapping):
+            for k, v in list(o.items()):
+                walk(k, d - 1)
+                walk(v, d - 1)
+            return
+        if isinstance(o, (list, tuple, set, frozenset)):
+            for item in list(o):
+                walk(item, d - 1)
+            return
+        # `isinstance` rather than truthiness: on a CLASS these names answer the
+        # descriptor rather than a value, and a descriptor is not a route.
+        closure = getattr(o, "__closure__", None)
+        for cell in closure if isinstance(closure, tuple) else ():
+            try:
+                walk(cell.cell_contents, d - 1)
+            except ValueError:          # an empty cell, mid-definition
+                pass
+        for name in ("__self__", "__func__", "__wrapped__", "__dict__", "__defaults__"):
+            walk(getattr(o, name, None), d - 1)
+        for cls in classes(o):
+            if charters(cls):
+                walk(cls, d - 1)
+                walk(dict(vars(cls)), d - 1)
+        if charters(o):
+            for name in dir(o):
+                if name in _NOT_HANDED_OVER:
+                    continue
+                try:
+                    walk(getattr(o, name), d - 1)
+                except Exception:       # an attribute that refuses is not a route
+                    pass
+
+    walk(obj, depth)
+    return list(seen.values())
+
+
+def _inventories(c) -> list:
+    """Every `VaultInventory` an action holding *c* can get out of it, by any route.
+
+    Two halves, like the class docstring's two: what is simply THERE (`_handed`), and
+    what anything found there ANSWERS when called. The argument sets are the ones the
+    escape hatch actually needed — ``_serves["vault"]`` takes a snapshot and ignores it,
+    so ``None`` and ``{}`` are enough to make it hand one over.
+    """
+    out = []
+    for o in _handed(c):
+        if isinstance(o, action.VaultInventory):
+            out.append(o)
+        if not callable(o):
+            continue
+        for args in ((), (None,), ({},)):
+            try:
+                got = o(*args)
+            except Exception:           # a wrong-arity guess is not a finding
+                continue
+            out.extend(x for x in _handed(got, depth=3)
+                       if isinstance(x, action.VaultInventory))
     return out
 
 
@@ -410,6 +515,113 @@ class TheCallerIsNeverBlocked(PersonaIso):
         self.assertNotIn("\n", inv.note)
 
 
+class TwoInvocationsOfOneActionAreTwoRecords(PersonaIso):
+    """Every invocation retires the record IT started, and the palette is why.
+
+    `invoke` puts the work on a thread and returns, so one process can hold several runs
+    of one action at once — which no earlier `inflight` caller ever did: a dispatch, a
+    clone and a `gl-refresh` each finish in the process that started them. `inflight.finish`
+    picks a record by name, kind and age, and two threads picking together pick the SAME
+    file: one unlink wins and the loser's record survives its work by a day, drawn as
+    ``⏳ 1 running`` for the first half hour (`frame/panel.py`, `frame/slots.py`, both
+    reading `kind=None`). Two keypresses in the palette is all it takes.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.reg = actions.ActionRegistry()
+
+    def _records(self) -> list[str]:
+        return sorted(p.stem
+                      for p in (config.STATE_DIR / "dispatch-inflight").glob("*.json"))
+
+    def _first_call_blocks(self, gate, entered):
+        """An action whose FIRST invocation waits and whose second returns at once.
+
+        The ordering is not a hope: the second `invoke` is not made until `entered` says
+        the first is already inside `run`, so which call is which is decided rather than
+        raced. That matters because the property under test is about WHICH record went.
+        """
+        turn = itertools.count()
+
+        def run(ctx):
+            if next(turn) == 0:
+                entered.set()
+                gate.wait(timeout=BLOCKED)
+                return "the slow one"
+            return "the quick one"
+        return run
+
+    def test_an_invocation_retires_its_own_record_and_not_the_one_still_running(self):
+        """The measurement, without a race in the test itself. Picking takes the oldest
+        still-running record, and the second invocation's own record is not it — so a
+        `finish` that picks clears the work that is STILL GOING and leaves the finished
+        one behind, which is the leak with its sign flipped."""
+        gate, entered = threading.Event(), threading.Event()
+        self.addCleanup(gate.set)
+        self.reg.register(_act("twice", run=self._first_call_blocks(gate, entered)))
+
+        slow = self.reg.invoke("twice", fid="fr-1", snapshot=_snapshot())
+        self.assertTrue(entered.wait(SOON), "the first invocation never started")
+        started_first = self._records()
+        self.assertEqual(len(started_first), 1, "the first record was never written")
+
+        quick = self.reg.invoke("twice", fid="fr-1", snapshot=_snapshot())
+        self.assertTrue(quick.join(SOON))
+        self.assertEqual(quick.note, "the quick one")
+        self.assertEqual(self._records(), started_first,
+                         "the finished invocation retired the running one's record")
+
+        gate.set()
+        self.assertTrue(slow.join(SOON))
+        self.assertEqual(self._records(), [], "the running one's record outlived it")
+
+    def test_invocations_that_finish_together_leave_nothing_behind(self):
+        """The shape as an operator meets it: several runs of one action overlapping, all
+        ending at once. Barriers rather than sleeps, so the workers are provably inside
+        `run` when the count is taken and provably leave it together — which is the window
+        a picking `finish` loses records in."""
+        n = 8
+        arrived = threading.Barrier(n + 1, timeout=BLOCKED)
+        release = threading.Barrier(n + 1, timeout=BLOCKED)
+        self.addCleanup(release.abort)
+        self.addCleanup(arrived.abort)
+        self.reg.register(_act("swarm", run=lambda ctx: (arrived.wait(),
+                                                         release.wait())))
+
+        invs = [self.reg.invoke("swarm", fid="fr-1", snapshot=_snapshot())
+                for _ in range(n)]
+        arrived.wait()
+        self.assertEqual(len(self._records()), n, "one record per invocation, in flight")
+        release.wait()
+        for inv in invs:
+            self.assertTrue(inv.join(SOON))
+            self.assertEqual(inv.error, "")
+        self.assertEqual(self._records(), [], "a record outlived the work it described")
+        self.assertEqual(inflight.live(kind=inflight.ACTION), [])
+
+    def test_an_invocation_whose_record_was_never_written_retires_nobody_elses(self):
+        """`inflight.start` answers ``None`` when it wrote nothing — an unwritable state
+        dir, most likely. There is then no record of this invocation to retire, and a
+        fallback to the name-and-kind search would delete a CONCURRENT invocation's: the
+        same leak, arriving from the other direction and on a machine already unwell."""
+        gate, entered = threading.Event(), threading.Event()
+        self.addCleanup(gate.set)
+        self.reg.register(_act("twice", run=self._first_call_blocks(gate, entered)))
+
+        slow = self.reg.invoke("twice", fid="fr-1", snapshot=_snapshot())
+        self.assertTrue(entered.wait(SOON), "the first invocation never started")
+        started_first = self._records()
+
+        with mock.patch.object(inflight, "start", return_value=None):
+            quick = self.reg.invoke("twice", fid="fr-1", snapshot=_snapshot())
+        self.assertTrue(quick.join(SOON))
+        self.assertEqual(self._records(), started_first,
+                         "an invocation that recorded nothing retired somebody else's")
+        gate.set()
+        self.assertTrue(slow.join(SOON))
+
+
 class NoRouteFromAnActionToAVaultValue(PersonaIso):
     """§4d: an action reaching a vault goes THROUGH the guards, never around them.
 
@@ -468,6 +680,38 @@ class NoRouteFromAnActionToAVaultValue(PersonaIso):
         with self.assertRaises(AttributeError) as e:
             c.vault
         self.assertIn("touches", str(e.exception))
+
+    def test_the_walk_finds_an_inventory_when_one_was_declared(self):
+        """The control on the two below: `_handed` really does reach an inventory and
+        recognise it, so a green there is a guard holding rather than a probe that never
+        looked."""
+        self.assertTrue(_inventories(self._ctx(touches=("vault",))))
+
+    def test_an_undeclared_action_cannot_obtain_an_inventory_BY_ANY_ROUTE(self):
+        """The missing half of the test above it. "Absent, not disabled" is a claim about
+        what an action can OBTAIN, and `c.vault` raising is only a claim about one name.
+
+        The first cut of this failed exactly here: the ctx class carried ``_serves``, and
+        ``type(c)._serves["vault"](None)`` answered a live inventory of this plane — every
+        vault name, and every key name in each — to an action whose whole declaration was
+        ``touches=()``. `assertEqual(set(vars(c)), {"fid"})` was true the entire time.
+        """
+        self.assertEqual(_inventories(self._ctx(touches=())), [])
+
+    def test_no_ctx_class_carries_anything_of_charters_beyond_its_behaviour(self):
+        """The same property said the short way, and the one that will still be readable
+        in a year: a ctx class holds dunders and nothing else.
+
+        `Ctx` says "no public methods, deliberately" and three tests assert the attribute
+        set exactly — but all of them read `dir()` and drop names starting with ``_``, so
+        a table parked on the class as ``_serves`` satisfied every one of them. The filter
+        here is the DUNDER, which is behaviour Python owns, rather than the underscore,
+        which is a convention a component author never agreed to.
+        """
+        for cls in type(self._ctx(touches=())).__mro__:
+            carried = {n for n in vars(cls)
+                       if not (n.startswith("__") and n.endswith("__"))}
+            self.assertEqual(carried, set(), f"{cls.__name__} carries {carried}")
 
     def test_the_inventory_keeps_no_provider_between_calls(self):
         """A cached provider is how the value would arrive without anybody writing a
