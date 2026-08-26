@@ -69,5 +69,36 @@ they are actually written in. One of them ran `charter init` against the operato
 `root.find_root` grew an optional `env=` for it, so the guard asks the real resolver instead
 of keeping a private copy of the walk that would drift away from it.
 
+## And the guard stopped keeping its own copy of "what is a charter"
+
+The tripwire's first two rounds each closed a list of spellings, and each time a new list
+turned up. Measured against a guarded plane, all of these ran, four of them starting a real
+`charter docs` — which regenerates a plane's topology:
+
+```
+["nice", "charter", "docs"]                      ["CHARTER", "docs"]
+["nohup", "charter", "docs"]                     ["/bin/bash", "-lc", "charter docs"]
+["env", "-S", "<python> -c 'from charter import config; print(config.ROOT)'"]
+```
+
+The last one printed the guarded plane.
+
+None of these is exotic. `-lc` is how a login shell is spelled; `CHARTER` is the same binary
+on the filesystems this runs on; `nice` is a wrapper. And charter already knew all three:
+its Bash tool-gate denies `nice cat <vault>`, `CHARTER secret get … --reveal` and `env -S
+'cat <vault>'`, with tests pinning each. The test harness had grown a **second, weaker copy**
+of the same question, and the two had drifted.
+
+So there is one copy now. `tests/_planeguard.py` calls `charter/hooks.py`'s own reader for
+what a wrapper run means — its wrapper table, each wrapper's option arity, `env -S`, the
+case fold, the pre-rename `edm` binary — and adds only the questions production deliberately
+does not ask: a shell's `-c` string, Python source, a script file, and an interpreter
+resolved to what it really is rather than what the symlink is called. A structural test
+fails if the tables drift apart again.
+
+Doing that turned up a real defect in the production guard, filed as #547 rather than
+patched around here: `env -Sfoo=1 cat .charter/vaults/x.json` is currently ALLOWED by the
+Bash tool-gate, because the packed command is split at the wrong `=`.
+
 This reaches you as a correctness fix in `charter gl-refresh`; the rest only ever mattered
 if you run charter's own test suite. Nothing to adopt — upgrading is the whole of it.

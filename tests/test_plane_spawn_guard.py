@@ -17,6 +17,7 @@ failure mode this repo has shipped before.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import config, root
+from charter import config, hooks, root
 from tests import _envguard, _planeguard
 
 
@@ -55,6 +56,14 @@ class WhatIsGuarded(unittest.TestCase):
         """
         _envguard.unset(root.ENV_VAR)
         self.assertIn(os.path.abspath(str(root.find_root())), _planeguard._REAL_ROOT)
+
+
+#: A program that exists, runs nothing and exits non-zero — the stand-in interpreter for
+#: the ``-m charter`` cases, so that a guard which failed to refuse would leave a failed
+#: exit rather than run something. Looked up rather than written out: there is no
+#: ``/bin/false`` on macOS, so the literal turned a regression in those cases into a
+#: `FileNotFoundError` naming a path instead of a failure naming the guard.
+_FALSE = shutil.which("false") or "/bin/false"
 
 
 class _FakePlane(unittest.TestCase):
@@ -110,11 +119,11 @@ class ARefusedSpawn(_FakePlane):
     def test_a_dash_m_charter_argv_is_recognised_too(self):
         """`util.self_relaunch_argv`'s spelling — the one every self-relaunch site uses.
 
-        The interpreter is `/bin/false` so that a guard which failed to refuse would leave
-        a non-zero exit rather than run anything.
+        The interpreter is :data:`_FALSE` so that a guard which failed to refuse would
+        leave a non-zero exit rather than run anything.
         """
         with self.assertRaises(_planeguard.RealPlaneSpawn):
-            subprocess.Popen(["/bin/false", "-P", "-m", "charter", "gl-refresh"],
+            subprocess.Popen([_FALSE, "-P", "-m", "charter", "gl-refresh"],
                              cwd=self.real,
                              env={k: v for k, v in os.environ.items()
                                   if k != root.ENV_VAR})
@@ -190,12 +199,36 @@ class EverySpellingThatReachesCharter(_FakePlane):
         self.stranded = {k: v for k, v in os.environ.items() if k != root.ENV_VAR}
 
     def refuse(self, args, **kw):
-        with self.assertRaises(_planeguard.RealPlaneSpawn) as caught:
-            subprocess.Popen(args, cwd=self.real, env=self.stranded, **kw).wait()
-        self.assertFalse(self.canary.exists(),
-                         "refused after delegating — the child ran anyway")
-        self.assertFalse(self.marker.exists())
-        return str(caught.exception)
+        """Assert *args* is refused — and stay finite if it is not.
+
+        Two things this does NOT do with an `assertRaises` block, both of them lessons from
+        the suite's own open hangs (#545, #546). It never `wait()`s on a child it did not
+        expect to exist: a regression that lets `watch -n 1 charter` through would otherwise
+        park the whole run forever on a command that by definition never exits. And it hands
+        every child ``/dev/null`` for stdin, so a `su` that reaches a real terminal asks
+        nobody for a password. A guard's own test may not be the thing that makes a red run
+        impossible to get.
+
+        Evidence is cleared FIRST, because several of these run as `subTest`s inside one
+        case and share one setUp: a marker left by an earlier spelling would fail every
+        later one on evidence that is not about it, turning one red case into seven and
+        hiding which spelling actually got through.
+        """
+        for evidence in (self.canary, self.marker):
+            if evidence.exists():
+                evidence.unlink()
+        kw.setdefault("stdin", subprocess.DEVNULL)
+        try:
+            child = subprocess.Popen(args, cwd=self.real, env=self.stranded, **kw)
+        except _planeguard.RealPlaneSpawn as refused:
+            self.assertFalse(self.canary.exists(),
+                             "refused after delegating — the child ran anyway")
+            self.assertFalse(self.marker.exists())
+            return str(refused)
+        child.kill()
+        child.wait()
+        self.fail(f"not refused: {args!r} spawned a charter that would resolve "
+                  f"{self.real} — the guarded plane")
 
     def test_a_python_dash_c_that_imports_charter(self):
         """The shape that was live in the suite. The write comes FIRST, so a guard that
@@ -247,10 +280,196 @@ class EverySpellingThatReachesCharter(_FakePlane):
 
     def test_a_wrapper_that_takes_a_command_as_its_arguments(self):
         """`nice` rather than `sudo`: if this ever stops being refused the fallout is the
-        fake charter running, not a password prompt on a real machine. `nice` also has an
-        argument grammar this deliberately does not follow — the word appearing anywhere
-        after a wrapper is what refuses."""
+        fake charter running, not a password prompt on a real machine.
+
+        The ARGV form is the one that matters and it is `test_a_wrapper_in_an_argv…`
+        below, not this one. This case wrote only the shell-string spelling for a round,
+        and the shell string is the form that already had a wrapper clause — so the plain
+        ``["nice", "charter", "docs"]`` went unexercised and ran.
+        """
         self.refuse(["/bin/sh", "-c", f"nice {self.fake} --version"])
+
+    def test_a_wrapper_in_an_argv_is_followed_to_the_program(self):
+        """The plainest spelling there is, and it RAN: ``["nice", "charter", "docs"]``.
+
+        `_cmd_launches_charter` read `nice` as "a command called nice" and stopped. The
+        wrapper follow existed only inside shell STRINGS, while `_COMMAND_WRAPPERS`' own
+        docstring justified itself with ``sudo charter doctor`` — an argv — and the case
+        above pinned only the string form. A reason that names a shape the code cannot see
+        is the shape this whole round was sent back over.
+
+        Each of these is now answered by `charter.hooks._split_env_chdir`, production's own
+        reader, including each wrapper's own option arity: `nice -n 10`, `timeout`'s bare
+        duration, `xargs -n1`, `stdbuf -o0` glued, and `env -i`, which is the flag a flat
+        "wrappers take a value" table gets wrong.
+        """
+        for argv in (["nice", str(self.fake), "--version"],
+                     ["nice", "-n", "10", str(self.fake), "--version"],
+                     ["nohup", str(self.fake), "--version"],
+                     ["env", "-i", str(self.fake), "--version"],
+                     ["stdbuf", "-o0", str(self.fake), "--version"],
+                     ["timeout", "5", str(self.fake), "--version"],
+                     ["timeout", "--preserve-status", "5", str(self.fake)],
+                     ["xargs", "-n1", str(self.fake)],
+                     ["nice", "-n", "10", "nohup", str(self.fake), "--version"]):
+            with self.subTest(argv=argv):
+                self.refuse(argv)
+
+    def test_a_wrapper_whose_grammar_cannot_be_followed_refuses_on_the_word(self):
+        """`flock <file> <cmd>` and `watch -n1 <cmd>` put a positional of their own in
+        front of the program, so no reader that names "the program" can name charter here.
+
+        These are the reason the wrapper clause survives alongside the production split
+        rather than being replaced by it: where the program cannot be named, the word
+        appearing ANYWHERE after the wrapper is what refuses. `su -c` is here for the same
+        reason `eval` is — its argument is a command STRING, which production's Bash guard
+        states as a limit it does not follow.
+        """
+        for argv in (["flock", str(self.elsewhere / "lock"), str(self.fake), "--version"],
+                     ["watch", "-n", "1", str(self.fake), "--version"],
+                     ["su", "-c", f"{self.fake} --version"]):
+            with self.subTest(argv=argv):
+                self.refuse(argv)
+
+    def test_a_bundled_short_option_reaches_a_shells_command_string(self):
+        """``bash -lc 'charter docs'`` is what a login shell is SPELLED, and it ran.
+
+        `_python_launches_charter` already walked a bundle — that is how ``-Pmcharter`` was
+        caught — while the shell branch matched ``tok == "-c"`` and ``tok.startswith("-c")``
+        and saw none of `-lc`, `-ec`, `-xc`, `-ic`. One walk, `_bundled_option`, now serves
+        both. `-o pipefail` is in here because it is the shell short option that takes a
+        VALUE: a walk that read its value as more bundled letters would be the mirror of
+        the `env -i` mistake production's per-wrapper table exists to avoid.
+        """
+        for argv in (["/bin/bash", "-lc", f"{self.fake} --version"],
+                     ["/bin/sh", "-ec", f"{self.fake} --version"],
+                     ["/bin/sh", "-xc", f"{self.fake} --version"],
+                     ["/bin/sh", "-ic", f"{self.fake} --version"],
+                     ["/bin/sh", f"-c{self.fake} --version"],
+                     ["/bin/bash", "-o", "pipefail", "-c", f"{self.fake} --version"],
+                     ["/bin/bash", "--login", "-c", f"{self.fake} --version"]):
+            with self.subTest(argv=argv):
+                self.refuse(argv)
+
+    def test_env_split_string_is_not_a_way_through(self):
+        """`env -S '<cmd>'` packs a whole command into ONE token, and it printed the
+        guarded plane.
+
+        The old reader skipped `-S` as a value-taking option, which left an EMPTY argv —
+        and an empty argv was answered "not charter". Its own docstring had warned against
+        exactly that (*"a guard guessing at an unknown option's arity would start skipping
+        the command word itself"*) and then committed it on the one flag whose value IS the
+        command word. Production said the same thing and got it right
+        (`hooks._SPLIT_STRING_FLAGS`, pinned by
+        `test_guard_parsing.test_env_split_string_is_not_a_way_through`, whose name this
+        borrows deliberately), and that is the code this now calls.
+        """
+        for argv in (["env", "-S", f"{self.fake} --version"],
+                     ["env", f"-S{self.fake} --version"],
+                     ["env", f"--split-string={self.fake} --version"],
+                     ["env", "-S", f"nice {self.fake} --version"],
+                     ["env", "-S",
+                      f"{sys.executable} -c 'from charter import config; print(config)'"]):
+            with self.subTest(argv=argv):
+                self.refuse(argv)
+
+    def test_a_packed_command_that_itself_contains_an_equals_sign(self):
+        """``env -Sfoo=1 charter docs``, which reusing production's reader let through.
+
+        `hooks._split_env_chdir` reads the ``--split-string=`` spelling before the glued
+        ``-S…`` one, so it splits this at the FIRST ``=`` — the program becomes ``1`` and
+        the charter after it is never looked at. Reuse means inheriting that, so the
+        ORDERING is repaired on the way in (`_unpack_split_strings`) using production's own
+        flag names, and the repaired tokens go back to production's splitter.
+
+        The same input is a live bypass of charter's Bash tool-gate on `main` — measured:
+        ``env -Sfoo=1 cat .charter/vaults/x.json`` and ``env -Sfoo=1 charter secret get v k
+        --reveal --force`` are both ALLOWED there while the unwrapped commands are denied.
+        That is production's to fix (#547); this case is only about the harness not
+        shipping the same hole.
+        """
+        for argv in ([str(self.fake), "docs"],
+                     ["env", f"-Sfoo=1 {self.fake} docs"],
+                     ["env", "-Sfoo=1", str(self.fake), "docs"],
+                     ["env", f"--split-string=foo=1 {self.fake} docs"],
+                     ["/bin/sh", "-c", f"env -Sfoo=1 {self.fake} docs"]):
+            with self.subTest(argv=argv):
+                self.refuse(argv)
+
+    def test_the_name_glued_to_an_option_letter_still_reaches_the_lexer(self):
+        """``env -Scharter --version``, as a shell STRING, and it is the GATE that misses.
+
+        `-S` puts a word character immediately in front of the name, so the word test —
+        which exists to keep ``<checkout>/charter/sub`` from reading as a command — answers
+        "charter is not named here" about a string whose entire content is a charter
+        invocation, and the string is never lexed at all. A gate that can only cause misses
+        must not be the thing deciding: :data:`~tests._planeguard._CHARTER_MENTION` asks
+        for the name and nothing about its boundaries, and the word test still decides what
+        is a command once the lexer has run.
+        """
+        bindir = self.elsewhere / "onpath"
+        bindir.mkdir()
+        shutil.copy(self.fake, bindir / "charter")
+        (bindir / "charter").chmod(0o755)
+        self.stranded["PATH"] = f"{bindir}:{self.stranded.get('PATH', '')}"
+        self.refuse(["/bin/sh", "-c", "env -Scharter --version"])
+
+    def test_the_program_name_is_case_folded_too(self):
+        """``["CHARTER", "docs"]`` ran, against a guarded plane.
+
+        Same class as production's `test_the_program_name_is_case_folded_too`, and the same
+        one-line answer: on the filesystems this runs on `CHARTER` and `charter` are one
+        binary, so a guard that matches one casing has a Shift key for a bypass. The
+        harness guard was the last one in the tree still comparing
+        ``os.path.basename(parts[0]) == "charter"``.
+        """
+        upper = self.elsewhere / "CHARTER"
+        # On a case-INSENSITIVE filesystem this IS `self.fake`, written back unchanged —
+        # which is the whole point of the case: one file, two spellings, one binary.
+        upper.write_text(self.fake.read_text())
+        upper.chmod(0o755)
+        self.refuse([str(upper), "docs"])
+        self.refuse(["/bin/sh", "-c", f"{upper} docs"])
+        self.refuse([_FALSE, "-m", "CHARTER", "gl-refresh"])
+
+    def test_the_pre_rename_binary_is_charter_too(self):
+        """`edm` is charter's former name, and a machine that still has it on `PATH` has a
+        binary that resolves a plane. Production keeps it in `_CHARTER_PROGS` for exactly
+        that reason; this reads the same constant rather than deciding again."""
+        edm = self.elsewhere / "edm"
+        edm.write_text(self.fake.read_text())
+        edm.chmod(0o755)
+        self.refuse([str(edm), "docs"])
+        self.refuse(["nice", str(edm), "docs"])
+
+    def test_an_interpreter_is_what_it_resolves_to_not_what_it_is_called(self):
+        """``Popen([<symlink to python3>, "-c", "import charter"])`` ran.
+
+        The guard read the LINK's name, found neither `python` nor `sys.executable`'s
+        basename in it, and answered "not an interpreter". What the child execs is decided
+        by the kernel, not by the spelling: a path is followed to what is really there, a
+        RELATIVE path against the child's own cwd — `Popen` chdirs before it execs — and a
+        bare name along the child's own ``PATH``.
+        """
+        link = self.elsewhere / "notpython"
+        os.symlink(sys.executable, link)
+        self.refuse([str(link), "-c", "import charter"])
+
+        # relative: it has to live in the plane the child is given, because that is the
+        # directory the name is resolved against.
+        os.symlink(sys.executable, self.real / "notpython")
+        self.refuse(["./notpython", "-c", "import charter"])
+
+    def test_a_bare_name_is_looked_up_on_the_childs_own_path(self):
+        """``Popen(["charter", "--version"], env={"PATH": …})`` — the spelling charter's own
+        hooks use, with nothing but ``PATH`` deciding which binary runs."""
+        bindir = self.elsewhere / "bin"
+        bindir.mkdir()
+        shutil.copy(self.fake, bindir / "charter")
+        (bindir / "charter").chmod(0o755)
+        self.stranded["PATH"] = f"{bindir}:{self.stranded.get('PATH', '')}"
+        self.refuse(["charter", "--version"])
+        self.refuse(["/bin/sh", "-c", f"PATH={bindir}:$PATH charter --version"])
 
     def test_an_env_wrapper_in_front_of_the_binary(self):
         """``env -u X <charter>``. The ``-m charter`` adjacency below would answer the
@@ -314,7 +533,7 @@ class EverySpellingThatReachesCharter(_FakePlane):
 
     def test_an_env_wrapper_around_the_dash_m_spelling(self):
         """The suite's own gate is run as ``env -u CHARTER_SESSION_ID … python3 -m …``."""
-        self.refuse(["env", "-u", "NOTHING", "/bin/false", "-m", "charter", "gl-refresh"])
+        self.refuse(["env", "-u", "NOTHING", _FALSE, "-m", "charter", "gl-refresh"])
 
     def test_the_interpreter_is_named_by_executable_rather_than_argv(self):
         """``Popen(["x"], executable=".../charter")`` runs charter and says ``x``."""
@@ -397,6 +616,106 @@ class SpellingsThatAreNotASpawn(_FakePlane):
         # resolved spelling — the same two-spellings problem `_REAL_ROOT` carries.
         self.assertEqual(self.allow(["/bin/sh", "-c", f'pwd > "{self.ran}"']).strip(),
                          str(self.real.resolve()))
+
+
+class TheHarnessGuardIsNotASecondCopyOfProductions(unittest.TestCase):
+    """The finding this round closed was not "a spelling was missing". It was that the
+    harness guard held its OWN table of wrappers, its OWN `env` option arity and its OWN
+    case rule, and each of them was weaker than the one `charter/hooks.py` already had —
+    against inputs production denies and `tests/test_guard_parsing.py` already pins.
+
+    Measured: ``["nice", "charter", "docs"]``, ``["CHARTER", "docs"]`` and ``["env", "-S",
+    "<python> -c 'from charter import config; print(config.ROOT)'"]`` all ran against a
+    guarded plane, and the last printed it. `nice cat <vault>`, `CHARTER secret get …
+    --reveal` and `env -S 'cat <vault>'` are all denied by production.
+
+    So the cases below are not about a list of commands. They are the join: what production
+    can parse, this parses, because it is the same code. A second copy that starts drifting
+    fails here rather than in someone's plane.
+    """
+
+    def test_the_launcher_split_is_productions_own_reader(self):
+        """Not "behaves like" — IS. If someone reinstates a private walk, this catches it
+        by watching production's function get called."""
+        with mock.patch.object(hooks, "_split_env_chdir",
+                               wraps=hooks._split_env_chdir) as split:
+            _planeguard._launcher_argv(["nice", "charter", "docs"])
+        split.assert_called_once()
+
+    def test_every_wrapper_production_follows_is_followed_here(self):
+        """The whole of `hooks._WRAPPERS`, as an ARGV — the form that was unexercised.
+
+        A decision-function table rather than a spawn table on purpose: `sudo` and `su`
+        would prompt a real machine for a password, and the point being pinned is the
+        JOIN with production's constant, which no amount of spawning would show.
+        """
+        for wrapper in sorted(hooks._WRAPPERS):
+            with self.subTest(wrapper=wrapper):
+                self.assertTrue(
+                    _planeguard._cmd_launches_charter([wrapper, "charter", "docs"]),
+                    f"`{wrapper} charter docs` is a charter spawn to charter's own Bash "
+                    f"guard and not to this one — the two tables have drifted")
+
+    def test_the_wrappers_this_adds_are_the_ones_production_has_no_use_for(self):
+        """An addition is fine; a re-statement is not. Whatever is here beyond production's
+        set has to be a wrapper whose argument grammar cannot be followed to a program —
+        which is why they are refused on the WORD instead."""
+        self.assertLessEqual(hooks._WRAPPERS, _planeguard._COMMAND_WRAPPERS)
+        self.assertEqual(_planeguard._COMMAND_WRAPPERS - hooks._WRAPPERS,
+                         {"eval", "su", "watch", "script", "flock"})
+
+    def test_the_charter_word_is_built_from_productions_names(self):
+        """Including `edm`, charter's pre-rename binary, and folded — the two things
+        `hooks._is_charter` and `_VAULT_PATH_RE` were already folded for."""
+        for name in hooks._CHARTER_PROGS:
+            with self.subTest(name=name):
+                self.assertTrue(_planeguard._CHARTER_WORD.search(f"{name} --version"))
+                self.assertTrue(
+                    _planeguard._CHARTER_WORD.search(f"{name.upper()} --version"))
+        # …and still not a path that merely contains the word, which is the shape the
+        # frame's tmux fixtures spawn by the dozen.
+        self.assertFalse(
+            _planeguard._CHARTER_WORD.search("cd ~/IdeaProjects/charter/tests"))
+
+    #: `test_guard_parsing`'s own wrapper corpus, with `charter` where the vault path was.
+    #: Every one of these is a command charter's Bash guard already names as charter.
+    SAME_CORPUS = ("sudo charter doctor",
+                   "env charter doctor",
+                   "/usr/bin/env charter doctor",
+                   "nice -n 10 charter doctor",
+                   "stdbuf -o0 charter doctor",
+                   "timeout 5 charter doctor",
+                   "timeout -s KILL 5 charter doctor",
+                   "env -i charter doctor",
+                   "env -u PATH charter doctor",
+                   "sudo -u root charter doctor",
+                   "sudo -- charter doctor",
+                   "sudo env charter doctor",
+                   "xargs charter doctor",
+                   "env FOO=bar charter doctor",
+                   "env -S 'charter doctor'",
+                   "env -Scharter doctor",
+                   "env --split-string='charter doctor'",
+                   "CHARTER doctor")
+
+    def test_the_same_corpus_is_charter_to_both_guards(self):
+        """Asked as an ARGV, which is the form that had no wrapper follow at all — a
+        `Popen(["nice", "charter", "docs"])` never becomes a shell string on the way."""
+        for cmd in self.SAME_CORPUS:
+            with self.subTest(cmd=cmd):
+                argv = shlex.split(cmd)
+                self.assertTrue(hooks._is_charter(*hooks._split_env(argv)[::2]),
+                                f"{cmd} is not charter to PRODUCTION — wrong corpus")
+                self.assertTrue(_planeguard._cmd_launches_charter(argv), cmd)
+
+    def test_the_same_corpus_is_charter_inside_a_shell_string(self):
+        """And again one layer of quoting in, where `charter workspace _reconcile` and
+        `out="$(charter doctor 2>&1)"` — charter's own `hooks.json` — actually live."""
+        for cmd in (*self.SAME_CORPUS,
+                    "if true; then charter doctor; fi",
+                    'out="$(charter doctor 2>&1)" || true'):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(_planeguard._shell_launches_charter(cmd), cmd)
 
 
 class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):

@@ -90,6 +90,24 @@ operator's plane as charter", and where a spelling cannot be decided it answers 
 and lets the plane check settle it: a false refusal in a test is loud, named and one line
 from the fix, and a false allow writes to a live machine.
 
+**And the property is asked with production's own reader, not a second copy of it.** The
+round after that one measured the same thing again and found the same answer for a new
+list: ``["nice", "charter", "docs"]``, ``["nohup", …]``, ``["CHARTER", "docs"]``,
+``["/bin/bash", "-lc", "charter docs"]``, ``["env", "-S", "<python> -c 'from charter import
+config; print(config.ROOT)'"]`` — eight forms, none refused, four of them starting a real
+``charter docs``, and the ``env -S`` one printing the guarded plane. Every one of them is
+denied by charter's OWN Bash tool-gate, in `charter/hooks.py`, with tests pinning it
+(`nice cat <vault>`, `CHARTER secret get … --reveal`, `env -S 'cat <vault>'`). The harness
+had grown its own wrapper table, its own `env` option arity and its own case rule, and each
+was weaker than the one production already had.
+
+So `_launcher_argv` calls `hooks._split_env_chdir`, `_COMMAND_WRAPPERS` derives from
+`hooks._WRAPPERS`, and `_CHARTER_WORD` from `hooks._CHARTER_PROGS`. What is left here is
+what production deliberately does not ask — a shell's ``-c`` string, Python source, a script
+file — plus one repair, `_unpack_split_strings`, for a defect in production's `-S` parse
+that reuse would otherwise inherit (#547). `TheHarnessGuardIsNotASecondCopyOfProductions`
+in `test_plane_spawn_guard.py` fails if the two drift apart again.
+
 **Charter's own spawners now hand the plane over** (`util.child_env`), so an isolated case
 satisfies this without knowing it exists. What is left for the tripwire is the case that
 was never covered: a test that spawns charter by hand, and a test that never isolated
@@ -110,6 +128,17 @@ import sys
 import tokenize
 import unittest
 from pathlib import Path
+
+# Production's OWN command reader, not a second copy of it. `charter.hooks` already answers
+# "what program does this command line actually run" for the Bash tool-gate — following
+# wrappers, unpacking `env -S`, folding the program name's case — and every one of those
+# was a hole here while the same input was denied there. See :func:`_launcher_argv`.
+#
+# Imported at module scope, which is safe at exactly this point and not before: `tests`
+# imports `_envguard` and scrubs the ambient charter namespace BEFORE it imports this
+# module, so `charter.config` still resolves its plane with the same environment
+# `install()` would have given it one line later.
+from charter import hooks as _hooks      # noqa: E402
 
 #: The state directory of the plane this test PROCESS resolved at import — before any
 #: `setUp` could repoint `charter.config`, so unavoidably the developer's real one.
@@ -340,9 +369,6 @@ class RealPlaneSpawn(BaseException):
     """A test spawned a charter that would resolve the developer's own control plane."""
 
 
-#: ``NAME=value`` — the shell's environment-assignment prefix, and `env`'s argument form.
-_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
-
 #: An interpreter whose ``-c`` is Python SOURCE and whose first bare argument is a Python
 #: script. `sys.executable`'s own basename is accepted alongside it, because a virtualenv,
 #: a framework build or a `uv`-managed toolchain may spell it something this pattern does
@@ -363,18 +389,50 @@ _SHELL_REDIRECTS = frozenset((">", ">>", "<", "<<", "<<<", ">&", "<&", ">|", "&>
 
 #: Commands whose ARGUMENTS are themselves a command. ``sudo charter doctor`` has ``sudo``
 #: in the command position and charter one word later; a reader that looked only at the
-#: head would call that an argument and allow it. Their argument grammars differ enough
-#: (``timeout 5 charter``, ``xargs -n1 charter``) that following them exactly is not worth
-#: attempting -- the word appearing anywhere after one of these is refused.
-_COMMAND_WRAPPERS = frozenset((
-    "eval", "exec", "command", "builtin", "sudo", "doas", "su", "nohup", "nice", "setsid",
-    "stdbuf", "time", "timeout", "xargs", "watch", "script", "env", "flock", "ionice"))
+#: head would call that an argument and allow it.
+#:
+#: :data:`charter.hooks._WRAPPERS` is the base rather than a list written out again here.
+#: That constant is what charter's own Bash guard follows, and it is the wrapper table with
+#: the argument grammars — :data:`~charter.hooks._WRAPPER_VALUE_FLAGS` and the rest — kept
+#: next to it, which :func:`_launcher_argv` now uses. Restating the class in a second place
+#: is what produced this round's finding: `nice cat <vault>` was denied by production while
+#: ``["nice", "charter", "docs"]`` ran here.
+#:
+#: The additions are the ones production has no reason to carry and this does. `eval` and
+#: `su -c` take a command STRING, which the Bash guard states as a limit it does not follow
+#: (`_split_env_chdir`) and this one refuses instead; `watch`, `script` and `flock` take a
+#: positional of their own before the program, so :func:`_launcher_argv` cannot name the
+#: program past one — and where the program cannot be named, the word appearing ANYWHERE
+#: after the wrapper is what refuses.
+_COMMAND_WRAPPERS = _hooks._WRAPPERS | frozenset((
+    "eval", "su", "watch", "script", "flock"))
 
 #: ``charter`` as a WORD inside a shell command string. ``/`` is allowed BEFORE it, so an
 #: absolute path to the binary (``/usr/local/bin/charter --version``) is a hit, and
 #: forbidden AFTER it, so a path that merely contains the checkout
 #: (``cd ~/IdeaProjects/charter/tests``) is not.
-_CHARTER_WORD = re.compile(r"(?<![\w.-])charter(?![\w.\-/])")
+#:
+#: The names come from :data:`charter.hooks._CHARTER_PROGS`, so ``edm`` — charter's
+#: pre-rename binary, still installed on some machines and still resolving a plane — counts
+#: here for the same reason production keeps it. Case-INSENSITIVE for the reason
+#: `test_the_program_name_is_case_folded_too` already pins in production: on the
+#: filesystems this runs on ``CHARTER`` and ``charter`` are one binary, and a guard that
+#: matches one casing of a name is a guard with a Shift key for a bypass. ``["CHARTER",
+#: "docs"]`` ran against a guarded plane while production denied the same word.
+_CHARTER_WORD = re.compile(
+    r"(?<![\w.-])(?:" + "|".join(re.escape(p) for p in _hooks._CHARTER_PROGS)
+    + r")(?![\w.\-/])", re.IGNORECASE)
+
+#: The name ANYWHERE in a string, by any spelling, boundaries and all. This is the cheap
+#: gate that decides whether a shell string is worth lexing — and it is deliberately looser
+#: than :data:`_CHARTER_WORD`, because a gate that can only cause MISSES must not be the
+#: thing deciding. ``env -Scharter doctor`` glues the name to an option letter, which puts a
+#: word character in front of it and makes the word test say "charter is not named here" —
+#: about a string whose whole content is a charter invocation. The word test still decides
+#: what is a COMMAND once the string is lexed, which is what keeps ``ls -d
+#: <checkout>/charter/sub`` a path rather than a spawn.
+_CHARTER_MENTION = re.compile(
+    "|".join(re.escape(p) for p in _hooks._CHARTER_PROGS), re.IGNORECASE)
 
 #: The names of `subprocess.Popen.__init__`'s positional parameters, in order after *args*.
 #: The guard has to know what the child was told, and a caller may say it either way:
@@ -399,7 +457,89 @@ def _is_python(name: str) -> bool:
 
 
 def _module_is_charter(name: str) -> bool:
-    return name == "charter" or name.startswith("charter.")
+    """``-m <name>``: is that charter? Folded, and including charter's pre-rename package,
+    for the same reason :data:`_CHARTER_WORD` is — production's `_is_charter` reads exactly
+    this argument as ``args[i + 1].lower() in _CHARTER_PROGS``."""
+    low = name.lower()
+    return any(low == p or low.startswith(p + ".") for p in _hooks._CHARTER_PROGS)
+
+
+def _reaches_an_interpreter(rest: list[str]) -> bool:
+    """Could this argv tail be an interpreter being handed something that reaches charter?
+
+    ``-c`` (Python source, or a shell command string), ``-m`` (a module) and a ``.py`` file
+    are the three, and they are the only reason the PROGRAM's identity is ever worth
+    resolving off the filesystem. Cheap, and asked first, so :func:`_program_names` does no
+    `realpath` and no ``PATH`` search for the `git`, `tmux` and `gh` children that make up
+    most of what this suite spawns.
+    """
+    for tok in rest:
+        if not tok.startswith("-"):
+            return tok.endswith(".py")
+        if tok.startswith("--"):
+            continue
+        if any(ch in "cm" for ch in tok[1:]):
+            return True
+    return False
+
+
+def _program_names(prog: str, cwd, env) -> list[str]:
+    """Every basename *prog* could turn out to name, the word itself first.
+
+    An interpreter is not its spelling. ``Popen([<symlink to python3>, "-c", "import
+    charter"])`` ran against a guarded plane because the guard read the LINK's name and
+    stopped; so did ``["./notpython", "-c", …]``. The property is "what program does the
+    child actually exec", and the child answers it with the kernel: a path is resolved
+    (against the CHILD's cwd, since `Popen` chdirs before it execs), a bare name is looked
+    up on the CHILD's ``PATH``, and symlinks are followed to what is really there.
+
+    Best effort, and deliberately additive: the written name stays in the list, so a
+    resolution that fails, points at nothing, or resolves somewhere surprising can only
+    ADD a way to recognise charter, never take one away.
+    """
+    names = [os.path.basename(prog)]
+    try:
+        if os.sep in prog or (os.altsep and os.altsep in prog):
+            where = prog
+            if not os.path.isabs(prog) and cwd is not None:
+                where = os.path.join(os.fsdecode(cwd), prog)
+            names.append(os.path.basename(os.path.realpath(where)))
+        else:
+            path = (env if env is not None else os.environ).get("PATH")
+            found = shutil.which(prog, path=path)
+            if found:
+                names.append(os.path.basename(os.path.realpath(found)))
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+    return names
+
+
+def _bundled_option(tok: str, wanted: str, valued: str = "") -> tuple[str, str, int]:
+    """Read one bundled short-option token: ``(letter, attached value, tokens consumed)``.
+
+    Short options bundle, and every reader of one has to walk the LETTERS rather than match
+    the token whole. Both places this file needs that were written separately and only one
+    of them walked: `python -Pmcharter` was caught, while ``bash -lc 'charter docs'`` ran,
+    because the shell branch tested ``tok == "-c"`` and ``tok.startswith("-c")``. ``-lc``,
+    ``-ec``, ``-xc`` and ``-ic`` are ordinary spellings — the first is what a login shell is
+    spelled — and every one of them was a way through.
+
+    *wanted* are the letters that are a way in; *valued* are letters that take a value and
+    are NOT, so the walk stops at one rather than reading its value as more bundled
+    letters. ``letter`` is ``""`` when the token holds neither, and ``consumed`` is ``2``
+    when the option's value is the NEXT argv token rather than glued to this one — which is
+    the caller's to fetch, because ``python -m charter`` and ``python -mcharter`` are the
+    same run.
+    """
+    if not tok.startswith("-") or tok.startswith("--") or tok == "-":
+        return "", "", 1
+    for j, ch in enumerate(tok[1:], start=1):
+        if ch in wanted:
+            attached = tok[j + 1:]
+            return ch, attached, 1 if attached else 2
+        if ch in valued:
+            return "", "", 1 if tok[j + 1:] else 2
+    return "", "", 1
 
 
 def _code_imports_charter(code: str) -> bool:
@@ -489,35 +629,91 @@ def _script_imports_charter(path: str) -> bool:
         return True
 
 
-def _strip_launcher_prefix(parts: list[str]) -> list[str]:
-    """Drop ``VAR=value`` assignments and an `env` wrapper to reach the real command.
+def _unpack_split_strings(parts: list[str]) -> list[str]:
+    """``env -S '<command>'`` with its packed command put back as ordinary tokens.
 
-    ``env -u CHARTER_SESSION_ID python3 -m charter --version`` launches charter; a guard
-    that stopped reading at ``env`` would answer that it does not. Only the option forms
-    `env` itself documents are consumed — anything else ends the walk, because a guard
-    guessing at an unknown option's arity would start skipping the command word itself.
+    Production unpacks this too, and for the reason its own comment gives
+    (:data:`charter.hooks._SPLIT_STRING_FLAGS`): the value IS the command word, so skipping
+    it leaves an empty argv. It reads the ``--split-string=`` spelling BEFORE the glued
+    ``-S…`` one, though, so a packed command that itself contains an ``=`` is split at the
+    wrong one — ``env -Sfoo=1 charter docs`` yields ``1`` as the program and the charter is
+    never seen at all.
+
+    That is not only this guard's problem: measured against `main`'s Bash tool-gate, both
+    ``env -Sfoo=1 charter secret get v k --reveal --force`` and ``env -Sfoo=1 cat
+    .charter/vaults/x.json`` are ALLOWED while the same commands unwrapped are denied.
+    Filed as #547 — this is not the place to change a production guard's decisions. What is
+    repaired here is only the ordering, on the way IN: the flag names are still production's
+    constant, and the result goes straight back to production's splitter, so there is still
+    one reader of what a wrapper run means.
+
+    Only a ``-S`` that an `env` could be taking is unpacked. `ssh -S <control-socket>` is a
+    different flag on a different program, and a guard that unpacked it would be inventing
+    an arity for a program it has not identified — the mistake this function's neighbour
+    was sent back over.
     """
+    out: list[str] = []
+    env_seen = False
     i, n = 0, len(parts)
     while i < n:
         tok = parts[i]
-        if _ASSIGNMENT.match(tok):
+        if env_seen and tok.startswith(_hooks._SPLIT_STRING_FLAGS):
+            if tok.startswith("--") and "=" in tok:
+                packed = tok.split("=", 1)[1]
+            elif not tok.startswith("--") and len(tok) > 2:
+                packed = tok[2:]
+            elif i + 1 < n:
+                packed, i = parts[i + 1], i + 1
+            else:
+                packed = ""
+            try:
+                out.extend(shlex.split(packed))
+            except ValueError:            # will not lex; the words are still the words
+                out.extend(packed.split())
             i += 1
             continue
-        if os.path.basename(tok) != "env":
-            break
+        if os.path.basename(tok).lower() == "env":
+            env_seen = True
+        out.append(tok)
         i += 1
-        while i < n:
-            tok = parts[i]
-            if _ASSIGNMENT.match(tok) or tok in ("-i", "--ignore-environment", "-0",
-                                                 "--null", "-v", "--debug"):
-                i += 1
-            elif tok in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"):
-                i += 2
-            elif tok.startswith(("--unset=", "--chdir=", "--split-string=")):
-                i += 1
-            else:
-                break
-    return parts[i:]
+    return out
+
+
+def _launcher_argv(parts: list[str]) -> tuple[list[str], list[str]]:
+    """``(the argv the launcher run really reaches, the words consumed getting there)``.
+
+    **Delegated to `charter.hooks._split_env_chdir` rather than re-derived.** That function
+    is production's own answer to "what program does this command line run": it strips
+    ``VAR=value`` assignments, leading redirections, shell keywords and the wrapper run
+    (:data:`~charter.hooks._WRAPPERS`), each wrapper's own options by that wrapper's own
+    arity table, and `timeout`'s bare duration. The version that used to live here read
+    `env` alone, and every gap between the two was a way onto a guarded plane while the
+    same input was denied by production:
+
+    * ``["nice", "charter", "docs"]`` — a wrapper production strips and this did not;
+    * ``["env", "-S", "<python> -c 'from charter import config'"]`` — `-S` was skipped as a
+      value-taking option, which left an EMPTY argv and "no program at all". Production
+      treats its value as TOKENS, and says why at :data:`~charter.hooks._SPLIT_STRING_FLAGS`
+      in the same words the old docstring here used to warn against: *"skipping it would
+      leave an empty argv and the guard would see no program at all — fail-open on the exact
+      input the rest of this table exists to catch."*
+
+    *consumed* is what was dropped on the way, and it is asked separately because the name
+    can be IN it: ``c=charter; eval $c`` puts charter in an assignment and nothing else,
+    and ``env -S`` packs a whole command into one token. Computed as "in *parts* and not in
+    the argv" rather than as a prefix length, because `-S` INSERTS tokens — a word that
+    appears in both is simply checked in the argv instead, where it is checked properly.
+
+    A splitter that raises has decided nothing, so the whole command line becomes
+    *consumed*: the caller then refuses if charter is named anywhere in it, which is the
+    direction it is safe to be wrong in.
+    """
+    try:
+        unpacked = _unpack_split_strings(list(parts))
+        _prog, _env, argv, _chdir, _reads = _hooks._split_env_chdir(unpacked)
+    except Exception:
+        return list(parts), list(parts)
+    return list(argv), [tok for tok in parts if tok not in argv]
 
 
 def _python_launches_charter(rest: list[str]) -> bool:
@@ -527,26 +723,23 @@ def _python_launches_charter(rest: list[str]) -> bool:
     spelled attached (``-mcharter``), separate (``-m charter``) or bundled behind other
     short options (``-Pmcharter``) — all of which CPython accepts, and one of which
     `util.self_relaunch_argv` is a single edit away from producing.
+
+    The bundle is walked by :func:`_bundled_option`, which the SHELL branch of
+    :func:`_cmd_launches_charter` now uses too. It was written twice and walked once, so
+    ``bash -lc 'charter docs'`` ran while ``python -Pmcharter`` was refused.
     """
     i, n = 0, len(rest)
     while i < n:
         tok = rest[i]
         if not tok.startswith("-") or tok == "-":
             return _script_imports_charter(tok)
-        if tok.startswith("--"):
-            i += 1
-            continue
-        skip = 1
-        for j, ch in enumerate(tok[1:], start=1):
-            if ch in "cm":
-                value = tok[j + 1:] or (rest[i + 1] if i + 1 < n else "")
-                return (_code_imports_charter(value) if ch == "c"
-                        else _module_is_charter(value))
-            if ch in "WXQ":               # takes a value, and is no way into charter
-                if not tok[j + 1:]:
-                    skip = 2
-                break
-        i += skip
+        letter, value, consumed = _bundled_option(tok, "cm", valued="WXQ")
+        if letter:
+            if consumed == 2:
+                value = rest[i + 1] if i + 1 < n else ""
+            return (_code_imports_charter(value) if letter == "c"
+                    else _module_is_charter(value))
+        i += consumed
     return False
 
 
@@ -608,10 +801,11 @@ def _shell_segments(command: str) -> list[list[str]]:
     return segments
 
 
-def _shell_launches_charter(command: str, depth: int = 0) -> bool:
+def _shell_launches_charter(command: str, depth: int = 0, cwd=None, env=None) -> bool:
     """Does this shell command STRING run charter?
 
-    The word has to be there at all — that gate is what keeps ``pwd > "$out"`` and the
+    The name has to be there at all — that gate (:data:`_CHARTER_MENTION`, which asks for
+    the name and nothing about its boundaries) is what keeps ``pwd > "$out"`` and the
     frame's tmux fixtures out of the lexer entirely. Once it is there, the only question
     left is whether it is a COMMAND or an ARGUMENT, and both spellings are live in this
     suite. `test_toolgate` asks a real bash to echo its corpus back — ``printf "%s\\x00"
@@ -630,51 +824,76 @@ def _shell_launches_charter(command: str, depth: int = 0) -> bool:
     * a wrapper that takes a command as its arguments — ``sudo``, ``eval``, ``xargs``,
       ``timeout`` — with the word anywhere after it;
     * a string that will not lex, or nesting past the fourth level.
+
+    The per-segment question is :func:`_cmd_launches_charter`'s, in full: the wrapper
+    clause used to be repeated here because that function did not have one, which is how
+    ``["nice", "charter", "docs"]`` — the same wrapper, one layer of quoting less — ran.
     """
-    if not _CHARTER_WORD.search(command):
+    if not _CHARTER_MENTION.search(command):
         return False
     if depth > 3:                         # nesting nobody writes; stop, and refuse
         return True
     for body in _substitution_bodies(command):
-        if _shell_launches_charter(body, depth + 1):
+        if _shell_launches_charter(body, depth + 1, cwd, env):
             return True
     try:
         segments = _shell_segments(command)
     except ValueError:
         return True
     for segment in segments:
-        words = _strip_launcher_prefix(segment)
-        if any(_CHARTER_WORD.search(w) for w in segment[:len(segment) - len(words)]):
-            return True                   # an assignment, or `env`'s own options, name it
-        if not words:
-            continue
-        if "$" in words[0] or "`" in words[0]:
+        if _cmd_launches_charter(segment, depth + 1, cwd, env):
+            return True
+        words, _consumed = _launcher_argv(segment)
+        if words and ("$" in words[0] or "`" in words[0]):
             return True                   # the command word is computed: undecidable
-        if _cmd_launches_charter(words, depth + 1):
-            return True
-        if (os.path.basename(words[0]) in _COMMAND_WRAPPERS
-                and any(_CHARTER_WORD.search(w) for w in words[1:])):
-            return True
     return False
 
 
-def _cmd_launches_charter(parts: list[str], depth: int = 0) -> bool:
-    """Does this argv launch charter — by any spelling that would resolve a plane?"""
-    parts = _strip_launcher_prefix(parts)
+def _cmd_launches_charter(parts: list[str], depth: int = 0, cwd=None, env=None) -> bool:
+    """Does this argv launch charter — by any spelling that would resolve a plane?
+
+    The wrapper run and the assignments in front of the program come off through
+    :func:`_launcher_argv`, which is production's reader; what is left is asked three
+    questions, and each of them is about what the child WILL BE rather than how it is
+    written here:
+
+    * is the program charter — `charter.hooks._is_charter`, case-folded, and by the name
+      the program resolves to as well as the one written down;
+    * is it a Python interpreter being handed source, a module or a script;
+    * is it a shell being handed a command string, by any bundling of ``-c``.
+
+    And one belt-and-braces clause under them: a wrapper whose argument grammar
+    :func:`_launcher_argv` cannot follow past (`eval`, `su -c`, `flock <file>`) with the
+    word anywhere after it. Where a spelling cannot be decided this answers "charter" and
+    lets the plane check settle it.
+    """
+    parts, consumed = _launcher_argv(parts)
+    if any(_CHARTER_WORD.search(w) for w in consumed):
+        return True                       # an assignment, `env -S`'s packed command, …
     if not parts:
         return False
-    head = os.path.basename(parts[0])
-    if head == "charter":
-        return True
     rest = parts[1:]
-    if _is_python(head) and _python_launches_charter(rest):
+    names = _program_names(parts[0], cwd, env) if _reaches_an_interpreter(rest) else [
+        os.path.basename(parts[0])]
+    if any(_hooks._is_charter(name, parts) for name in names):
         return True
-    if head in _SHELL_NAMES:
-        for i, tok in enumerate(rest):
-            if tok == "-c" and i + 1 < len(rest):
-                return _shell_launches_charter(rest[i + 1], depth + 1)
-            if tok.startswith("-c") and len(tok) > 2:
-                return _shell_launches_charter(tok[2:], depth + 1)
+    if any(_is_python(name) for name in names) and _python_launches_charter(rest):
+        return True
+    if any(name.lower() in _SHELL_NAMES for name in names):
+        i = 0
+        while i < len(rest):
+            # `-o`/`-O` are the shell short options that take a value and are no way in;
+            # everything else bundles freely, which is what makes `-lc`, `-ec`, `-xc` and
+            # `-ic` the ordinary spellings they are.
+            letter, value, taken = _bundled_option(rest[i], "c", valued="oO")
+            if letter:
+                if taken == 2:
+                    value = rest[i + 1] if i + 1 < len(rest) else ""
+                return _shell_launches_charter(value, depth + 1, cwd, env)
+            i += taken
+    if (os.path.basename(parts[0]).lower() in _COMMAND_WRAPPERS
+            and any(_CHARTER_WORD.search(w) for w in rest)):
+        return True
     # ``-m charter`` by adjacency, wherever it appears and whatever argv[0] is called.
     # `_is_python` knows the interpreter names this machine has; this catches the one it
     # does not.
@@ -728,8 +947,14 @@ def _charter_argv(args, opts: dict) -> list[str] | None:
     if not parts:
         return None
 
+    # The child's own cwd and environment, which is what decides where a relative
+    # interpreter path lands and which ``PATH`` a bare program name is looked up on. Passed
+    # down rather than left to this process's: `Popen` chdirs before it execs, so
+    # ``["./python3", "-c", "import charter"]`` is a different program depending on `cwd`.
+    cwd, env = opts.get("cwd"), opts.get("env")
+
     executable = _decoded(opts.get("executable")) if opts.get("executable") else None
-    if executable is not None and os.path.basename(executable) == "charter":
+    if executable is not None and _hooks._is_charter(executable, parts):
         return parts
 
     # ``shell=True`` hands args[0] to ``/bin/sh -c`` — as a string, or as the first element
@@ -737,11 +962,11 @@ def _charter_argv(args, opts: dict) -> list[str] | None:
     # STRING, and the previous version answered it ``None``: it declined to parse the one
     # form that carries the whole command.
     if opts.get("shell"):
-        return parts if _shell_launches_charter(parts[0]) else None
+        return parts if _shell_launches_charter(parts[0], 0, cwd, env) else None
     if isinstance(args, (str, bytes)):
         # Without ``shell=True`` a string is one program name and no arguments.
-        return parts if os.path.basename(parts[0]) == "charter" else None
-    return parts if _cmd_launches_charter(parts) else None
+        return parts if _hooks._is_charter(parts[0], parts) else None
+    return parts if _cmd_launches_charter(parts, 0, cwd, env) else None
 
 
 def _explain_spawn(parts: list[str], plane) -> str:
