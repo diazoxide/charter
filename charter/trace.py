@@ -83,7 +83,7 @@ def record(event: str, session: str | None = None, **fields) -> None:
         config.private_mkdir(f.parent)
         rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), "event": event}
         rec.update({k: v for k, v in fields.items() if v is not None})
-        with f.open("a") as fh:
+        with config.open_for(f, "a") as fh:
             fh.write(contain.json_line(rec) + "\n")
     except Exception:
         pass

@@ -80,9 +80,9 @@ def mark(harness: str | None = None, when: datetime | None = None,
     p = path()
     try:
         config.private_mkdir(p.parent)
-        p.write_text(json.dumps({"ts": when.isoformat(timespec="seconds"),
-                                 "harness": harness, "source": src},
-                                sort_keys=True) + "\n")
+        config.write_for(p, json.dumps({"ts": when.isoformat(timespec="seconds"),
+                                       "harness": harness, "source": src},
+                                      sort_keys=True) + "\n")
         return p
     except OSError:
         return None

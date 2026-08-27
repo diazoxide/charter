@@ -480,12 +480,12 @@ def set_active(name: str, session_id: str | None = None, force: bool = False,
     tid = _terminal_id() if terminal_id is None else terminal_id
     if tid:
         config.private_mkdir(config.TERMINALS_DIR)
-        _terminal_file(tid).write_text(name + "\n")
+        config.write_for(_terminal_file(tid), name + "\n")
     sid = _session_id(session_id)
     if sid:
         config.private_mkdir(config.SESSIONS_DIR)
-        _session_file(sid).write_text(name + "\n")
-        _lock_file(sid).write_text(name + "\n")  # confirming = locking for the session
+        config.write_for(_session_file(sid), name + "\n")
+        config.write_for(_lock_file(sid), name + "\n")  # confirming = locking
     _prune()
     _trace("workspace-use", session_id, workspace=name,
            scope=("terminal" if tid else "session" if sid else "none"),
@@ -512,7 +512,7 @@ def reconcile(session_id: str | None = None, terminal_id: str | None = None) -> 
     val = _read(_terminal_file(tid)) if tid else None
     if val:
         config.private_mkdir(config.SESSIONS_DIR)
-        _session_file(sid).write_text(val + "\n")
+        config.write_for(_session_file(sid), val + "\n")
         # The one pointer write nobody typed. If any write is ever going to look as though
         # it came from nowhere, it is this one — so it says where it came from.
         _trace("workspace-seeded", session_id, workspace=val, **{"from": "terminal"})
@@ -750,7 +750,7 @@ def _rename_active_pointers(old: str, new: str) -> None:
         for f in list(d.glob("*.workspace")) + list(d.glob("*.lock")):
             try:
                 if f.read_text().strip() == old:
-                    f.write_text(new + "\n")
+                    config.write_for(f, new + "\n")
             except OSError:
                 pass
 

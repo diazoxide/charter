@@ -62,7 +62,7 @@ def ensure_index(mem_dir: Path, header: str) -> Path:
     idx = writable(index_path(mem_dir))
     mkdir_for(mem_dir)
     if not idx.exists():
-        idx.write_text(header if header.endswith("\n") else header + "\n")
+        config.write_for(idx, header if header.endswith("\n") else header + "\n")
     return idx
 
 
@@ -96,7 +96,8 @@ def write(mem_dir: Path, text: str, title: str | None = None, *, timestamped: bo
     writable(p)
     if index:
         writable(index_path(mem_dir))
-    p.write_text(f"# {title}\n\n_{now.strftime('%Y-%m-%d %H:%M')} · {kind}_\n\n{text}\n")
+    config.write_for(
+        p, f"# {title}\n\n_{now.strftime('%Y-%m-%d %H:%M')} · {kind}_\n\n{text}\n")
     if index:
         index_append(index_path(mem_dir), p.name, title)
     return p
@@ -106,8 +107,8 @@ def index_append(idx: Path, filename: str, title: str) -> None:
     idx = writable(idx)
     if not idx.exists():
         mkdir_for(idx.parent)
-        idx.write_text("# Memory Index\n\n")
-    with idx.open("a") as f:
+        config.write_for(idx, "# Memory Index\n\n")
+    with config.open_for(idx, "a") as f:
         f.write(f"- [{title}]({filename})\n")
 
 
@@ -394,7 +395,7 @@ def _drop_index_line(mem_dir: Path, filename: str) -> None:
     if not idx.exists() or contain.dir_refusal(mem_dir, "write") or contain.file_refusal(idx):
         return
     keep = [ln for ln in idx.read_text().splitlines() if f"({filename})" not in ln]
-    idx.write_text("\n".join(keep) + ("\n" if keep else ""))
+    config.write_for(idx, "\n".join(keep) + ("\n" if keep else ""))
 
 
 def body(text: str) -> str:

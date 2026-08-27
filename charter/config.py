@@ -16,6 +16,7 @@ calls `use()` rather than knowing what to copy.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -165,8 +166,12 @@ def _repoint_vault_registry(legacy_dir: Path, new_dir: Path) -> None:
                 cfg["file"] = new_prefix + path[len(old_prefix):]
                 changed += 1
         if changed:
-            registry.write_text(json.dumps(doc, indent=2) + "\n")
-            os.chmod(registry, 0o600)
+            # `write_text` then `chmod` was the #437 window one more time: the rewritten
+            # registry sat at whatever mode the pre-0.52 file had for the whole of the
+            # write, and only then became 0600. `_open_private` settles it on the
+            # descriptor first, so there is no such window (#505).
+            with _open_private(registry, "w") as f:
+                f.write(json.dumps(doc, indent=2) + "\n")
             print(f"charter: repointed {changed} vault path(s) to {new_dir}",
                   file=sys.stderr)
     except (OSError, ValueError) as e:
@@ -333,6 +338,154 @@ def mkdir_for(p, parents: bool = True) -> None:
         private_mkdir(p, parents=parents)
         return
     p.mkdir(parents=parents, exist_ok=True)
+
+
+#: The mode a file holding this plane's state is written at: owner read/write, nobody
+#: else. A constant rather than a per-writer decision, for the reason `_OTHERS` in
+#: `charter.secrets.base` is a mask rather than a list — "which of charter's state files
+#: are sensitive" is a question that gets answered wrong once and then stays wrong. It is
+#: the mode `docs/secrets.md` already promises for a vault file, applied to the rest of the
+#: state directory, and it is the same posture as the 0700 the directories get: the
+#: contents of ``.charter/`` are one account's.
+STATE_FILE_MODE = 0o600
+
+
+def _private_fd(p: "Path", *, append: bool) -> int:
+    """A descriptor on *p* with `STATE_FILE_MODE` settled on the **inode**, before any
+    content of charter's can reach it.
+
+    ``os.open(..., O_CREAT, 0o600)`` is not this, and that is the whole of #437's lesson
+    repeated one surface over: the *mode* argument applies **only when the call creates
+    the inode**. For a file that already exists — one written by a charter older than
+    this, or restored from a tarball, or made by hand — it is ignored entirely, so the
+    old contents and every byte written after them sit at whatever mode the file already
+    had. The mode is therefore settled with `os.fchmod` on the descriptor this call
+    holds, which is also why it is `fchmod` and not `chmod`: nothing swapped at the path
+    in between can be affected, and nothing at the path can be affected instead of the
+    inode charter is about to write.
+
+    ``O_TRUNC`` is deliberately NOT in the flags. Truncating first would empty the file
+    while it is still at its old mode; the caller truncates after the `fchmod`, so there
+    is no window in which new content is readable by an account the finished file is not.
+
+    A `fchmod` that fails is swallowed rather than raised. Filesystems with fixed
+    permissions (exFAT, many network mounts) accept the state directory and cannot hold a
+    mode, and every caller here is a hook, a status line or a marker file — refusing to
+    write ``guard-seen.json`` would take the plane down to protect a mode the filesystem
+    was never going to keep. `charter.secrets.plain_file` makes the opposite trade for the
+    one file where it is right to (plaintext secrets: it reads the mode back and refuses),
+    and `charter.secrets.registry._write` makes this one, for these reasons.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else 0)
+    fd = os.open(str(p), flags, STATE_FILE_MODE)
+    try:
+        os.fchmod(fd, STATE_FILE_MODE)
+    except OSError:
+        pass
+    return fd
+
+
+@contextlib.contextmanager
+def open_for(p, mode: str = "w", *, encoding: str | None = "utf-8"):
+    """Open *p* for writing — **privately when it is charter's own state, ordinarily when
+    it is not**. The file half of :func:`mkdir_for`, and the same dispatch (#505).
+
+    #470 answered "the umask must not decide the mode of charter's state" for
+    directories. The **files** were never asked: every one of them was written at
+    ``0o777 & ~umask``, i.e. 0644 on the default ``umask 022`` and 0666 under ``umask
+    000``. That was harmless only as long as the directory above them was 0700 — which is
+    exactly the case charter deliberately does **not** guarantee. `private_mkdir` leaves a
+    directory it did not create exactly as it is (#331: ``$CHARTER_HOME`` can point the
+    state directory at a home or a shared team directory, so "chmod whatever we land in"
+    is how charter comes to tighten one unprompted), and `vault list` / `doctor` report
+    the loose one rather than fixing it. So on a plane whose ``.charter/`` predates charter
+    — or was made by ``mkdir -p`` before 0.52.x — every account on the machine could read
+    the trace log, the ephemeral persona store and ``guard-seen.json``, and under ``umask
+    000`` could *rewrite* the last of those and decide what charter treats as consented.
+
+    **The property is "this file holds plane state", not "charter made the folder".** So
+    the dispatch is on where the path is, at runtime, exactly as `mkdir_for`'s is — not on
+    whether charter created the directory, and not on a list of the files somebody
+    remembered were sensitive.
+
+    **A file that already exists is tightened; a directory that already exists is not.**
+    That looks like two answers and is one: charter tightens what is *its own*, and
+    reports what is not. A directory under ``$CHARTER_HOME`` may be somebody's home or a
+    team share that charter merely landed in, and has a life of its own — so charter names
+    it and prints the ``chmod`` (`base.loose_dir_note`, `doctor`). A file charter is
+    putting its own bytes into is charter's whatever its history, and leaving the old mode
+    on it is the #437 defect verbatim. `secrets.registry._write` and
+    `secrets.plain_file._write_private` have settled the mode on the descriptor of a
+    pre-existing file since then; this is the same discipline for the rest of the state
+    directory, not a second policy.
+
+    A path **outside** the state directory is opened with a plain :func:`open` and NOT
+    tightened, which is what makes this a dispatch rather than a privatiser: `memstore`
+    writes a committed ``personas/<n>/memory/`` file through the same call, and those are
+    the operator's to mode. `mkdir_for` documents the same half.
+
+    *mode* is a `open` mode string; only the writing ones reach here. ``"a"`` appends
+    (``O_APPEND``, no truncation), anything else truncates **after** the mode is settled.
+    """
+    p = Path(p)
+    if not under_state(p):
+        with open(p, mode, encoding=(None if "b" in mode else encoding)) as f:
+            yield f
+        return
+    with _open_private(p, mode, encoding=encoding) as f:
+        yield f
+
+
+@contextlib.contextmanager
+def _open_private(p, mode: str = "w", *, encoding: str | None = "utf-8"):
+    """:func:`open_for`'s private branch, unconditionally — for the one caller that knows
+    it is writing charter's own state before ``STATE_DIR`` exists to be compared against.
+
+    `_repoint_vault_registry` runs *during* the migration that produces the state
+    directory, so `under_state` has nothing to answer with yet. Reaching past the dispatch
+    is right there and wrong everywhere else, which is why it is private and says so.
+    """
+    append = "a" in mode
+    fd = _private_fd(Path(p), append=append)
+    try:
+        if not append:
+            os.ftruncate(fd, 0)     # after the fchmod, never before: see `_private_fd`
+        f = os.fdopen(fd, mode, encoding=(None if "b" in mode else encoding))
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:                         # the file object owns the descriptor now
+        yield f
+
+
+def write_for(p, data) -> None:
+    """`Path.write_text` for a path that may be charter's own state — the whole content,
+    written into a file charter has already made private if that is where it belongs.
+
+    This is the ``config.private_write`` #505 asks for, under the name that matches
+    :func:`mkdir_for`: it is a **dispatch**, not a privatiser, and calling it
+    ``private_write`` would invite the next writer to reach for it on a committed path and
+    quietly tighten one. ``_for`` is what this package spells "ask where the path is".
+    """
+    with open_for(p, "wb" if isinstance(data, (bytes, bytearray)) else "w") as f:
+        f.write(data)
+
+
+def touch_for(p) -> None:
+    """`Path.touch` for a path that may be charter's own state.
+
+    A marker file carries its meaning in *existing*, not in its bytes — which is exactly
+    why it was easy to miss that ``Path.touch()`` creates at ``0o666 & ~umask`` like every
+    other writer. An empty file another account can create, delete or re-time is a marker
+    that account gets to set: `hooks._ask_mark_set` and `toolgate.snapshot` both decide
+    what a later turn is allowed to do from one.
+    """
+    p = Path(p)
+    if not under_state(p):
+        p.touch()
+        return
+    os.close(_private_fd(p, append=True))
+    os.utime(p, None)       # `Path.touch` bumps the mtime of an existing file too
 
 
 def derive(root: Path, start: Path | None = None) -> dict:

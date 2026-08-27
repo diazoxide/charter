@@ -64,6 +64,22 @@ guard is `config`.
 ``charter _version-check``, and no test in this suite makes a network call, directly or by
 proxy. It reaches the state directory through `update.maybe_spawn`'s lock file, which the
 scan covers.
+
+**And the same sentence about the files (#505).** Everything above is about directories,
+and the files inside them were written at ``0o777 & ~umask`` the whole time — harmless for
+exactly as long as the directory above them was 0700, which is the one thing charter
+deliberately does not guarantee. `TheFilesInItAreChartersToChooseToo` is therefore the
+issue's own reproduction: a ``.charter/`` that **already existed at 0755**, three commands,
+and ``st_mode`` read off every file underneath. `TheDispatchOnWhereTheFileIs` is
+`config.write_for` / `open_for` / `touch_for` at the level the CLI cannot reach, including
+the one place the two halves give different answers — a pre-existing loose *file* is
+tightened where a pre-existing loose *directory* is not, because charter tightens what is
+its own and reports what is not.
+
+Every mode assertion in this file sets the umask **explicitly** and compares against a
+control file or directory made by this process under the same umask. A case that inherited
+the ambient umask would pass on a laptop at 022 and say something different on a CI runner
+at 002, and neither run would be measuring independence from it.
 """
 
 from __future__ import annotations
@@ -101,12 +117,18 @@ def modes_up_to(leaf, stop) -> dict:
         cur = cur.parent
 
 
-class TheCliDecidesIt(unittest.TestCase):
-    """The real binary, in a real plane, with no ``.charter/`` in it yet.
+class APlaneTheCliCanRunIn(unittest.TestCase):
+    """One `charter init` plane, copied per case — the fixture, with no cases of its own.
 
     A subprocess rather than a handler call, because the umask is a property of the
     process and because the defect was in the *order commands run in* — which is a thing
     only the CLI actually has.
+
+    No ``test_`` methods, so unittest never builds the template for this class itself; the
+    two suites below inherit it. Extracted when #505 added the second (`.charter/`'s
+    **files**, not its directories): building the plane twice would have doubled the
+    slowest fixture in the suite, and copying the twenty lines would have been the usual
+    way for two measurements of the same thing to drift.
     """
 
     #: One plane, built once by `charter init` and copied per case. Building it per case
@@ -223,6 +245,10 @@ class TheCliDecidesIt(unittest.TestCase):
             len(set(seen.values())), 1,
             f"the umask still decides it: {[(oct(u), oct(m)[-3:]) for u, m in seen.items()]}")
 
+
+class TheCliDecidesIt(APlaneTheCliCanRunIn):
+    """The real binary, in a real plane, with no ``.charter/`` in it yet."""
+
     def test_vault_add_is_the_flow_from_the_issue(self) -> None:
         """`charter vault add` writes the local registry first, and that write is what
         created `.charter/` at the umask default on the flow the issue reproduces."""
@@ -296,6 +322,132 @@ class TheCliDecidesIt(unittest.TestCase):
         self.charter(plane, "vault", "add", "devops", "--provider", "plain-file")
         self.assertEqual(stat.S_IMODE(sd.stat().st_mode), 0o755,
                          "charter chmod-ed a directory it did not create")
+
+
+class TheFilesInItAreChartersToChooseToo(APlaneTheCliCanRunIn):
+    """#505: the same sentence about the **files**, in the plane where it matters.
+
+    #470 settled the mode of every directory charter creates. The files inside them were
+    still written at ``0o777 & ~umask``, and that was harmless only for as long as the
+    directory above them was 0700 — which is exactly the case charter deliberately does
+    **not** guarantee. So the plane here is the one from the issue's reproduction: a
+    ``.charter/`` that **already existed**, at 0755, made by somebody's ``mkdir -p``.
+    charter will not chmod it (`test_an_existing_loose_state_directory_is_left_exactly_as_it_is`
+    above pins that, and this case re-pins it as a precondition), so every file charter
+    writes into it is reachable by every account on the machine unless the file itself
+    says otherwise.
+
+    **Measured, not reasoned.** ``os.stat().st_mode`` over every regular file under
+    ``.charter/`` after a run of the CLI, under three umasks. The control is a file
+    written by *this* process under the same umask, so "the umask no longer decides it" is
+    a comparison rather than a constant somebody typed — and a case that asserted 0600
+    against a machine whose umask happened to be 077 would pass while proving nothing.
+    """
+
+    #: The three commands the issue reproduces with, each of which writes a different file
+    #: through a different writer: the vault registry, the guard sighting, the trace log
+    #: and the ephemeral persona store. Run in one plane, in this order, because what the
+    #: issue exhibits is the *set* of files left behind rather than any one of them.
+    FLOWS = (
+        (("vault", "add", "devops", "--provider", "plain-file"), ""),
+        (("persona", "remember", "steward", "an ordinary scratch note", "--ephemeral"), ""),
+        (("hook", "pretooluse"),
+         json.dumps({"session_id": "sess-505", "cwd": ".", "tool_name": "Bash",
+                     "tool_input": {"command": "ls"}})),
+    )
+
+    def _run_the_issue(self, plane: Path) -> list[Path]:
+        for args, stdin in self.FLOWS:
+            proc = self.charter(plane, *args, stdin=stdin)
+            self.assertNotIn("Traceback (most recent call last):",
+                             (proc.stdout or "") + (proc.stderr or ""),
+                             f"`charter {' '.join(args)}` crashed:\n{proc.stdout}\n{proc.stderr}")
+        files = sorted(p for p in (plane / ".charter").rglob("*") if p.is_file())
+        self.assertGreaterEqual(
+            len(files), 4,
+            f"only {len(files)} file(s) under `.charter/` — the flows this case names "
+            f"stopped writing, so it is measuring nothing: {files}")
+        return files
+
+    def test_every_file_under_a_pre_existing_loose_state_directory_is_private(self) -> None:
+        seen: dict[int, set] = {}
+        for um in UMASKS:
+            with self.subTest(umask=oct(um)):
+                plane = self.plane(f"files-{um:03o}")
+                sd = plane / ".charter"
+                sd.mkdir()
+                os.chmod(sd, 0o755)              # the pre-existing loose one, by hand
+                old = os.umask(um)
+                try:
+                    control = plane / f"control-{um:03o}"
+                    control.write_text("x")
+                    files = self._run_the_issue(plane)
+                finally:
+                    os.umask(old)
+
+                self.assertEqual(
+                    stat.S_IMODE(sd.stat().st_mode), 0o755,
+                    "precondition: charter must NOT have chmod-ed the directory it did "
+                    "not create — if it did, this case stopped being about the files")
+                self.assertEqual(
+                    stat.S_IMODE(control.stat().st_mode), 0o666 & ~um,
+                    "precondition: the umask must actually be in force in this process, "
+                    "or 'the umask no longer decides it' is not being tested at all")
+                for f in files:
+                    self.assertEqual(
+                        stat.S_IMODE(f.stat().st_mode) & 0o077, 0,
+                        f"under umask {oct(um)}, {f.relative_to(plane)} came out "
+                        f"{oct(stat.S_IMODE(f.stat().st_mode))[-3:]} inside a 0755 "
+                        f"`.charter/` — another account on this machine can read it")
+                seen[um] = {stat.S_IMODE(f.stat().st_mode) for f in files}
+        self.assertEqual(
+            len(set(map(frozenset, seen.values()))), 1,
+            f"the umask still decides it: "
+            f"{[(oct(u), sorted(map(oct, m))) for u, m in seen.items()]}")
+
+    def test_the_charter_created_directories_have_not_regressed(self) -> None:
+        """The control #470 owns, re-run here because a fix to the files is exactly the
+        kind of change that reaches for a chmod and takes the directories with it."""
+        plane = self.plane("dirs-control")
+        old = os.umask(0o022)
+        try:
+            self._run_the_issue(plane)
+        finally:
+            os.umask(old)
+        dirs = [p for p in (plane / ".charter").rglob("*") if p.is_dir()]
+        self.assertGreaterEqual(len(dirs), 2, "no directories to measure")
+        for d in [plane / ".charter", *dirs]:
+            self.assertEqual(
+                stat.S_IMODE(d.stat().st_mode) & 0o077, 0,
+                f"{d.relative_to(plane)} came out "
+                f"{oct(stat.S_IMODE(d.stat().st_mode))[-3:]} — #470 regressed")
+
+    def test_a_committed_file_is_still_the_operators_to_mode(self) -> None:
+        """The other half of the dispatch, and the one a `write_for` that privatised
+        everything would fail: `charter persona remember` without ``--ephemeral`` writes
+        into ``personas/<n>/memory/``, which is committed and belongs to the operator's
+        umask. Measured against a control file written by this process, so the assertion
+        is "whatever the umask says" rather than a mode written down here.
+        """
+        plane = self.plane("committed-file")
+        old = os.umask(0o022)
+        try:
+            control = plane / "control.txt"
+            control.write_text("x")
+            proc = self.charter(plane, "persona", "remember", "steward", "a committed fact")
+        finally:
+            os.umask(old)
+        self.assertEqual(proc.returncode, 0, f"{proc.stdout}\n{proc.stderr}")
+        written = sorted((plane / "personas" / "steward" / "memory").glob("*.md"))
+        self.assertTrue(written, "nothing was committed, so this case measures nothing")
+        for f in written:
+            self.assertEqual(
+                stat.S_IMODE(f.stat().st_mode), stat.S_IMODE(control.stat().st_mode),
+                f"charter tightened {f.name}, which is committed and the operator's")
+        self.assertNotEqual(
+            stat.S_IMODE(written[0].stat().st_mode) & 0o077, 0,
+            "under umask 022 an ordinary file is 0644 — a 0600 here means `write_for` "
+            "stopped dispatching and is privatising everything")
 
 
 class ThePrivateWalkItself(PersonaIso):
@@ -441,6 +593,230 @@ class TheDispatchOnWhereThePathIs(PersonaIso):
                          "precondition: the lexical spelling must NOT match, or this "
                          "case is not about resolution at all")
         self.assertTrue(config.under_state(link / "cache"))
+
+
+class TheDispatchOnWhereTheFileIs(PersonaIso):
+    """`config.write_for` / `open_for` / `touch_for` — `mkdir_for` for an inode with
+    contents (#505), at the level the CLI sweep cannot reach.
+
+    Every case runs in a **pre-existing 0755** state directory, because that is the case
+    the whole issue is about: charter will not chmod a directory it did not create, so if
+    the files do not decide their own mode nothing does.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sd = Path(config.STATE_DIR)
+        self.sd.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.sd, 0o755)
+
+    def control(self, um: int) -> Path:
+        """A file this process wrote under the same umask — what "not tightened" means.
+
+        A mode written down here would be a second thing to keep in step with the
+        platform; a file written beside it cannot drift.
+        """
+        c = Path(self.tmp) / f"control-{um:03o}"
+        c.write_text("x")
+        return c
+
+    def test_a_state_file_is_private_under_every_umask(self) -> None:
+        for um in UMASKS:
+            with self.subTest(umask=oct(um)):
+                old = os.umask(um)
+                try:
+                    control = self.control(um)
+                    for name, write in (
+                        ("write.json", lambda p: config.write_for(p, "{}")),
+                        ("append.log", lambda p: self._append(p, "line\n")),
+                        ("marker", config.touch_for),
+                    ):
+                        p = self.sd / f"{um:03o}-{name}"
+                        write(p)
+                        self.assertEqual(
+                            stat.S_IMODE(p.stat().st_mode) & 0o077, 0,
+                            f"{name} came out {oct(stat.S_IMODE(p.stat().st_mode))[-3:]}")
+                finally:
+                    os.umask(old)
+                self.assertEqual(stat.S_IMODE(control.stat().st_mode), 0o666 & ~um,
+                                 "precondition: the umask was not actually in force, so "
+                                 "this round proves nothing about independence from it")
+
+    @staticmethod
+    def _append(p: Path, text: str) -> None:
+        with config.open_for(p, "a") as f:
+            f.write(text)
+
+    def test_a_file_outside_it_keeps_the_umask_and_is_not_tightened(self) -> None:
+        """The half that makes this a dispatch: `memstore` writes a committed
+        ``personas/<n>/memory`` file through the same call, and those are the operator's.
+        A `write_for` that privatised everything passes every case above and fails here."""
+        old = os.umask(0o022)
+        try:
+            control = self.control(0o022)
+            p = config.PERSONAS_DIR / "steward" / "memory" / "a.md"
+            config.mkdir_for(p.parent)
+            config.write_for(p, "committed")
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(p.stat().st_mode), stat.S_IMODE(control.stat().st_mode),
+                         "charter tightened a committed file it merely wrote")
+        self.assertNotEqual(stat.S_IMODE(p.stat().st_mode) & 0o077, 0,
+                            "0600 here means the dispatch stopped dispatching")
+
+    def test_a_pre_existing_loose_state_file_is_tightened(self) -> None:
+        """The file charter did not create — and the one answer here that differs from the
+        directories', on purpose.
+
+        A directory under ``$CHARTER_HOME`` may be somebody's home or a team share that
+        charter merely landed in, so charter names it and prints the ``chmod`` (#331). A
+        file charter is putting its own bytes into is charter's whatever its history, and
+        leaving the old mode on it is #437 verbatim — which is why
+        `secrets.registry._write` and `secrets.plain_file._write_private` have settled the
+        mode on the descriptor of a pre-existing file since then. This is the same
+        discipline, not a second policy.
+        """
+        for mode in (0o644, 0o666, 0o604, 0o640):
+            with self.subTest(existing=oct(mode)):
+                p = self.sd / f"pre-{mode:03o}.json"
+                # LONGER than what replaces it. A dropped truncate leaves the tail of the
+                # old value behind, and an equal-length fixture cannot tell the difference
+                # — which is how this case first passed against a `write_for` that had
+                # stopped truncating at all.
+                p.write_text('{"old": "a value long enough to leave a tail"}')
+                os.chmod(p, mode)
+                config.write_for(p, "{}")
+                self.assertEqual(p.read_text(), "{}",
+                                 "the previous contents were not truncated away")
+                self.assertEqual(stat.S_IMODE(p.stat().st_mode) & 0o077, 0,
+                                 f"a file that was {oct(mode)[-3:]} kept it while charter "
+                                 f"wrote this plane's state into it")
+
+    def test_the_mode_is_settled_before_anything_is_destroyed(self) -> None:
+        """The order inside `_private_fd`, which the finished mode cannot show.
+
+        Moving the truncate above the `fchmod` leaves the *finished* file at 0600 either
+        way, so every mode assertion in this class passes — and a crash in between leaves
+        an empty world-readable file instead of the previous contents at 0600, which is
+        the strictly worse of the two. The descriptor is opened and inspected here without
+        writing, which is the only moment that ordering is visible.
+        """
+        p = self.sd / "order.json"
+        p.write_text("the previous contents")
+        os.chmod(p, 0o666)
+        fd = config._private_fd(p, append=False)
+        try:
+            self.assertEqual(stat.S_IMODE(os.fstat(fd).st_mode), 0o600,
+                             "the descriptor is not private yet")
+            self.assertEqual(p.read_text(), "the previous contents",
+                             "the file was truncated before its mode was settled")
+        finally:
+            os.close(fd)
+
+    def test_touch_for_outside_the_state_directory_keeps_the_umask(self) -> None:
+        """`touch_for` is a dispatch too. One that privatised every marker would pass every
+        case above while tightening committed files — `mkdir_for`'s other half, again."""
+        old = os.umask(0o022)
+        try:
+            control = self.control(0o022)
+            p = config.PERSONAS_DIR / "steward" / "marker"
+            config.mkdir_for(p.parent)
+            config.touch_for(p)
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(p.stat().st_mode), stat.S_IMODE(control.stat().st_mode),
+                         "charter tightened a committed marker it merely created")
+
+    def test_bytes_are_written_as_bytes(self) -> None:
+        """`write_for` replaces both `write_text` and `write_bytes` — the scan counts
+        `write_bytes` as a site it covers, so the routed call has to accept one."""
+        p = self.sd / "blob.bin"
+        payload = b"\x00\x01\xff not utf-8: \xc3\x28"
+        config.write_for(p, payload)
+        self.assertEqual(p.read_bytes(), payload)
+        self.assertEqual(stat.S_IMODE(p.stat().st_mode) & 0o077, 0)
+
+    def test_the_content_is_never_on_disk_at_the_loose_mode(self) -> None:
+        """The ordering `_private_fd` exists for, measured rather than asserted in prose.
+
+        ``open(p, "w")`` truncates as it opens, so a fix that wrote first and chmod-ed
+        afterwards would leave the new content readable for the length of the write. The
+        mode is read *from inside the write*, on the same inode, while the file object is
+        open — the only moment at which "there is no window" is falsifiable.
+        """
+        p = self.sd / "window.json"
+        p.write_text("old")
+        os.chmod(p, 0o666)
+        during = []
+        with config.open_for(p, "w") as f:
+            during.append(stat.S_IMODE(os.fstat(f.fileno()).st_mode))
+            f.write("secret")
+        self.assertEqual(during, [0o600],
+                         f"the file was {oct(during[0])[-3:]} while charter was writing "
+                         f"this plane's state into it")
+
+    def test_it_does_not_chmod_the_directory_it_writes_into(self) -> None:
+        """The overreach the directories' half refuses (#331), which a file writer reaching
+        for `os.chmod` on a parent would reintroduce from the other side."""
+        config.write_for(self.sd / "x.json", "{}")
+        self.assertEqual(stat.S_IMODE(self.sd.stat().st_mode), 0o755,
+                         "charter chmod-ed the state directory it did not create")
+
+    def test_append_does_not_truncate(self) -> None:
+        """`trace` and `memstore`'s index are appenders, and an `O_TRUNC` reached for on
+        the way to a private mode would silently empty the trace log."""
+        p = self.sd / "trace.jsonl"
+        self._append(p, "one\n")
+        self._append(p, "two\n")
+        self.assertEqual(p.read_text(), "one\ntwo\n")
+
+    def test_touch_keeps_an_existing_file_and_bumps_its_mtime(self) -> None:
+        """`Path.touch`'s own contract — every caller here uses it as a marker, and one
+        that truncated would be a different function wearing the name."""
+        p = self.sd / "mark"
+        p.write_text("payload")
+        os.utime(p, (1, 1))
+        config.touch_for(p)
+        self.assertEqual(p.read_text(), "payload")
+        self.assertGreater(p.stat().st_mtime, 1)
+        self.assertEqual(stat.S_IMODE(p.stat().st_mode) & 0o077, 0)
+
+    def test_a_state_path_reached_through_a_symlink_is_still_state(self) -> None:
+        """The dispatch is `under_state`, which resolves — so the file half inherits the
+        answer the directory half already argued for, rather than asking a second time."""
+        link = Path(self.tmp) / "link-to-state"
+        link.symlink_to(self.sd)
+        old = os.umask(0o000)
+        try:
+            config.write_for(link / "through-a-link.json", "{}")
+        finally:
+            os.umask(old)
+        self.assertEqual(
+            stat.S_IMODE((self.sd / "through-a-link.json").stat().st_mode) & 0o077, 0)
+
+    def test_the_mode_is_a_mask_not_a_value(self) -> None:
+        """`STATE_FILE_MODE` is asserted through ``& 0o077`` everywhere above for the
+        reason `base._OTHERS` is a mask: 0644 is the mode everybody pictures, and 0604,
+        0620 and 0606 hand the file to another account just as completely. This is the
+        one place the constant itself is named, so a change to it is a decision somebody
+        made rather than a test quietly following along."""
+        self.assertEqual(config.STATE_FILE_MODE, 0o600)
+
+    def test_the_atomic_writers_temp_file_is_private_by_construction(self) -> None:
+        """`inflight` and `toolgate` write through a temp file and `os.replace`, which
+        carries the SOURCE's mode onto the destination — so the scan not looking at
+        `os.replace` is only honest if the sources are already private.
+
+        `toolgate`'s temp file is a state path the write scan sees. `inflight`'s comes
+        from `tempfile.mkstemp`, whose 0600 is documented rather than incidental — pinned
+        here because the claim is load-bearing and a change to it would be silent.
+        """
+        fd, name = tempfile.mkstemp(dir=self.tmp)
+        os.close(fd)
+        self.addCleanup(os.unlink, name)
+        self.assertEqual(stat.S_IMODE(os.stat(name).st_mode) & 0o077, 0,
+                         "mkstemp stopped creating at 0600; every atomic writer that "
+                         "leans on it now leaks its destination's mode")
 
 
 class TheHandedWriterAsksWhereItIs(PersonaIso):
@@ -710,6 +1086,250 @@ class TheHandedScanSeesWhatItClaims(unittest.TestCase):
             "of the scan by naming a function `mkdir_for`")
 
 
+class TheWriteScanSeesWhatItClaims(unittest.TestCase):
+    """The file half of the scanner's accuracy, against sources written for the purpose.
+
+    Same treatment the directory half gets, and for the same reason: a scan that has
+    quietly stopped seeing anything reports a clean package, which is the most comfortable
+    way for a coverage test to become decorative.
+    """
+
+    def setUp(self) -> None:
+        self.names = scan.state_attribute_names()
+
+    #: Every spelling of "put bytes in a file here", and where each keeps its path. The
+    #: table IS the test, for the reason `TheScanSeesWhatItClaims.MAKERS` is: keying on the
+    #: shape ("``write_text`` takes a receiver, ``open`` an argument") trades one spelling
+    #: for another, and the one nobody listed is the one that ships.
+    WRITERS = {
+        "bound method, path is the receiver":
+            "def f():\n    (config.STATE_DIR / 'x').write_text('y')\n",
+        "bytes, same shape":
+            "def f():\n    (config.STATE_DIR / 'x').write_bytes(b'y')\n",
+        "a marker file — no content, same mode":
+            "def f():\n    (config.STATE_DIR / 'x').touch()\n",
+        "builtin open, path is argument 0":
+            "def f():\n    open(config.STATE_DIR / 'x', 'w').close()\n",
+        "builtin open, appending":
+            "def f():\n    open(config.STATE_DIR / 'x', 'a').close()\n",
+        "builtin open, exclusive create":
+            "def f():\n    open(config.STATE_DIR / 'x', 'x').close()\n",
+        "builtin open, read-plus still writes":
+            "def f():\n    open(config.STATE_DIR / 'x', 'r+').close()\n",
+        "Path.open, path is the receiver":
+            "def f():\n    (config.STATE_DIR / 'x').open('w').close()\n",
+        "the mode arrives by keyword":
+            "def f():\n    open(config.STATE_DIR / 'x', mode='w').close()\n",
+        "the path arrives by keyword":
+            "def f():\n    open(file=config.STATE_DIR / 'x', mode='w').close()\n",
+        "os.open, path is argument 0":
+            "import os\ndef f():\n"
+            "    os.open(config.STATE_DIR / 'x', os.O_WRONLY | os.O_CREAT, 438)\n",
+        "os.open by keyword":
+            "import os\ndef f():\n    os.open(path=config.STATE_DIR / 'x', flags=os.O_CREAT)\n",
+        "unbound, path is argument 0 of an attribute call":
+            "from pathlib import Path\ndef f():\n"
+            "    Path.write_text(config.STATE_DIR / 'x', 'y')\n",
+    }
+
+    def test_every_spelling_of_writing_a_file_is_scanned(self) -> None:
+        for label, src in self.WRITERS.items():
+            with self.subTest(label):
+                hits = scan.write_violations(src, self.names)
+                self.assertEqual([e for _ln, e in hits], ["config.STATE_DIR / 'x'"],
+                                 f"{label}: a state file written here went unseen")
+
+    def test_the_same_spellings_on_a_committed_path_are_left_alone(self) -> None:
+        """The other half of the claim: widening where the path is looked for must not
+        widen WHAT counts as one, or the fix is to privatise committed files."""
+        for label, src in self.WRITERS.items():
+            with self.subTest(label):
+                self.assertEqual(
+                    scan.write_violations(src.replace("STATE_DIR", "PERSONAS_DIR"),
+                                          self.names),
+                    [], f"{label}: a committed file was flagged as state")
+
+    #: Reads of a state file, which are not sites at all. A scan that flagged these would
+    #: be asking charter to route a read through a writer — which is not a thing — and the
+    #: noise would take the real answers with it.
+    READERS = {
+        "open with no mode is `open`'s documented default of 'r'":
+            "def f():\n    open(config.STATE_DIR / 'x').close()\n",
+        "an explicit text read":
+            "def f():\n    open(config.STATE_DIR / 'x', 'r').close()\n",
+        "a binary read":
+            "def f():\n    open(config.STATE_DIR / 'x', 'rb').close()\n",
+        "Path.open with no mode":
+            "def f():\n    (config.STATE_DIR / 'x').open().close()\n",
+        "read_text is not a write":
+            "def f():\n    (config.STATE_DIR / 'x').read_text()\n",
+    }
+
+    def test_reading_a_state_file_is_not_a_violation(self) -> None:
+        for label, src in self.READERS.items():
+            with self.subTest(label):
+                self.assertEqual(scan.write_violations(src, self.names), [],
+                                 f"{label}: a read was reported as an unrouted write")
+
+    def test_an_os_open_for_reading_is_reported_and_that_is_the_residual(self) -> None:
+        """Stated as a case rather than left to be discovered.
+
+        `Path.open`'s mode and `os.open`'s path share argument 0, so an `os.open` flag
+        expression is unreadable here and the safe direction reports it. There are none
+        in the package, the cost is a false positive, and the way out of one is the same
+        as for a real writer: settle the mode on the descriptor.
+        """
+        src = "import os\ndef f():\n    os.open(config.STATE_DIR / 'x', os.O_RDONLY)\n"
+        self.assertEqual([e for _ln, e in scan.write_violations(src, self.names)],
+                         ["config.STATE_DIR / 'x'"])
+        settled = ("import os\ndef f():\n"
+                   "    fd = os.open(config.STATE_DIR / 'x', os.O_RDONLY)\n"
+                   "    os.fchmod(fd, 384)\n")
+        self.assertEqual(scan.write_violations(settled, self.names), [])
+
+    def test_a_mode_it_cannot_read_counts_as_a_write(self) -> None:
+        """The safe direction, stated as a case. ``open(p, mode)`` with *mode* computed
+        elsewhere cannot be judged here, and a false positive is loud where a skipped
+        writer is the defect itself."""
+        src = "def f(mode):\n    open(config.STATE_DIR / 'x', mode).close()\n"
+        self.assertEqual([e for _ln, e in scan.write_violations(src, self.names)],
+                         ["config.STATE_DIR / 'x'"])
+
+    def test_the_routed_calls_are_not_flagged(self) -> None:
+        for name in scan.ROUTED_WRITE:
+            with self.subTest(name):
+                src = f"def f():\n    config.{name}(config.STATE_DIR / 'x', 'y')\n"
+                self.assertEqual(scan.write_violations(src, self.names), [])
+
+    def test_the_routed_names_exist_in_config(self) -> None:
+        """Asserted against `config` so a rename cannot leave the list stale — the same
+        guard `ROUTED` gets for the directory half."""
+        for name in scan.ROUTED_WRITE:
+            self.assertTrue(callable(getattr(config, name, None)),
+                            f"`config.{name}` no longer exists; ROUTED_WRITE is stale")
+        for qual in scan.THE_WRITE_WALK:
+            module, _, fn = qual.rpartition(".")
+            self.assertTrue(hasattr(config, fn),
+                            f"{qual} no longer exists in `config`; the exemption is stale")
+
+    def test_settling_the_mode_on_the_descriptor_is_what_clears_an_os_open(self) -> None:
+        """`secrets.plain_file`, `secrets.fingerprint` and `secrets.registry` open state
+        files directly because each has a policy the dispatch does not have — two of them
+        read the mode back and REFUSE. What makes them correct is the ``fchmod``, so that
+        is what the scan asks for, rather than naming the three functions in a list.
+        """
+        leaks = ("import os\ndef f():\n"
+                 "    fd = os.open(config.STATE_DIR / 'x', os.O_WRONLY | os.O_CREAT, 384)\n"
+                 "    os.write(fd, b'y')\n")
+        settles = ("import os\ndef f():\n"
+                   "    fd = os.open(config.STATE_DIR / 'x', os.O_WRONLY | os.O_CREAT, 384)\n"
+                   "    os.fchmod(fd, 384)\n"
+                   "    os.write(fd, b'y')\n")
+        self.assertEqual([e for _ln, e in scan.write_violations(leaks, self.names)],
+                         ["config.STATE_DIR / 'x'"],
+                         "`os.open`'s mode argument is ignored for an inode that already "
+                         "exists (#437) — a creation mode is not a private file")
+        self.assertEqual(scan.write_violations(settles, self.names), [])
+
+    def test_one_hop_of_indirection_does_not_hide_it(self) -> None:
+        """The shape most of the writers actually have: a module-level path helper, then
+        a write in the function that uses it."""
+        src = ("def _cache_file():\n    return config.STATE_DIR / 'cache' / 'x.json'\n\n"
+               "def save():\n    f = _cache_file()\n"
+               "    f.write_text('y')\n")
+        self.assertEqual([ln for ln, _ in scan.write_violations(src, self.names)], [6])
+
+    def test_the_module_alias_does_not_hide_it(self) -> None:
+        src = "def f():\n    (_cfg.STATE_DIR / 'x').write_text('y')\n"
+        self.assertEqual([ln for ln, _ in scan.write_violations(src, self.names)], [2])
+
+    #: How the two writers this scan could not see were *bound*, rather than what they
+    #: wrote. `_local_assigns` read single-Name assignments only, so a name that arrived
+    #: by tuple-unpack or as a loop variable expanded to itself and named nothing —
+    #: `persona.set_active` and `workspace._rename_active_pointers` were both invisible on
+    #: that alone, and both wrote pointer files at the umask.
+    BINDINGS = {
+        "tuple unpack — which element is which is not decidable, so both carry it":
+            "def _pointers():\n    return config.SESSIONS_DIR / 'a', config.TERMINALS_DIR / 'b'\n\n"
+            "def go():\n    sf, tf = _pointers()\n    sf.write_text('y')\n",
+        "a loop over the names that were just unpacked":
+            "def _pointers():\n    return config.SESSIONS_DIR / 'a', config.TERMINALS_DIR / 'b'\n\n"
+            "def go():\n    sf, tf = _pointers()\n"
+            "    for f in (sf, tf):\n        f.write_text('y')\n",
+        "a loop over what a state directory globs":
+            "def go():\n    for f in config.SESSIONS_DIR.glob('*.workspace'):\n"
+            "        f.write_text('y')\n",
+        "a loop over the state directories themselves":
+            "def go():\n    for d in (config.SESSIONS_DIR, config.TERMINALS_DIR):\n"
+            "        (d / 'x').write_text('y')\n",
+    }
+
+    def test_how_the_name_was_bound_does_not_hide_the_write(self) -> None:
+        for label, src in self.BINDINGS.items():
+            with self.subTest(label):
+                self.assertTrue(scan.write_violations(src, self.names),
+                                f"{label}: the write went unseen")
+
+    def test_the_same_bindings_on_a_committed_path_are_left_alone(self) -> None:
+        """Widening how a name is followed must not widen what counts as state, or the
+        remedy for the noise is to privatise the committed tree."""
+        for label, src in self.BINDINGS.items():
+            with self.subTest(label):
+                committed = src.replace("SESSIONS_DIR", "PERSONAS_DIR") \
+                               .replace("TERMINALS_DIR", "PERSONAS_DIR")
+                self.assertEqual(scan.write_violations(committed, self.names), [],
+                                 f"{label}: a committed file was flagged as state")
+
+    def test_the_handed_half_is_the_same_question_about_files(self) -> None:
+        """`memstore.write(mem_dir, …)` again, one inode-kind over: nothing in the callee
+        spells a state name, and the file it writes was at the umask exactly as the
+        directory used to be."""
+        caller = ("from . import store\n\n"
+                  "def go():\n    store.write(config.STATE_DIR / 'x', 'y')\n")
+        for label, body in (
+                ("write_text", "    (mem_dir / 'a').write_text(text)\n"),
+                ("open for append", "    (mem_dir / 'a').open('a').close()\n"),
+                ("touch", "    (mem_dir / 'a').touch()\n")):
+            with self.subTest(label):
+                mods = scan.modules_from({
+                    "store": "def write(mem_dir, text):\n" + body, "caller": caller})
+                self.assertEqual(scan.handed_write_violations(mods, self.names),
+                                 {"charter/store.py": [(2, "mem_dir / 'a'")]})
+
+    def test_a_committed_path_handed_the_same_way_is_not(self) -> None:
+        mods = scan.modules_from({
+            "store": "def write(mem_dir, text):\n    (mem_dir / 'a').write_text(text)\n",
+            "caller": "from . import store\n\n"
+                      "def go():\n    store.write(config.PERSONAS_DIR / 'x', 'y')\n"})
+        self.assertEqual(scan.handed_write_violations(mods, self.names), {})
+
+    def test_the_routed_call_clears_the_handed_half_too(self) -> None:
+        mods = scan.modules_from({
+            "store": "def write(mem_dir, text):\n"
+                     "    config.write_for(mem_dir / 'a', text)\n",
+            "caller": "from . import store\n\n"
+                      "def go():\n    store.write(config.STATE_DIR / 'x', 'y')\n"})
+        self.assertEqual(scan.handed_write_violations(mods, self.names), {})
+
+    def test_config_own_writers_are_exempt_and_named_in_full(self) -> None:
+        """`config`'s own `open`/`touch` ARE the routing — flagging them would be asking
+        the guard to route through itself. Exempted by ``module.function``, so the same
+        function name in another module is still scanned."""
+        callee = "def write_for(p, t):\n    open(p, 'w').close()\n"
+        caller = "from . import {alias}\n\ndef go():\n    {alias}.write_for(config.STATE_DIR / 'x', 'y')\n"
+        self.assertEqual(
+            scan.handed_write_violations(
+                scan.modules_from({"config": callee,
+                                   "caller": caller.format(alias="config")}), self.names),
+            {})
+        self.assertEqual(
+            scan.handed_write_violations(
+                scan.modules_from({"other": callee,
+                                   "caller": caller.format(alias="other")}), self.names),
+            {"charter/other.py": [(2, "p")]},
+            "any module could opt out of the scan by naming a function `write_for`")
+
+
 class EveryStateWriterGoesThroughTheWalk(unittest.TestCase):
     def test_no_mkdir_in_the_package_can_make_a_loose_state_directory(self) -> None:
         found = scan.scan_package()
@@ -720,6 +1340,42 @@ class EveryStateWriterGoesThroughTheWalk(unittest.TestCase):
             "the state directory (#470):\n"
             + "\n".join(f"  {f}:{ln}  {expr}.mkdir(…)"
                         for f, hits in found.items() for ln, expr in hits))
+
+    #: The writers #505 did **not** close, by file and by the path expression at the site
+    #: — never by line number, which two people editing the same module would invalidate
+    #: without either of them touching a mode.
+    #:
+    #: Both are `persona.set_active`: the per-session and per-terminal persona pointers
+    #: (``f``, bound by ``for f in (sf, tf)``) and the plane-wide ``active-persona``. They
+    #: are three lines and they are out of this change only because two other branches
+    #: were live in `charter/persona.py` when it landed, and an edit in the middle of them
+    #: buys a conflict for no schedule. Filed as #581, with the measurement.
+    #:
+    #: This list is a **ratchet, not an allowance**. The assertion below is equality, so a
+    #: writer that gets routed fails here as a stale entry and a new unrouted one fails as
+    #: an unlisted leak — neither direction can happen quietly, and "add a line to make the
+    #: test pass" is a diff a reviewer sees.
+    NOT_ROUTED_YET = {"charter/persona.py": ["config.ACTIVE_PERSONA_FILE", "f"]}
+
+    def test_no_write_in_the_package_can_leave_a_loose_state_file(self) -> None:
+        found = {f: sorted(expr for _ln, expr in hits)
+                 for f, hits in scan.scan_package_writes().items()}
+        expected = {f: sorted(e) for f, e in self.NOT_ROUTED_YET.items()}
+        self.assertEqual(
+            found, expected,
+            "a file under `.charter/` written without `config.write_for` / `open_for` / "
+            "`touch_for` comes out at `0o777 & ~umask`, and the directory above it is not "
+            "guaranteed to be 0700 — charter does not chmod a state directory it did not "
+            "create (#331, #505). Route it. If it really is out of reach, move it into "
+            "`NOT_ROUTED_YET` and say why there; if it is now routed, delete its entry.\n"
+            f"  found:  {found}\n  listed: {expected}")
+
+    def test_the_ratchet_names_files_that_exist(self) -> None:
+        """The one way an equality assertion cannot notice a stale entry: the module gets
+        renamed or deleted, and the list keeps naming a path nobody will look at again."""
+        for f in self.NOT_ROUTED_YET:
+            self.assertTrue((REPO_ROOT / f).is_file(),
+                            f"NOT_ROUTED_YET names {f}, which is not a file any more")
 
 
 if __name__ == "__main__":
