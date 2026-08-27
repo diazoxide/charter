@@ -104,7 +104,10 @@ class RosterWidths(PersonaIso):
             except OSError:
                 continue
             kept.append(n)
-        if len(kept) < 2:
+        # `min(2, ...)`, not a flat 2: a caller asking for ONE persona gets a roster of
+        # one, and a flat floor turned that into a silent skip — a test that does not run
+        # is not a test, and this one was the guard on the shared row's DISP cell.
+        if len(kept) < min(2, len(names)):
             self.skipTest("filesystem refuses these names")
         return kept
 
@@ -355,6 +358,48 @@ class TestEveryColumnIsMeasuredNotOnlyTheName(RosterWidths):
         rows = self._stats_with_tally({"ok": 1234567, cjk: 2})
         header = next(r for r in rows if r.startswith("PERSONA"))
         self._assert_aligned(rows, header, "STATUS", DORMANT)
+
+
+class TestTheRewrittenRowsKeptWhatTheyGuarded(RosterWidths):
+    """Two guards on the rows this change rewrote, found unpinned by `tools/sweep.py`.
+
+    Neither is about column width. Both are behaviour the old `print` statements carried
+    and the new row builders still carry, and the sweep charges them here because these
+    are the lines this change touched. A rewrite that silently dropped either would have
+    passed every alignment case in this file, which is the point of running the sweep on
+    a diff rather than only asserting the thing you set out to fix.
+    """
+
+    def test_a_vault_status_cannot_write_a_second_row(self):
+        """VAULT STATUS is the last column of `persona list` and it is UNPADDED, so it is
+        the one field a bound at the column cannot help with. `_vault_status` returns
+        provider health text — a path, an error from a credential helper — and a newline
+        in it writes a second physical line wearing this table's own layout. That is
+        #453's mechanism, and `contain.one_line` is what stops it."""
+        self._roster("ok", "other")
+        hostile = "no vault\nfake      Fake role   vault2   no vault"
+        with mock.patch.object(commands_persona, "_vault_status", return_value=hostile):
+            rows = self._run(commands_persona.cmd_persona_list)
+        forged = [r for r in rows if r.startswith("fake")]
+        self.assertEqual(
+            forged, [],
+            "a vault status wrote its own table row:\n" + "\n".join(rows))
+
+    def test_the_shared_namespace_reports_no_dispatch_count(self):
+        """`_shared` is a namespace, not a persona: nothing is ever dispatched AS it, so a
+        number in its DISP cell would be a count of something that cannot happen. The row
+        prints an em dash, and the tally is not consulted for it even when one exists."""
+        self._roster("ok")
+        from charter import dispatch
+
+        with mock.patch.object(dispatch, "tally",
+                               return_value={config.SHARED_PERSONA: 7, "ok": 3}):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        shared = [r for r in rows if r.startswith(config.SHARED_PERSONA)]
+        self.assertEqual(len(shared), 1, "\n".join(rows))
+        self.assertNotIn("7", shared[0],
+                         "the shared namespace reported a dispatch count:\n" + shared[0])
+        self.assertIn("—", shared[0], shared[0])
 
 
 class TestTuiColumn(unittest.TestCase):
