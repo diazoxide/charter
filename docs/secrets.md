@@ -46,7 +46,7 @@ start about a directory you have decided to leave alone is a check nobody reads 
 **The files in it are a different answer, and on purpose.** Every file charter writes under
 `.charter/` — the vault registry, `guard-seen.json`, the trace log, the ephemeral persona
 store, the session and workspace pointers, the caches — is **0600**, whatever your umask
-says and whatever mode the file had before. Until 0.54 they were written at `0o777 & ~umask`
+says and whatever mode the file had before. They used to be written at `0o777 & ~umask`
 instead, which was safe only while the directory above them was 0700 — i.e. not in the case
 this whole section is about
 ([#505](https://github.com/diazoxide/charter/issues/505)).

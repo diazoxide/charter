@@ -616,7 +616,7 @@ class TheDispatchOnWhereTheFileIs(PersonaIso):
         A mode written down here would be a second thing to keep in step with the
         platform; a file written beside it cannot drift.
         """
-        c = Path(self.tmp) / f"control-{um:03o}-{id(self):x}"
+        c = Path(self.tmp) / f"control-{um:03o}"
         c.write_text("x")
         return c
 
