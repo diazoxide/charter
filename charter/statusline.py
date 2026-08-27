@@ -946,18 +946,18 @@ def _row_plan(budget: int) -> _RowPlan:
     it. It takes the other of #506's two honest options: a narrower row SHAPE, whose
     losing order is written down.
 
-    The order, and why each item is where it is:
+    What a narrow pane gives up, and why in that order:
 
-    1. **The branch text shrinks first.** It is the widest column and the least urgent —
-       "which branch" is a fact you go and look up, where a red pipeline is one you act
-       on. It stops at :data:`_BRANCH_MIN_W`, which is the markers, because dirty/ahead/
-       behind are true of the TREE and outlive its name.
-    2. **Then the repo name shrinks**, to :data:`_NAME_MIN_W`.
-    3. **Then whole cells go**, in the order change → branch → CI. Whole, never trimmed:
-       `✗ fa…` is the false-clean reading a trimmed cell produces, and the CI mark is the
-       last thing standing because it is the one cell that changes what a reader does
+    1. **The branch text is the first thing to go and the CI mark the last.** "Which
+       branch" is a fact you go and look up; a red pipeline is one you act on. So the
+       branch is the widest column at a wide pane and the first to reach its floor, and
+       that floor is :data:`_BRANCH_MIN_W` — the markers — because dirty/ahead/behind are
+       true of the TREE and outlive what it is called.
+    2. **A cell that cannot be shown whole is not shown**, in the order change → branch →
+       CI. `✗ fa…` is the false-clean reading a trimmed cell produces, and the CI mark is
+       the last thing standing because it is the one cell that changes what a reader does
        next.
-    4. **Anything a drop left over goes back**, name first. A dropped cell frees more
+    3. **Anything a drop left over goes back**, name first. A dropped cell frees more
        columns than the deficit demanded, and leaving them blank while the repo name is
        cut to twelve characters spends a narrow pane on nothing.
 
@@ -965,26 +965,24 @@ def _row_plan(budget: int) -> _RowPlan:
     status-line PANE's width, so any split reaches here — lays out at 72 and loses
     exactly 23 columns of branch text. Nothing else moves.
     """
-    # **No early return for a wide pane, and no `break` in the loop below.** Both were
-    # here, and a deletion sweep reported both as equivalent — correctly. A pane at
-    # `_LEFT_W` or wider walks the whole function and comes back with `_FULL_ROW` anyway:
-    # `over` clamps to zero so nothing shrinks, the drop loop finds the plan already
-    # inside the budget, and the leftover loop caps each cell at its full width. Saying it
-    # twice bought a branch nothing could reach.
+    # **Written as "start at the floors and spend upward", not "start full and shrink".**
+    # It was the second, with an early return for a wide pane and a shrink loop in front
+    # of the two below — and a deletion sweep took all of it apart: the early return was
+    # unreachable behaviour (a wide pane comes back with `_FULL_ROW` from the general path
+    # anyway), and the shrink loop was redundant with the give-back loop, which recomputes
+    # the same allocation from the floors. Verified as a whole function rather than
+    # reasoned: the two spellings agree at every budget from 1 to 400.
     #
-    # What replaces the `break` is what the `break` was really for: `max(0, …)` makes the
-    # shrink loop unable to GROW a cell. That is a property of the arithmetic now rather
-    # than of an early exit somebody has to keep in step with it — and it IS pinned, by
-    # `_row_plan(200) == _FULL_ROW`: unclamp it and a 200-column pane plans a 139-column
-    # branch cell.
-    plan = _FULL_ROW
-    for i, floor in ((1, _BRANCH_MIN_W), (0, _NAME_MIN_W)):
-        over = max(0, _plan_width(plan) - budget)
-        plan = plan._replace(**{plan._fields[i]: max(floor, plan[i] - over)})
+    # And this way the two orders are each written down exactly once — the drop order, and
+    # the give-back order that makes the branch narrow before the name does — instead of
+    # the give-back silently overruling a shrink that had already made the same decision.
+    plan = _RowPlan(_NAME_MIN_W, _BRANCH_MIN_W, _CI_W, _MR_W)
     for i in (3, 1, 2):                       # change, then branch, then CI
         if _plan_width(plan) <= budget:
             break
         plan = plan._replace(**{plan._fields[i]: 0})
+    # The name is filled to its full width before the branch gets a column, which is what
+    # "the branch narrows first" means from this direction.
     for i, full in ((0, _FULL_ROW.name), (1, _FULL_ROW.branch)):
         spare = budget - _plan_width(plan)
         if plan[i] and spare > 0:

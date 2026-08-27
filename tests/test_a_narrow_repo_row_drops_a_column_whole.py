@@ -113,14 +113,36 @@ class RowPlanCase(unittest.TestCase):
     def test_a_cell_is_never_drawn_narrower_than_the_value_it_would_hold(self):
         """Shown whole or dropped whole, and this is the assertion that says so: at no
         width does the CI cell exist while holding a PREFIX of its label. `✗ fa…` is the
-        false-clean reading a crop produces, and it is worse than an absent cell."""
+        false-clean reading a crop produces, and it is worse than an absent cell.
+
+        **Asked of the PLAN, not of the rendered row**, and the difference is the whole
+        assertion. `if "✗" in row` skips itself the moment the glyph is gone — so a plan
+        that pushed the row over its budget and let `tui.Row` truncate the CI cell away
+        entirely satisfied it by drawing nothing. Found by the deletion sweep, which
+        unclamped a cell's floor and produced exactly that.
+        """
         for w in self.WIDTHS:
             with self.subTest(width=w):
+                plan = sl._row_plan(w)
                 row = tui.strip_ansi(_row(w))
-                if "✗" in row:
-                    self.assertIn(CI_WHOLE, row, row)
-                if "#" in row:
-                    self.assertIn(CHANGE_WHOLE, row, row)
+                if plan.ci:
+                    self.assertIn(CI_WHOLE, row, f"plan={tuple(plan)} row={row!r}")
+                if plan.mr:
+                    self.assertIn(CHANGE_WHOLE, row, f"plan={tuple(plan)} row={row!r}")
+
+    def test_no_cell_is_ever_planned_narrower_than_its_own_floor(self):
+        """A cell is at its full width, at its floor, or gone. Never between, and never
+        negative — a negative width is TRUTHY, so it reads as a drawn cell, spends a gap,
+        and pushes the row over the budget the plan just computed for it."""
+        for w in range(1, 200):
+            with self.subTest(width=w):
+                plan = sl._row_plan(w)
+                self.assertGreaterEqual(plan.name, sl._NAME_MIN_W, (w, plan))
+                if plan.branch:
+                    self.assertGreaterEqual(plan.branch, sl._BRANCH_MIN_W, (w, plan))
+                    self.assertLessEqual(plan.branch, sl._BRANCH_W, (w, plan))
+                self.assertIn(plan.ci, (0, sl._CI_W), (w, plan))
+                self.assertIn(plan.mr, (0, sl._MR_W), (w, plan))
 
     def test_the_markers_outlive_the_branch_name(self):
         """Dirty and ahead are true of the TREE; `main` is only what it is called. So the
