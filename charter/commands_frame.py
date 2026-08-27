@@ -3517,6 +3517,14 @@ def _draw_palette(args) -> int:
     and goes through `invoke`. They are told apart by `choose.noun_of`, on ids a provider's
     action cannot spell — see `frame/choose.py`.
 
+    **A third kind arrives only if the operator types**, and the catalogue is deliberately
+    not where it lives. `query_only` hands the surface :func:`_name_rows`, which is called
+    the first time the query is non-empty and never while it is empty — so `F2` on a plane
+    with forty workspaces still costs what it cost when the doorways were the only way to
+    a name, and `F2` then `beta` then Enter switches without the doorway's Enter in
+    between. The rows that come back are the picker's own, so `_chosen_name` maps one back
+    to a name without knowing which route drew it.
+
     **Every outcome is said on the operator's own screen, and there is exactly one call
     that says it.** Three things can need a sentence and none of them has anywhere else to
     go, because the pane they would have been drawn in is the one this is about to kill:
@@ -3540,6 +3548,7 @@ def _draw_palette(args) -> int:
         surface = palette.Palette(
             catalogue=(choose.open_rows(fid)
                        + palette.rows(reg.offers(fid=fid, snapshot=snapshot))),
+            query_only=lambda: _name_rows(fid, opened),
             mouse=True)
         chosen = palette.own_the_tty(
             surface, then=lambda row: _picker(row, fid, opened))
@@ -3579,17 +3588,71 @@ def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
     cannot honour. ``None`` here sends the row back to :func:`_draw_palette`, which says
     the note on the operator's screen.
 
-    The roster is appended to *opened* rather than returned beside the surface, because
-    what comes back out of `own_the_tty` is a ROW and the caller has to map it to the name
-    it stood for. Matching that by title would mean matching on a string
-    `overlay.Surface.render` has already contained — see `choose.Roster`.
+    The roster is put in *opened* by :func:`_roster` rather than returned beside the
+    surface, because what comes back out of `own_the_tty` is a ROW and the caller has to
+    map it to the name it stood for. Matching that by title would mean matching on a string
+    `overlay.Surface.render` has already contained — see `choose.Roster`. It also comes
+    from there rather than from `choose.roster` directly, so a noun the operator already
+    typed against is not listed a second time — see that function.
     """
     noun = choose.noun_of(row)
     if noun is None or row.note:
         return None
+    return palette.Palette(catalogue=_roster(noun, fid, opened).rows,
+                           label=noun, mouse=True)
+
+
+def _name_rows(fid: str, opened: list) -> "tuple[overlay.Row, ...]":
+    """Every workspace and every persona as one row, each labelled with which it is.
+
+    **Handed to the palette as `query_only`, so this runs on the first keystroke and never
+    on a query of nothing.** That is the cost half of Task 8: a directory listing per noun
+    is what a name row is made of, and an operator who opened `F2` to press `detach` asked
+    no question that needs one. `frame/palette.Palette._reachable` is where the promise is
+    kept and `tests/test_frame_palette_names.py` is where it is measured.
+
+    Workspaces before personas — `choose.NOUNS`' own order, which the doorways are already
+    drawn in — because `narrow` never reorders and this is where the two groups' order is
+    decided rather than at the moment somebody types.
+
+    **A pinned noun's names are listed WITH THE PIN, not dropped.** The doorway refuses to
+    open a picker for one, because a pane of names none of which can be switched to is an
+    offer charter knows it cannot honour — but a name the operator has already typed is a
+    question they asked, and answering it with an empty pane is #512's "no repos" over a
+    plane that had them. So the reason goes in the note (`choose.labelled`), the row says
+    why before the keypress, and pressing it lands the same sentence on the screen —
+    `choose.pin_reason` and `switch.to_workspace` build it from one read of
+    `state.identity`, so the row and the refusal cannot describe one frame two ways.
+
+    The rosters go into *opened* exactly as a doorway's would, which is what makes
+    :func:`_chosen_name` indifferent to how a name row reached the screen.
+    """
+    out: list = []
+    for noun in choose.NOUNS:
+        out.extend(choose.labelled(_roster(noun, fid, opened),
+                                   choose.pin_reason(noun, fid)))
+    return tuple(out)
+
+
+def _roster(noun: str, fid: str, opened: list) -> "choose.Roster":
+    """This palette's roster for *noun*, read from the plane at most once.
+
+    **One roster per noun per palette, and that is correctness rather than thrift.** Row
+    ids are `<noun>:n<N>` — an index into the list that produced them — so two rosters for
+    one noun are two lists that agree only for as long as the plane does not change under
+    them, and `_chosen_name` would answer from whichever was appended first. A workspace
+    created between the operator typing and the operator pressing Enter on a doorway is
+    enough to make that the wrong name.
+
+    Reading once is the same answer read twice as often as it needs to be: typing `bet`
+    and then opening the workspace doorway is one glob of `workspaces/`, not two.
+    """
+    for roster in opened:
+        if roster.noun == noun:
+            return roster
     roster = choose.roster(noun, fid)
     opened.append(roster)
-    return palette.Palette(catalogue=roster.rows, label=noun, mouse=True)
+    return roster
 
 
 def _chosen_name(row, opened: list) -> "tuple[str, str] | None":

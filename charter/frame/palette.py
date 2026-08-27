@@ -19,6 +19,14 @@ the whole of the seam, and it is deliberately a function from offers to
 the same :class:`Palette` over a different row source, and a picker that had to subclass
 something would be a second surface wearing this one's name.
 
+**A NAME is not an action either, and it reaches this list without becoming one.** Task 6
+removed forty workspace `Action`s and was right to — an action's contract is
+fire-and-report, and forty of them meant forty `run`s each starting a second charter
+process — but the doorway it left cost the operator a keypress on the thing they do most.
+:attr:`Palette.query_only` is the seam that gives it back: rows the FILTER reaches which
+browsing does not, gathered the first time something is typed and never while the query is
+empty. Still rows, still no `Action`, and still nothing spawned until Enter.
+
 **Three rules the plan states and a first implementation loses.**
 
 *An unavailable action is listed WITH ITS REASON.* `frame/actions.py` already refuses to
@@ -49,11 +57,11 @@ import select
 import sys
 import termios
 import tty
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from .. import contain
-from . import overlay
+from . import component, overlay
 
 #: What the header says the palette is, before the operator types anything.
 HEADING = "charter"
@@ -103,12 +111,23 @@ def matches(query: str, row: overlay.Row) -> bool:
     run, and matching it would make typing `lock` list every action that merely mentions
     one — a filter that answers a question nobody asked.
 
+    **And the id only when it is an ACTION id**, which is the same sentence read
+    carefully rather than a new rule: an id earns its place in the filter by being the
+    name a provider's documentation gives the thing. `frame/choose.py`'s row ids are not
+    that — they are charter's own counter, `workspace:n7`, never drawn and never typed —
+    and now that name rows sit in this list, matching them blindly would make `n` list
+    every name on the plane and `persona` list every persona. `component.usable_id` is
+    the question `frame/action.py` already asks of an action id, asked here rather than
+    re-spelled, so "can be an action id" and "is matched as one" cannot drift apart.
+
     `casefold` on both sides rather than `lower`, and applied to the query once per row
     rather than hoisted, because this is the whole of the case rule and a hoisted copy is
     a second place for it to be wrong.
     """
     q = contain.one_line(query).casefold()
-    return q in row.title.casefold() or q in row.id.casefold()
+    if q in row.title.casefold():
+        return True
+    return component.usable_id(row.id) and q in row.id.casefold()
 
 
 def narrow(catalogue: Iterable[overlay.Row], query: str) -> tuple[overlay.Row, ...]:
@@ -145,9 +164,53 @@ class Palette(overlay.Surface):
     #: `Surface.heading`, which this class rewrites on every keystroke.
     label: str = HEADING
 
+    #: Rows a QUERY reaches and browsing does not. Called with no arguments the first time
+    #: :attr:`query` is non-empty, and never while it is empty. ``None`` — the default,
+    #: and what every picker passes — is "there are none".
+    #:
+    #: **The laziness is the whole reason this is a callable and not a second tuple.**
+    #: `frame/choose.py`'s names are directory listings off the plane: `switch.workspaces`
+    #: globs `workspaces/` and `switch.personas` globs `personas/`, once each per read. An
+    #: operator who opens the palette to press `detach` has asked no question about names,
+    #: and a catalogue built eagerly would enumerate forty workspaces to answer it. Passing
+    #: rows here instead of a function would have done that work at the call site, which is
+    #: the same cost one line earlier.
+    query_only: Callable[[], tuple[overlay.Row, ...]] | None = None
+
+    #: What :attr:`query_only` answered, kept so it is asked ONCE per palette rather than
+    #: once per keystroke — see :meth:`_reachable`. ``None`` is "not asked yet", which is
+    #: what makes that distinguishable from a plane that genuinely has no names.
+    _found: tuple[overlay.Row, ...] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._refilter()
+
+    def _reachable(self) -> tuple[overlay.Row, ...]:
+        """Everything :func:`narrow` may keep right now: the catalogue, and — once
+        something has been typed — :attr:`query_only`'s rows after it.
+
+        **Empty query, catalogue only, and that is a cost promise rather than a display
+        one.** It is what makes `F2` on a plane with forty workspaces read the same three
+        state files it read before this attribute existed. A version that gathered eagerly
+        and merely hid the rows would draw identically and be the thing this refuses.
+
+        **Asked once, not once per keystroke.** The gather is memoised in :attr:`_found`,
+        so `beta` costs one directory read rather than four, and backspacing to nothing and
+        typing again costs none. The names are therefore resolved at the FIRST keystroke
+        rather than when the palette opened, which is the same freshness the doorway path
+        has — `commands_frame._roster` hands both paths the one roster — and a palette
+        lives for as long as somebody is looking at it.
+
+        **After the catalogue, never before.** `narrow` does not reorder, so this is the
+        only place the order of the two groups is decided: every action and both doorways
+        keep the position they had before names existed, and a plane with forty workspaces
+        cannot bury `detach` under the ones whose names happen to contain a `d`.
+        """
+        if not self.query or self.query_only is None:
+            return self.catalogue
+        if self._found is None:
+            self._found = tuple(self.query_only())
+        return self.catalogue + self._found
 
     def _refilter(self) -> None:
         """Recompute the visible rows, the header, and where the cursor sits.
@@ -158,7 +221,7 @@ class Palette(overlay.Surface):
         `_top` follows it because `Surface._window` recomputes from the selection, so
         there is no second scroll state to keep in step.
         """
-        self.rows = narrow(self.catalogue, self.query)
+        self.rows = narrow(self._reachable(), self.query)
         self._sel = 0
         self._top = 0
         self.heading = self.label + (PROMPT + self.query if self.query else "")

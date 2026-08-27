@@ -781,6 +781,39 @@ workspace · 4 to choose from
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```
 
+**If you already know the name, do not go through the doorway — just type it.** Once
+anything is typed, the palette also matches workspace and persona names, each row labelled
+with which it is, so `F2` `b` `e` `t` `a` Enter switches without opening anything:
+
+```
+charter /zeb · 3 to choose from
+> zeb-api                     workspace
+    zebra-ui                  workspace
+    zeb                       persona
+
+  up/down move   enter choose   esc cancel   F12 back to the harness
+```
+
+The doorways are for browsing — when you do not know the name — and typing is for
+switching, when you do. Both reach the same rows, and the one you are on keeps its `*`
+either way.
+
+**With nothing typed, no names are listed and none are read.** Names come off directory
+listings on your plane, so opening the palette to press `detach` does not enumerate forty
+workspaces to answer a question you did not ask. They are gathered on the first keystroke,
+once, for as long as that palette is open.
+
+**Typing the name of a noun this frame is pinned to lists it with the reason.** The doorway
+refuses to open a picker for a pinned noun, because every name in it would be a move that
+could not happen — but a name you typed is a question you asked, so the row appears with
+`cannot switch: $CHARTER_WORKSPACE pins this frame to '<name>'` beside it rather than an
+empty pane you cannot tell from a typo.
+
+**The filter reads titles and action ids, never the right-hand column.** So `detach` finds
+the detach row and `acme.deploy` finds a provider's action by the name its documentation
+uses, while `persona` finds the persona *doorway* rather than every persona on the plane —
+the kind label is a label, not a search term.
+
 **There is no row cap.** The old menu was a tmux `display-menu`, drawn inside your terminal
 and unable to scroll, so it cut every list at twelve and lost the digit shortcut past nine.
 The picker is a pane charter draws: it scrolls, it filters, and a plane with forty
