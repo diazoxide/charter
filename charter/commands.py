@@ -2461,11 +2461,22 @@ def _news_line(e, status: str) -> str:
     Deliberately not JSON. The skill is a Claude Code artifact and opencode gets none, so
     this text is the only thing an agent on another harness has — a machine surface would
     become the parsed one, and this the unchecked one.
+
+    Every span an entry owns goes through `contain.one_line`. The slug, the headline and
+    the `adopt:` command are all frontmatter or a filename, this is two lines of charter's
+    own report with a structure a reader parses by eye, and #502 is the same value crossing
+    into the same kind of line one function over. The `·` and the indent are charter's; a
+    third of each would be the entry's.
     """
     from . import news
 
-    how = f"adopt: charter {e.adopt}" if e.adopt else "adopt: manual (see the entry)"
-    return f"  {e.slug} · {news.marker(e)}{e.headline}\n      {how}"
+    adopt = contain.one_line(e.adopt)
+    # Asked of the CONTAINED value, not the raw one. They agree today; the question this
+    # line needs answered is "is there a command to show the reader", and a value that
+    # renders as nothing is not one.
+    how = f"adopt: charter {adopt}" if adopt else "adopt: manual (see the entry)"
+    return (f"  {contain.one_line(e.slug)} · {news.marker(e)}"
+            f"{contain.one_line(e.headline)}\n      {how}")
 
 
 #: Said once, where a probe would otherwise be run against nothing.
@@ -2491,10 +2502,19 @@ def cmd_news(args) -> int:
         # `gh release create --notes-file`. So an ordering charter cannot honour is caught
         # before a Release exists to be wrong, rather than after — which is the position
         # #486 was filed from, with the notes already published.
-        problems = news.ordering_errors(news.for_version(version))
+        # Both halves, behind one gate. `entry_errors` speaks for files that BECAME
+        # entries; `unreadable` speaks for files in the news directory that did not, which
+        # is where a miscased `Version:` lands — dropped by `_read` before any per-entry
+        # check exists to be asked, and waved through by a release guard that answers from
+        # filenames (#503). Asked over the whole directory rather than for this version,
+        # because a file with no readable version has no version to be filtered by and the
+        # release being cut is when somebody wants to hear about it.
+        problems = news.entry_errors(news.for_version(version)) + news.unreadable()
         if problems:
-            util.err(f"the news entries for {version} declare an ordering charter cannot "
-                     f"honour:")
+            # "the news for", not "the news entries for": half of what this gate now
+            # catches is a file that never became an entry, and a sentence naming only
+            # entries would send the reader looking for one that does not exist.
+            util.err(f"the news for {version} declares something charter cannot honour:")
             for why in problems:
                 util.info(f"  {why}")
             return 1
@@ -2519,7 +2539,9 @@ def cmd_news(args) -> int:
                 # Said, not swallowed. A probe that could not run is the one case where
                 # silence would be read as "nothing to adopt" — the shape ADR 0013 and
                 # `doctor`'s not-checked hint both exist to refuse.
-                util.warn(f"{e.slug}: {why}")
+                # The slug is the committed filename with its version prefix cut off, and
+                # `why` already carries the entry's `check:` contained (`news._report`).
+                util.warn(f"{contain.one_line(e.slug)}: {why}")
                 unchecked += 1
         if not shown:
             if unchecked:
@@ -2552,11 +2574,14 @@ def cmd_news(args) -> int:
     # over a malformed `security:` line would lose them the other nineteen entries to
     # protect them from one being in the wrong place. `--for` is where refusing belongs,
     # because that is the call that becomes a published Release.
-    for why in news.ordering_errors(entries):
+    for why in news.entry_errors(entries) + news.unreadable():
         util.warn(why)
     for e in entries:
         status, _ = (news.INFORMATIONAL, "") if planeless else news.probe(e)
-        print(f"{e.version}  {news.marker(e)}{e.headline}")
+        # Version and headline are both frontmatter, and this is a report line whose
+        # two-space column a reader parses by eye (#502).
+        print(f"{contain.one_line(e.version)}  {news.marker(e)}"
+              f"{contain.one_line(e.headline)}")
         # Only an entry with something to DO gets the action line. An informational entry
         # — a patch note, usually — exists to say there is nothing to take up, so printing
         # "adopt: manual" beneath it invents a chore out of the line that denies one.
@@ -2581,7 +2606,11 @@ def cmd_news_stamp(args) -> int:
     if blocked:
         return 1
     for src, dst in renamed:
-        util.ok(f"{src.name} → {dst.name}")
+        # The same pair of committed filenames `news.stamp`'s refusals carry, on the path
+        # that always runs. Containing the refusal and not the success would be #502 in
+        # miniature: one spelling of the message guarded, its neighbour three lines away
+        # not — and this is the one a release prints.
+        util.ok(f"{contain.one_line(src.name)} → {contain.one_line(dst.name)}")
     if not renamed:
         util.info(f"no staged entries — nothing to move onto {version}.")
 

@@ -115,7 +115,7 @@ class DeclaringNothingChangesNothing(NewsDir):
             self.assertFalse(e.lead)
             self.assertFalse(e.security)
             self.assertEqual(e.bad, ())
-        self.assertEqual(news.ordering_errors(news.for_version(_V)), [])
+        self.assertEqual(news.entry_errors(news.for_version(_V)), [])
 
 
 class ADeclaredOrderBeatsTheFilename(NewsDir):
@@ -193,13 +193,13 @@ class AValueCharterCannotReadIsSaid(NewsDir):
     def test_true_and_false_are_the_two_values(self):
         self.three(**{"z-important": {"security": "true"},
                       "m-middle": {"security": "false"}})
-        self.assertEqual(news.ordering_errors(news.for_version(_V)), [])
+        self.assertEqual(news.entry_errors(news.for_version(_V)), [])
         self.assertEqual(self.release_body_order(),
                          ["security: important", "ordinary", "middle"])
 
     def test_case_is_not_a_spelling_difference(self):
         self.three(**{"z-important": {"security": "TRUE"}})
-        self.assertEqual(news.ordering_errors(news.for_version(_V)), [])
+        self.assertEqual(news.entry_errors(news.for_version(_V)), [])
         self.assertEqual(self.release_body_order()[0], "security: important")
 
     def test_a_value_outside_the_pair_is_reported_rather_than_read_as_false(self):
@@ -207,7 +207,7 @@ class AValueCharterCannotReadIsSaid(NewsDir):
         would accept it and be walked past by the one after that; the property here is
         not which words mean yes but whether the value was UNDERSTOOD."""
         self.three(**{"z-important": {"security": "yes"}})
-        why, = news.ordering_errors(news.for_version(_V))
+        why, = news.entry_errors(news.for_version(_V))
         self.assertIn("z-important", why)
         self.assertIn("yes", why)
         self.assertIn("`true` or `false`", why)
@@ -217,7 +217,7 @@ class AValueCharterCannotReadIsSaid(NewsDir):
         so rather than deciding for the author. This is the codepoint that walks past
         every membership test written against a list of words."""
         self.three(**{"z-important": {"security": "ｔｒｕｅ"}})
-        self.assertTrue(news.ordering_errors(news.for_version(_V)))
+        self.assertTrue(news.entry_errors(news.for_version(_V)))
 
     def test_the_unreadable_value_cannot_forge_a_second_line_of_output(self):
         """A news entry is a committed file, so its frontmatter is untrusted input, and
@@ -228,7 +228,7 @@ class AValueCharterCannotReadIsSaid(NewsDir):
         # at the layer the message is built from — the guard has to hold on the argument
         # it is given, not on the parser upstream of it.
         e = news.for_version(_V)[0]._replace(bad=(("security", "yes\nEVIL: line"),))
-        why, = news.ordering_errors([e])
+        why, = news.entry_errors([e])
         self.assertNotIn("\n", why)
         self.assertIn("EVIL", why)  # shown, escaped — not dropped
 
@@ -292,7 +292,7 @@ class ADeclaredFieldWithNoValueIsUnreadRatherThanUnmade(NewsDir):
 
     def test_a_value_on_the_continuation_line_is_reported_not_read_as_false(self):
         self._important(self._CONTINUATION)
-        why, = news.ordering_errors(news.for_version(_V))
+        why, = news.entry_errors(news.for_version(_V))
         self.assertIn("z-important", why)
         self.assertIn("security", why)
 
@@ -317,7 +317,7 @@ class ADeclaredFieldWithNoValueIsUnreadRatherThanUnmade(NewsDir):
                      f"---\nversion: {_V}\nheadline: important\nsecurity: \n---\n\nb\n"):
             with self.subTest(text=text):
                 self._important(text)
-                self.assertTrue(news.ordering_errors(news.for_version(_V)))
+                self.assertTrue(news.entry_errors(news.for_version(_V)))
 
     def test_lead_declared_empty_is_reported_too(self):
         """Both ordering fields, not just the one the repro used. `_ORDERING_FIELDS` is
@@ -325,7 +325,7 @@ class ADeclaredFieldWithNoValueIsUnreadRatherThanUnmade(NewsDir):
         wrote — but a test that only ever names `security` would not know."""
         self._important(f"---\nversion: {_V}\nheadline: important\nlead:\n  true\n"
                         f"---\n\nb\n")
-        why, = news.ordering_errors(news.for_version(_V))
+        why, = news.entry_errors(news.for_version(_V))
         self.assertIn("lead", why)
 
     def test_the_message_names_the_shape_instead_of_quoting_an_empty_value(self):
@@ -333,7 +333,7 @@ class ADeclaredFieldWithNoValueIsUnreadRatherThanUnmade(NewsDir):
         nothing after it — reads as a rendering bug and tells the author nothing. The
         sentence has to name the line the value went onto, because that is the edit."""
         self._important(self._CONTINUATION)
-        why, = news.ordering_errors(news.for_version(_V))
+        why, = news.entry_errors(news.for_version(_V))
         self.assertNotIn("`security: `", why)
         self.assertIn("`true` or `false`", why)
         self.assertIn("next line", why.casefold())
@@ -347,7 +347,7 @@ class ADeclaredFieldWithNoValueIsUnreadRatherThanUnmade(NewsDir):
             self.assertFalse(e.security)
             self.assertFalse(e.lead)
             self.assertEqual(e.bad, ())
-        self.assertEqual(news.ordering_errors(news.for_version(_V)), [])
+        self.assertEqual(news.entry_errors(news.for_version(_V)), [])
         self.assertEqual(self.release_body_order(),
                          ["ordinary", "middle", "important"])
 
@@ -413,7 +413,7 @@ class TheReleaseGateRefusesAContradiction(NewsDir):
         version would refuse the second release that ever used the field."""
         self.write(f"{_V}-only.md", _entry(_V, "this one", lead="true"))
         self.write("0.61.0-only.md", _entry("0.61.0", "that one", lead="true"))
-        self.assertEqual(news.ordering_errors(news.all()), [])
+        self.assertEqual(news.entry_errors(news.all()), [])
         self.assertEqual(self._for(_V)[0], 0)
         self.assertEqual(self._for("0.61.0")[0], 0)
 
@@ -446,7 +446,7 @@ class WhatShippedStillParses(unittest.TestCase):
     def test_no_shipped_entry_declares_an_order_charter_cannot_honour(self):
         entries = news.all()
         self.assertTrue(entries, "no news entries found — this test proves nothing")
-        self.assertEqual(news.ordering_errors(entries), [])
+        self.assertEqual(news.entry_errors(entries), [])
 
     def test_the_0_52_0_release_leads_with_its_security_fix(self):
         """#486's own case, on real data. 0.52.0 shipped 24 entries and the vault-spending
@@ -546,11 +546,16 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
     `release.yml`'s pre-publish guard *is* `charter news --for $version`, and until #486
     that call had exactly one way to exit 1 — no entry — so its `::error::` could state
     that as fact and prescribe `charter news stamp $version`. #486 gave it two more: an
-    ordering value charter cannot read, and two entries both claiming `lead: true`.
-    Against either, an annotation naming only the missing entry names a cause that is not
-    the cause and prescribes a command that changes nothing — and stamping a version that
-    is already stamped is a no-op, so the operator's next move produces no new
-    information either.
+    ordering value charter cannot read, and two entries both claiming `lead: true`; #503
+    gave it two after that, a frontmatter key charter does not read (`Security:`,
+    `securiy:`) and a file in `docs/news` that is not an entry at all. Against any of
+    them, an annotation naming only the missing entry names a cause that is not the cause
+    and prescribes a command that changes nothing — and stamping a version that is already
+    stamped is a no-op, so the operator's next move produces no new information either.
+
+    Which is also why the vocabulary the two texts share is no longer the word "ordering".
+    Four of the five causes are not orderings, and a shared word that is true of one cause
+    is the same narrowing that put #486 back through the field added to prevent it.
 
     Three properties, in ascending order of teeth.
 
@@ -589,9 +594,9 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
                              f"--for {version} was expected to refuse")
         return err.getvalue()
 
-    def test_the_annotation_names_the_ordering_cause_as_well_as_the_missing_entry(self):
+    def test_the_annotation_names_the_declared_cause_as_well_as_the_missing_entry(self):
         self.assertIn("docs/news/", self.annotation)
-        self.assertIn("ordering", self.annotation)
+        self.assertIn("cannot honour", self.annotation)
 
     def test_and_defers_to_the_command_for_which_of_them_it_was(self):
         """Rather than diagnosing. Two causes named in one line is only an improvement if
@@ -601,15 +606,20 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
     def test_a_missing_entry_prints_the_words_the_annotation_sends_a_reader_to_find(self):
         self.assertIn("news entry", self._stderr_of("9.9.9"))
 
-    def test_an_unhonourable_ordering_prints_them_too(self):
+    def test_a_declaration_charter_cannot_honour_prints_them_too(self):
         """The coupling that makes property 1 more than a word in a YAML file: reword
-        `cmd_news`'s ordering refusal to drop "ordering" and this goes red, because the
+        `cmd_news`'s refusal to drop "cannot honour" and this goes red, because the
         annotation is still sending the reader to look for it.
 
-        Every ordering shape that refuses, not one of them. The sentence the annotation
-        sends the reader to find is `cmd_news`'s wrapper line, and a refusal added later
-        that printed only its own per-entry sentence would leave that reader grepping the
-        log for a word the run never says.
+        Every shape that refuses, not one of them. The sentence the annotation sends the
+        reader to find is `cmd_news`'s wrapper line, and a refusal added later that
+        printed only its own per-entry sentence would leave that reader grepping the log
+        for a word the run never says.
+
+        The last three shapes are #503's, and they are the reason the coupled word is no
+        longer "ordering": `securiy: true` is not an ordering claim, and a file whose key
+        reads `Version:` is not an entry at all — but each of them stops a release, and
+        each has to print the vocabulary the annotation promises.
         """
         shapes = {
             "two entries claim the lead":
@@ -622,11 +632,20 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
                          self.write(f"{_V}-z-important.md",
                                     f"---\nversion: {_V}\nheadline: important\n"
                                     f"security:\n  true\n---\n\nb\n")),
+            "an ordering field spelled in another case":
+                lambda: self.three(**{"z-important": {"Security": "true"}}),
+            "a key that is a near miss for one charter reads":
+                lambda: self.three(**{"z-important": {"securiy": "true"}}),
+            "a file in the directory that is not an entry":
+                lambda: (self.three(),
+                         self.write(f"{_V}-z-important.md",
+                                    f"---\nVersion: {_V}\nheadline: important\n"
+                                    f"---\n\nb\n")),
         }
         for name, stage in shapes.items():
             with self.subTest(shape=name):
                 stage()
-                self.assertIn("ordering", self._stderr_of(_V))
+                self.assertIn("cannot honour", self._stderr_of(_V))
 
     def test_the_gate_drops_only_the_stream_the_annotation_does_not_point_at(self):
         """stdout is discarded on purpose — it is the Release body, and the guard wants

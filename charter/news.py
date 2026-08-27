@@ -4,7 +4,7 @@ A *news entry* is a shipped, per-item note that a version introduced something, 
 an optional probe for whether this plane has adopted it. Not a changelog: an entry exists
 to be **acted on**, and one with nothing to adopt is one line.
 
-Five properties are load-bearing.
+Six properties are load-bearing.
 
 **One entry, two consumers, one answer.** The GitHub Release body and the offline `charter
 news` suggestion are the same entries rendered twice — `release.yml`'s announce job pipes
@@ -14,6 +14,21 @@ never at a call site. It was not, and #486 is what that cost: ORDER was left to
 `sorted(glob("*.md"))`, which for a stamped release is alphabetical by slug, so 0.52.0's
 vault-spending fix rendered eighth, under a docs correction. :func:`all` now applies the
 declared order and :func:`marker` the label, and both views come through them.
+
+**What an entry declares is honoured or reported, never neither.** An entry is a committed
+file and the release notes are the one document nobody re-derives, so an entry that does
+not render is indistinguishable from an entry nobody wrote. :func:`_flag` holds that line
+for a VALUE charter cannot read. It was held for nothing else: `Security: true` is a
+different dict key from `security:`, so `meta.get("security")` found nothing, the entry
+sorted as though it had declared nothing, and `charter news --for` — the release gate —
+exited 0 with an empty stderr (#503). :data:`_KNOWN_FIELDS` closes the key half, and
+:func:`unreadable` closes the half below it, where a miscased ``Version:`` costs the file
+its `Entry` altogether and no per-entry check can be asked about it.
+
+And the report saying so is charter's own output, so every span in it is contained as the
+sentence is assembled (:func:`_report`) rather than at the spans somebody was thinking
+about: the ordering VALUE was contained and the committed FILENAME beside it was not, so a
+filename holding a newline forged an extra line of charter's report (#502).
 
 **It ships in the wheel.** Entries travel with the code that implements them, resolved the
 way :mod:`charter.docsrc` resolves documentation — packaged copy first, the repo's
@@ -143,7 +158,7 @@ _ENV = "CHARTER_NEWS_PROBE"
 #: The two opt-in ordering fields, and the only two. `security:` is a CLASS — a version
 #: may ship any number of security entries, and they sort above everything else. `lead:`
 #: is a POSITION, so at most one entry per version may claim it; a second is a
-#: contradiction :func:`ordering_errors` reports rather than resolving.
+#: contradiction :func:`entry_errors` reports rather than resolving.
 #:
 #: Split rather than collapsed into one `rank: <int>`, because the two answer different
 #: questions and only one of them can be answered by an author working alone. "Is this a
@@ -154,6 +169,36 @@ _ENV = "CHARTER_NEWS_PROBE"
 #: let an author state only what they actually know.
 LEAD, SECURITY = "lead", "security"
 _ORDERING_FIELDS = (LEAD, SECURITY)
+
+#: Every frontmatter key a news entry may declare, and a CLOSED set: a key outside it is
+#: reported by :func:`entry_errors` rather than read past.
+#:
+#: Closed because the alternative failure is silent. `persona.parse` keeps a key exactly as
+#: written, so ``Security: true`` is the key ``Security``, ``meta.get("security")`` finds
+#: nothing, and the entry declares a security fix, sorts as though it declared nothing, and
+#: leaves `charter news --for` exiting 0 with an empty stderr (#503). That is #486's own
+#: defect reached through the KEY instead of the value, and the key half fails the more
+#: quietly of the two, because an unfound key leaves no value to report.
+#:
+#: **Loud rather than liberal, and the case is why.** Folding the lookup to lower case
+#: answers ``Security:`` and nothing else: ``securiy:``, ``leads:``, ``security-fix:`` and
+#: ``sec urity:`` all parse cleanly, are never looked up, and sink the entry in exactly the
+#: same silence. Accepting more spellings is a guard against a spelling — the shape this
+#: module's docstring names six times over — where the property is "a key the author
+#: declared is honoured or reported, never neither". With no unspoken key left, case stops
+#: being a special case of anything.
+#:
+#: There is a second reason not to fold. `persona.parse` keeps the LAST of two lines with
+#: the same key, so a case-folding parser would owe an answer to
+#: ``{"Security": "true", "security": "false"}`` — which wins, or does it refuse (#509).
+#: Reporting needs no such rule, and needs no change to a parser whose dict is also read
+#: for ``vault:`` and ``extends:``.
+#:
+#: Every name here is also an :class:`Entry` field, asserted rather than assumed by
+#: `tests/test_a_news_key_is_honoured_or_reported.py`: a name added here that `_read` does
+#: not actually read would be a key charter accepts and then ignores — the silence this set
+#: exists to remove, wearing a commit.
+_KNOWN_FIELDS = ("version", "headline", "check", "adopt") + _ORDERING_FIELDS
 
 
 class Entry(NamedTuple):
@@ -172,9 +217,16 @@ class Entry(NamedTuple):
     #: rather than raised, and rather than silently read as false, because false is the
     #: answer that SINKS the entry — an author who wrote `security: yes` and got the
     #: bottom of the release notes would have been failed by the field that was supposed
-    #: to help them. :func:`ordering_errors` turns these into sentences, and
+    #: to help them. :func:`entry_errors` turns these into sentences, and
     #: `charter news --for` — which is the release workflow's own gate — refuses on them.
     bad: tuple[tuple[str, str], ...] = ()
+    #: Frontmatter keys this entry declared that charter does not read, in the order the
+    #: file wrote them. Beside :attr:`bad` and for the same reason, one half of the
+    #: declaration each: `bad` is a value charter could not read, this is a key it never
+    #: looked up. Both are carried rather than raised, and neither is dropped, because
+    #: dropping is what makes an entry that declared something indistinguishable from one
+    #: that declared nothing (#503).
+    unknown: tuple[str, ...] = ()
 
 
 def _is_checkout(d: Path) -> bool:
@@ -232,12 +284,16 @@ def _read(p: Path) -> Entry | None:
         if value is None:
             bad.append((field, raw or ""))
         flags[field] = bool(value)
+    # In the file's own order, not sorted: an author reading the report is looking for the
+    # line they typed, and `persona.parse` hands its keys back in the order it read them.
+    unknown = tuple(k for k in meta if k not in _KNOWN_FIELDS)
     return Entry(version=version, slug=slug,
                  headline=(meta.get("headline") or "").strip(),
                  check=(meta.get("check") or "").strip(),
                  adopt=(meta.get("adopt") or "").strip(),
                  body=body, path=p,
-                 lead=flags[LEAD], security=flags[SECURITY], bad=tuple(bad))
+                 lead=flags[LEAD], security=flags[SECURITY], bad=tuple(bad),
+                 unknown=unknown)
 
 
 def _flag(raw: str | None) -> bool | None:
@@ -275,16 +331,22 @@ def _flag(raw: str | None) -> bool | None:
 
     So the property is not "which words mean yes" but **"was this value understood?"**.
     Two literals are recognised, case-folded; every other string an author typed is
-    reported by :func:`ordering_errors` naming the value it could not read. An author who
+    reported by :func:`entry_errors` naming the value it could not read. An author who
     writes something outside the pair is told so at the release gate rather than being
     quietly overruled by it.
 
-    **The next spelling** is not in this function: it is the KEY. `persona.parse` matches
+    **The next spelling was not in this function: it was the KEY.** `persona.parse` matches
     exactly and case-sensitively, so ``Security: true`` never arrives as ``security`` and
-    is genuinely absent here (#503); and it keeps the LAST of two lines with the same key,
-    so an entry declaring ``security:`` twice has one of them dropped without a word
-    (#509). Both are reached through the dict this function is handed, not through the
-    value it reads, and both change how every caller of `persona.parse` reads its result.
+    is genuinely absent here — this function is handed ``None`` and answers False, which is
+    the right answer to the question it was asked and the wrong outcome for the entry
+    (#503). The key half is answered where the key lives, by :data:`_KNOWN_FIELDS`: a key
+    outside that set is a sentence rather than a shrug, so ``Security:`` is reported and so
+    is ``securiy:``, which no amount of case-folding here would have caught.
+
+    What is still open is the same dict keeping the LAST of two lines with one key, so an
+    entry declaring ``security:`` twice has one of them dropped without a word (#509).
+    That one is reached through `persona.parse` itself, whose result is also read for
+    ``vault:`` and ``extends:``, and is filed rather than folded in here.
     """
     if raw is None:
         return False
@@ -314,57 +376,203 @@ def marker(e: Entry) -> str:
     return "security: " if e.security else ""
 
 
-def ordering_errors(entries: list[Entry]) -> list[str]:
-    """Why the declared ordering of *entries* cannot be honoured, as sentences.
+def _report(template: str, **fields) -> str:
+    """One line of charter's own report, with **every** field in it bounded to one line.
 
-    Empty is the ordinary answer. Two failures are reported, and neither is resolved
-    quietly, because a quiet resolution is what #486 was about:
+    *template* is a literal in this module — charter's own sentence, with ``{}`` slots.
+    Everything substituted into it comes out of a committed file and goes through
+    :func:`contain.one_line`; a sequence is contained element by element and then joined
+    with charter's own comma, so the separator cannot come from the data either.
+
+    **Why the containment is here and not at the slots.** A news entry is a committed file
+    and so is its NAME: whoever writes the commit chooses both, and both land in a line a
+    release engineer reads out of CI. `entry_errors` contained the ordering *value* and
+    interpolated the *filename* three inches away raw, so an entry named
+    ``0.60.0-a\\nEVIL: charter says nothing is wrong.md`` printed two lines where charter
+    emitted one, the second being the attacker's sentence in charter's own voice (#502).
+    The value was contained because the value was what that commit was about — not because
+    the filename half had been judged safe.
+
+    Wrapping each span individually would have fixed those four call sites and left the
+    door open at the fifth, which is a THIRD untrusted span appearing in one of these
+    sentences: the ``{version}`` in the duplicate-`lead:` message is frontmatter, the
+    ``{check}`` in a probe's reason is frontmatter, and a slug is a filename with its
+    prefix cut off. So the message is contained as it is ASSEMBLED. A field added to one of
+    these templates tomorrow is contained by having been passed here, which is the one
+    property a reviewer can check by reading the call site.
+
+    What this does not reach is a call site that builds its sentence with an f-string
+    instead of calling this. Nothing in the language stops that, so
+    `tests/test_a_news_entry_cannot_forge_a_report_line.py` plants a newline in every field
+    a news entry owns and asserts each of these reports is still the number of lines
+    charter meant to write.
+    """
+    shown = {}
+    for key, value in fields.items():
+        if isinstance(value, (list, tuple)):
+            shown[key] = ", ".join(contain.one_line(v) for v in value)
+        else:
+            shown[key] = contain.one_line(value)
+    return template.format(**shown)
+
+
+#: An ordering field whose value charter could not read, quoted back to its author.
+_BAD_VALUE = ("{name}: `{field}: {raw}` is not a value charter reads — a news ordering "
+              "field is `true` or `false`. Left unread, this entry sorts as though it "
+              "never declared anything.")
+
+#: The same field declared with nothing after the colon. Distinct from :data:`_BAD_VALUE`
+#: because the fix is different: there is no value to correct, and quoting one back
+#: ("`security: `") would read like a rendering bug. Name the shape that produces it
+#: instead — the value on the continuation line is the way this gets typed.
+_EMPTY_VALUE = ("{name}: `{field}:` is declared with no value on that line — a news "
+                "ordering field is `true` or `false`, written after the colon. charter's "
+                "frontmatter is flat `key: value` and drops a line without a colon, so a "
+                "value indented onto the NEXT line never reaches charter. Left unread, "
+                "this entry sorts as though it never declared anything.")
+
+#: Charter's own list of what an entry may declare, built from :data:`_KNOWN_FIELDS` so the
+#: sentence cannot drift from the set it describes.
+_FIELDS_SAID = ", ".join(f"`{f}:`" for f in _KNOWN_FIELDS)
+
+#: A key that is one of charter's fields in another case. Its own sentence, because the
+#: author has already written the right word and needs to be told only that the key is
+#: matched exactly — pointing them at the whole list would make them hunt for a difference
+#: that is not there.
+_MISCASED_KEY = ("{name}: `{key}:` differs from `{known}:` only in case, and charter "
+                 "matches a frontmatter key exactly — so this entry declared no "
+                 "`{known}:` at all and was read as though the line were not there. "
+                 "Spell the key `{known}:`.")
+
+#: Any other key charter does not read. Reported rather than ignored because ignoring is
+#: what makes `securiy: true` indistinguishable from a line nobody wrote (#503).
+_UNKNOWN_KEY = ("{name}: `{key}:` is not a field a news entry declares, so nothing read "
+                "it. A news entry declares " + _FIELDS_SAID + ", matched exactly — a near "
+                "miss parses like anything else, is looked up by nothing, and would "
+                "otherwise sink this entry without a word.")
+
+#: Two entries in one version both claiming the position only one of them can have.
+_TWO_LEADS = ("{version}: {count} entries declare `lead: true` ({names}) — only one entry "
+              "can be the one a reader sees first. Leave `lead:` off all but one; a "
+              "security fix that need not be first can say `security: true` instead, "
+              "which any number of entries may.")
+
+
+def entry_errors(entries: list[Entry]) -> list[str]:
+    """What *entries* declare that charter cannot honour, as sentences.
+
+    Empty is the ordinary answer. Three kinds of failure are reported, and none of them is
+    resolved quietly, because a quiet resolution is what #486 was about:
 
     * an ordering field whose value was not understood (see :func:`_flag`), named with the
       value, so an author who wrote ``security: yes`` learns which word charter reads —
       and, when the field was declared with nothing after the colon, naming the shape
       instead of the empty value, because the author who wrote it almost certainly put
       the value on the next line and needs to be told that line is not read;
+    * a key outside :data:`_KNOWN_FIELDS`, which is where ``Security: true`` lands and
+      where ``securiy: true`` lands with it (#503). This is the quietest of the four:
+      an unfound key leaves no value to report, so before it was reported the entry
+      declared a security fix, rendered below the ordinary ones, and let the release gate
+      pass with an empty stderr;
     * two entries in one version both declaring ``lead: true``. One of them is not going
       to be first, and picking silently would hand back the accident #486 already
       diagnosed — a position decided by something other than a person deciding it.
 
+    Named for the ENTRY rather than for the ordering it used to be named for, because an
+    unrecognised key is not an ordering claim and the narrower name is how the middle one
+    would have ended up somewhere else, reported by nobody. What they share is the
+    property: a thing the author declared is honoured or reported, never neither.
+
     Callers rather than this function decide the consequence: `charter news --for`, which
     IS the release workflow's publish gate, refuses; the range view warns and prints on.
+    Every sentence is assembled through :func:`_report`, so a committed filename in one
+    cannot write a second line into the report it appears in (#502).
     """
     out: list[str] = []
     for e in sorted(entries, key=lambda e: e.path.name):
         for field, raw in e.bad:
-            if raw == "":
-                # Distinct from the sentence below, because the fix is different: there
-                # is no value to correct, and quoting one back ("`security: `") would
-                # read like a rendering bug. Name the shape that produces it instead —
-                # the value on the continuation line is the way this gets typed.
-                out.append(
-                    f"{e.path.name}: `{field}:` is declared with no value on that line "
-                    f"— a news ordering field is `true` or `false`, written after the "
-                    f"colon. charter's frontmatter is flat `key: value` and drops a line "
-                    f"without a colon, so a value indented onto the NEXT line never "
-                    f"reaches charter. Left unread, this entry sorts as though it never "
-                    f"declared anything.")
-                continue
-            out.append(
-                f"{e.path.name}: `{field}: {contain.one_line(raw)}` is not a value "
-                f"charter reads — a news ordering field is `true` or `false`. Left "
-                f"unread, this entry sorts as though it never declared anything.")
+            template = _EMPTY_VALUE if raw == "" else _BAD_VALUE
+            out.append(_report(template, name=e.path.name, field=field, raw=raw))
+        for key in e.unknown:
+            known = next((f for f in _KNOWN_FIELDS if f == key.casefold()), None)
+            if known is not None:
+                out.append(_report(_MISCASED_KEY, name=e.path.name, key=key, known=known))
+            else:
+                out.append(_report(_UNKNOWN_KEY, name=e.path.name, key=key))
     leads: dict[str, list[Entry]] = {}
     for e in entries:
         if e.lead:
             leads.setdefault(e.version, []).append(e)
     for version, claimants in sorted(leads.items()):
         if len(claimants) > 1:
-            names = ", ".join(sorted(c.path.name for c in claimants))
-            out.append(
-                f"{version}: {len(claimants)} entries declare `lead: true` ({names}) — "
-                f"only one entry can be the one a reader sees first. Leave `lead:` off "
-                f"all but one; a security fix that need not be first can say "
-                f"`security: true` instead, which any number of entries may.")
+            out.append(_report(_TWO_LEADS, version=version, count=len(claimants),
+                               names=sorted(c.path.name for c in claimants)))
     return out
+
+
+#: A file in the news directory that :func:`_read` declined, and the four ways that
+#: happens. Each names the edit, because "not an entry" alone sends a release engineer to
+#: read a file and guess.
+_UNREADABLE_FILE = ("{name}: charter could not read this file ({error}), so it is a file "
+                    "in the news directory and an entry in no release.")
+_NO_FRONTMATTER = ("{name}: no `key: value` frontmatter, so charter reads it as no entry "
+                   "at all. Every file in the news directory is an entry — give it "
+                   "`version:` and `headline:`, or move it out of the directory.")
+_MISCASED_VERSION = ("{name}: `{key}:` differs from `version:` only in case, and charter "
+                     "matches a frontmatter key exactly — so this file names no version "
+                     "and is in no release, in the offline view or the published notes. "
+                     "Spell the key `version:`.")
+_NO_VERSION = ("{name}: no `version:` charter could read in its frontmatter, so this file "
+               "is in no release, in the offline view or the published notes. A staged "
+               "entry writes `version: " + UNRELEASED + "` until `charter news stamp` "
+               "moves it.")
+
+
+def _not_an_entry(p: Path) -> str:
+    """Why *p* produced no :class:`Entry`, as a sentence — best effort, always something.
+
+    The SET this explains comes from :func:`_read` returning ``None``; only the wording is
+    here. That split is deliberate: a fifth way for `_read` to decline would otherwise have
+    to be remembered in two places, and the one that gets forgotten is this one — where
+    being forgotten means a file reported with a reason that is no longer true. The
+    fallthrough sentence at the end is what a fifth reason gets until somebody writes it
+    one, and it is still a sentence naming the file.
+    """
+    try:
+        text = p.read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        return _report(_UNREADABLE_FILE, name=p.name, error=f"{type(exc).__name__}: {exc}")
+    meta, _body = persona.parse(text)
+    if not meta:
+        return _report(_NO_FRONTMATTER, name=p.name)
+    miscased = next((k for k in meta if k != "version" and k.casefold() == "version"), None)
+    if miscased is not None:
+        return _report(_MISCASED_VERSION, name=p.name, key=miscased)
+    return _report(_NO_VERSION, name=p.name)
+
+
+def unreadable() -> list[str]:
+    """Every file in the news directory that is not an entry, as sentences.
+
+    The sibling of :func:`entry_errors`, and it exists because the loudest version of
+    #503's defect is the one that never reaches that function. ``Security: true`` sinks an
+    entry; ``Version: 0.60.0`` **deletes** it — `_read` finds no ``version`` and returns
+    ``None``, so the file is dropped before any of `all`'s consumers see it, and there is
+    no `Entry` for `entry_errors` to have an opinion about. The release guard does not
+    catch it either: `stamped()` answers from FILENAMES, so a file named
+    ``0.60.0-fix.md`` satisfies "every published version ships an entry" while rendering
+    into neither the Release body nor `charter news`.
+
+    So the two questions are asked separately and answered the same way — reported, not
+    swallowed — and `cmd_news` puts both behind the same gate. Asked over the whole
+    directory rather than per version on purpose: a file with no readable version has no
+    version to be filtered by, and the release being cut is exactly when somebody wants to
+    know that the entry they wrote for it is not in it.
+    """
+    d = _dir()
+    if d is None:
+        return []
+    return [_not_an_entry(p) for p in sorted(d.glob("*.md")) if _read(p) is None]
 
 
 def all() -> list[Entry]:
@@ -842,7 +1050,13 @@ def probe(entry: Entry) -> tuple[str, str]:
     code = _dispatch(entry.check)
     if code is None:
         why = _IN_FLIGHT if in_flight else (_refused or _NOT_RUN)
-        return UNKNOWN, why.format(check=entry.check)
+        # Through `_report` rather than `.format` directly: `check:` is frontmatter, this
+        # sentence is printed as a line of `charter news --pending`'s own report, and the
+        # five templates above are the third untrusted span #502 predicted would turn up in
+        # one of these messages. `_tokens` refuses `\n` as shell syntax and never sees
+        # U+2028 or an ANSI escape, and in any case a guard that decides whether a probe
+        # RUNS is not a guard on what the report PRINTS.
+        return UNKNOWN, _report(why, check=entry.check)
     return (ADOPTED if code == 0 else PENDING), ""
 
 
@@ -915,6 +1129,18 @@ def _restamp(text: str, version: str) -> str | None:
     return "".join(out) if found else None
 
 
+#: Why a stamp was refused, one sentence each. Through :func:`_report` for the reason
+#: `entry_errors`' sentences are: these name FILES, a filename is chosen by whoever wrote
+#: the commit, and this text is read out of a release engineer's terminal at the one moment
+#: nobody re-derives it (#502). `{version}` is argv rather than a committed file and is
+#: bounded anyway — a value charter refused is by definition one nothing has vouched for.
+_NOT_A_VERSION = ("'{version}' is not a version — pass the number alone, as in 0.45.0, "
+                  "not the tag name")
+_NAME_TAKEN = ("{src} → {dst}: that name is already taken, and charter will not overwrite "
+               "an entry that already shipped")
+_NOTHING_TO_STAMP = "{src}: no `version:` line in its frontmatter to stamp"
+
+
 def stamp(version: str) -> tuple[list[tuple[Path, Path]], list[str]]:
     """Move every staged entry onto *version*: rename the file, rewrite the field.
 
@@ -928,8 +1154,7 @@ def stamp(version: str) -> tuple[list[tuple[Path, Path]], list[str]]:
     leaves every entry staged, which fails loudly at the next catch.
     """
     if not _is_version(version):
-        return [], [f"{version!r} is not a version — pass the number alone, as in 0.45.0, "
-                    f"not the tag name"]
+        return [], [_report(_NOT_A_VERSION, version=version)]
     d = checkout_dir()
     if d is None:
         return [], ["news entries are stamped in the repo, and this is not a charter "
@@ -941,12 +1166,11 @@ def stamp(version: str) -> tuple[list[tuple[Path, Path]], list[str]]:
         slug = src.stem.split("-", 1)[1]
         dst = d / f"{version}-{slug}.md"
         if dst.exists():
-            blocked.append(f"{src.name} → {dst.name}: that name is already taken, and "
-                           f"charter will not overwrite an entry that already shipped")
+            blocked.append(_report(_NAME_TAKEN, src=src.name, dst=dst.name))
             continue
         text = _restamp(src.read_text(), version)
         if text is None:
-            blocked.append(f"{src.name}: no `version:` line in its frontmatter to stamp")
+            blocked.append(_report(_NOTHING_TO_STAMP, src=src.name))
             continue
         plan.append((src, dst, text))
     if blocked:
