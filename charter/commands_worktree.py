@@ -293,7 +293,15 @@ def cmd_worktree_history(args) -> int:
     # A second thing the kit brings that the format string could not: these values come
     # out of a COMMITTED log, so `tui.pad` sanitising them (a newline becomes a space) is
     # what stops one event's field shearing every column below it.
-    body = [(e.get("ts", ""), e.get("repo", ""), e.get("piece", ""), e.get("event", ""),
+    #
+    # `ts`, `repo` and `event` need their fallbacks and `piece` does not, which looks
+    # inconsistent and is not: `pieces.events` keeps a line only `if obj.get("piece")`, so
+    # a row without one never reaches here — the deletion sweep reported the fourth
+    # fallback as equivalent and it was right. Subscripted rather than `.get`, so if that
+    # filter ever goes the failure is a loud `KeyError` naming the field rather than
+    # `tui.pad(None, w)` three frames down. The other three are reachable the moment a
+    # process is killed mid-append, which is what `events()` tolerates by design.
+    body = [(e.get("ts", ""), e.get("repo", ""), e["piece"], e.get("event", ""),
              pieces.claimant(e) + (f" — {e['reason']}" if e.get("reason") else ""))
             for e in rows]
     widths = [tui.column("", [r[i] for r in body]) for i in range(4)]

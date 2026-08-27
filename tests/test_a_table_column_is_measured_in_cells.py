@@ -271,6 +271,21 @@ class TestWorktreeHistoryColumnsLineUp(WorktreeHistoryCase):
                             for r in rows), "\n".join(rows))
         self.assert_aligned(rows, "slice", least=1)
 
+    def test_a_line_with_no_piece_never_reaches_the_renderer(self):
+        """The reason `piece` is subscripted where its three neighbours are not.
+
+        `events()` keeps a line only `if obj.get("piece")`, so the renderer is entitled to
+        assume the field — and the sweep proved it, by reporting a fourth `""` fallback as
+        equivalent. This is the coupling that entitles it, pinned where the assumption is
+        made rather than only where the filter is written."""
+        self.record("svc", "slice")
+        log = pieces.log_path(self.WS)
+        log.write_text(log.read_text()
+                       + '{"ts": "2026-01-01T00:00:00+00:00", "repo": "NOPIECE"}\n')
+        self.assertEqual([e for e in pieces.events(self.WS) if not e.get("piece")], [])
+        rows = self.history()
+        self.assertNotIn("NOPIECE", "\n".join(tui.strip_ansi(r) for r in rows))
+
     def test_the_timestamp_column_is_wider_than_the_timestamp_charter_writes(self):
         """`{ts:<22}` on the 25-character stamp `pieces.record` writes on every event.
 
