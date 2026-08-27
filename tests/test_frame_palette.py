@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, contain, tui
-from charter.frame import action, actions, builtin_actions, overlay, palette, state, switch
+from charter.frame import action, actions, builtin_actions, overlay, palette, state
 
 from tests._isolation import PersonaIso
 
@@ -500,6 +500,33 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         self.assertFalse(offer.available)
         self.assertIn("no record of this frame's harness pane", offer.reason)
 
+    def test_a_frame_with_NO_harness_record_at_all_says_the_same_thing(self):
+        """**A different condition from the one above, and the only one that reaches
+        `_laid_out`'s fallback.** `state.harness_pane` answers `None` — not a bad string —
+        for a frame launched by a charter that predates `record_harness_pane`, for a state
+        directory that was truncated, and for a file that cannot be read. Its own docstring
+        names all three.
+
+        Without the `or ""`, `PANE_ID_RE.fullmatch(None)` raises `TypeError` — and
+        `ActionRegistry._check` catches `BaseException` and turns it into an unavailable
+        row, so the row is refused **either way** and only the REASON differs. Measured on
+        this exact fixture:
+
+            shipped : charter has no record of this frame's harness pane, so it cannot
+                      move the panels — relaunch the frame
+            mutant  : TypeError: expected string or bytes-like object, got 'NoneType'
+
+        That is `release.yml`'s `-z` (#558) and `panel.py`'s dead `except` (#570) one
+        surface over: a neighbour that answers the same question a worse way, so a test
+        asserting only "unavailable" stays green over a real deletion. This asserts which
+        refusal fired.
+        """
+        (state.frame_dir(self.FID) / "harness").unlink()
+        self.assertIsNone(state.harness_pane(self.FID))
+        offer = self._offers()["density.normal"]
+        self.assertFalse(offer.available)
+        self.assertEqual(offer.reason, builtin_actions.NO_LAYOUT)
+
     def test_a_frame_with_a_real_harness_pane_can_move_its_density(self):
         """The other direction, so the reason above cannot pass by never being available."""
         self.assertTrue(self._offers()["density.normal"].available)
@@ -598,11 +625,10 @@ class ThePaletteCommand(PersonaIso, unittest.TestCase):
         """`invoke` re-asks availability, so a row drawn while a plane was one way and
         pressed while it is another is refused — and that sentence has nowhere else to go,
         because the pane it would have been drawn in is the one about to be killed."""
-        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "pinned-ws"})
-        with mock.patch.object(switch, "workspaces", return_value=["pinned-ws", "other"]):
-            self.assertEqual(self._draw(overlay.Row(id="workspace.w1", title="w")), 0)
+        state.record_harness_pane(self.FID, "not-a-pane-id")
+        self.assertEqual(self._draw(overlay.Row(id="density.full", title="d")), 0)
         self.said.assert_called_once()
-        self.assertIn("$CHARTER_WORKSPACE pins this frame", self.said.call_args[0][1])
+        self.assertIn("no record of this frame's harness pane", self.said.call_args[0][1])
         self.assertEqual(self.said.call_args[0][2], "/dev/ttys7")
 
     def test_the_pane_is_not_killed_before_the_action_has_started(self):

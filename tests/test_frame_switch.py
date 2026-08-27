@@ -26,7 +26,7 @@ import unittest
 from unittest import mock
 
 from charter import cli, commands_frame, config, persona, tui, workspace
-from charter.frame import builtin_actions, palette, picker, state, switch
+from charter.frame import builtin_actions, choose, palette, picker, state, switch
 
 from tests._isolation import PersonaIso
 
@@ -231,14 +231,16 @@ class SwitchingPersona(PersonaIso, unittest.TestCase):
 
 
 def _rows(fid: str, *, density: str = "normal"):
-    """The palette's own rows for *fid*, built exactly the way `_draw_palette` builds
-    them — through `builtin_actions.build`, not from a hand-written list."""
+    """The palette's whole catalogue for *fid*, built exactly the way `_draw_palette`
+    builds it — the two picker rows, then the action rows, neither from a hand-written
+    list."""
     reg = builtin_actions.build(fid, current_density=density)
-    return palette.rows(reg.offers(fid=fid, snapshot={}))
+    return (choose.open_rows(fid)
+            + palette.rows(reg.offers(fid=fid, snapshot={})))
 
 
 def _titles(fid: str, kind: str, *, density: str = "normal") -> list[str]:
-    """Every row title whose ID belongs to *kind* (`workspace`, `persona`, `density`).
+    """Every row title whose ID belongs to *kind* (today: `density`).
 
     Selected by ID and never by what the title says, because the mark charter puts in
     front of the current one is part of the title — a prefix match on the title would
@@ -248,15 +250,22 @@ def _titles(fid: str, kind: str, *, density: str = "normal") -> list[str]:
             if r.id.startswith(kind + ".")]
 
 
-class ThePaletteOffersBothLists(PersonaIso, unittest.TestCase):
-    """#517's whole surface, moved off `display-menu`: every workspace and every persona
-    is a row, and neither list is capped any more.
+def _names(fid: str, noun: str) -> list[str]:
+    """Every row title inside *noun*'s picker — the list one keypress past the palette."""
+    return [r.title for r in choose.roster(noun, fid).rows]
 
-    The menu capped each at twelve because a `display-menu` is drawn inside the terminal
-    and tmux does not scroll it. The palette scrolls AND filters, so the cap would only
-    hide names an operator can already reach by typing three letters of one — §2's
-    "charter's nine-row cap was charter's, not tmux's", applied to the other list it
-    bounded.
+
+class ThePaletteOffersAPickerForEach(PersonaIso, unittest.TestCase):
+    """#517's whole surface, moved off `display-menu` and then off the action registry:
+    one row per noun, saying which name the frame is on, opening the list of the rest.
+
+    **Task 6's correction to Task 4.** The menu capped each list at twelve because a
+    `display-menu` is drawn inside the terminal and tmux does not scroll it; Task 4 lifted
+    the cap by registering every name as an ACTION, which is a contract that promises
+    fire-and-report work and describes a name badly — forty names meant forty ``run``s that
+    each started a whole second charter to write two files. The names now live in a picker
+    (`frame/choose.py`), which is this same overlay over a different row source, and the
+    palette carries the doorway.
     """
 
     FID = "f-entries"
@@ -267,50 +276,54 @@ class ThePaletteOffersBothLists(PersonaIso, unittest.TestCase):
         state.frame_dir(self.FID, create=True)
         state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
 
-    def test_charters_own_rows_come_first_and_in_a_fixed_order(self):
+    def test_the_palette_opens_with_the_two_pickers_then_charters_own_actions(self):
+        """The order is fixed and the pickers are first, so an operator who presses `F2`
+        and Enter without reading opens a list rather than detaching their harness."""
         _plane_workspaces("alpha")
-        titles = [r.title for r in _rows(self.FID)]
-        self.assertTrue(titles[0].startswith("detach"), titles)
-        self.assertTrue(any("density: " in t for t in titles[1:4]), titles)
+        ids = [r.id for r in _rows(self.FID)]
+        self.assertEqual(ids[:3], ["pick:workspace", "pick:persona", "frame.detach"])
+        self.assertTrue(any(i.startswith("density.") for i in ids[3:6]), ids)
+
+    def test_each_doorway_says_which_name_the_frame_is_on(self):
+        """So the palette still answers "which workspace am I on" without opening
+        anything, and typing the name still finds the row when it is the one in use."""
+        _plane_workspaces("alpha")
+        state.record_workspace(self.FID, "alpha")
+        titles = {r.id: r.title for r in _rows(self.FID)}
+        self.assertEqual(titles["pick:workspace"], "workspace: alpha — pick another")
+
+    def test_a_noun_with_nothing_chosen_says_so_rather_than_naming_nothing(self):
+        """A plane with no persona at all is an ordinary answer, not a missing one — and
+        `persona: ` with nothing after it is a row that reads as broken."""
+        self.assertEqual({r.id: r.title for r in _rows(self.FID)}["pick:persona"],
+                         "persona — pick one")
+
+    def test_nothing_chosen_is_the_empty_string_and_never_none(self):
+        """charter's own convention for "there is none", one module over: `switch._pin`
+        records that "empty is what every charter reader already treats as absent", and
+        `choose.current` is declared to answer a name.
+
+        **Pinned on the function rather than on a row, because both callers that exist
+        today mask it**: `open_rows` tests `if now` and `roster` compares `n == now`, and
+        `None` and `""` behave identically in both. A third caller writing `f"on {now}"`
+        would print the word `None`. That masking is the shape this repo has been bitten
+        by four times, so the contract is asserted where it is stated.
+        """
+        self.assertEqual(choose.current(choose.PERSONA, self.FID), "")
 
     def test_a_long_list_is_not_capped(self):
-        """Thirty workspaces are thirty rows. The menu answered twelve plus a row saying
-        how many it had hidden; this surface has nowhere to hide them."""
+        """Thirty workspaces are thirty rows in the picker. The menu answered twelve plus
+        a row saying how many it had hidden; this surface has nowhere to hide them."""
         _plane_workspaces(*[f"ws{i:02d}" for i in range(30)])
-        rows = _titles(self.FID, "workspace")
+        rows = _names(self.FID, choose.WORKSPACE)
         self.assertGreaterEqual(len(rows), 30, rows)
         self.assertTrue(any("ws29" in r for r in rows), rows)
 
     def test_an_empty_list_is_simply_no_rows(self):
-        """A plane with no personas gets no persona rows — and nothing pretends otherwise.
+        """A plane with no personas gets an empty picker — and nothing pretends otherwise.
         The menu needed a placeholder row because `display-menu` refuses a zero-row menu
-        outright (`not enough arguments`); a palette with fewer rows is just a shorter
-        palette, and `overlay.EMPTY` covers the case where it has none at all."""
-        self.assertEqual(_titles(self.FID, "persona"), [])
-
-    def test_a_name_is_contained_before_it_becomes_a_row(self):
-        """#472: a table sized its columns from a raw name first. `contain.one_line` runs
-        before any width arithmetic — twice, once where the name meets charter's marker
-        column and once where the title meets `Action`'s own contract — so a name that
-        could hold a newline cannot put one in a row."""
-        (config.WORKSPACES_DIR / "alpha").mkdir(parents=True)
-        with mock.patch.object(switch, "workspaces",
-                               return_value=["alpha", "line\nbreak"]):
-            rows = _titles(self.FID, "workspace")
-        self.assertTrue(all("\n" not in r for r in rows), rows)
-
-    def test_a_hostile_name_reaches_the_title_and_never_an_id(self):
-        """The property `frame/menu.py` existed for, one surface over: the NAME is display
-        text and nothing else. A row's id is charter's own `workspace.w<N>`, held to the
-        action alphabet, and it is the id — never the title — that `invoke` dispatches on."""
-        hostile = 'x" ; run-shell "touch /tmp/pwned'
-        (config.WORKSPACES_DIR / "alpha").mkdir(parents=True)
-        with mock.patch.object(switch, "workspaces", return_value=["alpha", hostile]):
-            rows = [r for r in _rows(self.FID) if r.id.startswith("workspace.")]
-        carrying = [r for r in rows if hostile in r.title]
-        self.assertEqual(len(carrying), 1, [r.title for r in rows])
-        self.assertNotIn(";", carrying[0].id)
-        self.assertTrue(carrying[0].id.startswith("workspace.w"), carrying[0].id)
+        outright (`not enough arguments`); `overlay.EMPTY` is what this surface draws."""
+        self.assertEqual(_names(self.FID, choose.PERSONA), [])
 
 
 class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
@@ -320,8 +333,9 @@ class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
     re-record left the F2 menu naming the workspace the frame had LEFT, and a workspace
     made after launch never appeared at all — `_rerecord_menu` existed only to paper over
     that, and had to be called from every command that could move the frame. Nothing calls
-    anything now: `builtin_actions.build` resolves the lists and the marks when the palette
-    opens, so there is no second copy to keep in step.
+    anything now: `builtin_actions.build` resolves the density mark and `frame/choose.py`
+    resolves the names and their marks when the palette opens, so there is no second copy
+    to keep in step.
     """
 
     FID = "f-palette-follows"
@@ -347,26 +361,29 @@ class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
     def test_the_mark_moves_with_the_frame(self):
         # `default` is folded in whether or not its directory exists — `switch.workspaces`
         # matches `commands_workspace.cmd_workspace_use` there.
-        self.assertEqual(_titles(self.FID, "workspace"),
-                         ["* workspace: alpha", "  workspace: beta",
-                          "  workspace: default"])
+        self.assertEqual(_names(self.FID, choose.WORKSPACE),
+                         ["* alpha", "  beta", "  default"])
         self.assertEqual(self._switch(workspace="beta"), 0)
-        self.assertEqual(_titles(self.FID, "workspace"),
-                         ["  workspace: alpha", "* workspace: beta",
-                          "  workspace: default"])
+        self.assertEqual(_names(self.FID, choose.WORKSPACE),
+                         ["  alpha", "* beta", "  default"])
+
+    def test_the_doorway_names_the_workspace_the_frame_moved_to(self):
+        """The mark inside the picker and the name on the palette row are one read
+        (`choose.current`), so the two surfaces cannot disagree about where the frame is."""
+        self._switch(workspace="beta")
+        self.assertEqual({r.id: r.title for r in _rows(self.FID)}["pick:workspace"],
+                         "workspace: beta — pick another")
 
     def test_a_persona_switch_moves_its_own_mark_too(self):
-        self.assertEqual(_titles(self.FID, "persona"),
-                         ["  persona: forge", "  persona: scribe"])
+        self.assertEqual(_names(self.FID, choose.PERSONA), ["  forge", "  scribe"])
         self._switch(persona="scribe")
-        self.assertEqual(_titles(self.FID, "persona"),
-                         ["  persona: forge", "* persona: scribe"])
+        self.assertEqual(_names(self.FID, choose.PERSONA), ["  forge", "* scribe"])
 
     def test_a_workspace_made_after_launch_is_offered(self):
         """The same staleness seen from the other side: the menu's table was written at
         launch, so a plane that grew a workspace since had no row for it."""
         _plane_workspaces("gamma")
-        self.assertIn("  workspace: gamma", _titles(self.FID, "workspace"))
+        self.assertIn("  gamma", _names(self.FID, choose.WORKSPACE))
 
     def test_a_pinned_frame_is_offered_the_row_WITH_ITS_REASON(self):
         """Step 4 of the plan, on the exact example it names. `$CHARTER_WORKSPACE` was set
@@ -374,11 +391,16 @@ class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
         outrank it — and a palette that silently dropped the row would leave the operator
         unable to ask why a thing they remember is missing."""
         state.record_identity(self.FID, {"CHARTER_WORKSPACE": "alpha"})
-        rows = [r for r in _rows(self.FID) if r.id.startswith("workspace.")]
-        self.assertTrue(rows, "the rows must still be offered")
-        self.assertTrue(all("$CHARTER_WORKSPACE pins this frame" in r.note for r in rows),
-                        [r.note for r in rows])
-        self.assertTrue(all("'alpha'" in r.note for r in rows), [r.note for r in rows])
+        row = {r.id: r for r in _rows(self.FID)}["pick:workspace"]
+        self.assertIn("$CHARTER_WORKSPACE pins this frame", row.note)
+        self.assertIn("'alpha'", row.note)
+
+    def test_an_unpinned_frames_doorway_carries_no_reason_at_all(self):
+        """The other direction, so the reason above cannot pass by always being there:
+        `available` and "has no reason" are one decision in `choose.pin_reason`, and a
+        non-empty note is what `_draw_palette` refuses the keypress on."""
+        self.assertEqual({r.id: r for r in _rows(self.FID)}["pick:workspace"].note, "")
+        self.assertEqual({r.id: r for r in _rows(self.FID)}["pick:persona"].note, "")
 
     def test_the_density_mark_is_read_from_the_frames_own_record(self):
         """A switch does not change the density, and nothing re-writes it: the mark is
