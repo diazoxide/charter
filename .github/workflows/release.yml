@@ -122,14 +122,18 @@ jobs:
           # answer to one question, free to say yes on a release whose notes come out
           # empty. `charter news --for` exits non-zero when there is nothing to render.
           #
-          # It exits non-zero for MORE than that now (#486): an ordering field charter
-          # cannot read, or two entries both claiming `lead: true`. So the annotation
-          # names both causes and defers to the command's own stderr — which `>/dev/null`
-          # keeps, since it drops only stdout — rather than prescribing `news stamp` for
-          # a failure stamping cannot fix.
+          # It exits non-zero for MORE than that now: an ordering field charter cannot
+          # read, or two entries both claiming `lead: true` (#486); a frontmatter key
+          # charter does not know, which is where `Security: true` lands (#503); or a file
+          # in docs/news that is not an entry at all. So the annotation names the two
+          # SHAPES — no entry, or something the entries declare that charter cannot honour
+          # — and defers to the command's own stderr for which, since that stderr is
+          # already one sentence per finding. `>/dev/null` keeps it, dropping only stdout.
+          # Prescribing `news stamp` for any of the second shape would be prescribing a
+          # no-op for a failure stamping cannot fix.
           version=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           if ! python -m charter news --for "$version" >/dev/null; then
-            echo "::error::cannot render the release notes for $version: either no docs/news/$version-<slug>.md (every published version ships an entry, including a patch — run: charter news stamp $version), or an ordering those entries declare that charter cannot honour. See the error above for which."
+            echo "::error::cannot render the release notes for $version: either no docs/news/$version-<slug>.md (every published version ships an entry, including a patch — run: charter news stamp $version), or something those entries declare that charter cannot honour — an ordering, a frontmatter key, or a file in docs/news that is not an entry. See the error above for which."
             exit 1
           fi
 

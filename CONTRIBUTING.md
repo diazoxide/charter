@@ -73,6 +73,15 @@ command.
   to the release, which is the only vantage point from which "first" means anything.
   Without either, entries sort by filename as they always have.
 
+  **Those six keys are the whole set, and they are matched exactly.** `version`,
+  `headline`, `check`, `adopt`, `lead`, `security` — anything else in an entry's
+  frontmatter is reported at the release gate rather than ignored, `Security:` and
+  `securiy:` included. Charter does not guess which one you meant: a key it does not read
+  reads as nothing at all, and an entry that renders as nothing is indistinguishable from
+  an entry nobody wrote (#503). The same goes for the file itself — every `.md` in
+  `docs/news/` is an entry, and one that declares no `version:` charter can read stops the
+  release rather than quietly sitting the release out.
+
   Write it in the PR that builds the thing: you are the only person who knows why it
   matters and what would prove somebody has taken it up, and reconstructing that from
   commit titles at release time is how notes become a changelog nobody reads. Nothing in CI
