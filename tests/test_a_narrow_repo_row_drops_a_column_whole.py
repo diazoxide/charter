@@ -187,6 +187,37 @@ class RowPlanCase(unittest.TestCase):
             with self.subTest(width=w):
                 self.assertTrue(sl._row_plan(w).name, w)
 
+    def test_two_repos_sharing_a_prefix_stay_apart_at_every_width(self):
+        """What the name floor is FOR, asserted as the property rather than as its number.
+
+        A test that spells `_NAME_MIN_W`'s value passes forever and sees nothing — #508's
+        own finding about `28`, and the whole reason none of these cases names a width.
+        What a floor on the name column actually buys is that a row still says WHICH repo
+        it is about, and the sharp case is two repos in one workspace whose names share a
+        prefix: `analytics-api` and `analytics-web` are indistinguishable the moment the
+        column can no longer reach past `analytics-`.
+
+        Found by the deletion sweep, which dropped a term from the floor and watched every
+        other case here stay green. Measured against the mutants it produces: the floor as
+        it stands has zero indistinguishable widths, and each smaller one has six, nine and
+        nineteen.
+        """
+        a, b = Path("/tmp/p/analytics-api"), Path("/tmp/p/analytics-web")
+        states = {a: {"dirty": True}, b: {}}
+        branches = {a: "main", b: "main"}
+        gl = {a: {"ci": "failed"}, b: {"ci": "success"}}
+        for w in range(28, sl._LEFT_W + 1):
+            with self.subTest(width=w):
+                plan = sl._row_plan(w)
+                cells = [tui.strip_ansi(
+                    sl._tree_cells("  ├─ ", d.name, d, states, branches, gl,
+                                   plan=plan).render(w)[0])[:plan.name].rstrip()
+                    for d in (a, b)]
+                self.assertNotEqual(
+                    cells[0], cells[1],
+                    f"at {w} columns both repos draw {cells[0]!r} — the name column is "
+                    f"too narrow to say which row is about which repo")
+
     def test_a_drop_gives_its_leftover_back_rather_than_leaving_it_blank(self):
         """A dropped cell frees more columns than the deficit demanded. Leaving them
         blank while the repo name is cut to twelve characters spends a narrow pane on
