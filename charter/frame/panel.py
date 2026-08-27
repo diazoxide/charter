@@ -191,6 +191,19 @@ def _component_text(reg, cid: str, fid: str) -> str:
     function can fail: a snapshot that cannot be read, a pane whose size cannot be
     measured. A panel that stops repainting has already lost the pane, whatever the
     traceback would have said.
+
+    **Never raises means never raises an `Exception`**, and `except Exception` is the
+    whole of what keeps the operator's own interrupt out of that promise —
+    `KeyboardInterrupt` and `SystemExit` are `BaseException`s, which this clause does not
+    reach. It used to carry an `except KeyboardInterrupt: raise` above it as well, and
+    that was dead code rather than defence in depth: the clause below could never have
+    caught one either way. `tools/sweep.py` proved it equivalent on `main` and #568
+    removed it, because a line that cannot change an outcome is not documentation of an
+    intent — it is a second, weaker answer to a question `except Exception` had already
+    answered. Do not read `Registry.draw`'s identical-looking guard as the same thing:
+    the clause below THAT one is `except BaseException`, so there the two lines are the
+    only reason an interrupt survives a stranger's renderer at all.
+    `TheOperatorsInterruptIsNotAComponentFailure` pins both halves.
     """
     from . import ctx as _ctx, gather
     try:
@@ -199,8 +212,6 @@ def _component_text(reg, cid: str, fid: str) -> str:
         drew = reg.draw(cid, _ctx.build(c.needs, width=slots._width(),
                                         height=_rows(), fid=fid, snapshot=snapshot))
         return "\n".join(drew)
-    except KeyboardInterrupt:
-        raise
     except Exception as e:
         # `contain.one_line` BEFORE the width arithmetic, the order the rest of charter
         # keeps: *cid* arrived on this process's own command line, an escape sequence in

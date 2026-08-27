@@ -777,6 +777,98 @@ class APanelPaintsInsideItsOwnRectangle(PersonaIso, unittest.TestCase):
         self.assertLessEqual(tui.width(line), 40)
 
 
+class TheOperatorsInterruptIsNotAComponentFailure(PersonaIso, unittest.TestCase):
+    """A `KeyboardInterrupt` raised while a pane repaints leaves the panel, and
+    `_component_text`'s `except Exception` is the whole of what makes it.
+
+    **That function carried an `except KeyboardInterrupt: raise` above the clause, and it
+    was dead code** — `tools/sweep.py`'s second find on `main` (#568). Measured against a
+    copy of the same function with the clause removed, before removing it: identical on
+    `KeyboardInterrupt`, `SystemExit`, `BaseException`, `GeneratorExit`, `OSError`,
+    `ValueError`, `RuntimeError`, a `reg.get` miss, and a normal return, whether the
+    exception came from the renderer, from `gather.read` or from `_rows`.
+    `KeyboardInterrupt` is a `BaseException` and not an `Exception`, so the clause below
+    could never have caught one and the clause above could never have been the reason.
+
+    Per the sweep spec's §4 — *"equivalent mutant" and "dead code" are the same finding*
+    — it is gone. This class is the property the removal must not change, pinned at the
+    step that carries it rather than left to be inferred, the way #566 handled
+    `cmd_toggle`'s `if not fid: return 0`.
+
+    **The identical two lines in `Registry.draw` are NOT dead, and that contrast is the
+    reason this needed measuring rather than reading.** The clause below THOSE is `except
+    BaseException`, which does catch a `KeyboardInterrupt` — so there the guard is the
+    only reason an interrupt survives a stranger's renderer at all, and
+    `test_component_providers.py::test_the_operators_own_interrupt_still_travels` is what
+    says so. Two identical spellings, one load-bearing and one dead, told apart entirely
+    by the clause underneath.
+
+    **One axis did differ, and it is reported rather than pinned.** A class inheriting
+    from BOTH `KeyboardInterrupt` and `Exception` is legal Python; it escapes
+    `Registry.draw` through that live guard and reached the deleted clause first, so
+    shipped let it kill the pane where the mutant paints the failure line. Nothing in
+    charter or the standard library is such a class — it inverts the split PEP 352 made
+    `KeyboardInterrupt` a `BaseException` for — and the behaviour the deleted line
+    selected on it was the one §4b exists to refuse: a provider's exception costing the
+    SESSION instead of its own pane. Pinning that would have pinned an accident.
+    """
+
+    def test_an_interrupt_is_not_an_Exception_which_is_why_the_catch_lets_it_by(self):
+        """The chain asserted rather than inferred. Every case below rests on this one
+        fact about the hierarchy, so if it ever stopped holding, this says so at the step
+        where it changed instead of leaving four cases failing for a reason none of them
+        names."""
+        self.assertFalse(issubclass(KeyboardInterrupt, Exception))
+        self.assertFalse(issubclass(SystemExit, Exception))
+        self.assertTrue(issubclass(KeyboardInterrupt, BaseException))
+        self.assertTrue(issubclass(SystemExit, BaseException))
+
+    def test_an_interrupt_while_the_snapshot_is_read_leaves_the_panel(self):
+        """`gather.read` is `_component_text`'s own failure mode rather than a
+        renderer's, so this is the interrupt arriving in the half of the function the
+        deleted clause sat over. `^C` during the plane scan must end the process, not
+        paint `unavailable` and repaint forever."""
+        _installed(self, needs=("repos",))
+        with mock.patch("charter.frame.gather.read",
+                        side_effect=KeyboardInterrupt("^C")):
+            with self.assertRaises(KeyboardInterrupt):
+                _painted(CID)
+
+    def test_a_process_exit_while_the_snapshot_is_read_leaves_the_panel_too(self):
+        """`run`'s own docstring names both: *"`KeyboardInterrupt` and `SystemExit` are
+        how this process is MEANT to end, and swallowing either would hold a pane open
+        against the operator killing it."* The deleted clause named only one of them,
+        which is a second reason it was not the thing carrying the property."""
+        _installed(self, needs=("repos",))
+        with mock.patch("charter.frame.gather.read", side_effect=SystemExit(3)):
+            with self.assertRaises(SystemExit):
+                _painted(CID)
+
+    def test_an_interrupt_inside_a_providers_renderer_leaves_the_panel(self):
+        """The whole chain, end to end, through the pane a provider actually draws:
+        `Registry.draw`'s live guard re-raises, `_component_text` does not catch it, and
+        `run`'s outer `except Exception` does not either. That is three functions
+        agreeing, and only the middle one had a line to lose."""
+        _installed(self,
+                   render="lambda ctx: (_ for _ in ()).throw(KeyboardInterrupt())")
+        with self.assertRaises(KeyboardInterrupt):
+            _painted(CID)
+
+    def test_an_ordinary_failure_in_the_same_place_is_still_a_painted_line(self):
+        """The control, and it is not optional: without it a `_component_text` that had
+        stopped catching anything at all would pass every case above. Same call, same
+        fixture, an `OSError` instead — contained, named in the pane, and the panel still
+        returns 0."""
+        _installed(self, needs=("repos",))
+        with mock.patch("charter.frame.gather.read",
+                        side_effect=OSError("volume went away")):
+            rc, painted, err = _painted(CID, cols=78)
+        self.assertEqual(rc, 0, painted)
+        self.assertIn(CID, painted)
+        self.assertIn("OSError", painted)
+        self.assertNotIn("panel stopped", err)
+
+
 class TheProviderNameThatReachesThePaneIsContained(PersonaIso, unittest.TestCase):
     """A component name a stranger's distribution chose, on `run`'s failure path.
 
@@ -1015,3 +1107,112 @@ class ASizePolicyBecomesCellsByOneRuleStatedOnce(unittest.TestCase):
         for size in (component.Content(), component.Content(cap=9), component.Fill()):
             with self.subTest(size=size):
                 self.assertEqual(layout._policy_cells(size), 1)
+
+
+class TheCommittedSpellingAndTheComponentIdReachOneEntry(unittest.TestCase):
+    """`layout._key`'s alias resolution — this file's own title, read in the direction
+    nothing was asking it in.
+
+    `_derive` keys all five tables by the COMMITTED spelling, so every per-slot fact
+    `layout` answers is reachable under a built-in's component id only because `_key`
+    resolves one to the other. **Collapsing `_key` to `return name` left the full suite
+    green.** `tools/sweep.py` found that on `main`, after three rounds of hand-sweeping
+    had walked past it (#568).
+
+    The one case that named `_key` asked it for a value it must hand back unchanged
+    (`ANameThatIsNotTextIsAnAnswerRatherThanACrash` above). That is the guard's OTHER
+    half, and it answers identically with the resolution or without it — a real test,
+    pointed at the function, blind to the thing the line is for, which is the shape this
+    file's docstring says the review rounds kept hitting.
+
+    So the resolution is asked here on every alias the table declares rather than on one
+    of them, and then at the three geometry functions a wrong answer actually reaches. A
+    sidebar that stops costing columns is #500; a strip that stops being a fixed row is
+    #515. Neither arrives as an error — `slot_sizes` and `_edge_of` both degrade by
+    filtering rather than refusing, which is exactly why nothing went red.
+    """
+
+    #: Every alias :data:`builtins.SLOT_OF` declares, written out rather than read back
+    #: from it: a test that reads the table it is checking moves with the table and pins
+    #: nothing. :meth:`test_the_pinned_table_is_the_whole_table` is what keeps the two in
+    #: step instead.
+    #:
+    #: **`repos` is here because it is its OWN alias.** It is the one entry a `_key` that
+    #: resolved nothing would still get right, so it is the reason the other three have to
+    #: be asked beside it — one example standing for four would have a one-in-four chance
+    #: of being the example that cannot fail.
+    ALIASES = (("identity", "top"), ("attention", "bottom"),
+               ("repos", "repos"), ("sidebar", "right"))
+
+    def test_the_pinned_table_is_the_whole_table(self):
+        """An alias added to `SLOT_OF` and not to :data:`ALIASES` would ship unpinned in
+        exactly the way `identity` did, so the coverage is asserted rather than
+        believed."""
+        self.assertEqual(dict(self.ALIASES), builtins.SLOT_OF)
+
+    def test_a_built_in_id_resolves_to_the_slot_name_the_tables_are_keyed_by(self):
+        """`_key`'s own contract, stated as the mapping and not as an example of it."""
+        for cid, slot in self.ALIASES:
+            with self.subTest(cid=cid):
+                self.assertEqual(layout._key(cid), slot)
+
+    def test_every_per_slot_fact_answers_the_same_under_either_spelling(self):
+        """The three lookups that read `_key`, asked in both vocabularies at once.
+
+        `assertIsNotNone` on the slot-name side first, because `_edge_of` and `_size_of`
+        answer `None` for a name nothing placed: without that control a resolution that
+        had stopped working would agree with itself at `None` and pass.
+        """
+        for cid, slot in self.ALIASES:
+            with self.subTest(cid=cid):
+                self.assertIsNotNone(layout._edge_of(slot), "the fixture placed nothing")
+                self.assertIsNotNone(layout._size_of(slot), "the fixture placed nothing")
+                self.assertEqual(layout._edge_of(cid), layout._edge_of(slot))
+                self.assertEqual(layout._size_of(cid), layout._size_of(slot))
+                self.assertIs(layout._is_fixed_row(cid), layout._is_fixed_row(slot))
+
+    def test_a_sidebar_under_its_component_id_still_costs_the_table_its_columns(self):
+        """`repos_cols`, against the measurement in its own docstring: on tmux 3.7c at
+        120x40 a side pane split BEFORE the table leaves that table 97 columns, not the
+        window's 120. The sidebar reaches that arithmetic through `_edge_of` and
+        `_size_of`, so an arrangement spelled in component ids would be sized for a pane
+        23 columns wider than the one it gets — #500 exactly, whose visible form was a
+        seven-row pane with one line in it.
+        """
+        wanted = 120 - layout.SLOT_SIZE["right"] - layout._BORDER_COLS
+        self.assertEqual(
+            layout.repos_cols(["right", "top", "bottom", "repos"], window_cols=120),
+            wanted)
+        self.assertEqual(
+            layout.repos_cols(["sidebar", "identity", "attention", "repos"],
+                              window_cols=120),
+            wanted)
+
+    def test_a_frame_spelled_in_component_ids_is_sized_as_the_slot_names_are(self):
+        """`slot_sizes` drops a name it cannot size rather than raising on it, matching
+        `visible_slots`' filter-don't-refuse discipline — so an unresolved id is not an
+        error here, it is an ABSENT entry, and `panel_argvs` then splits that pane at the
+        shipped floor or the frame loses it. Asked as "the two spellings agree" so the
+        numbers stay `_derive`'s rather than being copied into this file.
+        """
+        ids = [cid for cid, _ in self.ALIASES]
+        by_id = layout.slot_sizes(ids, window_rows=50, content_rows=6)
+        by_name = layout.slot_sizes([slot for _, slot in self.ALIASES],
+                                    window_rows=50, content_rows=6)
+        self.assertEqual(len(by_name), len(self.ALIASES), "the fixture sized nothing")
+        self.assertEqual({builtins.SLOT_OF[cid]: n for cid, n in by_id.items()}, by_name)
+
+    def test_a_sidebar_under_its_component_id_is_still_charged_no_rows(self):
+        """`harness_rows` charges a pane's height against the harness unless its edge
+        costs COLUMNS, and that edge comes from `_edge_of`. Unresolved, `sidebar`'s 22
+        columns are charged as 22 rows and the harness loses them — the same arithmetic
+        `test_the_harness_is_charged_no_rows_for_a_pane_that_costs_columns` pins for a
+        component this plane placed, asked here for charter's own sidebar under its own
+        id. The number that comes out of this is what `resize-pane -y` is given, so it is
+        wrong on screen and not only in a dict.
+        """
+        by_name = {"top": 1, "bottom": 1, "repos": 6, "right": 22}
+        by_id = {"identity": 1, "attention": 1, "repos": 6, "sidebar": 22}
+        rows = sum(by_name[s] + layout._BORDER_ROWS for s in ("top", "bottom", "repos"))
+        self.assertEqual(layout.harness_rows(by_name, window_rows=50), 50 - rows)
+        self.assertEqual(layout.harness_rows(by_id, window_rows=50), 50 - rows)
