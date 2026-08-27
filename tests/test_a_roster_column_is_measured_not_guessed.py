@@ -104,7 +104,10 @@ class RosterWidths(PersonaIso):
             except OSError:
                 continue
             kept.append(n)
-        if len(kept) < 2:
+        # `min(2, ...)`, not a flat 2: a caller asking for ONE persona gets a roster of
+        # one, and a flat floor turned that into a silent skip — a test that does not run
+        # is not a test, and this one was the guard on the shared row's DISP cell.
+        if len(kept) < min(2, len(names)):
             self.skipTest("filesystem refuses these names")
         return kept
 
@@ -263,6 +266,61 @@ class TestTheSkillsBlockIsMeasuredToo(RosterWidths):
             "the `unused:` label starts in a different column on each row — the name "
             f"column was sized by a guess (offsets {sorted(at)}):\n" + "\n".join(block))
 
+    def test_a_hostile_name_cannot_forge_a_row_in_this_block(self):
+        """The block prints a persona DIRECTORY name, so it needs #472's bound too.
+
+        Reachable, not theoretical. `drift` reports a persona whose name appears in
+        `personas/_skills/*.jsonl`, and `skilluse.record` writes whatever string it is
+        given into that committed log with no `valid_name` between — so the same commit
+        that adds a directory named with a separator can add the log line that pulls it
+        into this block. Without the bound the name writes a second physical line wearing
+        the block's own layout, which is #453's mechanism two reports over.
+        """
+        name = "evil" + chr(0x2028) + "  fake     used but not declared: nothing"
+        try:
+            (config.PERSONAS_DIR / name).mkdir()
+            (config.PERSONAS_DIR / name).rmdir()
+        except OSError:
+            self.skipTest(f"filesystem refuses {name!r}")
+        from charter import skilluse
+
+        drift = {"unused": [], "undeclared": ["a-skill"]}
+        self._roster("ok", name)
+        with mock.patch.object(skilluse, "drift", return_value=drift):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        self.assertEqual(
+            [r for r in rows if r.startswith("  fake")], [],
+            "the persona name wrote its own line in the skills block:\n"
+            + "\n".join(rows))
+        self.assertTrue(
+            any(contain.one_line(name) in r and "a-skill" in r for r in rows),
+            "the bounded name is not in the block:\n" + "\n".join(rows))
+
+    def test_both_directions_of_drift_are_reported(self):
+        """`unused` and `undeclared` are two `if`s, and only the first had a test.
+
+        The sweep deleted the `undeclared` branch and the whole suite stayed green — the
+        half of the block that answers the more interesting question could stop printing
+        and nothing would say so. They are different findings: `unused` is a context cost,
+        `undeclared` is a persona working outside its charter (ADR 0013).
+
+        `drift` is stubbed rather than driven through a usage log, because the property
+        under test is that the report PRINTS both directions, not how `skilluse` derives
+        them.
+        """
+        from charter import skilluse
+
+        drift = {"unused": ["declared-never-used"], "undeclared": ["used-never-declared"]}
+        self._roster("ok")
+        with mock.patch.object(skilluse, "drift", return_value=drift):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        self.assertTrue(any("unused: declared-never-used" in r for r in rows),
+                        "the unused half is missing:\n" + "\n".join(rows))
+        self.assertTrue(
+            any("used but not declared: used-never-declared" in r for r in rows),
+            "the undeclared half is missing — the block reports only one direction of "
+            "drift:\n" + "\n".join(rows))
+
     def test_a_long_name_is_not_cut_out_of_the_block(self):
         """`tui.pad` truncates, so alignment alone would survive a constant here too."""
         long = self.NAMES["well over the boundary"]
@@ -355,6 +413,69 @@ class TestEveryColumnIsMeasuredNotOnlyTheName(RosterWidths):
         rows = self._stats_with_tally({"ok": 1234567, cjk: 2})
         header = next(r for r in rows if r.startswith("PERSONA"))
         self._assert_aligned(rows, header, "STATUS", DORMANT)
+
+
+class TestTheRewrittenRowsKeptWhatTheyGuarded(RosterWidths):
+    """Two guards on the rows this change rewrote, found unpinned by `tools/sweep.py`.
+
+    Neither is about column width. Both are behaviour the old `print` statements carried
+    and the new row builders still carry, and the sweep charges them here because these
+    are the lines this change touched. A rewrite that silently dropped either would have
+    passed every alignment case in this file, which is the point of running the sweep on
+    a diff rather than only asserting the thing you set out to fix.
+    """
+
+    def test_a_vault_status_cannot_write_a_second_row(self):
+        """VAULT STATUS is the last column of `persona list` and it is UNPADDED, so it is
+        the one field a bound at the column cannot help with. `_vault_status` returns
+        provider health text — a path, an error from a credential helper — and a newline
+        in it writes a second physical line wearing this table's own layout. That is
+        #453's mechanism, and `contain.one_line` is what stops it."""
+        self._roster("ok", "other")
+        hostile = "no vault\nfake      Fake role   vault2   no vault"
+        with mock.patch.object(commands_persona, "_vault_status", return_value=hostile):
+            rows = self._run(commands_persona.cmd_persona_list)
+        forged = [r for r in rows if r.startswith("fake")]
+        self.assertEqual(
+            forged, [],
+            "a vault status wrote its own table row:\n" + "\n".join(rows))
+
+    def test_a_never_dispatched_persona_is_flagged_not_dotted(self):
+        """The glyph fallback, which is the one column cell that is not a lookup.
+
+        `glyph` has no entry for "never dispatched" — that status is decided in the loop,
+        not by `persona.stats` — so the row's marker comes from the `.get` default, and
+        the flag is the whole signal a steward prunes on. Collapse that conditional to its
+        other branch and the loudest row in the report becomes an ordinary `·` bullet,
+        with the words still there and nothing drawing the eye to them. Unpinned until the
+        sweep asked.
+        """
+        self._roster("ok", "other")
+        from charter import dispatch
+
+        with mock.patch.object(dispatch, "tally", return_value={"ok": 3}):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        row = [r for r in rows if r.startswith("other")]
+        self.assertEqual(len(row), 1, "\n".join(rows))
+        self.assertIn("never dispatched", row[0])
+        self.assertIn("⚑ never dispatched", row[0],
+                      "the never-dispatched row lost its flag glyph:\n" + row[0])
+
+    def test_the_shared_namespace_reports_no_dispatch_count(self):
+        """`_shared` is a namespace, not a persona: nothing is ever dispatched AS it, so a
+        number in its DISP cell would be a count of something that cannot happen. The row
+        prints an em dash, and the tally is not consulted for it even when one exists."""
+        self._roster("ok")
+        from charter import dispatch
+
+        with mock.patch.object(dispatch, "tally",
+                               return_value={config.SHARED_PERSONA: 7, "ok": 3}):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        shared = [r for r in rows if r.startswith(config.SHARED_PERSONA)]
+        self.assertEqual(len(shared), 1, "\n".join(rows))
+        self.assertNotIn("7", shared[0],
+                         "the shared namespace reported a dispatch count:\n" + shared[0])
+        self.assertIn("—", shared[0], shared[0])
 
 
 class TestTuiColumn(unittest.TestCase):

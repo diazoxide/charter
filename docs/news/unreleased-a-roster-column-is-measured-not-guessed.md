@@ -61,6 +61,31 @@ on every other surface; the column honours that bound rather than inventing a se
 smaller one. An ordinary roster now renders *narrower* than before, because 28 was always
 more than a roster of real names needs.
 
+## What the sweep charged for the rewrite
+
+Replacing a `print` statement makes its line a new line, and `tools/sweep.py` charges new
+lines against the diff. Six guarantees the old prints carried turned out to have no test
+behind them — none of them about column width, all of them things a rewrite could have
+dropped in silence while every alignment case stayed green.
+
+`persona list`'s VAULT STATUS is the last column and is *unpadded*, so a bound at the
+column cannot help it; a newline in provider health text writes a second row wearing the
+table's layout. `_shared` is a namespace rather than a persona, so its DISP cell is an em
+dash instead of a count of something that cannot happen. The `never dispatched` flag is the
+signal a steward prunes on, and collapsing its conditional leaves the words in place with
+nothing drawing the eye to them. The skills block reported only one of its two directions
+of drift under test, so the half answering the more interesting question could stop
+printing unnoticed. And that block bounded its name twice — once inside the width, once at
+the row — which is the measure-one-string-print-another shape this entry is about, one
+block further down; it now binds the name once into the list both readers share, so there
+is no second call left to disagree with the first.
+
+One of the seven was genuinely equivalent, and it is worth saying which rather than
+quietly pinning it: `persona.stats` returns only statuses that are already keys in the
+glyph table, so `never dispatched` is the sole status reaching the `.get` default and the
+`·` fallback beside it is unreachable today. It stays as the neutral marker for a status
+somebody adds later.
+
 ## What this does not fix
 
 Alignment is about the cells a value **declares**, and that is all `tui.width` can report.
