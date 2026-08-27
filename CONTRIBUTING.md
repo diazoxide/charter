@@ -44,6 +44,23 @@ command.
   outside a frame with `_envguard.unset_all()`, or states the value it needs with
   `mock.patch.dict(os.environ, …)`; a test that spawns a subprocess has to hand it the
   throwaway plane as `$CHARTER_ROOT`, which no guard in this process can do for you.
+  `tests/_ttyguard.py` is the fourth, for what that shell *is* rather than what it says: it
+  answers whether your streams are a terminal, and **how wide they are**. `$COLUMNS` is
+  scrubbed with the rest, and — because removing it only moves the reading to an ioctl on
+  stdout — `os.get_terminal_size()` answers what a pipe answers, so a render is the same
+  width in your window as it is in CI. A test that wants a size states one with
+  `mock.patch("os.get_terminal_size", …)`.
+- **The suite spends nothing it was not asked to.** `tests/_planeguard.py` also refuses a
+  charter child started with `start_new_session=True` — charter's own shape for a
+  background refresh that outlives the process that started it. Those fire in tests and
+  almost never in the field, because both spawners are throttled by state in
+  `config.STATE_DIR` and every test gets a fresh temp one, so `charter _version-check`
+  (a PyPI request) and `charter gl-refresh` (the forge client) went off 63 times in one
+  green run. If your case renders a status line and does not care, call
+  `tests._isolation.no_background_refresh(self)`; if it is *about* the child, call
+  `tests._planeguard.allow_background_children(self)`. A test that starts a real tmux
+  server names its socket with `tests._tmuxreap.name("<slug>")`, so the next run can reap
+  it when this one is killed before its cleanup runs.
 - **Comments explain *why*.** The codebase leans hard on this: a comment that restates the
   code earns nothing, one that records the failure a line prevents is worth several
   paragraphs of docs. Read a few modules before writing your first one.
@@ -115,6 +132,16 @@ developer's terminal. And once, more quietly, both sides of an assertion collaps
 ambient `$CHARTER_WORKSPACE` and the test agreed with itself: a mutation that dies with a
 clean environment survived under the pin. `tests/_envguard.py` closes both directions, but
 it only knows about charter's own names; yours is still yours to pin.
+
+The fifth was the *size* of that terminal, and it is the one worth studying, because the
+obvious fix was half a fix. `$COLUMNS` is exported by many shells and `charter/tui.py`
+reads it, so it was added to the scrub — after which `term_width()` fell straight through
+to `os.get_terminal_size()`, an ioctl on stdout. Measured with both variables unset: three
+modules gave three failures and an error on a 40-column pty and passed on a 200-column one.
+Nobody had hit it because that ioctl raises when stdout is a pipe, which it is under CI and
+under every agent-launched run — so the only person who could see it was the one running
+the suite in their own narrow window. Scrubbing a name is not the same as ending a reading,
+and a scrub that is a list of spellings will always be one name behind.
 
 **So: a test pins what it depends on.** Anything that changes behaviour and comes from
 outside the test — git config, `$PATH`, locale, the default shell, an env var, the

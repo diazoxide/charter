@@ -85,12 +85,57 @@ charter is full of ``except Exception`` fallbacks that would turn this tripwire 
 degraded code path, and `unittest` records a `BaseException` against the test that raised
 it, so the failure keeps its name.
 
+**And the same three descriptors answer a SECOND question, which is how wide they are.**
+`charter.tui.term_width` asks it twice — ``$COLUMNS`` first, then `os.get_terminal_size()`,
+an ioctl on this process's own stdout — and both answers come off the operator's window
+rather than out of this repository. At ``COLUMNS=40`` the suite returned four failures and
+an error (#544).
+
+Scrubbing the variable is the obvious fix and it is **half** of one, which is the part
+worth writing down: with ``$COLUMNS`` gone, `term_width` falls straight through to the
+ioctl. Measured on real ptys with both geometry variables already unset,
+`test_frame_panel` + `test_frame_slots` + `test_nested_plane_named`, 172 tests either way:
+
+===============  ==================================
+pty width        result
+===============  ==================================
+40 columns       ``FAILED (failures=3, errors=1)``
+200 columns      ``OK``
+===============  ==================================
+
+Same tree, same commit; the only difference was the size of the window, and the suite read
+it. Nobody had hit it because `os.get_terminal_size()` raises when stdout is not a
+terminal — under CI, under ``| tee``, under every agent-launched run — so the only person
+who could see it is the one running the suite in their own narrow window, which is #545's
+observation about `isatty` one question further along.
+
+`os.environ` is `_envguard`'s to scrub, and it asks `charter.tui.TERMINAL_SIZE_VARS` for
+the names. The ioctl is here, with the streams whose size it is asking about:
+`os.get_terminal_size` is replaced with one that raises the `OSError` a pipe raises, so
+every caller takes the no-tty path it already documents and is already tested on —
+`term_width`'s *default*, `frame/slots.py`'s `panel_cols` fallback, `commands_frame`'s
+`_ASSUMED_SIZE`. Nothing new is invented for them to fall back to.
+
+**Neutralised, not refused, and that is this module's own tier test applied.** Loudness is
+worth its cost where the answer is a claim about the world the test runs in — whether
+anybody is watching. "There is no tty to measure" is not such a claim: it is the state a
+piped run is in, charter's answer to it is a documented default rather than a decision, and
+refusing would fire inside every one of the several hundred tests that render anything. A
+test that wants a size states one — ``mock.patch("os.get_terminal_size",
+return_value=os.terminal_size((22, 3)))``, which fifty-odd cases here already write, and
+which replaces the same module attribute this installs.
+
 **What this cannot see.** A subprocess gets its own file descriptors, and it inherits this
 process's — so a child charter really can find a terminal on fd 0. Nothing in the suite
 reaches a prompt that way today (`RealPlaneSpawn` already refuses the children that would
 resolve a real plane, and the rest are driven with explicit input), and closing it would
 mean rewriting fd 0 for every child, which is a bigger change than the hole justifies. It
-is written down here rather than left to be discovered.
+is written down here rather than left to be discovered. The same goes for the size: a child
+resolves its own, but the suite spawns its children with pipes, so their answer is the
+pipe's answer, which is this one. A test that reads the winsize through `fcntl` directly
+also goes around this — nothing in charter does, and
+`test_no_test_reads_the_terminals_size` does it deliberately, as the control that proves
+the pty it opened really was 40 columns wide.
 """
 
 from __future__ import annotations
@@ -148,6 +193,25 @@ def _isatty() -> bool:
     if _active and not _declared:
         raise AmbientTerminalRead(_explain())
     return False
+
+
+#: What `os.get_terminal_size` raises on a pipe, and so what every caller in charter
+#: already handles. Written for whoever finds it in a traceback: a test that wanted a size
+#: and did not state one is the only way to get here.
+_NO_SIZE = ("[Errno 25] Inappropriate ioctl for device: this is `tests/_ttyguard.py`, not "
+            "your terminal. The suite answers 'stdout is not a tty' on every machine, so a "
+            "render cannot come out one width in a 200-column window and another in a "
+            "40-column one (#544). A test that wants a size states it: "
+            "`mock.patch(\"os.get_terminal_size\", return_value=os.terminal_size((80, 24)))`.")
+
+#: The real measurement, kept for anything that genuinely has to take one — the courtesy
+#: :func:`ambient` extends for the `isatty` answers, for the same reason: a guard with no
+#: honest way past it is a guard somebody deletes.
+real_get_terminal_size = os.get_terminal_size
+
+
+def _no_terminal_size(fd=None):
+    raise OSError(_NO_SIZE)
 
 
 def no_terminal() -> None:
@@ -220,6 +284,13 @@ def install() -> None:
 
     for stream in (sys.stdout, sys.stderr):
         answer_not_a_terminal(stream)
+
+    # And how WIDE those streams are, which is the same fixture one question along. The
+    # attribute on the `os` module rather than a wrapper around a caller: `charter.tui`,
+    # `charter.frame.slots`, `charter.frame.palette` and `charter.commands_frame` all look
+    # it up there at call time, so one replacement covers every reader — including
+    # `shutil.get_terminal_size`, which is what `argparse`'s help formatter measures with.
+    os.get_terminal_size = _no_terminal_size
 
     original_run = unittest.TestCase.run
 

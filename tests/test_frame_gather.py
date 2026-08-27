@@ -26,7 +26,7 @@ from unittest import mock
 from charter import config
 from charter.frame import gather, state
 
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, no_background_refresh
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -57,6 +57,12 @@ class ClonedRepoIso(PersonaIso):
         super().setUp()
         (self.tmp / "charter.toml").write_text("schema = 1\n")
         config.HAS_CONTROL_PLANE = True
+        # `gather.scan` calls `glstate.maybe_spawn` on its own path, and a plane this test
+        # just created has no cache to be fresh and no cooldown lock to hold — so every
+        # case in this class forked a real detached `charter gl-refresh` that nothing here
+        # waits for or asserts about (#542). What this class measures is what `scan`
+        # returns, not what it kicks off.
+        no_background_refresh(self)
         self.repo = config.WORKSPACES_DIR / config.DEFAULT_WORKSPACE / "demo"
         _init_repo(self.repo)
 

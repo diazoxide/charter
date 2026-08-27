@@ -34,7 +34,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from charter import commands, commands_worktree, config, root, statusline, util
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, no_background_refresh
 
 
 class NestedCase(PersonaIso):
@@ -43,6 +43,15 @@ class NestedCase(PersonaIso):
     Built on disk rather than mocked: the behaviour is a path relationship, and a stubbed
     answer would pass while the arithmetic was wrong.
     """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The planes below are real ones, written a line before they are rendered, so
+        # charter's two background refreshers both find a cache that has never existed and
+        # fork — a real detached `charter gl-refresh` per render, which nothing here waits
+        # for and nothing here asserts about (#542). What these cases are about is which
+        # PLANE the renderer names.
+        no_background_refresh(self)
 
     def dirs(self) -> tuple[Path, Path]:
         # A name that cannot collide with anything the renderer already prints — the brand

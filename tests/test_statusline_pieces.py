@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from charter import config, pieces, statusline, workspace
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, no_background_refresh
 
 
 def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -40,6 +40,10 @@ class PieceStatusCase(PersonaIso):
         super().setUp()
         (self.tmp / "charter.toml").write_text("schema = 1\n")
         config.HAS_CONTROL_PLANE = True
+        # A render kicks charter's two background refreshers, and a plane built one line
+        # ago always looks stale to both — so these cases forked a real detached
+        # `charter gl-refresh` apiece, which nothing here waits for (#542).
+        no_background_refresh(self)
         self.ws = config.DEFAULT_WORKSPACE
         self.repo = config.WORKSPACES_DIR / self.ws / "demo"
         self.repo.mkdir(parents=True, exist_ok=True)

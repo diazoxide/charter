@@ -25,8 +25,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import config, statusline, update
-from tests._isolation import PersonaIso
+from charter import config, statusline
+from tests._isolation import PersonaIso, no_background_refresh
 
 
 def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -85,9 +85,12 @@ class PlaneRootIso(PersonaIso):
         for n in ("alpha", "beta"):
             self.make_persona(n, role=n.title(), **{"delegate-when": f"{n} work"})
         init_repo(self.tmp)
-        # `_brand` forks a detached version check. A suite that quietly reaches the
-        # network is not hermetic.
-        self.enterContext(mock.patch.object(update, "maybe_spawn", lambda: None))
+        # `_brand` forks a detached version check, and a render kicks the forge refresh
+        # beside it. A suite that quietly reaches the network is not hermetic. Both are
+        # stopped by one call now: this file used to stub only `update.maybe_spawn` by
+        # hand, and `ADirtyRootSpeaks` forked a real `charter gl-refresh` right past it
+        # (#542).
+        no_background_refresh(self)
 
     # -- the two ways a root gets worked in ------------------------------------ #
 

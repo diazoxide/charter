@@ -142,6 +142,43 @@ class ReportIso(PersonaIso):
         self.consent_home = home
 
 
+def no_background_refresh(case) -> None:
+    """Stop this case's renders from forking charter's two background refreshers.
+
+    One spelling of the three lines six modules already wrote by hand, with the same
+    comment twice over::
+
+        spawn = update.maybe_spawn          # never fork a network child from the suite
+        update.maybe_spawn = lambda: None
+        self.addCleanup(lambda: setattr(update, "maybe_spawn", spawn))
+
+    `statusline.render` calls both spawners on its own path, and a case that renders a
+    status line is almost never a case about refreshing anything. On a real machine neither
+    fires: both are throttled by state in `config.STATE_DIR`, and the cache is fresh and the
+    cooldown lock is held. A test's plane is a fresh temp directory, so the cache is always
+    absent and the lock never exists — the throttles that make this rare in real use are
+    exactly what a throwaway plane removes, and `test_statusline_brand` has said so in a
+    comment for as long as it has had one: *"a temp STATE_DIR always looks stale"*.
+
+    **Called by the case, never by `PersonaIso`, and the difference is the whole design.**
+    A base class that stubbed these for every test would make `test_glstate_respawn`'s
+    "must not raise" cases pass without running anything, and would do the same for the
+    next such case somebody writes — the trap #542 names. What refuses the fork itself is
+    `tests._planeguard.BackgroundCharterChild`, which fires at the `Popen` and therefore
+    lets every one of those cases run their throttle logic and assert on it exactly as
+    before. This helper is only for the cases that never wanted a child at all.
+
+    Named for what it prevents rather than for what it patches: a case that grows a third
+    background refresher gets it here, once, instead of in eighteen modules.
+    """
+    from charter import glstate, update
+
+    for module, name in ((update, "maybe_spawn"), (glstate, "maybe_spawn")):
+        patcher = mock.patch.object(module, name, lambda *a, **k: None)
+        patcher.start()
+        case.addCleanup(patcher.stop)
+
+
 def child_plane_env(case, **extra: str) -> tuple[Path, dict]:
     """A throwaway plane, and the environment that points a CHILD charter at it.
 

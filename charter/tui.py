@@ -42,6 +42,26 @@ from collections.abc import Iterable, Sequence
 RESET = "\x1b[0m"
 ELLIPSIS = "…"
 
+#: The environment variables that describe **the terminal a process was launched from**,
+#: as opposed to the one it is drawing into. :func:`term_width` reads the first of them;
+#: `commands_frame._frame_env` strips both out of every child a frame starts, because a
+#: captured size is wrong the moment the child is a different rectangle.
+#:
+#: A named constant rather than two string literals at each of those places, and the
+#: reason is `charter.legacyenv`'s verbatim: **a tuple of strings was never what needed a
+#: plane.** `tests/_envguard.py` removes the shell's own answers from the suite before
+#: `charter.config` is first imported — before a plane is resolved out of the operator's
+#: shell — so it cannot ask `commands_frame`, which pulls `config` in at import. It can
+#: ask this module, which imports ``os``, ``re``, ``unicodedata`` and nothing else. Asked
+#: rather than re-spelled, a third geometry variable is covered by that scrub on the
+#: commit that adds it instead of on the commit that debugs it (#544).
+#:
+#: ``LINES`` is here although nothing in charter reads it yet, for the reason
+#: `tests._envguard._scrubbed_names` gives about `session._WINDOW_ID_VARS`: "deliberately
+#: not read" is a decision that can change, and a scrub costs nothing if it is wrong.
+#: `commands_frame` already strips it, so the pair is charter's own answer already.
+TERMINAL_SIZE_VARS = ("COLUMNS", "LINES")
+
 _SGR = re.compile(r"\x1b\[[0-9;]*m")
 #: Trailing whitespace hiding *behind* trailing SGR escapes ("a \x1b[0m").
 _HIDDEN_TRAIL = re.compile(r"[ \t]+((?:\x1b\[[0-9;]*m)+)$")
@@ -231,7 +251,8 @@ def column(header: str, cells: Iterable[str], gap: int = 2,
 
 
 def term_width(default: int = 80, floor: int = 1) -> int:
-    """Terminal width: ``$COLUMNS``, else the tty size, else *default*.
+    """Terminal width: ``$COLUMNS`` (:data:`TERMINAL_SIZE_VARS`), else the tty size,
+    else *default*.
 
     Clamped to at least *floor*. Status-line style programs get their size via
     ``$COLUMNS`` because stdout is a pipe, hence the env-first order.

@@ -30,7 +30,7 @@ import unittest
 from pathlib import Path
 
 from charter import config, inflight, statusline
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, no_background_refresh
 
 
 def _plain(s: str) -> str:
@@ -174,10 +174,9 @@ class RowsStayTrue(PersonaIso):
 
     def setUp(self) -> None:
         super().setUp()
-        from charter import update
-        spawn = update.maybe_spawn          # never fork a network child from the suite
-        update.maybe_spawn = lambda: None
-        self.addCleanup(lambda: setattr(update, "maybe_spawn", spawn))
+        # Never fork a network child from the suite — the version check AND the forge
+        # refresh, in one call rather than three lines covering half of it (#542).
+        no_background_refresh(self)
         # A roster where every conditional badge is both present and absent: `flying`
         # declares a vault this machine has never registered (`◦`) and is in flight;
         # `stuck` is in flight past the presumed-dead threshold, so it carries the `?`
