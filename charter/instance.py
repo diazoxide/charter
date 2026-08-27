@@ -498,6 +498,92 @@ def density_slots(level) -> list[str]:
     return list(FRAME_DENSITY[lv]["slots"]) if lv else []
 
 
+#: What ``[frame] chrome`` may say, and the pane options each word means.
+#:
+#: **The surface is tmux's, not charter's.** ``window-style`` and ``window-active-style``
+#: are settable PANE-scoped, and tmux fills the pane's whole rectangle from them —
+#: including the cells no renderer wrote, on resize, on reattach, at zero cost on the
+#: repaint path. So charter sets an option and never paints a fill: nothing new is on the
+#: repaint path, a background cannot wrap a pane, focused-versus-unfocused comes from
+#: tmux's own pane focus for free, and the harness pane is untouched by construction
+#: rather than by care (ADR 0018). Measured on 3.7c: with these set on a panel pane,
+#: ``show -p -t <harness> -v window-style`` reads back ``''``.
+#:
+#: **Two named slots one step apart, and never an index.** ``black``/``brightblack`` and
+#: ``white``/``brightwhite`` are slots in the operator's own palette; ``colour236`` is a
+#: fixed point in the xterm cube that no theme moves. The sharp form of that argument is
+#: the inverse of the obvious one: an absolute colour is unsafe precisely on the terminals
+#: that render it faithfully — a 16-colour client gets charter's grey downsampled to the
+#: operator's own black and looks fine, while a truecolor client on a light theme gets it
+#: verbatim and looks broken. tmux is already the colour ladder (measured: 24-bit ->
+#: ``colour237`` -> ``ESC[40m`` -> ``ESC[7m`` as clients of four capabilities attached in
+#: turn), it recomputes it per client per attach, and a second ladder inside charter
+#: computed from ``$COLORTERM`` would be a second answer built on the one input measured
+#: to be stale (``COLORTERM`` is not in tmux's ``update-environment``, so a pane carries
+#: the terminal that started the SERVER, not the one looking at it).
+#:
+#: **``off`` is the default and there is no ``auto``.** Charter cannot detect the
+#: operator's background — OSC 11 through tmux got no answer in a second of reading, and
+#: 3.7c's own ``client-light-theme``/``client-dark-theme`` hooks did not fire against a
+#: pty client that answered — and ``window-style`` honours colour ONLY (``reverse``,
+#: ``dim`` and ``bold`` are accepted and silently ignored, measured), so the one
+#: theme-relative style is unavailable. A default that repaints a stranger's terminal can
+#: make a working frame WORSE on upgrade, which is the same asymmetry ``mouse`` is off
+#: for. An ``auto`` that resolved to ``off`` would be a config value that changes nothing
+#: while claiming to decide something; an ``auto`` that guessed would be a guess wearing
+#: the word for a measurement.
+#:
+#: **The value is a WORD and never a style string, and that is a containment boundary.**
+#: A tmux style value is format-expanded at draw time — measured, stored verbatim and
+#: evaluated: ``bg=#{?#{==:1,1},colour196,colour46}`` reached the wire as
+#: ``ESC[48;5;196m``. charter.toml is committed and arrives from someone else's machine,
+#: so a free style string there would be a committed value reaching a tmux evaluator,
+#: which is :data:`_HOTKEY_RE`'s class exactly. Execution was NOT achieved on 3.7c
+#: (``#(...)`` is refused by the style parser outright) and that is not the same as it
+#: being safe: the category is confirmed and one version was tested. The asymmetry
+#: ``_HOTKEY_RE`` already argues holds — a word charter refuses that an operator wanted
+#: costs them a rename; a style string charter accepted that tmux evaluates costs an
+#: unknown amount on a version nobody ran.
+#:
+#: Whole-frame, not per component: one frame has one look, and a colour key per component
+#: would be thirty knobs whose first product is a frame that does not match itself.
+FRAME_CHROME: dict[str, tuple[tuple[str, str], ...]] = {
+    #: Nothing set at all — `show -p` answers `''` for every pane and the frame is
+    #: whatever the operator's own terminal already was.
+    "off": (),
+    "dark": (("window-style", "bg=black"),
+             ("window-active-style", "bg=brightblack")),
+    "light": (("window-style", "bg=white"),
+              ("window-active-style", "bg=brightwhite")),
+}
+
+
+def chrome_level(name) -> str | None:
+    """*name* if it names a :data:`FRAME_CHROME` surface, else ``None``.
+
+    The one place a chrome value arriving from outside charter's own constants — a
+    hand-edited charter.toml, committed and shared — is admitted, and the whole of what
+    stands between `[frame] chrome` and a style string tmux would expand. ``isinstance``
+    first for :func:`density_level`'s reason: ``value in FRAME_CHROME`` raises
+    ``TypeError`` for an unhashable value (``tomllib`` can hand this a list or a table),
+    and this module is imported by every command including ``charter --version``.
+    """
+    return name if isinstance(name, str) and name in FRAME_CHROME else None
+
+
+def chrome_options(level) -> tuple[tuple[str, str], ...]:
+    """The ``(option, value)`` pairs *level* means — empty for anything charter does not
+    know, which is ``off``'s own answer and therefore the safe fallback.
+
+    Callers hand these to tmux, so what comes back is charter's own constant and never
+    the caller's argument: a value this function did not recognise cannot leave through
+    it, which is what makes "no operator string reaches tmux" a property of the code
+    rather than a promise about its call sites.
+    """
+    lv = chrome_level(level)
+    return FRAME_CHROME[lv] if lv else ()
+
+
 def verbosity_for(level) -> str:
     """How much each panel says at *level*. :data:`DEFAULT_VERBOSITY` for anything else.
 
@@ -589,6 +675,20 @@ FRAME_FIELDS = {
     #: The palette is the exception and does not need this flag: while it is open it is
     #: the active surface, so its own request is the one that reaches the terminal.
     "mouse": (False, "mouse"),
+    #: The pane surface, off by default — see :data:`FRAME_CHROME` for what the three
+    #: words mean, why there is no fourth, and why the value is a word rather than a
+    #: style. Off for `mouse`'s own reason, said about a different cost: a default that
+    #: can make an existing working frame WORSE on upgrade must be opt-in, and a
+    #: light-terminal operator upgrading into a default `dark` gets a frame worse than
+    #: the one they had, on a surface they never touched, having done nothing. A
+    #: dark-terminal operator upgrading into a default `off` gets a frame BETTER than the
+    #: one they had — the heading, the inset, the selected row and the status rule are
+    #: theme-safe and ship on — and one line short of the one they wanted. Those are not
+    #: symmetric, and the asymmetry is the argument.
+    #:
+    #: One word, so `docs/frame.md`'s hyphen rule (`history-limit`, not `history_limit`)
+    #: does not arise.
+    "chrome": ("off", "chrome"),
     "hotkey": ("F2", "hotkey"),
     "history_limit": (50000, "history-limit"),
     "min_cols": (100, "min-cols"),
@@ -691,10 +791,11 @@ def frame_of(cfg: dict) -> dict:
     module is imported by every command, including ``charter --version``, so a
     hand-edited charter.toml must degrade to the defaults rather than raise.
 
-    Three keys need more than a type check, and all three get it here rather than
+    Four keys need more than a type check, and all four get it here rather than
     downstream: ``slots`` is filtered against :data:`FRAME_SLOTS`, ``density`` against
-    :data:`FRAME_DENSITY`, and ``hotkey`` against :data:`_HOTKEY_RE` — see that constant
-    for the injection a bare ``isinstance(value, str)`` let through. All three degrade to
+    :data:`FRAME_DENSITY`, ``chrome`` against :data:`FRAME_CHROME`, and ``hotkey``
+    against :data:`_HOTKEY_RE` — see those two constants for the injection a bare
+    ``isinstance(value, str)`` lets through in each case. All four degrade to
     the shipped default, which is the contract every other key in this function already
     keeps: a charter.toml charter cannot make sense of never stops charter from running.
 
@@ -742,6 +843,14 @@ def frame_of(cfg: dict) -> dict:
             continue
         if key == "density":
             if density_level(value):
+                out[key] = value
+            continue
+        if key == "chrome":
+            # The closed enum, checked at the boundary the way `density` is — and for a
+            # sharper reason: a tmux style value is FORMAT-EXPANDED at draw time, so a
+            # bare `isinstance(value, str)` here would carry a committed string from
+            # someone else's machine into a tmux evaluator. See :data:`FRAME_CHROME`.
+            if chrome_level(value):
                 out[key] = value
             continue
         if key == "hotkey":

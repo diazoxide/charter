@@ -141,6 +141,10 @@ from .frame import (builtin_actions, choose, component, gather, layout, overlay,
 # lookup after that point would silently resolve to the wrong thing (an `AttributeError`
 # on a `list`, not a helpful one).
 from .frame import slots as frame_slots
+# Aliased for the same reason: `_split_panels` names its resolved `[frame] chrome` word
+# `chrome`, and `_surface_argvs` takes it as a parameter of that name — the module and
+# the value are two different things and the value is the one the reader is following.
+from .frame import chrome as chrome_mod
 
 #: One shared tmux server for every frame this machine runs, sessions (not servers) told
 #: apart by name — the frame id. Never the operator's own default socket: a frame's
@@ -1612,6 +1616,55 @@ def _chrome_argvs(*, socket: str, harness_pane: str) -> list[list[str]]:
             for name, value in _CHROME]
 
 
+def _surface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
+    """`set-option -p`: the pane surface `[frame] chrome` asked for, on ONE panel pane.
+
+    **tmux paints the background; charter sets an option.** `window-style` and
+    `window-active-style` are settable pane-scoped on 3.7c, and tmux fills the pane's
+    whole rectangle from them — the cells no renderer wrote included, on resize, on
+    reattach. Measured, three panes with styles on the two panels and not on the harness,
+    and what tmux then put on an attached client's wire::
+
+        HARNESS : b'...\\x1b(B\\x1b[m\\x1b[1;1HHARNESS'        <- no colour at all
+        PANELA  : b'...\\x1b[K\\x1b[48;5;24m\\x1b[2BPANELA'    <- the ACTIVE style
+        PANELB  : b'...\\x1b[K\\x1b[48;5;236m\\x1b[2BPANELB'   <- the INACTIVE style
+
+    So nothing here is on the repaint path (constraint 3 is untouched because nothing new
+    repaints), the fill has no width to get wrong and therefore cannot wrap a pane
+    (constraint 5, #553), and the focused/unfocused split is drawn by tmux from its own
+    pane focus — it needs no `focus-events` and works inside an operator's own tmux where
+    charter writes no config at all.
+
+    **PANE-scoped, and that is the whole of the harness boundary.** `-p -t <pane id>`
+    reaches exactly the pane charter just split off for a panel; the harness pane is never
+    an argument here, so ADR 0018's line — charter "never decides what a cursor or a
+    colour means inside it" — holds by construction rather than by care. Read back rather
+    than intended: `show -p -t <harness> -v window-style` answers `''`.
+
+    **It survives a panel respawn**, which a renderer-side fill would not: `pane-died`
+    respawns a dead panel into the SAME pane, and these are properties of the rectangle
+    rather than of the process in it.
+
+    *chrome* is the word from `[frame] chrome`, and `instance.chrome_options` is what
+    turns it into styles — so what reaches tmux is charter's own constant whatever the
+    word was. An unknown word yields no commands at all, which is `off`.
+
+    All four of charter's panes, not only the two bars: two chrome-coloured panes beside
+    two uncoloured ones is a frame that does not match itself.
+
+    **`NO_COLOR` refuses this, and that is the half that is easy to miss.** The fill is
+    tmux's paint, not charter's, so gating only the panels' own SGR would leave an
+    operator who asked for no colour looking at a coloured frame — charter having asked
+    somebody else to paint it. `NO_COLOR` means no colour on their screen caused by
+    charter, whichever process puts the bytes there. Asked through `chrome.no_colour` so
+    there is one reading of the variable and not a second one out here (#547).
+    """
+    if chrome_mod.no_colour():
+        return []
+    return [tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id, name, value)
+            for name, value in instance.chrome_options(chrome)]
+
+
 def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`set-option -w`: keep dead panes in CHARTER'S OWN WINDOW, and in no other.
 
@@ -2061,6 +2114,14 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     the only way for the two servers to agree about them is for one call site to set them
     on both.
 
+    **And the pane SURFACE is set here too, one pane at a time** (`_surface_argvs`). It
+    is the same funnel and the same argument, one scope down: `window-style` is a PANE
+    option, so unlike the border it has to be set on each panel as it appears — which is
+    also exactly why the harness pane never gets it. Both launch paths and every density
+    change reach panels through this function, so a frame cannot come out surfaced on one
+    server and bare on the other, and a pane added by a later `_relayout` is surfaced when
+    it is created rather than by a second pass that could forget it.
+
     Reported but not fatal, like the splits themselves: a frame whose panels cannot be
     respawned is still a frame, and the harness pane's own `remain-on-exit` was armed
     separately and earlier (`_remain_on_exit_argv`), so the exit code does not ride on
@@ -2084,6 +2145,12 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     # each successfully-created pane belongs to (for its size and its resize-pane flag),
     # and `panel_argvs` returns exactly one command per slot, in the same order (see its
     # own docstring).
+    # The word, resolved once for the whole batch: `config.FRAME` is a plane's own file
+    # and cannot change between two splits, and `instance.chrome_options` is what turns
+    # it into styles — so a value charter does not know produces no commands at all,
+    # which is `off`. `.get` rather than `[...]`: a frame relaunched by a charter that
+    # predates this key has a resolved config without it.
+    chrome = config.FRAME.get("chrome")
     panes: dict[str, str] = {}
     for slot, cmd in zip(slots, panel_cmds):
         # Reported by `tmuxctl.run` but not fatal: one decorative panel failing to draw
@@ -2095,6 +2162,13 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
         pane_id = p.stdout.strip()
         if pane_id and _PANE_ID_RE.fullmatch(pane_id):
             panes[slot] = pane_id
+            # The pane surface, on the pane that was just created and on no other — the
+            # one place charter has a panel's `%N` in hand. The harness pane is never an
+            # argument (`_surface_argvs`), which is how ADR 0018's boundary holds by
+            # construction. Not fatal, like the splits: a frame whose panes kept the
+            # terminal's own background is a frame that looks plainer, not one that fails.
+            for surface in _surface_argvs(socket=socket, pane_id=pane_id, chrome=chrome):
+                tmuxctl.run("painting a panel's surface", surface, env=env)
     return panes
 
 

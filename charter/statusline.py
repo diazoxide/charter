@@ -1535,12 +1535,21 @@ class PersonaChip(NamedTuple):
     DATA rather than left to be read back out of the rendered text — a caller that wants
     the true total (a column heading, say) adds it to the rows that do name a persona,
     instead of parsing a sentence whose wording is a rendering choice.
+
+    *active* is whether this row is the persona the session is currently being — carried
+    as DATA for the same reason *hidden* is. The frame highlights that row across the
+    whole pane (`frame/chrome.reverse`), and the only other way to find it is to look for
+    `_MARK_ACTIVE` or `_MAGENTA` in the rendered head — which would tie a highlight to a
+    marker glyph and a colour name, exactly the spelling-for-property trade this class's
+    *hidden* field already refuses. Defaulted, so a caller building a chip by hand (the
+    fixtures in `tests/test_frame_slots.py` do) gets a row that is not the active one.
     """
 
     name: str | None
     head: str
     badges: str
     hidden: int = 0
+    active: bool = False
 
 
 def _persona_chips(session: str | None = None) -> list[str]:
@@ -1597,7 +1606,8 @@ def _persona_chip_cells(session: str | None = None) -> list[PersonaChip]:
             # so its width never reaches a name.
             head = (f"{_MAGENTA}{_MARK_ACTIVE} {_BOLD}{n}{_R}{dot}" if n == active
                     else f"{_DIM}{_MARK_IDLE} {n}{_R}{dot}")
-            chips.append(PersonaChip(n, head, f"{badge}{health}{flight}"))
+            chips.append(PersonaChip(n, head, f"{badge}{health}{flight}",
+                                     active=n == active))
         if len(chips) > _MAX_PERSONA_LINES:
             # Which ones survive matters more than how many. Keeping the first N
             # alphabetically would drop exactly the personas worth seeing, so the order is

@@ -31,6 +31,17 @@ default = "steward"
 # more — it drew a 22-column copy of the rows `repos` now draws at full width.
 slots = ["top", "bottom", "repos", "right"]
 
+# This plane opts into the pane surface. `off` is the shipped default and stays that way:
+# charter cannot detect a terminal's theme (OSC 11 through tmux answers nothing, and
+# `$COLORTERM` inside a pane describes the terminal that started the SERVER, not the one
+# looking at the pane), so no colour is right on both themes and a default that repaints a
+# stranger's terminal can make an upgraded frame worse for them. This file is not a
+# stranger's — it is this plane's own, and this plane's operator asked for the look. Same
+# posture and same recorded reason as `[frame] mouse`: `FRAME_DEFAULTS` says what a plane
+# looks like before anybody has said anything, and this line says what THIS one looks
+# like. Three words: `off`, `dark`, `light`.
+chrome = "dark"
+
 [update]
 # Track main instead of the last release. `charter update` installs straight from git;
 # nothing is published, and PEP 610 gives `charter --version` the exact commit.
