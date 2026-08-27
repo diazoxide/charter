@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from . import (config, contain, docsrc, doctor, instance, inventory, render, util,
+from . import (config, contain, docsrc, doctor, instance, inventory, render, tui, util,
                workspace, worktree)
 # One committer for the control plane, in charter/planegit.py. Re-exported rather
 # than moved-and-updated so every existing caller and test keeps working — the point
@@ -596,11 +596,28 @@ def _status_for_workspace(ws: str, inv_by_name: dict, active: str) -> None:
         hint = f"`charter clone <repo> --workspace {ws}` to populate"
         print(f"  (empty; {hint})\n")
         return
-    fmt = "  {:<38} {:<12} {}"
-    print(fmt.format("REPO", "STACK", "BRANCH / NOTE"))
-    for name, d in sorted(clones.items()):
-        stack = inv_by_name.get(name, {}).get("stack", "?")
-        print(fmt.format(name, stack, _clone_note(d)))
+    # Sized from the values, measured in CELLS (#592). `{:<38} {:<12}` was two of the
+    # three shipped instances of #508's constant, and the STACK one is wrong on a value
+    # charter itself produces: `node-monorepo` is thirteen characters in a column of
+    # twelve, so every monorepo row PUSHED its branch note one column right of every
+    # other row's. A repo name is a directory somebody else cloned and a stack comes out
+    # of the inventory, so neither width was ever charter's to guess — and `str.format`
+    # counts characters where a terminal lays out cells, so a CJK repo name misaligned
+    # its row without going anywhere near either constant.
+    body = [(name, inv_by_name.get(name, {}).get("stack", "?"), _clone_note(d))
+            for name, d in sorted(clones.items())]
+    nw = tui.column("REPO", [r[0] for r in body])
+    sw = tui.column("STACK", [r[1] for r in body])
+
+    def line(repo, stack, note) -> str:
+        """Header and data rows through ONE function. They are sibling rows of the same
+        table, and two code paths that each believe they agree about the widths is the
+        fastest way back to a misaligned report (#508's own finding, one command over)."""
+        return f"  {tui.pad(repo, nw)}{tui.pad(stack, sw)}{note}".rstrip()
+
+    print(line("REPO", "STACK", "BRANCH / NOTE"))
+    for row in body:
+        print(line(*row))
     print()
 
 
@@ -2359,23 +2376,37 @@ def cmd_recall(args) -> int:
         if got.undated:
             util.info(f"{got.undated} undated memory(ies) skipped — no recorded date to compare.")
         return 0
-    width = max((len(h.label) for h in results), default=8)
+    # Sized from the values it holds, measured in CELLS (#592). This column was ALREADY
+    # sized from the data, which is the half a constant gets wrong — and it still
+    # misaligned, because `len` counts characters and a terminal lays out cells. A base
+    # label is a persona or workspace directory name, so a CJK one is two cells per glyph
+    # and `len` under-pads it by its own length; a combining mark is zero cells and `len`
+    # over-pads. Either way the TITLE column lands somewhere on that row it lands on no
+    # other. Sizing and padding have to be the same unit or the arithmetic was for
+    # nothing, which is why `tui.pad` fills these rather than `{:<n}`.
+    dates = [h.date.isoformat() if h.date else "—" for h in results]
+    dw = tui.column("", dates)
+    lw = tui.column("", [h.label for h in results])
     full = getattr(args, "full", False)
-    for h in results:
+    # The address line hangs under the TITLE, so its indent is the two columns in front of
+    # it and not a number that happens to equal them today. It was `14` written out, which
+    # is `2 + 10 + 2` — correct only while the date column is exactly ten wide.
+    hang = " " * (2 + dw)
+    for h, date in zip(results, dates):
         tag = f"  ({h.score})" if h.score else ""
         # The date leads because when listing it IS the sort key — and the column order
         # stays identical under a query (where score orders instead), since a layout that
         # rearranges itself per mode is harder to read than one that never moves.
-        print(f"  {h.date.isoformat() if h.date else '—':<10}  {h.label:<{width}}  {h.title}{tag}")
+        print(f"  {tui.pad(date, dw)}{tui.pad(h.label, lw)}{h.title}{tag}".rstrip())
         # The ADDRESS, on every hit. This used to be a closing sentence telling the reader
         # to go and find the file, which is a direction rather than a location — and the
         # slug rules differ per base (the journal timestamps its filenames, persona memory
         # does not), so following it cost an inference and a `Read` per hit.
-        print(f"              {_rel_to_root(h.path)}")
+        print(f"{hang}{_rel_to_root(h.path)}")
         if full:
             snip = _body_snippet(h.path)
             if snip:
-                print(f"              {snip}")
+                print(f"{hang}{snip}")
     where = "every workspace" if all_ws else ", ".join(scopes)
     util.info(f"{len(results)} memory(ies) across {where}."
               + ("" if full else "  Pass --full for a line of each body."))

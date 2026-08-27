@@ -1856,8 +1856,13 @@ class TheSidebarListsTheWorkspacesTodos(PersonaIso, unittest.TestCase):
 
         WHICH workspace that live gather is for is a separate question and a real one —
         `gather.scan` resolves it from the panel process, which #512 showed reaches none
-        of the rungs that speak for the frame. Filed as **#526** rather than fixed here:
-        the mechanism it wants (`state.workspace_for`) arrives with #525.
+        of the rungs that speak for the frame. Settled since, as **#526**: `todo_section`
+        hands `gather.read` the frame's own workspace (`_frame_workspace`), so the scan
+        this case forces is a scan for the workspace the frame was launched for.
+        `tests/test_a_frame_answers_for_the_frames_workspace.py` is where that half is
+        pinned, on a plane whose own rungs answer something else — which is the fixture
+        this one deliberately does not build, because what it is about is the SCAN
+        happening at all.
         """
         from charter import todos, workspace
         todos.add(workspace.resolve(), "written before the frame ever launched")

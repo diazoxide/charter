@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import config, pieces, util, workspace, worktree
+from . import config, pieces, tui, util, workspace, worktree
 from . import root as _root
 
 #: Exit code for "this piece is already claimed", distinct from the generic 1 every other
@@ -281,11 +281,25 @@ def cmd_worktree_history(args) -> int:
                   "`charter worktree add`.")
         return 0
 
-    for e in rows:
-        who = pieces.claimant(e)
-        reason = f" — {e['reason']}" if e.get("reason") else ""
-        print(f"    {e.get('ts', ''):<22} {e.get('repo', ''):<16} "
-              f"{e.get('piece', ''):<24} {e.get('event', ''):<10} {who}{reason}")
+    # Sized from the values, measured in CELLS (#592). `{ts:<22}` is the instance of
+    # #508's constant that is wrong on charter's OWN output rather than on an unusual
+    # name: `pieces.record` writes `datetime.isoformat(timespec="seconds")`, which is 25
+    # characters with an offset on it, so EVERY row of this table pushed its repo, piece
+    # and event three columns right of the next one — the table has never once lined up.
+    # A repo and a piece name are somebody else's directory names, so `:<16`/`:<24` were
+    # guesses about content too, and `str.format` counts characters where a terminal lays
+    # out cells.
+    #
+    # A second thing the kit brings that the format string could not: these values come
+    # out of a COMMITTED log, so `tui.pad` sanitising them (a newline becomes a space) is
+    # what stops one event's field shearing every column below it.
+    body = [(e.get("ts", ""), e.get("repo", ""), e.get("piece", ""), e.get("event", ""),
+             pieces.claimant(e) + (f" — {e['reason']}" if e.get("reason") else ""))
+            for e in rows]
+    widths = [tui.column("", [r[i] for r in body]) for i in range(4)]
+    for row in body:
+        cells = "".join(tui.pad(c, w) for c, w in zip(row, widths))
+        print(f"    {cells}{row[4]}".rstrip())
     return 0
 
 

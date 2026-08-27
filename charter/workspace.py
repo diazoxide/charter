@@ -81,6 +81,57 @@ def for_session(sid: str) -> str | None:
     return val if val and valid_name(val) else None
 
 
+def for_frame(sid: str | None) -> str | None:
+    """The workspace the frame *sid* names was LAUNCHED for, or ``None``.
+
+    A rung of :func:`chosen`, and the answer to #524. Inside a charter frame
+    ``$CHARTER_SESSION_ID`` holds the FRAME's id (`session.current`'s own docstring says
+    so, and ADR 0019 is why), so "this session's id" and "the frame this session is
+    running inside" are the same string — which is what makes the launcher's recorded
+    answer readable from here at all. Outside a frame the id names a conversation, there
+    is no frame directory under it, and this answers ``None``.
+
+    **Why a rung and not a hook.** #524's own framing was that the session-start hook is
+    where this lands — `hooks.sessionstart` already picks a workspace and writes the
+    per-session pointer, and a framed harness is the one caller with a recorded answer it
+    does not consult. But the issue's own third constraint rules that out as the
+    mechanism: *a non-Claude harness has no session-start hook at all*, and neither does
+    a bare `charter ws current` typed into the frame's shell. A hook would fix the
+    harness charter ships hooks for and leave every other one re-resolving. A rung in the
+    ladder itself needs no harness cooperation, so it degrades to nothing rather than to
+    a wrong answer.
+
+    Its POSITION is the reconciliation #524 says charter cannot leave silent, and it is
+    the same one `frame/state.workspace_for` already spells for the panels:
+
+    * **Below the per-session pointer.** `charter workspace use <name>` typed inside the
+      frame writes that pointer under the frame's id, so an operator's explicit choice
+      still wins and the panels still follow it — the direction #517 asks for, and the
+      documented promise that `ws use` "moves the panels too". The launcher's answer is a
+      SEED, never a pin; nothing here takes `ws use` away from a framed session, which is
+      exactly what handing the harness `$CHARTER_WORKSPACE` would have done.
+    * **Above the per-terminal pointer.** That rung is not merely absent inside a frame,
+      it is *wrong*: it is keyed on `$TMUX_PANE`, and the harness's pane is one charter
+      created — not the operator's terminal, whose pointer it would otherwise read or
+      (on a recycled pane id) mistake for its own. Same for the declared default below
+      it: both answer for the asking process, and the record is here to outrank exactly
+      those two.
+
+    Name-checked through `frame/state.frame_workspace`, which owns that guard for this
+    value; ``None`` covers a frame launched by a charter predating the record, a corrupt
+    file, and every process that is not in a frame.
+    """
+    if not sid:
+        return None
+    try:
+        from .frame import state as _state
+        return _state.frame_workspace(sid)
+    except Exception:
+        # A rung, on the path every command takes to answer "where am I". It reports what
+        # it can read and never becomes the reason a command cannot run.
+        return None
+
+
 def _terminal_id(explicit: str | None = None) -> str | None:
     """This terminal PANE's id, or ``None`` — see :func:`charter.session.terminal`,
     which owns it. Kept as a module-level name because it is the seam tests patch to
@@ -287,7 +338,8 @@ def clear_declared_default() -> None:
 def resolve(explicit: str | None = None, session_id: str | None = None,
             cwd=None) -> str:
     """Active workspace by precedence: ``--workspace`` → ``$CHARTER_WORKSPACE`` → **the
-    tree you are standing in** → per-session pointer → per-terminal pointer → ``default``.
+    tree you are standing in** → per-session pointer → **the frame you are inside**
+    (:func:`for_frame`) → per-terminal pointer → ``default``.
 
     The cwd sits above the pointers because it cannot be wrong: a workspace's trees live
     at paths that name the workspace, so being inside one is not a hint about which
@@ -346,6 +398,13 @@ def chosen(explicit: str | None = None, session_id: str | None = None,
         val = _read(_session_file(sid))
         if val:
             return val
+    # The frame this session is running inside, if it is running inside one (#524). Below
+    # the pointer above — an operator's `ws use` outranks a launch — and above the two
+    # rungs below, which answer for the ASKING PROCESS and inside a frame are therefore
+    # about the wrong terminal. See :func:`for_frame` for the whole reconciliation.
+    framed = for_frame(sid)
+    if framed:
+        return framed
     tid = _terminal_id()
     if tid:
         val = _read(_terminal_file(tid))
@@ -382,6 +441,8 @@ def source(explicit: str | None = None, session_id: str | None = None,
     sid = _session_id(session_id)
     if sid and _read(_session_file(sid)):
         return "session"
+    if for_frame(sid):
+        return "frame"
     tid = _terminal_id()
     if tid and _read(_terminal_file(tid)):
         return "terminal"
