@@ -83,6 +83,21 @@ class RowPlanCase(unittest.TestCase):
             with self.subTest(width=w):
                 self.assertEqual(sl._row_plan(w), sl._FULL_ROW)
 
+    def test_no_plan_is_ever_wider_than_the_table(self):
+        """`_LEFT_W` is not a width the plan is clamped to, it is what the full plan
+        SUMS to — both are spelled from the same four cells and the same gaps.
+
+        Pinned because `render` relies on it and a deletion sweep proved the reliance
+        invisible: `repo_w = min(width, _LEFT_W)` measured identical to `repo_w = width`,
+        because no plan can exceed the table anyway. That is a property worth stating once
+        here rather than a clamp restating it at every call site — the left column of the
+        two-column layout is `_LEFT_W` wide, and a row composed for more than that would
+        be composed for a width it is never going to get."""
+        self.assertEqual(sl._plan_width(sl._FULL_ROW), sl._LEFT_W)
+        for w in range(1, 400):
+            with self.subTest(width=w):
+                self.assertLessEqual(sl._plan_width(sl._row_plan(w)), sl._LEFT_W)
+
     def test_an_eighty_column_terminal_keeps_the_ci_mark_and_the_change(self):
         """#506's headline case, at the width it was reported from. Both cells WHOLE."""
         row = tui.strip_ansi(_row(74))

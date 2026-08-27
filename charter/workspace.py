@@ -120,6 +120,16 @@ def for_frame(sid: str | None) -> str | None:
     Name-checked through `frame/state.frame_workspace`, which owns that guard for this
     value; ``None`` covers a frame launched by a charter predating the record, a corrupt
     file, and every process that is not in a frame.
+
+    **The empty-id refusal below is a COST guard, and a deletion sweep is right that
+    nothing observable depends on it.** Deleted, this still answers ``None`` —
+    `contain.child` refuses a falsy name and `frame_workspace` degrades — so it is kept
+    for what it avoids rather than for what it decides: this rung sits on :func:`resolve`,
+    which the status line calls on every turn, and without it a session-less call pays a
+    module import, a path resolution and a failed `read_text` to learn what one boolean
+    already knew. The contract is pinned (`for_frame(None) is None`); the shortcut is
+    not, deliberately, because a test that could tell the two apart would be asserting the
+    shortcut rather than the answer.
     """
     if not sid:
         return None

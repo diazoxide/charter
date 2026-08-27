@@ -2493,13 +2493,16 @@ def render(payload: dict | None = None) -> str:
 
         sid = payload.get("session_id")
         # The columns the repo block actually gets, and the one number every row below is
-        # composed for (#506). `min` covers both layouts with one expression rather than
-        # by asking which one is about to be chosen: the two-column branch below hands the
-        # left column exactly `_LEFT_W`, and it is only taken when `width` is at least
-        # `_LEFT_W + _RIGHT_MIN_W`, so `min` already answers `_LEFT_W` there. The
-        # single-column branches truncate each line to `width`, which is the crop #506 is
-        # about — so on a narrow pane this is what stops the CI mark being eaten by it.
-        repo_w = min(width, _LEFT_W)
+        # composed for (#506). The single-column branches truncate each line to `width`,
+        # which is the crop #506 is about — so on a narrow pane this is what stops the CI
+        # mark being eaten by it.
+        #
+        # `width`, with no `min(width, _LEFT_W)` in front of it, and a deletion sweep is
+        # why: `_row_plan` cannot return a plan wider than the table — `_LEFT_W` IS what
+        # the full plan sums to, both spelled from the same four cells — so the clamp
+        # restated a property the plan already has. It is pinned where it belongs, on
+        # `_row_plan`, rather than at each caller that would otherwise have to remember it.
+        repo_w = width
         repo_lines = [r.render(repo_w)[0]
                       for r in _repo_rows(dirs, active, cur, states, branches, gl,
                                           detail_wts, repo_w)]

@@ -295,6 +295,27 @@ class TheSessionIdIsTheFramesId(FramedCase):
     def test_the_record_is_keyed_on_exactly_that_id(self):
         self.assertEqual(state.frame_workspace(self.FID), FRAMED)
 
+    def test_a_session_with_no_id_names_no_frame(self):
+        """`for_frame`'s own precondition, asked of `for_frame`.
+
+        A shell with no `$CHARTER_SESSION_ID` and no `$CLAUDE_CODE_SESSION_ID` reaches
+        this rung with `None`, which is the ordinary case for anyone typing `charter ws
+        current` in a plain terminal — the rung has to answer "no frame", not go looking
+        for a directory named after nothing.
+
+        Written because a deletion sweep deleted the refusal and reported that fifty-nine
+        test modules execute this file and **not one of them names this function**. It
+        happens to degrade the same way through `contain.child` today, which is exactly
+        the kind of accident that stops being true when the other module changes.
+        """
+        for sid in (None, ""):
+            with self.subTest(sid=sid):
+                self.assertIsNone(workspace.for_frame(sid))
+
+    def test_an_id_that_names_no_frame_answers_none(self):
+        """The other half: a real session id that is simply not a frame's."""
+        self.assertIsNone(workspace.for_frame("a-claude-conversation-uuid"))
+
     def test_a_second_frame_does_not_inherit_the_first_ones_record(self):
         """#411's protection, re-asked one rung down. The record is per-frame, so a frame
         that never recorded anything reads nothing — the failure mode a `$CHARTER_WORKSPACE`
