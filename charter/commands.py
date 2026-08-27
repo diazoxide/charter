@@ -604,10 +604,19 @@ def _status_for_workspace(ws: str, inv_by_name: dict, active: str) -> None:
     # of the inventory, so neither width was ever charter's to guess — and `str.format`
     # counts characters where a terminal lays out cells, so a CJK repo name misaligned
     # its row without going anywhere near either constant.
-    body = [(name, inv_by_name.get(name, {}).get("stack", "?"), _clone_note(d))
-            for name, d in sorted(clones.items())]
-    nw = tui.column("REPO", [r[0] for r in body])
-    sw = tui.column("STACK", [r[1] for r in body])
+    #
+    # **Measured from the two columns that cost nothing to know, and only those.** A repo
+    # name is a dictionary key and a stack is an inventory lookup; the third column runs
+    # two `git` invocations per clone. Sizing from all three would mean collecting every
+    # row before printing any — on a workspace with twenty clones the operator waits for
+    # forty git calls before the header appears, where today the table draws as it goes.
+    # Nothing is lost by it: the last column has nothing to its right, so it needs no
+    # width at all. That is the same rule `_STATS_HEADS` keeps for its own trailing
+    # STATUS column.
+    rows = sorted(clones.items())
+    stacks = {n: inv_by_name.get(n, {}).get("stack", "?") for n, _ in rows}
+    nw = tui.column("REPO", [n for n, _ in rows])
+    sw = tui.column("STACK", stacks.values())
 
     def line(repo, stack, note) -> str:
         """Header and data rows through ONE function. They are sibling rows of the same
@@ -616,8 +625,8 @@ def _status_for_workspace(ws: str, inv_by_name: dict, active: str) -> None:
         return f"  {tui.pad(repo, nw)}{tui.pad(stack, sw)}{note}".rstrip()
 
     print(line("REPO", "STACK", "BRANCH / NOTE"))
-    for row in body:
-        print(line(*row))
+    for name, d in rows:
+        print(line(name, stacks[name], _clone_note(d)))
     print()
 
 

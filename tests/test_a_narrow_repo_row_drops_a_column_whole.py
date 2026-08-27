@@ -192,14 +192,51 @@ class SiblingRowsCase(unittest.TestCase):
                                  tui.width(b[:b.index("✓")]),
                                  "\n".join([a, b]))
 
-    def test_a_cjk_repo_name_does_not_push_the_row_past_its_pane(self):
-        """`tui.Cell` measures cells, and the name column is the one holding a value
-        charter did not mint."""
-        plan = sl._row_plan(74)
-        row = sl._tree_cells("  ├─ ", "日本語のリポジトリ", D, STATES, BRANCHES, GL,
-                             plan=plan).render(74)[0]
-        self.assertLessEqual(tui.width(row), 74, row)
-        self.assertIn(CI_WHOLE, tui.strip_ansi(row), row)
+    #: Real repo names, one per shape a width can be got wrong on. The name column is the
+    #: one cell holding a value charter did not mint — a clone is a directory somebody
+    #: else made — so it is where a character-versus-cell mistake would enter.
+    #:
+    #: `svc` is the CONTROL: it is inside every budget, so a failure naming it is about
+    #: the table rather than about the name. The combining mark is built with `chr` and
+    #: uses `q`, which has no precomposed form with an acute — the obvious `é` spelling
+    #: is one codepoint and one cell, so `len` and `tui.width` agree about it and it
+    #: quietly tests nothing.
+    NAMES = {
+        "short ascii control": "svc",
+        "exactly the name column's width": "a" * sl._NAME_W,
+        "one character over it": "a" * (sl._NAME_W + 1),
+        "far past it": "a-repo-name-far-past-any-column-width-anybody-guessed",
+        "CJK — two cells per glyph": "日本語のリポジトリ",
+        "combining mark — zero cells": "svc-q" + chr(0x0301) + "ueue",
+        "emoji — two cells, one character": "🚀-launcher",
+    }
+
+    def test_no_real_name_pushes_its_row_past_the_pane(self):
+        """`tui.Cell` measures cells, so a name is padded and cut in the unit the terminal
+        lays out in. Asserted at the narrow widths, where the row has the least room to
+        absorb a mistake, and with the CI cell — the thing #506 is about — still whole."""
+        for label, name in self.NAMES.items():
+            for w in (95, 80, 74, 60):
+                with self.subTest(name=label, width=w):
+                    plan = sl._row_plan(w)
+                    row = sl._tree_cells("  ├─ ", name, D, STATES, BRANCHES, GL,
+                                         plan=plan).render(w)[0]
+                    self.assertLessEqual(tui.width(row), w, row)
+                    self.assertIn(CI_WHOLE, tui.strip_ansi(row), row)
+
+    def test_an_awkward_name_starts_its_ci_cell_where_an_ordinary_one_does(self):
+        """The alignment half. Every name in the matrix is drawn beside `svc`, and the two
+        rows have to agree about where the CI column begins — which is the whole reason
+        the name cell has a declared width rather than a natural one."""
+        for label, name in self.NAMES.items():
+            with self.subTest(name=label):
+                plan = sl._row_plan(74)
+                rows = [tui.strip_ansi(
+                    sl._tree_cells("  ├─ ", n, D, STATES, BRANCHES, GL,
+                                   plan=plan).render(74)[0])
+                    for n in ("svc", name)]
+                self.assertEqual(*[tui.width(r[:r.index("✗")]) for r in rows],
+                                 "\n".join(rows))
 
 
 class RenderCase(PersonaIso):
