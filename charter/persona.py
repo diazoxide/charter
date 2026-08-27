@@ -258,9 +258,9 @@ def parse(text: str) -> tuple[dict, str]:
 
     **Lossy, and now provably so.** Two lines carrying one key collapse to the last of
     them, which is a fact about a `dict` and not a decision anyone made: the file said two
-    things and this says one. Callers that need to know a key was written twice ask
-    :func:`duplicate_keys` — :func:`load` does, so every persona-shaped consumer gets the
-    answer without a second read.
+    things and this says one. A caller holding only text asks :func:`duplicate_keys` for
+    what the dict dropped; :func:`load` reads both off one walk of the same file, so every
+    persona-shaped consumer gets the answer without a second parse.
     """
     pairs, body = _frontmatter(text)
     return dict(pairs), body
@@ -1088,17 +1088,36 @@ def uses_of(name: str) -> list[str]:
 BORROWS_NONE = "none"
 
 
+#: The keys whose unreadability makes :func:`borrows_of`'s ``None`` a lie, and therefore
+#: the ones a grant may not be widened over.
+#:
+#: ``borrows`` is #575's own defect: the answer is read off the key's ABSENCE, so a
+#: spelling charter cannot read is indistinguishable from an author who never opted in.
+#:
+#: ``extends`` is the same fail-open one key over, and it was found by asking this list the
+#: question rather than by trusting the issue's. A child declaring ``Extends: parent`` does
+#: not inherit its parent's ``borrows:``, so a chain that opted OUT of the legacy grant
+#: hands the child the wide one:
+#:
+#:     parent:  borrows: none
+#:     kid:     Extends: parent   uses: forge   → forge's tools, auto-approved
+#:
+#: Charter cannot follow a chain it could not read, which is precisely why it must not
+#: conclude "this persona declared no ``borrows:``" from the end of one.
+_GRANT_DECIDING_KEYS = ("borrows", "extends")
+
+
 def _borrows_unreadable(resolved: dict) -> bool:
-    """Did the author write a ``borrows:`` declaration charter could not read?
+    """Did the author write a grant-deciding declaration charter could not read?
 
     The whole of #575's teeth live in the difference between that and "the author never
     mentioned borrowing", because :func:`effective_tools` widens on the second one.
     Two spellings of unreadable, both of which used to answer *absent*:
 
-    * a key that differs from ``borrows`` only by case — ``Borrows: none`` was read by
-      nothing, so the persona kept the legacy grant it had just written the word to give
-      up, and
-    * ``borrows:`` on two lines, where the dict keeps whichever is lower in the file, so
+    * a key that differs from one of :data:`_GRANT_DECIDING_KEYS` only by case —
+      ``Borrows: none`` was read by nothing, so the persona kept the legacy grant it had
+      just written the word to give up, and
+    * one of them on two lines, where the dict keeps whichever is lower in the file, so
       ``borrows: none`` above ``borrows: forge`` grants `forge`'s tools by line order.
 
     Both are asked of the whole inheritance chain, unlike :func:`key_issues`, and that
@@ -1106,16 +1125,21 @@ def _borrows_unreadable(resolved: dict) -> bool:
     GRANT belongs to the persona the tool gate is deciding about. A parent whose
     ``Borrows:`` charter could not read must not hand its children the wide grant either.
 
+    Deliberately NOT "any key charter could not read". A persona with an unrelated typo
+    would silently lose its legacy `uses:` grant, which is a fail-closed nobody asked for
+    and nothing would explain — the same over-reach that made the general unknown-key
+    finding a warning rather than an error.
+
     The case half is read off the *resolved* meta, which costs nothing — `resolve` copies
     a key it does not recognise straight through, so an ancestor's ``Borrows`` is already
     sitting in the merged dict under that spelling. Only the duplicate half needs the
     per-file answer, and only that half walks.
     """
-    if any(misspelled_key(k) == "borrows" for k in resolved["meta"]):
+    if any(misspelled_key(k) in _GRANT_DECIDING_KEYS for k in resolved["meta"]):
         return True
     for a in resolved.get("lineage") or ():
         d = load(a)
-        if d and "borrows" in (d.get("dupes") or ()):
+        if d and any(k in (d.get("dupes") or ()) for k in _GRANT_DECIDING_KEYS):
             return True
     return False
 

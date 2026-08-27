@@ -133,6 +133,33 @@ class BorrowsFailsOpen(KeyCase):
         self.assertEqual(persona.borrows_of("kid"), [])
         self.assertNotIn("Bash(gh:*)", persona.effective_tools("kid"))
 
+    def test_a_miscased_extends_does_not_restore_the_wide_grant(self):
+        """The fail-open one key over, found by asking the whole grant path rather than
+        the issue's list.
+
+        A child declaring `Extends: parent` inherits nothing, so a parent that opted OUT
+        with `borrows: none` hands the child the legacy `uses:` grant it had renounced.
+        Charter cannot follow a chain it could not read, so it must not conclude "this
+        persona declared no `borrows:`" from the end of one.
+        """
+        self.write("forge", "role: f\nvault: none\ntools: Bash(gh:*)\n")
+        self.write("parent", "role: p\nvault: none\nborrows: none\n")
+        self.write("kid", "role: k\nvault: none\nExtends: parent\nuses: forge\n"
+                          "tools: Bash(ls:*)\n")
+        self.assertEqual(persona.borrows_of("kid"), [])
+        self.assertEqual(persona.effective_tools("kid"), {"Bash(ls:*)"})
+
+    def test_a_duplicated_extends_does_not_pick_a_parent_by_line_order(self):
+        """Two `extends:` lines choose which parent's tools and vault are inherited, by
+        which one is lower in the file."""
+        self.write("forge", "role: f\nvault: none\ntools: Bash(gh:*)\n")
+        self.write("a", "role: a\nvault: none\nborrows: none\n")
+        self.write("b", "role: b\nvault: none\n")
+        self.write("kid", "role: k\nvault: none\nextends: a\nextends: b\n"
+                          "uses: forge\ntools: Bash(ls:*)\n")
+        self.assertEqual(persona.borrows_of("kid"), [])
+        self.assertEqual(persona.effective_tools("kid"), {"Bash(ls:*)"})
+
     def test_an_absent_borrows_still_means_the_legacy_grant(self):
         """The back-compat #257 was built on, and the thing narrowing must not break:
         opting one persona in must never alter a persona that declared nothing."""
@@ -147,6 +174,33 @@ class BorrowsFailsOpen(KeyCase):
                             "tools: Bash(ls:*)\n")
         self.assertEqual(persona.borrows_of("opted"), [])
         self.assertEqual(persona.effective_tools("opted"), {"Bash(ls:*)"})
+
+    def test_a_key_that_only_casefold_reaches_borrows_still_fails_closed(self):
+        """`casefold`, not `lower`, and this is the difference between them.
+
+        U+017F LATIN SMALL LETTER LONG S lowers to itself and casefolds to `s`, so
+        ``Borrowſ:`` is one codepoint from the key that decides a permission grant:
+        `lower` reads it as an unrelated word and restores the fail-open, `casefold`
+        names it. Found by hand — the sweep has no operator for swapping one string
+        method for another (#569).
+        """
+        self.grant_world(front_key="Borrowſ")
+        self.assertEqual(persona.misspelled_key("Borrowſ"), "borrows")
+        self.assertEqual(persona.borrows_of("front"), [])
+        self.assertEqual(persona.effective_tools("front"), {"Bash(ls:*)"})
+
+    def test_a_miscased_key_that_is_not_borrows_leaves_the_grant_alone(self):
+        """The narrow trigger, pinned from the other side.
+
+        `_borrows_unreadable` asks whether a key was reaching for ``borrows`` — not
+        whether the definition has any bad key at all. Widening it to "any miscased key"
+        would silently drop the legacy `uses:` grant of every persona with an unrelated
+        typo, which is a fail-closed nobody asked for and nothing would explain.
+        """
+        self.write("forge", "role: f\nvault: none\ntools: Bash(gh:*)\n")
+        self.write("plain", "role: p\nVault: devops\nuses: forge\ntools: Bash(ls:*)\n")
+        self.assertIsNone(persona.borrows_of("plain"), "`Vault:` is not about borrowing")
+        self.assertEqual(persona.effective_tools("plain"), {"Bash(ls:*)", "Bash(gh:*)"})
 
     def test_a_correctly_spelled_borrows_still_grants_what_it_names(self):
         self.write("forge", "role: f\nvault: none\ntools: Bash(gh:*)\n")
@@ -216,6 +270,22 @@ class AMiscasedKeyIsReported(KeyCase):
         self.assertIsNone(persona.misspelled_key("delegate_when"), "underscore is not case")
         self.assertIsNone(persona.misspelled_key("borrow"), "a shorter word is not case")
 
+    def test_the_miscased_row_names_a_non_ascii_key_by_its_escape(self):
+        """A case variant can be non-ASCII, which is what makes this row need the escape
+        as much as the others.
+
+        `Borrowſ` casefolds to `borrows` — so it reaches the miscased row, not the
+        unknown-key row — and U+017F has no ASCII spelling. Without the bound, the row
+        that exists to say which key to edit prints a glyph the reader cannot type and
+        cannot grep for. Found by hand: the sweep has no operator for removing a call
+        and leaving the interpolation (#569).
+        """
+        self.write("odd", "role: o\nvault: none\nBorrowſ: none\n")
+        msgs = [m for m in self.errors("odd") if "read by nothing" in m]
+        self.assertTrue(msgs, "the miscased key is reported")
+        self.assertIn("017f", msgs[0].lower())
+        self.assertNotIn("ſ", msgs[0])
+
     def test_a_key_that_renders_as_nothing_is_named_by_its_escape(self):
         """#498's finding on this row. U+3164 HANGUL FILLER is `Lo`, survives `strip`, and
         prints as nothing — so an unescaped row said `frontmatter key '' …`, telling
@@ -260,6 +330,15 @@ class AKeyWrittenTwice(KeyCase):
         """Half the value of the sentence: the author's first line is the one they meant."""
         self.write("dup", "role: d\nvault: alpha\nvault: beta\n")
         self.assertTrue(any("LAST" in m for m in self.errors("dup")), self.errors("dup"))
+
+    def test_the_duplicate_row_names_the_key_by_its_escape_too(self):
+        """The same bound as the miscased row, on the other sentence `key_issues` writes.
+        Both exist to say which key to go and edit, so neither may print nothing."""
+        self.write("blank", "role: b\nvault: none\nㅤv: 1\nㅤv: 2\n")
+        msgs = self.errors("blank")
+        self.assertTrue(any("more than once" in m for m in msgs), msgs)
+        self.assertFalse(any("key ''" in m for m in msgs), msgs)
+        self.assertTrue(any("3164" in m for m in msgs), msgs)
 
     def test_a_key_written_once_is_never_reported(self):
         """A false positive here would train people to scroll past the row."""
@@ -344,6 +423,19 @@ class TheSubAgentIsNotGeneratedFromAKeyCharterCannotRead(KeyCase):
         self.assertIn("agent-tools:", out, "and the spelling that would have worked")
         self.assertNotIn("Synced 1 persona", out, "no green tick over a dropped allowlist")
 
+    def test_a_draft_with_a_bad_key_is_reported_as_the_bad_key(self):
+        """Both are true and the agent is withheld either way, so this is about which
+        sentence the operator gets.
+
+        The draft is temporary and self-evident — they wrote `draft: true`. The key is the
+        latent one, and it bites the moment the draft is finished, so it is the finding
+        worth spending the line on. Ordering, which no deletion operator can charge.
+        """
+        self.write("wip", "role: w\nvault: none\ndraft: true\nAgent-tools: Read\n")
+        self.assertTrue(persona.is_draft("wip"), "it really is a draft as well")
+        self.assertEqual(cp._write_agent("wip"), "unreadable")
+        self.assertIn("'Agent-tools'", self.sync())
+
     def test_an_unknown_key_still_generates_an_agent(self):
         """The narrow gate, pinned from the other side: `modell:` is not `key_issues`, so
         a plane carrying a harness field keeps its sub-agent."""
@@ -368,6 +460,18 @@ class TheVocabulary(unittest.TestCase):
     def test_the_two_sets_do_not_overlap(self):
         self.assertEqual(set(persona.AGENT_PASSTHROUGH_KEYS)
                          & set(persona.CHARTER_OWN_KEYS), set())
+
+    def test_the_vocabulary_is_lowercase(self):
+        """The invariant that makes "miscased" mean anything.
+
+        `misspelled_key` folds the key it is handed and looks it up in a table folded the
+        same way. If a vocabulary key were ever spelled with a capital, the two halves
+        would disagree: the table would hold a folded key that no correct file writes, and
+        the correctly-spelled key would report ITSELF as miscased. Stated here rather than
+        left to the day somebody adds `agentTools`.
+        """
+        for key in persona.KNOWN_KEYS:
+            self.assertEqual(key, key.casefold(), f"{key!r} is not lowercase")
 
     def test_every_key_charter_actually_reads_is_declared(self):
         """The failure this cannot have: a key charter READS that the vocabulary omits.
