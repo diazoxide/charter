@@ -1339,13 +1339,18 @@ def cmd_persona_stats(args) -> int:
         # A name column with no header of its own, and the same rule as the table above:
         # measured from the names it is about to print, in cells rather than characters.
         # It was `{shown:<26}` and carried #508 identically — one drifted persona with a
-        # long or a CJK name and the `unused:`/`used but not declared:` labels stop
-        # lining up down the block.
-        nw = tui.column("", [contain.one_line(n) for n, _ in drifted])
-        for name, d in drifted:
-            # Same rule as the table: the persona name and the skill names are committed
-            # values landing in a report of one-line rows.
-            shown = tui.pad(contain.one_line(name), nw)
+        # long or a CJK name and the `unused:`/`used but not declared:` labels stop lining
+        # up down the block.
+        #
+        # Bounded ONCE, into the list that both the measure and the print read. Calling
+        # `one_line` twice — inside the width and again at the row — is how a column ends
+        # up measured from one string and filled with another, which is #472's mis-measure
+        # and is not a mistake worth leaving available to make. The persona name and the
+        # skill names are committed values landing in a report of one-line rows.
+        shown_names = [(contain.one_line(n), d) for n, d in drifted]
+        nw = tui.column("", [n for n, _ in shown_names])
+        for name, d in shown_names:
+            shown = tui.pad(name, nw)
             if d["unused"]:
                 # Not untidy: `skills:` preloads full text on EVERY dispatch, so an unused
                 # declaration is a standing context cost bought for nothing.
