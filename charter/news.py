@@ -511,8 +511,8 @@ def entry_errors(entries: list[Entry]) -> list[str]:
 
 
 #: A file in the news directory that :func:`_read` declined, and the four ways that
-#: happens. Each names the edit, because "not an entry" alone sends a release engineer to
-#: read a file and guess.
+#: happens today — plus the one for a way it does not. Each names the edit, because "not an
+#: entry" alone sends a release engineer to read a file and guess.
 _UNREADABLE_FILE = ("{name}: charter could not read this file ({error}), so it is a file "
                     "in the news directory and an entry in no release.")
 _NO_FRONTMATTER = ("{name}: no `key: value` frontmatter, so charter reads it as no entry "
@@ -527,6 +527,14 @@ _NO_VERSION = ("{name}: no `version:` charter could read in its frontmatter, so 
                "entry writes `version: " + UNRELEASED + "` until `charter news stamp` "
                "moves it.")
 
+#: For a decline this version cannot explain. It says so rather than guessing at one of the
+#: four above, because a file reported with a reason that is not the reason is worse than a
+#: file reported with none: the reader makes the edit it names, nothing changes, and the
+#: sentence has spent its credibility.
+_NOT_AN_ENTRY = ("{name}: charter reads this file as no entry at all, for a reason this "
+                 "version has no sentence for. It is in the news directory and in no "
+                 "release.")
+
 
 def _not_an_entry(p: Path) -> str:
     """Why *p* produced no :class:`Entry`, as a sentence — best effort, always something.
@@ -534,9 +542,10 @@ def _not_an_entry(p: Path) -> str:
     The SET this explains comes from :func:`_read` returning ``None``; only the wording is
     here. That split is deliberate: a fifth way for `_read` to decline would otherwise have
     to be remembered in two places, and the one that gets forgotten is this one — where
-    being forgotten means a file reported with a reason that is no longer true. The
-    fallthrough sentence at the end is what a fifth reason gets until somebody writes it
-    one, and it is still a sentence naming the file.
+    being forgotten means a file reported with a reason that is not the reason. So the
+    fourth answer is asked as a question (*is there a readable version?*) rather than
+    assumed from having reached the end, and a decline this version cannot explain gets
+    :data:`_NOT_AN_ENTRY`: still a sentence, still naming the file, claiming nothing.
     """
     try:
         text = p.read_text()
@@ -548,7 +557,9 @@ def _not_an_entry(p: Path) -> str:
     miscased = next((k for k in meta if k != "version" and k.casefold() == "version"), None)
     if miscased is not None:
         return _report(_MISCASED_VERSION, name=p.name, key=miscased)
-    return _report(_NO_VERSION, name=p.name)
+    if not (meta.get("version") or "").strip():
+        return _report(_NO_VERSION, name=p.name)
+    return _report(_NOT_AN_ENTRY, name=p.name)
 
 
 def unreadable() -> list[str]:

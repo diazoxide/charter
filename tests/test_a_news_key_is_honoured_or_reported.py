@@ -365,6 +365,20 @@ class AFileThatIsNotAnEntryIsAlsoSaid(NewsDir):
         why, = news.unreadable()
         self.assertIn("z-empty", why)
 
+    def test_a_decline_this_version_cannot_explain_still_gets_a_sentence(self):
+        """The branch no fixture can reach today, and the reason it is not "whatever the
+        last `if` said". The set of reported files comes from `_read`; a fifth way for it
+        to decline would arrive here with none of the four reasons true, and reporting a
+        healthy-looking file as "no `version:`" sends the reader to make an edit that
+        changes nothing and spends the sentence's credibility.
+        """
+        self.write(f"{_V}-z-ok.md", _entry(headline="perfectly fine"))
+        with mock.patch.object(news, "_read", return_value=None):
+            why, = news.unreadable()
+        self.assertIn("z-ok", why)
+        self.assertNotIn("version:", why)
+        self.assertIn("no entry at all", why)
+
     def test_every_reason_is_one_sentence_that_names_the_file(self):
         """The set of files reported comes from `_read` returning None; only the WORDING
         is `_not_an_entry`'s. A sixth way for `_read` to decline gets the fallthrough
