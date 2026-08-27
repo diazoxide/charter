@@ -12,6 +12,15 @@ function from a chosen row back to the name it stood for, and one call into
 `frame/switch.py`. Everything modal, every key, the scrolling window, the containment and
 the escape hatch are already decided one module down and are not restated.
 
+**The same rows are reached two ways, and only one of them costs a directory read.** A
+doorway row (:func:`open_rows`) opens a picker over :func:`roster`, which is browsing — you
+do not know the name. Typing at the top level reaches the very same rows through
+:func:`labelled`, which is switching — you do. The palette gathers them the first time
+something is typed and never while the query is empty (`frame/palette.Palette.query_only`),
+so an operator who opened `F2` to press `detach` does not pay to enumerate forty
+workspaces, and one who knows the name spends `F2`, the name, Enter — the doorway's Enter
+back.
+
 **The picker runs in the palette's OWN pane, and that is a property rather than a saving.**
 The alternative — a palette row that spawns a second `charter` which splits a second
 overlay pane — races the palette's own teardown: `commands_frame._close_palette` sends
@@ -28,6 +37,13 @@ that alphabet, a provider shipping an action called `pick.workspace` would take 
 keypress. The `:` in :data:`OPEN_ID` and :data:`NAME_ID` cannot appear in an action id, so
 the two namespaces cannot meet; `overlay.Row` imposes no alphabet of its own, and none of
 these ids is ever drawn or ever reaches tmux.
+
+That same fact is what keeps these ids out of the FILTER now that name rows sit in the
+top-level list. `frame/palette.matches` matches a row's id only when the id is one a
+provider's documentation could name — `component.usable_id`, the same question
+`frame/action.py` asks — because :data:`NAME_ID` is charter's own counter and nobody types
+`workspace:n7`. Matched blindly it would make `n` list every name on the plane and
+`persona` list every persona, which is a filter answering a question nobody asked.
 
 **Containment is `frame/overlay.py`'s, asked for once, where the width arithmetic is.**
 `Surface.render` runs `contain.one_line` over every title and note *before* `tui.width`
@@ -177,6 +193,37 @@ def roster(noun: str, fid: str) -> Roster:
                              title=f"{MARK[0] if n == now else MARK[1]}{n}")
                  for i, n in enumerate(names))
     return Roster(noun=noun, rows=rows, names=names)
+
+
+def labelled(roster: Roster, reason: str = "") -> tuple[overlay.Row, ...]:
+    """*roster*'s rows for the top-level list: noted with *reason*, or with the KIND.
+
+    **The kind is what tells `zeb` the persona from `zeb-api` the workspace** when both
+    are answers to one query. Inside a picker the heading already says which noun the pane
+    is showing and every row is that noun, so the label there would be forty copies of a
+    word the header carries once — which is why :func:`roster` leaves the note empty and
+    this is a second function rather than a field on the first.
+
+    **The kind is a LABEL and never a search term.** It goes in the note, which
+    `frame/palette.matches` deliberately does not match, so typing `persona` finds the
+    doorway row that says so and not every persona the plane has. That is the same
+    decision that keeps `lock` from listing every action whose reason mentions one.
+
+    **A *reason* displaces it, and that inverts :func:`roster`'s own objection rather than
+    contradicting it.** That function refuses to repeat the launch pin on every row because
+    a pinned frame's picker cannot be opened at all — the doorway stops one keypress
+    earlier — so the line would be one no test could go red without. Typing does not go
+    through the doorway, so on THIS path the pinned rows are reachable, the reason is live,
+    and `frame/palette.py`'s first rule applies unchanged: an unavailable row is listed
+    *with its reason*, because an operator cannot ask about an option they cannot see
+    (#512). The reason names `$CHARTER_WORKSPACE` or `$CHARTER_PERSONA`, so the kind is
+    still on the row; it is a sentence instead of a word.
+
+    ``_replace`` rather than a fresh `overlay.Row`, so the id is carried over untouched:
+    it is what :meth:`Roster.name_of` matches on, and a labelled row that minted its own
+    would be a row that stands for no name.
+    """
+    return tuple(r._replace(note=reason or roster.noun) for r in roster.rows)
 
 
 def open_rows(fid: str) -> tuple[overlay.Row, ...]:

@@ -315,6 +315,47 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
                         f"the chosen name never switched the frame: workspace is still "
                         f"{state.frame_workspace(self.fid)!r}")
 
+    def test_typing_a_name_switches_the_frame_with_no_doorway_in_between(self):
+        """**Task 8, end to end, with real keys, and the keystroke claim is the point.**
+
+        The case above spends `F2`, Enter on the doorway, the name, Enter. This one spends
+        `F2`, the name, Enter — one keypress fewer, on the thing an operator does most —
+        and it is the same pane, the same surface and the same switch underneath.
+
+        The kind is asserted on the drawn row rather than on the `Row`: `workspace` beside
+        `zebra` is what tells it from a persona of the same name, and it is the note
+        column, which `overlay.Surface.render` lays out against the pane's real width.
+        """
+        fd, pane = self._open()
+        self._await_screen(pane, "workspace: alpha")
+        self.assertEqual(state.frame_workspace(self.fid), "alpha")
+        was = state.version(self.fid)
+        os.write(fd, b"zebra")
+        self._await_screen(pane, "detach", present=False)
+        screen = self._screen(pane)
+        # Past the header, which carries what was typed and would answer for the row.
+        row = next((ln for ln in screen.splitlines()[1:] if "zebra" in ln), "")
+        self.assertIn("workspace", row,
+                      f"the row does not say what kind of thing `zebra` is:\n{screen}")
+        self.assertEqual(self._palette_pane(), pane,
+                         "typing a name opened a second pane")
+        os.write(fd, b"\r")
+        self.assertTrue(_await(lambda: state.frame_workspace(self.fid) == "zebra"),
+                        f"the typed name never switched the frame: workspace is still "
+                        f"{state.frame_workspace(self.fid)!r}")
+        self.assertTrue(_await(lambda: state.version(self.fid) != was),
+                        "the frame was never bumped, so no panel repaints")
+
+    def test_nothing_typed_lists_no_names_at_all(self):
+        """The other half, and the one a display test cannot fake: the palette that just
+        opened is the doorways and the actions, with `zebra` nowhere on it. A palette that
+        listed every name up front would draw it here."""
+        _, pane = self._open()
+        self._await_screen(pane, "density: minimal")
+        screen = self._screen(pane)
+        self.assertNotIn("zebra", screen, screen)
+        self.assertIn("workspace: alpha", screen, screen)
+
     def test_the_picker_bumps_the_frame_so_every_panel_repaints(self):
         """#411/#412's half of step 1. A pointer some panels may read is the bug; the
         version moving is what makes a panel's poll loop redraw against the new plane."""
