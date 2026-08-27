@@ -679,13 +679,62 @@ class TheDispatchOnWhereTheFileIs(PersonaIso):
         for mode in (0o644, 0o666, 0o604, 0o640):
             with self.subTest(existing=oct(mode)):
                 p = self.sd / f"pre-{mode:03o}.json"
-                p.write_text("old")
+                # LONGER than what replaces it. A dropped truncate leaves the tail of the
+                # old value behind, and an equal-length fixture cannot tell the difference
+                # — which is how this case first passed against a `write_for` that had
+                # stopped truncating at all.
+                p.write_text('{"old": "a value long enough to leave a tail"}')
                 os.chmod(p, mode)
-                config.write_for(p, "new")
-                self.assertEqual(p.read_text(), "new")
+                config.write_for(p, "{}")
+                self.assertEqual(p.read_text(), "{}",
+                                 "the previous contents were not truncated away")
                 self.assertEqual(stat.S_IMODE(p.stat().st_mode) & 0o077, 0,
                                  f"a file that was {oct(mode)[-3:]} kept it while charter "
                                  f"wrote this plane's state into it")
+
+    def test_the_mode_is_settled_before_anything_is_destroyed(self) -> None:
+        """The order inside `_private_fd`, which the finished mode cannot show.
+
+        Moving the truncate above the `fchmod` leaves the *finished* file at 0600 either
+        way, so every mode assertion in this class passes — and a crash in between leaves
+        an empty world-readable file instead of the previous contents at 0600, which is
+        the strictly worse of the two. The descriptor is opened and inspected here without
+        writing, which is the only moment that ordering is visible.
+        """
+        p = self.sd / "order.json"
+        p.write_text("the previous contents")
+        os.chmod(p, 0o666)
+        fd = config._private_fd(p, append=False)
+        try:
+            self.assertEqual(stat.S_IMODE(os.fstat(fd).st_mode), 0o600,
+                             "the descriptor is not private yet")
+            self.assertEqual(p.read_text(), "the previous contents",
+                             "the file was truncated before its mode was settled")
+        finally:
+            os.close(fd)
+
+    def test_touch_for_outside_the_state_directory_keeps_the_umask(self) -> None:
+        """`touch_for` is a dispatch too. One that privatised every marker would pass every
+        case above while tightening committed files — `mkdir_for`'s other half, again."""
+        old = os.umask(0o022)
+        try:
+            control = self.control(0o022)
+            p = config.PERSONAS_DIR / "steward" / "marker"
+            config.mkdir_for(p.parent)
+            config.touch_for(p)
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(p.stat().st_mode), stat.S_IMODE(control.stat().st_mode),
+                         "charter tightened a committed marker it merely created")
+
+    def test_bytes_are_written_as_bytes(self) -> None:
+        """`write_for` replaces both `write_text` and `write_bytes` — the scan counts
+        `write_bytes` as a site it covers, so the routed call has to accept one."""
+        p = self.sd / "blob.bin"
+        payload = b"\x00\x01\xff not utf-8: \xc3\x28"
+        config.write_for(p, payload)
+        self.assertEqual(p.read_bytes(), payload)
+        self.assertEqual(stat.S_IMODE(p.stat().st_mode) & 0o077, 0)
 
     def test_the_content_is_never_on_disk_at_the_loose_mode(self) -> None:
         """The ordering `_private_fd` exists for, measured rather than asserted in prose.
@@ -1122,6 +1171,22 @@ class TheWriteScanSeesWhatItClaims(unittest.TestCase):
                 self.assertEqual(scan.write_violations(src, self.names), [],
                                  f"{label}: a read was reported as an unrouted write")
 
+    def test_an_os_open_for_reading_is_reported_and_that_is_the_residual(self) -> None:
+        """Stated as a case rather than left to be discovered.
+
+        `Path.open`'s mode and `os.open`'s path share argument 0, so an `os.open` flag
+        expression is unreadable here and the safe direction reports it. There are none
+        in the package, the cost is a false positive, and the way out of one is the same
+        as for a real writer: settle the mode on the descriptor.
+        """
+        src = "import os\ndef f():\n    os.open(config.STATE_DIR / 'x', os.O_RDONLY)\n"
+        self.assertEqual([e for _ln, e in scan.write_violations(src, self.names)],
+                         ["config.STATE_DIR / 'x'"])
+        settled = ("import os\ndef f():\n"
+                   "    fd = os.open(config.STATE_DIR / 'x', os.O_RDONLY)\n"
+                   "    os.fchmod(fd, 384)\n")
+        self.assertEqual(scan.write_violations(settled, self.names), [])
+
     def test_a_mode_it_cannot_read_counts_as_a_write(self) -> None:
         """The safe direction, stated as a case. ``open(p, mode)`` with *mode* computed
         elsewhere cannot be judged here, and a false positive is loud where a skipped
@@ -1284,7 +1349,7 @@ class EveryStateWriterGoesThroughTheWalk(unittest.TestCase):
     #: (``f``, bound by ``for f in (sf, tf)``) and the plane-wide ``active-persona``. They
     #: are three lines and they are out of this change only because two other branches
     #: were live in `charter/persona.py` when it landed, and an edit in the middle of them
-    #: buys a conflict for no schedule. Filed as its own issue.
+    #: buys a conflict for no schedule. Filed as #581, with the measurement.
     #:
     #: This list is a **ratchet, not an allowance**. The assertion below is equality, so a
     #: writer that gets routed fails here as a stale entry and a new unrouted one fails as

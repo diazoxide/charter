@@ -39,8 +39,13 @@ mention a state name is itself a state path source (``_cache_file()``, ``_route_
 ``persona.ephemeral_dir()``), and so is one that returns a call to such a function. That
 fixpoint is now **cross-module** — a caller reaching `persona.ephemeral_dir` through the
 alias it imported it under is the same question as one calling a helper in its own file.
-Local assignments inside the calling function are substituted before the test, so
-``f = _cache_file()`` … ``f.parent.mkdir(…)`` is seen for what it is.
+Local bindings inside the calling function are substituted before the test, so
+``f = _cache_file()`` … ``f.parent.mkdir(…)`` is seen for what it is — and so are the two
+shapes that are not a plain assignment: ``sf, tf = _pointer_files(…)`` binds both names to
+the call, and ``for f in (sf, tf):`` binds the loop variable to what it walks. Reading
+single-Name assignments only is what hid `persona.set_active` and
+`workspace._rename_active_pointers`, both of which wrote pointer files at the umask while
+the scan reported their modules clean (#505). See :func:`_local_assigns`.
 
 **The handed half.** :func:`handed_violations` propagates *arguments*: a call that passes
 a state path (or a parameter already known to carry one) into a package function taints
@@ -79,7 +84,8 @@ including the ones returning strings and ints, and the scan starts reporting com
 directories it can never be cleaned of. `frame.state.frame_dir` has that shape, so the
 frame's per-frame files are outside both halves. Their directory is created through
 `config.private_mkdir`, so the exposure is the narrower one — a ``.charter/frame/`` that
-pre-existed loose — but it is a gap and it is filed rather than papered over.
+pre-existed loose — but it is a gap and it is filed rather than papered over (#582, which
+carries the measurement of what full substitution does to this scan).
 
 **``os.replace``/``os.rename`` destinations are not scanned**, which is a decision rather
 than an oversight. An atomic writer's temp file carries its own mode onto the destination,
@@ -379,41 +385,45 @@ _FILE_KWARGS = ("file", "path")
 #: noise would take the real answers with it.
 _WRITE_MODE_CHARS = frozenset("wax+")
 
-#: ``os.open`` says the same thing in flags. ``O_RDONLY`` is 0 and names nothing, so the
-#: presence of any of these IS the question.
-_WRITE_FLAGS = ("O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC")
-
 
 def _opens_for_writing(node: ast.Call, is_attr: bool) -> bool:
     """Does this ``open``/``os.open`` call write?
 
     Three shapes share the name and keep the mode in different places: ``open(p, "w")``
-    (argument 1), ``p.open("w")`` (argument 0) and ``os.open(p, flags)` (argument 1). As
+    (argument 1), ``p.open("w")`` (argument 0) and ``os.open(p, flags)`` (argument 1). As
     with the path, the shape is not decided — every position that could hold a mode is
-    read, and a writing mode in **any** of them makes it a site.
+    read, and anything in any of them that is not *demonstrably* a read makes it a site.
 
-    **An unrecognisable mode counts as a write.** ``open(p, mode)`` with *mode* computed
-    somewhere else cannot be read here, and the safe direction is the false positive: a
-    reader wrongly asked to route is loud, a writer wrongly skipped is the defect.
+    So the question is asked in the negative, and that is not a stylistic choice: the only
+    thing this can be sure of is a **read**, because ``"r"``/``"rb"`` are string literals
+    the stdlib documents. Everything else — a mode computed elsewhere, an `os.open` flag
+    expression, the path argument that shares a position with `Path.open`'s mode — is
+    unreadable here, and the safe direction for unreadable is "write": a reader wrongly
+    asked to route is loud, a writer wrongly skipped is the defect itself.
 
-    No mode argument at all is the one case answered "no" — that is `open`'s documented
-    default of ``"r"``, which is a fact about the stdlib rather than a guess about this
-    call.
+    An earlier cut asked it in the positive and carried a list of ``O_WRONLY``/``O_CREAT``/
+    … flag names beside the mode characters. That list was **dead**, and the hand-check
+    for #505 is what showed it: with an unreadable expression already answering "write",
+    a branch that answers "write" for a recognised flag cannot change any outcome, and
+    deleting any entry from it changed nothing measurable. A list that cannot be wrong is
+    a list that is not being consulted.
+
+    No mode argument at all is the one case answered "no" — `open`'s documented default of
+    ``"r"``, which is a fact about the stdlib rather than a guess about this call.
+
+    **The residual, said out loud:** ``os.open(p, os.O_RDONLY)`` on a state path is
+    reported, because nothing here can tell that expression from a writing one. It is a
+    false positive in the safe direction; there are none in the package today, and the way
+    out of one is the same as for a real writer — settle the mode on the descriptor.
     """
     texts = [ast.unparse(a) for a in node.args[0 if is_attr else 1:2]]
     texts += [ast.unparse(k.value) for k in node.keywords if k.arg in ("mode", "flags")]
     if not texts:
         return False
     for t in texts:
-        if t[:1] in ("'", '"'):
-            if _WRITE_MODE_CHARS & set(t):
-                return True
-        elif any(f in t for f in _WRITE_FLAGS):
-            return True
-        elif t.startswith("0o") or t.lstrip("-").isdigit():
-            continue          # `os.open`'s third argument is the creation mode, not flags
-        else:
-            return True       # unreadable — the safe direction
+        if t[:1] in ("'", '"') and not (_WRITE_MODE_CHARS & set(t)):
+            continue          # a read-mode string literal — the one thing we can be sure of
+        return True
     return False
 
 
