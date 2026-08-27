@@ -57,6 +57,23 @@ from tests._isolation import PersonaIso
 #: than assumed.
 COMBINING = "svc-q" + chr(0x0301) + "ueue"
 
+#: The pair that makes `len`-sizing OBSERVABLE, and it took a mutation to find out that
+#: nothing else does.
+#:
+#: A CJK name on its own does not catch a column sized with `len` and padded with
+#: `tui.pad`: `pad` measures in cells, so every row is still padded to the same number of
+#: cells and the table still lines up. And if some ASCII name is the widest by CHARACTERS,
+#: the column it sizes is wide enough that the CJK value is not cut either — so the
+#: readability probe passes too. Measured: a hand-check restored `len` here and the whole
+#: file stayed green.
+#:
+#: What breaks is a value that is **widest in cells while another value is widest in
+#: characters**. `len` then sizes the column to the ASCII name and `tui.pad` cuts the CJK
+#: one down to it. So the fixture is a pair, and :meth:`TableCase.assert_the_widest_two
+#: _disagree` is what keeps it one.
+WIDEST_IN_CHARACTERS = "sixteen-char-svc"          # 16 characters, 16 cells
+WIDEST_IN_CELLS = "日本語のリポジトリです"          # 11 characters, 22 cells
+
 
 class TableCase(PersonaIso):
     """The two probes, and the environment every table below is rendered in."""
@@ -74,6 +91,18 @@ class TableCase(PersonaIso):
             len(value), tui.width(value),
             f"fixture: {value!r} is {len(value)} characters AND {tui.width(value)} cells, "
             "so `len` and `tui.width` agree about it and this case cannot fail")
+
+    def assert_the_widest_two_disagree(self, by_chars: str, by_cells: str) -> None:
+        """Fixture guard for the pair that makes `len`-sizing observable at all.
+
+        *by_chars* must be the longer by `len` and *by_cells* the wider by `tui.width`.
+        Only then does sizing with `len` produce a column too narrow for the value it
+        holds — with any other pairing the column is wide enough by accident and the
+        readability probe passes against the defect. See :data:`WIDEST_IN_CELLS`.
+        """
+        self.assertGreater(len(by_chars), len(by_cells), "fixture: wrong way round")
+        self.assertGreater(tui.width(by_cells), tui.width(by_chars),
+                           "fixture: wrong way round")
 
     def setUp(self) -> None:
         super().setUp()
@@ -196,13 +225,51 @@ class TestWorktreeHistoryColumnsLineUp(WorktreeHistoryCase):
 
     def test_every_name_is_still_readable_off_its_row(self):
         """Sizing the column, not clipping to it — the half the alignment cases cannot
-        see, because `tui.pad` truncates and the columns go on lining up while it does."""
+        see, because `tui.pad` truncates and the columns go on lining up while it does.
+
+        Measured — with only the awkward names in here, restoring `len` left every case
+        in this file green, because the widest name by characters was also wide enough in
+        cells for every other value to fit inside it. The case that catches `len` is the
+        one below, and it is a PAIR and nothing else."""
         for repo in self.REPOS.values():
             self.record(repo, "slice")
         rows = self.history()
         for repo in self.REPOS.values():
             with self.subTest(repo=repo):
                 self.assert_readable(rows, repo)
+
+    def test_the_widest_in_cells_is_readable_beside_the_widest_in_characters(self):
+        """The two-value fixture, ALONE in its table — and alone is load-bearing.
+
+        `len`-sizing is only observable when the value that decides the width and the
+        value that overflows it are different values. Put a sixty-character ASCII name in
+        the same table and it decides the width for both, the CJK one fits inside it with
+        room to spare, and the case passes against exactly the defect it is named for.
+        Measured: it did, in the sibling case above, until this one was split out."""
+        self.assert_the_widest_two_disagree(WIDEST_IN_CHARACTERS, WIDEST_IN_CELLS)
+        for repo in (WIDEST_IN_CHARACTERS, WIDEST_IN_CELLS):
+            self.record(repo, "slice")
+        rows = self.history()
+        self.assert_readable(rows, WIDEST_IN_CELLS)
+        self.assert_aligned(rows, self.TAIL)
+
+    def test_a_log_line_missing_a_field_still_draws_a_row(self):
+        """`events()` skips a line it cannot parse and keeps every line that has a
+        `piece` — so a half-written record, or one from a charter that wrote fewer
+        fields, arrives here with `ts`, `repo` or `event` simply absent. The `""`
+        fallbacks are what stand between that and `tui.pad(None, w)`, which raises and
+        takes the whole command down.
+
+        A killed process mid-append is exactly what an append-only log collects, which is
+        `events()`' own stated reason for tolerating it. Nothing was asserting that the
+        renderer tolerates it too — found by the deletion sweep."""
+        self.record("svc", "slice")
+        log = pieces.log_path(self.WS)
+        log.write_text(log.read_text() + '{"piece": "a-piece-and-nothing-else"}\n')
+        rows = self.history()
+        self.assertTrue(any("a-piece-and-nothing-else" in tui.strip_ansi(r)
+                            for r in rows), "\n".join(rows))
+        self.assert_aligned(rows, "slice", least=1)
 
     def test_the_timestamp_column_is_wider_than_the_timestamp_charter_writes(self):
         """`{ts:<22}` on the 25-character stamp `pieces.record` writes on every event.
@@ -317,6 +384,22 @@ class TestStatusColumnsLineUp(StatusTableCase):
                          self.cells_before(row, self.NOTE),
                          "\n".join([head, row]))
 
+    def test_a_clone_the_inventory_does_not_know_still_gets_a_stack_cell(self):
+        """`inv_by_name.get(name, {}).get("stack", "?")` — two fallbacks, and both are
+        reachable: a clone made by hand, or one whose repo has left the inventory, has no
+        entry at all. Without them the cell is `None`, `tui.pad` raises on it, and
+        `charter status` — the command whose whole job is "where am I" — dies on the one
+        plane where the question is hardest to answer another way.
+
+        Found by the deletion sweep: nothing asserted either fallback.
+        """
+        self.clone("svc", stack="go")
+        unknown = self.clone("cloned-by-hand")
+        del self.stacks[unknown]          # in the workspace, absent from the inventory
+        rows = self.status()
+        self.assert_readable(rows, "?")
+        self.assert_aligned(rows, self.NOTE)
+
     def test_a_repo_name_past_the_constant_does_not_push_its_row(self):
         self.clone("svc")
         self.clone("a-repo-name-far-past-any-fixed-column-width-somebody-guessed")
@@ -346,12 +429,28 @@ class TestStatusColumnsLineUp(StatusTableCase):
         self.assert_aligned(rows, self.NOTE)
 
     def test_every_repo_and_stack_is_still_readable_off_its_row(self):
+        """A constant's half: a name and a stack past the width somebody guessed."""
         long_repo = "a-repo-name-far-past-any-fixed-column-width-somebody-guessed"
         self.clone("svc", stack="go")
         self.clone(long_repo, stack="node-monorepo")
         rows = self.status()
-        self.assert_readable(rows, long_repo)
-        self.assert_readable(rows, "node-monorepo")
+        for value in (long_repo, "node-monorepo"):
+            with self.subTest(value=value):
+                self.assert_readable(rows, value)
+
+    def test_the_widest_in_cells_is_readable_beside_the_widest_in_characters(self):
+        """`len`'s half, and it needs the pair ALONE in the table.
+
+        The width has to be decided by one value and overflowed by another. A sixty-
+        character ASCII repo name in the same table decides it for both, the CJK name fits
+        inside with room to spare, and the case passes against the defect — measured, in
+        the sibling case above, until this one was split out of it."""
+        self.assert_the_widest_two_disagree(WIDEST_IN_CHARACTERS, WIDEST_IN_CELLS)
+        self.clone(WIDEST_IN_CHARACTERS, stack="go")
+        self.clone(WIDEST_IN_CELLS, stack="python")
+        rows = self.status()
+        self.assert_readable(rows, WIDEST_IN_CELLS)
+        self.assert_aligned(rows, self.NOTE)
 
 
 # --------------------------------------------------------------------------- #
@@ -399,6 +498,11 @@ class RecallCase(TableCase):
             workspace=self.WS, all_workspaces=False, since=None, limit=8, full=False))
 
     @staticmethod
+    def hit_rows_or_undated(rows: list[str]) -> list[str]:
+        """Hit rows whose date column holds the `—` an undated memory renders."""
+        return [r for r in rows if re.match(r"^ {2}—", tui.strip_ansi(r))]
+
+    @staticmethod
     def hit_rows(rows: list[str]) -> list[str]:
         """Only the `date · label · title` rows.
 
@@ -442,7 +546,7 @@ class TestRecallColumnsLineUp(RecallCase):
         self.assert_readable(rows, f"persona:{name}")
         self.assert_readable(rows, f"workspace:{self.WS}")
 
-    def test_the_address_hangs_under_the_title_it_addresses(self):
+    def test_the_address_hangs_under_the_label_it_addresses(self):
         """The address line's indent used to be `14` written out, which is `2 + 10 + 2` —
         correct only while the date column is exactly ten wide. Pinned as a relationship
         so the two cannot drift apart the first time either end moves."""
@@ -454,6 +558,48 @@ class TestRecallColumnsLineUp(RecallCase):
         self.assertEqual(len(addr) - len(addr.lstrip(" ")),
                          row.index(date) + len(date) + 2,
                          "\n".join([row, addr]))
+
+    def test_an_undated_result_narrows_the_date_column_and_the_indent_with_it(self):
+        """The case that makes both of those measurable at all.
+
+        Every dated hit renders a ten-character ISO date, so a `10`-wide constant and a
+        `14`-wide indent are correct for every dated report — a hand-check restored both
+        and nothing went red. An UNDATED memory renders `—`, one cell, and a column sized
+        from the values is then three wide and the indent five. That is the difference
+        between a column that is measured and one that happens to be right.
+
+        Undated is ordinary rather than exotic: `recall` counts them (`got.undated`) and
+        a memory file with no recorded date is what `memstore` writes when nothing dated
+        it.
+        """
+        name = self.with_persona("dev")
+        # A memory's date is its in-body `_YYYY-MM-DD …_` stamp, falling back to a
+        # `YYYYMMDD-` filename prefix (`memstore.memory_date`). BOTH have to go, and the
+        # filename one is why the workspace journal file is renamed rather than edited —
+        # `memstore.write(timestamped=True)` puts the date in the name as well as in the
+        # body, so stripping only the stamp leaves the hit dated and the fixture inert.
+        for base in (persona.memory_dir(name), workspace.memory_dir(self.WS)):
+            for f in list(base.glob("*.md")):
+                body = re.sub(r"^_\d{4}-\d{2}-\d{2}[^\n]*$", "_undated_", f.read_text(),
+                              flags=re.M)
+                f.write_text(body)
+                f.rename(base / re.sub(r"^\d{8}-\d{6}-", "", f.name))
+        rows = self.hit_rows_or_undated(self.recall(name))
+        self.assertTrue(rows, "fixture: no hits at all")
+        self.assertTrue(all(tui.strip_ansi(r).lstrip().startswith("—") for r in rows),
+                        "fixture: a hit still carries a date, so the date column is ten "
+                        "wide and this case cannot fail:\n" + "\n".join(rows))
+        row = tui.strip_ansi(rows[0])
+        self.assertEqual(row.index("—"), 2, row)
+        # The label starts one gap past a column holding a single cell — not eleven.
+        self.assertLess(tui.width(row[:row.index("persona:")]), 10, row)
+        # And the address line follows the column it hangs under. This is the assertion
+        # that makes the hardcoded `14` fail: with every hit dated, `2 + dw` IS 14 and a
+        # literal is indistinguishable from the expression.
+        addr = tui.strip_ansi(next(ln for ln in self.recall(name)
+                                   if "/memory/" in ln))
+        self.assertEqual(len(addr) - len(addr.lstrip(" ")),
+                         row.index("persona:"), "\n".join([row, addr]))
 
 
 if __name__ == "__main__":  # pragma: no cover

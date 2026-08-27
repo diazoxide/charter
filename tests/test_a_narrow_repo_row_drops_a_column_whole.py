@@ -143,6 +143,44 @@ class RowPlanCase(unittest.TestCase):
         self.assertIn("*↑2", tui.strip_ansi(cell), cell)
         self.assertLessEqual(tui.width(cell), sl._BRANCH_MIN_W, cell)
 
+    def test_at_the_floor_the_cell_holds_the_markers_and_no_stub(self):
+        """Shown whole or dropped whole, one layer down from `_row_plan`'s own version.
+
+        `assertIn("*↑2")` alone does not say this: a cell drawn as `a-…*↑2` contains the
+        markers too, so a stub of the branch name passes that probe while spending the
+        reader's last three columns on three characters of a name they cannot look up.
+        The assertion has to be that the branch name is NOT there — measured, by a
+        hand-check that dropped the floor to zero and watched every other case stay
+        green."""
+        cell = tui.strip_ansi(sl._branch_cell_for(
+            "a-very-long-branch-name-indeed", "", "*↑2", "*↑2", True, sl._BRANCH_MIN_W))
+        self.assertEqual(cell, "*↑2", cell)
+        self.assertNotIn(tui.ELLIPSIS, cell, cell)
+
+    def test_a_cell_the_plan_dropped_costs_no_gap_either(self):
+        """A dropped cell built as a ZERO-WIDTH one still contributes `_GAP`, so every
+        cell after it starts two columns further right than the plan believes and the row
+        overruns the pane it was planned for — `tui.Row` then truncates, and what it
+        truncates is the CI label.
+
+        The BRANCH cell is the one this can be asked about, and that is a property of the
+        losing order rather than an accident: the change and the CI mark are dropped last
+        and second-last, so each is the final cell on its row when it goes and `_finish`
+        strips the gap that would have followed it. The branch is dropped from the
+        MIDDLE, with the CI mark still to its right. (`_tree_cells` says the same thing in
+        its docstring, so a reader deleting one of the other two guards knows why nothing
+        goes red.)"""
+        w = 31                                   # narrow enough that the branch is gone
+        plan = sl._row_plan(w)
+        self.assertFalse(plan.branch, plan)
+        self.assertTrue(plan.ci, plan)
+        row = tui.strip_ansi(_row(w))
+        self.assertLessEqual(tui.width(row), w, row)
+        self.assertIn(CI_WHOLE, row, row)
+        # And the gap really was the only thing between them: the CI cell begins exactly
+        # one gap past the name cell, not two.
+        self.assertEqual(tui.width(row[:row.index("✗")]), plan.name + len(sl._GAP), row)
+
     def test_the_name_is_the_one_cell_that_is_never_dropped(self):
         """A row with no name is not a row about anything."""
         for w in (*self.WIDTHS, 20, 16, 10, 1):
@@ -237,6 +275,55 @@ class SiblingRowsCase(unittest.TestCase):
                     for n in ("svc", name)]
                 self.assertEqual(*[tui.width(r[:r.index("✗")]) for r in rows],
                                  "\n".join(rows))
+
+
+class TheWorktreeSummaryLineCase(unittest.TestCase):
+    """The other line `_repo_rows` emits, and it carried the same constant.
+
+    A repo with worktrees nobody is drawing as full rows gets one summary line beneath it
+    — `│ ╰─ piece · piece · piece`. It carried its own `_LEFT_W` while everything above it
+    moved to the pane's real width.
+
+    **And the sweep's answer was to delete the crop, not to re-point it.** `tui.Text`
+    clamps the finished line to the same budget, so cropping the joined names first and
+    the line afterwards produce the same string for every input — the pre-crop was
+    redundant either way it was spelled, which is exactly the "equivalent mutant and dead
+    code are the same finding" `tools/sweep.py` argues for. What these cases pin is the
+    property that survived it: the line fits the pane, and it says when it left something
+    out.
+    """
+
+    def _lines(self, budget: int, pieces: int = 6) -> list[str]:
+        wt_dirs = [Path(f"/tmp/a-plane/.worktrees/w/charter/piece-number-{i}")
+                   for i in range(pieces)]
+        with mock.patch("charter.worktree.dirs_for", return_value=wt_dirs):
+            rows = sl._repo_rows([D], "w", None, STATES, BRANCHES, GL, (), budget)
+        return [tui.strip_ansi(ln) for r in rows for ln in r.render(budget)]
+
+    def test_the_summary_line_fits_the_pane_it_was_composed_for(self):
+        for w in (95, 80, 74, 60, 50, 40):
+            with self.subTest(width=w):
+                for line in self._lines(w):
+                    self.assertLessEqual(tui.width(line), w, line)
+
+    def test_it_says_when_it_left_a_piece_out(self):
+        """A summary that silently drops pieces is a summary a reader trusts wrongly. The
+        `…` is the only thing that says otherwise, and it has to survive whatever crop the
+        line went through."""
+        line = next(ln for ln in self._lines(60) if "piece-number-0" in ln)
+        self.assertTrue(line.endswith(tui.ELLIPSIS),
+                        f"the overflow mark is not on the line, so the reader is not "
+                        f"told anything was dropped:\n{line!r}")
+
+    def test_a_pane_wide_enough_shows_every_piece(self):
+        """The control on the case above: with room for all six, none of them is dropped
+        and there is no overflow mark to find. Without this, a line that dropped
+        EVERYTHING would satisfy the ellipsis assertion perfectly."""
+        lines = [ln for ln in self._lines(200) if "piece-number-0" in ln]
+        self.assertEqual(len(lines), 1, lines)
+        for i in range(6):
+            self.assertIn(f"piece-number-{i}", lines[0], lines[0])
+        self.assertNotIn(tui.ELLIPSIS, lines[0], lines[0])
 
 
 class RenderCase(PersonaIso):

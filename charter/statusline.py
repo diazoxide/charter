@@ -991,8 +991,18 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None,
 
     *plan* is what the pane can afford (:func:`_row_plan`). A cell whose planned width is
     zero is **not built**, so no gap is spent on it either — the alternative, a zero-width
-    `Cell`, leaves the row carrying `_GAP` for a column that is not there and every row
-    after the drop starts two columns further right than the header above it.
+    `Cell`, leaves the row carrying `_GAP` for a column that is not there and every cell
+    after the drop starts two columns further right than the plan believes, which pushes
+    the row over its budget and lets `tui.Row` truncate the CI label off the end.
+
+    **Only the BRANCH guard is observable, and that follows from the losing order rather
+    than from luck** — recorded because a deletion sweep will report the other two as
+    equivalent and the next reader deserves to know why rather than deleting them. The
+    change and the CI mark are dropped last and second-last, so each is the final cell on
+    its row by the time it goes, and `tui`'s own `_finish` strips the trailing gap that
+    would have followed it. The branch is dropped from the MIDDLE, with the CI mark still
+    to its right. All three are written the same way anyway: three cells built by one
+    rule is what stops the fourth one somebody adds from being written by a different one.
     """
     cells: list[tui.Cell] = [tui.Cell(f"{lead}{label}", plan.name)]
 
@@ -1272,8 +1282,13 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=(),
         elif wts and wt_budget > 0:
             wt_budget -= 1
             lead = f"  {_DIM}{_TREE_PIPE}{_R} {_DIM}{_TREE_WT}{_R}"
-            pieces = tui.truncate(" · ".join(w.name for w in wts),
-                                  max(1, budget - tui.width("  │   ╰─ ")))
+            # Clamped by `tui.Text` at render time and NOT here. This used to pre-truncate
+            # to `_LEFT_W` minus the lead, which #506 would have made `budget` minus the
+            # lead — and a deletion sweep says neither is worth writing: `Text.render` gets
+            # the same budget, so cropping the joined names first and cropping the finished
+            # line afterwards produce the same string for every input. Two crops to one
+            # width is one crop, and the redundant one was carrying a constant.
+            pieces = " · ".join(w.name for w in wts)
             rows.append(tui.Text(f"{lead}{_DIM}{pieces}{_R}"))
 
     if capped:
