@@ -126,10 +126,11 @@ asserts too little. The harness should surface *what the test asserted* alongsid
 the reviewer's first question is "did my test look closely enough" rather than "can I suppress
 this".
 
-## Four ways a sweep lies, all measured here
+## Five ways a sweep lies, all measured here
 
-Every one of these makes a mutation score **pinned** when it is not. That is the worst failure
-this tool can have and the hardest to notice, because the report comes back green.
+The first four make a mutation score **pinned** when it is not — the worst failure this tool can
+have and the hardest to notice, because the report comes back green. The fifth lies in the
+**other** direction, which is why it took longest to find.
 
 1. **Exit-code scoring.** Deleting `release.yml`'s `-z "$claimed"` refusal (#558) left the run
    still exiting 1 — the mismatch check below it caught the empty string instead. Same code,
@@ -154,7 +155,15 @@ this tool can have and the hardest to notice, because the report comes back gree
    mutation needs a timeout, and a timeout must be reported as its own outcome rather than
    folded into either column.
 
-None of the four is visible from outside. Together they are the argument for why this harness
+5. **A mutation that never applied.** Its edit did not match — a quoting difference, an anchor
+   that moved — so the "mutant" tree is the **unmutated** tree, the tests pass, and the guard is
+   reported as a **survivor**. Found on #585, whose first table carried two of these. This is the
+   only one that errs toward *more* work rather than less: it sends someone to write a test for a
+   line that is already covered, and it discredits the tool the first time they discover that.
+   **Every mutation must assert that it actually applied.** A verdict from an edit that did not
+   happen is not a verdict.
+
+None of the five is visible from outside. Together they are the argument for why this harness
 needs its own tests and its own sweep rather than being trusted because it is short: a gate that
 silently passes everything is worse than no gate, because it is *believed*.
 
