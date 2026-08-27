@@ -751,14 +751,13 @@ how to get back in (`tmux -L charter attach -t <frame-id>`) rather than leaving 
 remember the flags.
 
 ```
-charter · 7 to choose from
-> detach — leave the harness running
+charter · 6 to choose from
+> workspace: alpha — pick another
+    persona: steward — pick another
+    detach — leave the harness running
     density: minimal
     density: normal
   * density: full
-  * workspace: alpha             cannot switch: $CHARTER_WORKSPACE pins this fr…
-    workspace: default           cannot switch: $CHARTER_WORKSPACE pins this fr…
-    workspace: zebra             cannot switch: $CHARTER_WORKSPACE pins this fr…
 
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```
@@ -767,9 +766,24 @@ charter · 7 to choose from
 An option you cannot see is one you cannot ask about, so a row that is refused stays and
 says what would make it available. The reason is the right-hand column.
 
+**Two of those rows are doorways.** `workspace:` and `persona:` say which one this frame is
+on, and Enter opens the list of the others **in the same pane** — a picker, which is this
+same surface over a different set of rows. Type to narrow it exactly as you would the
+palette, Enter to switch, Escape to leave having changed nothing:
+
+```
+workspace · 4 to choose from
+  * alpha
+>   beta
+    default
+    zebra
+
+  up/down move   enter choose   esc cancel   F12 back to the harness
+```
+
 **There is no row cap.** The old menu was a tmux `display-menu`, drawn inside your terminal
 and unable to scroll, so it cut every list at twelve and lost the digit shortcut past nine.
-The palette is a pane charter draws: it scrolls, it filters, and a plane with forty
+The picker is a pane charter draws: it scrolls, it filters, and a plane with forty
 workspaces lists forty.
 
 **The menu is gone.** `charter frame-menu` and `charter frame-action` no longer exist, and
@@ -777,7 +791,7 @@ neither does the `display-menu` they opened. `F2` was always trying to be a pale
 keeping both would have left two answers to "how do I do a thing", which is how the single
 menu became weird in the first place.
 
-**Switching from the palette moves the frame, and says so.** Choosing a workspace writes
+**Switching from the picker moves the frame, and says so.** Choosing a workspace writes
 the choice under the frame's own id — the same pointer `charter workspace use` writes from
 inside the frame, which is what makes the panels follow — records it as the frame's
 workspace, re-gathers the repo table for it, and bumps the frame so every panel repaints
@@ -787,15 +801,26 @@ one-line message lands on your own screen saying what happened.
 **A pinned frame says so before you press anything.** A frame launched with
 `$CHARTER_WORKSPACE` (or `$CHARTER_PERSONA`) set is *pinned*: that variable is in every
 panel pane's environment for as long as the pane lives, and nothing charter can write
-outranks it — so every workspace row carries `cannot switch: $CHARTER_WORKSPACE pins this
-frame to '<name>'` rather than offering a move that would not happen. Nothing here creates
-a workspace either.
+outranks it — so that noun's row carries `cannot switch: $CHARTER_WORKSPACE pins this
+frame to '<name>'` and opens no picker, rather than offering a list of moves that would not
+happen. The other noun is unaffected: one pin, one noun. Nothing here creates a workspace
+either — an unknown name is a refusal with the existing names beside it, never an implicit
+create.
+
+**A name that is not a name is drawn and never run.** A workspace or persona is a directory
+somebody can add in a commit, and a filesystem forbids only `/` and NUL — so a name can hold
+a newline, a U+2028, an escape sequence, a quote or a `#`. Every name is made one line
+before any column is measured (#472), so it is exactly one row on screen; and the switch
+re-checks it against the same alphabet `charter workspace use` does, so a name charter would
+not accept is refused with a message rather than acted on.
 
 **The session lock moves with you.** `charter workspace use` locks the session to what it
 selected so a workspace cannot be swapped out from under a running task — but a keypress on
-the palette *is* you, and the switcher's own first write would otherwise take a lock that
+the picker *is* you, and the switcher's own first write would otherwise take a lock that
 its second write hit, leaving a switcher that worked exactly once. So the switch overrides
-the lock and names what it overrode: `workspace → beta  (lock moved from 'alpha')`.
+the lock and names what it overrode: `workspace → beta  (lock moved from 'alpha')`. Silence
+would be the wrong answer: an agent inside the frame took that lock, and its next command
+acts on a workspace it was never told had moved.
 
 **Pressing `F2` again while the palette is open opens a second one.** `bind -n` is tmux's
 root key table, so tmux matches the key before any byte reaches the palette's pane — the

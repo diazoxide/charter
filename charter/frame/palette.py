@@ -191,8 +191,9 @@ class Palette(overlay.Surface):
         return super().handle(ev, height)
 
 
-def own_the_tty(surface: overlay.Surface, *, fd: int | None = None,
-                out=None) -> overlay.Row | None:
+def own_the_tty(surface: overlay.Surface, *, fd: int | None = None, out=None,
+                then: Callable[[overlay.Row], overlay.Surface | None] | None = None
+                ) -> overlay.Row | None:
     """Put this process's own tty in raw mode and let *surface* have it until it is done.
 
     **Raw mode is what makes the surface modal at all.** Without it the terminal line
@@ -215,14 +216,43 @@ def own_the_tty(surface: overlay.Surface, *, fd: int | None = None,
     default size here would be a rectangle charter invented for a pane it could not
     measure, which is `frame/slots.py`'s measured 22-column pane reporting 200 columns,
     one surface over.
+
+    ---
+
+    **`then` is how one pane holds more than one surface**, and it is Task 6's whole
+    mechanism: a chosen row is offered to it, and a `Surface` coming back is run next, in
+    this same pane, without the tty leaving raw mode in between. `None` — the default, and
+    what `then` answers for every row that is not a doorway — ends the loop and returns
+    the row, exactly as before.
+
+    That is what a picker is (`frame/choose.py`): the palette's own pane, redrawn from a
+    different row source. The alternative shape, a palette row that starts a second
+    charter to split a second overlay pane, races the palette's own teardown —
+    `commands_frame._close_palette` selects the harness, kills this pane and re-arms the
+    escape hatch as ONE chained tmux command the instant a row has been chosen, and a
+    second pane that had already selected and zoomed itself would be undone by it.
+
+    `then` is charter's own code and answers `None` for every row a picker offers, so the
+    loop is a two-level tree rather than an open one. It is deliberately not bounded by a
+    count: a number here would be a limit on how deep a surface may nest, invented to
+    guard against charter's own code being wrong, and the honest answer to a surface that
+    will not end is the one `frame/overlay.py` already gives — `HATCH_KEY`, matched by
+    tmux's own root key table before any byte reaches this process.
     """
     fd = sys.stdin.fileno() if fd is None else fd
     out = sys.stdout if out is None else out
     before = termios.tcgetattr(fd)
     tty.setraw(fd)
     try:
-        return surface.run(read=_reader(fd), write=_writer(out),
-                           size=lambda: tuple(os.get_terminal_size(out.fileno())))
+        read, write = _reader(fd), _writer(out)
+        def size() -> tuple[int, int]:
+            return tuple(os.get_terminal_size(out.fileno()))
+        while True:
+            chosen = surface.run(read=read, write=write, size=size)
+            nxt = then(chosen) if (then is not None and chosen is not None) else None
+            if nxt is None:
+                return chosen
+            surface = nxt
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, before)
 

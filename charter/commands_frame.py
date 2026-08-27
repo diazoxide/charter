@@ -133,7 +133,7 @@ import sys
 import time
 
 from . import config, contain, harness, instance, tui, util, workspace
-from .frame import (builtin_actions, component, gather, layout, overlay,
+from .frame import (builtin_actions, choose, component, gather, layout, overlay,
                     palette, picker, state, switch, tmuxctl)
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
@@ -3498,7 +3498,7 @@ def _open_palette(args) -> int:
 
 
 def _draw_palette(args) -> int:
-    """Be the palette: draw the actions, take a choice, start it, hand the pane back.
+    """Be the palette: draw the rows, take a choice, act on it, hand the pane back.
 
     **The close is a ``finally``**, for `overlay.Surface.run`'s reason one layer down: a
     palette that raised must still give the operator their harness back. Whatever went
@@ -3506,36 +3506,104 @@ def _draw_palette(args) -> int:
     place charter may print it.
 
     **The registry is built here, not carried.** `builtin_actions.build` resolves the
-    density mark, the workspace list, the persona list and every installed provider's
-    actions against the moment the palette opened — the menu's staleness (`_rerecord_menu`,
-    deleted with it) was a snapshot on disk that every other command had to remember to
-    rewrite.
+    density mark and every installed provider's actions against the moment the palette
+    opened — the menu's staleness (`_rerecord_menu`, deleted with it) was a snapshot on
+    disk that every other command had to remember to rewrite. `choose.open_rows` resolves
+    the workspace and persona the frame is on at the same moment, for the same reason.
 
-    **A refusal is said on the operator's own screen.** `invoke` re-asks availability, so a
-    row drawn while a plane was one way and pressed while it is another is refused with the
-    same sentence the row carried — and that sentence has nowhere else to go, because the
-    pane it would have been drawn in is the pane this is about to kill. A STARTED action
-    says nothing: what it started surfaces through `inflight`, which is the frame's
-    existing spinner and not a second clock.
+    **Two kinds of row, and one of them is a doorway.** A picker row replaces the surface
+    in this same pane (`palette.own_the_tty`'s *then*) rather than starting anything, and
+    :func:`_picker` is what turns one into the next surface; everything else is an action
+    and goes through `invoke`. They are told apart by `choose.noun_of`, on ids a provider's
+    action cannot spell — see `frame/choose.py`.
+
+    **Every outcome is said on the operator's own screen, and there is exactly one call
+    that says it.** Three things can need a sentence and none of them has anywhere else to
+    go, because the pane they would have been drawn in is the one this is about to kill:
+    a picker row refused before it opens (the launch pin), a switch refused after a name is
+    chosen (an unknown name, a name that stopped existing while the picker was up), and a
+    switch that took effect over a session lock and must name what it overrode (#517 —
+    "a menu that silently fails against a lock is worse than no menu"). One call rather
+    than a branch per case, because a branch per case is a case somebody adds without one.
+
+    A STARTED action still says nothing: what it started surfaces through `inflight`,
+    which is the frame's existing spinner and not a second clock.
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     socket = state.frame_server(fid) or SOCKET
     harness = state.harness_pane(fid) or ""
     reg = builtin_actions.build(fid, current_density=_current_density(fid))
     snapshot = gather.cached(fid) or {}
+    client = getattr(args, "client", "") or ""
+    opened: list[choose.Roster] = []
     try:
         surface = palette.Palette(
-            catalogue=palette.rows(reg.offers(fid=fid, snapshot=snapshot)), mouse=True)
-        chosen = palette.own_the_tty(surface)
-        if chosen is not None:
-            inv = reg.invoke(chosen.id, fid=fid, snapshot=snapshot)
-            inv.join(timeout=_ACTION_START_GRACE)
-            if not inv.started:
-                _say_on_screen(fid, inv.reason, getattr(args, "client", "") or "")
+            catalogue=(choose.open_rows(fid)
+                       + palette.rows(reg.offers(fid=fid, snapshot=snapshot))),
+            mouse=True)
+        chosen = palette.own_the_tty(
+            surface, then=lambda row: _picker(row, fid, opened))
+        if chosen is None:
+            return 0
+        picked = _chosen_name(chosen, opened)
+        if picked is not None:
+            noun, name = picked
+            out = choose.switch_to(noun, fid, name)
+            _say_on_screen(fid, out.message, client)
+            return 0
+        if choose.noun_of(chosen) is not None:
+            # A picker row that never opened its picker: `_picker` refused it, which it
+            # does for exactly one reason and always with that reason in the row's note.
+            _say_on_screen(fid, chosen.note, client)
+            return 0
+        inv = reg.invoke(chosen.id, fid=fid, snapshot=snapshot)
+        inv.join(timeout=_ACTION_START_GRACE)
+        if not inv.started:
+            _say_on_screen(fid, inv.reason, client)
     finally:
         _close_palette(socket, harness=harness,
                        overlay_pane=os.environ.get("TMUX_PANE", ""))
     return 0
+
+
+def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
+    """The surface *row* opens, or ``None`` when it opens none.
+
+    Handed to `palette.own_the_tty` as its *then*, so a picker is drawn in the palette's
+    own pane with the tty never leaving raw mode — see that function for why a second pane
+    would race this one's teardown.
+
+    **A pinned frame does not get a picker**, and that is Task 4's rule kept rather than
+    a new one: the row is listed, it carries the sentence that says why, and opening a list
+    of names none of which can be switched to would be an offer charter already knows it
+    cannot honour. ``None`` here sends the row back to :func:`_draw_palette`, which says
+    the note on the operator's screen.
+
+    The roster is appended to *opened* rather than returned beside the surface, because
+    what comes back out of `own_the_tty` is a ROW and the caller has to map it to the name
+    it stood for. Matching that by title would mean matching on a string
+    `overlay.Surface.render` has already contained — see `choose.Roster`.
+    """
+    noun = choose.noun_of(row)
+    if noun is None or row.note:
+        return None
+    roster = choose.roster(noun, fid)
+    opened.append(roster)
+    return palette.Palette(catalogue=roster.rows, label=noun, mouse=True)
+
+
+def _chosen_name(row, opened: list) -> "tuple[str, str] | None":
+    """``(noun, name)`` when *row* came off a picker this palette opened, else ``None``.
+
+    Asked of every roster rather than only the last, so that the answer does not depend on
+    how many surfaces were drawn — and asked by row ID, which is charter's own
+    `<noun>:n<N>` and never the operator's name.
+    """
+    for roster in opened:
+        name = roster.name_of(row)
+        if name is not None:
+            return roster.noun, name
+    return None
 
 
 def _close_palette(socket: str, *, harness: str, overlay_pane: str) -> None:

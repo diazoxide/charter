@@ -598,11 +598,10 @@ class ThePaletteCommand(PersonaIso, unittest.TestCase):
         """`invoke` re-asks availability, so a row drawn while a plane was one way and
         pressed while it is another is refused — and that sentence has nowhere else to go,
         because the pane it would have been drawn in is the one about to be killed."""
-        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "pinned-ws"})
-        with mock.patch.object(switch, "workspaces", return_value=["pinned-ws", "other"]):
-            self.assertEqual(self._draw(overlay.Row(id="workspace.w1", title="w")), 0)
+        state.record_harness_pane(self.FID, "not-a-pane-id")
+        self.assertEqual(self._draw(overlay.Row(id="density.full", title="d")), 0)
         self.said.assert_called_once()
-        self.assertIn("$CHARTER_WORKSPACE pins this frame", self.said.call_args[0][1])
+        self.assertIn("no record of this frame's harness pane", self.said.call_args[0][1])
         self.assertEqual(self.said.call_args[0][2], "/dev/ttys7")
 
     def test_the_pane_is_not_killed_before_the_action_has_started(self):

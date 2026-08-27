@@ -4,11 +4,18 @@
 component seam a provider gets, and charter's own commands go through the action seam a
 provider gets. There is no private table of rows beside the registry the palette lists.
 
-**Everything the menu offered is here, and nothing else was invented.** Detach, the three
-densities, every workspace and every persona — the same four groups `_menu_entries` and
-`_switch_entries` built, minus the two things that were tmux's problem rather than
-charter's: the twelve-name cap (the overlay scrolls) and the submenu (a filter reaches a
-name in fewer keystrokes than a nested list does).
+**Everything the menu offered is reachable, and nothing else was invented.** Detach and
+the three densities are here; the workspace and persona lists are one keypress further on,
+in `frame/choose.py`, and the palette carries one row per noun that opens each. That is
+Task 6, and it is a correction to what this module shipped in Task 4 rather than an
+addition to it: a workspace is a *name*, not a thing this contract can honestly describe.
+An `Action`'s promise is fire-and-report — ``run`` starts work and returns — and forty
+names registered as forty actions meant forty ``run``s that each started a whole second
+charter process to write two files. A picker chooses the name first and switches once, in
+the pane the operator is already looking at.
+
+The two things that were tmux's problem rather than charter's are still gone either way:
+the twelve-name cap (the overlay scrolls) and the digit shortcut that ran out at nine.
 
 **An action starts a DETACHED process, and that is not incidental.** §4g's fire-and-report
 says `run` returns having started work; here it must also OUTLIVE the pane it was started
@@ -27,11 +34,8 @@ are both files the launcher already wrote.
 
 **Ids are charter's, titles carry the operator's names.** `frame.action.Action` holds an
 id to the component alphabet because it reaches a `bind` line, and a workspace may be
-named `my-repo.v2`, which is not in that alphabet. So a workspace's row is
-`workspace.w<N>` with the NAME in the title, contained by `Action.__post_init__` before
-anything measures it. The id is never drawn and never committed — this registry is rebuilt
-every time the palette opens, and the invocation happens against the same object — so
-nothing depends on `w3` meaning the same workspace twice.
+named `my-repo.v2`, which is not in that alphabet. That is why the picker's own rows are
+not actions at all — see `frame/choose.py`.
 """
 
 from __future__ import annotations
@@ -39,22 +43,14 @@ from __future__ import annotations
 import os
 import subprocess
 
-from .. import contain, util
-from . import action, actions, state, switch, tmuxctl
+from .. import util
+from . import action, actions, choose, state, tmuxctl
 
-#: What marks the workspace, persona or density a frame is currently on.
-#:
-#: **ASCII, deliberately** — the same rule `statusline._persona_chips` records having
-#: been broken twice by an East-Asian *Ambiguous* glyph, and `overlay.Surface.render`
-#: restates for its own marker. `*` is what `git branch` already uses for "the one you
-#: are on" and is unambiguously narrow everywhere.
-MARK = ("* ", "  ")
-
-#: What a workspace row's id counts up, and what a persona row's does. Charter's own
-#: prefixes, in the action alphabet, with the position appended — see the module
-#: docstring for why the name cannot be the id.
-WORKSPACE_ID = "workspace.w{}"
-PERSONA_ID = "persona.p{}"
+#: What marks the density a frame is currently on. **One constant, not two**: it is
+#: `frame/choose.py`'s, which marks the workspace and the persona a frame is on for the
+#: identical reason, and a second copy here would be a second answer to what "the one you
+#: are on" looks like. See that module for why it is ASCII.
+MARK = choose.MARK
 
 
 def _spawn(argv: list[str], *, fid: str) -> None:
@@ -168,67 +164,6 @@ def _run_density(fid: str, level: str):
     return f"density → {level}"
 
 
-def _register_switches(reg: actions.ActionRegistry, fid: str) -> None:
-    """Every workspace and every persona this plane has, as rows.
-
-    **Every one of them.** The menu capped each list at twelve because a `display-menu` is
-    drawn inside the terminal and tmux does not scroll it; this surface scrolls and
-    filters, so the cap would only hide names an operator can already reach faster by
-    typing three letters of one.
-
-    Two registrations rather than one loop over a table of two, because the two differ in
-    every part that matters — which lister, which pin, which command flag — and a table
-    would be a shared shape hiding four differences.
-    """
-    _register_names(reg, WORKSPACE_ID, switch.workspaces(),
-                    current=switch.current_workspace(fid), noun="workspace",
-                    pin="CHARTER_WORKSPACE")
-    _register_names(reg, PERSONA_ID, switch.personas(),
-                    current=switch.current_persona(fid), noun="persona",
-                    pin="CHARTER_PERSONA")
-
-
-def _register_names(reg: actions.ActionRegistry, template: str, names: list[str], *,
-                    current, noun: str, pin: str) -> None:
-    """One row per *name*, each running `charter frame-switch --<noun> <name>`.
-
-    **The pin is the availability rule, and it is the one refusal `switch.py` states as
-    permanent.** `$CHARTER_WORKSPACE` was set at launch, so it sits in every panel pane's
-    environment and nothing charter writes can outrank it; a row that offered to switch
-    anyway would report "switched" and draw the old workspace, which is the failure #411
-    was filed for. The session LOCK is not an unavailability — `to_workspace` overrides it
-    deliberately and says so in its own message — so it is not reported as one here.
-
-    `contain.one_line` before the name is measured or padded (#472), and again by
-    `Action.__post_init__` on the title it lands in. Twice, because they are two different
-    joins: this one is where a name meets charter's own marker column, and that one is
-    where a title meets the contract.
-    """
-    for i, name in enumerate(names):
-        on = MARK[0] if name == current else MARK[1]
-        reg.register(action.Action(
-            id=template.format(i),
-            title=f"{on}{noun}: {contain.one_line(name)}",
-            run=(lambda ctx, n=name, v=noun: _run_switch(ctx.fid, v, n)),
-            available=(lambda ctx, p=pin: not switch._pin(ctx.fid, p)),
-            reason_unavailable=(lambda ctx, p=pin: _pinned_reason(ctx.fid, p))))
-
-
-def _pinned_reason(fid: str, pin: str) -> str:
-    """Why a pinned frame will not switch, naming the value that pins it.
-
-    The same sentence `switch.to_workspace` refuses with, built from the same read, so the
-    row and the keypress cannot describe one frame two ways.
-    """
-    return (f"cannot switch: ${pin} pins this frame to "
-            f"'{contain.one_line(switch._pin(fid, pin) or '')}'")
-
-
-def _run_switch(fid: str, noun: str, name: str):
-    _spawn(util.self_relaunch_argv("frame-switch", f"--{noun}", name), fid=fid)
-    return f"{noun} → {contain.one_line(name)}"
-
-
 def build(fid: str, *, current_density: str) -> actions.ActionRegistry:
     """Charter's own actions, plus every action an installed provider supplies.
 
@@ -245,11 +180,19 @@ def build(fid: str, *, current_density: str) -> actions.ActionRegistry:
     somewhere to speak. Nothing here catches anything: `add` turns a missing distribution,
     a bad import, a version charter does not speak and an id collision each into a row
     that says which.
+
+    **`fid` is no longer read while BUILDING, and it stays in the signature anyway.** The
+    workspace and persona lists left with `_register_names` (see the module docstring), and
+    what remains — detach, the densities, a provider's own — resolves the frame at the
+    moment it is *invoked*, off `ctx.fid`. Dropping the parameter would mean every caller
+    stopped saying which frame it was building for, and `frame/actions.py` takes `fid` on
+    both `offers` and `invoke` precisely because that answer must never be ambient: one
+    tmux server is shared by every frame on the machine, and this process's own
+    `$CHARTER_SESSION_ID` may be another frame's (`state.record_identity` measures it).
     """
     reg = actions.ActionRegistry()
     _register_detach(reg)
     _register_density(reg, current=current_density)
-    _register_switches(reg, fid)
     for aid in reg.providers.ids():
         reg.add(aid)
     return reg

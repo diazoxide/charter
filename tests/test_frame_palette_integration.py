@@ -277,32 +277,55 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
 
     def test_the_hotkey_opens_a_palette_listing_the_frames_actions(self):
         _, pane = self._open()
-        for expected in ("detach", "density: minimal", "workspace: alpha",
-                         "workspace: zebra"):
+        for expected in ("detach", "density: minimal", "workspace: alpha — pick another",
+                         "persona — pick one"):
             self._await_screen(pane, expected)
 
     def test_typing_narrows_the_list_to_what_matches(self):
         fd, pane = self._open()
         self._await_screen(pane, "workspace: alpha")
-        os.write(fd, b"zebra")
-        self._await_screen(pane, "workspace: alpha", present=False)
+        os.write(fd, b"workspace")
+        self._await_screen(pane, "detach", present=False)
         screen = self._screen(pane)
-        self.assertIn("workspace: zebra", screen, screen)
-        self.assertNotIn("detach", screen, screen)
-        self.assertIn("zebra", screen.splitlines()[0],
+        self.assertIn("workspace: alpha", screen, screen)
+        self.assertIn("workspace", screen.splitlines()[0],
                       "what the operator typed is not on the header")
 
-    def test_enter_runs_the_action_the_filter_left_and_it_outlives_the_pane(self):
-        """The action is a workspace switch, so what is asserted is a file the switch
-        wrote — which is the only way to see that `run` was reached AND that the work
-        survived `kill-pane` on the pane it was started from."""
+    def test_enter_opens_the_picker_in_this_same_pane_and_choosing_moves_the_frame(self):
+        """**Task 6's step 1, end to end, with real keys.** The palette's workspace row is
+        a doorway: Enter replaces the surface in the pane the operator is already looking
+        at — no second pane, no second charter process, nothing to race
+        `_close_palette` — and the name chosen there switches the frame.
+
+        Asserted on the frame's own record rather than on anything drawn, because "the
+        frame moved" is `state.workspace_for`'s rungs (#411) and not a repaint.
+        """
         fd, pane = self._open()
-        self._await_screen(pane, "workspace: zebra")
+        self._await_screen(pane, "workspace: alpha")
         self.assertEqual(state.frame_workspace(self.fid), "alpha")
+        self.assertEqual(self._palette_pane(), pane)
+        os.write(fd, b"workspace\r")
+        # The picker: the names alone, no `workspace:` prefix and no `detach` beside them.
+        self._await_screen(pane, "detach", present=False)
+        self._await_screen(pane, "zebra")
+        self.assertEqual(self._palette_pane(), pane,
+                         "the picker opened a second pane instead of reusing this one")
         os.write(fd, b"zebra\r")
         self.assertTrue(_await(lambda: state.frame_workspace(self.fid) == "zebra"),
-                        f"the chosen action never ran: workspace is still "
+                        f"the chosen name never switched the frame: workspace is still "
                         f"{state.frame_workspace(self.fid)!r}")
+
+    def test_the_picker_bumps_the_frame_so_every_panel_repaints(self):
+        """#411/#412's half of step 1. A pointer some panels may read is the bug; the
+        version moving is what makes a panel's poll loop redraw against the new plane."""
+        fd, pane = self._open()
+        self._await_screen(pane, "workspace: alpha")
+        was = state.version(self.fid)
+        os.write(fd, b"workspace\r")
+        self._await_screen(pane, "zebra")
+        os.write(fd, b"zebra\r")
+        self.assertTrue(_await(lambda: state.version(self.fid) != was),
+                        "the frame was never bumped, so no panel repaints")
 
     def test_the_pane_comes_back_to_the_harness_when_the_palette_closes(self):
         fd, pane = self._open()
@@ -343,13 +366,16 @@ class AnUnavailableActionIsDrawnWithItsReason(_ThePalette, unittest.TestCase):
 
     def test_the_row_is_listed_and_says_why_it_cannot_run(self):
         _, pane = self._open()
-        self._await_screen(pane, "workspace: zebra")
+        self._await_screen(pane, "workspace: alpha")
         self._await_screen(pane, "cannot switch: $CHARTER_WORKSPACE")
 
-    def test_choosing_it_changes_nothing_and_the_frame_says_so(self):
+    def test_choosing_it_opens_no_picker_changes_nothing_and_the_frame_says_so(self):
+        """A pinned frame does not get a list of names it cannot switch to. The row is
+        still there, still says why, and Enter on it closes the palette having moved
+        nothing — the reason goes to the operator's own screen on the way out."""
         fd, pane = self._open()
-        self._await_screen(pane, "workspace: zebra")
-        os.write(fd, b"zebra\r")
+        self._await_screen(pane, "workspace: alpha")
+        os.write(fd, b"workspace\r")
         self.assertTrue(_await(lambda: self._palette_pane() is None),
                         "the palette never closed")
         time.sleep(0.5)
