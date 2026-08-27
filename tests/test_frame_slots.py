@@ -73,11 +73,22 @@ class Render(PersonaIso, unittest.TestCase):
 
     def test_a_slot_never_exceeds_the_pane_width(self):
         """`tui.width` counts display cells, not characters — a wide glyph that fits by
-        len() still wraps the pane and pushes the frame apart."""
-        for slot in ("top", "bottom"):
-            for line in slots.render(slot, "f-1").splitlines():
-                with self.subTest(slot=slot):
-                    self.assertLessEqual(tui.width(line), tui.term_width(default=80))
+        len() still wraps the pane and pushes the frame apart.
+
+        **The pane is stated, not read off the machine** (#591). This used to bound the
+        render by `tui.term_width(default=80)` while the render itself was laid out by
+        `slots._width()` — and until #591 both of those read `$COLUMNS`, so the two sides
+        of the assertion collapsed onto the same ambient value and the test could not fail
+        whatever width it was given. That is #525's shape exactly. `_width` answers a
+        constant now, so the bound has to come from somewhere that is not the shell
+        either: the size is mocked, and 80 is what this pane IS.
+        """
+        with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch("os.get_terminal_size", return_value=os.terminal_size((80, 24))):
+            for slot in ("top", "bottom"):
+                for line in slots.render(slot, "f-1").splitlines():
+                    with self.subTest(slot=slot):
+                        self.assertLessEqual(tui.width(line), 80)
 
     def test_a_failing_renderer_yields_a_line_rather_than_an_exception(self):
         """A panel that raises leaves a hole in the frame; `statusline.render` makes the
@@ -243,13 +254,58 @@ class Width(unittest.TestCase):
                          return_value=os.terminal_size((22, 5))):
             self.assertEqual(slots._width(), 22)
 
-    def test_width_falls_back_to_env_first_term_width_when_no_tty_is_available(self):
-        """The one case `tui.term_width()` is allowed to answer: no tty behind the fd at
-        all (stdout piped to a file, say), not merely a pane that disagrees with
-        `$COLUMNS`."""
-        with mock.patch.dict(os.environ, {"COLUMNS": "55"}), \
-             mock.patch("os.get_terminal_size", side_effect=OSError("not a tty")):
-            self.assertEqual(slots._width(), 55)
+    def test_width_falls_back_to_a_constant_and_never_to_the_shells_columns(self):
+        """#591. This used to assert the opposite — that `tui.term_width()` answers when
+        there is no tty behind the fd — and calling that "the one case `$COLUMNS` is
+        allowed to answer" was the defect written down as a property.
+
+        There is no such case. `$COLUMNS` describes the LAUNCHING terminal (this module's
+        own docstring measures a 22-column pane seeing `COLUMNS='200'`), so an
+        unmeasurable pane laid out from it is laid out from a rectangle that is not this
+        one — and `panel._hold`, the paint that runs when a panel has already failed, is
+        the call site where that is worst. A pane nobody can measure gets
+        :data:`slots._DEFAULT_COLS`, exactly as it has always got `_DEFAULT_ROWS` for its
+        height.
+
+        Both directions, because one alone is satisfiable by an accident: a `$COLUMNS`
+        WIDER than the constant would wrap the paint out of its own pane, and a NARROWER
+        one is the same wrong source pointing the other way (and would have been the
+        arithmetic every renderer downstream then spends).
+        """
+        for columns in ("400", "55"):
+            with self.subTest(columns=columns):
+                with mock.patch.dict(os.environ, {"COLUMNS": columns}), \
+                     mock.patch("os.get_terminal_size", side_effect=OSError("not a tty")):
+                    self.assertEqual(slots._width(), slots._DEFAULT_COLS)
+
+    def test_the_fallback_width_is_the_one_charter_already_falls_back_to(self):
+        """The VALUE, which the two tests above cannot see: both assert against
+        `_DEFAULT_COLS` itself, so setting it to 400 satisfies them and lays every
+        unmeasurable pane out four hundred columns wide. Found by hand-mutating the
+        constant — `tools/sweep.py` has no operator for a number (#569).
+
+        Pinned as an agreement rather than as a literal, which is the same argument
+        `_DEFAULT_ROWS`' own docstring makes about `panel._DEFAULT_ROWS`: "how big is a
+        rectangle nobody can measure" must have ONE answer in charter, or the two copies
+        are free to drift. `commands_frame._FALLBACK_SIZE` is the frame's own — the
+        traditional default screen, 80x24 — and `tui.term_width`'s default is the same 80
+        this used to reach through. Both dimensions, so a fix that lined one up and left
+        the other is still red.
+        """
+        from charter import commands_frame
+        self.assertEqual((slots._DEFAULT_COLS, slots._DEFAULT_ROWS),
+                         commands_frame._FALLBACK_SIZE,
+                         "a pane charter cannot measure is laid out at a different size "
+                         "than the window charter cannot measure")
+
+    def test_the_unmeasurable_pane_answers_the_same_for_both_dimensions(self):
+        """The pair, said once. A pane with no tty behind it has neither a width nor a
+        height to read, and before #591 those two facts came from different places —
+        `_height` from a constant, `_width` from the environment — which is how one of
+        them came to describe a different terminal than the other."""
+        with mock.patch("os.get_terminal_size", side_effect=OSError("not a tty")):
+            self.assertEqual((slots._width(), slots._height()),
+                             (slots._DEFAULT_COLS, slots._DEFAULT_ROWS))
 
 
 class RenderFollowsThePane(PersonaIso, unittest.TestCase):

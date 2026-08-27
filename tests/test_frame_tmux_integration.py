@@ -86,7 +86,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config, hooks, instance, todos
+from charter import commands_frame, config, hooks, instance, statusline, todos
 from charter.frame import gather, layout, notify
 from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
@@ -1522,6 +1522,111 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                 f"the pane #515 has to name explicitly, because with three strips the "
                 f"two below it trade rows with each other and never with it")
 
+    def test_the_table_panes_width_is_tmuxs_answer_and_not_the_recorded_order(self):
+        """#510, against the one authority there is.
+
+        `layout.repos_cols` derives the table pane's width from the ORDER the recorded map
+        is in, and that order is a JSON file in the frame's own state directory:
+        `state.panes` validates the VALUES and says nothing about the order, so a truncated
+        write, a hand edit, or a charter that wrote a different shape all arrive as a
+        plausible-looking map whose order is fiction. Nothing about that is detectable from
+        inside charter — which is the point of asking tmux instead.
+
+        So this builds the `right`-FIRST geometry for real, where the table pane is 87
+        columns in a 110-column window, and then hands `_reassert_sizes` the SHIPPED order,
+        which claims the same pane is the full 110. The derivation says the table fits (110
+        >= `statusline._LEFT_W`) and sizes the pane for six repos; tmux says 87, which draws
+        no table at all. One row is the measurement's answer and only the measurement's, so
+        this is red on `main` and red on any version that quietly keeps deriving.
+
+        **And the order the two passes run in is what makes tmux's answer true**, which is
+        the other half of the fix and is asserted here rather than argued: the window is
+        resized first, leaving `right` proportionally scaled to a width it is not supposed
+        to have, and `_reassert_sizes` has to put it back before it may believe anything
+        about its neighbour. Measured on this binary during development: `right` came back
+        62 columns wide after a 120x40 -> 200x40 grow, and the table pane read 137 where
+        the truth one `resize-pane -x 22` later is 177.
+        """
+        fid = state.frame_id("rsz-measured", os.getpid())
+        r = _tmux("new-session", "-d", "-s", "rsz-measured", "-x", "120", "-y", "40",
+                  "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+
+        def _split(*flags: str) -> str:
+            p = _tmux("split-window", "-t", harness_pane, *flags,
+                      "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            return p.stdout.strip()
+
+        # `right` FIRST, which is the geometry an operator's own `[frame] slots` order
+        # produces and which `instance.frame_of` keeps verbatim.
+        right = _split("-h", "-l", "22")
+        top = _split("-v", "-b", "-l", "1")
+        bottom = _split("-v", "-l", "1")
+        table = _split("-v", "-l", "6")
+        self.assertEqual(_tmux("resize-window", "-t", "rsz-measured",
+                               "-x", "110", "-y", "50").returncode, 0)
+
+        # The map's order is a LIE about this frame: it says the shipped order, in which
+        # nothing insets the table. The panes themselves are in the other one.
+        lying_order = {"top": top, "bottom": bottom, "repos": table, "right": right}
+        self.assertGreaterEqual(
+            layout.repos_cols(list(lying_order), window_cols=110),
+            statusline._LEFT_W,
+            "the recorded order does not claim a table-wide pane — the derivation this "
+            "test exists to disagree with is not even being exercised")
+
+        with mock.patch("charter.frame.slots.repos_rows_wanted",
+                        side_effect=lambda fid, *, pane_cols:
+                            1 if pane_cols < statusline._LEFT_W else 6):
+            commands_frame._reassert_sizes(SOCKET, fid=fid, panes=lying_order,
+                                           harness_pane=harness_pane,
+                                           window_cols=110, window_rows=50)
+
+        self.assertEqual(
+            _tmux("display-message", "-p", "-t", right, "#{pane_width}").stdout.strip(),
+            "22",
+            "the sidebar was not put back to its own width before the pane beside it was "
+            "measured — every number after this point is about a geometry that no longer "
+            "exists")
+        self.assertEqual(
+            _tmux("display-message", "-p", "-t", table, "#{pane_width}").stdout.strip(),
+            "87",
+            "tmux does not agree the table pane is inset — the fixture is not the "
+            "geometry this test is about")
+        height = _tmux("display-message", "-p", "-t", table,
+                       "#{pane_height}").stdout.strip()
+        self.assertEqual(height, "1",
+                         f"the table pane is {height} rows in a window where its own pane "
+                         f"is 87 columns and draws no table — sized from the recorded "
+                         f"order, which tmux has just contradicted")
+
+    def test_a_pane_that_cannot_be_measured_still_gets_the_derivations_answer(self):
+        """The other side of #510, and the reason `layout.repos_cols` stays. The launcher
+        cannot measure a pane that does not exist yet, and a running frame can lose one
+        between the map being read and the resize being applied. Same real window, same
+        real panes, and a recorded id for the table that names nothing tmux has — the
+        derivation answers, and it answers 110, which draws the six-row table.
+        """
+        fid = state.frame_id("rsz-underived", os.getpid())
+        r = _tmux("new-session", "-d", "-s", "rsz-underived", "-x", "110", "-y", "50",
+                  "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        top = _tmux("split-window", "-t", harness_pane, "-v", "-b", "-l", "1",
+                    "-P", "-F", "#{pane_id}", "--", "sleep", "600").stdout.strip()
+        rows_seen: list[int] = []
+        with mock.patch("charter.frame.slots.repos_rows_wanted",
+                        side_effect=lambda fid, *, pane_cols:
+                            rows_seen.append(pane_cols) or 6):
+            commands_frame._reassert_sizes(
+                SOCKET, fid=fid, panes={"top": top, "repos": "%999"},
+                harness_pane=harness_pane, window_cols=110, window_rows=50)
+        self.assertEqual(rows_seen, [110],
+                         "a pane tmux would not measure did not fall through to "
+                         "`layout.repos_cols` — it fell through to something else")
+
     # -- 5. Session-scoped id delivery for the hotkey menu --------------------------- #
 
     def test_a_second_frames_own_id_does_not_leak_the_firsts(self):
@@ -2422,6 +2527,89 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         harness = int(_tmux("display-message", "-p", "-t", harness_pane,
                             "#{pane_height}").stdout.strip())
         self.assertGreaterEqual(harness, layout.HARNESS_MIN_ROWS, harness)
+
+    def test_a_real_drag_across_the_table_width_removes_the_pane_and_brings_it_back(self):
+        """#536, end to end: a real `window-resized` hook, a real `resize-window`, a real
+        `charter frame-resize` child, and a pane that actually leaves the window and
+        actually comes back.
+
+        Which slots a frame HAD was decided once, at launch — `_drawable_slots` ran against
+        the terminal the frame started in and nothing re-ran it except a density change. So
+        a frame launched at 120 columns and narrowed to 80 kept a `repos` pane whose
+        renderer refuses to draw a table below `statusline._LEFT_W`, leaving a bordered
+        rectangle saying so; and a frame narrowed and then WIDENED never got it back at
+        all, because nothing could un-refuse a slot that had already been dropped.
+
+        Asserted as a pane COUNT and a pane's presence in the window, not as a size:
+        #500/#488 already prove the sizes hold, and every one of those assertions passes
+        just as well against the pane that could not be un-split. The only thing that
+        distinguishes this fix is that the rectangle is gone.
+
+        **Both directions, and the second is why one is not enough.** A resize that only
+        ever removed would pass "the pane is gone"; a resize that only ever added would
+        pass "the pane came back". The frame has to end this test with exactly the panes a
+        launch at its final size would have drawn.
+        """
+        fid = state.frame_id("four-edge-shape", os.getpid())
+        harness_pane, panes = self._spawn_frame(fid)
+        state.record_harness_pane(fid, harness_pane)
+        state.record_panes(fid, panels=panes)
+        state.record_server(fid, SOCKET)
+
+        hook = commands_frame._resize_hook_argv(socket=SOCKET,
+                                                harness_pane=harness_pane, fid=fid)
+        self.assertIsNotNone(hook, "the frame's own id was refused by the hook builder")
+        self.assertEqual(self._run_env(hook).returncode, 0,
+                         "installing the resize hook failed")
+
+        def _panes_now() -> set[str]:
+            out = _tmux("list-panes", "-t", fid, "-F", "#{pane_id}").stdout.split()
+            return set(out)
+
+        def _await_shape(slots: list[str], what: str) -> set[str]:
+            """Wait for the frame's own RECORD to name *slots*, then read the window.
+
+            The record is what `cmd_resize` rewrites LAST (`_apply_arrangement`: relayout,
+            record, bump), so it is the only readiness condition that means the child has
+            finished rather than that its panes happen to exist yet — polling the window
+            alone caught a re-layout mid-flight, with five panes up and the map still
+            naming two.
+            """
+            deadline = time.monotonic() + _DEADLINE
+            while time.monotonic() < deadline and sorted(state.panes(fid)) != sorted(slots):
+                time.sleep(0.1)
+            self.assertEqual(sorted(state.panes(fid)), sorted(slots),
+                             f"{what}: the frame's own record names "
+                             f"{sorted(state.panes(fid))}")
+            seen = _panes_now()
+            self.assertEqual(len(seen), len(slots) + 1,
+                             f"{what}: the record says {sorted(slots)} but the window "
+                             f"holds {sorted(seen)} panes counting the harness")
+            return seen
+
+        self.assertEqual(len(_panes_now()), 5,
+                         "the fixture did not come up with a harness and four panels")
+
+        # Narrow past both boundaries at once: 80 is under `[frame] min-cols` (which drops
+        # `right`) and under `statusline._LEFT_W` (which drops `repos`).
+        self.assertEqual(_tmux("resize-window", "-t", fid,
+                               "-x", "80", "-y", "40").returncode, 0)
+        left = _await_shape(["top", "bottom"],
+                            "a frame narrowed to 80 columns still has the two panes a "
+                            "launch at 80 columns would have refused to draw")
+        self.assertNotIn(panes["repos"], left)
+        self.assertNotIn(panes["right"], left)
+
+        # And back. The panes that come back are NEW ones — `_relayout` splits rather than
+        # un-kills — so this is asserted on the recorded map and the window's own count,
+        # never on the old ids.
+        self.assertEqual(_tmux("resize-window", "-t", fid,
+                               "-x", "160", "-y", "40").returncode, 0)
+        back = _await_shape(["top", "bottom", "repos", "right"],
+                            "a frame widened back to 160 columns never regained the "
+                            "panes it now has room for")
+        for pane in back:
+            self.addCleanup(_kill_pid, self._pane_pid(pane))
 
     def test_a_state_bump_through_the_real_hook_repaints_the_table_and_the_alert_row(self):
         """Closes the gap `PanelIntegration`'s own hook test

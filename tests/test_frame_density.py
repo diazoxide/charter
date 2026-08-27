@@ -65,15 +65,33 @@ class _Tmux:
     only way a test can prove an ORDER of tmux calls.
     """
 
-    def __init__(self, *, size="200:50", new_panes=("%7", "%8", "%9")):
+    def __init__(self, *, size="200:50", new_panes=("%7", "%8", "%9"),
+                 sizes=(), pane_cols=None):
         self.size = size
+        #: Window sizes handed out IN ORDER, one per `#{window_width}` query, the LAST one
+        #: sticking once the list runs out. A window that is still moving is the whole of
+        #: #501, and a fake with one answer cannot express one: `cmd_resize` measures, and
+        #: then asks again immediately before it applies, so a two-element list is a
+        #: terminal that changed size between those two moments — and a terminal that has
+        #: stopped moving keeps answering the size it stopped at, which is why the tail
+        #: sticks rather than reverting to *size*.
+        self.sizes = list(sizes)
+        #: What tmux answers for `#{pane_width}` (#510). ``None`` means "declines to say",
+        #: which is an empty stdout and the case `_variable_pane_cols` falls back to
+        #: `layout.repos_cols`' derivation for — the answer every test written before #510
+        #: was asserting against, so leaving this alone keeps them exercising it.
+        self.pane_cols = pane_cols
         self.new_panes = list(new_panes)
         self.calls: list[list[str]] = []
 
     def __call__(self, action, argv, *, env=None, timeout=None, report=True):
         self.calls.append(list(argv))
         out = ""
-        if "display-message" in argv:
+        if commands_frame._PANE_WIDTH_FORMAT in argv:
+            out = "" if self.pane_cols is None else str(self.pane_cols)
+        elif "display-message" in argv:
+            if self.sizes:
+                self.size = self.sizes.pop(0)
             out = self.size
         elif "split-window" in argv:
             out = self.new_panes.pop(0) if self.new_panes else ""
@@ -1368,8 +1386,21 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         super().setUp()
         self.fid = f"rsz-{_a_dead_pid()}"
         state.record_harness_pane(self.fid, "%0")
-        state.record_panes(self.fid,
-                           panels={"top": "%1", "bottom": "%2", "repos": "%5"})
+        # Every slot this plane's arrangement names, so a resize at the sizes below finds
+        # the frame ALREADY the shape it should be and re-sizes rather than re-lays-out.
+        # #536 made that distinction matter: a map missing `right` is a frame that would
+        # gain a sidebar on its next resize, which is correct behaviour and is not what
+        # this class is about.
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2",
+                                             "repos": "%5", "right": "%3"})
+        # `_relayout_target` asks the real binary otherwise, so a machine with no tmux (or
+        # one too old for `window-resized`) would take a different branch here than CI —
+        # #519's shape exactly. `LiveOverride` above pins its own for the same reason.
+        self.enterContext(mock.patch("charter.frame.tmuxctl.version",
+                                     return_value=(3, 7)))
+        # The settle wait is pinned by `TheShapeWaitsForTheWindowToStop` below and would
+        # otherwise cost this class a real 400ms per shape change.
+        self.enterContext(mock.patch.object(commands_frame, "_SETTLE_SECONDS", 0.0))
         rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
                  "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
                  "change": None, "sigil": "", "current": False, "worktree_count": 0}
@@ -1426,12 +1457,32 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         the two below the harness trade rows with each other and never with it."""
         self.assertEqual(self._heights("200:50"), {"%1": 1, "%2": 1, "%0": 38})
 
-    def test_narrowing_the_terminal_shrinks_the_pane_back_to_its_one_row(self):
+    def test_a_table_pane_that_stays_is_shrunk_to_the_one_row_it_can_draw(self):
         """The panel draws no table below `statusline._LEFT_W`, so every row past the
-        first was blank — and came out of the harness."""
+        first was blank — and came out of the harness.
+
+        **Driven through `_reassert_sizes` rather than `cmd_resize` since #536**, and the
+        change of call site is the fix rather than a convenience: a `cmd_resize` at these
+        widths now removes the pane outright (the test below), so the one-row height is
+        what the SIZING half answers for a table pane that is still there — a re-layout
+        that has not settled yet, a frame whose kill failed, a `[frame] slots` a plane
+        committed by hand. That arithmetic is #500's and it must not rot just because the
+        commonest route to it changed.
+
+        Read back the way `_table_rows` reads it: the window's rows minus every height
+        asserted, minus one border per horizontal pane.
+        """
         for cols in (60, 80, statusline._LEFT_W - 1):
             with self.subTest(cols=cols):
-                self.assertEqual(self._table_rows(f"{cols}:50"), 1)
+                fake = _Tmux(size=f"{cols}:50")
+                panes = {"top": "%1", "bottom": "%2", "repos": "%5"}
+                with mock.patch("charter.frame.tmuxctl.run", side_effect=fake):
+                    commands_frame._reassert_sizes(
+                        "sock", fid=self.fid, panes=panes, harness_pane="%0",
+                        window_cols=cols, window_rows=50)
+                heights = {c[c.index("-t") + 1]: int(c[c.index("-y") + 1])
+                           for c in fake.calls if "resize-pane" in c and "-y" in c}
+                self.assertEqual(50 - sum(heights.values()) - len(heights), 1)
 
     def test_the_density_the_operator_chose_is_read_here_too(self):
         """`cmd_density` and `cmd_resize` are different processes minutes apart, so the
@@ -1469,6 +1520,467 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
                              panels={"top": "%1", "bottom": "%2", "repos": "%5",
                                      "right": "%3"}),
             1 + 6)
+
+
+class _ResizeFixture(PersonaIso, unittest.TestCase):
+    """One running frame at four slots, and one way to drive `charter frame-resize` at it.
+
+    Shared by the three classes below because #591, #510, #501 and #536 are one property
+    said at four call sites — *a pane's geometry comes from the pane, and a decision made
+    from a stale reading is refused rather than applied* — and a second fixture would be a
+    second frame for them to disagree about.
+    """
+
+    #: Every slot this plane's arrangement names, in split order, already drawn. A resize
+    #: at a size that keeps all four therefore finds the frame the shape it should be.
+    PANES = {"top": "%1", "bottom": "%2", "repos": "%5", "right": "%3"}
+
+    def setUp(self):
+        super().setUp()
+        self.fid = f"rsz-{_a_dead_pid()}"
+        state.record_harness_pane(self.fid, "%0")
+        state.record_panes(self.fid, panels=dict(self.PANES))
+        self.enterContext(mock.patch("charter.frame.tmuxctl.version",
+                                     return_value=(3, 7)))
+        self.enterContext(mock.patch.object(commands_frame, "_SETTLE_SECONDS", 0.0))
+        rows = [{"name": f"repo{i}", "branch": "main", "dirty": False,
+                 "tracked_dirty": False, "ahead": 0, "behind": 0, "ci": None,
+                 "change": None, "sigil": "", "current": False, "worktree_count": 0}
+                for i in range(6)]
+        gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
+                               "current_repo": None, "repos": rows, "worktrees": []})
+
+    def _resize(self, **kwargs) -> _Tmux:
+        """Fire one `charter frame-resize` child and hand back what it said to tmux."""
+        fake = _Tmux(**kwargs)
+        with mock.patch("charter.frame.tmuxctl.run", side_effect=fake):
+            self.assertEqual(commands_frame.cmd_resize(SimpleNamespace(frame=self.fid)), 0)
+        return fake
+
+    @staticmethod
+    def _resized(fake: _Tmux) -> list[list[str]]:
+        return [c for c in fake.calls if "resize-pane" in c]
+
+    @staticmethod
+    def _killed(fake: _Tmux) -> list[str]:
+        return [c[c.index("-t") + 1] for c in fake.calls if "kill-pane" in c]
+
+    @staticmethod
+    def _split(fake: _Tmux) -> list[list[str]]:
+        return [c for c in fake.calls if "split-window" in c]
+
+
+class AStaleMeasurementIsRefusedRatherThanApplied(_ResizeFixture):
+    """#501. `window-resized` fires per size change and each event starts its own
+    backgrounded `charter frame-resize`; nothing serialises them and `run-shell -b` gives
+    no completion ordering, so during a drag several children are in flight at once, each
+    holding a measurement from a different instant.
+
+    That is not cosmetic. `bottom`'s height is `min(content, cap)` where the cap is what
+    the window can spare, so a child that measured a TALLER window computes a taller pane;
+    landing after the child that measured the final, shorter one, it hands tmux a size for
+    a window that no longer exists — and tmux does not refuse an over-large `-y`, it grants
+    it out of the neighbour, which is the agent's own session (measured on 3.7c:
+    `resize-pane -y 40` in a 20-row window left the harness pane **1 row tall**).
+
+    Reachable by construction rather than by hand, exactly as #501 said: the fake below
+    answers one window size to the measurement and a different one to the re-read, which is
+    what a second child changing the window underneath this one looks like from in here.
+    """
+
+    def test_a_size_the_window_has_already_left_is_not_applied(self):
+        """The measurement says 50 rows; by the time this child is ready to apply, the
+        window is 22. Nothing may be resized — the change that beat this check fired its
+        own `window-resized`, and that event's child measures the window as it now is."""
+        fake = self._resize(sizes=["200:50", "200:22"])
+        self.assertEqual(self._resized(fake), [],
+                         "a child applied a size for a window it had already been told "
+                         "was gone")
+
+    def test_the_measurement_that_still_matches_is_applied(self):
+        """The control, and it is what makes the assertion above mean anything: the same
+        code path with a window that has NOT moved must still do its whole job, or
+        "nothing was resized" would be satisfied by a `cmd_resize` that had simply stopped
+        working."""
+        fake = self._resize(sizes=["200:50", "200:50"])
+        self.assertTrue(self._resized(fake),
+                        "a stable window was refused too — the check is not a check, it "
+                        "is an off switch")
+
+    def test_a_window_tmux_will_not_report_is_not_guessed_at(self):
+        """The refusal one step earlier. `_window_size` answers `_FALLBACK_SIZE` for a
+        window tmux would not report, which is right for a LAUNCHER — it has to draw
+        something — and wrong here: 80x24 asserted over a window that is very probably not
+        80x24 is the same destructive move as a stale measurement, with less excuse.
+        `_measure_window` says `None` and this child does nothing at all."""
+        fake = self._resize(size="not-a-size")
+        self.assertEqual(self._resized(fake), [])
+        self.assertEqual(self._killed(fake), [])
+
+    def test_the_re_read_happens_before_anything_is_applied_not_after(self):
+        """The ordering the whole fix is. A re-read AFTER the `resize-pane` calls would
+        satisfy every assertion above about the final state while still having applied the
+        stale size first — and tmux takes an over-large height out of the harness the
+        moment it is asked, not when charter finds out it was wrong."""
+        fake = self._resize(sizes=["200:50", "200:50"])
+        window_reads = [i for i, c in enumerate(fake.calls)
+                        if commands_frame._WINDOW_SIZE_FORMAT in c]
+        first_apply = min(i for i, c in enumerate(fake.calls) if "resize-pane" in c)
+        self.assertEqual(len(window_reads), 2,
+                         f"the window was read {len(window_reads)} times, not measured "
+                         f"and then re-read: {fake.calls}")
+        self.assertLess(window_reads[1], first_apply,
+                        "the re-read landed after the sizes had already been applied")
+
+
+class TheTablePaneIsAskedHowWideItIs(_ResizeFixture):
+    """#510. `layout.repos_cols` turns the WINDOW's width into the PANE's by walking the
+    order those panes were split in — correct, and a derivation where a measurement is
+    available: the pane's id is in the recorded map and tmux will answer for it.
+
+    The two part company silently. The order comes off disk as JSON, and `state.panes`
+    validates the VALUES and says nothing about the order, so a truncated write or a hand
+    edit reaches here as a plausible map whose order is fiction; the failure is an
+    over-tall pane re-asserted on every step of a drag with the rows taken off the harness.
+    """
+
+    def test_the_panes_own_width_is_asked_of_tmux_and_beats_the_derivation(self):
+        """The map says the shipped order, in which nothing insets the table — so the
+        derivation says 200 and sizes the pane for all six repos. tmux says the pane is
+        actually 60 columns, which is below `statusline._LEFT_W` and draws no table at
+        all. The measurement wins, and the harness gets the five rows back."""
+        fake = self._resize(size="200:50", pane_cols=60)
+        heights = {c[c.index("-t") + 1]: int(c[c.index("-y") + 1])
+                   for c in self._resized(fake) if "-y" in c}
+        self.assertEqual(50 - sum(heights.values()) - len(heights), 1,
+                         f"the table pane was sized from the derivation, not from the "
+                         f"width tmux reported for it: {heights}")
+
+    def test_a_pane_tmux_will_not_measure_falls_back_to_the_derivation(self):
+        """The launcher cannot measure a pane that does not exist yet, so `repos_cols`
+        stays charter's answer and this is the running frame's version of the same case: a
+        pane that has died between the map being read and this running. Same window, same
+        map, no answer from tmux — the six-repo table comes back."""
+        fake = self._resize(size="200:50", pane_cols=None)
+        heights = {c[c.index("-t") + 1]: int(c[c.index("-y") + 1])
+                   for c in self._resized(fake) if "-y" in c}
+        self.assertEqual(50 - sum(heights.values()) - len(heights), 1 + 6)
+
+    def test_a_zero_is_not_an_answer(self):
+        """`repos_cols` floors at 0 and a pane that has gone away can report one. Telling
+        `repos_rows_wanted` the table has no room at all would floor the pane at one row
+        for a reason that is a read failure rather than a geometry."""
+        fake = self._resize(size="200:50", pane_cols=0)
+        heights = {c[c.index("-t") + 1]: int(c[c.index("-y") + 1])
+                   for c in self._resized(fake) if "-y" in c}
+        self.assertEqual(50 - sum(heights.values()) - len(heights), 1 + 6)
+
+    def test_the_side_panels_width_lands_before_the_pane_is_measured(self):
+        """**The order is the whole of why the measurement can be trusted, and it was
+        measured rather than reasoned.** tmux redistributes every pane proportionally on a
+        window resize, so a sidebar mid-drag is not 22 columns wide and the pane beside it
+        is not the width it is about to be: on tmux 3.7c a 120x40 frame with `right` split
+        first, grown to 200x40, came back with `right` at **62** columns and the table pane
+        reading **137** — where the truth, one `resize-pane -x 22` later, is **177**.
+        Measuring first would have been worse than deriving. So the columns are applied,
+        and only then is the pane asked."""
+        fake = self._resize(size="200:50", pane_cols=177)
+        first_x = min(i for i, c in enumerate(fake.calls)
+                      if "resize-pane" in c and "-x" in c)
+        measured = min(i for i, c in enumerate(fake.calls)
+                       if commands_frame._PANE_WIDTH_FORMAT in c)
+        self.assertLess(first_x, measured,
+                        "the table pane was measured while the sidebar was still "
+                        "wherever tmux's proportional redistribution had left it")
+
+    def test_the_rows_land_after_the_measurement(self):
+        """The other half of the same order: a height computed from the measured width is
+        worth nothing if it was asserted before the width was known."""
+        fake = self._resize(size="200:50", pane_cols=60)
+        measured = min(i for i, c in enumerate(fake.calls)
+                       if commands_frame._PANE_WIDTH_FORMAT in c)
+        first_y = min(i for i, c in enumerate(fake.calls)
+                      if "resize-pane" in c and "-y" in c)
+        self.assertLess(measured, first_y)
+
+
+class TheMeasurementsOwnRefusals(PersonaIso, unittest.TestCase):
+    """`_variable_pane_cols`, asked directly rather than through `cmd_resize`.
+
+    `tools/sweep.py` found two survivors sitting inside this one function and said the
+    thing that matters about them: two guards in sequence mask each other, so neither is
+    safe to call equivalent on its own. Both were reachable only through `cmd_resize`,
+    where a later filter happened to catch what an earlier one let past. Each is asked its
+    own question here.
+    """
+
+    _PANES = {"top": "%1", "bottom": "%2", "repos": "%5"}
+
+    def _cols(self, *, returncode=0, stdout="", panes=None) -> tuple[int, list[list[str]]]:
+        calls: list[list[str]] = []
+
+        def fake(action, argv, *, env=None, timeout=None, report=True):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
+
+        with mock.patch("charter.frame.tmuxctl.run", side_effect=fake):
+            got = commands_frame._variable_pane_cols(
+                "sock", panes=dict(self._PANES if panes is None else panes),
+                window_cols=200)
+        return got, calls
+
+    def test_tmuxs_answer_is_the_answer(self):
+        """The control. Without it every refusal below is satisfied by a function that
+        never believes tmux at all."""
+        self.assertEqual(self._cols(stdout="87\n")[0], 87)
+
+    def test_a_failure_whose_stdout_still_parses_is_not_an_answer(self):
+        """The `out.returncode == 0` half, which `cols.isdigit()` looks like it already
+        covers and does not. `tmuxctl.run` folds a TIMEOUT into a return code
+        (`tmuxctl.TIMED_OUT`) and hands back whatever the killed process had already
+        written — so a partial read is a failure whose stdout is a perfectly good number.
+        Believing it sizes the table pane from a truncated measurement."""
+        self.assertEqual(self._cols(returncode=1, stdout="6")[0], 200,
+                         "a failed `display-message` was believed because its stdout "
+                         "happened to parse")
+
+    def test_a_zero_is_not_an_answer(self):
+        self.assertEqual(self._cols(stdout="0")[0], 200)
+
+    def test_nothing_at_all_is_not_an_answer(self):
+        self.assertEqual(self._cols(stdout="")[0], 200)
+
+    def test_a_recorded_pane_id_that_is_not_tmuxs_own_shape_never_reaches_a_target(self):
+        """#475's rule on the one value this path reads off disk. `state.panes` is JSON in
+        the frame's own state directory and it validates that a value is a STRING, not
+        that it is a pane — `%1;kill-server` is a string. The guard is asserted on what was
+        ISSUED rather than on the number that came back, because the derivation is the
+        answer either way: a version that skipped the check would return 200 too, having
+        first handed that text to tmux."""
+        got, calls = self._cols(stdout="87",
+                                panes={"top": "%1", "repos": "%1;kill-server"})
+        self.assertEqual(got, 200)
+        self.assertEqual([c for c in calls if "display-message" in c], [],
+                         f"a pane id off disk was used as a `-t` without ever having "
+                         f"tmux's own shape: {calls}")
+
+    def test_a_frame_with_no_variable_row_pane_asks_nothing(self):
+        """A `[frame] slots` without `repos` — an ordinary frame, and the launcher's own
+        case. There is nothing to measure, so nothing is measured and the derivation
+        answers for a pane that would be split rather than one that is."""
+        got, calls = self._cols(stdout="87", panes={"top": "%1", "bottom": "%2"})
+        self.assertEqual(got, 200)
+        self.assertEqual(calls, [])
+
+
+class AResizeAddsAndRemovesPanesNotOnlySizesThem(_ResizeFixture):
+    """#536. Which slots a frame HAD was decided once, at launch: `_drawable_slots` ran
+    against the terminal the frame started in and only a density change re-ran it. So a
+    frame launched at 200 columns and dragged to 80 kept a sidebar the same frame would
+    have refused to draw had it started there, and a frame launched at 80 and widened to
+    200 never gained one — the repo table's pane saying `⋯ too narrow for the repo table`
+    is #515 being honest about a pane it could not un-split.
+    """
+
+    def test_narrowing_past_the_table_width_removes_the_pane_rather_than_shrinking_it(self):
+        """`layout.visible_slots` drops `repos` below `statusline._LEFT_W` and `right`
+        below `[frame] min-cols`, because a pane too narrow for the table is a bordered
+        rectangle that reads as "this workspace has no repos" on a plane that has six. A
+        LAUNCH at 80 columns already got that right; this is the drag getting it right."""
+        fake = self._resize(size="80:50")
+        self.assertEqual(sorted(self._killed(fake)), ["%3", "%5"],
+                         f"the panes a launch at this size would not have drawn are still "
+                         f"there: {fake.calls}")
+
+    def test_widening_gains_the_pane_a_launch_at_that_size_would_have_had(self):
+        """The direction that was strictly worse, because nothing at all brought it back:
+        a frame launched narrow and then widened had to be relaunched, or sent through the
+        F2 palette, to get the panes it now had room for."""
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        fake = self._resize(size="200:50")
+        split = [c for c in self._split(fake)]
+        self.assertEqual(len(split), 2,
+                         f"a widened frame did not gain the two panes it now has room "
+                         f"for: {fake.calls}")
+
+    def test_a_size_that_changes_nothing_moves_no_panes_at_all(self):
+        """The control this whole class needs, and the property that keeps a drag cheap:
+        every step of a drag that does not cross a boundary must be a re-SIZE and nothing
+        else. A `cmd_resize` that killed and re-split at each step would spend a
+        `charter panel` process, a cold charter import and one of three respawn lives per
+        step."""
+        fake = self._resize(size="200:50")
+        self.assertEqual(self._killed(fake), [])
+        self.assertEqual(self._split(fake), [])
+        self.assertTrue(self._resized(fake))
+
+    def test_the_last_pane_is_never_dropped(self):
+        """Below half the size floors `layout.visible_slots` answers `[]`, and a
+        `_relayout` with nothing left makes `_install_resize_hook` REMOVE the
+        `window-resized` hook — correctly, and it is a one-way door reached from here: the
+        hook is the only thing that would notice the terminal being widened again. So this
+        frame keeps what it has at that size, exactly as it did before #536, and the
+        operator who wants nothing drawn has a keypress that says so."""
+        self.assertEqual(commands_frame._drawable_slots(
+            40, 8, commands_frame._visible_now(self.fid, config.FRAME)), [],
+            "this window is not below the floors — the case is not being exercised")
+        fake = self._resize(size="40:8")
+        self.assertEqual(self._killed(fake), [],
+                         "a resize killed the last pane, and with it the hook that would "
+                         "have brought any of them back")
+
+    def test_a_panel_the_operator_hid_is_not_brought_back_by_a_resize(self):
+        """The recompute starts from this frame's own arrangement minus its own hidden set
+        (`_visible_now`), never from `config.FRAME["slots"]`. Recomputing from the config
+        would put a panel the operator toggled off back on screen on their next terminal
+        drag — a resize silently undoing a keypress."""
+        state.record_hidden(self.fid, ["right", "repos"])
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        fake = self._resize(size="200:50")
+        self.assertEqual(self._split(fake), [],
+                         f"a resize re-split panels the operator had hidden: {fake.calls}")
+
+    def test_the_density_the_operator_chose_survives_a_resize_too(self):
+        """The same property reached through the other key. A `minimal` frame is `top` and
+        `bottom` and nothing else; a resize must not grow it back to `full` merely because
+        the terminal is wide enough for one."""
+        state.record_density(self.fid, "minimal")
+        state.record_hidden(self.fid, [n for n in instance.frame_arrangement(config.FRAME)
+                                       if n not in instance.density_slots("minimal")])
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        fake = self._resize(size="200:50")
+        self.assertEqual(self._split(fake), [])
+
+
+class TheShapeWaitsForTheWindowToStop(_ResizeFixture):
+    """#536's second half, and it is #501's mechanism used for a slower question.
+
+    Re-applying a size out of order is self-correcting: the next event fixes it. Killing
+    and re-splitting panes out of order is not — each split is a new interpreter, a cold
+    charter import and a first paint, and it spends one of the three lives
+    `_arm_panel_respawn` gives that pane. So a drag through the width where the table stops
+    fitting must not thrash panes in and out at every step of it.
+
+    There is no timer here and no state to debounce with: `notify._last` works because one
+    process makes every call, and every one of these children is its own `run-shell -b`
+    process. What they share is the window, so a child that wants to change the shape
+    sleeps and then asks whether the window is still where it was. The one the drag
+    actually ended on is the only one that gets a yes.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Undo the fixture's own zero — this class is what pins the wait, so it has to be
+        # the real mechanism being exercised, only faster than 400ms.
+        self.enterContext(mock.patch.object(commands_frame, "_SETTLE_SECONDS", 0.0))
+
+    def test_a_window_still_moving_moves_no_panes(self):
+        """Two sizes: the one this child measured, and the one the window is by the time
+        the wait is over. Both are narrow enough to want the table pane gone, so a version
+        that killed on the first measurement alone would still look right in the final
+        state — hence the assertion is on what was ISSUED, not on what was wanted."""
+        fake = self._resize(sizes=["80:50", "70:50"])
+        self.assertEqual(self._killed(fake), [],
+                         f"panes were killed for a window the drag had already left: "
+                         f"{fake.calls}")
+
+    def test_the_window_the_drag_ended_on_is_the_one_that_gets_acted_on(self):
+        """The control. The same two-read path with a window that settled must do the
+        whole job, or "nothing was killed" above is satisfied by a mechanism that never
+        acts at all."""
+        fake = self._resize(sizes=["80:50", "80:50"])
+        self.assertEqual(sorted(self._killed(fake)), ["%3", "%5"])
+
+    def test_the_layout_uses_the_measurement_that_settled_not_a_fresh_one(self):
+        """The last place a third reading could sneak in, and `tools/sweep.py` found it:
+        `_apply_arrangement` takes the window it is to lay out for, and collapsing that to
+        its own `_window_size` call left every other test green.
+
+        It is the same defect as #501 one layer up. This child measured 200x50, waited, and
+        confirmed 200x50 — that is the window the decision was made from and the only one it
+        may be applied to. A `_apply_arrangement` that measured again would get whatever the
+        window happens to be at that instant, and act on a size nothing checked: three
+        answers here, and the third is a terminal that has moved to 80 columns, where
+        `_drawable_slots` wants two panes rather than four. Asserted on the SPLITS, because
+        the two readings disagree about exactly which panes this frame should have.
+        """
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+        fake = self._resize(sizes=["200:50", "200:50", "80:50"])
+        self.assertEqual(len(self._split(fake)), 2,
+                         f"the re-layout was laid out for a window nobody checked — the "
+                         f"settled 200x50 measurement was thrown away: {fake.calls}")
+
+    def test_the_wait_is_actually_waited(self):
+        """`_SETTLE_SECONDS` is patched to zero everywhere above, which is exactly the
+        shape of a settle that has been accidentally deleted. This asserts the sleep is
+        reached — with the real constant's own value, and only on the path that changes
+        the frame's shape."""
+        slept: list[float] = []
+        with mock.patch.object(commands_frame, "_SETTLE_SECONDS", 0.25), \
+             mock.patch("charter.commands_frame.time.sleep", slept.append):
+            self._resize(size="80:50")
+        self.assertEqual(slept, [0.25])
+
+    def test_a_resize_that_changes_no_panes_never_waits(self):
+        """The cost bound. A drag that stays on one side of every boundary is the ordinary
+        case and must pay nothing for a mechanism it does not use — otherwise every step
+        of every drag leaves a sleeping interpreter behind for the length of the wait."""
+        slept: list[float] = []
+        with mock.patch("charter.commands_frame.time.sleep", slept.append):
+            self._resize(size="200:50")
+        self.assertEqual(slept, [])
+
+    def test_a_frame_already_the_shape_its_operator_asked_for_never_waits_either(self):
+        """The same bound, for the frame where "what this shows" and "what the config
+        says" differ — which is every frame whose operator has pressed a key.
+
+        Hand-mutating found this: computing `want` from `config.FRAME["slots"]` while
+        `_apply_arrangement` still got `_visible_now`'s answer left every geometry
+        assertion green, because the re-layout laid out the right thing. All it cost was a
+        settle wait and a version bump on a resize with nothing to do — which is invisible
+        in the final state and is exactly the "a second line hides the consequence" shape.
+        A hidden `right` with the other three drawn is a frame that IS its own shape, so a
+        resize must decide that in the same breath it decides what to lay out.
+        """
+        state.record_hidden(self.fid, ["right"])
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2", "repos": "%5"})
+        slept: list[float] = []
+        with mock.patch("charter.commands_frame.time.sleep", slept.append):
+            fake = self._resize(size="200:50")
+        self.assertEqual(slept, [],
+                         "a frame already showing exactly what its operator asked for "
+                         "waited out a settle to change nothing")
+        self.assertEqual(self._split(fake), [])
+        self.assertEqual(self._killed(fake), [])
+
+
+class TheSettleIsLongEnoughToBeOne(unittest.TestCase):
+    """`_SETTLE_SECONDS`' own VALUE, which every test that exercises the settle patches
+    away and therefore cannot see: set it to `0.0` and `TheShapeWaitsForTheWindowToStop`
+    above stays entirely green while the mechanism is gone. Found by hand-mutating the
+    constant — `tools/sweep.py` has no operator for a number (#569).
+
+    Deliberately a bare `TestCase` with no fixture at all: any class that drives
+    `cmd_resize` has to patch this constant to stay fast, and a test reading a constant its
+    own `setUp` replaced is asserting against the patch.
+    """
+
+    def test_the_wait_clears_one_measured_re_layout(self):
+        """A re-layout's own tmux command list — two `set -p pane-died`, two
+        `split-window`s, the `window-resized` hook, the window and pane measurements, four
+        `resize-pane`s and a `select-pane` — was measured at a **median 72ms over 5 runs**
+        on tmux 3.7c, and that is before either new panel's cold charter import and first
+        paint. A wait under that lets one crossing of the boundary land inside the last
+        one, which is the pane-thrash this mechanism exists to prevent."""
+        self.assertGreater(commands_frame._SETTLE_SECONDS, 0.072,
+                           "the settle is shorter than one measured re-layout — a second "
+                           "crossing of the boundary lands inside the first")
+
+    def test_the_wait_is_not_long_enough_to_read_as_a_missed_resize(self):
+        """The ceiling, and it is the other failure rather than tidiness: the panes do not
+        move until this elapses, so a settle an operator can sit through reads as the frame
+        having ignored their resize."""
+        self.assertLessEqual(commands_frame._SETTLE_SECONDS, 1.0)
 
 
 class DensityIsWiredIntoTheCli(unittest.TestCase):
