@@ -996,6 +996,35 @@ class TheOperatorsCredentialStoreIsNeverReached(unittest.TestCase):
         self.assertFalse(self.marker.exists(), "refused, and yet it ran")
         self.assertIn("REFUSED", str(caught.exception))
 
+    def test_a_path_object_as_the_whole_command_is_refused(self):
+        """`Popen` accepts one path-like as the entire command, and it is not iterable —
+        so the branch that normalises it is the difference between recognising this and
+        answering "not a credential CLI" for something that is about to run `op`."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            subprocess.Popen(Path(self.dir / "op"))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_bare_string_as_the_whole_command_is_refused(self):
+        """Without `shell=True` a string is one program name and no arguments — a
+        different branch from the shell case below, and from the argv list above."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            subprocess.Popen(str(self.dir / "op"))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_command_that_is_all_wrapper_leaves_no_program_to_name(self):
+        """`Popen(["env"])` really runs `env`, and `_launcher_argv` strips the wrapper —
+        so what reaches the name check is an EMPTY argv. Not a hypothetical branch: the
+        guard runs on every spawn in the suite, and one that indexed `argv[0]` here would
+        turn an ordinary command into an `IndexError` raised from inside a tripwire."""
+        p = subprocess.run(["env"], capture_output=True)
+        self.assertEqual(p.returncode, 0)
+
+    def test_a_spawn_with_no_command_at_all_is_left_to_subprocess(self):
+        """Asked of the decision function directly, because `Popen(None)` never gets far
+        enough to prove anything: the guard must decline rather than raise a `TypeError`
+        of its own from inside somebody else's spawn."""
+        self.assertIsNone(_planeguard._reaches_a_credential_cli(None, {}))
+
     def test_a_bare_name_on_the_path_is_refused_too(self):
         """How charter actually spells it: `onepassword._argv` builds `["op", …]` and
         lets `$PATH` resolve it, so a guard that only recognised full paths would miss

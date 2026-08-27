@@ -467,15 +467,23 @@ def _reaches_a_credential_cli(args, opts: dict) -> tuple[list[str], str] | None:
     that is free and `env VAR=x op read …` is a shape a test could plausibly write, and the
     program name is resolved through `_program_names` so a path or a symlink cannot walk
     past a basename compare.
+
+    **Every branch below is one a test drives**, which is the other half of that asymmetry.
+    The first version of this function copied `_charter_argv`'s full defensive shape — a
+    ``None`` from `_decoded`, an empty *parts*, a `TypeError` from iterating *args* — and
+    the sweep found nine of those unreachable: `_decoded` answers ``None`` only for a value
+    that is neither `str`, `bytes` nor `PathLike`, and `os.fsdecode`'s surrogateescape
+    means it cannot fail on the two spellings that reach it here. An unreachable guard is
+    dead code wearing a guard's clothes, and this file's own doctrine — no suppression
+    list, "equivalent mutant" and "dead code" are the same finding — applies to it.
     """
-    if not _VAULT_CLIS or args is None:
+    if args is None:
         return None
     if isinstance(args, os.PathLike):
         args = os.fspath(args)
     if isinstance(args, (str, bytes)):
         command = _decoded(args)
-        parts = [command] if command is not None else None
-        if parts and opts.get("shell"):
+        if opts.get("shell"):
             # ``shell=True`` hands the whole string to ``/bin/sh -c``. Splitting it is the
             # shell's job and `shlex` is only an approximation of it, so a string that will
             # not tokenize is answered "not a credential CLI" rather than guessed at —
@@ -485,17 +493,14 @@ def _reaches_a_credential_cli(args, opts: dict) -> tuple[list[str], str] | None:
                 parts = shlex.split(command)
             except ValueError:
                 return None
+        else:
+            parts = [command]
     else:
-        try:
-            parts = [_decoded(a) for a in args]
-        except TypeError:
-            return None
-        if any(p is None for p in parts):
-            return None
-    if not parts:
-        return None
+        parts = [_decoded(a) for a in args]
     argv, _consumed = _launcher_argv(parts)
     if not argv:
+        # A command line that is ALL wrapper — `Popen(["env"])` is the ordinary one — has
+        # no program left to name. Reached on every such spawn, not a hypothetical.
         return None
     for name in _program_names(argv[0], opts.get("cwd"), opts.get("env")):
         if name in _VAULT_CLIS:

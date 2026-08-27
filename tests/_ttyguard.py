@@ -165,6 +165,35 @@ def ambient() -> dict[str, bool]:
     return dict(_AMBIENT)
 
 
+def says_it_is_a_terminal(stream) -> bool:
+    """Whether *stream* claims to be a terminal — ``False`` for one that cannot say.
+
+    A stream that raises when asked is not a terminal for any purpose here, and a guard
+    that raised while INSTALLING would take the suite down at import — before any test
+    exists to name in the traceback. Reachable: a closed stream raises `ValueError`, and
+    under some runners `sys.stdout` is not a file object at all.
+    """
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def answer_not_a_terminal(stream) -> bool:
+    """Make *stream* report ``isatty()`` false. ``False`` if it will not take the answer.
+
+    Every stream CPython hands a `python -m unittest` run accepts this, so the fallback is
+    for the runner that does not — a C-level object with no instance dictionary raises
+    `AttributeError`, and one with a read-only slot raises `TypeError`. Answering two
+    streams and failing on the third is strictly better than answering none.
+    """
+    try:
+        stream.isatty = lambda: False
+    except (AttributeError, TypeError):
+        return False
+    return True
+
+
 def install() -> None:
     """Answer for all three streams, and arm the stdin refusal per test. Idempotent.
 
@@ -179,13 +208,7 @@ def install() -> None:
     _installed = True
 
     for name in ("stdin", "stdout", "stderr"):
-        stream = getattr(sys, name, None)
-        try:
-            _AMBIENT[name] = bool(stream.isatty())
-        except (AttributeError, OSError, ValueError):
-            # A stream that cannot answer is not a terminal for any purpose here, and a
-            # guard that raised while installing would take the suite down at import.
-            _AMBIENT[name] = False
+        _AMBIENT[name] = says_it_is_a_terminal(getattr(sys, name, None))
 
     # A REAL file object, not a stub: `fileno()`, `read()`, `buffer` and `close()` all have
     # to keep working, because tests hand stdin to subprocesses and to `input()`. `devnull`
@@ -196,10 +219,7 @@ def install() -> None:
     sys.stdin = _STDIN
 
     for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.isatty = lambda: False
-        except (AttributeError, TypeError):     # pragma: no cover - not seen on CPython
-            pass
+        answer_not_a_terminal(stream)
 
     original_run = unittest.TestCase.run
 

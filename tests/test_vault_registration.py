@@ -60,37 +60,41 @@ from tests._isolation import PersonaIso
 _HERMETIC_GIT = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
 
 
+#: What `op` writes for an item that is not there. charter deliberately does not match on
+#: this text — absence is PROVEN by a successful listing (#322) — so nothing depends on its
+#: wording. Copied from `test_op_reads_the_item_once.py`, which recorded it against
+#: op 2.34.0.
+_NO_SUCH_ITEM = '[ERROR] 2026/08/20 11:02:31 "charter-devops" isn\'t an item.'
+
+
 class _FakeOp:
-    """Stands in for the `op` CLI, for a vault that has just been registered.
+    """`op`, for the one vault state `cmd_vault_add` can ever be looking at: a vault that
+    was registered a moment ago and whose item therefore does not exist yet.
 
     Deliberately the smallest fake that answers `health()` — the only path `cmd_vault_add`
-    reaches — rather than a sixth full model of `op`. `health()` asks `keys()`, which is
-    one `item get`; a failed `item get` is followed by an `item list` to decide whether the
-    item is absent or merely unreadable (#322), so both are answered. Every value below is
-    an inert fixture string; there is no 1Password vault on this machine to record one
-    from, and nothing here asserts on one.
+    reaches — rather than a sixth full model of `op`. Modelling the item as ABSENT is what
+    makes both of its branches live: `keys()` makes one `item get`, which fails, and a
+    failed `item get` is followed by an `item list` because a vault charter could not read
+    is not a vault with no secrets (#322). A fake whose `item get` succeeded would leave
+    the listing unreachable, and a fake with an unreachable branch is a fake nobody can
+    tell is still right.
+
+    Anything else asked of it is an error rather than a bland success: a silent
+    ``returncode=0, stdout=""`` is how a fake starts answering a question it does not
+    model, and `op`'s callers read empty output as data.
     """
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
-        #: Titles the fake vault holds. Filled from whatever item was last asked for, so
-        #: `_legacy_items` — which matches on `charter-<vault>-` — is answered about the
-        #: item under test rather than about a name this fake invented.
-        self.titles: list[str] = []
 
     def __call__(self, argv, input=None, **kw):
         self.calls.append(list(argv))
-        bare = [a for a in argv if not a.startswith("--")]
-        if bare[:3] == ["op", "item", "get"]:
-            title = bare[3] if len(bare) > 3 else "charter-devops"
-            if title not in self.titles:
-                self.titles.append(title)
-            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({
-                "id": "itm1", "title": title, "category": "PASSWORD", "fields": []}))
-        if bare[:3] == ["op", "item", "list"]:
-            return SimpleNamespace(returncode=0, stderr="",
-                                   stdout=json.dumps([{"title": t} for t in self.titles]))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if argv[1:3] == ["item", "get"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr=_NO_SUCH_ITEM)
+        if argv[1:3] == ["item", "list"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([]), stderr="")
+        raise AssertionError(f"the fake `op` was asked for something `cmd_vault_add` does "
+                             f"not do: {argv}")
 
 
 def _no_real_op(case) -> _FakeOp:
@@ -178,6 +182,15 @@ class RegisteringOverAnExistingName(VaultRegistrationCase):
         self.assertIn("no secrets yet in item 'charter-devops'", out)
         self.assertNotIn("not on PATH", out)
         self.assertTrue(self.op.calls, "the fake was never reached")
+
+    def test_the_op_stub_answers_for_op_and_for_nothing_else(self):
+        """`shutil.which` is patched on the MODULE object, so the stub is global for the
+        duration of every case here — `charter.util.run`, `doctor` and anything else that
+        asks goes through it. Answering every name would put a different lie in place of
+        the one it removes, which is why the stub is a conditional and not a constant."""
+        import shutil as _sh
+        self.assertEqual(_sh.which("op"), "/usr/local/bin/op")
+        self.assertIsNone(_sh.which("charter-definitely-not-a-real-binary-xyz"))
 
     def test_force_does_not_migrate_and_says_so(self):
         """`--force` is an override, not a migration. Moving secrets between providers is

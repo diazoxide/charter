@@ -124,6 +124,41 @@ class TheGuardIsNotBlind(unittest.TestCase):
         self.assertTrue(issubclass(_ttyguard.AmbientTerminalRead, BaseException))
         self.assertFalse(issubclass(_ttyguard.AmbientTerminalRead, Exception))
 
+    def test_a_read_outside_any_test_is_answered_rather_than_refused(self):
+        """Disarmed outside a test, for `_envguard`'s reason: module import happens before
+        anything could declare, and a tripwire that fired there would refuse the suite's
+        own boot rather than name a test. Move one has already made those reads
+        deterministic; only the loudness waits for a test to be running."""
+        with mock.patch.object(_ttyguard, "_active", False):
+            self.assertFalse(sys.stdin.isatty())
+
+    def test_installing_twice_does_not_replace_the_stream_a_test_may_have_pinned(self):
+        """`install()` is idempotent because it is reachable twice — `tests` can be
+        imported by a child process that also imports a test module. A second install
+        would hand out a NEW stdin, silently discarding whatever a running test had
+        patched onto the old one."""
+        before = sys.stdin
+        _ttyguard.install()
+        self.assertIs(sys.stdin, before)
+
+    def test_a_stream_that_cannot_answer_is_not_a_terminal(self):
+        """Install must not be the thing that breaks the run: a closed stream raises
+        `ValueError` from `isatty()`, and under some runners `sys.stdout` is not a file
+        object at all."""
+        class _Closed:
+            def isatty(self):
+                raise ValueError("I/O operation on closed file")
+
+        self.assertFalse(_ttyguard.says_it_is_a_terminal(_Closed()))
+        self.assertFalse(_ttyguard.says_it_is_a_terminal(None))
+        self.assertTrue(_ttyguard.says_it_is_a_terminal(SimpleNamespace(isatty=lambda: 1)))
+
+    def test_a_stream_that_will_not_take_the_answer_costs_only_itself(self):
+        """Answering two streams and failing on the third beats answering none — so the
+        refusal is reported rather than raised."""
+        self.assertTrue(_ttyguard.answer_not_a_terminal(SimpleNamespace()))
+        self.assertFalse(_ttyguard.answer_not_a_terminal(object()))
+
     def test_stdout_is_deliberately_not_refused(self):
         """The boundary, stated as a test rather than only as prose. Answering every
         stream is what makes the suite machine-independent; LOUDNESS is spent only on the
