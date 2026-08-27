@@ -37,6 +37,12 @@ os.makedirs(os.environ["CODEX_HOME"], exist_ok=True)
 # on charter's own workspace picker, forever, whenever the suite was run from a terminal
 # (#545). See `tests/_ttyguard.py`: all three streams now answer what CI answers, and a
 # test that wants a different answer for stdin has to say so.
+#
+# The same module answers how WIDE they are, which is the same fixture one question along:
+# `os.get_terminal_size()` is an ioctl on this process's stdout, and removing `$COLUMNS`
+# from the environment only moves `tui.term_width`'s reading onto it. Measured with both
+# geometry variables already unset: three modules give three failures and an error on a
+# 40-column pty and pass on a 200-column one (#544).
 from . import _ttyguard      # noqa: E402  (imports no charter module, by design)
 
 _ttyguard.install()
@@ -61,3 +67,14 @@ _envguard.install()
 from . import _planeguard      # noqa: E402  (env above must be set before charter loads)
 
 _planeguard.install()
+
+# And the one thing no guard can prevent, only clean up after: a run that was KILLED.
+# Measured — a `kill -9` two seconds into `test_frame_overlay_escape_hatch` leaves a live
+# tmux server and its socket file behind, because the signal skips every `addCleanup`
+# there is. 14 such servers and 497 stale socket files were on this machine when #564 was
+# fixed. This runs at START, which is the only moment that can clean up after a run that
+# had no exit — and it touches nothing whose pid is still alive, so a concurrent run is
+# safe.
+from . import _tmuxreap      # noqa: E402
+
+_tmuxreap.install()

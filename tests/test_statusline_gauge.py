@@ -17,7 +17,8 @@ from unittest import mock
 
 from charter import config, statusline
 from tests import _envguard
-from tests._isolation import PersonaIso, isolate_state_dir, pin_update_channel
+from tests._isolation import (PersonaIso, isolate_state_dir, no_background_refresh,
+                              pin_update_channel)
 
 
 def _plain(parts):
@@ -62,8 +63,7 @@ class ContextGaugeCase(unittest.TestCase):
         # against it, and `tests._planeguard.RealPlaneSpawn` refuses that outright (#527).
         # In `setUp` rather than in the one case that first needed it: three of the cases
         # below call `render`, and the precaution had been remembered in exactly one.
-        from charter import update
-        self.enterContext(mock.patch.object(update, "maybe_spawn", lambda: None))
+        no_background_refresh(self)
 
     def test_shows_context_percentage(self):
         self.assertIn("ctx 37%", _plain(statusline._context_gauge(_payload(pct=37.4))))

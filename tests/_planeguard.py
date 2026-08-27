@@ -132,6 +132,30 @@ next one. It is checked BEFORE the plane question and without waiting on :data:`
 because reading somebody's credential store is wrong on a machine with no control plane at
 all. Which CLIs count is asked of `reference._RESOLVERS` — production's own scheme table —
 so a provider added there is covered on the commit that adds it.
+
+**The fifth, and the other half of the measurement above:
+:class:`BackgroundCharterChild`.** #527 answered WHICH plane a spawned charter lands on;
+it did not answer HOW MANY a unit test forks. Counted in-process on one green run at
+b3dbd54 — by wrapping `Popen.__init__` before this package is imported, because a
+``ps | grep`` of a running suite matches its own command line — the answer was 66 detached
+charter children: 27 ``charter _version-check``, each of them a GET to PyPI, 36 ``charter
+gl-refresh``, each running the forge client over every clone in the workspace, and 3
+``charter frame-gather``. All correctly planed, none waited for, none asserted about. On a
+sweep that runs the suite once per mutation, 27 becomes thousands.
+
+They fire in a test and almost never on a real machine for the same reason a temp plane is
+an isolated one: both spawners are throttled by state in `config.STATE_DIR`, and
+`PersonaIso` hands every case a fresh one — so the cache is always absent and the cooldown
+lock never exists. Six modules stubbed the spawner by hand because of it; twelve did not.
+
+The refusal is at the FORK rather than at the spawner, and that is what keeps it from
+being the stub it replaces. A `PersonaIso` that stubbed `update.maybe_spawn` and
+`glstate.maybe_spawn` would silently swallow `test_glstate_respawn`'s "must not raise"
+cases and every case written after it. Refusing the `start_new_session=True` `Popen`
+leaves all of them running their throttle logic and asserting on it, and refuses only the
+part nobody was asserting about. `tests._isolation.no_background_refresh` is the way out
+for a case that never wanted a child, :func:`allow_background_children` for the one that
+did.
 """
 
 from __future__ import annotations
@@ -391,6 +415,10 @@ class RealPlaneSpawn(BaseException):
 
 class RealVaultReach(BaseException):
     """A test spawned the CLI that reads the developer's own credential store."""
+
+
+class BackgroundCharterChild(BaseException):
+    """A test forked a detached charter the test itself will never wait for."""
 
 
 _VAULT_CLIS: frozenset[str] = frozenset()
@@ -1086,6 +1114,57 @@ def _explain_spawn(parts: list[str], plane) -> str:
         f"the tree — `test_no_test_reads_the_operators_shell` does exactly that.")
 
 
+#: Whether the case now running has said it wants real detached charter children. Set by
+#: :func:`allow_background_children`, which restores the previous value when the case ends.
+_BACKGROUND_ALLOWED = False
+
+
+def allow_background_children(case) -> None:
+    """Declare that *case* means to fork a real detached charter, and let it.
+
+    The way out :class:`BackgroundCharterChild` names, for the handful of cases that are
+    ABOUT the fork rather than merely downstream of one — a test measuring that
+    `glstate.maybe_spawn` records the child's pid, say, which needs a pid that exists.
+
+    Scoped to the case and restored on its cleanup, the shape `_isolation.isolate_state_dir`
+    and `pin_update_channel` already use. A module-level switch would have the same problem
+    a module-level `maybe_spawn` stub has: it silently covers the cases written after it.
+    """
+    global _BACKGROUND_ALLOWED
+    previous = _BACKGROUND_ALLOWED
+    _BACKGROUND_ALLOWED = True
+
+    def restore() -> None:
+        global _BACKGROUND_ALLOWED
+        _BACKGROUND_ALLOWED = previous
+
+    case.addCleanup(restore)
+
+
+def _explain_background(parts: list[str]) -> str:
+    return (
+        f"REFUSED: forking a detached charter child from a test\n"
+        f"{_current_test()} is about to fork `{' '.join(parts)}` with "
+        f"`start_new_session=True` — charter's own shape for \"a child that outlives this "
+        f"process\" (`util.detach_self`, `update.maybe_spawn`, `glstate.maybe_spawn`). "
+        f"Nothing in this test waits for it, so whatever it does happens after the test is "
+        f"over and cannot be asserted on: `_version-check` is a GET to PyPI (and a second "
+        f"to GitHub on a dev plane) and `gl-refresh` runs the forge client for every clone "
+        f"in the workspace. Measured on one green run at b3dbd54: 27 `_version-check` and "
+        f"36 `gl-refresh` children, 66 detached charter children in total, none of them "
+        f"waited for and none of them asserted about (#542).\n"
+        f"They fire here and almost never in real use for the same reason a temp plane is "
+        f"an isolated one: both spawners are throttled by state in `config.STATE_DIR`, and "
+        f"a fresh one has no cache to be fresh and no cooldown lock to hold. Two ways "
+        f"out:\n"
+        f"  - if the test is not about the fork, stop the spawner rather than the fork: "
+        f"`tests._isolation.no_background_refresh(self)` stubs `update.maybe_spawn` and "
+        f"`glstate.maybe_spawn` for this case, which is the three lines six modules "
+        f"already write by hand; or\n"
+        f"  - if the test IS about the fork, say so: "
+        f"`tests._planeguard.allow_background_children(self)`.")
+
+
 def _child_plane(opts: dict):
     """The plane the child described by *opts* would resolve -- or ``None`` for none.
 
@@ -1136,7 +1215,13 @@ _SPAWN_GUARDED = False
 
 
 def _guard_spawns() -> None:
-    """Refuse a charter child that would resolve the real plane. Idempotent.
+    """Refuse a charter child that would resolve the real plane, or that nobody waits for.
+
+    Idempotent. Two refusals share one wrapper because they share one question — is this
+    `Popen` starting charter? — and asking it twice would be two readers of a grammar whose
+    whole design note is that a second copy drifts. The plane check goes first: a child on
+    the operator's live plane is the worse of the two, and its message is the one a reader
+    needs even when both apply.
 
     Wrapped on ``subprocess.Popen.__init__``, the CLASS, rather than on the
     ``subprocess.Popen`` module attribute. Two reasons, and both are holes the attribute
@@ -1176,16 +1261,19 @@ def _guard_spawns() -> None:
         if reached is not None:
             raise RealVaultReach(_explain_vault(*reached))
         parts = _charter_argv(args, opts)
-        if parts is not None and _REAL_ROOT:
-            plane = _child_plane(opts)
-            if plane is not None:
-                try:
-                    here = os.path.abspath(str(plane))
-                except (OSError, TypeError, ValueError):
-                    here = None
-                if here is not None and (here in _REAL_ROOT
-                                         or os.path.realpath(here) in _REAL_ROOT):
-                    raise RealPlaneSpawn(_explain_spawn(parts, plane))
+        if parts is not None:
+            if _REAL_ROOT:
+                plane = _child_plane(opts)
+                if plane is not None:
+                    try:
+                        here = os.path.abspath(str(plane))
+                    except (OSError, TypeError, ValueError):
+                        here = None
+                    if here is not None and (here in _REAL_ROOT
+                                             or os.path.realpath(here) in _REAL_ROOT):
+                        raise RealPlaneSpawn(_explain_spawn(parts, plane))
+            if opts.get("start_new_session") and not _BACKGROUND_ALLOWED:
+                raise BackgroundCharterChild(_explain_background(parts))
         return original(self, args, *rest, **kw)
 
     __init__.__module__ = __name__

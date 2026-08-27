@@ -1371,12 +1371,18 @@ def _frame_env(fid: str, h) -> dict[str, str]:
     NAMED (`_guest_harness_env`, `_pane_identity_env`). A second copy of "what a framed
     harness's environment is" would be two answers to one question.
 
-    COLUMNS/LINES go, and that is belt and braces rather than the fix itself: every pane
-    (harness or panel) measures its OWN tty (`frame/slots.py`, `frame/panel.py`), so a
-    stale value here cannot mislay anything charter draws. But this environment is
-    inherited WHOLE by every process tmux starts for this frame — the harness's shell
-    among them — and both variables describe the LAUNCHING terminal, not any pane the
-    frame creates.
+    `tui.TERMINAL_SIZE_VARS` go, and that is belt and braces rather than the fix itself:
+    every pane (harness or panel) measures its OWN tty (`frame/slots.py`,
+    `frame/panel.py`), so a stale value here cannot mislay anything charter draws. But
+    this environment is inherited WHOLE by every process tmux starts for this frame — the
+    harness's shell among them — and both variables describe the LAUNCHING terminal, not
+    any pane the frame creates.
+
+    Asked of `tui`, which is the module that READS ``$COLUMNS``, rather than spelled here
+    a second time. Two copies of "which variables describe the launching terminal" is two
+    answers to one question, and the second copy is the one the test harness could not
+    ask: `tests/_envguard.py` scrubs before `charter.config` loads, and this module pulls
+    `config` in at import (#544).
 
     TMUX/TMUX_PANE go for a sharper reason: they describe the pane `charter` was TYPED
     in. tmux sets both itself for a pane it creates, and carrying the launcher's own
@@ -1394,7 +1400,7 @@ def _frame_env(fid: str, h) -> dict[str, str]:
     client environment, and the server born from it inherits every name in it.
     """
     env = dict(os.environ, CHARTER_SESSION_ID=fid)
-    for stale in ("COLUMNS", "LINES", "TMUX", "TMUX_PANE"):
+    for stale in (*tui.TERMINAL_SIZE_VARS, "TMUX", "TMUX_PANE"):
         env.pop(stale, None)
     if h:
         env["CHARTER_HARNESS"] = h.name

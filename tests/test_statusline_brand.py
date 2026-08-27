@@ -17,14 +17,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from charter import config, statusline, tui, update
-from tests._isolation import PersonaIso, pin_update_channel
+from tests._isolation import PersonaIso, no_background_refresh, pin_update_channel
 
 
 class BrandLayout(unittest.TestCase):
     def setUp(self) -> None:
-        self._spawn = update.maybe_spawn      # never fork a network child from a test
-        update.maybe_spawn = lambda: None
-        self.addCleanup(lambda: setattr(update, "maybe_spawn", self._spawn))
+        # Never fork a network child from a test. One call rather than three lines of
+        # hand-rolled stubbing, and it covers the forge refresh beside the version
+        # check — a file that stubbed only one of the two forked the other (#542).
+        no_background_refresh(self)
         # `_brand` renders the `dev` chip from `config.UPDATE`, so every width assertion
         # below is a function of the channel unless it is pinned (#459). This class is
         # about LAYOUT and runs against the real plane on purpose; the chip belongs to
@@ -91,9 +92,7 @@ class UpdateIndicator(PersonaIso):
         # _brand() calls maybe_spawn(), and a temp STATE_DIR always looks stale — so
         # without this every test here forks a real network child. A suite that
         # quietly reaches the internet is not hermetic.
-        self._spawn = update.maybe_spawn
-        update.maybe_spawn = lambda: None
-        self.addCleanup(lambda: setattr(update, "maybe_spawn", self._spawn))
+        no_background_refresh(self)
 
     def _cache(self, latest: str, age: float = 0) -> None:
         p = config.STATE_DIR / "cache" / "update.json"

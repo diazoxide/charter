@@ -18,9 +18,9 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from charter import config, statusline, update
+from charter import config, statusline
 from tests import _envguard
-from tests._isolation import pin_update_channel
+from tests._isolation import no_background_refresh, pin_update_channel
 
 
 def _plain(lines):
@@ -88,11 +88,10 @@ class NeverBreaksTheStatusLine(unittest.TestCase):
         # (#519, #521, #528).
         _envguard.unset_all()
 
-        # render() reaches _brand() -> update.maybe_spawn(), which forks a real
-        # network child. A suite that quietly reaches the internet is not hermetic.
-        self._spawn = update.maybe_spawn
-        update.maybe_spawn = lambda: None
-        self.addCleanup(lambda: setattr(update, "maybe_spawn", self._spawn))
+        # render() reaches _brand() -> update.maybe_spawn() and glstate.maybe_spawn(),
+        # both of which fork a real network child. A suite that quietly reaches the
+        # internet is not hermetic.
+        no_background_refresh(self)
         # Also redirect STATE_DIR: these render against the REAL plane on purpose,
         # and the render path now writes a vault-health cache under it. A test that
         # writes into the developer's own `.charter/` is the bug this suite fixed

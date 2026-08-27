@@ -36,12 +36,22 @@ under test asks for.
 
 **What counts as a charter environment variable is a property, not a list.** It is any
 name in charter's own namespace (``CHARTER_*``, ``CLAUDE*``), plus the terminal-identity
-variables `charter.session` derives a session and a pane from, plus charter's FORMER
-namespace — each asked of the constant production reads it from (`session._PANE_ID_VARS`,
-`session._WINDOW_ID_VARS`, `legacyenv.NAMES`) rather than copied out of them, for the same
-reason `PersonaIso` asks `config.derive` instead of re-listing twenty-five settings. A
-``CHARTER_`` variable invented next month is guarded the day it is invented, and #519's
-specific four are covered by the property rather than by being spelled.
+variables `charter.session` derives a session and a pane from, plus the terminal-GEOMETRY
+variables `charter.tui` measures a width from, plus charter's FORMER namespace — each
+asked of the constant production reads it from (`session._PANE_ID_VARS`,
+`session._WINDOW_ID_VARS`, `tui.TERMINAL_SIZE_VARS`, `legacyenv.NAMES`) rather than copied
+out of them, for the same reason `PersonaIso` asks `config.derive` instead of re-listing
+twenty-five settings. A ``CHARTER_`` variable invented next month is guarded the day it is
+invented, and #519's specific four are covered by the property rather than by being
+spelled.
+
+``$COLUMNS`` arrived here as the counter-example that proves the paragraph above is worth
+writing: it is not in charter's namespace, it has no charter in its name at all, and it
+flipped five tests (#544). What made it reachable was a list of spellings; what makes it
+covered is asking the module that reads it. Its other half — the tty ioctl that
+`term_width` falls through to once the variable is gone — is not an environment variable
+at all and lives in `tests/_ttyguard.py`, with the
+streams whose size it is asking about.
 
 **The former namespace is here because the first version of this file forgot it, and the
 way it forgot is the argument for the paragraph above.** That version spelled ``TMUX`` and
@@ -136,14 +146,34 @@ def _scrubbed_names() -> frozenset[str]:
     forward and would reach sideways into whatever unrelated tool on the machine happens to
     share three letters.
 
+    `tui.TERMINAL_SIZE_VARS` is ``$COLUMNS`` and ``$LINES`` — the SIZE of the terminal the
+    suite was launched in, which is a fact about the operator's window and not about
+    anything in this repository. `tui.term_width` reads the first, and at ``COLUMNS=40``
+    with everything else already cleared the suite returned four failures and an error
+    (#544). Asked of `charter.tui` because that is the module that reads it and because
+    `tui` imports ``os``, ``re`` and ``unicodedata`` and nothing else — the same reason
+    `legacyenv` exists as a separate module, stated in its own docstring: a tuple of
+    strings was never what needed a plane, and `commands_frame`, which strips the same two
+    names out of every child a frame starts, cannot be asked here because importing it
+    resolves one.
+
+    **Removing these two is only half of that defect, and the smaller half.** With
+    ``$COLUMNS`` absent `term_width` falls through to `os.get_terminal_size()`, an ioctl on
+    this process's stdout — so the scrub moves the reading from the shell to the tty rather
+    than ending it. Measured at b3dbd54 with both variables unset: the same three modules
+    give 3 failures and 1 error on an 80x24 pty at 40 columns and pass at 200. That half is
+    closed by `tests/_ttyguard.py`, which owns the file descriptors and where the whole
+    argument lives; this entry exists so that the shell's answer cannot reach a
+    `dict(os.environ)` or a child process either.
+
     ``TMUX`` is the one name spelled out, and it has to be: it is tmux's variable, not
     charter's, read in half a dozen places to answer "is this process inside a tmux" with
     no constant to derive it from. Its pane counterpart arrives from `_PANE_ID_VARS`, so
     inventing a constant for one of a pair would buy nothing.
     """
-    from charter import legacyenv, session
+    from charter import legacyenv, session, tui
     return frozenset(session._PANE_ID_VARS + session._WINDOW_ID_VARS + ("TMUX",)
-                     + legacyenv.NAMES)
+                     + legacyenv.NAMES + tui.TERMINAL_SIZE_VARS)
 
 
 def _loud_names() -> frozenset[str]:
@@ -336,11 +366,12 @@ def install() -> None:
     _installed = True
 
     # `charter.session` imports `os` and `re`, `charter.legacyenv` imports `os` and `sys`,
-    # and neither imports anything else — in particular not `charter.config` — so asking
-    # them for the pane variables and the pre-rename names here cannot pull the plane
-    # resolution in ahead of the scrub below. `legacyenv` is a separate module for exactly
-    # this reason: those three names used to live in `config`, where nobody could ask for
-    # them without resolving a plane, so this file did not ask and they leaked (#540).
+    # `charter.tui` imports `os`, `re` and `unicodedata`, and none of them imports anything
+    # else — in particular not `charter.config` — so asking them for the pane variables,
+    # the pre-rename names and the terminal geometry here cannot pull the plane resolution
+    # in ahead of the scrub below. `legacyenv` is a separate module for exactly this
+    # reason: those three names used to live in `config`, where nobody could ask for them
+    # without resolving a plane, so this file did not ask and they leaked (#540).
     _SCRUB_NAMES = _scrubbed_names()
 
     for key in [k for k in os.environ if _in_namespace(k)]:

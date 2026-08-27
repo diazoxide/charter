@@ -36,12 +36,16 @@ import unittest
 
 from charter import commands_frame
 from charter.frame import overlay, tmuxctl
+from tests import _tmuxreap
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
 #: This module's own server, unique per test PROCESS so an interrupted earlier run's
-#: socket can never be mistaken for this one's.
-SOCKET = f"charter-overlay-hatch-{os.getpid()}"
+#: socket can never be mistaken for this one's — and, since #564, so an interrupted
+#: earlier run's socket can be RECOGNISED and reaped by the next one. This module's own
+#: leftovers were 497 of the 658 files in the socket directory when that was measured, all
+#: of them from runs the deletion sweep killed mid-flight, which no teardown can reach.
+SOCKET = _tmuxreap.name("overlay-hatch")
 
 #: Where tmux puts :data:`SOCKET`'s FILE, computed the way tmux computes it — and only
 #: the FALLBACK for it. `TheHatch._teardown_socket` asks the live server for

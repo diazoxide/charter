@@ -91,7 +91,9 @@ from charter.frame import gather, layout, notify
 from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
+from tests import _tmuxreap
 from tests._isolation import PersonaIso, run_hook
+from tests._planeguard import allow_background_children
 # Imported rather than re-declared: a second copy of the stub that keeps a launch's
 # detached `frame-gather` child off the developer's real plane is a copy that can drift
 # out of step with the production call it stands in for, and `tests/_planeguard.py`
@@ -104,7 +106,14 @@ _HAS_TMUX = shutil.which("tmux") is not None
 
 #: Unique per test PROCESS, not merely per class — a socket left behind by an earlier,
 #: interrupted run must never collide with (or be mistaken for) this one's.
-SOCKET = f"charter-integration-test-{os.getpid()}"
+#:
+#: Built by `tests._tmuxreap.name` rather than spelled here, and that is the other half of
+#: the same sentence: an interrupted run's socket is not merely something this one must not
+#: collide with, it is something this one must CLEAN UP — 14 live servers and 497 stale
+#: files had accumulated before anything did (#564). The reaper recognises a socket by the
+#: shape that function produces, so a module spelling its own name is a module whose leaks
+#: nobody reaps.
+SOCKET = _tmuxreap.name("integration-test")
 
 #: `tests/_isolation.py`'s `PersonaIso` isolates the paths a Python IMPORT of `charter`
 #: reads inside THIS process; `PanelIntegration` below needs a SUBPROCESS to see the
@@ -2214,6 +2223,14 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         # back on if the ordering is wrong — getting it right here is the only
         # thing standing between a `sleep 600` harness pane and an orphan).
         self.addCleanup(self._teardown_socket)
+        # This class WANTS the detached child, which is why it declares it rather than
+        # stubbing it: `_spawn_frame` runs the real `commands_frame._spawn_gather`, and
+        # "the detached `charter frame-gather` really starts, really gathers the workspace
+        # it was told to, really writes the cache and really bumps the frame" is the
+        # composition this class exists to prove. `tests._planeguard` refuses a detached
+        # charter child by default (#542) precisely so the 43 cases that did NOT mean to
+        # fork one say so instead of forking it.
+        allow_background_children(self)
         (self.tmp / "charter.toml").write_text("")
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)  # derive STATE_DIR under CHARTER_ROOT, like
@@ -3087,7 +3104,7 @@ class EarlyDeathIntegration(_VoidDeaths, unittest.TestCase):
 #: whether charter makes a dead PANEL reachable was answered by the fixture. It stayed
 #: green with the production call deleted. This one is never configured by anything: what
 #: it does with a dying pane is tmux's own default, which is what an operator's tmux is.
-OP_SOCKET = f"charter-integration-operator-{os.getpid()}"
+OP_SOCKET = _tmuxreap.name("integration-operator")
 
 #: The socket FILE tmux computes for `-L OP_SOCKET` — the same path `_teardown_socket`
 #: already has to know. Needed as a path (not a name) by `WindowInsideAnOperatorsTmux`,

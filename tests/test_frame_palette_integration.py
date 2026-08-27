@@ -40,6 +40,7 @@ from pathlib import Path
 from charter import commands_frame, config, util
 from charter.frame import overlay, state, tmuxctl
 
+from tests import _tmuxreap
 from tests._isolation import PersonaIso
 
 _HAS_TMUX = shutil.which("tmux") is not None
@@ -52,8 +53,9 @@ _HAS_TMUX = shutil.which("tmux") is not None
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: This module's own server, unique per test PROCESS so an interrupted earlier run's socket
-#: can never be mistaken for this one's — `test_frame_overlay_escape_hatch.py`'s rule.
-SOCKET = f"charter-palette-integ-{os.getpid()}"
+#: can never be mistaken for this one's, and so the next run can reap it —
+#: `test_frame_overlay_escape_hatch.py`'s rule, now `tests._tmuxreap.name`'s (#564).
+SOCKET = _tmuxreap.name("palette-integ")
 
 #: Where tmux puts :data:`SOCKET`'s FILE, computed the way tmux computes it, and only as
 #: the FALLBACK for it: :meth:`_ThePalette._teardown_socket` asks the live server first,
