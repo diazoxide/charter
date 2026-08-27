@@ -22,6 +22,7 @@ Vocabulary::
 
     sanitize                  drop everything that is not charter's own markup
     width / truncate / pad    ANSI-aware string primitives
+    column                    how wide one table column has to be for its values
     Text                      markup line(s), clamped at render time
     Cell + Row                one line of fixed/natural-width cells
     Stack                     vertical composition of nodes
@@ -36,7 +37,7 @@ from __future__ import annotations
 import os
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 RESET = "\x1b[0m"
 ELLIPSIS = "…"
@@ -192,6 +193,41 @@ def pad(s: str, w: int, align: str = "left") -> str:
         left = fill // 2
         return " " * left + s + " " * (fill - left)
     return s + " " * fill
+
+
+def column(header: str, cells: Iterable[str], gap: int = 2,
+           cap: int | None = None) -> int:
+    """Visible width for one table column: its *header*, its widest cell, and *gap*.
+
+    The one number a hand-rolled table gets wrong. A column written as ``{name:<28}``
+    is two mistakes at once, and this function is the answer to both:
+
+    * **28 is a guess about content.** ``:<28`` pads a short value and does nothing at
+      all to a long one — it pushes, so that row's remaining columns land somewhere no
+      other row's do and the table stops being a table. The width has to come from the
+      values about to be printed, which is what *cells* is. Sizing every column this
+      way — the numeric ones too — means the report cannot be pushed out of alignment
+      by any value at all, rather than by none of the values somebody thought of.
+    * **``:<28`` counts characters.** A terminal lays out *cells*: a CJK name is two
+      per glyph and a combining mark is zero, so `len` over-pads the first and
+      under-pads the second, and a name well inside the budget still shifts its row.
+      Every measurement here is :func:`width`, and callers pad with :func:`pad` for the
+      same reason — the two have to agree or the arithmetic was for nothing.
+
+    *gap* is the separation from the next column, counted inside the returned width so
+    a caller pads once rather than padding and then adding spaces. Passing a *cap*
+    bounds the content (never the gap) for a column whose values are prose rather than
+    identifiers; the cells then truncate with an ellipsis inside their column instead of
+    widening it. Leave it ``None`` where the reader has to be able to read the value
+    back off the row — a clipped name is one they cannot go and act on.
+
+    What this leaves unanswered is whether a cell is **legible**. :func:`width` reports the
+    cells a value *declares*, which is what alignment is made of; three U+3164 HANGUL
+    FILLERs declare six and render as nothing (#498). Use `contain.readable` where the
+    question is whether a reader can name the value, not where it sits.
+    """
+    w = max([width(header)] + [width(c) for c in cells])
+    return (w if cap is None else min(w, cap)) + gap
 
 
 def term_width(default: int = 80, floor: int = 1) -> int:

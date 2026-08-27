@@ -17,7 +17,7 @@ import json
 import os
 import sys
 
-from . import commands_secrets, config, contain, mcpseen, persona, trace, util
+from . import commands_secrets, config, contain, mcpseen, persona, trace, tui, util
 from .secrets import base, registry
 
 #: The scaffold a new persona starts from.
@@ -169,12 +169,23 @@ def cmd_persona_list(args) -> int:
     # display transform, never a lookup key.
     named = {n: (persona.vault_of(n) or "—") for n in names}
     vaults = {n: contain.one_line(v) for n, v in named.items()}
-    # dynamic column widths so long persona/role/vault names don't collide
-    nw = max([len("PERSONA")] + [len(s) for s in shown.values()]) + 2
-    rw = min(38, max([len("ROLE")] + [len(r) for r in roles.values()])) + 2
-    vw = max([len("VAULT")] + [len(v) for v in vaults.values()]) + 2
-    fmt = f"{{}}{{:<{nw}}}{{:<{rw}}}{{:<{vw}}}{{}}"
-    print(fmt.format("  ", "PERSONA", "ROLE", "VAULT", "VAULT STATUS"))
+    # Dynamic column widths so long persona/role/vault names don't collide — measured in
+    # terminal CELLS, not characters. `len` was the same defect #508 named one command
+    # over, one layer down: it sizes and pads a CJK name to 28 characters, the terminal
+    # draws 56, and that row's ROLE, VAULT and VAULT STATUS all land 28 columns right of
+    # every other row's. `tui.column` measures and `tui.pad` pads, and the pair have to
+    # agree or the arithmetic was for nothing — which is why the rows below are padded
+    # rather than run through `str.format`, whose `{:<nw}` counts characters too.
+    nw = tui.column("PERSONA", shown.values())
+    rw = tui.column("ROLE", roles.values(), cap=38)
+    vw = tui.column("VAULT", vaults.values())
+
+    def row(mark, name, role, vault, status) -> str:
+        """Header and data rows through one function, so there is no second code
+        path left to disagree with this one about a width."""
+        return (f"{mark}{tui.pad(name, nw)}{tui.pad(role, rw)}"
+                f"{tui.pad(vault, vw)}{status}").rstrip()
+    print(row("  ", "PERSONA", "ROLE", "VAULT", "VAULT STATUS"))
     for n in names:
         # Identity, not display: `one_line` maps `evil\n` and a literal `evil\x0a` onto the same
         # rendered string, so deciding the marker from the rendered form would mark every
@@ -185,9 +196,15 @@ def cmd_persona_list(args) -> int:
         # (`listed by other accounts: .charter 755 (want 700 — chmod 700)`), and a remedy
         # clipped at 160 characters is one the reader cannot act on. Still a fixed budget,
         # for the reason `contain` gives: a budget the input can grow is no budget.
-        print(fmt.format(mark, shown[n], roles[n][:rw - 2], vaults[n],
-                         contain.one_line(_vault_status(named[n]),
-                                          contain.PATH_DISPLAY_LIMIT)))
+        #
+        # ROLE is the one column with a cap, because it is the one holding prose rather
+        # than an identifier. `tui.pad` applies it, so an over-long role is cut at the
+        # column in CELLS and marked `…`; the old `roles[n][:rw - 2]` cut it at rw-2
+        # *characters*, which for a CJK role left a cell that was still too wide for the
+        # column it had just been cut to fit.
+        print(row(mark, shown[n], roles[n], vaults[n],
+                  contain.one_line(_vault_status(named[n]),
+                                   contain.PATH_DISPLAY_LIMIT)))
     return 0
 
 
@@ -1208,6 +1225,52 @@ def cmd_persona_lint(args) -> int:
     return 0
 
 
+#: The `persona stats` table, as ``(header, alignment)`` pairs. STATUS is deliberately
+#: absent: it is the last column, so nothing sits to its right to be pushed and it needs
+#: no width at all. Every column that DOES have something to its right is measured.
+_STATS_HEADS = (("PERSONA", "left"), ("MEM", "right"), ("RECENT", "right"),
+                ("VERIFY", "right"), ("DUP", "right"), ("DISP", "right"))
+
+#: Between the measured columns and the trailing STATUS text. A right-aligned column
+#: carries its own gutter on the LEFT (that is what ``{'MEM':>5}`` was doing), so the one
+#: place a separator has to be written out is after the last of them.
+_STATS_GAP = "  "
+
+
+def _stats_table(heads, body) -> list[str]:
+    """The header row and *body* rows of the stats table, columns measured from *body*.
+
+    **One function for the header and the rows, called once each.** They are sibling rows
+    of the same table, and the fastest way back to a misaligned report is two code paths
+    that each believe they agree about the widths. Before #508 there were two: a format
+    string in the `print` for the header and another in the loop, and they agreed only for
+    names shorter than the constant they both spelled.
+
+    The widths come from :func:`tui.column`, which explains the two things a hand-rolled
+    ``{name:<28}`` gets wrong — a constant is a guess about content, and `str.format`
+    counts characters where a terminal lays out cells. Both were live here: a persona
+    directory is a committed name charter did not mint, so a 30-cell one pushed that row's
+    other six columns right, and an 8-glyph CJK one that fits the constant twice over
+    still shifted its row by 8 because ``:<28`` had padded it to 28 *characters* (#508).
+
+    Not clipped to the terminal, and that is a decision rather than an omission. #472 asks
+    this report to name each persona in its bounded spelling, because the steward reading
+    it acts on that name — `persona show`, `persona retire`. A column capped at the
+    terminal edge would hand them a prefix they cannot look up, which is a worse report
+    than a wide one. The bound on the name is `contain.one_line`'s, applied to the value
+    once, the same as on every other surface; this column honours it rather than inventing
+    a second, smaller one.
+    """
+    widths = [tui.column(h, [row[i] for row in body])
+              for i, (h, _) in enumerate(heads)]
+
+    def line(cells) -> str:
+        out = "".join(tui.pad(c, w, a) for c, w, (_, a) in zip(cells, widths, heads))
+        return (out + _STATS_GAP + "".join(cells[len(heads):])).rstrip()
+
+    return [line([h for h, _ in heads] + ["STATUS"])] + [line(row) for row in body]
+
+
 def cmd_persona_stats(args) -> int:
     """Roster health mined from committed memory — a persona's memory IS its activity
     trace, so this is the usage + (in-corpus) quality signal for the steward's observe
@@ -1226,8 +1289,8 @@ def cmd_persona_stats(args) -> int:
     disp = dispatch.tally()
     glyph = {"active": "●", "idle": "○", "dormant": "✗", "draft": "⚑",
              "orchestrator": "⬡", "standby": "◇", "advisory": "◇"}
-    print(f"{'PERSONA':<28}{'MEM':>5}{'RECENT':>8}{'VERIFY':>8}{'DUP':>6}{'DISP':>6}  STATUS")
     dormant = idle = unused = drafts = 0
+    body: list[tuple[str, ...]] = []
     for r in rows:
         v = f"{r['verify_pct']}%" if r["verify_pct"] is not None else "—"
         d = f"{r['dup_pct']}%" if r["dup_pct"] is not None else "—"
@@ -1249,11 +1312,14 @@ def cmd_persona_stats(args) -> int:
         # `skilluse.drift` below all ask the filesystem and the committed dispatch log
         # about this persona, and the answer for a name holding a separator is not the answer for its
         # rendered spelling. See `cmd_persona_list` for why the name needs bounding at all.
-        print(f"{contain.one_line(r['persona']):<28}{r['count']:>5}{rec:>8}{v:>8}{d:>6}"
-              f"{(n_disp if not shared_row else '—'):>6}  "
-              f"{glyph.get(status, '⚑' if status == 'never dispatched' else '·')} {status}")
+        body.append((contain.one_line(r["persona"]), f"{r['count']}", rec, v, d,
+                     f"{n_disp}" if not shared_row else "—",
+                     f"{glyph.get(status, '⚑' if status == 'never dispatched' else '·')}"
+                     f" {status}"))
         dormant += r["status"] == "dormant"
         idle += r["status"] == "idle"
+    for ln in _stats_table(_STATS_HEADS, body):
+        print(ln)
     print()
 
     # Declared-vs-used skills. A separate block rather than a column, because it is per
@@ -1270,18 +1336,24 @@ def cmd_persona_stats(args) -> int:
             drifted.append((r["persona"], d))
     if drifted:
         print("SKILLS — declared vs actually invoked")
+        # A name column with no header of its own, and the same rule as the table above:
+        # measured from the names it is about to print, in cells rather than characters.
+        # It was `{shown:<26}` and carried #508 identically — one drifted persona with a
+        # long or a CJK name and the `unused:`/`used but not declared:` labels stop
+        # lining up down the block.
+        nw = tui.column("", [contain.one_line(n) for n, _ in drifted])
         for name, d in drifted:
             # Same rule as the table: the persona name and the skill names are committed
             # values landing in a report of one-line rows.
-            shown = contain.one_line(name)
+            shown = tui.pad(contain.one_line(name), nw)
             if d["unused"]:
                 # Not untidy: `skills:` preloads full text on EVERY dispatch, so an unused
                 # declaration is a standing context cost bought for nothing.
-                print(f"  {shown:<26} unused: "
+                print(f"  {shown} unused: "
                       f"{', '.join(contain.one_line(s) for s in d['unused'])}"
                       f"   (preloaded every dispatch)")
             if d["undeclared"]:
-                print(f"  {shown:<26} used but not declared: "
+                print(f"  {shown} used but not declared: "
                       f"{', '.join(contain.one_line(s) for s in d['undeclared'])}")
         print()
     util.info(f"RECENT = memories in the last {getattr(args, 'recent_days', 14)} days · "
