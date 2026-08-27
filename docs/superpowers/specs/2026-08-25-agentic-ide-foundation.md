@@ -814,7 +814,9 @@ The data model, then the surface: create a change, add repos to it, see its bran
 PRs as one status, act on it. This is where "monorepo on top of many repos" stops being a
 description of the file layout and becomes something the tool understands.
 
-Needs its own spec. Phases 0–3 are what make it buildable.
+**Its own spec, written 2026-08-28:**
+`docs/superpowers/specs/2026-08-28-phase4-cross-repo-change.md` — what identifies a change on
+disk, its lifecycle, and the plan. Phases 0–3 are what make it buildable.
 
 ---
 
