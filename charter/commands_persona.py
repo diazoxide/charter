@@ -599,19 +599,18 @@ def _credential_rule() -> str:
     )
 
 
-#: Frontmatter keys `_render_agent` copies straight into the generated sub-agent.
-#: Anything a charter sets that isn't here (and isn't consumed by charter itself)
-#: reaches `.claude/agents/<name>.md` never — a typo is silently inert today, which
-#: `persona lint` now reports.
-_AGENT_PASSTHROUGH_KEYS = ("model", "color", "memory")
-
-#: Keys charter reads itself rather than emitting. Together with the passthrough set
-#: this is the full vocabulary of a persona charter's frontmatter.
-_CHARTER_OWN_KEYS = (
-    "name", "role", "vault", "extends", "uses", "delegate-when", "description",
-    "agent-description", "agent-tools", "tools", "activity", "dispatch-isolation",
-    "draft", "skills", "disallowed-tools", "routing", "routes-to", "borrows",
-)
+#: Frontmatter keys `_render_agent` copies straight into the generated sub-agent, and the
+#: keys charter reads itself. Anything a charter sets that is in neither reaches
+#: `.claude/agents/<name>.md` never — a typo is silently inert, which `persona lint`
+#: reports.
+#:
+#: Both now DEFINED in `persona.py` and re-exported here under the names this module has
+#: always used. The vocabulary of a persona definition is a fact about the parser, not
+#: about the command that renders one, and `persona.structural_errors` — which runs on
+#: every turn for the status line — says in its own docstring that it cannot afford to
+#: import this module to fetch it.
+_AGENT_PASSTHROUGH_KEYS = persona.AGENT_PASSTHROUGH_KEYS
+_CHARTER_OWN_KEYS = persona.CHARTER_OWN_KEYS
 
 
 def _rel(path) -> str:
@@ -877,11 +876,35 @@ isolated context. Adopt the charter below as your role.
 
 
 def _write_agent(name: str) -> str | None:
-    """Generate/refresh one persona's sub-agent. Returns 'written'|'skipped'|'draft'|None.
-    Uses the RESOLVED persona (inheritance applied: merged charter + unioned tools)."""
+    """Generate/refresh one persona's sub-agent. Returns
+    'written'|'skipped'|'draft'|'unreadable'|None. Uses the RESOLVED persona (inheritance
+    applied: merged charter + unioned tools)."""
     d = persona.resolve(name)
     if not d:
         return None
+    if persona.key_issues(name):
+        # The sibling of #575's named bug, and the one with the wider blast radius. A key
+        # charter cannot read is not inert HERE — three of the fields this function renders
+        # are enforced by their PRESENCE, so misspelling one deletes the enforcement:
+        #
+        #   * `Agent-tools:` → no `tools:` line is emitted, and no `tools:` line means the
+        #     sub-agent inherits EVERY tool. The allowlist does not narrow; it vanishes.
+        #   * `Disallowed-tools:` → no `disallowedTools:` line. The denylist vanishes.
+        #   * `Draft:` → `is_draft` is False, so the unfinished charter this function
+        #     refuses to ship becomes a sub-agent's system prompt after all.
+        #
+        # All three were reached by `charter persona sync-agents` printing `✓ Synced 1
+        # persona sub-agent(s)`. Same answer as a draft, for the same reason the draft
+        # branch gives: the generated file IS the sub-agent's system prompt, and one built
+        # from a definition charter could not read is not the committed charter. The stale
+        # agent goes too — leaving it keeps the persona dispatchable under whatever it said
+        # before, which is exactly the grant the author was editing the file to remove.
+        #
+        # Deliberately NOT gated on lint's other findings, or on an unknown key generally:
+        # `key_issues` is the narrow set charter can prove was meant to be read (a key it
+        # reads, miscased or written twice), so `modell:` still renders an agent.
+        _remove_agent(name)
+        return "unreadable"
     if persona.is_draft(name):
         # The generated file IS the sub-agent's system prompt, so an unfinished charter
         # must not become one. Any agent generated BEFORE the persona was marked draft is
@@ -1646,6 +1669,7 @@ def cmd_persona_sync_agents(args) -> int:
     outcomes = {n: _write_agent(n) for n in names}
     written = [n for n, o in outcomes.items() if o == "written"]
     drafts = [n for n, o in outcomes.items() if o == "draft"]
+    unreadable = [n for n, o in outcomes.items() if o == "unreadable"]
     withheld = {n: persona.mcp_withheld(n) for n in written}
     withheld = {n: v for n, v in withheld.items() if v}
     # A server name the committed sidecar chose and `mcp_name_ok` refused. Said on the run
@@ -1669,6 +1693,21 @@ def cmd_persona_sync_agents(args) -> int:
         util.warn(f"Skipped {len(drafts)} draft persona(s): {', '.join(drafts)} — "
                   "an unfinished charter must not become a sub-agent's system prompt. "
                   "Finish it, drop the `draft: true` line, then re-run.")
+    if unreadable:
+        # Said on the run that would have written the agent, not left to `lint`. A
+        # miscased `Agent-tools:` does not narrow a sub-agent's tools, it removes the
+        # allowlist entirely — so a green tick over this is the shape #453 keeps arriving
+        # in, a bound that degrades in silence.
+        util.warn(f"Skipped {len(unreadable)} persona(s) whose frontmatter charter cannot "
+                  f"read: {', '.join(unreadable)}. A key spelled in another case, or "
+                  f"declared twice, is read by nothing — and `agent-tools:`, "
+                  f"`disallowed-tools:` and `draft:` are enforced by being PRESENT, so a "
+                  f"misspelling drops the allowlist, the denylist or the draft guard "
+                  f"rather than narrowing anything. No agent is generated until the key is "
+                  f"fixed:")
+        for n in unreadable:
+            for _lvl, msg in persona.key_issues(n):
+                util.info(f"  {contain.readable(n)}: {msg}")
     if removed:
         util.info("Removed stale generated agents: " + ", ".join(removed))
     if refused:

@@ -218,13 +218,23 @@ def list_personas() -> list[str]:
     return sorted(names)
 
 
-def parse(text: str) -> tuple[dict, str]:
-    """Split frontmatter markdown into (metadata, charter body).
+def _frontmatter(text: str) -> tuple[list[tuple[str, str]], str]:
+    """The frontmatter as ``[(key, value)]`` **in file order**, plus the body.
 
-    Minimal, dependency-free: flat ``key: value`` lines. Good enough for our
-    small, controlled frontmatter (``role``, ``vault``, …).
+    The one line-walk. :func:`parse` collapses these pairs into a dict and :func:`load`
+    also asks them what the dict cannot answer — which keys were written more than once
+    (#509). Two questions, one reading of the file, so the answers cannot disagree about
+    what the file said.
+
+    Splitting this out is what let #509 be fixed without the change it feared. That issue
+    read the choice as "either change what `parse` returns or give it a second output",
+    both of which land on `persona.load`, `structural_errors`, `resolve`, `tools_of`,
+    `vault_of`, `docsrc`, `news._read` and the skill lint at once. Neither happened:
+    `parse` still returns ``(dict, body)`` and every caller of it is untouched. The second
+    answer is carried by the *loader*, which is where the persona-shaped questions are
+    already asked.
     """
-    meta: dict = {}
+    pairs: list[tuple[str, str]] = []
     body = text
     if text.startswith("---"):
         parts = text.split("---", 2)
@@ -236,8 +246,144 @@ def parse(text: str) -> tuple[dict, str]:
                 key, _, value = line.partition(":")
                 key, value = key.strip(), value.strip()
                 if key:
-                    meta[key] = value
-    return meta, body.strip()
+                    pairs.append((key, value))
+    return pairs, body.strip()
+
+
+def parse(text: str) -> tuple[dict, str]:
+    """Split frontmatter markdown into (metadata, charter body).
+
+    Minimal, dependency-free: flat ``key: value`` lines. Good enough for our
+    small, controlled frontmatter (``role``, ``vault``, …).
+
+    **Lossy, and now provably so.** Two lines carrying one key collapse to the last of
+    them, which is a fact about a `dict` and not a decision anyone made: the file said two
+    things and this says one. Callers that need to know a key was written twice ask
+    :func:`duplicate_keys` — :func:`load` does, so every persona-shaped consumer gets the
+    answer without a second read.
+    """
+    pairs, body = _frontmatter(text)
+    return dict(pairs), body
+
+
+def duplicate_keys(text: str) -> list[str]:
+    """Frontmatter keys *text* declares more than once, first-declaration order.
+
+    A key written twice is a contradiction in the file, not a value to be picked (#509).
+    :func:`parse` keeps the last line because that is what building a dict does, so the
+    first value is gone before any consumer sees the dict — ``vault:`` twice hands out
+    whichever vault is lower in the file, ``tools:`` twice auto-approves whichever list
+    is lower, and nothing anywhere said a word.
+
+    Exposed on the TEXT rather than folded into `parse`'s return type, so the news reader
+    and the skill lint can ask the same question of the same parser when their owners want
+    it, without this changing under them first.
+    """
+    return [k for k, n in _key_counts(_frontmatter(text)[0]).items() if n > 1]
+
+
+#: Frontmatter keys `commands_persona._render_agent` copies straight into the generated
+#: sub-agent.
+AGENT_PASSTHROUGH_KEYS = ("model", "color", "memory")
+
+#: Keys charter reads itself rather than emitting. Together with the passthrough set this
+#: is the full vocabulary of a persona charter's frontmatter.
+CHARTER_OWN_KEYS = (
+    "name", "role", "vault", "extends", "uses", "delegate-when", "description",
+    "agent-description", "agent-tools", "tools", "activity", "dispatch-isolation",
+    "draft", "skills", "disallowed-tools", "routing", "routes-to", "borrows",
+)
+
+#: The whole vocabulary, and the only spelling of each word charter answers to.
+#:
+#: Declared HERE rather than in `commands_persona`, where it lived, because
+#: :func:`structural_errors` needs it and its docstring says in as many words that it
+#: cannot afford the import — it runs on every turn for the status line. The vocabulary of
+#: a persona definition is a fact about the parser, not about the command that renders one,
+#: so the lower layer is where it belongs; `commands_persona` still exports the old names.
+KNOWN_KEYS = frozenset(AGENT_PASSTHROUGH_KEYS) | frozenset(CHARTER_OWN_KEYS)
+
+#: `KNOWN_KEYS` folded, for :func:`misspelled_key` — built once rather than per key per
+#: persona per turn.
+_FOLDED_KEYS = {k.casefold(): k for k in KNOWN_KEYS}
+
+
+def misspelled_key(key: str) -> str | None:
+    """The key charter reads that *key* differs from **only by case**, or None.
+
+    This is not the case-folding #573 refused, and the difference is which question gets
+    folded. There, folding was proposed for the *lookup* — `meta.get(key.casefold())` —
+    which would have made ``Vault:`` work and left ``vualt:``, ``borrow:`` and
+    ``delegate_when:`` exactly as silent, a guard against one spelling rather than the
+    property. Nothing here is looked up: a value is never read out of a miscased key, and
+    charter never guesses which field the author meant.
+
+    What is folded is the **sentence and the severity**. A key outside the vocabulary is
+    caught by :data:`KNOWN_KEYS` being closed — that is #573's mechanism, unchanged, and it
+    is what catches ``vualt:``. This only asks, of a key already caught, whether charter can
+    name the word the author was reaching for. When it can, the report says so and the
+    grant stops trusting the key's absence (:func:`borrows_of`), because ``Borrows: none``
+    is not a key charter has no opinion about — it is a key charter reads, one shift away,
+    and the author who wrote it was opting OUT of a permission grant.
+
+    ``casefold``, matching `news._flag`'s reading of ``TRUE``/``True``, so the whole tree
+    folds text one way.
+    """
+    if key in KNOWN_KEYS:
+        return None
+    return _FOLDED_KEYS.get(key.casefold())
+
+
+def key_issues(name: str) -> list[tuple[str, str]]:
+    """Frontmatter keys in *name*'s own definition that charter can neither honour nor
+    let pass — ``[(level, message)]``, all of them errors.
+
+    **The property: a frontmatter key is honoured or reported, never silently resolved.**
+    Two ways a key goes unhonoured while charter can still prove which word the author
+    meant, and both used to end in a value chosen by accident with nothing said:
+
+    * **Declared twice** (#509). ``vault: safe`` above ``vault: prod`` hands out ``prod``
+      because that is what building a dict does — the file states a contradiction and
+      charter resolves it by LINE ORDER. Charter does not pick; it names the key.
+    * **Spelled in another case** (#575). ``Vault:`` is read by nothing, so the persona
+      declares a vault and has none; ``Extends:`` declares a parent and inherits nothing.
+
+    A key charter simply does not read — ``modell:``, ``delegate_when:`` — is *not* here.
+    It stays the warning :func:`lint` has always given it, because charter has no claim
+    about it: a harness's own field is a legitimate thing to carry in a committed file, and
+    an error would break planes that are correct. These two are different in kind. Charter
+    can say which key charter reads the author was writing, which is what makes the finding
+    an error and what lets :func:`borrows_of` act on it.
+
+    Own definition only, matching :func:`structural_errors`' framing — a parent's bad key
+    is a finding about the parent, reported when the parent is linted, and the parent's own
+    sub-agent is the one withheld for it.
+    """
+    d = load(name)
+    if not d:
+        return []
+    issues: list[tuple[str, str]] = []
+    # Bounded, because a key is a string from a committed file on its way into a report a
+    # human reads and acts on. `splitlines` already makes a second ROW impossible — it
+    # splits on \r, \x85, U+2028 and U+2029 alike, so none of those survives into a key —
+    # but a key of U+3164 HANGUL FILLER strips to nothing visible and printed as
+    # `frontmatter key '' …`: #498's finding, a row telling somebody to go and edit a key
+    # it does not name. `readable` decides on the complement, so the key named here is one
+    # they can find in the file.
+    for key in sorted(d.get("dupes") or ()):
+        issues.append(("error", f"frontmatter key '{contain.readable(key)}' is declared "
+                                f"more than once — charter keeps the LAST line and the "
+                                f"first is lost before anything reads it. Two lines are a "
+                                f"contradiction in the file, not a value to pick: delete "
+                                f"one"))
+    for key in sorted(set(d["meta"])):
+        meant = misspelled_key(key)
+        if meant:
+            issues.append(("error", f"frontmatter key '{contain.readable(key)}' is read by "
+                                    f"nothing — charter matches keys exactly, so this is "
+                                    f"not `{meant}:` and its value never reaches charter. "
+                                    f"Spell it `{meant}:`"))
+    return issues
 
 
 def definition_refusal(name: str) -> str | None:
@@ -277,9 +423,22 @@ def load(name: str) -> dict | None:
     p = def_path(name)
     if not p.exists() or definition_refusal(name):
         return None
-    meta, charter = parse(p.read_text())
+    pairs, charter = _frontmatter(p.read_text())
+    meta = dict(pairs)
     meta.setdefault("name", name)
-    return {"meta": meta, "charter": charter}
+    # The second answer the dict cannot carry, from the same read (#509). A third key
+    # rather than a changed return type: every consumer indexes `["meta"]`/`["charter"]`,
+    # so nothing downstream has to learn about this to keep working — only the two
+    # functions that report it do.
+    dupes = [k for k, n in _key_counts(pairs).items() if n > 1]
+    return {"meta": meta, "charter": charter, "dupes": dupes}
+
+
+def _key_counts(pairs) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for key, _v in pairs:
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 # --------------------------------------------------------------------------- #
@@ -929,6 +1088,38 @@ def uses_of(name: str) -> list[str]:
 BORROWS_NONE = "none"
 
 
+def _borrows_unreadable(resolved: dict) -> bool:
+    """Did the author write a ``borrows:`` declaration charter could not read?
+
+    The whole of #575's teeth live in the difference between that and "the author never
+    mentioned borrowing", because :func:`effective_tools` widens on the second one.
+    Two spellings of unreadable, both of which used to answer *absent*:
+
+    * a key that differs from ``borrows`` only by case — ``Borrows: none`` was read by
+      nothing, so the persona kept the legacy grant it had just written the word to give
+      up, and
+    * ``borrows:`` on two lines, where the dict keeps whichever is lower in the file, so
+      ``borrows: none`` above ``borrows: forge`` grants `forge`'s tools by line order.
+
+    Both are asked of the whole inheritance chain, unlike :func:`key_issues`, and that
+    asymmetry is deliberate: a REPORT belongs to the file that has to be edited, while a
+    GRANT belongs to the persona the tool gate is deciding about. A parent whose
+    ``Borrows:`` charter could not read must not hand its children the wide grant either.
+
+    The case half is read off the *resolved* meta, which costs nothing — `resolve` copies
+    a key it does not recognise straight through, so an ancestor's ``Borrows`` is already
+    sitting in the merged dict under that spelling. Only the duplicate half needs the
+    per-file answer, and only that half walks.
+    """
+    if any(misspelled_key(k) == "borrows" for k in resolved["meta"]):
+        return True
+    for a in resolved.get("lineage") or ():
+        d = load(a)
+        if d and "borrows" in (d.get("dupes") or ()):
+            return True
+    return False
+
+
 def borrows_of(name: str) -> list[str] | None:
     """Personas whose tools and vault this one may use — its ``borrows:``, or ``None`` when
     the key is absent.
@@ -937,9 +1128,28 @@ def borrows_of(name: str) -> list[str] | None:
     absent means "I have not opted in, keep the legacy `uses:` grant", while
     ``borrows: none`` means "I borrow nothing". Collapsing them would either break every
     existing plane or make opting out unsayable.
+
+    **`None` means the author never mentioned borrowing, and nothing else (#575).** It used
+    to also mean "the author mentioned it and charter did not read the key", which made
+    this the one field in the file that fails OPEN: every other miscased key costs the
+    persona something — a miscased ``Vault:`` means no credentials, a miscased ``Tools:``
+    means no auto-approvals — while a miscased ``Borrows:`` fell through to the legacy
+    ``uses:`` grant, which is the WIDER one. An author writing ``Borrows: none`` to opt out
+    of #257's grant got #257's grant, both borrowed personas' tools auto-approved at
+    `toolgate.decide`, and `structural_errors` empty.
+
+    So an unreadable declaration answers ``[]`` — borrow nothing — and never ``None``. That
+    is narrower than the author asked for whenever they meant ``Borrows: forge``, and
+    narrower is the direction this may be wrong in: the persona pays a permission prompt it
+    did not expect and `persona lint` names the line to fix, which is a cost measured in one
+    edit. The other direction is measured in a vault.
     """
     r = resolve(name)
-    if not r or "borrows" not in r["meta"]:
+    if not r:
+        return None
+    if _borrows_unreadable(r):
+        return []
+    if "borrows" not in r["meta"]:
         return None
     vals = _csv_list(r["meta"].get("borrows"))
     return [v for v in vals if v != BORROWS_NONE]
@@ -1152,14 +1362,26 @@ def structural_errors(name: str, known: set[str] | None = None) -> list[tuple[st
     rather than untidy — the resolver cannot build it. Split out from :func:`lint`
     (which calls this, so there is still one implementation) because the status line
     needs exactly this subset on **every turn** and none of the rest: no ``vault_of``,
-    no role/delegate-when, no unknown-key scan, and in particular no import of
-    ``commands_persona`` to fetch the key whitelist.
+    no role/delegate-when, no walk of the plugin cache, and no import of any command
+    module.
 
     ``known`` lets a caller sweeping the whole roster pass ``list_personas()`` once
     instead of paying for it per persona — 1.6ms of a 5.2ms 13-persona sweep.
+
+    :func:`key_issues` is here, and it is the one thing this gained. A key charter could
+    not honour is the same kind of broken as a dangling reference — the resolver builds a
+    persona out of a file that says something else — and it is where the fail-open shows:
+    ``Borrows: none`` narrows the grant now (#575), so the operator has to be told which
+    line did it by the signal that is on screen, not by a command they may never run.
+
+    It cost nothing to move here. This function used to be unable to ask about keys at
+    all, because the vocabulary lived in `commands_persona` and the import was the whole
+    expense; the vocabulary is :data:`KNOWN_KEYS` in this module now, and `lint`'s own
+    unknown-key scan stopped paying for that import too. The general unknown-key WARNING
+    stays in `lint` — it is not an error and this half is the error half.
     """
     allnames = known if known is not None else set(list_personas())
-    issues: list[tuple[str, str]] = []
+    issues: list[tuple[str, str]] = list(key_issues(name))
     refused = definition_refusal(name)
     if refused:
         # First, and on its own terms: every check below reads through `load`, which
@@ -1309,12 +1531,29 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
                                "charter, drop the line, then `charter persona sync-agents`"))
     # A frontmatter key charter neither reads nor emits reaches nothing: it is not copied
     # into .claude/agents/<name>.md and no charter code consults it, so a typo (`modell:`,
-    # `delegate_when:`) is silently inert. Imported lazily — persona.py is the lower layer
-    # and must not import the command module at import time.
-    from .commands_persona import _AGENT_PASSTHROUGH_KEYS, _CHARTER_OWN_KEYS
-    for key in sorted(set(meta) - (set(_AGENT_PASSTHROUGH_KEYS) | set(_CHARTER_OWN_KEYS))):
-        issues.append(("warn", f"frontmatter key '{key}' is neither read by charter nor "
-                               f"emitted into the sub-agent — it does nothing (typo?)"))
+    # `delegate_when:`) is silently inert.
+    #
+    # A WARNING, and it stays one. Charter has no claim about `modell:` — a harness's own
+    # field is a legitimate thing to carry in a committed file, and this line firing as an
+    # error would break planes that are correct. The two kinds of key charter CAN make a
+    # claim about — one it reads spelled in another case, and one it reads written twice —
+    # are errors, and they come from `structural_errors` below.
+    #
+    # Skipping the keys `key_issues` already named is not tidiness. "It does nothing
+    # (typo?)" is the wrong sentence for `Borrows:`: the key does nothing and its ABSENCE
+    # does a great deal, and a reader who acts on the milder of two sentences about one
+    # line acts on the wrong one.
+    #
+    # `contain.readable` because a key is a string from a committed file printed into a row
+    # whose whole job is to say which key to go and edit. `splitlines` already rules out a
+    # second row — it splits on \r, \x85, U+2028 and U+2029 — but a key of U+3164 HANGUL
+    # FILLER strips to nothing and printed as `frontmatter key '' …`, #498's finding on a
+    # row that had not been given the escape.
+    named = {k for k in meta if misspelled_key(k)}
+    for key in sorted((set(meta) - KNOWN_KEYS) - named):
+        issues.append(("warn", f"frontmatter key '{contain.readable(key)}' is neither read "
+                               f"by charter nor emitted into the sub-agent — it does "
+                               f"nothing (typo?)"))
     issues += structural_errors(name)
     issues += bin_issues(name)
     if deep:
