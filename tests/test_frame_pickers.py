@@ -228,6 +228,25 @@ class AHostileNameIsOneRowAndRunsNothing(_Frame, unittest.TestCase):
         self.assertEqual(sorted(p.name for p in config.WORKSPACES_DIR.iterdir()),
                          ["alpha", "beta"], "a refused switch created something")
 
+    def test_a_hostile_PERSONA_name_is_refused_the_same_way(self):
+        """**The twin, and it was not pinned before this case.** `switch.to_persona` has
+        the same `shown = contain.one_line(name)` as `to_workspace`, reaching the same
+        `_say_on_screen`; the workspace one is covered twice over and the persona one was
+        covered nowhere — deleting it left the whole suite green. Task 6 step 4 says
+        "workspace **and** persona", and a picker exists for both.
+        """
+        with mock.patch.object(switch, "personas", return_value=["forge", *HOSTILE]):
+            roster = choose.roster(choose.PERSONA, self.FID)
+            self.assertEqual(len(roster.rows), 1 + len(HOSTILE))
+            for row in roster.rows[1:]:
+                name = roster.name_of(row)
+                out = choose.switch_to(choose.PERSONA, self.FID, name)
+                self.assertFalse(out.ok, f"{name!r} was switched to")
+                self.assertEqual(len(out.message.splitlines()), 1, repr(out.message))
+                self.assertEqual(out.message, "".join(out.message.splitlines()),
+                                 repr(out.message))
+        self.assertIsNone(switch.current_persona(self.FID))
+
 
 def _pane(*rows):
     """Stand in for the palette's pane: hand each row to *then* in turn, answer the last.
