@@ -288,6 +288,24 @@ class ThePaletteOpensThePickerAndActsOnWhatComesBack(_Frame, unittest.TestCase):
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         self.said.assert_not_called()
 
+    def test_the_picker_says_which_noun_it_is_and_still_takes_a_click(self):
+        """Two things the surface is built with, and neither is cosmetic.
+
+        The heading is the only thing on a picker's screen that says what the names ARE —
+        the rows are bare names, deliberately, and a list of unlabelled words one keypress
+        after a list of actions is a pane an operator has to guess at. And `mouse` is one
+        declaration in `overlay.Surface`: it both asks the terminal for pointer reports and
+        decides whether one is acted on, so a picker built without it would be the one
+        surface in this frame where a click does nothing.
+        """
+        opened = []
+        doorway = self._doorway(choose.WORKSPACE)
+        surface = commands_frame._picker(doorway, self.FID, opened)
+        self.assertTrue(surface.mouse, "a click in the picker would do nothing")
+        header = surface.render(60, 10)[0]
+        self.assertIn(choose.WORKSPACE, tui.strip_ansi(header), header)
+        self.assertEqual(opened[0].noun, choose.WORKSPACE)
+
     def test_an_action_row_still_goes_through_invoke(self):
         """The other branch, so the dispatch above cannot pass by swallowing everything:
         a row that is not a doorway and not a name is an action and is started."""
