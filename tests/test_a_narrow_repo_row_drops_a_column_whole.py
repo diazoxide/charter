@@ -143,6 +143,22 @@ class RowPlanCase(unittest.TestCase):
         self.assertIn("*↑2", tui.strip_ansi(cell), cell)
         self.assertLessEqual(tui.width(cell), sl._BRANCH_MIN_W, cell)
 
+    def test_a_clean_repo_still_shows_its_branch_at_the_floor(self):
+        """The floor bounded from ABOVE, where the case below bounds it from below.
+
+        With no markers to pay for, the branch cell's whole floor is the branch's — and
+        `main` is four cells in six, so an ordinary clean repo keeps its branch name right
+        down to the narrowest cell the plan will draw. Raise `_BRANCH_TEXT_MIN_W` past the
+        floor and the branch simply vanishes from every clean row on a narrow pane, which
+        is a column silently going blank rather than a column being given up.
+
+        Between the two cases the constant is bounded rather than spelled. What is left
+        inside those bounds — four, five or six — no user-facing property can tell apart,
+        and that is recorded rather than papered over with an assertion on the number."""
+        cell = tui.strip_ansi(
+            sl._branch_cell_for("main", "", "", "", False, sl._BRANCH_MIN_W))
+        self.assertEqual(cell, "main", cell)
+
     def test_at_the_floor_the_cell_holds_the_markers_and_no_stub(self):
         """Shown whole or dropped whole, one layer down from `_row_plan`'s own version.
 

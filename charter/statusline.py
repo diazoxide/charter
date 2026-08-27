@@ -122,6 +122,13 @@ _BRANCH_MIN_W = 6
 # rather than cut: `fe…` is not a branch anybody can act on, and spending the cell on the
 # markers instead is the same shown-whole-or-dropped-whole rule :func:`_row_plan` keeps
 # one level up.
+#
+# **Bounded from both sides by a property, and 4/5/6 are indistinguishable between them.**
+# Measured, so the next reader does not go looking: below 4 a stub is drawn again (`a-…`
+# beside the markers, which the tests refuse); above 6 the branch vanishes from an
+# ordinary CLEAN row at the floor, because `main` is four cells in a six-cell cell and
+# there are no markers to pay for. Inside that band no user-facing property can tell one
+# value from another, and a test asserting the number would only pin the spelling.
 _BRANCH_TEXT_MIN_W = 4
 # Render to (COLUMNS − this). The pane gives LESS than `$COLUMNS` advertises, and the
 # amount was measured rather than guessed: at 2, a line ending exactly at COLUMNS−2 lost
@@ -860,7 +867,12 @@ def _branch_cell_for(branch_text: str, presence: str, marks_plain: str = "",
     room = width - tui.width(marks_plain)
     if room < _BRANCH_TEXT_MIN_W:
         return marks_col
-    br = tui.truncate(branch_text, max(1, room))
+    # `room`, not `max(1, room)`. The clamp was here before the refusal above was, and the
+    # refusal makes it dead: reaching this line means `room` is at least
+    # `_BRANCH_TEXT_MIN_W`. A deletion sweep said so, and two guards where one decides is
+    # the shape this repo keeps shipping — the second one passes because the first one
+    # caught it, and no mutation can turn it red.
+    br = tui.truncate(branch_text, room)
     out = f"{_YELLOW if is_dirty else _DIM}{br}{_R}{marks_col}"
     if not presence:
         return out
@@ -953,13 +965,21 @@ def _row_plan(budget: int) -> _RowPlan:
     status-line PANE's width, so any split reaches here — lays out at 72 and loses
     exactly 23 columns of branch text. Nothing else moves.
     """
+    # **No early return for a wide pane, and no `break` in the loop below.** Both were
+    # here, and a deletion sweep reported both as equivalent — correctly. A pane at
+    # `_LEFT_W` or wider walks the whole function and comes back with `_FULL_ROW` anyway:
+    # `over` clamps to zero so nothing shrinks, the drop loop finds the plan already
+    # inside the budget, and the leftover loop caps each cell at its full width. Saying it
+    # twice bought a branch nothing could reach.
+    #
+    # What replaces the `break` is what the `break` was really for: `max(0, …)` makes the
+    # shrink loop unable to GROW a cell. That is a property of the arithmetic now rather
+    # than of an early exit somebody has to keep in step with it — and it IS pinned, by
+    # `_row_plan(200) == _FULL_ROW`: unclamp it and a 200-column pane plans a 139-column
+    # branch cell.
     plan = _FULL_ROW
-    if budget >= _LEFT_W:
-        return plan
     for i, floor in ((1, _BRANCH_MIN_W), (0, _NAME_MIN_W)):
-        over = _plan_width(plan) - budget
-        if over <= 0:
-            break
+        over = max(0, _plan_width(plan) - budget)
         plan = plan._replace(**{plan._fields[i]: max(floor, plan[i] - over)})
     for i in (3, 1, 2):                       # change, then branch, then CI
         if _plan_width(plan) <= budget:
