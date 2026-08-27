@@ -112,6 +112,29 @@ def platform_caveat(mutation: "Mutation") -> str:
     return hit[0] if hit else ""
 
 
+def resolved(path: Path | str) -> Path:
+    """*path*, absolute and with every symlink taken out of it.
+
+    One spelling, applied at every boundary, because a path this tool merely *joins* is
+    harmless and a path it *compares* is not. The selection map is built by matching each
+    traced `co_filename` against a prefix, and `co_filename` is written by the import
+    system from whatever `sys.path` entry the module was found under — which, for the
+    trace runner, is `os.getcwd()`. The kernel's answer to that never contains a symlink.
+    So a prefix built from a path that still has one in it matches **nothing, ever**.
+
+    Measured (#572): the default workdir is `$TMPDIR`, macOS spells that
+    `/var/folders/…`, `/var` is a symlink to `/private/var`, and a sweep on macOS traced
+    all 329 test modules, matched not one file, and refused. The guard held; ten minutes
+    of tracing bought a hard stop and no diagnosis.
+
+    A `resolve()` at one site and a raw path at another is the same bug in a different
+    spelling, so this is the only normalisation there is: the repository root, the
+    workdir, every sandbox and the root the map is measured against all come through
+    here, and everything below them is repo-relative and joined rather than compared.
+    """
+    return Path(path).resolve()
+
+
 # --------------------------------------------------------------------------------------
 # 1. Scoping: which lines is this branch answerable for
 # --------------------------------------------------------------------------------------
@@ -572,6 +595,13 @@ module, out_path, prefix = sys.argv[1], sys.argv[2], sys.argv[3]
 # tree under test. Without this the import of every `tests.*` module fails, the tracer
 # sees nothing, and the map comes back empty — which still produces correct answers, by
 # sending every mutation to the full suite, and takes a hundred times as long to do it.
+#
+# This line also decides how every `co_filename` below is SPELLED. The import system
+# copies the `sys.path` entry a module was found under into its code objects, and
+# `os.getcwd()` is the kernel's answer, which has no symlinks left in it. `prefix` is
+# matched against those names raw — resolving one per call event would put a syscall on
+# the hottest path in this tool — so the caller resolves it once instead (`resolved`),
+# and #572 is what happens when it does not.
 sys.path.insert(0, os.getcwd())
 seen = set()
 error = ""
@@ -613,7 +643,10 @@ if suite is not None:
         threading.settrace(None)
 
 with open(out_path, "w") as fh:
-    json.dump({"files": sorted(seen), "error": error}, fh)
+    # `cwd` is reported because it is the ground truth for the spelling above — the
+    # directory the tracer's filenames are actually written against. The one moment
+    # anybody needs it is the moment the map refuses itself.
+    json.dump({"files": sorted(seen), "error": error, "cwd": os.getcwd()}, fh)
 '''
 
 
@@ -637,15 +670,22 @@ def test_modules(root: Path) -> list[str]:
 def build_map(root: Path, paths: tuple[str, ...], jobs: int, scratch: Path,
               log=print) -> dict[str, list[str]]:
     """``{source file: [test modules that execute it]}``, measured once."""
+    # Before anything is compared against it. `prefix` below is matched against filenames
+    # the interpreter spelled for itself, and it is the caller's spelling of this path
+    # that decides whether the two can ever meet — see :func:`resolved`.
+    root = resolved(root)
     modules = test_modules(root)
     scratch.mkdir(parents=True, exist_ok=True)
     runner = scratch / "_trace_runner.py"
     runner.write_text(_TRACE_RUNNER)
     prefix = str(root) + os.sep
     hits: dict[str, list[str]] = {}
+    #: Where the runners say they ran, as they measured it rather than as this side
+    #: assumed it. Only ever read when the map has already refused itself.
+    ran_in: set[str] = set()
     done = 0
 
-    def one(module: str) -> tuple[str, list[str], str]:
+    def one(module: str) -> tuple[str, list[str], str, str]:
         out = scratch / f"{module}.json"
         subprocess.run([sys.executable, str(runner), module, str(out), prefix],
                        cwd=str(root), check=False, timeout=SUBSET_TIMEOUT,
@@ -653,20 +693,26 @@ def build_map(root: Path, paths: tuple[str, ...], jobs: int, scratch: Path,
         try:
             payload = json.loads(out.read_text())
         except (OSError, ValueError):
-            return module, [], "the trace runner wrote nothing"
-        return module, payload["files"], payload["error"]
+            return module, [], "the trace runner wrote nothing", ""
+        return module, payload["files"], payload["error"], payload["cwd"]
 
     broken: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        for module, files, error in pool.map(one, modules):
+        for module, files, error, cwd in pool.map(one, modules):
             done += 1
             if done % 40 == 0:
                 log(f"    traced {done}/{len(modules)} modules")
             if error:
                 broken.append(f"{module}: {error.strip().splitlines()[-1]}")
+            ran_in.add(cwd)
             for f in files:
                 name, _, symbol = f.partition("::")
-                rel = Path(name).resolve().relative_to(root.resolve()).as_posix()
+                # Lexical, and it cannot fail: the runner only reported names that start
+                # with `prefix`, which is this `root` and a separator. Resolving either
+                # side again here is the move that made the bug survivable in the first
+                # place — it made the KEYS come out right while the prefix that chose
+                # them was wrong, so the map looked correct in every way except empty.
+                rel = Path(name).relative_to(root).as_posix()
                 hits.setdefault(f"{rel}::{symbol}" if symbol else rel, []).append(module)
 
     # An empty or near-empty map is a broken map, not a tree with no coverage, and it is
@@ -676,8 +722,19 @@ def build_map(root: Path, paths: tuple[str, ...], jobs: int, scratch: Path,
     if len(hits) < 2 or len(broken) > len(modules) // 4:
         log(f"  ! the trace produced {len(hits)} file(s) and {len(broken)} broken "
             f"module(s). The map is not usable:")
-        for line in broken[:3]:
-            log(f"  !   {line}")
+        # Which of the two it is decides what to do about it, and the counts alone leave
+        # the operator nowhere. `0 broken` is the tell: every runner loaded its suite,
+        # ran it, reported no error, and the tracer still matched nothing — that is a
+        # prefix that cannot match, not a tree without coverage. It is what #572 looked
+        # like from the outside, and comparing the two spellings below IS the diagnosis.
+        if broken:
+            for line in broken[:3]:
+                log(f"  !   {line}")
+        else:
+            log("  !   every module loaded and ran, so the tracer matched none of what")
+            log("  !   they executed. These two are one directory or they are nothing:")
+            log(f"  !     matched against : {prefix}")
+            log(f"  !     the runners ran : {'; '.join(sorted(ran_in))}")
         raise RuntimeError("the selection map is empty — refusing to sweep blind")
     if broken:
         log(f"  selection map: {len(broken)} module(s) would not load; "
@@ -790,7 +847,11 @@ class Sandbox:
     """A private clone of the tree. The operator's checkout is never written to."""
 
     def __init__(self, root: Path, where: Path, ref: str, dirty: dict[str, bytes]):
-        self.path = where
+        # Resolved on the way in, once. Everything downstream hangs off this path — the
+        # `cwd` the trace runners are given, the prefix the tracer matches against, the
+        # keys of the selection map — and a symlink surviving into any one of them is
+        # #572 again, in a different spelling.
+        self.path = where = resolved(where)
         if where.exists():
             shutil.rmtree(where)
         where.parent.mkdir(parents=True, exist_ok=True)
@@ -1358,7 +1419,28 @@ def as_json(results: list[Result]) -> str:
 # --------------------------------------------------------------------------------------
 
 def repo_root(start: Path) -> Path:
-    return Path(git("rev-parse", "--show-toplevel", cwd=start).strip())
+    return resolved(git("rev-parse", "--show-toplevel", cwd=start).strip())
+
+
+def workdir_for(root: Path, override: str | None) -> Path:
+    """Where the sandboxes and the trace cache live.
+
+    Outside the checkout, always. Sandboxes and a trace cache are not the working tree's
+    business, `.git` is a FILE and not a directory in a linked worktree, and a sweep run
+    from one worktree must not write into the repository another is using.
+
+    And resolved, which is the load-bearing half. `tempfile.gettempdir()` is `$TMPDIR`;
+    macOS spells that `/var/folders/…` and `/var` is a symlink to `/private/var`. So the
+    DEFAULT workdir was the one path in this tool guaranteed to carry a symlink down into
+    the selection map, and on macOS the tool could not sweep at all (#572). An explicit
+    `--workdir` gets the same treatment, which also makes a relative one mean what the
+    operator meant. The digest is taken from the resolved root, so one checkout reached
+    by two names gets one workdir and one cache instead of two.
+    """
+    if override:
+        return resolved(override)
+    digest = hashlib.sha256(str(resolved(root)).encode()).hexdigest()[:12]
+    return resolved(Path(tempfile.gettempdir()) / f"charter-sweep-{digest}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1399,12 +1481,7 @@ def main(argv: list[str] | None = None) -> int:
                                         cwd=root, check=False).strip() else "main"
         base = git("merge-base", ref, upstream, cwd=root).strip()
 
-    # Outside the checkout, always. Sandboxes and a trace cache are not the working
-    # tree's business, `.git` is a FILE and not a directory in a linked worktree, and a
-    # sweep run from one worktree must not write into the repository another is using.
-    workdir = Path(args.workdir) if args.workdir else (
-        Path(tempfile.gettempdir())
-        / f"charter-sweep-{hashlib.sha256(str(root).encode()).hexdigest()[:12]}")
+    workdir = workdir_for(root, args.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     cache_dir = workdir / "cache"
 
