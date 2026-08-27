@@ -773,9 +773,23 @@ class Sandbox:
             (self.path / rel).write_bytes(blob)
         self._pristine.clear()
 
-    def run(self, argv: list[str], timeout: int) -> Outcome:
-        env = dict(os.environ)
-        env.pop("PYTHONDONTWRITEBYTECODE", None)
+    def run(self, argv: list[str], timeout: float) -> Outcome:
+        # NO `__pycache__`, and this line is load-bearing. CPython decides a cached `.pyc`
+        # is still valid by comparing the source's size and its mtime **truncated to whole
+        # seconds** — nothing else. A sandbox applies one mutation after another to the
+        # same file, and two mutations of one file routinely differ from the original by
+        # the SAME number of bytes: `contain.one_line(x)` -> `x` removes exactly 18
+        # characters wherever it appears, so `panel.py`'s mutation at line 210 and its
+        # mutation at line 458 are both 29159 bytes against a 29177-byte original. Apply
+        # them a fraction of a second apart — which a two-second subset run does — and the
+        # second one is byte-for-byte indistinguishable from the first as far as the
+        # validator is concerned. It reuses the first one's bytecode.
+        #
+        # Measured, with the mtimes pinned equal to make it certain: mutating line 458 ran
+        # line 210's mutant, the test for line 210 went red, and line 458 — a real
+        # survivor — was reported PINNED. A guard certified as tested by a stale cache.
+        # With this variable set, the same pair answers RED then OK, correctly.
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         # Its own process group, so a timeout can take the whole tree of children with
         # it. `subprocess.run(timeout=…)` kills only the direct child, and this suite
         # starts real tmux servers — a wedged run that left one behind would be inherited

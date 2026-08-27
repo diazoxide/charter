@@ -795,6 +795,56 @@ class ACouldNotMeasureIsNotAPin(unittest.TestCase):
         self.assertIn("emphatically not a pin", text)
 
 
+class AStaleBytecodeCacheCannotDecideAnything(unittest.TestCase):
+    """The third way this harness invented a false pin, and the least obvious.
+
+    CPython validates a cached `.pyc` against the source's size and its mtime **truncated
+    to whole seconds**, and nothing else. A sandbox applies one mutation after another to
+    the same file, and two mutations of one file routinely differ from the original by the
+    same number of bytes — `contain.one_line(x)` -> `x` removes exactly 18 characters
+    wherever it appears. Measured on `charter/frame/panel.py` at `5b02b3f`: the mutation at
+    line 210 and the mutation at line 458 are both 29159 bytes against a 29177-byte
+    original. Applied within one second of each other, the second is indistinguishable from
+    the first, and line 458 — a real survivor — was reported PINNED by line 210's bytecode.
+    """
+
+    def test_the_sandbox_refuses_to_write_bytecode_at_all(self):
+        """Belt, not braces: rather than trying to out-guess the validator, the sandbox
+        never writes a `.pyc`, so there is nothing stale to reuse."""
+        box = object.__new__(sweep.Sandbox)
+        tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-pyc-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        box.path, box._pristine = tmp, {}
+        (tmp / "tests").mkdir()
+        (tmp / "tests" / "__init__.py").write_text("")
+        (tmp / "tests" / "test_env.py").write_text(textwrap.dedent("""
+            import os, sys, unittest
+            class T(unittest.TestCase):
+                def test_no_bytecode(self):
+                    assert os.environ.get("PYTHONDONTWRITEBYTECODE") == "1"
+                    assert sys.dont_write_bytecode
+        """))
+        outcome = box.run(["tests.test_env"], timeout=120)
+        self.assertTrue(outcome.green, outcome.detail)
+        self.assertEqual(list(tmp.rglob("__pycache__")), [])
+
+    def test_two_mutations_of_one_file_can_be_byte_identical_in_length(self):
+        """The precondition, stated as a property rather than as a story: if this stops
+        being possible the guard above is still right, and if it starts being common the
+        guard above is the only thing standing between the sweep and a wrong answer."""
+        src = textwrap.dedent("""
+            def f(a, b):
+                x = contain.one_line(a)
+                y = contain.one_line(b)
+                return x, y
+        """).lstrip("\n").encode()
+        muts = [m for m in sweep.mutations_for("charter/x.py", src, set(range(1, 6)))
+                if m.operator == "uncontain"]
+        self.assertEqual(len(muts), 2)
+        self.assertEqual(len(muts[0].source), len(muts[1].source))
+        self.assertNotEqual(muts[0].source, muts[1].source)
+
+
 class TheVerdictIsReadFromTheRun(unittest.TestCase):
     def test_ok_with_tests_is_green(self):
         self.assertTrue(sweep._verdict(_Completed(0, "Ran 42 tests in 1s\n\nOK\n")).green)
