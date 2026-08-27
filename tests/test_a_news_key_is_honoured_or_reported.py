@@ -297,9 +297,13 @@ class AMiscasedVersionDeletesTheEntryAndCharterSaysSo(NewsDir):
     """
 
     def _lost(self) -> None:
+        """`headline:` is written FIRST on purpose. A search for the miscased key that
+        forgot to filter — `next(k for k in meta)` — picks whichever key the file happens
+        to write first, and a fixture that put `Version:` there would let that pass and
+        report the right key by coincidence."""
         self.write(f"{_V}-a-ordinary.md", _entry(headline="ordinary"))
         self.write(f"{_V}-z-fix.md",
-                   f"---\nVersion: {_V}\nheadline: the one that vanished\n---\n\nb\n")
+                   f"---\nheadline: the one that vanished\nVersion: {_V}\n---\n\nb\n")
 
     def test_the_file_really_does_fall_out_of_every_view(self):
         """The premise. If `_read` ever started returning an entry for this, the class
@@ -323,6 +327,14 @@ class AMiscasedVersionDeletesTheEntryAndCharterSaysSo(NewsDir):
         self.assertIn("Version", why)
         self.assertIn("version:", why)
 
+    def test_and_names_the_key_that_is_wrong_rather_than_the_first_one(self):
+        """The assertion above is satisfied by a search that returns any key at all —
+        `Version` is a substring of the file's own frontmatter either way. This is the one
+        that says charter found the key it was looking for."""
+        self._lost()
+        why, = news.unreadable()
+        self.assertNotIn("headline", why)
+
     def test_and_the_release_gate_refuses(self):
         self._lost()
         rc, out, err = self.gate()
@@ -344,11 +356,14 @@ class AFileThatIsNotAnEntryIsAlsoSaid(NewsDir):
     alone sends a release engineer to open a file and guess."""
 
     def test_a_file_with_no_frontmatter(self):
+        """`key: value` rather than the word "frontmatter": the no-version sentence also
+        contains "frontmatter", so asserting that word alone is satisfied by the wrong
+        sentence — which is how a dropped `if not meta` reads as tested."""
         self.two()
         self.write(f"{_V}-z-notes.md", "just some prose, no frontmatter at all\n")
         why, = news.unreadable()
         self.assertIn("z-notes", why)
-        self.assertIn("frontmatter", why)
+        self.assertIn("`key: value` frontmatter", why)
 
     def test_a_file_whose_frontmatter_declares_no_version(self):
         self.two()
@@ -356,6 +371,16 @@ class AFileThatIsNotAnEntryIsAlsoSaid(NewsDir):
         why, = news.unreadable()
         self.assertIn("z-nover", why)
         self.assertIn("version:", why)
+        self.assertNotIn("`key: value` frontmatter", why)
+
+    def test_and_that_sentence_says_what_a_staged_entry_writes(self):
+        """The edit, not just the diagnosis. An author whose entry names no version is
+        usually one who has not staged it, and `unreleased` is the word they need — a
+        sentence that stops at "no version" leaves them to go and find it."""
+        self.two()
+        self.write(f"{_V}-z-nover.md", "---\nheadline: h\n---\n\nb\n")
+        why, = news.unreadable()
+        self.assertIn(news.UNRELEASED, why)
 
     def test_a_version_declared_with_nothing_after_the_colon(self):
         """The same shape `_flag` answers for an ordering field, one field up. The
@@ -364,6 +389,39 @@ class AFileThatIsNotAnEntryIsAlsoSaid(NewsDir):
         self.write(f"{_V}-z-empty.md", f"---\nversion:\n  {_V}\nheadline: h\n---\n\nb\n")
         why, = news.unreadable()
         self.assertIn("z-empty", why)
+
+    def test_a_file_charter_cannot_decode(self):
+        """Bytes that are not UTF-8. The `except` catching this is a guard like any
+        other: unpinned, it is a clause somebody narrows or widens with nothing to say
+        whether they were right — and here widening it would swallow a real bug while
+        reporting the file as merely undecodable."""
+        self.two()
+        (self.dir / f"{_V}-z-bytes.md").write_bytes(b"---\nversion: 0.60.0\n\xff\xfe\n---\n")
+        why, = news.unreadable()
+        self.assertIn("z-bytes", why)
+        self.assertIn("UnicodeDecodeError", why)
+
+    def test_a_directory_wearing_an_entrys_name(self):
+        """The OSError half, spelled portably. A directory named `<version>-<slug>.md`
+        is matched by the glob and raises `IsADirectoryError` on read — on darwin and on
+        Linux alike, with no permission bit involved, so this is not a case that only
+        fires on the runner or only on a laptop."""
+        self.two()
+        (self.dir / f"{_V}-z-dir.md").mkdir()
+        why, = news.unreadable()
+        self.assertIn("z-dir", why)
+        self.assertIn("Error", why)
+
+    def test_with_no_news_directory_at_all_there_is_nothing_to_report(self):
+        """The refusal at the top of `unreadable`. An installed charter whose wheel
+        carries no entries, and a checkout that is not one, both land here — and without
+        it the glob runs on `None` and the command raises instead of saying nothing."""
+        gone = self.dir / "not-here"
+        with mock.patch.object(news, "_PACKAGED", gone), \
+             mock.patch.object(news, "_CHECKOUT", gone):
+            self.assertIsNone(news._dir())
+            self.assertEqual(news.unreadable(), [])
+            self.assertEqual(news.all(), [])
 
     def test_a_decline_this_version_cannot_explain_still_gets_a_sentence(self):
         """The branch no fixture can reach today, and the reason it is not "whatever the

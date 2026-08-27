@@ -393,13 +393,15 @@ def _report(template: str, **fields) -> str:
     The value was contained because the value was what that commit was about — not because
     the filename half had been judged safe.
 
-    Wrapping each span individually would have fixed those four call sites and left the
-    door open at the fifth, which is a THIRD untrusted span appearing in one of these
-    sentences: the ``{version}`` in the duplicate-`lead:` message is frontmatter, the
-    ``{check}`` in a probe's reason is frontmatter, and a slug is a filename with its
-    prefix cut off. So the message is contained as it is ASSEMBLED. A field added to one of
-    these templates tomorrow is contained by having been passed here, which is the one
-    property a reviewer can check by reading the call site.
+    Wrapping each span individually would have fixed the four call sites #502 named and
+    left the door open at the shape it predicted: a THIRD untrusted span turning up in one
+    of these sentences. There were three of those already. The ``{version}`` in the
+    duplicate-`lead:` message is frontmatter; the ``{check}`` in a probe's reason is
+    frontmatter; the pair of filenames in `stamp`'s SUCCESS line is the same pair its
+    refusals carry, on the path that runs at every release. So the message is contained as
+    it is ASSEMBLED, and a field added to one of these templates tomorrow is contained by
+    having been passed here — which is a property a reviewer can check by reading the call
+    site, rather than one they have to remember.
 
     What this does not reach is a call site that builds its sentence with an f-string
     instead of calling this. Nothing in the language stops that, so

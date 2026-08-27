@@ -396,6 +396,57 @@ class TheCommandsPrintWhatTheModuleAssembled(NewsDir):
             self._both(SimpleNamespace(for_version=None, pending=True,
                                        since=None, until=None))
 
+    def test_the_pending_view_when_a_probe_could_not_run(self):
+        """A DIFFERENT line of the same view, and the one the case above never reaches.
+        `--pending` prints an adopt line for a PENDING entry and warns for an UNKNOWN one,
+        and the warning is where the slug is interpolated. Mocking every probe to PENDING
+        leaves that branch untouched — which is exactly how its containment read as
+        covered while nothing executed it."""
+        args = SimpleNamespace(for_version=None, pending=True, since=None, until=None)
+        said = {}
+        for label, name_payload, value_payload in (("hostile", _HOSTILE, _HOSTILE_VALUE),
+                                                   ("benign", _BENIGN, _BENIGN)):
+            self.setUp()
+            # A `check:` no CLI resolves: refused before any command function runs, so
+            # `probe` answers UNKNOWN with a reason, and no real probe is dispatched.
+            self.write(f"{_V}-a{name_payload}.md",
+                       _entry(headline=f"h{value_payload}", check="frobnicate --hard"))
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(commands.config, "HAS_CONTROL_PLANE", True), \
+                 redirect_stdout(out), redirect_stderr(err):
+                commands.cmd_news(args)
+            said[label] = out.getvalue() + err.getvalue()
+        self.assertIn("unchecked", said["hostile"], "the UNKNOWN branch was never reached")
+        self.assertEqual(len(said["hostile"].splitlines()),
+                         len(said["benign"].splitlines()),
+                         f"the hostile fixture changed the shape of the report: "
+                         f"{said['hostile']!r}")
+        self.assertNotIn("\x1b", said["hostile"])
+
+    def test_the_version_a_file_can_really_carry_into_the_range_view(self):
+        """`version:` is printed in that view's own left column, and it is frontmatter.
+
+        A line break cannot reach it — `persona.parse` would make a second key of it — but
+        an escape sequence can, and `update._parse` is deliberately lenient about junk
+        ("anything non-numeric sorts low rather than raising"), so the entry passes the
+        range filter and gets printed. That is the whole path, from a committed file to a
+        repainted terminal, with no step that had to be mocked.
+        """
+        self.write(f"{_V}-a-one.md", _entry(version=f"{_V}{_ESC}", headline="h"))
+        out, err = io.StringIO(), io.StringIO()
+        # `until` is above this version, because `_parse` reads the escape's own digits as
+        # part of the last component ("0\x1b[31m" → 31) and the entry sorts a little high.
+        # That is the leniency doing exactly what its docstring says, and the entry is
+        # still in a range a reader would ask for.
+        args = SimpleNamespace(for_version=None, pending=False,
+                               since="0.59.0", until="0.61.0")
+        with mock.patch.object(news, "probe", return_value=(news.INFORMATIONAL, "")), \
+             redirect_stdout(out), redirect_stderr(err):
+            commands.cmd_news(args)
+        said = out.getvalue()
+        self.assertIn("h", said, "the entry never reached the range view")
+        self.assertNotIn("\x1b", said)
+
 
 class TheGuardIsAtTheAssemblyNotAtTheSpans(unittest.TestCase):
     """What separates this fix from the one #502 argued against.
