@@ -983,9 +983,17 @@ def _row_plan(budget: int) -> _RowPlan:
         plan = plan._replace(**{plan._fields[i]: 0})
     # The name is filled to its full width before the branch gets a column, which is what
     # "the branch narrows first" means from this direction.
+    #
+    # `spare > 0` and not `plan[i] and spare > 0`. The second conjunct read as "never
+    # resurrect a cell the drop loop took away", which sounds load-bearing and is not: the
+    # only droppable cell here is the branch, the name is filled first and can absorb
+    # twenty columns, and every budget narrow enough to have dropped the branch has fewer
+    # than twenty spare. A deletion sweep said so. `spare > 0` IS load-bearing — below the
+    # name's own floor `spare` goes negative, and without the guard the name is planned
+    # narrower than the floor it was just given.
     for i, full in ((0, _FULL_ROW.name), (1, _FULL_ROW.branch)):
         spare = budget - _plan_width(plan)
-        if plan[i] and spare > 0:
+        if spare > 0:
             plan = plan._replace(**{plan._fields[i]: min(full, plan[i] + spare)})
     return plan
 
