@@ -141,6 +141,27 @@ If a change touches git behaviour, run the suite that way once. It is cheaper th
 against the PR branch; `main` is a different commit. Every one of these three was green on
 the PR and red immediately after merging.
 
+### Sweeping the guards your branch adds
+
+For every `if` you add that refuses, clamps, contains or falls back, there should be a test
+that goes RED when that line is deleted. `tools/sweep.py` checks that mechanically, against
+the diff with your merge-base:
+
+```bash
+python3 tools/sweep.py                  # this branch, against origin/main
+python3 tools/sweep.py --second-order 24 # survivors in one function, applied together
+python3 tools/sweep.py --all             # the standing debt across the tree, as a number
+```
+
+It deletes one guard at a time, runs only the test modules measured to execute that
+function, and re-runs the **whole** suite for anything that survives before reporting it.
+A survivor is a line you can delete with the suite still green. There is no suppression
+list, on purpose: if deleting a line genuinely changes nothing observable, delete the line
+— "equivalent mutant" and "dead code" are the same finding.
+
+It is not a CI gate yet. It is stdlib-only, it makes its own clones, and it never writes to
+your checkout.
+
 ## Architecture decisions
 
 Decisions that were hard to reverse are written down in [`docs/adr/`](docs/adr/), and

@@ -85,8 +85,11 @@ def tracked_top_level_directories(repo: Path = REPO) -> set[str]:
 #: are not repo content, and keeping untracked names here is how the list would grow one
 #: developer's machine at a time — `.charter`, `.superpowers`, `.venv`, `.idea` — until it
 #: classified nothing.
+#: `tools/` is developer tooling — `tools/sweep.py` runs the deletion sweep over a branch.
+#: No plugin loads it, `pyproject.toml` names `charter` as the only package so no wheel
+#: ships it, and an edit to it is not a stale plugin.
 _NOT_PLUGIN_SURFACE = {
-    ".github", ".claude", "charter", "docs", "tests", "personas", "workspaces",
+    ".github", ".claude", "charter", "docs", "tests", "personas", "workspaces", "tools",
 }
 
 PLUGIN = {
