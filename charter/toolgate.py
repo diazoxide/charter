@@ -794,9 +794,9 @@ def snapshot(session_id: str | None = None) -> dict:
 
         f = _ceiling_file(sid)
         config.private_mkdir(f.parent)
-        _marker_file(sid).touch()   # before the ceiling: see `_marker_file`
+        config.touch_for(_marker_file(sid))   # before the ceiling: see `_marker_file`
         tmp = f.with_name(f.name + ".tmp")
-        tmp.write_text(json.dumps(data, sort_keys=True))
+        config.write_for(tmp, json.dumps(data, sort_keys=True))
         os.replace(tmp, f)
     except OSError:
         return {}

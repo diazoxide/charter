@@ -114,7 +114,7 @@ def _stamp_baseline(version: str) -> None:
     try:
         p = _baseline_file()
         config.private_mkdir(p.parent)
-        p.write_text(version)
+        config.write_for(p, version)
     except OSError:
         pass          # a missing baseline degrades the news RANGE, never the update
 

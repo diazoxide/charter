@@ -86,7 +86,7 @@ def _write_lock(pid: int | None) -> None:
     try:
         lock = _lock_file()
         config.private_mkdir(lock.parent)
-        lock.write_text(str(pid) if pid else "")
+        config.write_for(lock, str(pid) if pid else "")
     except Exception:
         pass
 
@@ -148,7 +148,7 @@ def _save(cache: dict) -> None:
     f = _cache_file()
     try:
         config.private_mkdir(f.parent)
-        f.write_text(json.dumps(cache))
+        config.write_for(f, json.dumps(cache))
     except Exception:
         pass
 

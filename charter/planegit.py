@@ -246,7 +246,7 @@ def record_push(res: PushResult, head: str = "") -> PushResult:
             p.unlink(missing_ok=True)
             return res
         config.private_mkdir(p.parent)
-        p.write_text(json.dumps({
+        config.write_for(p, json.dumps({
             "outcome": res.outcome, "branch": res.branch, "landed": res.landed,
             "url": res.url, "detail": res.detail, "head": head, "at": time.time(),
         }, indent=2))

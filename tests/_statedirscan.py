@@ -1,10 +1,18 @@
-"""Which ``mkdir`` calls in `charter/` can create a directory under the state directory.
+"""Which writes in `charter/` can leave a loose inode under the state directory.
 
-Static, and deliberately so: the question is *coverage* — has every writer that can make
-``.charter/`` been routed through `config.private_mkdir` / `config.mkdir_for` — and
-coverage is a question about code that was not executed. The behavioural half lives in
-`test_the_state_directory_is_charters_to_choose.py`, which runs real commands and measures
-the mode that comes out; this half is what notices the writer nobody ran.
+Two kinds of inode, one question. A ``mkdir`` that can create a directory under
+``.charter/`` without going through `config.private_mkdir` / `config.mkdir_for` (#470),
+and a ``write_text``/``touch``/``open``/``os.open`` that can create a **file** there
+without going through `config.write_for` / `open_for` / `touch_for` (#505). Both are the
+same property — *the umask does not decide the mode of charter's own state* — and both are
+asked here in the same two halves, because a directory scan that had grown its own copy of
+the reachability machinery is how the two answers would drift apart.
+
+Static, and deliberately so: the question is *coverage* — has every writer that can reach
+``.charter/`` been routed — and coverage is a question about code that was not executed.
+The behavioural half lives in `test_the_state_directory_is_charters_to_choose.py`, which
+runs real commands and measures the mode that comes out; this half is what notices the
+writer nobody ran.
 
 Not a ``test_*`` module, so discovery skips it. Its own accuracy is tested there, against
 sources built for the purpose.
@@ -62,6 +70,25 @@ does not matter" — that was false on the exact flow above, where the loose dir
 ``.charter/``. It is that `config.mkdir_for` decides at **runtime**, on where the path
 actually is, so a writer routed through it is right about a path this reader cannot name.
 The scan's job is to prove every writer is routed; the guard is `config`.
+
+A **function that returns a local** (``d = contain.child(...)`` … ``return d``) is not
+recognised as a state-path source: :func:`_returns` reads the return expression, and
+substituting locals into it was measured to over-taint catastrophically — every function
+returning any local out of a module that touches the state directory becomes a state path,
+including the ones returning strings and ints, and the scan starts reporting committed
+directories it can never be cleaned of. `frame.state.frame_dir` has that shape, so the
+frame's per-frame files are outside both halves. Their directory is created through
+`config.private_mkdir`, so the exposure is the narrower one — a ``.charter/frame/`` that
+pre-existed loose — but it is a gap and it is filed rather than papered over.
+
+**``os.replace``/``os.rename`` destinations are not scanned**, which is a decision rather
+than an oversight. An atomic writer's temp file carries its own mode onto the destination,
+so the question is whether the *source* was private — and a source is either a state path
+this scan already sees (an ``os.replace`` cannot cross filesystems, so an atomic write into
+``.charter/`` is written next to its destination) or a `tempfile.mkstemp` file, which is
+0600 by construction. Both are pinned behaviourally in
+`TheDispatchOnWhereTheFileIs.test_the_atomic_writers_temp_file_is_private_by_construction`,
+so the reasoning is measured rather than assumed.
 """
 
 from __future__ import annotations
@@ -84,6 +111,18 @@ ROUTED = ("private_mkdir", "mkdir_for")
 #: to route through itself. Named in full — ``module.function`` — so an unrelated
 #: ``_mkdir_0700`` appearing elsewhere would still be scanned.
 THE_WALK = ("config.private_mkdir", "config._mkdir_0700", "config.mkdir_for")
+
+#: The routed spellings for a FILE (#505). Same shape as `ROUTED`, and the same reason it
+#: is documentation rather than a filter: none of these is named ``write_text``/``open``/
+#: ``touch``, so a routed call is simply not a site.
+ROUTED_WRITE = ("write_for", "open_for", "touch_for")
+
+#: `config`'s own file writers, exempt for the reason `THE_WALK` is: they **are** the
+#: routing. ``_open_private``/``_private_fd`` are the private opener itself; ``open_for``'s
+#: bare `open` is the branch it takes having just decided the path is not state;
+#: ``touch_for``'s bare ``Path.touch`` is the same branch.
+THE_WRITE_WALK = ("config._private_fd", "config._open_private", "config.open_for",
+                  "config.write_for", "config.touch_for")
 
 
 def state_attribute_names() -> set[str]:
@@ -233,14 +272,38 @@ def _enclosing(scopes, lineno):
 
 
 def _local_assigns(fn) -> dict[str, str]:
-    """``{name: source of what it was assigned}`` for simple local assignments in *fn*."""
+    """``{name: source of what it was assigned}`` for the local bindings in *fn*.
+
+    Three shapes, and the first cut had only one. ``f = _path()`` is the obvious one.
+
+    ``sf, tf = _pointer_files(…)`` binds two names to one expression, and each of them
+    gets the whole call: which element of the tuple a name took is not decidable here, and
+    the safe direction is that both carry whatever the call does. Reading only single-Name
+    targets meant `persona.set_active`'s pointer files were bound by a spelling the scan
+    could not see, and its writes went unreported.
+
+    ``for f in (sf, tf):`` is the same question worn as a loop, and the same answer: *f* is
+    whatever the iterable is. `workspace._rename_active_pointers` rewrites every session
+    and terminal pointer through two nested loops of exactly this shape, and a scan that
+    read neither reported the module clean while it wrote at the umask (#505).
+
+    A binding is approximate on purpose — the point is reachability, and a name that might
+    carry a state path is a name that does.
+    """
     assigns: dict[str, str] = {}
     if fn is None:
         return assigns
     for n in ast.walk(fn):
-        if isinstance(n, ast.Assign) and len(n.targets) == 1 \
-                and isinstance(n.targets[0], ast.Name):
-            assigns.setdefault(n.targets[0].id, ast.unparse(n.value))
+        if isinstance(n, ast.Assign) and len(n.targets) == 1:
+            target = n.targets[0]
+            if isinstance(target, ast.Name):
+                assigns.setdefault(target.id, ast.unparse(n.value))
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for el in target.elts:
+                    if isinstance(el, ast.Name):
+                        assigns.setdefault(el.id, ast.unparse(n.value))
+        elif isinstance(n, (ast.For, ast.AsyncFor)) and isinstance(n.target, ast.Name):
+            assigns.setdefault(n.target.id, ast.unparse(n.iter))
     return assigns
 
 
@@ -294,6 +357,146 @@ def _mkdir_sites(tree: ast.AST):
         exprs += [ast.unparse(k.value) for k in node.keywords if k.arg in _PATH_KWARGS]
         if exprs:
             yield node, tuple(exprs), _enclosing(scopes, node.lineno)
+
+
+# --------------------------------------------------------------------------- #
+# the same two questions, about FILES (#505)                                   #
+# --------------------------------------------------------------------------- #
+#: Every spelling of "put bytes in a file here" that carries a mode with it. ``write_text``
+#: / ``write_bytes`` / ``touch`` create at ``0o666 & ~umask``; ``open`` and ``os.open`` do
+#: the same for the modes that create. Named as a set of NAMES for the same reason
+#: `_mkdir_sites` yields every position that could hold the path: a shape decided here is
+#: a shape that can be wrong silently.
+_WRITE_NAMES = ("write_text", "write_bytes", "touch", "open")
+
+#: The keywords the stdlib gives the path of a file-opening call: ``open(file=…)`` and
+#: ``os.open(path=…)``. Read from the signatures, not invented.
+_FILE_KWARGS = ("file", "path")
+
+#: A mode string with any of these in it opens for writing. ``"r"``/``"rb"`` have none of
+#: them and are not a site at all — a scan that flagged every read of a state file would
+#: be asking `charter` to route a read through a writer, which is not a thing, and the
+#: noise would take the real answers with it.
+_WRITE_MODE_CHARS = frozenset("wax+")
+
+#: ``os.open`` says the same thing in flags. ``O_RDONLY`` is 0 and names nothing, so the
+#: presence of any of these IS the question.
+_WRITE_FLAGS = ("O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC")
+
+
+def _opens_for_writing(node: ast.Call, is_attr: bool) -> bool:
+    """Does this ``open``/``os.open`` call write?
+
+    Three shapes share the name and keep the mode in different places: ``open(p, "w")``
+    (argument 1), ``p.open("w")`` (argument 0) and ``os.open(p, flags)` (argument 1). As
+    with the path, the shape is not decided — every position that could hold a mode is
+    read, and a writing mode in **any** of them makes it a site.
+
+    **An unrecognisable mode counts as a write.** ``open(p, mode)`` with *mode* computed
+    somewhere else cannot be read here, and the safe direction is the false positive: a
+    reader wrongly asked to route is loud, a writer wrongly skipped is the defect.
+
+    No mode argument at all is the one case answered "no" — that is `open`'s documented
+    default of ``"r"``, which is a fact about the stdlib rather than a guess about this
+    call.
+    """
+    texts = [ast.unparse(a) for a in node.args[0 if is_attr else 1:2]]
+    texts += [ast.unparse(k.value) for k in node.keywords if k.arg in ("mode", "flags")]
+    if not texts:
+        return False
+    for t in texts:
+        if t[:1] in ("'", '"'):
+            if _WRITE_MODE_CHARS & set(t):
+                return True
+        elif any(f in t for f in _WRITE_FLAGS):
+            return True
+        elif t.startswith("0o") or t.lstrip("-").isdigit():
+            continue          # `os.open`'s third argument is the creation mode, not flags
+        else:
+            return True       # unreadable — the safe direction
+    return False
+
+
+def _settles_the_mode(fn) -> bool:
+    """Does *fn* settle the mode on the descriptor it opened?
+
+    ``os.open(p, O_CREAT, 0o600)`` is **not** private: the *mode* argument applies only
+    when the call creates the inode, so a file that already exists keeps whatever mode it
+    had and every byte written into it sits at that mode (#437, measured). What makes an
+    `os.open` writer correct is the ``fchmod`` on the descriptor — and charter has three
+    that do it directly rather than through `config`, because each has a policy of its own
+    the dispatch does not have: `secrets.plain_file` reads the mode back and **refuses**
+    to write plaintext into a file it could not make private, `secrets.fingerprint` does
+    the same for key material, and `secrets.registry` writes the committed shared half at
+    0644 on purpose.
+
+    So this asks the **property** — is the mode settled on the descriptor — rather than
+    naming those three functions in a list. A list is a spelling, and the fourth writer
+    nobody adds to it is the one that matters.
+
+    **What it cannot see, said out loud:** the mode `fchmod` is given is not read. A
+    writer that fchmods to 0644 on a state path passes this and should not. That is the
+    residual, and it is bounded by the fact that a `fchmod` is a deliberate line — the
+    defect this scans for is the writer that never thought about the mode at all.
+    """
+    if fn is None:
+        return False
+    return any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "fchmod"
+               for n in ast.walk(fn))
+
+
+def _write_sites(tree: ast.AST):
+    """``(call node, candidate path expressions, enclosing function)`` per file write.
+
+    The file half of :func:`_mkdir_sites`, and the same discipline: ``p.write_text(…)``
+    keeps its path in the RECEIVER, ``open(p, "w")`` and ``os.open(p, …)`` in the first
+    ARGUMENT, and ``Path.write_text(p, …)`` — the unbound spelling — in the first argument
+    of an attribute call. Every position that could hold the path is yielded.
+
+    An ``os.open`` whose enclosing function settles the mode on the descriptor is not a
+    site: see :func:`_settles_the_mode` for why that is a property and not an exemption.
+    """
+    scopes = _scopes(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        is_attr = isinstance(fn, ast.Attribute)
+        name = getattr(fn, "attr", None) or getattr(fn, "id", None)
+        if name not in _WRITE_NAMES:
+            continue
+        here = _enclosing(scopes, node.lineno)
+        if name == "open":
+            if not _opens_for_writing(node, is_attr):
+                continue
+            if _settles_the_mode(here):
+                continue
+        exprs = [ast.unparse(fn.value)] if is_attr else []
+        exprs += [ast.unparse(a) for a in node.args[:1]]
+        exprs += [ast.unparse(k.value) for k in node.keywords if k.arg in _FILE_KWARGS]
+        if exprs:
+            yield node, tuple(exprs), here
+
+
+def write_violations(source: str, state_names: set[str]) -> list[tuple[int, str]]:
+    """``(line, path expression)`` per file write in *source* on a path that is
+    state-derived **by its own spelling** — the named half, for files.
+
+    :func:`violations` with :func:`_write_sites` in place of :func:`_mkdir_sites`; the two
+    are one question asked about two kinds of inode, so they share every piece of the
+    reasoning below them.
+    """
+    tree = ast.parse(source)
+    state_funcs = state_path_functions(tree, state_names)
+    out = []
+    for node, exprs, enclosing in _write_sites(tree):
+        assigns = _local_assigns(enclosing)
+        for expr in exprs:
+            full = _expand(expr, assigns)
+            if _mentions_state(full, state_names) or _calls(full, state_funcs):
+                out.append((node.lineno, expr))
+                break
+    return out
 
 
 def _params(fn) -> list[str]:
@@ -489,18 +692,25 @@ def tainted_params(mods, state_names: set[str], state_funcs: set[str]) -> set[st
     return tainted
 
 
-def handed_violations(mods, state_names: set[str]) -> dict[str, list[tuple[int, str]]]:
+def handed_violations(mods, state_names: set[str], *, sites=_mkdir_sites,
+                      walk=THE_WALK) -> dict[str, list[tuple[int, str]]]:
     """``{relative path: [(line, expr)]}`` for every ``mkdir`` on a **handed** state path.
 
     The half the named scan cannot see, and the one `memstore` fell through.
+
+    *sites* and *walk* are what make this the same function for files (#505):
+    :func:`handed_write_violations` passes :func:`_write_sites` and `THE_WRITE_WALK`.
+    "A state path reached this callee as an argument" is one question, and the kind of
+    inode the callee then creates is not part of it — writing it twice is how the two
+    answers drift apart, which is the failure this file's own history is made of.
     """
     state_funcs = package_state_functions(mods, state_names)
     tainted = tainted_params(mods, state_names, state_funcs)
     found: dict[str, list[tuple[int, str]]] = {}
     for module, (path, tree) in mods.items():
         scopes = _scopes(tree)
-        for node, exprs, here in _mkdir_sites(tree):
-            if here is None or f"{module}.{here.name}" in THE_WALK:
+        for node, exprs, here in sites(tree):
+            if here is None or f"{module}.{here.name}" in walk:
                 continue
             mine = [q.rpartition(".")[2] for q in tainted
                     if q.startswith(f"{module}.{here.name}.")]
@@ -517,20 +727,54 @@ def handed_violations(mods, state_names: set[str]) -> dict[str, list[tuple[int, 
     return found
 
 
+def handed_write_violations(mods, state_names: set[str]) \
+        -> dict[str, list[tuple[int, str]]]:
+    """``{relative path: [(line, expr)]}`` per file write on a **handed** state path.
+
+    `memstore.write(mem_dir, …)` again, one inode-kind over: it is handed the committed
+    ``personas/<n>/memory`` on one call and the gitignored
+    ``PERSONA_STATE_DIR/ephemeral/<session>/<n>`` on the next, and the file it writes there
+    was at the umask exactly as the directory used to be.
+    """
+    return handed_violations(mods, state_names, sites=_write_sites, walk=THE_WRITE_WALK)
+
+
 def scan_package() -> dict[str, list[tuple[int, str]]]:
     """``{relative path: violations}`` over the whole package — both halves, merged.
 
     Named and handed are one answer because they are one property: a ``mkdir`` that can
     run on a path under ``.charter/`` without going through `config`.
     """
+    return _scan(violations, handed_violations)
+
+
+def scan_package_writes() -> dict[str, list[tuple[int, str]]]:
+    """The same sweep, asked about **files** (#505).
+
+    Kept as its own answer rather than merged into :func:`scan_package` so the failure a
+    developer reads names the right remedy — ``config.mkdir_for`` and ``config.write_for``
+    are different calls, and one report that says "route this" for both would make the
+    reader guess which.
+    """
+    return _scan(write_violations, handed_write_violations)
+
+
+def _scan(named, handed) -> dict[str, list[tuple[int, str]]]:
+    """One sweep of the package: the *named* half per module, then the *handed* half.
+
+    Named and handed are one answer because they are one property — a writer that can run
+    on a path under ``.charter/`` without going through `config`.
+    """
     names = state_attribute_names()
     mods = load_package()
     found: dict[str, list[tuple[int, str]]] = {}
     for module, (path, tree) in mods.items():
-        hits = violations(path.read_text(), names)
+        hits = named(path.read_text(), names)
         if hits:
             found[str(path.relative_to(PACKAGE.parent))] = hits
-    for f, hits in handed_violations(mods, names).items():
-        merged = sorted(set(found.get(f, [])) | set(hits))
-        found[f] = merged
-    return found
+    for f, hits in handed(mods, names).items():
+        found[f] = list(set(found.get(f, [])) | set(hits))
+    # Sorted unconditionally: the named half yields in `ast.walk` order, which is neither
+    # line order nor stable across Python versions, and a report a reader diffs against
+    # last week's should not reshuffle for having been asked twice.
+    return {f: sorted(hits) for f, hits in found.items()}

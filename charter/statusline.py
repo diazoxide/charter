@@ -237,7 +237,7 @@ def _record_turn(sid: str, hit: int, read: int, write: int,
     rows = rows[-_TREND_KEEP:]
     try:
         config.private_mkdir(f.parent)
-        f.write_text("\n".join(rows) + "\n")
+        config.write_for(f, "\n".join(rows) + "\n")
     except OSError:
         pass
     return _hits(rows)
@@ -656,7 +656,7 @@ def _repo_states(dirs: list[Path]) -> dict:
     if changed:
         try:
             config.private_mkdir(cache_file.parent)
-            cache_file.write_text(json.dumps(cache))
+            config.write_for(cache_file, json.dumps(cache))
         except Exception:
             pass
     return out
@@ -1312,7 +1312,7 @@ def _vault_health(vault: str) -> tuple[bool, str]:
     cache[vault] = {"ok": bool(ok), "detail": detail or "", "ts": now}
     try:
         config.private_mkdir(cache_file.parent)
-        cache_file.write_text(json.dumps(cache))
+        config.write_for(cache_file, json.dumps(cache))
     except Exception:
         pass
     _vault_memo[vault] = (ok, detail)

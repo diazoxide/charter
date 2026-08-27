@@ -238,7 +238,7 @@ def approve(persona_name: str, fingerprints) -> None:
     doc[persona_name] = sorted({f for f in fingerprints if f})
     p = path()
     config.private_mkdir(p.parent)
-    p.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+    config.write_for(p, json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
 
 
 def _escape(ch: str) -> str:

@@ -707,7 +707,7 @@ def cmd_workspace_autosave(args) -> int:
         if commit_push(config.ROOT, ["add", "--", *rel],
                        f"workspace({name}): auto-save memo + manifest", no_push=True) != 0:
             return 0
-        marker.write_text(str(time.time()))
+        config.write_for(marker, str(time.time()))
         if share == "push":
             # detached background push — the turn returns immediately
             _spawn_pushbg(config.ROOT)

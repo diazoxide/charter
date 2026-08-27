@@ -43,6 +43,33 @@ directory and the `chmod` to run. It stays a **green** line rather than a warnin
 will not fix this one for you, so saying it is the remedy, and a warning at every session
 start about a directory you have decided to leave alone is a check nobody reads twice.
 
+**The files in it are a different answer, and on purpose.** Every file charter writes under
+`.charter/` — the vault registry, `guard-seen.json`, the trace log, the ephemeral persona
+store, the session and workspace pointers, the caches — is **0600**, whatever your umask
+says and whatever mode the file had before. Until 0.54 they were written at `0o777 & ~umask`
+instead, which was safe only while the directory above them was 0700 — i.e. not in the case
+this whole section is about
+([#505](https://github.com/diazoxide/charter/issues/505)).
+
+That charter *tightens* a file it did not create while it *reports* a directory it did not
+create is one policy, not two: charter tightens what is **its own** and reports what is not.
+A directory under `$CHARTER_HOME` may be your home or a team share charter merely landed in.
+A file charter is writing this plane's state into is charter's file whatever its history —
+and leaving the old mode on it is exactly the defect
+[#437](https://github.com/diazoxide/charter/issues/437) fixed for vault files, where
+`os.open`'s mode argument turned out to be ignored for an inode that already exists. The
+mode is settled on the **descriptor** before any content is written, so the new contents are
+never on disk at the old mode.
+
+A file charter never writes again keeps whatever mode it has. On a plane that predates this,
+`chmod 700 .charter` settles the directory and everything under it in one go.
+
+**If you deliberately share a plane between accounts, this is not the tool for it.** charter
+has one posture — `.charter/` is 0700 and its contents are 0600, one account's — and both
+`vault list` and `doctor` have told you to `chmod 700` any directory that says otherwise
+since 0.53. A group-readable state directory was already being reported as wrong; the files
+in it now match what the report asks for.
+
 If you want encryption at rest, use your **OS keychain** (macOS Keychain, a real
 password manager, or a proper secrets backend) to hold the credential, and treat
 `charter`'s vault as a *thin, disposable staging area* your agent reads from — or wait
