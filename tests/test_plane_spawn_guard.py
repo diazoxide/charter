@@ -954,6 +954,23 @@ class TheOperatorsCredentialStoreIsNeverReached(unittest.TestCase):
         with mock.patch("charter.secrets.reference._RESOLVERS", {}):
             self.assertEqual(_planeguard._credential_clis(), frozenset({"op"}))
 
+    def test_a_scheme_whose_uri_this_file_cannot_spell_costs_one_name_not_the_suite(self):
+        """The probe URIs live here and the builders live in production, so a scheme
+        arriving with a shape this file has not learned makes the lookup raise. The choice
+        is between guarding one CLI fewer and refusing to import the `tests` package, and
+        the skip is what picks the first — with the seeded `op` keeping the degraded answer
+        from being empty. A sweep survivor until it had this case (#569)."""
+        from charter.secrets import reference
+
+        def _never_called(uri, config):     # pragma: no cover - the lookup raises first
+            raise AssertionError("a scheme with no probe URI must not reach its builder")
+
+        with mock.patch("charter.secrets.reference._RESOLVERS",
+                        {"quantum": _never_called, "vault": reference._vault_argv}):
+            self.assertEqual(_planeguard._credential_clis(),
+                             frozenset({"op", "vault"}),
+                             "the unspellable scheme took the rest of the table with it")
+
     def test_a_shell_string_that_runs_it_is_refused(self):
         """`shell=True` hands the whole string to `/bin/sh -c`, so the program name is
         inside it rather than in `argv[0]`. Nothing in charter spells a vault read that

@@ -411,16 +411,22 @@ def _credential_clis() -> frozenset[str]:
     provider's ``op://`` scheme produces the same name — and it is what keeps this correct
     if the two ever stop agreeing.
 
-    Additive and best effort: a builder that raises contributes nothing and can only cost
-    precision, never correctness, because the names already collected still refuse.
+    A builder that will not answer contributes nothing and is skipped. That is not defensive
+    padding: the probe URIs are written HERE and the builders are written in production, so
+    the day a scheme arrives whose URI has a shape this file has not learned, the lookup
+    raises — and the choice is between guarding one CLI fewer and refusing to import the
+    `tests` package at all. `test_plane_spawn_guard` pins that it degrades rather than
+    explodes, and the seeded ``op`` is what stops the degraded answer from being empty.
+
+    The import is deliberately NOT wrapped. This runs from `install()`, after
+    `charter.config` is already loaded, so an `ImportError` here would mean charter itself
+    is broken — and swallowing it would leave every credential CLI unguarded while the
+    suite carried on looking healthy, which is the exact failure the guard exists to stop.
     """
+    from charter.secrets import reference
     names = {"op"}
     probes = {"op": "op://vault/item/field", "vault": "vault://secret/data/app#FIELD",
               "browser": "browser://session/localstorage/key"}
-    try:
-        from charter.secrets import reference
-    except Exception:                                # pragma: no cover - import can't fail
-        return frozenset(names)
     for scheme, build in reference._RESOLVERS.items():
         try:
             names.add(build(probes[scheme], {})[1])
