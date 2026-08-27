@@ -120,6 +120,37 @@ asserts too little. The harness should surface *what the test asserted* alongsid
 the reviewer's first question is "did my test look closely enough" rather than "can I suppress
 this".
 
+## Three ways a sweep lies, all measured here
+
+Every one of these makes a mutation score **pinned** when it is not. That is the worst failure
+this tool can have and the hardest to notice, because the report comes back green.
+
+1. **Exit-code scoring.** Deleting `release.yml`'s `-z "$claimed"` refusal (#558) left the run
+   still exiting 1 — the mismatch check below it caught the empty string instead. Same code,
+   different reason, real guard gone. Score on the **set of newly-failing test ids**, never on
+   the exit code.
+2. **A broken baseline.** A sweep that copied the tree with `cp -R` instead of `git clone` had no
+   `.git`, so twelve `test_workflows` / `test_plugin_freshness` / `test_doctor_shadowed` cases
+   errored in *every* run — baseline and all 37 mutants alike. Every mutation came back `rc=1`
+   and every one would have scored pinned. Two independent agents hit the identical twelve.
+   **Assert a green baseline before trusting any verdict from that clone.**
+3. **Stale bytecode.** A `__pycache__` left in place means the mutated source is never executed.
+   The mutation is real, the file on disk is right, and the interpreter runs the old code.
+
+None of the three is visible from outside. Together they are the argument for why this harness
+needs its own tests and its own sweep rather than being trusted because it is short: a gate that
+silently passes everything is worse than no gate, because it is *believed*.
+
+## What makes it affordable
+
+**A red subset proves a red full suite** — the subset is a subset, so a mutation that reddens it
+necessarily reddens the whole. The full suite is therefore needed only to confirm **survivors**,
+never to confirm reds.
+
+That asymmetry is the whole cost model. Reds are the common case and they run in seconds;
+survivors are rare and can afford four minutes each. It is also why selection can never be the
+final word in the *other* direction: a survivor of a subset is not yet a survivor.
+
 ## Delivery
 
 **A. The harness** — `tools/sweep.py`, stdlib only. Trace-based selection map, the mutation
