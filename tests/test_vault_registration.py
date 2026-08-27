@@ -71,19 +71,25 @@ class _FakeOp:
     from, and nothing here asserts on one.
     """
 
-    def __init__(self, title: str = "charter-devops") -> None:
-        self.title = title
+    def __init__(self) -> None:
         self.calls: list[list[str]] = []
+        #: Titles the fake vault holds. Filled from whatever item was last asked for, so
+        #: `_legacy_items` — which matches on `charter-<vault>-` — is answered about the
+        #: item under test rather than about a name this fake invented.
+        self.titles: list[str] = []
 
     def __call__(self, argv, input=None, **kw):
         self.calls.append(list(argv))
         bare = [a for a in argv if not a.startswith("--")]
         if bare[:3] == ["op", "item", "get"]:
+            title = bare[3] if len(bare) > 3 else "charter-devops"
+            if title not in self.titles:
+                self.titles.append(title)
             return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({
-                "id": "itm1", "title": self.title, "category": "PASSWORD", "fields": []}))
+                "id": "itm1", "title": title, "category": "PASSWORD", "fields": []}))
         if bare[:3] == ["op", "item", "list"]:
             return SimpleNamespace(returncode=0, stderr="",
-                                   stdout=json.dumps([{"title": self.title}]))
+                                   stdout=json.dumps([{"title": t} for t in self.titles]))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
@@ -152,6 +158,26 @@ class RegisteringOverAnExistingName(VaultRegistrationCase):
     def test_force_replaces(self):
         registry.add_vault("devops", "1password", {"op-vault": "Eng"}, force=True)
         self.assertEqual(registry.vaults()["devops"]["provider"], "1password")
+
+    def test_the_fake_answers_the_health_line_rather_than_the_machine(self):
+        """The other half of `_no_real_op`, and the half a passing suite does not prove.
+
+        Faking the runner alone stops the SPAWN; it does not stop `health()` reading the
+        machine, because the provider checks `shutil.which("op")` before it runs anything
+        and returns "op CLI not on PATH" when it is absent. So without the `which` stub
+        this command's last line is one thing on a bare CI runner and another on a laptop
+        with 1Password installed — the same ambient read as the spawn, one layer up, and
+        `cmd_vault_add`'s output is where it shows. Found as a survivor of the hand-check
+        (#569): every other case here passed with that stub deleted.
+        """
+        err = io.StringIO()
+        with redirect_stderr(err):
+            commands_secrets.cmd_vault_add(
+                _args("devops", "1password", op_vault="Eng", force=True))
+        out = err.getvalue()
+        self.assertIn("no secrets yet in item 'charter-devops'", out)
+        self.assertNotIn("not on PATH", out)
+        self.assertTrue(self.op.calls, "the fake was never reached")
 
     def test_force_does_not_migrate_and_says_so(self):
         """`--force` is an override, not a migration. Moving secrets between providers is

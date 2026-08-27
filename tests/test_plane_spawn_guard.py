@@ -945,6 +945,32 @@ class TheOperatorsCredentialStoreIsNeverReached(unittest.TestCase):
         self.assertEqual(sorted(_planeguard._VAULT_CLIS), ["npx", "op", "vault"])
         self.assertEqual(sorted(reference._RESOLVERS), ["browser", "op", "vault"])
 
+    def test_op_is_named_even_if_the_table_stops_naming_it(self):
+        """`OnePasswordProvider._argv` spells `op` inline and has no table to ask, so the
+        derivation seeds it unconditionally. Today the `op://` resolver produces the same
+        name and the seed looks redundant — this is what makes it not: with the table
+        emptied, the provider charter writes 1Password items through is still guarded.
+        """
+        with mock.patch("charter.secrets.reference._RESOLVERS", {}):
+            self.assertEqual(_planeguard._credential_clis(), frozenset({"op"}))
+
+    def test_a_shell_string_that_runs_it_is_refused(self):
+        """`shell=True` hands the whole string to `/bin/sh -c`, so the program name is
+        inside it rather than in `argv[0]`. Nothing in charter spells a vault read that
+        way; a test could, and the point of a tripwire is the spelling nobody planned."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            subprocess.run(f"{self.dir}/op item list", shell=True)
+        self.assertFalse(self.marker.exists())
+
+    def test_a_shell_string_that_will_not_lex_is_not_guessed_at(self):
+        """The direction this guard chooses to be wrong in, said out loud: splitting a
+        shell string is the shell's job and `shlex` only approximates it, so an unlexable
+        command is answered "not a credential CLI" rather than refused. `RealPlaneSpawn`
+        chooses the opposite for charter, because there the cost of a miss is a write to a
+        live plane; here a miss is a `git`-shaped command that nobody could run."""
+        subprocess.run(f"{self.dir}/git 'unclosed", shell=True, capture_output=True)
+        self.assertFalse(self.marker.exists())      # sh refused it; nothing was reached
+
     def test_reading_a_real_1password_item_is_refused(self):
         """The exact argv the four measured invocations carried."""
         with self.assertRaises(_planeguard.RealVaultReach) as caught:
@@ -972,6 +998,17 @@ class TheOperatorsCredentialStoreIsNeverReached(unittest.TestCase):
                     self.assertRaises(_planeguard.RealVaultReach):
                 self._run(argv, env={**os.environ,
                                      "PATH": f"{self.dir}:{os.environ['PATH']}"})
+        self.assertFalse(self.marker.exists())
+
+    def test_a_program_that_merely_resolves_to_it_is_refused(self):
+        """`_program_names` follows the link and the `$PATH` lookup, so a basename compare
+        cannot be walked past. charter's own spellings would never do this — which is the
+        point: a guard is for the spelling nobody planned, and this one was a survivor of
+        the hand-check until it had a case (#569)."""
+        link = self.dir / "not-op-at-all"
+        link.symlink_to(self.dir / "op")
+        with self.assertRaises(_planeguard.RealVaultReach):
+            self._run([str(link), "item", "list"])
         self.assertFalse(self.marker.exists())
 
     def test_a_wrapper_in_front_of_it_is_followed(self):

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import os
+import pathlib
 import sys
 import unittest
 from types import SimpleNamespace
@@ -54,6 +55,31 @@ class WhatIsAnswered(unittest.TestCase):
         a mutation that dies under a pipe "reported OK under a pty"."""
         from charter import util
         self.assertFalse(util._USE_COLOR)
+
+    def test_the_answer_is_installed_rather_than_inherited(self):
+        """Under a pipe the guard's answer and the ambient one are both ``False``, so
+        every assertion above passes with `install()`'s three lines deleted — and goes on
+        passing in CI, which is the one environment that can never tell the difference.
+        This asks the question that has a different answer either way: is the ``isatty``
+        being called ours, or the stream's own? A hand-check of the sweep's blind spot
+        (#569), and the reason it is worth a case of its own.
+        """
+        self.assertIn("isatty", vars(sys.stdout))
+        self.assertIn("isatty", vars(sys.stderr))
+        self.assertIs(sys.stdin, _ttyguard._STDIN)
+        self.assertIs(sys.stdin.isatty, _ttyguard._isatty)
+
+    def test_the_guard_is_installed_before_charter_is_imported(self):
+        """`charter.util` reads `sys.stderr.isatty()` at ITS import, so this ordering is
+        the whole of `_USE_COLOR`'s determinism — and the mutation that moves the install
+        down is invisible under a pipe, where the two answers coincide. Read off the
+        source because that is where the ordering lives; `tests/__init__.py` says the same
+        thing in a comment, and a comment is not a test.
+        """
+        src = (pathlib.Path(__file__).parent / "__init__.py").read_text()
+        self.assertLess(src.index("_ttyguard.install()"), src.index("import _envguard"),
+                        "_envguard pulls `charter` in — the streams must be answered "
+                        "before that, not after")
 
     def test_what_the_terminal_actually_said_is_still_available(self):
         """`_envguard.scrubbed`'s counterpart: a case that genuinely has to know what the
