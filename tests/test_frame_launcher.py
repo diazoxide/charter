@@ -1252,6 +1252,7 @@ class Probe(unittest.TestCase):
         sentinel = AssertionError("workspace resolved — the launch path was reached")
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("sys.stdin.isatty", return_value=False), \
              _harness_binary_installed(), \
              mock.patch("charter.workspace.resolve", side_effect=sentinel):
             with self.assertRaises(AssertionError) as ctx:
@@ -1667,12 +1668,32 @@ def _no_real_detached_child(sink: list):
 
 def _launch(fake: _FakeTmux, *, cols=200, rows=50, version=(3, 7), harness="claude",
            rest=(), which=None, detached=None):
+    """A launch in a terminal nobody is typing at — BOTH halves stated, not one (#545).
+
+    `commands_frame._picker_wanted` reads a PAIR: ``sys.stdin.isatty() and
+    sys.stdout.isatty()``, by design, because ``charter claude < /dev/null`` on a real
+    terminal has one and not the other. This helper pinned `stdout` and left `stdin` to
+    whatever the runner happened to have, and nothing here sets `args.workspace` or
+    `args.pick` — so on a pipe the picker was skipped and on a TERMINAL every launch below
+    stopped at charter's own prompt and waited for a human. 122 tests in this module,
+    measured under a pty; green in CI, whose stdin is not a terminal, which is why it went
+    unseen for as long as it did.
+
+    ``False`` narrows what these tests inherit and widens nothing: no case here exercises
+    the picker (none drives `_read`, none passes `pick=`), and one that wanted to would pin
+    `stdin` ``True`` itself and drive the prompt, which is the right way round.
+
+    `tests._ttyguard` is what makes this line load-bearing rather than a comment — an
+    undeclared read of `sys.stdin.isatty()` is refused while a test runs, so deleting it
+    fails these tests by name instead of hanging them.
+    """
     _refuse_the_real_plane()
     args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False)
     with _outside_tmux(), \
          _no_real_detached_child(detached if detached is not None else []), \
          mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
          mock.patch("sys.stdout.isatty", return_value=True), \
+         mock.patch("sys.stdin.isatty", return_value=False), \
          _harness_binary_installed(which), \
          mock.patch("charter.frame.tmuxctl.version", return_value=version), \
          mock.patch("charter.workspace.resolve", return_value="demo"), \
@@ -2147,6 +2168,7 @@ class Launch(PersonaIso, unittest.TestCase):
              _no_real_detached_child([]), \
              mock.patch("charter.commands_frame.subprocess.run", side_effect=_peek), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("sys.stdin.isatty", return_value=False), \
              _harness_binary_installed(), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("charter.workspace.resolve", return_value="demo"), \
@@ -2630,6 +2652,7 @@ class Launch(PersonaIso, unittest.TestCase):
              _no_real_detached_child([]), \
              mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("sys.stdin.isatty", return_value=False), \
              _harness_binary_installed(), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("charter.workspace.resolve", return_value="demo"), \
@@ -2842,6 +2865,7 @@ class Launch(PersonaIso, unittest.TestCase):
         with _outside_tmux(), \
              mock.patch("charter.commands_frame.subprocess.run") as run, \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("sys.stdin.isatty", return_value=False), \
              _harness_binary_installed(), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("charter.workspace.resolve", return_value="demo"), \
@@ -4070,7 +4094,12 @@ def _frame_id():
 
 def _launch_inside(fake: _FakeOperatorTmux, *, version=(3, 7), harness="claude",
                    rest=(), tmux_env=OPERATOR_TMUX, slots=None, detached=None):
-    """Run `cmd_launch` as if the operator typed it inside their own tmux."""
+    """Run `cmd_launch` as if the operator typed it inside their own tmux.
+
+    Both halves of the tty pair are stated, for the reason `_launch` sets out at length
+    (#545): a tmux pane IS a terminal, so this is the helper most likely to be reached with
+    a real one on stdin.
+    """
     _refuse_the_real_plane()
     args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False)
     env = dict(os.environ, TMUX=tmux_env, TMUX_PANE="%0")
@@ -4079,6 +4108,7 @@ def _launch_inside(fake: _FakeOperatorTmux, *, version=(3, 7), harness="claude",
            mock.patch("charter.commands_frame.subprocess.run", side_effect=fake),
            mock.patch("charter.commands_frame.time.sleep"),
            mock.patch("sys.stdout.isatty", return_value=True),
+           mock.patch("sys.stdin.isatty", return_value=False),
            _harness_binary_installed(),
            mock.patch("charter.frame.tmuxctl.version", return_value=version),
            mock.patch("charter.workspace.resolve", return_value="demo")]
@@ -4648,6 +4678,7 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
              mock.patch("charter.commands_frame.subprocess.run", side_effect=_route), \
              mock.patch("charter.commands_frame.time.sleep"), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("sys.stdin.isatty", return_value=False), \
              _harness_binary_installed(), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
              mock.patch("charter.workspace.resolve", return_value="demo"), \

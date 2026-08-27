@@ -910,5 +910,191 @@ class NoBackgroundRefreshWithoutAPlane(unittest.TestCase):
         popen.assert_not_called()
 
 
+class TheOperatorsCredentialStoreIsNeverReached(unittest.TestCase):
+    """`RealVaultReach` — the fourth tripwire, and the only one not about the plane.
+
+    Two tests in `test_vault_registration.py` ran the operator's real `op` against their
+    real 1Password vault, because `cmd_vault_add` ends in `prov.health()` and a
+    `1password` vault answers that by shelling out (#546). Measured with a logging
+    stand-in first on `$PATH`: four invocations, two tests, none anywhere else in 6636.
+    They passed because an unauthenticated `op` fails fast; they HANG when it prompts.
+
+    A control, on the same terms as `ARefusedSpawn` above: the refusal is made to happen
+    for real, and the evidence that nothing ran is a marker file that is absent while the
+    same marker is PRESENT in the allowed case — "the child never started" and "the child
+    started and could not write" look identical without it.
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="vaultguard-"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.marker = self.dir / "the-cli-ran"
+        for name in ("op", "vault", "npx", "git"):
+            p = self.dir / name
+            p.write_text(f"#!/bin/sh\necho {name} >> {self.marker}\n")
+            p.chmod(0o755)
+
+    def _run(self, argv, **kw):
+        subprocess.run(argv, **kw)
+
+    def test_the_names_are_asked_of_productions_own_resolver_table(self):
+        """Derived, not spelled — the rule `_envguard` states for its own loud set. A
+        scheme added to `reference._RESOLVERS` is guarded on the commit that adds it,
+        which is the difference between a guard and a list somebody has to remember."""
+        from charter.secrets import reference
+        self.assertEqual(sorted(_planeguard._VAULT_CLIS), ["npx", "op", "vault"])
+        self.assertEqual(sorted(reference._RESOLVERS), ["browser", "op", "vault"])
+
+    def test_op_is_named_even_if_the_table_stops_naming_it(self):
+        """`OnePasswordProvider._argv` spells `op` inline and has no table to ask, so the
+        derivation seeds it unconditionally. Today the `op://` resolver produces the same
+        name and the seed looks redundant — this is what makes it not: with the table
+        emptied, the provider charter writes 1Password items through is still guarded.
+        """
+        with mock.patch("charter.secrets.reference._RESOLVERS", {}):
+            self.assertEqual(_planeguard._credential_clis(), frozenset({"op"}))
+
+    def test_a_scheme_whose_uri_this_file_cannot_spell_costs_one_name_not_the_suite(self):
+        """The probe URIs live here and the builders live in production, so a scheme
+        arriving with a shape this file has not learned makes the lookup raise. The choice
+        is between guarding one CLI fewer and refusing to import the `tests` package, and
+        the skip is what picks the first — with the seeded `op` keeping the degraded answer
+        from being empty. A sweep survivor until it had this case (#569)."""
+        from charter.secrets import reference
+
+        def _never_called(uri, config):     # pragma: no cover - the lookup raises first
+            raise AssertionError("a scheme with no probe URI must not reach its builder")
+
+        with mock.patch("charter.secrets.reference._RESOLVERS",
+                        {"quantum": _never_called, "vault": reference._vault_argv}):
+            self.assertEqual(_planeguard._credential_clis(),
+                             frozenset({"op", "vault"}),
+                             "the unspellable scheme took the rest of the table with it")
+
+    def test_a_shell_string_that_runs_it_is_refused(self):
+        """`shell=True` hands the whole string to `/bin/sh -c`, so the program name is
+        inside it rather than in `argv[0]`. Nothing in charter spells a vault read that
+        way; a test could, and the point of a tripwire is the spelling nobody planned."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            subprocess.run(f"{self.dir}/op item list", shell=True)
+        self.assertFalse(self.marker.exists())
+
+    def test_a_shell_string_that_will_not_lex_is_not_guessed_at(self):
+        """The direction this guard chooses to be wrong in, said out loud: splitting a
+        shell string is the shell's job and `shlex` only approximates it, so an unlexable
+        command is answered "not a credential CLI" rather than refused. `RealPlaneSpawn`
+        chooses the opposite for charter, because there the cost of a miss is a write to a
+        live plane; here a miss is a `git`-shaped command that nobody could run."""
+        subprocess.run(f"{self.dir}/git 'unclosed", shell=True, capture_output=True)
+        self.assertFalse(self.marker.exists())      # sh refused it; nothing was reached
+
+    def test_reading_a_real_1password_item_is_refused(self):
+        """The exact argv the four measured invocations carried."""
+        with self.assertRaises(_planeguard.RealVaultReach) as caught:
+            self._run([str(self.dir / "op"), "item", "get", "charter-devops",
+                       "--vault", "Eng", "--format", "json"])
+        self.assertFalse(self.marker.exists(), "refused, and yet it ran")
+        self.assertIn("REFUSED", str(caught.exception))
+
+    def test_a_path_object_as_the_whole_command_is_refused(self):
+        """`Popen` accepts one path-like as the entire command, and it is not iterable —
+        so the branch that normalises it is the difference between recognising this and
+        answering "not a credential CLI" for something that is about to run `op`."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            subprocess.Popen(Path(self.dir / "op"))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_bare_string_as_the_whole_command_is_refused(self):
+        """Without `shell=True` a string is one program name and no arguments — a
+        different branch from the shell case below, and from the argv list above."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            subprocess.Popen(str(self.dir / "op"))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_command_that_is_all_wrapper_leaves_no_program_to_name(self):
+        """`Popen(["env"])` really runs `env`, and `_launcher_argv` strips the wrapper —
+        so what reaches the name check is an EMPTY argv. Not a hypothetical branch: the
+        guard runs on every spawn in the suite, and one that indexed `argv[0]` here would
+        turn an ordinary command into an `IndexError` raised from inside a tripwire."""
+        p = subprocess.run(["env"], capture_output=True)
+        self.assertEqual(p.returncode, 0)
+
+    def test_a_spawn_with_no_command_at_all_is_left_to_subprocess(self):
+        """Asked of the decision function directly, because `Popen(None)` never gets far
+        enough to prove anything: the guard must decline rather than raise a `TypeError`
+        of its own from inside somebody else's spawn."""
+        self.assertIsNone(_planeguard._reaches_a_credential_cli(None, {}))
+
+    def test_a_bare_name_on_the_path_is_refused_too(self):
+        """How charter actually spells it: `onepassword._argv` builds `["op", …]` and
+        lets `$PATH` resolve it, so a guard that only recognised full paths would miss
+        every real call."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            self._run(["op", "read", "--no-newline", "op://Eng/charter-devops/AWS_KEY"],
+                      env={**os.environ, "PATH": f"{self.dir}:{os.environ['PATH']}"})
+        self.assertFalse(self.marker.exists())
+
+    def test_the_other_resolvers_are_refused_on_the_same_terms(self):
+        """`vault kv get` and the browser lane's `npx` read credentials just as `op`
+        does — one reaches a HashiCorp Vault, the other a logged-in browser session (and
+        pulls a package off the network to do it)."""
+        for argv in (["vault", "kv", "get", "-field=TOKEN", "secret/data/app"],
+                     ["npx", "--yes", "@playwright/cli@0.1.18", "session", "read"]):
+            with self.subTest(cli=argv[0]), \
+                    self.assertRaises(_planeguard.RealVaultReach):
+                self._run(argv, env={**os.environ,
+                                     "PATH": f"{self.dir}:{os.environ['PATH']}"})
+        self.assertFalse(self.marker.exists())
+
+    def test_a_program_that_merely_resolves_to_it_is_refused(self):
+        """`_program_names` follows the link and the `$PATH` lookup, so a basename compare
+        cannot be walked past. charter's own spellings would never do this — which is the
+        point: a guard is for the spelling nobody planned, and this one was a survivor of
+        the hand-check until it had a case (#569)."""
+        link = self.dir / "not-op-at-all"
+        link.symlink_to(self.dir / "op")
+        with self.assertRaises(_planeguard.RealVaultReach):
+            self._run([str(link), "item", "list"])
+        self.assertFalse(self.marker.exists())
+
+    def test_a_wrapper_in_front_of_it_is_followed(self):
+        """`_launcher_argv` is production's own command reader, and it is used here for
+        the same reason `_charter_argv` uses it: a wrapper is not a disguise."""
+        with self.assertRaises(_planeguard.RealVaultReach):
+            self._run(["env", "OP_ACCOUNT=x", str(self.dir / "op"), "item", "list"])
+        self.assertFalse(self.marker.exists())
+
+    def test_the_message_names_the_test_the_cli_and_the_way_out(self):
+        with self.assertRaises(_planeguard.RealVaultReach) as caught:
+            self._run([str(self.dir / "op"), "item", "list"])
+        msg = str(caught.exception)
+        self.assertIn("TheOperatorsCredentialStoreIsNeverReached."
+                      "test_the_message_names_the_test_the_cli_and_the_way_out", msg)
+        self.assertIn("op", msg)
+        self.assertIn("runner", msg)             # the way out five modules already take
+        self.assertIn("shutil.which", msg)       # and its second half
+
+    def test_it_is_a_base_exception_so_charters_own_fallbacks_cannot_eat_it(self):
+        """`ReferenceProvider.health` answers a `VaultError` with a status string, and
+        `doctor` catches broadly around every check: a tripwire either of those can
+        swallow becomes a red line in a report instead of a failed test."""
+        self.assertTrue(issubclass(_planeguard.RealVaultReach, BaseException))
+        self.assertFalse(issubclass(_planeguard.RealVaultReach, Exception))
+
+    def test_an_unrelated_binary_of_the_same_shape_really_runs(self):
+        """The half that proves an absent marker above means "never started". `git` is
+        spawned by this suite constantly and must stay spawnable."""
+        self._run([str(self.dir / "git"), "status"])
+        self.assertEqual(self.marker.read_text().strip(), "git")
+
+    def test_the_guard_does_not_wait_on_a_plane(self):
+        """Checked BEFORE the plane question and without `_REAL_ROOT`: reading somebody's
+        1Password vault is wrong on a machine that has no control plane at all, and a
+        guard armed only when one is resolvable would be off in exactly that case."""
+        with mock.patch.object(_planeguard, "_REAL_ROOT", ()), \
+                self.assertRaises(_planeguard.RealVaultReach):
+            self._run([str(self.dir / "op"), "item", "list"])
+
+
 if __name__ == "__main__":
     unittest.main()

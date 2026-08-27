@@ -1,6 +1,6 @@
 """Suite-wide tripwires: no test may WRITE into the developer's real ``.charter/``, none
-may READ a setting off the developer's real ``charter.toml``, and none may SPAWN a charter
-that would resolve it.
+may READ a setting off the developer's real ``charter.toml``, none may SPAWN a charter that
+would resolve it, and none may SPAWN the CLI that reads their real credential store.
 
 `PersonaIso` isolates a test that remembers to derive from it. Nothing made the
 *forgetting* visible, so the same defect kept arriving in a new file: the suite wrote
@@ -115,6 +115,23 @@ two drift apart again.
 satisfies this without knowing it exists. What is left for the tripwire is the case that
 was never covered: a test that spawns charter by hand, and a test that never isolated
 `config.ROOT` in the first place.
+
+**The fourth tripwire, and the only one that is not about the plane at all.**
+:class:`RealVaultReach`. Two tests in `test_vault_registration.py` ran the operator's real
+``op`` binary against their real 1Password vault — `cmd_vault_add` finishes with
+``prov.health()``, which for a ``1password`` vault shells out, and the vault names came
+from the fixtures' own strings (#546). Measured with a logging stand-in for ``op`` first on
+``$PATH``: four invocations from two tests, and none anywhere else in 6636. They passed
+because an unauthenticated ``op`` exits non-zero fast enough to look like a healthy answer;
+they HANG when it prompts instead, which is what a machine that has 1Password installed and
+a session that has expired produces — the operator's, in other words, and never CI's.
+
+Guarded here rather than only fixed there for the reason #542 sets out: a stub in the base
+class silences an instance, and a refusal at the spawn fails the pull request that adds the
+next one. It is checked BEFORE the plane question and without waiting on :data:`_REAL_ROOT`,
+because reading somebody's credential store is wrong on a machine with no control plane at
+all. Which CLIs count is asked of `reference._RESOLVERS` — production's own scheme table —
+so a provider added there is covered on the commit that adds it.
 """
 
 from __future__ import annotations
@@ -370,6 +387,125 @@ def _guard_reads(config) -> None:
 
 class RealPlaneSpawn(BaseException):
     """A test spawned a charter that would resolve the developer's own control plane."""
+
+
+class RealVaultReach(BaseException):
+    """A test spawned the CLI that reads the developer's own credential store."""
+
+
+_VAULT_CLIS: frozenset[str] = frozenset()
+
+
+def _credential_clis() -> frozenset[str]:
+    """The CLI names charter shells out to in order to read a real credential store.
+
+    **Asked of production's own resolver table**, not listed here. `reference._RESOLVERS`
+    is the map from URI scheme to *(argv, CLI name)* that `ReferenceProvider.get` and
+    `health` both use, so a scheme added there is guarded on the commit that adds it —
+    the same reason `_envguard` asks `session._PANE_ID_VARS` rather than spelling
+    ``TMUX_PANE``. Each builder is called with a syntactically valid URI of its own scheme
+    because the name is what the builder RETURNS; there is no constant to read it out of.
+
+    ``op`` is added unconditionally as well, for `OnePasswordProvider`, whose ``_argv``
+    spells the program inline and has no table to ask. The addition is free — the reference
+    provider's ``op://`` scheme produces the same name — and it is what keeps this correct
+    if the two ever stop agreeing.
+
+    A builder that will not answer contributes nothing and is skipped. That is not defensive
+    padding: the probe URIs are written HERE and the builders are written in production, so
+    the day a scheme arrives whose URI has a shape this file has not learned, the lookup
+    raises — and the choice is between guarding one CLI fewer and refusing to import the
+    `tests` package at all. `test_plane_spawn_guard` pins that it degrades rather than
+    explodes, and the seeded ``op`` is what stops the degraded answer from being empty.
+
+    The import is deliberately NOT wrapped. This runs from `install()`, after
+    `charter.config` is already loaded, so an `ImportError` here would mean charter itself
+    is broken — and swallowing it would leave every credential CLI unguarded while the
+    suite carried on looking healthy, which is the exact failure the guard exists to stop.
+    """
+    from charter.secrets import reference
+    names = {"op"}
+    probes = {"op": "op://vault/item/field", "vault": "vault://secret/data/app#FIELD",
+              "browser": "browser://session/localstorage/key"}
+    for scheme, build in reference._RESOLVERS.items():
+        try:
+            names.add(build(probes[scheme], {})[1])
+        except Exception:
+            continue
+    return frozenset(names)
+
+
+def _explain_vault(parts: list[str], name: str) -> str:
+    return (
+        f"REFUSED: spawning `{name}` — the operator's own credential store\n"
+        f"{_current_test()} is about to run `{' '.join(parts)}`. That is not a fake: it is "
+        f"the CLI charter reads real secrets through, on this machine, against whatever "
+        f"vault the argv names and whatever identity the operator is signed in as. Running "
+        f"charter's own suite must not touch anybody's actual credentials.\n"
+        f"  It is also a HANG waiting to happen, which is how it was found (#546). `op` "
+        f"exits non-zero in well under a second when it has no session, so two tests here "
+        f"passed for years by luck; it PROMPTS instead when a human could be asked, and the "
+        f"suite then parks in `subprocess.communicate` behind a biometric prompt — measured "
+        f"at 15 minutes, with `python3 -m unittest discover -s tests` never finishing.\n"
+        f"  The way out is the one five modules here already take: drive a fake. Set the "
+        f"provider's `runner` (on the CLASS when the provider is built inside the command "
+        f"under test — `registry.provider_for` gives a test no instance to reach) and stub "
+        f"`shutil.which` so the provider believes the CLI is installed: "
+        f"`tests/test_vault_registration.py::_no_real_op` is the smallest example, and "
+        f"`test_op_reads_the_item_once.py` the fullest. A test that genuinely needs a real "
+        f"credential store is not a unit test.")
+
+
+def _reaches_a_credential_cli(args, opts: dict) -> tuple[list[str], str] | None:
+    """``(argv, CLI name)`` when *args* would run one of :func:`_credential_clis`.
+
+    Deliberately narrower than :func:`_charter_argv`, and the asymmetry is the point.
+    That function has to chase every spelling because charter re-spawns ITSELF and the
+    interesting cases are the indirect ones; this one is asking about a third-party binary
+    that only ever arrives as ``argv[0]`` of a list charter built (`onepassword._argv`,
+    `reference._RESOLVERS`). Wrappers are still unwrapped through `_launcher_argv`, since
+    that is free and `env VAR=x op read …` is a shape a test could plausibly write, and the
+    program name is resolved through `_program_names` so a path or a symlink cannot walk
+    past a basename compare.
+
+    **Every branch below is one a test drives**, which is the other half of that asymmetry.
+    The first version of this function copied `_charter_argv`'s full defensive shape — a
+    ``None`` from `_decoded`, an empty *parts*, a `TypeError` from iterating *args* — and
+    the sweep found nine of those unreachable: `_decoded` answers ``None`` only for a value
+    that is neither `str`, `bytes` nor `PathLike`, and `os.fsdecode`'s surrogateescape
+    means it cannot fail on the two spellings that reach it here. An unreachable guard is
+    dead code wearing a guard's clothes, and this file's own doctrine — no suppression
+    list, "equivalent mutant" and "dead code" are the same finding — applies to it.
+    """
+    if args is None:
+        return None
+    if isinstance(args, os.PathLike):
+        args = os.fspath(args)
+    if isinstance(args, (str, bytes)):
+        command = _decoded(args)
+        if opts.get("shell"):
+            # ``shell=True`` hands the whole string to ``/bin/sh -c``. Splitting it is the
+            # shell's job and `shlex` is only an approximation of it, so a string that will
+            # not tokenize is answered "not a credential CLI" rather than guessed at —
+            # nothing in charter spells a vault read that way, and this guard would rather
+            # miss a shape nobody writes than refuse an unrelated `shell=True` command.
+            try:
+                parts = shlex.split(command)
+            except ValueError:
+                return None
+        else:
+            parts = [command]
+    else:
+        parts = [_decoded(a) for a in args]
+    argv, _consumed = _launcher_argv(parts)
+    if not argv:
+        # A command line that is ALL wrapper — `Popen(["env"])` is the ordinary one — has
+        # no program left to name. Reached on every such spawn, not a hypothetical.
+        return None
+    for name in _program_names(argv[0], opts.get("cwd"), opts.get("env")):
+        if name in _VAULT_CLIS:
+            return parts, name
+    return None
 
 
 #: An interpreter whose ``-c`` is Python SOURCE and whose first bare argument is a Python
@@ -1023,15 +1159,22 @@ def _guard_spawns() -> None:
     a call to one of them that is not the two known non-charter uses. The day a charter
     spawn is written that way, that case turns red and this docstring is what it points at.
     """
-    global _SPAWN_GUARDED
+    global _SPAWN_GUARDED, _VAULT_CLIS
     if _SPAWN_GUARDED:
         return
     _SPAWN_GUARDED = True
+    _VAULT_CLIS = _credential_clis()
     original = subprocess.Popen.__init__
 
     def __init__(self, args=None, *rest, **kw):
         opts = dict(zip(_POPEN_POSITIONAL, rest))
         opts.update(kw)
+        # Before the plane question, and unconditional where that one waits on
+        # `_REAL_ROOT`: a real `op` reads the operator's 1Password vault whatever plane
+        # the child would resolve, and on a machine with no plane at all.
+        reached = _reaches_a_credential_cli(args, opts)
+        if reached is not None:
+            raise RealVaultReach(_explain_vault(*reached))
         parts = _charter_argv(args, opts)
         if parts is not None and _REAL_ROOT:
             plane = _child_plane(opts)
