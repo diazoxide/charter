@@ -115,12 +115,18 @@ mutant:   rc=1  this run names  (the version input <none>) but pyproject.toml sa
 Same exit code, different reason. **Two guards in sequence mask each other**, so a test asserting
 only the exit code stays green over a real deletion.
 
+This shape has now appeared three times, in three different spellings, so it is the norm rather
+than the curiosity: a refusal masked by the check below it (`release.yml`'s `-z`); a guard masked
+by a lookup *ordering* two functions away (`layout.py:291`, #553); and a fallback masked by a
+neighbouring call already answering False (`_server`'s `or SOCKET`, found by the sweep on #567).
+In all three, each single mutation looks equivalent and **neither line is pinned**.
+
 This is why most "equivalent mutant" claims will be wrong: the mutant is not equivalent, the test
 asserts too little. The harness should surface *what the test asserted* alongside a survivor, so
 the reviewer's first question is "did my test look closely enough" rather than "can I suppress
 this".
 
-## Three ways a sweep lies, all measured here
+## Four ways a sweep lies, all measured here
 
 Every one of these makes a mutation score **pinned** when it is not. That is the worst failure
 this tool can have and the hardest to notice, because the report comes back green.
@@ -134,10 +140,21 @@ this tool can have and the hardest to notice, because the report comes back gree
    errored in *every* run — baseline and all 37 mutants alike. Every mutation came back `rc=1`
    and every one would have scored pinned. Two independent agents hit the identical twelve.
    **Assert a green baseline before trusting any verdict from that clone.**
-3. **Stale bytecode.** A `__pycache__` left in place means the mutated source is never executed.
-   The mutation is real, the file on disk is right, and the interpreter runs the old code.
+3. **Stale bytecode.** A `__pycache__` left in place can mean the mutated source is never
+   executed — the mutation is real, the file on disk is right, and the interpreter runs the old
+   code. **This is conditional and the condition matters.** Mutating by rewriting the `.py`
+   changes its mtime, which invalidates a timestamp-validated `.pyc`, so a sweep that edits
+   files in place cannot hit it — measured, including a deliberately careless variant with a
+   warm cache copied in, which still reddened. It *is* reachable for a `--ref`-driven sweeper
+   that moves the tree with `git checkout` / `apply` / `stash`, or under hash-based `.pyc`.
+   The harness is exactly that kind of sweeper, and it hit this. Set `PYTHONDONTWRITEBYTECODE`
+   and clear caches between mutations rather than relying on mtime.
+4. **A mutation that hangs.** A hang is not a red and not a survivor — it is *no verdict*, and
+   an unattended sweep that stalls hands the next person a blank where an answer belongs. Every
+   mutation needs a timeout, and a timeout must be reported as its own outcome rather than
+   folded into either column.
 
-None of the three is visible from outside. Together they are the argument for why this harness
+None of the four is visible from outside. Together they are the argument for why this harness
 needs its own tests and its own sweep rather than being trusted because it is short: a gate that
 silently passes everything is worse than no gate, because it is *believed*.
 
