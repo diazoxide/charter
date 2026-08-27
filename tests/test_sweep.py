@@ -564,12 +564,17 @@ class _FakeBox:
     run that goes red once and green on confirmation is spelled.
     """
 
-    def __init__(self, subset=None, full: sweep.Outcome | None = None):
+    def __init__(self, subset=None, full: sweep.Outcome | None = None,
+                 clean: frozenset = frozenset()):
         self._subset = subset if isinstance(subset, list) else [subset] * 4
         self._full = full
+        self._clean = clean
         self.applied: list[sweep.Mutation] = []
         self.subset_calls = 0
         self.full_calls = 0
+
+    def clean_failures(self, modules):
+        return self._clean
 
     def apply(self, m):
         self.applied.append(m)
@@ -607,7 +612,7 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
         """Selection is an optimisation and must never be the final word. This is the
         line that makes a false 'pinned' impossible, and it costs one full run."""
         box = _FakeBox(subset=sweep.Outcome(True, 40, "OK"),
-                       full=sweep.Outcome(False, 6000, "FAILED (failures=1)"))
+                       full=sweep.Outcome(False, 6000, "FAILED", failing=frozenset({"m.C.t"})))
         verdict, _, full = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "pinned")
         self.assertGreaterEqual(box.full_calls, 1)
@@ -625,7 +630,7 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
         mutation, it certifies a guard. Six thousand tests, real tmux servers, and a
         machine that may be running other sweeps: one confirming run is expensive and
         still cheaper than one guard wrongly declared safe."""
-        box = _FullFlake(sweep.Outcome(False, 6000, "FAILED (errors=1)"),
+        box = _FullFlake(sweep.Outcome(False, 6000, "FAILED", failing=frozenset({"m.C.t"})),
                          sweep.Outcome(True, 6000, "OK"))
         verdict, _, full = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "survived")
@@ -633,8 +638,8 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
         self.assertIn("green on confirmation", full.detail)
 
     def test_a_full_suite_red_twice_pins_the_guard(self):
-        box = _FullFlake(sweep.Outcome(False, 6000, "FAILED (failures=1)"),
-                         sweep.Outcome(False, 6000, "FAILED (failures=1)"))
+        box = _FullFlake(sweep.Outcome(False, 6000, "FAILED", failing=frozenset({"m.C.t"})),
+                         sweep.Outcome(False, 6000, "FAILED", failing=frozenset({"m.C.t"})))
         verdict, _, _ = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "pinned")
         self.assertEqual(box.full_calls, 2)
@@ -642,7 +647,7 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
     def test_a_red_subset_is_confirmed_once_and_then_believed(self):
         """A red twice IS a red, and re-running the whole suite for it would spend four
         minutes to learn nothing. The asymmetry runs one way only."""
-        box = _FakeBox(subset=sweep.Outcome(False, 40, "FAILED"))
+        box = _FakeBox(subset=sweep.Outcome(False, 40, "FAILED", failing=frozenset({"m.C.t"})))
         verdict, _, full = sweep.decide(box, _M, ["tests.test_x"])
         self.assertEqual(verdict, "pinned")
         self.assertEqual(box.subset_calls, 2)
@@ -654,7 +659,7 @@ class TheFullSuiteHasTheLastWord(unittest.TestCase):
         red does not merely mislabel one mutation — it certifies a guard as tested by a
         failure that had nothing to do with it, which is the exact defect this tool was
         written to catch. So a red that does not reproduce goes to the full suite."""
-        box = _FakeBox(subset=[sweep.Outcome(False, 40, "FAILED"),
+        box = _FakeBox(subset=[sweep.Outcome(False, 40, "FAILED", failing=frozenset({"m.C.t"})),
                                sweep.Outcome(True, 40, "OK")],
                        full=sweep.Outcome(True, 6000, "OK"))
         verdict, subset, _ = sweep.decide(box, _M, ["tests.test_x"])
@@ -731,6 +736,67 @@ class AHangIsNotAPass(unittest.TestCase):
         proc = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
         proc.wait()
         sweep._kill_group(proc)
+
+
+class TheVerdictIsTheSetOfNewlyFailingTests(unittest.TestCase):
+    """An exit code cannot say WHY a run died, and this project has measured the confusion
+    in both directions.
+
+    `release.yml`'s `-z "$claimed"` refusal (#558) exits 1 with the line deleted *and*
+    without it, for two different reasons — so a real deletion read as pinned. And a sweep
+    run in a tree copied without `.git` errors twelve `test_workflows` cases in the
+    baseline and in every mutant alike — so every mutation read as pinned, 37 of 37, and
+    that whole sweep had to be thrown away.
+
+    Both are the same mistake: crediting a mutation with a red it did not cause. So the
+    verdict here is `failing(mutant) - failing(same command, unmutated)`.
+    """
+
+    def test_a_red_the_subset_was_already_red_on_pins_nothing(self):
+        already = frozenset({"unittest.loader._FailedTest.tests.test_workflows"})
+        box = _FakeBox(subset=sweep.Outcome(False, 40, "FAILED", failing=already),
+                       full=sweep.Outcome(True, 6000, "OK"),
+                       clean=already)
+        verdict, subset, _ = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "survived")
+        self.assertIn("nothing new", subset.detail)
+
+    def test_only_the_tests_this_mutation_broke_are_held_against_it(self):
+        box = _FakeBox(
+            subset=sweep.Outcome(False, 40, "FAILED",
+                                 failing=frozenset({"pre.C.existing", "new.C.broken"})),
+            clean=frozenset({"pre.C.existing"}))
+        verdict, subset, _ = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "pinned")
+        self.assertEqual(subset.failing, frozenset({"new.C.broken"}))
+        self.assertIn("new.C.broken", subset.detail)
+        self.assertNotIn("pre.C.existing", subset.detail)
+
+    def test_the_clean_baseline_is_measured_before_the_mutation_is_applied(self):
+        """Otherwise it would measure the mutant and every verdict would be 'no change'."""
+        order = []
+
+        class Ordered(_FakeBox):
+            def clean_failures(self, modules):
+                order.append("baseline")
+                return frozenset()
+
+            def apply(self, m):
+                order.append("apply")
+
+        box = Ordered(subset=sweep.Outcome(True, 40, "OK"),
+                      full=sweep.Outcome(True, 6000, "OK"))
+        sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(order[:2], ["baseline", "apply"])
+
+    def test_a_whole_suite_red_only_on_pre_existing_failures_is_not_a_pin(self):
+        already = frozenset({"tests.test_flaky.C.t"})
+        box = _FakeBox(subset=sweep.Outcome(True, 40, "OK"),
+                       full=sweep.Outcome(False, 6000, "FAILED", failing=already),
+                       clean=already)
+        verdict, _, full = sweep.decide(box, _M, ["tests.test_x"])
+        self.assertEqual(verdict, "survived")
+        self.assertIn("nothing new", full.detail)
 
 
 class ACouldNotMeasureIsNotAPin(unittest.TestCase):
@@ -856,11 +922,27 @@ class TheVerdictIsReadFromTheRun(unittest.TestCase):
         self.assertFalse(v.green)
         self.assertIn("no tests", v.detail)
 
-    def test_a_failure_carries_its_reason(self):
-        v = sweep._verdict(_Completed(1, "FAIL: test_x\nRan 42 tests in 1s\n\nFAILED (failures=1)\n"))
+    def test_a_failure_carries_the_ids_of_the_tests_that_failed(self):
+        v = sweep._verdict(_Completed(1,
+            "FAIL: test_x (tests.test_mod.C.test_x)\n"
+            "ERROR: test_y (tests.test_mod.C.test_y)\n"
+            "Ran 42 tests in 1s\n\nFAILED (failures=1, errors=1)\n"))
         self.assertFalse(v.green)
         self.assertEqual(v.ran, 42)
-        self.assertIn("test_x", v.detail)
+        self.assertEqual(v.failing,
+                         frozenset({"tests.test_mod.C.test_x", "tests.test_mod.C.test_y"}))
+        self.assertIn("tests.test_mod.C.test_x", v.detail)
+
+    def test_an_import_error_is_collected_as_a_failing_id_too(self):
+        """A module that will not import errors as `unittest.loader._FailedTest`, and a
+        tree copied without `.git` produces twelve of them at once. If those are counted
+        against the mutation, every mutation in the run scores pinned."""
+        v = sweep._verdict(_Completed(1,
+            "ERROR: tests.test_workflows "
+            "(unittest.loader._FailedTest.tests.test_workflows)\n"
+            "Ran 3 tests in 1s\n\nFAILED (errors=1)\n"))
+        self.assertEqual(v.failing,
+                         frozenset({"unittest.loader._FailedTest.tests.test_workflows"}))
 
 
 class TheSubsetIsNarrowedByFunctionAndWidenedByDoubt(unittest.TestCase):
@@ -1036,6 +1118,47 @@ class TheReportNamesTheMaskingRisk(unittest.TestCase):
         self.assertIn("drop-conjunct", text)
         self.assertIn("shipped :", text)
         self.assertIn("mutant  :", text)
+
+
+class ASurvivorIsASurvivorOnTHISPlatform(unittest.TestCase):
+    """A clause the operating system never reaches is unreachable, not untested.
+
+    Measured on this project: `except OSError: return None` around a pty read is dead code
+    on macOS, where closing the far end returns `b""`, and live on Linux, where it raises
+    `[Errno 5]`. A local sweep sees a survivor either way. Scoring that as a missing test
+    is a false positive, and false positives are what get a gate switched off — so the
+    harness labels it rather than silently counting it.
+    """
+
+    def _survivor(self, before, operator="narrow-except"):
+        m = sweep.Mutation(path="charter/frame/overlay.py", line=400, end_line=400,
+                           operator=operator, question="?", before=before,
+                           after="ZeroDivisionError", symbol="run")
+        return sweep.Result(m, "survived", sweep.Outcome(True, 40, "OK"),
+                            sweep.Outcome(True, 6000, "OK"), [], sweep.Evidence([], []))
+
+    def test_a_narrowed_os_level_catch_is_flagged_for_a_second_opinion(self):
+        text = sweep.report([self._survivor("OSError")], Path("."), "a", "b", None, 1.0)
+        self.assertIn("    PLATFORM:", text)
+        self.assertIn("OSError", text)
+        self.assertIn("throwaway branch", text)
+
+    def test_a_catch_charter_itself_raises_is_not_flagged(self):
+        text = sweep.report([self._survivor("ControlPlaneNotFound")],
+                            Path("."), "a", "b", None, 1.0)
+        self.assertNotIn("    PLATFORM:", text)
+
+    def test_a_deleted_guard_is_not_flagged_merely_for_naming_an_oserror(self):
+        """The caveat is about a CATCH the OS may never trigger, not about any line that
+        happens to mention one."""
+        text = sweep.report([self._survivor("if isinstance(e, OSError): return None",
+                                            operator="drop-if")],
+                            Path("."), "a", "b", None, 1.0)
+        self.assertNotIn("    PLATFORM:", text)
+
+    def test_the_report_says_which_platform_it_measured_on(self):
+        text = sweep.report([], Path("."), "a", "b", None, 1.0)
+        self.assertIn(sys.platform, text)
 
 
 class ThereIsNoSuppressionList(unittest.TestCase):

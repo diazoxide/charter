@@ -90,6 +90,27 @@ NARROW_TO = "ZeroDivisionError"
 
 _RAN = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
 
+#: Exception types whose *behaviour* is decided by the operating system, not by charter.
+#: A `narrow-except` survivor on one of these may not be an unpinned guard at all: the
+#: clause may simply be unreachable on the platform the sweep ran on. Measured on this
+#: project — `except OSError: return None` around a pty read is dead code on macOS, where
+#: closing the far end returns `b""`, and live on Linux, where it raises `[Errno 5]`. The
+#: pin was proved by pushing the mutant to a throwaway branch and letting CI redden it.
+PLATFORM_SENSITIVE = frozenset({
+    "OSError", "IOError", "EnvironmentError", "BlockingIOError", "BrokenPipeError",
+    "ConnectionResetError", "ConnectionAbortedError", "InterruptedError", "TimeoutError",
+    "PermissionError", "FileNotFoundError", "NotADirectoryError", "IsADirectoryError",
+})
+
+
+def platform_caveat(mutation: "Mutation") -> str:
+    """Why this survivor might be a platform artefact rather than a missing test."""
+    if mutation.operator != "narrow-except":
+        return ""
+    named = {w for w in re.findall(r"[A-Za-z_]+", mutation.before)}
+    hit = sorted(named & PLATFORM_SENSITIVE)
+    return hit[0] if hit else ""
+
 
 # --------------------------------------------------------------------------------------
 # 1. Scoping: which lines is this branch answerable for
@@ -704,6 +725,9 @@ class Outcome:
     ran: int
     detail: str
     conclusive: bool = True
+    #: The ids of the tests that failed. The verdict is read from the DIFFERENCE between
+    #: this and what the same command failed on unmutated — never from the exit code.
+    failing: frozenset = dataclasses.field(default_factory=frozenset)
 
 
 @dataclasses.dataclass
@@ -723,16 +747,43 @@ def _kill_group(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+#: `FAIL: test_x (tests.test_mod.Class.test_x)` / `ERROR: ...`, and for an import failure
+#: `ERROR: tests.test_mod (unittest.loader._FailedTest.tests.test_mod)`. The parenthesised
+#: id is the stable name; a subtest's trailing `[value]` sits outside it.
+_FAIL_ID = re.compile(r"^(?:FAIL|ERROR):\s+\S+\s+\(([^)]+)\)", re.MULTILINE)
+
+
 def _verdict(proc) -> Outcome:
+    """What a run said, as the SET OF TESTS THAT FAILED — never as an exit code.
+
+    An exit code cannot tell "died because I deleted the guard" from "died for a reason
+    that has nothing to do with it", and this project has now measured that confusion in
+    both directions. `release.yml`'s `-z "$claimed"` refusal (#558) exits 1 with the line
+    deleted *and* without it, for two different reasons, so a real deletion looked pinned.
+    And a sweep run in a tree copied without `.git` errored twelve `test_workflows` cases
+    in the baseline and in every mutant alike — every mutation came back rc=1 and every one
+    would have scored "pinned".
+
+    So the ids are collected here and the comparison is made in :func:`decide` against what
+    the SAME command failed on before any mutation. A mutation is only credited with a red
+    it actually caused.
+    """
     text = (proc.stdout or "") + (proc.stderr or "")
     m = _RAN.search(text)
     ran = int(m.group(1)) if m else 0
-    if proc.returncode == 0 and ran > 0:
-        return Outcome(True, ran, "OK")
+    failing = frozenset(mm.group(1) for mm in _FAIL_ID.finditer(text))
     if ran == 0:
-        return Outcome(False, 0, "no tests ran")
-    tail = [ln for ln in text.splitlines() if ln.startswith(("FAILED", "ERROR:", "FAIL:"))]
-    return Outcome(False, ran, "; ".join(tail[:3]) or f"rc={proc.returncode}")
+        # No `Ran N tests` line at all: the runner did not get far enough to answer.
+        return Outcome(False, 0, "no tests ran", conclusive=False, failing=failing)
+    if proc.returncode == 0:
+        return Outcome(True, ran, "OK", failing=failing)
+    return Outcome(False, ran, _named(failing) or f"rc={proc.returncode}", failing=failing)
+
+
+def _named(ids) -> str:
+    """A handful of failing test ids, shortest-name-first, for a one-line report."""
+    short = sorted(ids, key=len)
+    return "; ".join(short[:3]) + (f" (+{len(short) - 3} more)" if len(short) > 3 else "")
 
 
 class Sandbox:
@@ -758,6 +809,11 @@ class Sandbox:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(blob)
         self._pristine: dict[str, bytes] = {}
+        #: What each module-set fails on with NOTHING mutated, measured once per sandbox.
+        #: The full-tree baseline in `main` cannot answer this: a subset is a handful of
+        #: modules run alone, and a module that only passes with its neighbours would
+        #: redden every mutation mapped to it — a whole file of guards silently certified.
+        self._clean_failures: dict[tuple[str, ...], frozenset] = {}
 
     def apply(self, mutation: Mutation) -> None:
         self.apply_source(mutation.path, mutation.source)
@@ -820,6 +876,13 @@ class Sandbox:
 
     def subset(self, modules: list[str]) -> Outcome:
         return self.run(list(modules), SUBSET_TIMEOUT)
+
+    def clean_failures(self, modules: list[str]) -> frozenset:
+        """What this module-set fails on unmutated. Call BEFORE applying a mutation."""
+        key = tuple(modules)
+        if key not in self._clean_failures:
+            self._clean_failures[key] = self.subset(modules).failing
+        return self._clean_failures[key]
 
     def full(self) -> Outcome:
         return self.run(["discover", "-s", "tests", "-t", "."], self.full_timeout)
@@ -947,6 +1010,8 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
       suite for 1800s instead of failing, and reading that as green would have pinned a
       guard on a timeout.
     """
+    # Measured BEFORE the mutation goes anywhere near the tree.
+    clean = box.clean_failures(modules) if modules else frozenset()
     box.apply(mutation)
     if modules:
         subset = box.subset(modules)
@@ -954,20 +1019,33 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
             subset = box.subset(modules)
             if not subset.conclusive:
                 return "unresolved", subset, None
-        if not subset.green:
+        caused = subset.failing - clean
+        if not caused:
+            # Either nothing failed, or the only failures are ones this module-set was
+            # already failing on. Neither is evidence about the guard.
+            subset = Outcome(True, subset.ran, "OK" if subset.green
+                             else f"red, but on nothing new ({_named(subset.failing)})",
+                             failing=subset.failing)
+        else:
             # A red is the one verdict this tool never revisits, so it had better be a
             # real one. The suite starts real tmux servers, several sweeps share a
             # machine, and a flaky red here does not merely mislabel one mutation — it
             # certifies a guard as tested by a failure that had nothing to do with it.
-            # One confirming run is seconds against a median subset of seven modules.
             again = box.subset(modules)
-            if again.green:
-                subset = Outcome(True, again.ran, "red once, green on confirmation")
+            if not (again.failing - clean):
+                subset = Outcome(True, again.ran, "red once, green on confirmation",
+                                 failing=again.failing)
             else:
-                return "pinned", subset, None
+                return "pinned", Outcome(False, subset.ran, _named(caused),
+                                         failing=caused), None
     else:
         subset = Outcome(True, 0, "no covering module measured")
     full = box.full()
+    if full.failing and not (full.failing - clean):
+        # The whole suite went red only on tests this mutation's own module-set was
+        # already failing. Not evidence either.
+        full = Outcome(True, full.ran, f"red on nothing new ({_named(full.failing)})",
+                       failing=full.failing)
     if not full.green:
         # And the same for the run that has the last word. This is where the asymmetry
         # bites hardest: a flaky full suite reads as "pinned", and "pinned" is the verdict
@@ -1142,6 +1220,8 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     w("=" * 86)
     w(f"deletion sweep — {ref[:12]} against {base[:12]}")
     w("=" * 86)
+    w(f"measured on      : {sys.platform}, CPython "
+      f"{'.'.join(str(n) for n in sys.version_info[:3])}")
     if baseline is not None:
         w(f"baseline          : Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}")
     w(f"mutations applied : {len(results)}")
@@ -1170,8 +1250,13 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
         w("suite would not miss.")
         return "\n".join(out)
 
-    w("A survivor is a line you can delete with the whole suite still green.")
-    w("There is no suppression list: if deleting it genuinely changes nothing")
+    w("A survivor is a line you can delete with the whole suite still green")
+    w(f"ON {sys.platform.upper()}. That last part matters: a clause the operating system")
+    w("never reaches here is unreachable, not untested, and the two look identical from")
+    w("one machine. Anything marked PLATFORM below wants a second opinion from CI before")
+    w("it is read as a missing test.")
+    w("")
+    w("Otherwise there is no suppression list: if deleting it genuinely changes nothing")
     w("observable, delete it — 'equivalent mutant' and 'dead code' are one finding.")
     w("")
     by_file: dict[str, list[Result]] = {}
@@ -1200,6 +1285,13 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
             w(f"    mutant  : {_oneline(m.after, 74) or '(the statement, deleted)'}")
             if r.full:
                 w(f"    full    : Ran {r.full.ran} tests — OK, with the line gone")
+            caveat = platform_caveat(m)
+            if caveat:
+                w(f"    PLATFORM: `{caveat}` is the operating system's behaviour, not")
+                w(f"              charter's. On {sys.platform} this clause may never be")
+                w("              entered at all, which is unreachable rather than")
+                w("              unpinned. Push the mutant to a throwaway branch and let")
+                w("              CI answer before writing a test for it.")
             ev = r.evidence
             if ev is None:
                 continue
@@ -1254,6 +1346,8 @@ def as_json(results: list[Result]) -> str:
         "full": None if not r.full else {
             "green": r.full.green, "ran": r.full.ran, "detail": r.full.detail},
         "modules": r.modules,
+        "platform": sys.platform,
+        "platform_caveat": platform_caveat(r.mutation),
         "naming": [] if not r.evidence else [
             {"module": m, "test": t, "asserts": a} for m, t, a in r.evidence.naming],
     } for r in results], indent=1)
