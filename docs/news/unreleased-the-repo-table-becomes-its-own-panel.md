@@ -70,9 +70,11 @@ frame narrower than the table's own columns never drew one — a row trimmed pas
 loses the CI glyph and the open-change count, and a dirty, failing repo then reads as
 clean. That used to be invisible, because the pane went on drawing the status row above the
 missing table. On its own it would be a bordered box with nothing in it, so the slot is
-dropped and its rows go back to your session. If you narrow a frame that is *already*
-running, the pane cannot be un-split — a resize changes sizes, not which panes exist — so
-it shrinks to one row and says `⋯ too narrow for the repo table — 95 columns needed`.
+dropped and its rows go back to your session. Narrow a frame that is *already* running and
+the pane goes away too — a resize adds and removes panes now, not only sizes them (see
+*A resize changes which panes a frame has*, in this same release). While you are still
+dragging past the boundary the pane is still there and says `⋯ too narrow for the repo
+table — 95 columns needed`.
 
 **The density levels are re-derived rather than patched.** They differ by edges again,
 which is what a preset over `slots` can honestly express:

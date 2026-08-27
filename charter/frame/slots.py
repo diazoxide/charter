@@ -3,17 +3,25 @@
 Content comes from the renderers `statusline.py` already has — they are composed here,
 never rewritten, so a fix to a repo row or an alert lands in both surfaces at once.
 
-**A panel measures its own pane, never `$COLUMNS`.** A panel process is started as a
-tmux pane command, which inherits the *launching* shell's environment whole. Measured: a
-tmux pane 22 columns wide, launched from a shell that had exported `COLUMNS=200`, ran a
-probe that saw `COLUMNS env='200'` while its real tty was 22 columns.
-`charter.tui.term_width()` reads `$COLUMNS` first — correctly, for the status line, where
-stdout is a pipe and the environment is the only source of the truth. That order is
-exactly wrong here: trusting it would lay every panel out at the OUTER terminal's width
-and wrap catastrophically inside its own narrow pane. `tui.term_width()` itself is left
-alone (the status line depends on its env-first order); `_width` below asks the pane's
-own tty directly instead, and only reaches for `tui.term_width()` as a last resort, when
-there is no tty to measure at all.
+**A panel measures its own pane, never `$COLUMNS` — and not as a fallback either.** A
+panel process is started as a tmux pane command, which inherits the *launching* shell's
+environment whole. Measured: a tmux pane 22 columns wide, launched from a shell that had
+exported `COLUMNS=200`, ran a probe that saw `COLUMNS env='200'` while its real tty was
+22 columns. `charter.tui.term_width()` reads `$COLUMNS` first — correctly, for the status
+line, where stdout is a pipe and the environment is the only source of the truth. That
+order is exactly wrong here: trusting it would lay every panel out at the OUTER
+terminal's width and wrap catastrophically inside its own narrow pane. `tui.term_width()`
+itself is left alone (the status line depends on its env-first order); :func:`_width`
+asks the pane's own tty directly.
+
+**The last resort is a constant, not the environment** (#591). :func:`_width` used to
+fall through to `tui.term_width()` when the pane could not be measured, which put
+`$COLUMNS` back on the path by the back door: a panel whose stdout has no tty behind it
+laid itself out at the launching terminal's width, and `panel._hold` — the failure paint,
+which runs precisely when something has already gone wrong — painted a 400-column line
+into a 24-column pane. :data:`_DEFAULT_COLS` is what it answers instead, beside
+:data:`_DEFAULT_ROWS`, which has always been a constant for exactly this reason. Both
+halves of a pane's size now come from the same place and neither comes from the shell.
 """
 
 from __future__ import annotations
@@ -157,23 +165,39 @@ def _sidebar_live(fid: str) -> bool:
     return "right" in state.panes(fid)
 
 
+#: Columns a renderer assumes when this pane's own tty cannot be measured at all — the
+#: width half of the pair :data:`_DEFAULT_ROWS` is the height half of, and the same case:
+#: stdout piped somewhere with no tty behind it (a test, or `charter panel bottom
+#: --session x > /tmp/log` run by hand).
+#:
+#: **80 rather than `tui.term_width()`, and #591 is why.** That helper is env-first by
+#: design, so reaching for it here answered with the LAUNCHING terminal's `$COLUMNS` —
+#: which a panel process inherits whole (see this module's own docstring) and which
+#: describes a terminal the pane is a small rectangle inside. The number is the same one
+#: `tui.term_width`'s own *default* carried, so a pane with nothing to measure and nothing
+#: exported is laid out exactly as it was; what is gone is the branch that let a 400-column
+#: shell decide a 24-column pane's paint.
+_DEFAULT_COLS = 80
+
+
 def _width() -> int:
-    """The pane's own width in columns — measured, never read out of `$COLUMNS`.
+    """The pane's own width in columns — measured, never read out of the environment.
 
     `os.get_terminal_size(sys.stdout.fileno())` asks the file descriptor this process is
     actually writing to, which for a panel launched as a tmux pane command IS the pane —
     not a pipe, not the launching terminal. Only when that raises (stdout redirected to
-    something with no tty behind it at all, e.g. a test, or a panel run for debugging
-    with its output piped to a file) does this fall back to `tui.term_width()`, which is
-    the env-first helper the status line also uses. The measured value is returned as
-    reported, with no artificial floor clamped over it: a pane that really is 10 columns
-    wide getting reported as 20 would be exactly the theorising this function exists to
-    avoid — it would tell every caller here there is room that the real pane does not have.
+    something with no tty behind it at all, e.g. a test, or a panel run for debugging with
+    its output piped to a file) does this answer :data:`_DEFAULT_COLS`, the way
+    :func:`_height` has always answered :data:`_DEFAULT_ROWS`. The measured value is
+    returned as reported, with no artificial floor clamped over it: a pane that really is
+    10 columns wide getting reported as 20 would be exactly the theorising this function
+    exists to avoid — it would tell every caller here there is room that the real pane does
+    not have.
     """
     try:
         return os.get_terminal_size(sys.stdout.fileno()).columns
     except OSError:
-        return tui.term_width(default=80, floor=20)
+        return _DEFAULT_COLS
 
 
 #: Rows a renderer assumes when this pane's own tty cannot be measured at all — the same

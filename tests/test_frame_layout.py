@@ -497,6 +497,46 @@ class TheTablesWidthIsWhateverTheSplitOrderLeftIt(unittest.TestCase):
                     "panel_argvs and repos_cols disagree about this slot's direction")
 
 
+class ColumnSizesIsTheHalfThatCanBeAppliedFirst(unittest.TestCase):
+    """`column_sizes` exists so `commands_frame._reassert_sizes` can put the side panels
+    back at their own width BEFORE it asks tmux how wide the pane beside them is (#510) —
+    tmux redistributes every pane proportionally on a window resize, so a sidebar mid-drag
+    answers for a geometry that is one command away from not existing.
+
+    Pinned here rather than only through that caller, and `tools/sweep.py` is why: deleting
+    the edge filter left the whole suite green, because `_apply_sizes` filters again by
+    `_RESIZE_FLAG` on its way to the `-x` and swallowed every extra entry. Two guards in
+    sequence, the second hiding the first. This asks the function its own question.
+    """
+
+    def test_it_answers_the_column_slots_and_only_those(self):
+        self.assertEqual(layout.column_sizes(["top", "bottom", "repos", "right"]),
+                         {"right": layout.SLOT_SIZE["right"]})
+
+    def test_a_list_with_no_side_panel_answers_empty_rather_than_the_strips(self):
+        """The direction the deleted filter fails in: with it gone this answered `top`,
+        `bottom` and `repos` as well, and a caller applying the result as `-x` would be
+        asserting a WIDTH on three horizontal strips."""
+        self.assertEqual(layout.column_sizes(["top", "bottom", "repos"]), {})
+
+    def test_it_agrees_with_slot_sizes_about_how_wide_a_side_panel_is(self):
+        """Two loops, one fact. Both read `_size_of`, so the day they disagree is the day
+        one of them grew a table of its own — which is the shape `layout.py`'s own
+        docstring says these constants exist to stop."""
+        slots = ["top", "bottom", "repos", "right"]
+        full = layout.slot_sizes(slots, window_rows=50, content_rows=6)
+        columns = layout.column_sizes(slots)
+        self.assertTrue(columns, "nothing was compared — the check is vacuous")
+        for slot, cells in columns.items():
+            self.assertEqual(cells, full[slot], slot)
+
+    def test_an_unknown_name_is_dropped_rather_than_raised_on(self):
+        """`[frame] slots` is committed, untrusted input, and `slot_sizes` already
+        degrades rather than refusing for exactly that reason."""
+        self.assertEqual(layout.column_sizes(["sideways", "right"]),
+                         {"right": layout.SLOT_SIZE["right"]})
+
+
 class SlotSizesAnswersEverySlotAtOnce(unittest.TestCase):
     def test_the_fixed_slots_keep_their_declared_size(self):
         got = layout.slot_sizes(["top", "bottom", "right"], window_rows=50,

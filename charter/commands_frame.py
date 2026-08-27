@@ -202,6 +202,16 @@ _DEAD_FORMAT = "#{pane_dead}:#{pane_dead_status}"
 #: window has ample room for.
 _WINDOW_SIZE_FORMAT = "#{window_width}:#{window_height}"
 
+#: The format that reports ONE PANE's own width, which is the question
+#: :func:`_variable_pane_cols` asks and which the window's width above is not the answer to
+#: (#510). A `[frame] slots` naming `right` before the table insets that pane by 23
+#: columns, so charter has always had to turn the one into the other by arithmetic
+#: (`layout.repos_cols`); this is the number tmux itself holds. Separate from
+#: :data:`_WINDOW_SIZE_FORMAT` and not a third field appended to it, because they are
+#: asked at different moments and of different targets — the window before anything moves,
+#: the pane after the side panels have been put back where they belong.
+_PANE_WIDTH_FORMAT = "#{pane_width}"
+
 #: How long `_wait_for_harness` leaves between asks. There is no `attach` to block on
 #: inside an operator's tmux — the operator is already attached, to their own server —
 #: so the launcher watches the pane instead, and this is the cost of that: one local
@@ -1877,13 +1887,22 @@ def _reap_this_server(socket: str) -> None:
         state.reap(live, server=socket)
 
 
-def _window_size(socket: str, harness_pane: str) -> tuple[int, int]:
-    """The size of the WINDOW *harness_pane* is in, or `_FALLBACK_SIZE`.
+def _measure_window(socket: str, harness_pane: str) -> tuple[int, int] | None:
+    """The size of the WINDOW *harness_pane* is in, or ``None`` when tmux would not say.
 
     Never `os.get_terminal_size()` on this path: that measures the pane `charter` was
     typed in, which is a fraction of the window the frame gets the moment the operator
     has a split open — and `_drawable_slots` would then drop panels a full-width window
     has ample room for.
+
+    **``None`` rather than a fallback, and :func:`_window_size` is where the fallback still
+    lives.** A launcher that cannot measure the window still has to draw a frame, so it
+    takes `_FALLBACK_SIZE` and gets on with it. A `window-resized` child is the opposite
+    case: it exists only to apply a decision made from a measurement, and "charter could
+    not read the window" is not a measurement — applying an 80x24 layout to a window that
+    is very probably not 80x24 is the same destructive move as applying a stale one, with
+    less excuse. Telling the two apart is what lets `cmd_resize` refuse (#501) while
+    `cmd_launch` proceeds.
     """
     out = tmuxctl.run("measuring the frame's window",
                       tmuxctl.server_argv(socket, "display-message", "-p", "-t",
@@ -1891,8 +1910,102 @@ def _window_size(socket: str, harness_pane: str) -> tuple[int, int]:
                       timeout=5, report=False)
     w, _, hgt = out.stdout.strip().partition(":")
     if out.returncode != 0 or not w.isdigit() or not hgt.isdigit():
-        return _FALLBACK_SIZE
+        return None
     return int(w), int(hgt)
+
+
+def _window_size(socket: str, harness_pane: str) -> tuple[int, int]:
+    """:func:`_measure_window`, with `_FALLBACK_SIZE` for a window tmux would not report.
+
+    The launch-shaped half: every caller here has already decided it is going to lay a
+    frame out and needs a number to do it with. See :func:`_measure_window` for why the
+    resize path takes the other one.
+    """
+    return _measure_window(socket, harness_pane) or _FALLBACK_SIZE
+
+
+def _window_still(socket: str, harness_pane: str,
+                  measured: tuple[int, int]) -> bool:
+    """Is the window still the size *measured* said it was?
+
+    **The whole of #501's fix, and it is a re-READ rather than a lock.** `window-resized`
+    fires once per size change and each event starts its own backgrounded `charter
+    frame-resize` (`_resize_hook_argv`). Nothing serialises them and `run-shell -b` gives
+    no completion ordering, so during a drag several children are in flight at once, each
+    having measured the window at a different instant — and a child that measured a
+    TALLER window computes a taller `bottom`. Applied after the child that measured the
+    final, shorter one, that hands a pane a size for a window which no longer exists;
+    tmux does not refuse an over-large `-y`, it grants it and takes the difference out of
+    the neighbour, and the neighbour is the agent's own session (measured on 3.7c:
+    `resize-pane -y 40` in a 20-row window left the harness pane **1 row tall**).
+
+    A lock file the newest child STEALS would give last-writer-wins, which is the correct
+    semantics; a plain mutex would give first-writer-wins, which is the wrong end. This
+    gets last-writer-wins without either, because the window itself is the record: the
+    newest measurement is by definition the one that still matches, and every child
+    holding an older one asks this and finds it does not. Cheaper than a lock, and there
+    is no file to leave behind when a child is killed mid-drag.
+
+    **It narrows the window rather than closing it, and that is the honest claim.** The
+    size can still change between this answer and the `resize-pane` that follows it —
+    what is gone is the case the whole issue is about, a child sitting on a measurement
+    the window left milliseconds ago while a newer child has already applied the right
+    one. What remains is self-correcting in the direction that was always safe: the
+    change that beat this check fired its own `window-resized`, and that event's child
+    measures the window as it now is.
+
+    An unmeasurable window answers ``False`` — see :func:`_measure_window`. That is the
+    same direction as a stale one, and for a stronger reason.
+    """
+    return _measure_window(socket, harness_pane) == measured
+
+
+#: How long a `window-resized` child waits for the window to STOP moving before it will
+#: add or remove a pane, rather than merely re-size the ones this frame already has.
+#:
+#: **Re-sizing out of order is self-correcting; re-splitting out of order is not** (#536,
+#: quoting #501). The next resize event fixes a pane given the wrong height. A pane killed
+#: and split back costs a new interpreter, a cold charter import and a first paint, and
+#: spends one of the three lives `_arm_panel_respawn` gives it — so a drag dragged through
+#: the width where the repo table stops fitting must not thrash panes in and out at every
+#: step of it.
+#:
+#: **A trailing-edge wait, because there is no timer and no shared state to debounce
+#: with.** `notify._last` is a module-level dict, which works there because one process
+#: makes every call; every one of these children is a separate `run-shell -b` process, so
+#: the only thing they share is the window itself. A child that wants to change the shape
+#: therefore sleeps, then asks whether the window is still where it was
+#: (:func:`_window_still`). The one whose size the drag actually ended on is the only one
+#: that gets a yes.
+#:
+#: **The number is a floor with a measurement under it, not a taste.** It has to exceed the
+#: time one re-layout takes, or a second crossing lands inside the first. Measured on tmux
+#: 3.7c on this machine, the command list `_relayout` issues to grow a frame from two panes
+#: to four — two `set -p pane-died`, two `split-window`s, the `window-resized` hook, the
+#: window and pane measurements, four `resize-pane`s and a `select-pane` — took a **median
+#: 72ms over 5 runs** (69–72). That is the tmux side only: `split-window` returns as soon
+#: as the pane exists, so each new panel's own cold charter import and first paint (of the
+#: order of #501's measured 20ms per child, and more for one that actually renders) lands
+#: after it. 400ms clears the measured floor five times over and sits under the ~500ms at
+#: which an operator reads a delay as the frame having missed the resize entirely.
+_SETTLE_SECONDS = 0.4
+
+
+def _window_settled(socket: str, harness_pane: str,
+                    measured: tuple[int, int]) -> bool:
+    """Has the window held the size *measured* for :data:`_SETTLE_SECONDS`?
+
+    :func:`_window_still` with a wait in front of it, which is the whole mechanism — see
+    :data:`_SETTLE_SECONDS` for why a wait and not a debounce, and `cmd_resize` for what is
+    gated on it.
+
+    The sleep is in a backgrounded child nothing waits on (`_resize_hook_argv`'s
+    `run-shell -b`), so what it costs is one idle process per size change for the length of
+    the wait, and only for the size changes that would actually move a pane. tmux's own
+    command queue never blocks on it.
+    """
+    time.sleep(_SETTLE_SECONDS)
+    return _window_still(socket, harness_pane, measured)
 
 
 def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
@@ -2982,6 +3095,111 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
     return keep
 
 
+def _apply_sizes(socket: str, *, panes: dict[str, str], sizes: dict[str, int],
+                 flag: str) -> None:
+    """`resize-pane <flag>` every slot in *panes* that *sizes* has a number for and
+    :data:`_RESIZE_FLAG` gives exactly *flag*.
+
+    One loop, called twice by :func:`_reassert_sizes` — once for the columns and once for
+    the rows — rather than one loop over both, because the two are separated by a
+    MEASUREMENT that only the first one makes truthful (:func:`_variable_pane_cols`).
+
+    `layout.VARIABLE_ROW_SLOTS` is not in :data:`_RESIZE_FLAG` at all, which is what leaves
+    the table pane as the stack's dependent one — see that constant's own comment for the
+    tmux measurement, and note that a second check for it here would be a guard no mutation
+    could turn red, because this one already catches it.
+
+    Every pane id is checked before it is used, even though both callers of
+    :func:`_reassert_sizes` already checked theirs. `_panel_died_hook_argv`'s own rule
+    ("every value that reaches the text is what decides, never where it came from") applies
+    to a `-t` argument too, and #475 was exactly a builder that documented "safe because my
+    caller checked" growing a second caller.
+
+    `report=False`: a pane that has since died (the operator closed it, a panel crashed
+    between the map being read and this running) makes `resize-pane` fail, and that is not
+    an integration failure worth printing over the agent's own screen.
+    """
+    for slot, pane_id in panes.items():
+        if _RESIZE_FLAG.get(slot) != flag or slot not in sizes:
+            continue
+        if not _PANE_ID_RE.fullmatch(pane_id):
+            continue
+        tmuxctl.run(f"restoring the {slot} panel's size",
+                    tmuxctl.server_argv(socket, "resize-pane", "-t", pane_id,
+                                        flag, str(sizes[slot])),
+                    report=False)
+
+
+def _variable_pane_cols(socket: str, *, panes: dict[str, str], window_cols: int) -> int:
+    """How wide the variable-row pane (`repos`) actually is — **asked, not derived** (#510).
+
+    `layout.repos_cols` turns the WINDOW's width into the PANE's by walking the order those
+    panes were split in and subtracting every side panel split before it. That derivation
+    is correct, and it is a derivation where a measurement is available: the pane's id is
+    right there in *panes*, and one `display-message -p -t <pane> '#{pane_width}'` asks the
+    only authority there is. The derivation stays as the answer for a pane that cannot be
+    asked, which keeps `layout.repos_cols` the launcher's answer too — at launch the pane
+    does not exist yet, so nothing there can measure anything.
+
+    **The two part company in exactly the ways #510 names, and both are silent.** The
+    order comes out of `state.panes`, a JSON file in the frame's own state directory:
+    `state.panes` validates the VALUES (`isinstance(v, str)`) and says nothing about the
+    order, so a truncated write, a hand edit, or a charter that wrote a different shape all
+    reach here as a plausible-looking map whose order is fiction. And a future re-layout
+    that MOVED a surviving pane rather than killing and re-splitting it would change the
+    geometry without changing the map. In both cases the derivation's failure is an
+    over-tall pane re-asserted on every step of a drag with the rows taken off the harness
+    — measured on tmux 3.7c at 110x40 in the `right`-first order: 15 rows granted, 1 drawn,
+    and the harness left 22 where it should have had 36.
+
+    **The order this is called in is the whole of why the answer is trustworthy, and it was
+    measured rather than assumed.** tmux redistributes every pane proportionally on a window
+    resize, so a sidebar mid-drag is not 22 columns wide and the pane beside it is not the
+    width it is about to be. On tmux 3.7c, a 120x40 frame with `right` split first, grown to
+    200x40: `right` came back **62** columns and the table pane read **137** — where the
+    truth, one `resize-pane -x 22` later, is **177**. Measuring first would therefore have
+    been WORSE than the derivation, not better. `_reassert_sizes` applies the columns before
+    it calls this, and with that ordering tmux's own answer agrees with `repos_cols`
+    exactly, at 60, 110, 200 and 300 columns. The measurement is the authority and the
+    derivation is what has to agree with it.
+
+    One extra `display-message` on the `window-resized` path, which already runs one
+    (`_window_size`). That is the cost #510 filed itself over rather than assuming; it is
+    one round trip on a path whose own docstring is explicit that everything it reads is
+    cheap by construction, and it buys the difference between a geometry charter believes
+    and a geometry tmux reports.
+    """
+    # `next` and not a loop with a `break` in it. There is exactly ONE variable-row slot
+    # by construction — `layout.VARIABLE_ROW_SLOTS` is derived from charter's own six
+    # components, and a `[[frame.component]]` this plane places is always a FIXED row
+    # (`layout._is_fixed_row`'s second branch reads its edge, and the config boundary
+    # refuses a table without a number) — so a loop here had two ways to leave it that
+    # could never differ, which `tools/sweep.py` correctly reported as one line doing
+    # nothing.
+    pane_id = next((p for s, p in panes.items()
+                    if layout._key(s) in layout.VARIABLE_ROW_SLOTS), "")
+    # #475's rule, applied to the one value on this path that arrives off disk: `panes`
+    # is JSON in the frame's own state directory and `state.panes` validates that a value
+    # is a STRING, not that it is a pane. Nothing off disk becomes a `-t` until it has
+    # tmux's own shape, whatever the argv it is going into.
+    if _PANE_ID_RE.fullmatch(pane_id):
+        out = tmuxctl.run("measuring the table panel's own pane",
+                          tmuxctl.server_argv(socket, "display-message", "-p", "-t",
+                                              pane_id, _PANE_WIDTH_FORMAT),
+                          timeout=5, report=False)
+        cols = out.stdout.strip()
+        # Three separate ways not to have an answer, and the first is not covered by the
+        # other two: `tmuxctl.run` folds a TIMEOUT into a return code (`tmuxctl.TIMED_OUT`)
+        # and hands back whatever the killed process had already written, so a partial read
+        # can be a failure whose stdout still parses as a number. A zero is the third: not
+        # an answer tmux has for a live pane, and telling `repos_rows_wanted` the table has
+        # no room at all would floor the pane for a reason that is a read failure rather
+        # than a geometry.
+        if out.returncode == 0 and cols.isdigit() and int(cols) > 0:
+            return int(cols)
+    return layout.repos_cols(list(panes), window_cols=window_cols)
+
+
 def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pane: str,
                     window_cols: int, window_rows: int) -> None:
     """Re-apply every pane in *panes* the size `layout.slot_sizes` says it should have in
@@ -3007,17 +3225,25 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
     narrowed terminal keep a table-sized pane it could no longer draw a table in, on every
     step of the drag rather than only at launch.
 
-    **And the window's width is not the PANE's.** `layout.repos_cols` turns one into the
-    other from the order *panes* is in, which is the order those panes were split in. A
-    frame whose `[frame] slots` names `right` before `repos` has a 97-column table pane
-    in a 120-column window, and this is the site that re-applied the wrong height for it
-    on every step of a drag — the launch-time defect's longer-lived half.
+    **And the window's width is not the PANE's.** A frame whose `[frame] slots` names
+    `right` before `repos` has a 97-column table pane in a 120-column window, and this is
+    the site that re-applied the wrong height for it on every step of a drag — the
+    launch-time defect's longer-lived half.
+
+    **So the pane is ASKED how wide it is, and the columns are applied first so that the
+    answer is true (#510).** `layout.repos_cols` derived the pane's width from the order
+    *panes* is in, and that order is a JSON file's insertion order — right until it is not
+    (a truncated write, a hand edit, a future re-layout that moves a pane instead of
+    re-splitting it), at which point the derivation is silently fiction. tmux holds the
+    real number. It cannot simply be asked for it, though: a window resize leaves every
+    pane proportionally scaled until this function corrects it, so the table pane read
+    **137** columns in the 200-column window where the truth is **177** (measured on 3.7c).
+    Hence two passes with the measurement between them — the columns, then
+    :func:`_variable_pane_cols`, then the rows. See that function for the full measurement
+    and for what happens when the pane cannot be asked.
 
     Every pane id is checked before it is used, even though both callers already checked
-    theirs. `_panel_died_hook_argv`'s own rule ("every value that reaches the text is
-    what decides, never where it came from") applies to a `-t` argument too, and #475 was
-    exactly a builder that documented "safe because my caller checked" growing a second
-    caller.
+    theirs — see :func:`_apply_sizes`, which is where that check now lives for both passes.
 
     **The HARNESS is told its height too, and the variable slot is left as the remainder
     — #515.** tmux's `resize-pane -y` moves exactly ONE boundary: the one below the pane,
@@ -3038,34 +3264,28 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
     *harness_pane* is checked like every other id here and for the same reason: it is read
     off disk (`state.harness_pane`) by `cmd_resize`, which is exactly the shape #475 was.
 
-    `report=False`: a pane that has since died (the operator closed it, a panel crashed
-    between the map being read and this running) makes `resize-pane` fail, and that is
-    not an integration failure worth printing over the agent's own screen.
+    `report=False` throughout: a pane that has since died (the operator closed it, a panel
+    crashed between the map being read and this running) makes `resize-pane` fail, and that
+    is not an integration failure worth printing over the agent's own screen.
     """
-    # `list(panes)` twice, and it is the same list for two different questions:
-    # `slot_sizes` needs to know which OTHER horizontal strips are charging `repos`
-    # rows, and `repos_cols` needs the order they were split in to know how wide
-    # `repos` is. Both callers hand a map whose insertion order is that split order —
-    # `_draw_panels` records a launch in split order, `_relayout` keeps survivors ahead
-    # of new splits, and `state.panes` is JSON, which round-trips a dict's order.
+    # `list(panes)`, and the ORDER in it is a fact rather than an artefact: both callers
+    # hand a map whose insertion order is the order those panes were split in —
+    # `_draw_panels` records a launch in split order, `_relayout` keeps survivors ahead of
+    # new splits, and `state.panes` is JSON, which round-trips a dict's order. `column_sizes`
+    # and `slot_sizes` both read it, and `_variable_pane_cols` reads it again for the
+    # derivation it falls back to when the pane cannot be measured.
     order = list(panes)
+    # Pass one: the COLUMNS. A side panel's width is a constant and depends on nothing
+    # here, and it has to land before anything is measured — see :func:`_variable_pane_cols`
+    # for the tmux measurement that makes this an order rather than a preference.
+    _apply_sizes(socket, panes=panes, sizes=layout.column_sizes(order), flag="-x")
     sizes = layout.slot_sizes(
         order, window_rows=window_rows,
         content_rows=frame_slots.repos_rows_wanted(
-            fid, pane_cols=layout.repos_cols(order, window_cols=window_cols)))
-    for slot, pane_id in panes.items():
-        # `layout.VARIABLE_ROW_SLOTS` is not in `_RESIZE_FLAG` at all, which is what
-        # leaves the table pane as the stack's dependent one — see that constant's own
-        # comment for the tmux measurement, and note that a second check for it here
-        # would be a guard no mutation could turn red, because this one already caught it.
-        if slot not in _RESIZE_FLAG or slot not in sizes:
-            continue
-        if not _PANE_ID_RE.fullmatch(pane_id):
-            continue
-        tmuxctl.run(f"restoring the {slot} panel's size",
-                    tmuxctl.server_argv(socket, "resize-pane", "-t", pane_id,
-                                        _RESIZE_FLAG[slot], str(sizes[slot])),
-                    report=False)
+            fid, pane_cols=_variable_pane_cols(socket, panes=panes,
+                                               window_cols=window_cols)))
+    # Pass two: the ROWS, and the harness below them.
+    _apply_sizes(socket, panes=panes, sizes=sizes, flag="-y")
     if _PANE_ID_RE.fullmatch(harness_pane or ""):
         tmuxctl.run("restoring the harness pane's height",
                     tmuxctl.server_argv(
@@ -3095,12 +3315,53 @@ def cmd_resize(args) -> int:
 
     * no frame on the argv and no `$CHARTER_SESSION_ID` — not fired by a frame at all;
     * a harness pane that is not tmux's own `%<digits>` — it arrives off disk, and
-      `_window_size` is about to target it;
-    * no panes recorded — a frame whose panels all failed to draw has nothing to resize.
+      `_measure_window` is about to target it;
+    * no panes recorded — a frame whose panels all failed to draw has nothing to resize;
+    * **a window tmux would not report a size for** (#501) — this used to take
+      `_FALLBACK_SIZE` and re-assert an 80x24 layout over a window that is very probably
+      not 80x24, which is the same destructive move as applying a stale measurement with
+      less excuse. A launcher still falls back, because it has to draw SOMETHING; this has
+      the option of doing nothing and letting the next resize try again;
+    * **a window that has moved since this child measured it** (#501), checked immediately
+      before the sizes are applied — see :func:`_window_still` for the race and for why a
+      re-read gives last-writer-wins where a lock would give the wrong end of it.
 
     The frame comes off the argv first and the environment only as a fallback, matching
     `cmd_respawn`: on the operator's own server there IS no `$CHARTER_SESSION_ID` to
     read, because that variable is a session option charter does not write there.
+
+    **A resize can now add and remove panes, not only re-size them (#536).** Which slots a
+    frame had used to be decided once, at launch: `_drawable_slots` ran against the
+    terminal the frame started in and nothing afterwards re-ran it except a density change.
+    So a frame launched at 200 columns and dragged to 80 kept a sidebar the same frame
+    would have refused to draw had it started there, and — since #515 gave the repo table
+    its own pane — kept a `repos` pane that could only say `⋯ too narrow for the repo
+    table`, honestly, because it could not be un-split. The other direction was worse: a
+    frame launched at 80 and widened to 200 never gained the panes it was now big enough
+    for, until the next launch or the next `F2`.
+
+    So the drawable set is recomputed here and handed to `_apply_arrangement` — the ONE
+    live re-layout path, the same one a density level and a component's toggle key go
+    through, rather than a second answer to "what does this frame look like now". Two rules
+    keep that from being destructive, and each is a measured hazard rather than caution:
+
+    * **It waits for the window to stop** (:data:`_SETTLE_SECONDS`). Re-applying a size out
+      of order is self-correcting on the next event; killing and re-splitting panes out of
+      order is not, and a drag through the width where the table stops fitting would
+      otherwise thrash panes in and out with a `charter panel` process started and killed
+      at each step, spending respawn lives on nothing.
+    * **It never drops the LAST pane.** `_relayout` with an empty want-list makes
+      `_install_resize_hook` remove the `window-resized` hook itself (correctly — see there)
+      and that is a one-way door on this path specifically: the hook is the only thing that
+      would notice the terminal being widened again. Below half the size floors, where
+      `layout.visible_slots` answers `[]`, this frame therefore keeps the panes it has,
+      exactly as it did before #536. A density change reaching the same state is a
+      keypress, and the operator who pressed it can press another.
+
+    **What the operator chose is never quietly undone.** The recompute starts from
+    :func:`_visible_now` — this frame's own arrangement minus its own hidden set — not from
+    `config.FRAME["slots"]`, so a panel hidden with a toggle key or by a `minimal` density
+    stays hidden across every resize. Only the SIZE filter is re-run.
 
     **Both dimensions are used, not just the rows (#500).** The window's WIDTH decides
     whether `repos` can draw its table at all (`statusline._LEFT_W`), so narrowing a
@@ -3113,11 +3374,21 @@ def cmd_resize(args) -> int:
     **This is the hot path of the whole feature.** A terminal drag fires `window-resized`
     once per size change, so this runs repeatedly and in the background while the
     operator is still dragging. Everything it reads is cheap by construction:
-    `state.harness_pane`/`state.panes` are two small files, `_window_size` is one
-    `display-message`, and `frame_slots.repos_rows_wanted` goes through
-    `gather.row_count`, which answers from the frame's cache and never runs a git sweep
-    (see its own docstring) — and at a width below `_LEFT_W` it does not even ask, since
-    the answer is one row whatever the count is.
+    `state.harness_pane`/`state.panes` are two small files, `frame_slots.repos_rows_wanted`
+    goes through `gather.row_count`, which answers from the frame's cache and never runs a
+    git sweep (see its own docstring) — and at a width below `_LEFT_W` it does not even
+    ask, since the answer is one row whatever the count is.
+
+    **Three `display-message` calls now where there was one**, and the cost is stated
+    rather than waved at: the window before, the pane in the middle (#510), the window
+    again before anything is applied (#501). Measured on this machine against a real tmux
+    3.7c, one round trip is **~5ms** — dominated by spawning the `tmux` CLIENT process, not
+    by the server — so this child grows from #501's measured median of 20ms to roughly
+    35ms. That is a real 75%, on a path that runs once per size change during a drag, and
+    it buys the two things the extra reads are: a geometry tmux reports instead of one
+    charter believes, and a refusal to apply a measurement the window has already left. The
+    expensive addition is the settle wait, and it is paid only by a resize that would
+    change the frame's SHAPE.
     """
     fid = getattr(args, "frame", None) or os.environ.get("CHARTER_SESSION_ID", "")
     if not fid:
@@ -3129,9 +3400,29 @@ def cmd_resize(args) -> int:
     if not panes:
         return 0
     socket = state.frame_server(fid) or SOCKET
-    cols, rows = _window_size(socket, harness_pane)
-    _reassert_sizes(socket, fid=fid, panes=panes, harness_pane=harness_pane,
-                    window_cols=cols, window_rows=rows)
+    measured = _measure_window(socket, harness_pane)
+    if measured is None:
+        return 0
+    cols, rows = measured
+    # Read ONCE and used twice — to decide whether the shape has to change, and as what
+    # the re-layout is then given. A second `_visible_now` call for the second question
+    # would be a second answer to "what is this frame showing", and it would be the wrong
+    # kind of safe: a `want` computed from the config while `_apply_arrangement` got this
+    # would still lay the frame out correctly, so nothing would go red — it would only
+    # spend a settle wait and a version bump on a resize that had nothing to do.
+    visible = _visible_now(fid, config.FRAME)
+    # The SHAPE first, because a re-layout re-asserts every size on its way out
+    # (`_relayout`) and doing both would size the panes twice — once for the set this
+    # frame is about to stop having.
+    want = _drawable_slots(cols, rows, visible)
+    if want and set(want) != set(panes) and _window_settled(socket, harness_pane, measured):
+        where = _relayout_target(fid)
+        if where is not None:
+            _apply_arrangement(fid, where=where, want=visible, window=measured)
+            return 0
+    if _window_still(socket, harness_pane, measured):
+        _reassert_sizes(socket, fid=fid, panes=panes, harness_pane=harness_pane,
+                        window_cols=cols, window_rows=rows)
     return 0
 
 
@@ -3278,7 +3569,8 @@ def _relayout_target(fid: str):
     return (state.frame_server(fid) or SOCKET), harness_pane, v
 
 
-def _apply_arrangement(fid: str, *, where, want: list[str]) -> None:
+def _apply_arrangement(fid: str, *, where, want: list[str],
+                       window: tuple[int, int] | None = None) -> None:
     """Make *fid*'s panes match *want*, and let every surviving panel know.
 
     **The one live re-layout path**, and having exactly one is Task 5's actual
@@ -3294,9 +3586,17 @@ def _apply_arrangement(fid: str, *, where, want: list[str]) -> None:
     its decision BEFORE calling here for the mirror-image reason — a re-layout that fails
     halfway still leaves the panels that survive drawing the arrangement that was asked
     for.
+
+    *window* is a measurement the caller has ALREADY taken and already checked, and only
+    `cmd_resize` has one (#501): it measured the window, waited for it to stop moving and
+    re-read it, so a third reading here would be a fresh chance to disagree with the one
+    the decision was made from — the exact shape the settle exists to close. The two
+    keypress callers pass nothing and this measures for them, as it always has: they act on
+    a key rather than on a measurement, so there is no earlier reading for this one to
+    contradict.
     """
     socket, harness_pane, v = where
-    cols, rows = _window_size(socket, harness_pane)
+    cols, rows = window if window is not None else _window_size(socket, harness_pane)
     panes = _relayout(socket, fid=fid, harness_pane=harness_pane,
                       panels=state.panes(fid),
                       want=_drawable_slots(cols, rows, want), v=v,
@@ -3338,6 +3638,23 @@ def _hidden_now(fid: str, frame: dict) -> list[str]:
         return list(recorded)
     visible = set(frame.get("slots") or ())
     return [n for n in instance.frame_arrangement(frame) if n not in visible]
+
+
+def _visible_now(fid: str, frame: dict) -> list[str]:
+    """Which components *fid* IS drawing right now, in the arrangement's own order — the
+    complement of :func:`_hidden_now` over `instance.frame_arrangement`, and the same
+    expression `cmd_toggle` and `cmd_density` both end on.
+
+    **Size does not come into it**, and that separation is the point: this answers what the
+    OPERATOR has asked for (a density level, a toggle key, or the committed `[frame]
+    slots` when neither has been used), and `_drawable_slots` is what then decides which of
+    them a terminal of a given size can actually hold. `cmd_resize` needs exactly this
+    split — it must recompute the second without ever quietly undoing the first, and
+    recomputing from `config.FRAME["slots"]` instead would put a hidden panel back on
+    screen on the operator's next terminal drag.
+    """
+    hidden = set(_hidden_now(fid, frame))
+    return [n for n in instance.frame_arrangement(frame) if n not in hidden]
 
 
 def cmd_toggle(args) -> int:

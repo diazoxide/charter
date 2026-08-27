@@ -303,6 +303,13 @@ configured for it. A density change goes through the same floors, so choosing `f
 terminal with no room for a side panel gives you the edges that fit rather than a failed
 split.
 
+A resize goes through them too, so a *running* frame degrades and recovers the same way a
+launch would — with one exception. Dragging below half the floors does not take the last
+panel away: a frame with no panels also has no resize hook, and that hook is the only thing
+that would notice you making the terminal big again, so charter would have no way back.
+It keeps what it has at that size. `F2` still turns everything off, because a keypress can
+be followed by another one.
+
 `bottom` is never dropped by those floors, and it is the only slot that never is: it is
 the attention strip — one alert and the command that fixes it — which is the whole reason
 a cramped terminal is worth framing at all. It is one row at every size.
@@ -319,10 +326,11 @@ table comes out 23 columns narrower, and it is that width the pane is sized for.
 is recomputed on every terminal resize, not remembered from the launch — tmux does not
 refuse an over-large pane height, it takes the difference out of the neighbouring pane,
 and the neighbour is your agent session. Recomputing means charter runs for a moment on
-each resize (median 20ms, in the background, so nothing waits on it). During a fast drag
-those runs can finish out of order and leave the table sized for a window you have already
-resized past; it corrects itself the next time you resize, and #501 tracks closing it
-properly.
+each resize (~35ms, in the background, so nothing waits on it). During a fast drag those
+runs finish out of order — nothing serialises them — so each one re-reads the window
+immediately before it applies anything and does nothing at all if the size has moved since
+it measured. The newest measurement is the only one that still matches, which is the one
+worth applying.
 
 If the frame ends up narrower than the repo table's own columns (95), the table is not
 drawn rather than drawn with its right-hand columns cut off: a row trimmed past the branch
@@ -333,11 +341,16 @@ exotic one, so an 80-column frame is the two strips and your session, with the t
 rows going back to the harness rather than being taken and left blank. A `slots` list
 naming `right` before `repos` moves the threshold up by the sidebar's 23 columns: such a
 frame needs 118 columns of terminal before the table appears. Narrow a frame that is
-*already running* below 95 and the pane cannot be un-split — a resize changes sizes, not
-which panes exist — so it shrinks to one row and says `⋯ too narrow for the repo table —
-95 columns needed` rather than sitting there blank. The attention strip is unaffected
-either way: it drops whole fields instead, in priority order. (The status line outside a
-frame still crops instead of refusing; that is #506.)
+*already running* below 95 and the pane goes away too — a resize adds and removes panes,
+not only sizes them, so a running frame ends up with the panes a launch at its current size
+would have drawn, in either direction. Panes are only moved once the window has held one
+size for 400ms, so dragging through 95 columns does not thrash them in and out at every
+step; until that settles the pane you are dragging past says `⋯ too narrow for the repo
+table — 95 columns needed` rather than sitting there blank. A panel you hid with its own
+key, or a density you chose from the palette, is never undone by a resize — only the size
+filter is re-run. The attention strip is unaffected either way: it drops whole fields
+instead, in priority order. (The status line outside a frame still crops instead of
+refusing; that is #506.)
 
 If a future `[frame] slots` ever names an edge charter sizes but has no renderer for, that
 slot is skipped rather than drawn as a dead pane — the harness keeps the space — and

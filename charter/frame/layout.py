@@ -494,6 +494,35 @@ def repos_rows(*, content_rows: int, window_rows: int,
     return max(floor, min(content_rows, cap))
 
 
+def column_sizes(slots: list[str] | tuple[str, ...]) -> dict[str, int]:
+    """Every slot in *slots* whose split costs COLUMNS, mapped to how many it costs.
+
+    The half of :func:`slot_sizes` that depends on nothing else: a side panel is
+    :data:`SLOT_SIZE` columns wide in every window it is ever drawn in, whatever the rows
+    are and whatever the table has to say. Read through :func:`_size_of` and
+    :func:`_edge_of`, the same two questions :func:`slot_sizes` asks — so this is a second
+    loop over one answer, never a second table of how wide a side panel is.
+
+    **Split out because the ORDER the two are applied in is load-bearing (#510).**
+    `commands_frame._reassert_sizes` has to put the side panels back at their own width
+    before it may ask tmux how wide the variable-row pane beside them is, because tmux
+    redistributes every pane proportionally on a window resize and a scaled sidebar
+    answers for a geometry that is one command away from not existing. Measured on tmux
+    3.7c, a 120x40 frame with `right` split first, grown to 200x40: `right` came back
+    **62** columns and the table pane read **137**; after `resize-pane -x 22` on `right`
+    the same pane read **177**, which is what :func:`repos_cols` says it is. Same
+    agreement at 60, 110 and 300 columns.
+    """
+    out: dict[str, int] = {}
+    for slot in slots:
+        if _edge_of(slot) not in _COLUMN_EDGES:
+            continue
+        cells = _size_of(slot)
+        if cells is not None:
+            out[slot] = cells
+    return out
+
+
 def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int) -> dict[str, int]:
     """Every slot in *slots* mapped to the size it should be given — rows for the
     horizontal strips, columns for the side.

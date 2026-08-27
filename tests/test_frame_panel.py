@@ -120,15 +120,59 @@ class FailureIsVisibleInThePane(PersonaIso, unittest.TestCase):
         failure INSIDE the render path cannot take the message about it down too — which
         means it also does not inherit `render`'s own truncation. A message wider than a
         22-column `left` pane would wrap and scroll itself out of a pane it was written
-        to be readable in."""
+        to be readable in.
+
+        **The assertion is untouched by #591 and the fixture is the half that moved.** The
+        `fileno` patch used to sit OUTSIDE `redirect_stdout`, which patched whatever
+        `sys.stdout` was at that moment — `PersonaIso`'s own `StringIO`, not `out` — and
+        then `redirect_stdout` swapped a different object in underneath it. So
+        `sys.stdout.fileno()` raised `io.UnsupportedOperation` (an `OSError`), this ran on
+        `slots._width`'s FALLBACK, and the fallback read `$COLUMNS`: the test passed on a
+        machine with no `$COLUMNS` and failed at `COLUMNS=400`, painting an 88-cell line
+        into a 24-column pane. Both halves were wrong and only one of them is a test's
+        business — the fallback no longer reads the shell at all (`slots._DEFAULT_COLS`,
+        pinned in `test_frame_slots.py::Width`), and the ordering below is what makes this
+        case exercise what its name says: a pane whose own tty answers 24.
+
+        `PaintClampsToRealHeight` and `RendersToItsOwnPaneWidth` in this file already nest
+        the two the right way round; this is now the third.
+        """
         out = io.StringIO()
-        with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
-             mock.patch("os.get_terminal_size", return_value=os.terminal_size((24, 1))):
-            with redirect_stdout(out), redirect_stderr(io.StringIO()):
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            with mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+                 mock.patch("os.get_terminal_size",
+                            return_value=os.terminal_size((24, 1))):
                 panel.run("a-very-long-slot-name-indeed", "f-1", once=True)
         painted = out.getvalue().split("\x1b[2J", 1)[1]
         for line in painted.split("\n"):
             self.assertLessEqual(tui.width(line), 24, painted)
+
+    def test_a_pane_that_cannot_be_measured_is_not_measured_by_the_shell_instead(self):
+        """#591's live half, at the call site that has to hold it.
+
+        The case above states a pane's real width; this one takes the width away. A panel
+        whose stdout has no tty behind it (`charter panel top --session x > /tmp/log`, the
+        case `_DEFAULT_ROWS` already exists for) has nothing to measure — and the paint
+        that runs at that moment is a FAILURE paint, so whatever it lays out against is
+        what an operator gets in place of a working pane. Reaching for `$COLUMNS` there
+        answered with the terminal charter was launched from, which a panel process
+        inherits whole; a 400-column shell put an 88-cell line where 80 was the most
+        anything could claim.
+
+        Asserted against `slots._DEFAULT_COLS` rather than a literal, because the number
+        is not the property — the property is that the answer does not move when the shell
+        does. Red before the fix at exactly the value #591 reproduced with.
+        """
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"COLUMNS": "400"}):
+            with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                with mock.patch("os.get_terminal_size",
+                                side_effect=OSError("not a tty")):
+                    panel.run("a-very-long-slot-name-indeed", "f-1", once=True)
+        painted = out.getvalue().split("\x1b[2J", 1)[1]
+        self.assertTrue(painted.strip(), "nothing was painted at all")
+        for line in painted.split("\n"):
+            self.assertLessEqual(tui.width(line), slots._DEFAULT_COLS, painted)
 
 
 class Height(unittest.TestCase):
