@@ -3416,9 +3416,16 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
             # 'demo']` and `CHARTER_ROOT=''`. This test is about what a launch writes on
             # somebody else's tmux SERVER; the gather child is not part of that question,
             # and it is the one part of a launch that escapes the isolation.
+            # BOTH halves of the tty pair, for the reason `test_frame_launcher._launch`
+            # sets out (#545) and with one aggravation of its own: this launch runs on a
+            # worker THREAD, so `_picker_wanted` finding a terminal here does not merely
+            # hang the test — it hangs a daemon thread nobody is waiting on a prompt from,
+            # and what the assertion below reports is "the frame's own window never
+            # appeared", which is a true sentence about the wrong subject.
             with mock.patch.dict(os.environ, env, clear=True), \
                  _no_real_detached_child([]), \
                  mock.patch("sys.stdout.isatty", return_value=True), \
+                 mock.patch("sys.stdin.isatty", return_value=False), \
                  mock.patch("charter.workspace.resolve", return_value="demo"), \
                  mock.patch.dict(config.FRAME, {"slots": []}):
                 rc.append(commands_frame.cmd_launch(args))

@@ -30,6 +30,17 @@ os.environ["CODEX_HOME"] = os.path.join(_SANDBOX, "codex")
 os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
 os.makedirs(os.environ["CODEX_HOME"], exist_ok=True)
 
+# The FOURTH fixture, installed FIRST because it is the one thing here that must be true
+# before `charter` is imported at all: the suite's own file descriptors. `charter.util`
+# computes `_USE_COLOR` from `sys.stderr.isatty()` at import, and `sys.stdin`'s tty-ness
+# decides whether charter stops and asks a human — which is how 122 tests in one module sat
+# on charter's own workspace picker, forever, whenever the suite was run from a terminal
+# (#545). See `tests/_ttyguard.py`: all three streams now answer what CI answers, and a
+# test that wants a different answer for stdin has to say so.
+from . import _ttyguard      # noqa: E402  (imports no charter module, by design)
+
+_ttyguard.install()
+
 # The third fixture a test can inherit without noticing, after the plane root and these
 # config directories: the SHELL the suite was launched from. `$CHARTER_SESSION_ID`,
 # `$TMUX` and `$CHARTER_WORKSPACE` reach the code under test the same way `$XDG_CONFIG_HOME`

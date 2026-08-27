@@ -10,17 +10,102 @@ unreachable. Observed during a real migration, where three vaults were re-regist
 It also broke the rule the rest of charter states and follows — additive: never delete or
 rename a user's thing to make room; name the blocker and refuse. `init`, `reinit` and
 `_create_baseline_dirs` all work that way.
+
+**Nothing here may reach a real credential store, and until #546 two cases did.**
+`cmd_vault_add` finishes by calling `prov.health()`, and for a `1password` vault that
+shells out — so `test_force_does_not_migrate_and_says_so` and
+`test_the_account_pin_never_travels` ran the operator's OWN `op` binary against the vault
+names their own fixtures spell (`Eng`, `Engineering`). Measured by putting a logging
+stand-in for `op` first on `$PATH` and running the whole suite: four invocations, from
+those two tests, and no others anywhere in 6636. They passed because an unauthenticated
+`op` exits non-zero in well under a second and the provider then reports a vault it cannot
+read — the right answer, by luck. `op` **blocks** instead when it has no usable session and
+a human could be asked, and the suite then parks in `subprocess.communicate` behind a
+biometric prompt: measured at 15 minutes inside a fresh tmux pane, with
+`python3 -m unittest discover -s tests` never finishing.
+
+So `_no_real_op` is applied to every case in this file rather than to the two that were
+caught, on the same reasoning `_launch`'s tty pins carry: the next case here will be
+written by copying its neighbour. It is the pattern the five sibling `op` modules already
+use — a fake on `OnePasswordProvider.runner` plus a stubbed `shutil.which` — spelled the
+way `test_op_schema_is_told_the_same_everywhere.py` spells it, because that module drives
+`cmd_vault_add` too and therefore has to reach the provider the same indirect way.
+
+The suite-wide half is `tests._planeguard.RealVaultReach`, which refuses the spawn itself,
+so instance three fails on the pull request that adds it rather than on the machine most
+likely to have `op` installed — the operator's.
 """
 from __future__ import annotations
 
 import io
+import json
+import os
 import unittest
 from contextlib import redirect_stderr
 from types import SimpleNamespace
+from unittest import mock
 
 from charter import commands_secrets, config
 from charter.secrets import base, registry
+from charter.secrets.onepassword import OnePasswordProvider
 from tests._isolation import PersonaIso
+
+#: `git init` and `git check-ignore` are real subprocesses here (see
+#: `PlaintextMustNotLandInGit`), and both read the machine's git configuration:
+#: `check-ignore` honours `core.excludesFile`, so a developer whose global ignore names
+#: `*.json` or `cfg/` would watch `test_a_tracked_path_is_refused` fail for a reason that
+#: has nothing to do with charter, and `init` honours `init.templateDir`, which can run
+#: hooks. The same two lines a dozen other modules here already carry (`test_git_policy`,
+#: `test_freshness`, `test_reactive_memory`, …).
+_HERMETIC_GIT = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+
+class _FakeOp:
+    """Stands in for the `op` CLI, for a vault that has just been registered.
+
+    Deliberately the smallest fake that answers `health()` — the only path `cmd_vault_add`
+    reaches — rather than a sixth full model of `op`. `health()` asks `keys()`, which is
+    one `item get`; a failed `item get` is followed by an `item list` to decide whether the
+    item is absent or merely unreadable (#322), so both are answered. Every value below is
+    an inert fixture string; there is no 1Password vault on this machine to record one
+    from, and nothing here asserts on one.
+    """
+
+    def __init__(self, title: str = "charter-devops") -> None:
+        self.title = title
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv, input=None, **kw):
+        self.calls.append(list(argv))
+        bare = [a for a in argv if not a.startswith("--")]
+        if bare[:3] == ["op", "item", "get"]:
+            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({
+                "id": "itm1", "title": self.title, "category": "PASSWORD", "fields": []}))
+        if bare[:3] == ["op", "item", "list"]:
+            return SimpleNamespace(returncode=0, stderr="",
+                                   stdout=json.dumps([{"title": self.title}]))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def _no_real_op(case) -> _FakeOp:
+    """Point this case's 1Password provider at a fake, and say `op` is installed.
+
+    Both halves are needed and they close different holes. The runner is what a real
+    `op` would be spawned through, and it is set on the CLASS because the provider these
+    tests exercise is built inside `cmd_vault_add` by `registry.provider_for` — there is no
+    instance for a test to reach. `shutil.which` is what the provider checks BEFORE running
+    anything, so without stubbing it the answer would still be the machine's: "op CLI not
+    on PATH" on a bare runner and a real spawn on a laptop that has 1Password installed.
+    """
+    real_runner = OnePasswordProvider.__dict__["runner"]
+    op = _FakeOp()
+    OnePasswordProvider.runner = op
+    case.addCleanup(lambda: setattr(OnePasswordProvider, "runner", real_runner))
+    import charter.secrets.onepassword as mod
+    real_which = mod.shutil.which
+    mod.shutil.which = lambda n: "/usr/local/bin/op" if n == "op" else None
+    case.addCleanup(lambda: setattr(mod.shutil, "which", real_which))
+    return op
 
 
 def _args(name: str, provider: str = "plain-file", **kw) -> SimpleNamespace:
@@ -29,7 +114,16 @@ def _args(name: str, provider: str = "plain-file", **kw) -> SimpleNamespace:
                            persona=kw.pop("persona", None), force=kw.pop("force", False))
 
 
-class RegisteringOverAnExistingName(PersonaIso):
+class VaultRegistrationCase(PersonaIso):
+    """`PersonaIso`, plus the two things this file must not read off the machine."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.op = _no_real_op(self)
+        self.enterContext(mock.patch.dict(os.environ, _HERMETIC_GIT))
+
+
+class RegisteringOverAnExistingName(VaultRegistrationCase):
     def setUp(self) -> None:
         super().setUp()
         registry.add_vault("devops", "plain-file", {"file": str(self.tmp / "devops.json")})
@@ -89,7 +183,7 @@ class RegisteringOverAnExistingName(PersonaIso):
         self.assertIn("fresh", registry.vaults())
 
 
-class TheRegistryIsPortable(PersonaIso):
+class TheRegistryIsPortable(VaultRegistrationCase):
     """Issue #21. The registry recorded one developer's home directory, so a team that
     commits its reference vaults — they hold `op://` URIs, never values — found the vault
     files present on a fresh clone and the index that locates them useless, and scripted
@@ -148,7 +242,7 @@ class TheRegistryIsPortable(PersonaIso):
         self.assertEqual(registry.provider_for("b").path, self.tmp / "x" / "b.json")
 
 
-class SharedAndLocalHalves(PersonaIso):
+class SharedAndLocalHalves(VaultRegistrationCase):
     """#21's remaining half: the registry that *locates* committed vaults must travel too.
 
     `vaults.json` at the plane root is committed; `.charter/vaults.json` stays local and
@@ -242,7 +336,7 @@ class SharedAndLocalHalves(PersonaIso):
         self.assertEqual(_stat.S_IMODE(config.VAULTS_REGISTRY.stat().st_mode), 0o600)
 
 
-class PlaintextMustNotLandInGit(PersonaIso):
+class PlaintextMustNotLandInGit(VaultRegistrationCase):
     """A plain-file vault holds PLAINTEXT. The default sits under `.charter/`, which
     `charter init` gitignores — but `--file` accepts any path, and a vault pointed at one
     git tracks commits the credentials on the next `charter save`. Nothing said so:
@@ -251,6 +345,13 @@ class PlaintextMustNotLandInGit(PersonaIso):
     The PATH is refused, not `--share`: a team that provisions the file out of band has a
     legitimate use for a shared pointer, and the unignored path is the actual defect — it
     also catches the far more common case where `--share` was never passed at all.
+
+    This is the class that runs REAL git — `git init` here, and `git check-ignore` inside
+    `_unignored_plaintext` — so it is also the class whose answer the machine could decide.
+    That is not charter being wrong: `check-ignore` honours global excludes on purpose, and
+    `_unignored_plaintext` says so, because the question is "would git take this file" and
+    git is the authority. It is the FIXTURE that must not be the operator's. See
+    `test_the_machines_own_git_configuration_does_not_decide_this` for the measurement.
     """
 
     def setUp(self) -> None:
@@ -270,6 +371,19 @@ class PlaintextMustNotLandInGit(PersonaIso):
         self.assertEqual(rc, 1)
         self.assertIn("NOT gitignored", err)
         self.assertNotIn("leaky", registry.vaults())
+
+    def test_the_machines_own_git_configuration_does_not_decide_this(self):
+        """Whether `cfg/leaky.json` is "tracked" is git's answer, and git's answer includes
+        `core.excludesFile` — so a developer whose global ignore names `cfg/` or `*.json`
+        would watch the case above go red for a reason that has nothing to do with charter.
+
+        Measured, not supposed: with a global config whose `excludesFile` holds `cfg/`,
+        `test_a_tracked_path_is_refused` fails (`0 != 1`) without the two variables below
+        and passes with them. `init.templateDir` is the other half — `git init` runs hooks
+        out of it — which is why the system config is neutralised too.
+        """
+        self.assertEqual(os.environ["GIT_CONFIG_GLOBAL"], os.devnull)
+        self.assertEqual(os.environ["GIT_CONFIG_SYSTEM"], os.devnull)
 
     def test_the_gitignored_default_is_fine(self):
         rc, _ = self._add("ok")
