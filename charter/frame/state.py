@@ -368,66 +368,6 @@ def frame_server(fid: str) -> str | None:
         return None
 
 
-#: What tmux calls a client: the path of the pty it is attached on (`/dev/ttys042`), or
-#: an operator's own `-c`/`client_name`. Bounded on the way back off disk for
-#: `_PANE_ID_RE`'s reason — it arrives as text and goes straight into an argv element.
-_CLIENT_RE = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
-
-
-def record_menu_client(fid: str, client: str) -> None:
-    """Write down which client this frame's menu was last drawn for.
-
-    **Only a menu SELECTION needs this, and only to say something back.** A menu item's
-    own command is text tmux parses, so it can carry `#{client_name}` and reach the
-    presser's screen by construction (`frame/menu.py` measures that against two attached
-    clients). What it cannot carry is a client into a `frame-action` argv:
-    `commands_frame.cmd_action` runs a stored LIST through `subprocess.run`, which tmux
-    never sees, so a format in it would be four literal characters. That is fine for every
-    action that only *does* something — and not fine for one that has to *report*, which
-    is what `charter frame-switch` is (#517: a switch refused in silence is worse than no
-    switch at all).
-
-    So `cmd_menu`, which is handed the presser's own client, writes it here immediately
-    before drawing, and `cmd_switch` reads it back when it has something to say.
-
-    **What this is not:** it is not an answer to "who is attached", and it is not
-    consulted for anything but a message. With two clients each opening the menu, the
-    second write wins and a message can land on the other operator's screen — narrow (it
-    needs a second menu opened between this write and the selection), cosmetic, and
-    strictly better than the alternative, which is not a guess but a measured wrong
-    answer: `display-message -t <session>` with two clients attached was confirmed against
-    tmux 3.7c to draw on the most recently attached one regardless of who pressed.
-
-    Same atomic-write, never-raise shape as :func:`record_server`.
-    """
-    d = frame_dir(fid, create=True)
-    if d is None:
-        return
-    tmp = d / "menu-client.tmp"
-    try:
-        tmp.write_text(f"{client}\n")
-        os.replace(tmp, d / "menu-client")
-    except OSError:
-        return
-
-
-def menu_client(fid: str) -> str | None:
-    """The client *fid*'s menu was last drawn for, or ``None``.
-
-    ``None`` is a frame whose menu has never been opened, a corrupt file, and a value
-    outside :data:`_CLIENT_RE` — answered the same way, because the caller's fallback for
-    all three is the same and is safe: send the message to the frame and let tmux pick.
-    """
-    d = frame_dir(fid)
-    if d is None:
-        return None
-    try:
-        val = (d / "menu-client").read_text().strip()
-    except (OSError, ValueError):
-        return None
-    return val if _CLIENT_RE.fullmatch(val) else None
-
-
 def record_workspace(fid: str, name: str) -> None:
     """Write down which workspace this frame was LAUNCHED for.
 
@@ -573,7 +513,7 @@ def record_density(fid: str, level: str) -> None:
     hand-maintained and committed, and charter's rule is that machine-written config
     belongs somewhere a machine may rewrite whole — this directory is exactly that place
     (`reap` deletes it entire when the frame is gone, which is the property a config file
-    a human edits can never have). So the menu writes here, the frame's panels read here,
+    a human edits can never have). So the palette writes here, the frame's panels read here,
     and the operator's own file is left alone: relaunch and the configured default is back.
 
     Same must-not-raise, atomic-write shape as :func:`bump` and :func:`record_server`.
@@ -593,7 +533,7 @@ def density(fid: str) -> str | None:
     """The density this frame was last set to by hand, or ``None`` for "never set".
 
     ``None`` is the ordinary case, not a failure: every frame starts at whatever
-    `[frame] density` resolved to, and only a menu selection writes a file here. The
+    `[frame] density` resolved to, and only a palette row writes a file here. The
     caller falls back to the configured value — see `frame/slots.py`'s `verbosity`.
 
     The text is NOT validated here. `instance.density_level` is the one gate, and it sits
@@ -724,7 +664,7 @@ def record_panes(fid: str, *, panels: dict[str, str]) -> None:
 
     A frame's shape is decided once at launch and then only ever re-asserted
     (`commands_frame._resize_hook_argv`). Changing it while it runs — which is what the
-    density menu does — needs to know that `%3` is the `left` panel and not the `right`
+    density change does — needs to know that `%3` is the `left` panel and not the `right`
     one, because a slot being dropped means killing exactly that pane.
 
     tmux cannot be asked later: `list-panes` reports ids and geometry but nothing that
@@ -740,7 +680,7 @@ def record_panes(fid: str, *, panels: dict[str, str]) -> None:
 
     JSON, read back through :func:`panes` — same atomic write as everything else here, and
     the same silence on failure: a frame whose pane map could not be written simply cannot
-    be re-laid-out, which is a menu entry doing nothing rather than a launch failing.
+    be re-laid-out, which is a palette row doing nothing rather than a launch failing.
     """
     d = frame_dir(fid, create=True)
     if d is None:
@@ -765,7 +705,7 @@ def panes(fid: str) -> dict[str, str]:
     it is the module that builds the argv that must not be handed a bad one.
 
     An empty answer is the migration case as well as the corrupt one: a frame launched by
-    a charter that predates :func:`record_panes` has no file, and its density menu simply
+    a charter that predates :func:`record_panes` has no file, and its density rows simply
     cannot re-lay it out.
     """
     d = frame_dir(fid)

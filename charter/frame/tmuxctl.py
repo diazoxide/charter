@@ -1,6 +1,6 @@
 """The only module in charter that runs tmux.
 
-Kept alone so everything else — layout, panels, slots, the menu table — is testable on a
+Kept alone so everything else — layout, panels, slots, the palette — is testable on a
 machine with no tmux installed, and so there is exactly one place where the argv rule can
 be broken. That sentence was aspirational for a while: `commands_frame.py` called
 `subprocess.run(["tmux", …])` at thirteen separate call sites of its own, each repeating
@@ -10,10 +10,11 @@ raised `subprocess.TimeoutExpired` straight out of the launcher. :func:`run` and
 charter issues goes through one of them.
 
 One honest exception remains, and it is not a tmux call by construction:
-`commands_frame.cmd_action` runs whatever argv a menu entry resolved to. That argv is a
-LIST out of charter's own state — a tmux command today (`detach-client`), but nothing in
-`menu.record`'s contract says it has to be one — so it is run as a plain child process
-rather than pushed through a tmux-shaped helper that would have to lie about what it is.
+`frame/builtin_actions.py` starts a DETACHED child for every action the palette runs. Some
+of those argvs are tmux commands (`detach-client`) and some are charter's own (`charter
+frame-density`), and none of them may be waited for — §4g's fire-and-report — so they are
+`Popen`ed rather than pushed through a helper that would have to lie about both what it
+runs and when it returns.
 """
 
 from __future__ import annotations
@@ -34,7 +35,11 @@ from .. import util
 #: right for a different reason, so the reason is written down rather than the number
 #: lowered to match a justification that was never real:
 #:
-#: * `display-menu` — what the hotkey actually opens — arrived in 3.0.
+#: * `run-shell -C` — what the escape hatch runs, and the one bind that must keep working
+#:   when charter's own code does not (`frame/overlay.hatch_bind`) — arrived in 3.2
+#:   exactly. This was `display-menu` (3.0) until the palette replaced the menu; the
+#:   number did not move, and the reason it did not is that the line below was always the
+#:   binding one.
 #: * The exit-code mechanism rests on PANE-scoped hooks (`set-hook -p`, see
 #:   `commands_frame._pane_died_write_hook_argv`), which followed pane options into tmux
 #:   some time after 3.0. If those do not install, `cmd_launch` does not merely lose the
@@ -63,8 +68,8 @@ FLOOR = (3, 2)
 #: warns, does not refuse) and would otherwise see `set-hook … window-resized …` fail
 #: with that same "invalid option" text on every single launch. Raising `FLOOR` itself
 #: would refuse the whole frame over a gap that only costs cosmetic resize-drift, not
-#: the menu `FLOOR` protects — the two floors mean two different things and must stay
-#: two constants.
+#: the escape hatch `FLOOR` protects — the two floors mean two different things and must
+#: stay two constants.
 RESIZE_HOOK_FLOOR = (3, 3)
 
 #: The first tmux release in which `new-session` accepts `-e` at all — the VERSION is
@@ -108,11 +113,9 @@ PANE_ENV_FLOOR = (3, 0)
 #: The session-scoped tmux environment variable carrying the interpreter that runs
 #: charter from inside a frame — `"$CHARTER_PY" -m charter …`, never a bare `charter`
 #: off `$PATH`. Defined HERE, not in either of the two modules that build text around it
-#: (`commands_frame.conf_text`'s hotkey bind and `menu.menu_argv`'s per-item action), so
-#: the name the writer sets and the name both readers spell cannot drift apart —
-#: `commands_frame` imports `menu`, so there is no direction in which those two could
-#: have shared it between themselves. See `commands_frame._charter_py_env_argv` for why
-#: the value travels out of band at all.
+#: (`commands_frame.conf_text`'s hotkey bind, which opens the palette), so the name the
+#: writer sets and the name the reader spells cannot drift apart. See
+#: `commands_frame._charter_py_env_argv` for why the value travels out of band at all.
 CHARTER_PY_ENV = "CHARTER_PY"
 
 #: How long any one tmux ADMIN command may take before charter stops waiting for it.
@@ -215,6 +218,81 @@ def is_operator_socket(server: str | None) -> bool:
     """
     return bool(server) and server.startswith("/")
 
+
+#: tmux's own separator between commands sent in ONE invocation. A standalone argument,
+#: never a character glued to another one: measured against tmux 3.7c that an argument
+#: merely CONTAINING a `;` — `@charter_hatch`'s own value is
+#: `select-pane -t %1 ; kill-pane -t %2` — is passed through whole and is not read as a
+#: separator, so :func:`chain` is safe over exactly the commands charter already builds.
+SEPARATOR = ";"
+
+
+def chain(argvs: list[list[str]]) -> list[str] | None:
+    """Several tmux commands as ONE invocation, so the SERVER runs all of them.
+
+    **This exists because a command list that kills the caller's own pane cannot be sent
+    one command at a time.** `frame/overlay.close_argvs` is `select-pane`, `kill-pane`,
+    then re-arm the hatch — and the palette runs it from INSIDE the pane being killed.
+    Measured against tmux 3.7c, three separate invocations from that pane: the first
+    returned 0, and the process was gone before the second even answered, so the re-arm
+    never ran and the overlay pane was left standing, unzoomed and unfocused, drawing a
+    dead program. As one invocation, all three ran, 3 times out of 3 — tmux parses the
+    whole list and executes it server-side, where the caller's death cannot interrupt it.
+
+    ``None`` when the commands do not all address one server. That is not tidiness: the
+    head is what selects WHICH tmux this reaches (:func:`server_argv`), and a chain built
+    from two servers' argvs would send one server's commands to the other — charter's
+    private socket and an operator's own being exactly the two it holds. Refusing costs
+    the caller a fallback to one-at-a-time; guessing costs somebody else's session.
+    """
+    if not argvs:
+        return None
+    head = argvs[0][:3]
+    out = list(head)
+    for i, argv in enumerate(argvs):
+        if argv[:3] != head:
+            return None
+        out += ([SEPARATOR] if i else []) + argv[3:]
+    return out
+
+
+def inert_format(text: str) -> str:
+    """*text*, made inert against tmux's own format and style parsing. Three transforms:
+
+    1. **`#` -> `##`.** A `#(...)`/`#{...}` in an unexpanded string EXECUTES or
+       substitutes the moment tmux draws it — `display-message`'s own docs say the message
+       is a format, and this was measured through charter's real production path with a
+       git branch literally named `#(id>/tmp/...)`: the job ran, and the branch name never
+       appeared on screen. `##` is tmux's own escape for a literal `#`; doubling every
+       occurrence closes it regardless of how many times it is later collapsed for
+       display, and pre-doubled payloads (`##(...)`, `####(...)`) were tried by hand
+       against this fix and found no hole.
+
+    2. **A leading `-` is read as a FLAG.** Verified by hand against a real attached
+       client: tmux's own argument parser reads a value beginning with `-` as an
+       unrecognised flag of its own (`unknown flag -m`) and refuses the whole command,
+       rc 1 — not the "shown dim and may not be chosen" its docs describe. A leading space
+       keeps the text intact and stops it ever reaching tmux's flag position.
+
+    3. **A trailing `#` gets a trailing space.** Cosmetic only — nothing here executes
+       either way — but verified: a value doubled from a single trailing `#` collides with
+       the style-reset sequence tmux appends after it, rendering as literal
+       `trailing#[default]` garbage. A trailing space breaks the adjacency.
+
+    Lives here, in the module that owns every tmux argv charter builds, rather than beside
+    one of the two callers: `commands_frame._say_on_screen` puts a switch outcome on a
+    status line and `frame/palette.py` puts an action's refusal on the same one, and a
+    second copy of this would be a second answer to "what may reach tmux's parser" — which
+    is #547's shape, and which this repo has already paid for once.
+    """
+    text = text.replace("#", "##")
+    if text.startswith("-"):
+        text = " " + text
+    if text.endswith("#"):
+        text = text + " "
+    return text
+
+
 #: What :func:`run` reports as the return code of a command that never answered.
 #: `timeout(1)`'s own convention, and deliberately not `1`: every caller in
 #: `commands_frame` already branches on "nonzero", so a timeout degrades exactly the
@@ -269,8 +347,8 @@ def below_floor_message(v: tuple[int, int]) -> str:
     """
     return (f"tmux {v[0]}.{v[1]} composes the frame, and charter still launches it — "
             f"nothing here is disabled. Below tmux {FLOOR[0]}.{FLOOR[1]} charter has "
-            f"not verified two things it relies on: the hotkey stays bound but may open "
-            f"nothing (`display-menu`), and the pane-scoped hooks that carry the "
+            f"not verified two things it relies on: the escape hatch stays bound but "
+            f"may do nothing (`run-shell -C`), and the pane-scoped hooks that carry the "
             f"harness's real exit code may fail to install, in which case charter says "
             f"so and declines to attach rather than risk a session nothing can end.")
 
@@ -353,12 +431,16 @@ def run(action: str, argv: list[str], *, env: dict | None = None,
 def interact(argv: list[str], *, env: dict | None = None) -> subprocess.CompletedProcess:
     """Run one tmux command that OWNS the operator's terminal — no capture, no timeout.
 
-    `attach` and `display-menu` are not admin commands: the first IS the session for as
-    long as the harness runs, and the second draws on an attached client and waits for a
-    keypress. Capturing either would swallow the operator's own screen, and time-boxing
-    either would kill a frame for the crime of being used. Split from :func:`run` rather
-    than expressed as flags on it, so "this one has no timeout" is a visible property of
-    the call site instead of a keyword argument easily copied to a command that needs one.
+`attach` is not an admin command: it IS the session for as long as the harness runs.
+    Capturing it would swallow the operator's own screen, and time-boxing it would kill a
+    frame for the crime of being used. Split from :func:`run` rather than expressed as
+    flags on it, so "this one has no timeout" is a visible property of the call site
+    instead of a keyword argument easily copied to a command that needs one.
+
+    It had a second caller — `display-menu`, which drew on an attached client and waited
+    for a keypress. The palette replaced it, and the palette waits in a pane charter owns
+    rather than in a tmux command, so this function is back to the one call it was written
+    for.
     """
     if not isinstance(argv, list):
         raise TypeError(f"tmux argv must be a list, got {type(argv).__name__}: {argv!r} "

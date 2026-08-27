@@ -753,6 +753,10 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "The same `tmux attach` inside a `pty.fork` child, for the same reason: a "
             "`bind -n` can only be exercised by a real client with a real terminal, and "
             "`send-keys` never reaches the key table. `os._exit`s in its `finally`.",
+        "tests/test_frame_palette_integration.py:execvp":
+            "The same `tmux attach` inside a `pty.fork` child, and for the same reason "
+            "again: the palette's whole entry point is a `bind -n`, which only a real "
+            "client with a real terminal can press. `os._exit`s in its `finally`.",
     }
 
     _WATCHED = ("execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp",

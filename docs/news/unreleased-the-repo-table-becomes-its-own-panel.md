@@ -8,7 +8,7 @@ between them — the status one-liner, and then the repo table running straight 
 it:
 
 ```
-0 todos · ⚠ plane root charter · dirty · work belongs in a workspace clone · ⚡1 running · F2 menu
+0 todos · ⚠ plane root charter · dirty · work belongs in a workspace clone · ⚡1 running · F2 palette
 ├─ charter                    main↓9        ✓ passed
 │  ├─ frame-inside-tmux                     ✓ passed
 │  ├─ guard-all-or-nothing                  ✓ passed
@@ -34,7 +34,7 @@ They are two panes now, with a rule between them that tmux draws:
   ├─ scheduler ⑂3                      main
   └─ web-app                           main↓2
 ───────────────────────────────────────────────────────────────────────────────────────────────
-2 todos · ⚠ plane root charter · dirty · ⚡1 running · F2 menu
+2 todos · ⚠ plane root charter · dirty · ⚡1 running · F2 palette
 ```
 
 Top to bottom: identity, your session, the repo table, what wants attention.

@@ -11,7 +11,7 @@ source of truth.
 
 **The shipped `density` and the shipped `slots` must expand to the same frame.** They are
 two ways of asking charter for the default, and a plane where they disagree gives one
-answer to `charter.toml` and another to the hotkey menu. `ShippedDefaultsAgree` asserts it
+answer to `charter.toml` and another to the palette. `ShippedDefaultsAgree` asserts it
 mechanically rather than leaving it to be re-checked by eye — see its own docstring for
 why that matters more than usual right now.
 
@@ -35,7 +35,7 @@ from unittest import mock
 
 from charter import (commands_frame, config, inflight, instance, statusline, tui,
                      util)
-from charter.frame import gather, layout, menu, panel, slots, state
+from charter.frame import builtin_actions, gather, layout, panel, slots, state
 
 from tests._isolation import PersonaIso
 
@@ -1085,13 +1085,17 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         self._run("minimal")
         self.assertNotEqual(state.version(self.fid), before)
 
-    def test_the_menus_mark_moves_to_the_level_now_in_effect(self):
+    def test_the_palettes_mark_moves_to_the_level_now_in_effect(self):
+        """Nothing is re-recorded for this to be true: `_current_density` is read when the
+        palette opens, so the mark follows the frame's own record by construction."""
         self._run("full")
-        labels = [lb for lb, _ in menu.build(self.fid)]
-        on = commands_frame._DENSITY_MARK[0]
-        self.assertIn(f"{on} density: full", labels)
-        self.assertEqual([lb for lb in labels if lb.startswith(on)],
-                         [f"{on} density: full"], labels)
+        reg = builtin_actions.build(self.fid,
+                                    current_density=commands_frame._current_density(self.fid))
+        titles = [a.title for a in reg.all() if a.id.startswith("density.")]
+        on = builtin_actions.MARK[0]
+        self.assertIn(f"{on}density: full", titles)
+        self.assertEqual([t for t in titles if t.startswith(on)],
+                         [f"{on}density: full"], titles)
 
     def test_a_terminal_too_small_for_the_level_still_drops_the_side_panel(self):
         """A density change goes through the SAME size floors a launch does — asking for
@@ -1247,19 +1251,28 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         for c in splits:
             self.assertNotIn("-e", c, c)
 
-    def test_no_menu_is_recorded_inside_an_operators_tmux(self):
-        """`cmd_launch` records no menu there and charter binds no key there, so a density
-        change that grew one would create a table nothing can open — whose "Detach" row
-        targets `detach-client -s <fid>`, a SESSION name that does not exist on a server
-        where a frame is a window."""
+    def test_detaching_is_offered_with_its_reason_inside_an_operators_tmux(self):
+        """There is no table to record and none to refuse to record any more — the palette
+        is built when it opens. What used to be "no menu is written on the operator's own
+        server" is now a ROW that says why: `detach-client -s <fid>` names a SESSION, and
+        inside an operator's tmux a frame is a WINDOW, so the row is offered with the
+        operator's own prefix key named in place of the thing charter cannot do."""
         state.record_server(self.fid, "/private/tmp/tmux-502/default")
         self._run("full")
-        self.assertEqual(menu.build(self.fid), [])
+        reg = builtin_actions.build(self.fid, current_density="full")
+        offer = [o for o in reg.offers(fid=self.fid, snapshot={})
+                 if o.id == "frame.detach"][0]
+        self.assertFalse(offer.available)
+        self.assertIn("your own prefix key", offer.reason)
 
-    def test_a_menu_is_recorded_on_charters_own_server(self):
-        """The other direction, so the refusal above cannot pass by never recording."""
+    def test_detaching_is_available_on_charters_own_server(self):
+        """The other direction, so the row above cannot pass by never being available."""
         self._run("full")
-        self.assertTrue(menu.build(self.fid))
+        reg = builtin_actions.build(self.fid, current_density="full")
+        offer = [o for o in reg.offers(fid=self.fid, snapshot={})
+                 if o.id == "frame.detach"][0]
+        self.assertTrue(offer.available)
+        self.assertEqual(offer.reason, "")
 
     def test_a_new_pane_inside_an_operators_tmux_is_armed_against_that_server(self):
         """#408. This used to assert the opposite — `_arm_panel_respawn` refused on the
@@ -1295,7 +1308,7 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.density(self.fid))
 
     def test_an_unknown_level_is_refused_before_anything_moves(self):
-        """The level reaches a slot list and a menu label; the closed set is the guard,
+        """The level reaches a slot list and a palette row; the closed set is the guard,
         and it must be asked BEFORE the frame is touched, not after."""
         rc, fake = self._run("enormous")
         self.assertEqual(rc, 0)
@@ -1459,11 +1472,12 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
 
 
 class DensityIsWiredIntoTheCli(unittest.TestCase):
-    """The menu stores an argv; a CLI that does not accept it means the hotkey silently
-    does nothing, with no message anywhere to explain it."""
+    """A palette row starts an argv; a CLI that does not accept it means the keypress
+    silently does nothing, with no message anywhere to explain it."""
 
-    def test_the_menus_argv_shape_parses_and_dispatches(self):
-        """Parsed from the argv `_menu_entries` actually stores, not from a hand-written
+    def test_the_palettes_argv_shape_parses_and_dispatches(self):
+        """Parsed from the argv `builtin_actions._run_density` actually starts, not from a
+        hand-written
         one — a stored argv the CLI cannot parse is a hotkey that silently exits 2 inside
         a `run-shell` with nothing anywhere to print the reason.
 
@@ -1484,7 +1498,7 @@ class DensityIsWiredIntoTheCli(unittest.TestCase):
         `sub.choices` alone — nothing is named `frame-density` there yet — and only
         collide once that `add_parser` call ran a few lines later. On this repo's own
         3.11 floor `add_parser` accepts a duplicate name silently, so the harness would
-        simply be shadowed and the hotkey menu would launch a harness instead of changing
+        simply be shadowed and the palette would launch a harness instead of changing
         the frame's density. `_core_commands` reserves the word up front; this asserts on
         that guard's own wording, which is the half that does not depend on which
         interpreter runs the suite (see `test_frame_launcher.CollisionGuard` for the same

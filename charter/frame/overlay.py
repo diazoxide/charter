@@ -9,9 +9,10 @@ Both were measured before this module was written, and both lost:
   close popups on resize, instead adjust them to fit"), so a popup-first palette is one
   surface that works and one resize-shaped bug on exactly one version, plus two surfaces
   to keep in step. A full pane always works.
-* `display-menu` draws a list and takes a keypress, and charter's own nine-row cap sits
-  on top of it (`frame/menu.py`) — charter's cap, not tmux's; tmux 3.1c drew 20 rows
-  fine. Neither filters, neither scrolls, and neither is charter's to draw in.
+* `display-menu` draws a list and takes a keypress, and charter's own nine-row cap sat
+  on top of it — charter's cap, not tmux's; tmux 3.1c drew 20 rows fine. Neither
+  filters, neither scrolls, and neither is charter's to draw in. (`frame/menu.py` is
+  gone: `frame/palette.py` is what `F2` opens now, on this surface.)
 
 The popup's one real advantage survives and is why §4k keeps it as a later enhancement: a
 popup **is** the active surface, so its own mouse request is what reaches the terminal.

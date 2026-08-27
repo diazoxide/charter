@@ -80,4 +80,9 @@ the 27th — naming the module, the line, what got hidden and both ways out. All
 same way, by someone appending a class to a finished file and not noticing the trailer above
 the insertion point, so the guard is the point and the sweep is the smaller half.
 
+*(Later in this same release the menu those two classes drove was replaced by the palette,
+and both were deleted with it — see* F2 opens a palette you type into*. The discipline they
+established did not go with them: the palette's own integration tests wait for its rows to
+appear on the pane rather than sleeping and hoping.)*
+
 Nothing to adopt: none of this changes what charter does on your plane.

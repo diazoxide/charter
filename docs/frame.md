@@ -14,20 +14,21 @@ for a command charter has no launcher for at all. That is not just naming: once 
 frame` is on the command line, everything after it is grafted onto the harness's own argv
 verbatim, before charter's own argument parser ever sees it, so `frame claude -p hi` would
 hand `claude -p hi` to the `frame --` mechanism rather than route anywhere. The same reason
-keeps `frame-menu`, `frame-action`, `frame-density`, `frame-switch`, `frame-resize` and
-`frame-probe` — the command tmux's hotkey calls back into, the one every menu action calls
-back into, the one the density entries run, the one the workspace and persona entries run,
-the one the `window-resized` hook calls back into, and the read-only probe — as top-level
-names rather than nested under `frame` too.
+keeps `frame-palette`, `frame-density`, `frame-switch`, `frame-resize` and
+`frame-probe` — the command tmux's hotkey calls back into (and the program the palette's
+own pane runs), the one the density rows start, the one the workspace and persona rows
+start, the one the `window-resized` hook calls back into, and the read-only probe — as
+top-level names rather than nested under `frame` too.
 
 ## What it needs
 
 tmux composes the rectangles and does every part of terminal emulation; charter fills the
 edges and never draws or parses the harness's own pane (ADR 0018). Only tmux being
 *missing* stops a launch. tmux 3.2 is the version charter has checked its own
-requirements against — the hotkey's `display-menu`, and the pane-scoped hooks that carry
-the harness's exit code back out. Below 3.2 `charter <harness>` still starts and nothing
-is switched off: the hotkey stays bound but may open nothing, and if the exit-code hooks
+requirements against — the `F12` escape hatch's `run-shell -C`, and the pane-scoped hooks
+that carry the harness's exit code back out. Below 3.2 `charter <harness>` still starts and
+nothing is switched off: the escape hatch stays bound but may do nothing, and if the
+exit-code hooks
 fail to install charter says so and declines to attach rather than risk a session nothing
 can end. The resize-recovery hook needs a further 3.3; below that a resize still works,
 panels can just drift out of shape until the frame is relaunched.
@@ -184,9 +185,10 @@ the sentence above:
   `set -s focus-events on` in your own config is how you get it here.
 - **No hotkey.** tmux key tables are server-wide with no per-window form, so any key
   charter bound would be taken from every window you have open. The spec allowed a
-  prefix-scoped bind here; charter takes the stricter option, because the menu's one
-  entry is "Detach" and your own prefix key already does that better. The bottom panel
-  drops its hotkey hint to match rather than advertising a key that does nothing.
+  prefix-scoped bind here; charter takes the stricter option, because what the palette
+  would offer there is "Detach", which your own prefix key already does better, and the
+  density rows, which `[frame] density` sets. The bottom panel drops its hotkey hint to
+  match rather than advertising a key that does nothing.
 - **No `F12` escape hatch either, and this is the one that is worth knowing.** In charter's
   own tmux, `F12` returns you to your agent session from anywhere in the frame, including
   from a pane that has stopped answering its keyboard. It is a root key-table entry, which
@@ -481,17 +483,17 @@ something on them — and still says how many it hid. `right` shows four persona
 way too, with its todo list shrunk to four rows the same way.
 
 **The hotkey changes the density of the running frame, and nothing else.** `F2` opens the
-menu, which now lists all three levels with a `•` on the one in effect; choosing one
+palette, which lists all three levels with a `*` on the one in effect; choosing one
 re-lays the frame out live — panes are split or closed, sizes re-asserted, panels repaint
 at the new verbosity. It does **not** edit `charter.toml`: that file is yours, hand
 maintained and committed, and charter's rule is that machine-written state belongs
 somewhere a machine may rewrite whole. The override lives in the frame's own state
 directory and goes with the frame; relaunch and you are back to what the file says. The
 same applies to `charter frame-density <level>` typed by hand from inside a frame, which
-is what the menu entry runs.
+is what the palette row starts.
 
 Inside a tmux you already have, charter binds no key at all (see above), so there is no
-menu and no keypress route to density there — `[frame] density` is what sets it, and the
+palette and no keypress route to density there — `[frame] density` is what sets it, and the
 command still works if you run it inside the frame's own window.
 
 `hotkey` is checked against the shape of a tmux key name — optional `C-`/`M-`/`S-`
@@ -669,48 +671,66 @@ resolved settings charter's own code reads back use an underscore
 (`config.FRAME["history_limit"]`) instead. A key typed the underscored way in charter.toml
 is silently not recognized — the hyphenated spelling above is the one that is read.
 
-The hotkey (`F2` by default) opens a small menu on whichever frame you are attached to —
-"Detach", the three density levels, and two submenus: the plane's workspaces and its
-personas, each marking the one the frame is drawing. It exists only on charter's own
-server; inside a tmux you already have, charter binds no key at all (see above). However
-you detach — that entry, or tmux's own prefix key — charter notices the session is still
-running and prints how to get back in (`tmux -L charter attach -t <frame-id>`) rather than
-leaving you to remember the flags.
+The hotkey (`F2` by default) opens the **palette**: a full-pane list of everything this
+frame can do, drawn by charter in a pane of its own. Type to narrow it, arrow keys to move,
+Enter to run, Escape to leave. It exists only on charter's own server; inside a tmux you
+already have, charter binds no key at all (see above). However you detach — the palette's
+own row, or tmux's own prefix key — charter notices the session is still running and prints
+how to get back in (`tmux -L charter attach -t <frame-id>`) rather than leaving you to
+remember the flags.
 
 ```
-┌─charter───────────────────────────┐        ┌─charter · workspace───┐
-│ Detach                        (1) │        │   default         (1) │
-│   density: minimal            (2) │        │ * harness-wrapper (2) │
-│ * density: normal             (3) │   ▸    │   release-0-54    (3) │
-│   density: full               (4) │        │   user-reporting  (4) │
-│ workspace: harness-wrapper  ▸ (5) │        └───────────────────────┘
-│ persona: forge  ▸             (6) │
-└───────────────────────────────────┘
+charter · 7 to choose from
+> detach — leave the harness running
+    density: minimal
+    density: normal
+  * density: full
+  * workspace: alpha             cannot switch: $CHARTER_WORKSPACE pins this fr…
+    workspace: default           cannot switch: $CHARTER_WORKSPACE pins this fr…
+    workspace: zebra             cannot switch: $CHARTER_WORKSPACE pins this fr…
+
+  up/down move   enter choose   esc cancel   F12 back to the harness
 ```
 
-**Switching from the menu moves the frame, and says so.** Choosing a workspace writes the
-choice under the frame's own id — the same pointer `charter workspace use` writes from
+**Everything is listed, including what cannot run right now — with the reason beside it.**
+An option you cannot see is one you cannot ask about, so a row that is refused stays and
+says what would make it available. The reason is the right-hand column.
+
+**There is no row cap.** The old menu was a tmux `display-menu`, drawn inside your terminal
+and unable to scroll, so it cut every list at twelve and lost the digit shortcut past nine.
+The palette is a pane charter draws: it scrolls, it filters, and a plane with forty
+workspaces lists forty.
+
+**The menu is gone.** `charter frame-menu` and `charter frame-action` no longer exist, and
+neither does the `display-menu` they opened. `F2` was always trying to be a palette;
+keeping both would have left two answers to "how do I do a thing", which is how the single
+menu became weird in the first place.
+
+**Switching from the palette moves the frame, and says so.** Choosing a workspace writes
+the choice under the frame's own id — the same pointer `charter workspace use` writes from
 inside the frame, which is what makes the panels follow — records it as the frame's
 workspace, re-gathers the repo table for it, and bumps the frame so every panel repaints
 against the new plane. A persona switch is the same minus the gather. Either way a
 one-line message lands on your own screen saying what happened.
 
-**Two switches are refused, and both say why on that same line.** A frame launched with
+**A pinned frame says so before you press anything.** A frame launched with
 `$CHARTER_WORKSPACE` (or `$CHARTER_PERSONA`) set is *pinned*: that variable is in every
 panel pane's environment for as long as the pane lives, and nothing charter can write
-outranks it — so the menu says `cannot switch: $CHARTER_WORKSPACE pins this frame to
-'<name>'` rather than reporting a move that would not happen. A name that is not there is
-refused with the names that are; the menu never creates a workspace.
+outranks it — so every workspace row carries `cannot switch: $CHARTER_WORKSPACE pins this
+frame to '<name>'` rather than offering a move that would not happen. Nothing here creates
+a workspace either.
 
 **The session lock moves with you.** `charter workspace use` locks the session to what it
-selected so a workspace cannot be swapped out from under a running task — but a keypress
-on a menu *is* you, and the switcher's own first write would otherwise take a lock that
-its second write hit, leaving a switcher that worked exactly once. So the menu overrides
+selected so a workspace cannot be swapped out from under a running task — but a keypress on
+the palette *is* you, and the switcher's own first write would otherwise take a lock that
+its second write hit, leaving a switcher that worked exactly once. So the switch overrides
 the lock and names what it overrode: `workspace → beta  (lock moved from 'alpha')`.
 
-Long lists are cut to twelve rows with a last row saying how many were left out — a tmux
-menu is drawn inside your terminal and does not scroll. Rows past the ninth are drawn with
-no key at all — the digits run out at nine — and the arrow keys still reach them.
+**Pressing `F2` again while the palette is open opens a second one.** `bind -n` is tmux's
+root key table, so tmux matches the key before any byte reaches the palette's pane — the
+same property that makes `F12` work against a pane that has stopped answering. The second
+palette is the one taking your keys; Escape closes it, and the first is an ordinary pane
+you can select and close the same way.
 
 ### Picking a workspace when the frame opens
 

@@ -17,7 +17,7 @@ hoping at render time.
 docstring records what a committed `[frame] hotkey` did: a newline ended the ``bind``
 line, ``source-file`` returned 0, and a second tmux command ran at launch with no
 keypress. A component id arrives from the same class of place — a committed
-`charter.toml` names it, an installed provider declares it — and travels to a menu row
+`charter.toml` names it, an installed provider declares it — and travels to a palette row
 and a pane title. So it is a containment boundary rather than a naming convention, and
 :data:`_ID_RE` is deliberately narrower than "whatever Python can hold": an id this
 refuses that a provider wanted costs them a rename, and an id this accepted that tmux
@@ -123,10 +123,10 @@ ID_HINT = ("lower-case letters, digits and underscores, starting with a letter, 
 #: Nothing in ``[a-z0-9_.]`` can end a tmux ``bind`` line, open a quote, start a second
 #: command, introduce a tmux format (``#{...}``), traverse a path (``../``) or carry an
 #: escape sequence. Case is excluded as well, so two ids cannot differ only by a shift
-#: key — a distinction a menu row shows and a reader does not reliably see.
+#: key — a distinction a palette row shows and a reader does not reliably see.
 #:
 #: The length bound is per segment and is not decoration: an id is repeated into a pane
-#: title and a menu row, both of which are width-budgeted surfaces.
+#: title and a palette row, both of which are width-budgeted surfaces.
 #:
 #: **Matched with ``fullmatch``, and the first version of this module used ``match`` and
 #: was wrong.** Python's ``$`` matches at the end of the string *or just before a

@@ -2,8 +2,8 @@
 that happens once a name has been chosen.
 
 One mechanism, four steps, and every surface that switches goes through it: **list the
-names, contain them, perform the switch, repaint the panels.** The hotkey menu
-(`commands_frame._menu_entries` → `cmd_switch`) and the launch picker
+names, contain them, perform the switch, repaint the panels.** The palette
+(`frame/builtin_actions._register_names` → `cmd_switch`) and the launch picker
 (`frame/picker.py` → `cmd_launch`) are two front doors onto the same rooms.
 
 **A switch is a write to the frame's OWN identity, never a pointer somebody might read.**
@@ -26,7 +26,7 @@ failure mode #411 was filed for. Reporting "this frame is pinned" is the honest 
 locks the session to what it selected, so the switcher's own first write takes the lock and
 a second switch would be refused by the switcher's own doing — a switcher that works once
 is worse than none. The lock exists so a workspace cannot be swapped out from under a
-running task; an operator pressing a key and choosing a name off a menu is not that. So
+running task; an operator pressing a key and choosing a name off the palette is not that. So
 :func:`to_workspace` forces, and :data:`Outcome.message` names the workspace the lock was
 taken for, so nothing moves without the operator being told what moved.
 
@@ -47,8 +47,8 @@ typed.
 Every name that reaches a message goes through `contain.one_line` first — a workspace or
 persona name is a committed value, and a message is a line of charter's own output that a
 newline in a name could forge a second line of (`contain.py`, #453). The tmux side of the
-same rule lives in `frame/menu.py`, which contains a label again before it reaches tmux's
-own format parser.
+same rule lives in `frame/tmuxctl.inert_format`, which makes a line inert before it reaches
+tmux's own format parser.
 
 No tmux call is made from here at all. That keeps this module testable without a server —
 `commands_frame` owns the one `display-message` that puts a refusal on screen.
@@ -79,7 +79,7 @@ def workspaces() -> list[str]:
 
     `workspace.list_workspaces` reads directory names off the plane, so the check is the
     same floor `state.frame_workspace` applies to its own read: these names go on to a
-    `workspace_dir()` join and onto a tmux menu, and #442 is what an unchecked one in that
+    `workspace_dir()` join and onto a palette row, and #442 is what an unchecked one in that
     position already cost. `config.DEFAULT_WORKSPACE` is folded in whether or not its
     directory exists yet, matching `commands_workspace.cmd_workspace_use` — it is
     documented as the always-present workspace and `workspace.ensure` makes it on demand,
@@ -142,7 +142,7 @@ def to_workspace(fid: str, name: str) -> Outcome:
     act on:
 
     * **not a workspace name** — `workspace.valid_name`, the one rule
-      (`instance.workspace_name_ok`). A name off a menu charter built cannot fail this;
+      (`instance.workspace_name_ok`). A name off a palette charter built cannot fail this;
       one typed at `charter frame-switch` can.
     * **no such workspace** — an unknown name is a question, never an implicit create
       (see the module docstring). The existing names go in the message, which is the same
@@ -233,8 +233,8 @@ def to_persona(fid: str, name: str) -> Outcome:
 
 
 def current_workspace(fid: str) -> str:
-    """What the frame is drawing right now — `state.workspace_for`, named here so a menu
-    and the switcher cannot come to disagree about which name gets the mark."""
+    """What the frame is drawing right now — `state.workspace_for`, named here so the
+    palette and the switcher cannot come to disagree about which name gets the mark."""
     return state.workspace_for(fid)
 
 
@@ -242,7 +242,7 @@ def current_persona(fid: str) -> str | None:
     """The persona the frame is drawing right now, or ``None``.
 
     Asked with the frame's id rather than from the ambient environment, for `_pin`'s
-    reason — and through the frame's own recorded pin first, so a menu built by a
+    reason — and through the frame's own recorded pin first, so a palette built by a
     `run-shell` child marks the row the PANELS are showing rather than the row this
     process would resolve for itself off a shared server's environment. `resolve_active`
     is deliberately not called: its top rung is `$CHARTER_PERSONA` out of *this* process,

@@ -89,7 +89,7 @@ class Render(PersonaIso, unittest.TestCase):
             del slots.SLOTS["boom"]
 
     def test_the_bottom_row_names_the_configured_hotkey_not_a_hardcoded_one(self):
-        """`[frame] hotkey` is configurable and this row spelled `F2 menu` literally, so
+        """`[frame] hotkey` is configurable and this row spelled `F2 palette` literally, so
         a plane on `hotkey = "F1"` had its own panel telling every operator the wrong
         key, on every repaint, forever.
 
@@ -98,28 +98,28 @@ class Render(PersonaIso, unittest.TestCase):
         assertion is the one that fails on the mutation."""
         with mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
             out = slots.render("bottom", "f-1")
-        self.assertIn("F1 menu", out)
+        self.assertIn("F1 palette", out)
         self.assertNotIn("F2", out)
 
     def test_a_modifier_hotkey_reaches_the_panel_intact(self):
         """A second, differently-shaped value — `F1` alone could be satisfied by a
         one-character substitution. `M-m` shares no characters with `F2`."""
         with mock.patch.dict(config.FRAME, {"hotkey": "M-m"}):
-            self.assertIn("M-m menu", slots.render("bottom", "f-1"))
+            self.assertIn("M-m palette", slots.render("bottom", "f-1"))
 
     def test_a_frame_in_the_operators_own_tmux_advertises_no_hotkey(self):
         """Charter binds no key at all inside a tmux it did not start — a key table is
         server-wide in tmux with no per-window form, and taking one from every window
-        the operator has open to reach a menu whose only entry is "Detach" (which their
+        the operator has open to reach a palette offering "Detach" (which their
         own prefix already does) is a worse trade than none. A panel still printing
-        `F2 menu` there would be telling every operator about a key that does nothing,
+        `F2 palette` there would be telling every operator about a key that does nothing,
         on every repaint, forever — the same defect
         `test_the_bottom_row_names_the_configured_hotkey_not_a_hardcoded_one` exists
         for, reached through the other server instead of the wrong config value."""
         state.record_server("f-in-tmux", "/private/tmp/tmux-502/default")
         with mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
             out = slots.render("bottom", "f-in-tmux")
-        self.assertNotIn("menu", out)
+        self.assertNotIn("palette", out)
         self.assertIn("todo", out, "the rest of the row is untouched")
 
     def test_a_frame_on_charters_own_server_still_advertises_it(self):
@@ -127,7 +127,7 @@ class Render(PersonaIso, unittest.TestCase):
         a hotkey would pass the test above on its own."""
         state.record_server("f-own", "charter")
         with mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
-            self.assertIn("F1 menu", slots.render("bottom", "f-own"))
+            self.assertIn("F1 palette", slots.render("bottom", "f-own"))
 
     def test_an_unknown_slot_is_named_rather_than_drawn_blank(self):
         """`panel.run` (Task 7) refuses an unknown slot before ever spawning a pane for
@@ -699,7 +699,7 @@ class BottomRenderer(PersonaIso, unittest.TestCase):
                     self.assertEqual("AAAAA" in out, want_alert)
                     self.assertEqual("NNNNN" in out, want_news)
                     self.assertEqual("3 todos" in out, want_todo)
-                    self.assertEqual("F2 menu" in out, want_hotkey)
+                    self.assertEqual("F2 palette" in out, want_hotkey)
 
     def test_a_failing_session_news_call_yields_a_line_rather_than_an_exception(self):
         with mock.patch("charter.statusline._session_news",
@@ -709,14 +709,14 @@ class BottomRenderer(PersonaIso, unittest.TestCase):
     def test_empty_fields_leave_no_stray_separator(self):
         """No alerts, no session news — `_fit_fields` must SKIP an empty field rather
         than keep it and let ` · `.join emit a blank slot between separators
-        (`"5 todos ·  · F2 menu"`, say). Asserts the exact string rather than just
+        (`"5 todos ·  · F2 palette"`, say). Asserts the exact string rather than just
         `in`/`not in`, so a stray separator cannot hide inside a substring match."""
         with mock.patch("charter.statusline._alerts", return_value=[]), \
              mock.patch("charter.statusline._session_news", return_value=[]), \
              mock.patch("charter.statusline._todo_count", return_value=5), \
              mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
             out = tui.strip_ansi(slots.render("bottom", "f-1"))
-        self.assertEqual(out, "5 todos · F2 menu")
+        self.assertEqual(out, "5 todos · F2 palette")
 
     def test_the_todo_count_still_shows_at_zero_unlike_the_new_news_field(self):
         """`todo` predates Task 4 and keeps its own, different presence rule: `_bottom`

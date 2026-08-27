@@ -298,7 +298,7 @@ class Providers:
         """Every component id an installed provider claims, alphabetically.
 
         Sorted rather than in discovery order, because discovery order is ``sys.path``
-        order — a property of the machine, not of the plane — and a menu or a `doctor`
+        order — a property of the machine, not of the plane — and a palette or a `doctor`
         line that reordered itself when a virtualenv changed would be reporting the
         wrong thing. Split order is the registry's, and it comes from placement.
         """
@@ -662,7 +662,7 @@ class Registry:
         """Every registered component, composites and their parts alike, in split order.
 
         A part is still registered — it is drawn by its parent rather than by the frame,
-        which is a placement question and not an existence one. A menu row naming it, and
+        which is a placement question and not an existence one. A palette row naming it, and
         the intra-pane focus §4e gives charter, both need it to be here.
         """
         return tuple(sorted(self._by_id.values(), key=lambda c: self._order[c.id]))

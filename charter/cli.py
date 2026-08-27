@@ -637,7 +637,7 @@ def _add_frame_parsers(sub) -> None:
     **Two collisions, two different hazards, two different responses.** A `cli_name` that
     shadows a CORE command (anything registered before this function runs — see
     `build_parser`'s own comment about calling this last — plus the names this function
-    reserves for itself: `frame`, `panel`, `frame-menu`, `frame-action`, `frame-probe`)
+    reserves for itself: `frame`, `panel`, `frame-palette`, `frame-probe`)
     raises, loudly, at parser-construction time: `build_parser()` is called by every
     single `charter` invocation, so a registry mistake here breaks `charter --help`,
     `charter doctor`, everything — the failure has to happen in CI, not in an operator's
@@ -702,8 +702,8 @@ def _add_frame_parsers(sub) -> None:
     # own docstring for why the two must be kept apart. `_add_frame_parsers` runs LAST
     # (`build_parser`'s own comment), so `sub.choices` here already holds every CORE
     # command: init, doctor, workspace, worktree, vault, secret, persona, report,
-    # harness, hook, trace, all of it. `"frame"`, `"panel"`, `"frame-menu"`,
-    # `"frame-action"` and `"frame-probe"` join it even though none of their OWN
+    # harness, hook, trace, all of it. `"frame"`, `"panel"`, `"frame-palette"` and
+    # `"frame-probe"` join it even though none of their OWN
     # `add_parser` calls below has run yet: the loop finishes and registers every
     # harness BEFORE any of them are added, so a harness with `cli_name` equal to one of
     # these would pass a check against `sub.choices` alone (nothing there is named any of
@@ -715,11 +715,11 @@ def _add_frame_parsers(sub) -> None:
     # the harness instead — `frame`'s own escape hatch disappearing, every panel pane
     # failing to start because `charter panel` now means something else
     # (`layout.panel_argvs` emits exactly that argv; see `frame/panel.py`), the hotkey
-    # menu silently opening a harness launch instead of a menu because `charter
-    # frame-menu`/`charter frame-action` now mean something else too, or a news `check:`
+    # palette silently opening a harness launch instead of a palette because `charter
+    # frame-palette` now means something else too, or a news `check:`
     # naming `frame-probe` silently launching a harness instead of reading tmux's own
     # version (see `commands_frame.cmd_probe`'s own docstring).
-    _core_commands = set(sub.choices) | {"frame", "panel", "frame-menu", "frame-action",
+    _core_commands = set(sub.choices) | {"frame", "panel", "frame-palette",
                                          "frame-probe", "frame-respawn", "frame-density",
                                          "frame-resize", "frame-gather", "frame-switch"}
 
@@ -782,34 +782,30 @@ def _add_frame_parsers(sub) -> None:
     # launcher's own escape hatch and grafts EVERYTHING past it onto the harness's own
     # verbatim argv before `argparse` ever gets a chance to route a subcommand — a
     # `frsub = fr.add_subparsers(...)` nested under `fr` would never be reached, because
-    # `_split_frame_argv` runs first and unconditionally. `frame-menu` and
-    # `frame-action` are different literal tokens, so `_split_frame_argv` leaves them
-    # alone and ordinary top-level dispatch applies. Both are fired by tmux via
-    # `run-shell` (the hotkey bind in `conf_text`, and one menu item's own action built
-    # by `charter.frame.menu.menu_argv`) — never typed by an operator.
+    # `_split_frame_argv` runs first and unconditionally. `frame-palette` is a different
+    # literal token, so `_split_frame_argv` leaves it alone and ordinary top-level
+    # dispatch applies. It is fired by tmux via `run-shell` — the hotkey bind in
+    # `conf_text` — and, with `--pane`, by tmux's own `split-window`; never typed by an
+    # operator.
     #
-    # `frame-menu`'s own `client` argument is `#{client_name}`, expanded by tmux INSIDE
-    # the bind's `run-shell` text before this process starts — never queried after the
-    # fact (see `cmd_menu`'s own docstring for why: `list-clients` cannot tell WHO
-    # pressed the key, only who is attached, and picking among several guessed wrong).
+    # Its `client` argument is `#{client_name}`, expanded by tmux INSIDE the bind's
+    # `run-shell` text before this process starts — never queried after the fact (see
+    # `cmd_palette`'s own docstring for why: `list-clients` cannot tell WHO pressed the
+    # key, only who is attached, and picking among several guessed wrong). `nargs="?"`
+    # because the pane half is started by charter itself with whatever the bind carried,
+    # and an empty client is a `display-message -t <session>` rather than a refusal.
     #
-    # `--group` opens a SUBMENU (#517). It arrives from a menu item's own command text,
-    # which charter wrote (`frame/menu.py`'s `menu_argv`) — and is validated in
-    # `cmd_menu` against `menu.GROUPS` rather than by `choices=` here, for the same
-    # reason `frame-density`'s `level` is not: a `choices=` mismatch exits 2 from inside a
-    # `run-shell`, where nothing prints the reason.
-    mn = sub.add_parser("frame-menu")
-    mn.add_argument("client")
-    mn.add_argument("--group", dest="group", default=None)
-    mn.set_defaults(func=commands_frame.cmd_menu)
-
-    act = sub.add_parser("frame-action")
-    act.add_argument("action_id")
-    act.set_defaults(func=commands_frame.cmd_action)
+    # `--pane` says "you ARE the palette" rather than "open one". One subcommand and not
+    # two, because they are two halves of one keypress and two spellings would be two
+    # things to keep in step — see `cmd_palette`.
+    pal = sub.add_parser("frame-palette")
+    pal.add_argument("client", nargs="?", default="")
+    pal.add_argument("--pane", action="store_true")
+    pal.set_defaults(func=commands_frame.cmd_palette)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
-    # ones above. Fired by a hotkey-SUBMENU selection (#517,
-    # `commands_frame._switch_entries`), whose stored argv is exactly
+    # ones above. Started DETACHED by a palette row (#517,
+    # `frame/builtin_actions._run_switch`), whose argv is exactly
     # `util.self_relaunch_argv("frame-switch", "--workspace"|"--persona", <name>)`. Also
     # typeable by hand from inside a frame, which is why the name is a value and not a
     # positional: `charter frame-switch --workspace foo` reads as what it does.
@@ -828,7 +824,7 @@ def _add_frame_parsers(sub) -> None:
     # two above. Fired by a PANEL pane's own `pane-died` hook (#382,
     # `commands_frame._panel_died_hook_argv`) — never typed by an operator, and never by
     # the harness pane's hooks, which carry the exit code instead. The frame it belongs
-    # to travels on the argv (`--frame`), unlike `frame-menu`'s: this hook is armed on
+    # to travels on the argv (`--frame`), unlike `frame-palette`'s: this hook is armed on
     # the operator's own tmux too (#408), where `$CHARTER_SESSION_ID` is a session option
     # charter is not allowed to write. Optional, not required, so a hook installed by a
     # charter that predates #408 — already sitting in a running frame's pane options,
@@ -869,12 +865,12 @@ def _add_frame_parsers(sub) -> None:
     gt.set_defaults(func=commands_frame.cmd_gather)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
-    # three above. Fired by a hotkey-menu selection (`commands_frame._menu_entries`), whose
-    # stored argv is exactly `util.self_relaunch_argv("frame-density", <level>)`. It
+    # three above. Started DETACHED by a palette row (`frame/builtin_actions`), whose
+    # argv is exactly `util.self_relaunch_argv("frame-density", <level>)`. It
     # changes the RUNNING frame only — never charter.toml, which is hand-maintained (see
     # `cmd_density`'s own docstring) — and, like every other `frame-*` command here,
     # resolves which frame from `$CHARTER_SESSION_ID` at the moment it fires rather than
-    # from anything baked into a shared menu action. Deliberately NOT `choices=` on the
+    # from anything baked into a shared bind. Deliberately NOT `choices=` on the
     # level: `instance.density_level` is the one gate on that closed set, and a second
     # copy of it in argparse would mean a level added to the table and not to the parser
     # exits 2 from inside a `run-shell` where nothing prints the reason.
@@ -882,15 +878,15 @@ def _add_frame_parsers(sub) -> None:
     dn.add_argument("level")
     dn.set_defaults(func=commands_frame.cmd_density)
 
-    # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-menu`/
-    # `frame-action` above: those two exist because `_split_frame_argv` eats everything
+    # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-palette` above:
+    # that one exists because `_split_frame_argv` eats everything
     # after `argv[0] == "frame"`. This one exists because `news._PROBEABLE` (charter's
     # `check:` allowlist, #317) refuses any command whose parser carries a pass-through
     # positional, and every parser `_wire` builds carries one (`rest`, the harness's own
     # verbatim argv) — so `("frame",)` can never be added there, `--probe` on it or not.
     # `frame-probe` takes no arguments at all, so it is not that shape and CAN be listed
     # (see `news._PROBEABLE` and `commands_frame.cmd_probe`'s own docstring). Unlike
-    # `panel`/`frame-menu`/`frame-action`, an operator can also type this one directly —
+    # `panel`/`frame-palette`, an operator can also type this one directly —
     # it is the same read-only check `--probe` runs, just reachable without a launcher.
     pb = sub.add_parser("frame-probe",
                         help="Read-only: can a frame run here? (same check as "

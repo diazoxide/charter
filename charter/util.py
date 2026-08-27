@@ -309,8 +309,8 @@ def self_relaunch_argv(*args: str) -> list[str]:
     "don't do that". One helper, not a `[sys.executable, "-m", "charter", ...]` hand-built
     at every call site — the same shape as the frame's own "never join argv" rule: correct
     by construction rather than remembered at five (now seven) separate places. A shell
-    TEMPLATE that embeds ``"$CHARTER_PY" -m charter`` (the tmux hotkey bind and its menu
-    items — see ``commands_frame.py``'s own module docstring) cannot use this helper
+    TEMPLATE that embeds ``"$CHARTER_PY" -m charter`` (the tmux hotkey bind — see
+    ``commands_frame.py``'s own module docstring) cannot use this helper
     directly; those carry ``PYTHONSAFEPATH=1`` instead, the environment-variable form of
     the same switch, alongside ``$CHARTER_PY`` itself.
     """
