@@ -108,7 +108,7 @@ def workspace_name_ok(name) -> bool:
     ``charter --version``.
     """
     return (isinstance(name, str) and contain.segment_ok(name)
-            and WORKSPACE_NAME_RE.match(name) is not None)
+            and WORKSPACE_NAME_RE.fullmatch(name) is not None)
 
 
 def default_workspace_of(cfg: dict, fallback: str) -> str:
@@ -183,8 +183,17 @@ NOT_A_VERSION = ("'{version}' is not a version. It is interpolated into the pip 
 
 
 def version_ok(version) -> bool:
-    """True when *version* is a version rather than some other thing a specifier accepts."""
-    return isinstance(version, str) and bool(_VERSION.match(version.strip()))
+    """True when *version* is a version rather than some other thing a specifier accepts.
+
+    Asked of the string as given, with no `strip`. The `strip` that used to be here made
+    this answer about a DIFFERENT string from the one the caller then used:
+    `commands._sync_cmd` calls itself "the last gate before a requirement specifier" (#333)
+    and interpolates the raw value into ``charter-cp==<version>``, so a padded pin was
+    approved here and spent unpadded there. `locked_version` already strips what it reads
+    out of `charter.toml`, so the pin path is unchanged; what changes is that the gate now
+    checks the value that is spent (#577).
+    """
+    return isinstance(version, str) and bool(_VERSION.fullmatch(version))
 
 
 def locked_version(cfg: dict) -> str | None:

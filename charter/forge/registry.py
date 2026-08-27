@@ -44,7 +44,7 @@ def host_ok(host) -> bool:
     ``hooks._single_credential_hit`` already lowercases at match time, while rewriting the
     value here would give one forge two identities — the thing `contain` refuses names for.
     """
-    return isinstance(host, str) and bool(_HOST_RE.match(host))
+    return isinstance(host, str) and bool(_HOST_RE.fullmatch(host))
 
 
 def _build(kind: str, host: str | None) -> Forge:

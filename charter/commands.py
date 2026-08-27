@@ -947,7 +947,7 @@ def _as_rule(pattern: str) -> str:
     MCP name — and everything else is a command.
     """
     p = (pattern or "").strip()
-    if _TOOL_RULE_RE.match(p) or p in _RULE_TOOLS or _MCP_RULE_RE.match(p):
+    if _TOOL_RULE_RE.fullmatch(p) or p in _RULE_TOOLS or _MCP_RULE_RE.fullmatch(p):
         return p
     if p.startswith("mcp__"):
         raise UnexpressibleRule(

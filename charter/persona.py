@@ -62,7 +62,11 @@ EMPTY_REFERENCE = "is empty — remove the key, or name a persona"
 
 def valid_name(name: str) -> bool:
     # A leading '_' is reserved (the shared namespace) and rejected by the regex.
-    return bool(name) and _NAME_RE.match(name) is not None
+    # `fullmatch`, never `match`: `$` matches at the end of the string OR just before a
+    # trailing newline, so `_NAME_RE.match("evil\n")` admitted a name the alphabet
+    # excludes, and `personas/evil<LF>/` resolved, loaded and wrote a blank line into a
+    # generated agent's frontmatter (#577). `fullmatch` is the property `$` spells.
+    return bool(name) and _NAME_RE.fullmatch(name) is not None
 
 
 def _alphabet_detail(ref: str) -> str:
@@ -110,7 +114,12 @@ def reference_refusal(ref: str) -> str | None:
     if contain.child(config.PERSONAS_DIR, ref) is None:
         return contain.refusal(ref)
     if not valid_name(ref):
-        return NOT_A_NAME.format(name=ref, detail=_alphabet_detail(ref))
+        # `contain.readable`, for the reason the branch above goes through
+        # `contain._sentence`: this sentence NAMES the offender, so the offender must not
+        # be able to write a second line of it. Newly load-bearing as of #577 — while `$`
+        # admitted a trailing newline this branch was unreachable for the one character
+        # that could, and the raw `.format` was safe by accident (#453, #498).
+        return NOT_A_NAME.format(name=contain.readable(ref), detail=_alphabet_detail(ref))
     return None
 
 

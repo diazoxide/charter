@@ -57,7 +57,7 @@ def version_ok(version) -> bool:
     A question about the STRING, never about the registry: asking npm would make a hostile
     spec legal exactly when the attacker's package happens to exist.
     """
-    return isinstance(version, str) and bool(_VERSION.match(version))
+    return isinstance(version, str) and bool(_VERSION.fullmatch(version))
 
 
 #: One sentence, so the two argv builders and the reference resolver refuse alike.
