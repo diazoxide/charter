@@ -29,3 +29,4 @@ Written by the persona as it learns; committed and shared.
 - [PR #554 (overlay) CI failure at head c735efc0, diagnosed 2026-08-26: tes](pr-554-overlay-ci-failure-at-head-c735efc0-diagn.md)
 - [A MUTATION SWEEP THAT SCORES ON EXIT CODE IS ITSELF UNPINNED. Measured i](a-mutation-sweep-that-scores-on-exit-code-is-its.md)
 - [Dispatching several agents that each parallelize their own deletion swee](dispatching-several-agents-that-each-parallelize.md)
+- [FIVE ways a mutation sweep lies, all measured on charter 2026-08-26/27.](five-ways-a-mutation-sweep-lies-all-measured-on-.md)
