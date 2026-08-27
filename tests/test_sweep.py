@@ -1085,6 +1085,279 @@ class TheMapIsCachedAgainstTheTreeItMeasured(unittest.TestCase):
         self.assertNotEqual(before, sweep.tree_hash(self.tmp, ("charter",)))
 
 
+_TRACED_SOURCE = """\
+def work():
+    return 1
+
+
+def other():
+    return 2
+"""
+
+_TRACED_TEST = """\
+import unittest
+
+from pkg import thing
+
+
+class T(unittest.TestCase):
+    def test_it(self):
+        self.assertEqual(thing.work(), 1)
+        self.assertEqual(thing.other(), 2)
+"""
+
+
+#: A module the loader cannot turn into a suite. What it raises has to be something OTHER
+#: than an `ImportError`: `loadTestsFromName` catches those and hands back a suite holding
+#: one failing test, which is a red suite and not a broken module. Anything else comes
+#: straight back out of the import, which is what `build_map` counts.
+_WILL_NOT_LOAD = "raise RuntimeError('this module cannot be imported')\n"
+
+
+def _mini_tree(where: Path, good: int = 1, broken: int = 0) -> Path:
+    """A repository small enough to trace in a subprocess and real enough to trace.
+
+    `build_map` measures by *running* the tests, one module per process, so none of this
+    can be faked with a stub: the tree needs a package the tests import, a `tests/` the
+    loader can find by name, and functions the tracer can watch being called.
+    """
+    (where / "pkg").mkdir(parents=True)
+    (where / "tests").mkdir()
+    (where / "pkg" / "__init__.py").write_text("")
+    (where / "pkg" / "thing.py").write_text(_TRACED_SOURCE)
+    (where / "tests" / "__init__.py").write_text("")
+    for i in range(good):
+        (where / "tests" / f"test_good{i:02d}.py").write_text(_TRACED_TEST)
+    for i in range(broken):
+        (where / "tests" / f"test_broken{i:02d}.py").write_text(_WILL_NOT_LOAD)
+    return where
+
+
+class _Traced(unittest.TestCase):
+    """A miniature tree, plus a second name for it that goes through a symlink."""
+
+    good = 1
+    broken = 0
+
+    def setUp(self):
+        # Resolved, so that the fixture's own `$TMPDIR` cannot be what makes a case here
+        # pass or fail. The only symlink in play is the one this class makes on purpose.
+        self.tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-trace-")).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.tree = _mini_tree(self.tmp / "tree", self.good, self.broken)
+        self.link = self.tmp / "reached-through-here"
+        self.link.symlink_to(self.tree, target_is_directory=True)
+        self.log: list[str] = []
+        self._scratches = 0
+
+    def build(self, root=None, jobs=1):
+        self._scratches += 1
+        return sweep.build_map(self.tree if root is None else root, ("pkg",), jobs,
+                               self.tmp / f"scratch{self._scratches}", log=self.log.append)
+
+    @property
+    def logged(self) -> str:
+        return "\n".join(self.log)
+
+
+class TheMapIsMeasuredThroughEverySpellingOfItsRoot(_Traced):
+    """The tracer COMPARES paths, so the root it is handed has to be one spelling.
+
+    The trace runner puts `os.getcwd()` on `sys.path` and the kernel answers that with
+    every symlink already resolved, so `co_filename` is always the resolved spelling. A
+    prefix built from a root that still carries a symlink matches nothing at all — and
+    that is not an exotic case, it is the DEFAULT: `tempfile.gettempdir()` on macOS is
+    `/var/folders/…` and `/var` is a symlink to `/private/var`. Measured (#572): 329
+    modules traced, 0 files, 0 broken modules, and the tool refused to sweep at all.
+
+    The symlink below is made explicitly rather than inherited from `$TMPDIR`, so these
+    cases go red on a `resolve()`-less `build_map` on Linux too. A case that only
+    asserted the map came back non-empty would have passed on CI forever.
+    """
+
+    def test_a_root_reached_through_a_symlink_still_measures_what_ran(self):
+        found = self.build(self.link)
+        self.assertIn("pkg/thing.py::work", found)
+        self.assertEqual(found["pkg/thing.py::work"], ["tests.test_good00"])
+
+    def test_the_spelling_of_the_root_cannot_change_the_map(self):
+        """The strong form: not merely non-empty, the SAME map either way. A prefix is an
+        implementation detail of the measurement and must not be visible in its answer."""
+        self.assertEqual(self.build(self.link), self.build(self.tree))
+
+    def test_the_map_is_keyed_by_file_and_by_function(self):
+        """File alone is far too coarse in a tree where everything imports `layout`, and
+        function alone loses the `<lambda>`s and comprehension frames `select_for` falls
+        back on. The map carries both keys or the selection narrows in silence."""
+        found = self.build()
+        self.assertIn("pkg/thing.py", found)
+        self.assertIn("pkg/thing.py::other", found)
+
+
+class AnUnusableMapSaysWhichKindOfUnusable(_Traced):
+    """`0 file(s) and 0 broken module(s)` was the entire diagnosis of #572 — the tool had
+    it, printed it, and left the operator with nowhere to go from it.
+
+    The refusal is not softened here. A map that measured nothing still stops the sweep,
+    because the alternative is sending every mutation to the full suite and calling a
+    hundredfold slowdown a success. What changes is that it now says which of the two
+    failures it hit, and the failure that hides — the tracer matching nothing at all —
+    prints the two paths that had to be one path.
+    """
+
+    def test_a_tracer_that_matched_nothing_prints_both_spellings(self):
+        (self.tree / "tests" / "test_good00.py").write_text("import unittest\n")
+        with self.assertRaisesRegex(RuntimeError, "refusing to sweep blind"):
+            self.build()
+        self.assertIn("every module loaded and ran", self.logged)
+        self.assertIn(f"matched against : {self.tree}{os.sep}", self.logged)
+        # Measured by the runner, not assumed by the caller: this line is the one that
+        # would have shown `/private/var/…` against a `/var/…` prefix in a single glance.
+        self.assertIn(f"the runners ran : {self.tree}", self.logged)
+
+    def test_modules_that_would_not_load_are_named_instead(self):
+        """The other way to an empty map, and it wants the opposite thing done about it.
+        Printing a prefix here would be a red herring; the traceback is the answer."""
+        (self.tmp / "tree" / "tests" / "test_broken00.py").write_text(_WILL_NOT_LOAD)
+        with self.assertRaisesRegex(RuntimeError, "refusing to sweep blind"):
+            self.build()
+        self.assertIn("tests.test_broken00", self.logged)
+        self.assertNotIn("matched against", self.logged)
+
+    def test_a_runner_that_writes_nothing_is_a_broken_module_and_not_a_crash(self):
+        """A trace runner that dies before writing its JSON leaves no file at all. That
+        is a module this sweep could not measure, which the map already knows how to
+        report — it is not an exception for the whole run to die on."""
+        self.addCleanup(setattr, sweep, "_TRACE_RUNNER", sweep._TRACE_RUNNER)
+        sweep._TRACE_RUNNER = "import sys\nsys.exit(0)\n"
+        with self.assertRaisesRegex(RuntimeError, "refusing to sweep blind"):
+            self.build()
+        self.assertIn("the trace runner wrote nothing", self.logged)
+
+
+class TheTraceReportsWhatItMeasuredAsItGoes(_Traced):
+    good = 40
+
+    def test_a_minority_of_modules_that_will_not_load_is_a_note_and_not_a_refusal(self):
+        """Under a quarter broken is a usable map with a hole in it, and the hole is
+        stated: those files fall back to the full suite, which is slower and correct."""
+        (self.tmp / "tree" / "tests" / "test_broken.py").write_text(_WILL_NOT_LOAD)
+        found = self.build(jobs=4)
+        self.assertIn("pkg/thing.py::work", found)
+        self.assertIn("1 module(s) would not load", self.logged)
+
+    def test_the_trace_says_how_far_it_has_got(self):
+        """Tracing the real tree is 329 processes and ten minutes. A tool that prints
+        nothing for ten minutes cannot be told from a hung one, and gets killed."""
+        self.build(jobs=4)
+        self.assertIn("traced 40/40 modules", self.logged)
+
+
+class TheMapIsRetracedOnlyWhenItHasTo(_Traced):
+    """`cached.exists() and not refresh` — both halves, because either one alone is a
+    different tool: without the first it reads a cache that is not there, and without the
+    second `--refresh-map` hands back the very map the operator asked it to throw away."""
+
+    def cache(self):
+        return self.tmp / "cache"
+
+    def load(self, refresh=False):
+        return sweep.load_map(self.tree, ("pkg",), self.cache(), 1, refresh,
+                              log=self.log.append)
+
+    def test_the_first_call_traces_and_the_second_reads_what_it_wrote(self):
+        first = self.load()
+        self.assertIn("pkg/thing.py::work", first)
+        self.log.clear()
+        self.assertEqual(self.load(), first)
+        self.assertIn("cached", self.logged)
+
+    def test_refreshing_re_traces_even_though_the_cache_is_sitting_there(self):
+        fresh = self.load()
+        stale = next(iter(self.cache().glob("selection-*.json")))
+        stale.write_text('{"pkg/stale.py": ["tests.test_gone"]}')
+        self.assertEqual(self.load(refresh=True), fresh)
+
+
+class TheWorkdirIsOutsideTheTreeAndHasNoSymlinkInIt(unittest.TestCase):
+    """#572 at the exact place it bit: the DEFAULT workdir, which nobody passes.
+
+    `--workdir /private/tmp/…` was the published workaround, and that is another way of
+    saying the default was the one spelling of this path that could not work — the tool
+    was unusable as invoked and usable only as corrected. `$TMPDIR` is not this tool's to
+    choose, so the resolving is.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-workdir-")).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        (self.tmp / "real").mkdir()
+        self.link = self.tmp / "tmp-through-a-symlink"
+        self.link.symlink_to(self.tmp / "real", target_is_directory=True)
+
+    def _tmpdir_is_a_symlink(self):
+        """Exactly the shape macOS ships: `$TMPDIR` names a directory through a link."""
+        self.addCleanup(setattr, tempfile, "tempdir", tempfile.tempdir)
+        tempfile.tempdir = str(self.link)
+
+    def test_the_default_workdir_is_resolved_even_when_tmpdir_is_a_symlink(self):
+        self._tmpdir_is_a_symlink()
+        where = sweep.workdir_for(self.tmp / "checkout", None)
+        self.assertEqual(where.parent, self.tmp / "real")
+
+    def test_an_explicit_workdir_is_resolved_the_same_way(self):
+        """`--workdir` is the escape hatch, so it is the last place to leave unnormalised
+        — and resolving it also makes a relative one mean what the operator meant."""
+        where = sweep.workdir_for(self.tmp / "checkout", str(self.link / "here"))
+        self.assertEqual(where, self.tmp / "real" / "here")
+
+    def test_one_checkout_reached_by_two_names_gets_one_workdir(self):
+        """The digest is the cache key. Taken from an unresolved root, the same tree
+        traced from two spellings would pay for the map twice and share neither."""
+        checkout = self.tmp / "real"
+        self.assertEqual(sweep.workdir_for(checkout, None),
+                         sweep.workdir_for(self.link, None))
+
+
+class TheSandboxIsOneSpellingOfOnePath(unittest.TestCase):
+    """A sandbox's path becomes the trace runners' `cwd` and the root the map is measured
+    against, which makes it the last place a symlink can get in — `--workdir` under a
+    linked directory is #572 by another route and nothing downstream can tell them
+    apart."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-box-")).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.repo = self.tmp / "repo"
+        (self.repo / "charter").mkdir(parents=True)
+        (self.repo / "charter" / "m.py").write_text("x = 1\n")
+        # Sealed off from the machine's git, for the reason `TheDiffIsReadWithNoContext`
+        # gives: a global hooksPath or signing key would run this fixture through whatever
+        # the developer happens to have installed.
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                   GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=self.repo, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        run("add", "-A")
+        run("commit", "-qm", "base")
+        self.head = sweep.git("rev-parse", "HEAD", cwd=self.repo).strip()
+        (self.tmp / "boxes").mkdir()
+        self.link = self.tmp / "boxes-through-a-symlink"
+        self.link.symlink_to(self.tmp / "boxes", target_is_directory=True)
+
+    def test_a_sandbox_asked_for_under_a_symlink_reports_where_it_really_is(self):
+        box = sweep.Sandbox(self.repo, self.link / "w0", self.head, {})
+        self.assertEqual(box.path, self.tmp / "boxes" / "w0")
+        self.assertEqual((box.path / "charter" / "m.py").read_text(), "x = 1\n")
+
+
 class TheReportNamesTheMaskingRisk(unittest.TestCase):
     def _result(self, line, symbol):
         m = sweep.Mutation(path="charter/frame/layout.py", line=line, end_line=line,
