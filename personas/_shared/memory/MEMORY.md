@@ -26,3 +26,6 @@ Written by the persona as it learns; committed and shared.
 - [Guard-bypass technique that keeps working: when a parse bug is found, se](guard-bypass-technique-that-keeps-working-when-a.md)
 - [Deletion-sweep methodology gap, measured on release.yml's version check](deletion-sweep-methodology-gap-measured-on-relea.md)
 - [MERGE GATE: never trust 'gh pr checks' or mergeStateStatus=CLEAN to mean](merge-gate-never-trust-gh-pr-checks-or-mergestat.md)
+- [PR #554 (overlay) CI failure at head c735efc0, diagnosed 2026-08-26: tes](pr-554-overlay-ci-failure-at-head-c735efc0-diagn.md)
+- [A MUTATION SWEEP THAT SCORES ON EXIT CODE IS ITSELF UNPINNED. Measured i](a-mutation-sweep-that-scores-on-exit-code-is-its.md)
+- [Dispatching several agents that each parallelize their own deletion swee](dispatching-several-agents-that-each-parallelize.md)

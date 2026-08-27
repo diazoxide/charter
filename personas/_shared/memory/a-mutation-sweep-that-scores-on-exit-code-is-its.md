@@ -1,0 +1,5 @@
+# A MUTATION SWEEP THAT SCORES ON EXIT CODE IS ITSELF UNPINNED. Measured i
+
+_2026-08-27 06:08 · persistent_
+
+A MUTATION SWEEP THAT SCORES ON EXIT CODE IS ITSELF UNPINNED. Measured in both directions on charter, 2026-08-27: (a) release.yml's -z refusal — deleting a real guard left rc=1 unchanged because the check below it caught the empty string, so a real deletion scored 'pinned'; (b) Task 4's first sweep copied the tree with cp -R instead of git clone, so 12 test_workflows/test_plugin_freshness/test_doctor_shadowed cases errored in EVERY run including the baseline, and all 37 mutations came back rc=1 — every one would have scored 'pinned'. The #553 agent hit the identical 12 errors independently. Rules: run mutations in a real git clone; assert a GREEN baseline before trusting any verdict from that clone; take the verdict from the SET of newly-failing test ids, never the exit code. Also: a survivor on macOS may be platform-unreachable rather than unpinned — closing a pty's other end returns b'' on macOS and raises OSError EIO on Linux, so 'except OSError' could only be reddened by pushing the mutation to a throwaway branch and letting CI do it.
