@@ -550,9 +550,72 @@ def density(fid: str) -> str | None:
         return None
 
 
+def record_hidden(fid: str, names) -> None:
+    """Write down which components THIS RUNNING FRAME is not drawing.
+
+    The mechanism a toggle key and a density level are both expressed in
+    (`commands_frame.cmd_toggle`, `commands_frame.cmd_density`): visibility is per
+    component, and a level is a name for one set of it.
+
+    Same place and same argument as :func:`record_density` — charter.toml is
+    hand-maintained and committed, this directory is machine-written and `reap` deletes it
+    whole when the frame ends, so a keypress lands here and the operator's own file is
+    left alone. Relaunch and the arrangement they configured is back.
+
+    One name per line, newline-terminated, so that "nothing is hidden" is an EMPTY FILE
+    and "nothing has been recorded" is NO FILE. Those are different answers — the first is
+    an operator who toggled the last panel back on, the second is a frame nobody has
+    touched, whose hidden set is whatever ``visible = false`` its config declared — and a
+    caller cannot tell them apart from any value that flattens both to "empty", which is
+    why this is a file per frame rather than a line in one. Same must-not-raise,
+    atomic-write shape as :func:`record_density`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "hidden.tmp"
+    try:
+        tmp.write_text("".join(f"{n}\n" for n in names))
+        os.replace(tmp, d / "hidden")
+    except OSError:
+        return
+
+
+def hidden(fid: str) -> tuple[str, ...] | None:
+    """The components this frame has been told not to draw, or ``None`` for "never told".
+
+    ``None`` is the ordinary case and is not a failure: a frame comes up drawing the
+    arrangement its config describes, and only a keypress writes here. The caller falls
+    back to the ``visible = false`` names in that config — see
+    `commands_frame._hidden_now`.
+
+    **The text is NOT validated here, and unlike :func:`density` that is not a deferral —
+    there is nothing for a validator to protect.** A name in this set is only ever asked
+    ``is this name in it?`` about a name that is already in the frame's own arrangement
+    (`instance.frame_arrangement`), so a line that is not one of those names removes
+    nothing, reaches no tmux command and is not carried anywhere. A guard here would be a
+    guard with no consequence, which this repo's own sweep exists to find and delete.
+
+    Blank lines are dropped, which is what makes an empty recorded set read back as an
+    empty tuple rather than as one component named ``""``.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        text = (d / "hidden").read_text()
+    except (OSError, ValueError):
+        return None
+    return tuple(line for line in text.split("\n") if line)
+
+
 def clear_shape(fid: str) -> None:
-    """Forget the density, the pane map and the harness session recorded under *fid*,
+    """Forget the shape, the pane map and the harness session recorded under *fid*,
     because a NEW frame is claiming the id.
+
+    "The shape" is two files: the ``density`` a keypress chose and the ``hidden`` set a
+    component's own toggle key wrote (:func:`record_hidden`). Both are one operator's
+    decision about one frame, and that frame is over.
 
     The fourth and fifth lines on :func:`clear_exit`'s bill, and the same recycled pid
     underneath them (#383). A frame id is ``<workspace>-<launcher pid>``; :func:`reap`
@@ -567,6 +630,13 @@ def clear_shape(fid: str) -> None:
       says otherwise and nothing anywhere explains it — the config silently overridden by
       a keypress from another session, which is the one thing "for the running frame only"
       promises cannot happen.
+    * ``hidden`` is the same keypress said one component at a time (:func:`record_hidden`)
+      and inherits for the same reason, one level sharper: a level at least names a frame
+      charter ships, while a stale hidden set can leave a brand-new frame missing exactly
+      the panel a previous operator dismissed, with `[frame] slots` naming it and nothing
+      on screen to say why. The file's whole contract is that "never recorded" and
+      "recorded empty" are different answers, so a file inherited from a dead frame is
+      read as a live decision this frame's operator never made.
     * ``panes`` names tmux panes of a frame that no longer exists. `cmd_launch` rewrites
       it as it draws, so this only matters when a launch dies before that — but then the
       map survives pointing at nothing, and the next density change on the next frame to
@@ -584,7 +654,7 @@ def clear_shape(fid: str) -> None:
     d = frame_dir(fid)
     if d is None:
         return
-    for name in ("density", "panes", "session"):
+    for name in ("density", "hidden", "panes", "session"):
         try:
             (d / name).unlink(missing_ok=True)
         except OSError:

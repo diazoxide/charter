@@ -385,6 +385,16 @@ FRAME_SLOTS = ("top", "bottom", "repos", "right")
 #: How much frame there is, as a PRESET over :data:`FRAME_SLOTS` — never a second
 #: configuration system sitting beside `slots`.
 #:
+#: **And, since Phase 2's Task 5, a NAMED ARRANGEMENT OVER VISIBILITY rather than a
+#: mechanism of its own** (spec §4). The operator's own words for what was wrong with it:
+#: *"instead of having density - we need to have hotkeys to hide and show separately
+#: components"*. A level is now three panels' worth of "visible", written down under one
+#: word: `commands_frame.cmd_density` turns the list below into a HIDDEN SET over
+#: :func:`frame_arrangement`, and then goes through the very same re-layout a single
+#: component's toggle key does. Nothing about a level is a second path, and the mark it
+#: still leaves on the frame — its ``verbosity`` — is the one axis a per-component
+#: toggle genuinely cannot express, which is why the table below still carries it.
+#:
 #: Each level expands to two things: the ``slots`` an operator could have written by hand,
 #: and a ``verbosity`` naming how much each panel on them says (`frame/slots.py` owns what
 #: the two verbosities actually draw). `slots` stays the primitive, and an EXPLICIT
@@ -630,6 +640,41 @@ FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.ite
 _HOTKEY_RE = re.compile(r"^(?:[CMS]-){0,3}(?:[A-Za-z0-9]{1,20}|[!%&()*+,./:<=>?@\[\]^_|~-])$")
 
 
+def toggle_key(value):
+    """*value* if it is a tmux key charter will let reach a ``bind`` line, else ``None``.
+
+    **:data:`_HOTKEY_RE` asked, never a second pattern**, and that is the whole of this
+    function. A component's toggle key (``[[frame.component]]``'s ``key``) is interpolated
+    into tmux CONFIG TEXT by `commands_frame.conf_text` — the same ``bind -n {key}
+    run-shell '…'`` line, in the same file, sourced by the same ``source-file`` — as
+    ``[frame] hotkey``. The injection that constant's docstring measures is therefore the
+    identical injection, reached through a second committed key rather than a second
+    mechanism — re-measured on tmux 3.7c against a config in exactly the shape
+    `conf_text` writes, with ``key = "F9\\nrun-shell -b 'touch /tmp/PWNED'"``::
+
+        $ tmux -L t source-file evil.tmux ; echo $?
+        0                                   # silently
+        $ ls -l /tmp/PWNED
+        -rw-r--r--  1 …  /tmp/PWNED         # at source-file time, no keypress
+
+    The newline simply ends the ``bind`` line and starts a second tmux command.
+
+    A second regex spelled here would be a second answer to "what may reach a ``bind``
+    line", and the two would drift — which is exactly what `frame/component.py`'s own
+    ``match``/``fullmatch`` slip cost inside one module, and what `contain.py`'s docstring
+    argues against in general. So the two keys are one alphabet by construction.
+
+    ``isinstance`` first, for :func:`density_level`'s reason: ``tomllib`` can hand this a
+    list or a table, and ``_HOTKEY_RE.fullmatch`` raises ``TypeError`` for either — in a
+    module every command imports, ``charter --version`` included.
+
+    ``None`` rather than ``False``, so a caller can write the matched value back the way
+    :func:`density_level` does: what reaches tmux is then this function's answer, not the
+    object a committed file supplied.
+    """
+    return value if isinstance(value, str) and _HOTKEY_RE.fullmatch(value) else None
+
+
 def frame_of(cfg: dict) -> dict:
     """The ``[frame]`` section merged over :data:`FRAME_DEFAULTS`.
 
@@ -709,7 +754,11 @@ def frame_of(cfg: dict) -> dict:
             out[key] = value
     if "density" in section and not took_slots:
         out["slots"] = density_slots(out["density"])
-    placed = component_tables(section)
+    # *After* the loop, so ``hotkey`` is already resolved: a component's own ``key`` is
+    # refused when it would steal the frame's palette key, and the value it is compared
+    # against has to be the one `conf_text` will actually bind — the operator's, if they
+    # wrote a usable one, and the shipped ``F2`` if they did not.
+    placed = component_tables(section, hotkey=out["hotkey"])
     if placed is not None:
         out["slots"] = [p["slot"] for p in placed if p["visible"]]
     # The arrangement itself, and not only the names it comes down to. `slots` carries
@@ -742,10 +791,18 @@ FRAME_COMPONENT_KEY = "component"
 #: * ``size`` — how many cells it is given, for a component whose size is `Fixed`.
 #: * ``visible`` — whether it is drawn at all. The one key `slots` could only express by
 #:   deleting a name, which loses the position with it.
-FRAME_COMPONENT_FIELDS = ("use", "edge", "size", "visible")
+#: * ``key`` — the tmux key that TOGGLES ``visible`` on the running frame, live. Optional,
+#:   and there is no default: a `bind -n` is server-wide and intercepts the key before the
+#:   harness pane ever sees it, so charter shipping four of them would silently take four
+#:   keys away from Claude Code (or codex, or whatever the operator ran) on every plane.
+#:   A key is bound because an operator asked for it by name. Held to
+#:   :func:`toggle_key` — which is :data:`_HOTKEY_RE` — because it reaches the same
+#:   ``bind`` line ``[frame] hotkey`` does.
+FRAME_COMPONENT_FIELDS = ("use", "edge", "size", "visible", "key")
 
 
-def _placement(cid: str, *, edge: str, size, visible: bool = True) -> dict:
+def _placement(cid: str, *, edge: str, size, visible: bool = True,
+               key: str | None = None) -> dict:
     """One resolved placement: the component, where it sits, how big, and whether drawn.
 
     **The one place a placement is spelled**, which is why the rectangle is passed in
@@ -764,19 +821,26 @@ def _placement(cid: str, *, edge: str, size, visible: bool = True) -> dict:
     every plane that has a charter.toml; a component charter did not write has no
     committed spelling and travels under its id, which is the whole of "a component id is
     the frame's currency".
+
+    ``key`` travels beside ``visible`` because it is the one thing that CHANGES it: the
+    frame binds it to `commands_frame.cmd_toggle`, which flips this component's visibility
+    and hands the result to the same re-layout a density change goes through. ``None`` is
+    the ordinary answer — a plane spelled with `slots` has no place to write one, and a
+    component nobody asked to bind does not get a key.
     """
     from .frame import builtins as _builtins
     return {"use": cid, "slot": _builtins.SLOT_OF.get(cid, cid), "edge": edge,
-            "size": size, "visible": visible}
+            "size": size, "visible": visible, "key": key}
 
 
-def _built_in_placement(reg, cid: str, *, visible: bool = True) -> dict:
+def _built_in_placement(reg, cid: str, *, visible: bool = True,
+                        key: str | None = None) -> dict:
     """:func:`_placement` for one of charter's own, in the rectangle it declares."""
     c = reg.get(cid)
-    return _placement(cid, edge=c.edge, size=c.size, visible=visible)
+    return _placement(cid, edge=c.edge, size=c.size, visible=visible, key=key)
 
 
-def component_tables(section) -> list[dict] | None:
+def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None:
     """The ``[[frame.component]]`` arrangement *section* declares, or ``None``.
 
     ``None`` means "nothing usable was declared here" — no tables at all, or an
@@ -844,15 +908,37 @@ def component_tables(section) -> list[dict] | None:
     meanwhile is writing the arrangement out in full: `frame_components` answers every
     `slots` list as tables that resolve back to the same frame, which is what makes the
     mapping lossless in both directions.
+
+    **A ``key`` is the one value here that reaches tmux CONFIG TEXT**, which is why
+    *hotkey* is a parameter rather than something read back later. `commands_frame
+    .conf_text` writes ``bind -n {key} run-shell '…frame-toggle {name}'`` into the file
+    ``source-file`` parses, so a component's key is in exactly the position ``[frame]
+    hotkey`` was in when a newline in it ran a second tmux command at launch with no
+    keypress (:data:`_HOTKEY_RE`). :func:`toggle_key` is that same constant, asked here.
+
+    *hotkey* is the key the frame's own palette is bound to — resolved by :func:`frame_of`
+    before it calls this, because the comparison has to be against what will actually be
+    bound, not against the shipped constant a plane may have moved off. It joins
+    `frame/overlay.py`'s ``HATCH_KEY`` in the set of keys charter has already taken, and a
+    component may have neither. ``None`` means the caller has no palette key to reserve,
+    which is what resolving an arrangement outside a `[frame]` section has; the hatch is
+    reserved regardless, because charter binds it for every frame on its own server.
     """
     tables = section.get(FRAME_COMPONENT_KEY) if isinstance(section, dict) else None
     if not isinstance(tables, list) or not tables:
         return None
     from .frame import builtins as _builtins
+    from .frame import overlay as _overlay
     from .frame.component import EDGES, Fixed
     reg = _builtins.build()
     out: list[dict] = []
     seen: set[str] = set()
+    # Every key charter has already bound for this frame, which a component may not take.
+    # Built HERE rather than in :func:`frame_of` because reaching `frame/overlay.py` for
+    # the hatch key is an import, and this line runs only once a plane has actually
+    # written `[[frame.component]]` tables — `frame_of` itself is on the path of every
+    # command, `charter --version` included, and must stay as cheap as it was.
+    bound: set[str] = {k for k in (hotkey, _overlay.HATCH_KEY) if k}
     for table in tables:
         if not isinstance(table, dict):
             return None
@@ -865,6 +951,44 @@ def component_tables(section) -> list[dict] | None:
         visible = table.get("visible", True)
         if not isinstance(visible, bool):
             return None
+        # The two refusals a toggle key gets, each its own line because each is a
+        # different thing going wrong and the sweep has to be able to tell them apart.
+        key = table.get("key")
+        # One: it is not a key charter will let reach a `bind` line at all. `[frame]
+        # hotkey`'s own injection, arriving through a second committed key — see
+        # :func:`toggle_key`, which is the SAME pattern and not a second one.
+        if key is not None and toggle_key(key) is None:
+            return None
+        # Two: something has already bound it. tmux key tables have no notion of a
+        # conflict — the later `bind -n` simply replaces the earlier — so unrefused this
+        # is one dead key and nothing anywhere saying which. `bound` starts holding the
+        # keys charter binds for its own frame and grows by each component's, so one line
+        # answers for all three collisions rather than three lines answering separately:
+        #
+        # * another component's key — a panel that cannot be toggled at all;
+        # * the frame's own `hotkey` — `conf_text` writes the palette's bind BEFORE these,
+        #   so this one takes the palette away from every frame on the socket, and with it
+        #   every action §4h moved out of the deleted menu, leaving nothing to get them
+        #   back with;
+        # * `frame/overlay.py`'s `HATCH_KEY` — the escape hatch. `conf_text` writes that
+        #   bind AFTER these, so tmux's last-wins leaves the hatch alive and the
+        #   component's key silently dead. Measured on tmux 3.7c, sourcing both binds in
+        #   the order `conf_text` emits them::
+        #
+        #       $ tmux -L t source-file both.tmux ; echo $?
+        #       0
+        #       $ tmux -L t list-keys -T root | grep F12
+        #       bind-key -T root F12  run-shell -C "#{@charter_hatch}"
+        #
+        #   One line back, not two: the operator's key is simply gone, and `source-file`
+        #   said nothing. Refused here anyway, and deliberately not left to that emission
+        #   order — a guard whose consequence depends on where two other lines are
+        #   emitted is a guard nothing can pin (#553), which is the same trap one level
+        #   up from the one this sweep exists to catch.
+        if key is not None and key in bound:
+            return None
+        if key is not None:
+            bound.add(key)
         if cid in _builtins.SLOT_OF:
             c = reg.get(cid)
             if "edge" in table and table["edge"] != c.edge:
@@ -873,7 +997,7 @@ def component_tables(section) -> list[dict] | None:
                                         and table["size"] == c.size.n
                                         and not isinstance(table["size"], bool)):
                 return None
-            out.append(_built_in_placement(reg, cid, visible=visible))
+            out.append(_built_in_placement(reg, cid, visible=visible, key=key))
             continue
         # Not one of charter's own: a component id, which is placeable exactly when an
         # installed distribution declares it. Asked of entry point METADATA — nothing is
@@ -883,7 +1007,7 @@ def component_tables(section) -> list[dict] | None:
         if (not reg.providers.supplies(cid) or edge not in EDGES
                 or not isinstance(size, int) or isinstance(size, bool) or size < 1):
             return None
-        out.append(_placement(cid, edge=edge, size=Fixed(size), visible=visible))
+        out.append(_placement(cid, edge=edge, size=Fixed(size), visible=visible, key=key))
     return out
 
 
@@ -907,19 +1031,80 @@ def frame_components(cfg: dict) -> list[dict]:
     happen once, where they always did.
 
     **Lossless in both directions.** Every list this answers can be written back out as
-    ``[[frame.component]]`` tables — one per placement, carrying its ``use``, ``edge`` and
-    ``size`` — and :func:`component_tables` resolves those to the same placements again.
+    ``[[frame.component]]`` tables — one per placement, carrying its ``use``, ``edge``,
+    ``size``, ``visible`` and ``key`` — and :func:`component_tables` resolves those to the
+    same placements again.
     That round trip is what "the config maps onto the registry" has to mean if `slots` is
     to be retired later without an operator's committed frame changing under them.
+
+    **:func:`frame_of` is asked for the arrangement too, and not only for the slot list.**
+    This used to call :func:`component_tables` a second time, directly — which was one
+    reading of a committed value while that comment above said it was not. It became a
+    real disagreement the moment a table grew a ``key``: `frame_of` resolves ``hotkey``
+    and passes it down, so it refuses a component key that would steal the frame's palette,
+    and a second call without it would have accepted the very arrangement `config.FRAME`
+    had already thrown away. Two answers to one question, which is the shape #547 cost.
     """
-    section = cfg.get("frame")
-    placed = component_tables(section)
-    if placed is not None:
-        return placed
+    frame = frame_of(cfg)
+    if frame["components"]:
+        return frame["components"]
     from .frame import builtins as _builtins
     reg = _builtins.build()
     return [_built_in_placement(reg, _builtins.COMPONENT_OF[slot])
-            for slot in frame_of(cfg)["slots"]]
+            for slot in frame["slots"]]
+
+
+def frame_arrangement(frame: dict) -> list[str]:
+    """Every component name *frame* can show, in split order — visible or not.
+
+    **The universe a toggle and a density level both move within**, and the reason
+    visibility can be the one mechanism. `slots` says which panels are ON; it cannot say
+    which panels EXIST but are off, because deleting a name from a list loses the position
+    with it. This answers the longer list, so a hidden component keeps its place in the
+    split order — and that order is what a re-layout is asked with, so a level or a key
+    never has to invent a position for a panel it brings back.
+
+    *frame* is a RESOLVED ``[frame]`` mapping — :func:`frame_of`'s answer, which is
+    exactly what `config.FRAME` holds. It is read rather than re-derived from a cfg on
+    purpose: this is asked from inside a running frame (`commands_frame.cmd_toggle`,
+    `commands_frame.cmd_density`), and re-resolving there would be a second reading of the
+    committed file, taken at a different moment, free to disagree with the one the frame
+    was launched from.
+
+    Two sources, in the order the config boundary already ranks them:
+
+    * an arrangement written out (``components``) names its own components, invisible ones
+      included, and its file order is the split order;
+    * otherwise ``slots``, which is the same list with nothing hidden in it.
+
+    Then **charter's own built-ins that neither named, appended in shipped split order**.
+    That tail is what keeps `[frame] slots = ["top", "bottom"]` able to answer the
+    ``full`` density at all — a level names built-ins the plane never listed, and it has
+    done so since presets existed. Appended rather than merged, because a name the plane
+    did not write has no position of its own to be inserted at, and :data:`FRAME_SLOTS`'
+    order is the only other one charter knows: for a plane whose list is a prefix of the
+    shipped one — which is every plane that took a `slots` default and trimmed it — the
+    result IS the shipped order.
+    """
+    placed = frame.get("components") or ()
+    names = [p["slot"] for p in placed] or list(frame.get("slots") or ())
+    return names + [s for s in FRAME_SLOTS if s not in names]
+
+
+def frame_toggles(frame: dict) -> dict[str, str]:
+    """name → the tmux key that shows or hides it, for every component *frame* binds one
+    to, in split order.
+
+    What `commands_frame.conf_text` turns into ``bind -n`` lines. Empty for every plane
+    spelled with `slots` or `density`, and empty for an arrangement that declared no
+    ``key`` — there is no default key and :data:`FRAME_COMPONENT_FIELDS` says why.
+
+    Split order because a mapping keeps its insertion order and *frame*'s own placements
+    are in it. Nothing downstream depends on that, but a `list-keys` an operator reads
+    back should be in the order their file is written in rather than in whatever order a
+    set happened to iterate.
+    """
+    return {p["slot"]: p["key"] for p in (frame.get("components") or ()) if p.get("key")}
 
 
 #: The channels ``[update] channel`` may name, and a CLOSED set — the single most
