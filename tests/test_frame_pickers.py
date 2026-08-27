@@ -265,6 +265,30 @@ class ThePaletteOpensThePickerAndActsOnWhatComesBack(_Frame, unittest.TestCase):
         return next(r for r in choose.open_rows(self.FID)
                     if choose.noun_of(r) == noun)
 
+    def test_the_palette_is_built_with_a_doorway_for_each_noun_ahead_of_the_actions(self):
+        """**What the pane is actually given**, asserted on the surface `_draw_palette`
+        constructs rather than on rows a test handed back to it. Every other case in this
+        class feeds `own_the_tty` a row directly, so none of them would notice the
+        doorways never being put in the catalogue at all — measured: removing
+        `choose.open_rows` from the catalogue reddened nothing outside the tmux-gated
+        integration module, which skips on a machine with no tmux.
+
+        The order is asserted with them first, so an accidental `F2`-then-Enter opens a
+        list rather than detaching the harness.
+        """
+        seen = []
+
+        def fake(surface, *, then=None, **kw):
+            seen.append(surface)
+            return None
+
+        with mock.patch.object(palette, "own_the_tty", fake):
+            self.assertEqual(commands_frame.cmd_palette(
+                SimpleNamespace(client="", pane=True)), 0)
+        ids = [r.id for r in seen[0].catalogue]
+        self.assertEqual(ids[:2], ["pick:workspace", "pick:persona"], ids)
+        self.assertIn("frame.detach", ids)
+
     def test_choosing_a_name_moves_the_frame_and_says_what_it_did(self):
         was = state.version(self.FID)
         self.assertEqual(self._draw(self._doorway(choose.WORKSPACE),
@@ -387,6 +411,33 @@ class APinnedFrameIsToldBeforeItPressesAnything(_Frame, unittest.TestCase):
         row = next(r for r in choose.open_rows(self.FID)
                    if choose.noun_of(r) == choose.PERSONA)
         self.assertEqual(row.note, "")
+
+    def test_the_pin_is_contained_before_it_becomes_a_line_on_a_status_area(self):
+        """**The one containment in this branch that `overlay.Surface.render` does not
+        already do**, and the sweep found it unpinned.
+
+        `$CHARTER_WORKSPACE` is whatever the launching environment held, so
+        `CHARTER_WORKSPACE=$'a\\nb' charter claude` puts a newline in `state.identity`. The
+        reason built from it goes two places: a row's note, where `render` contains it —
+        and, when the row is pressed, straight into `_say_on_screen`, whose docstring
+        states the split in as many words: callers close the newline half with
+        `contain.one_line`, `tmuxctl.inert_format` closes the `#` half, "both, because they
+        are different properties: one line, and inert". `inert_format` does not touch a
+        separator, so nothing downstream would.
+
+        Asserted on what reaches `_say_on_screen`, not on the drawn pane — the pane would
+        pass either way, which is exactly how this line came to have no test.
+        """
+        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "al\npha\u2028x"})
+        row = next(r for r in choose.open_rows(self.FID)
+                   if choose.noun_of(r) == choose.WORKSPACE)
+        with mock.patch.object(palette, "own_the_tty", _pane(row)):
+            commands_frame.cmd_palette(SimpleNamespace(client="", pane=True))
+        said = self.said.call_args[0][1]
+        self.assertEqual(said, "".join(said.splitlines()), repr(said))
+        for bad in ("\n", "\r", "\u2028", "\u2029", "\u0085"):
+            self.assertNotIn(bad, said, repr(said))
+        self.assertIn("\\x0a", said, repr(said))
 
     def test_pressing_it_opens_no_picker_and_the_reason_reaches_the_screen(self):
         row = next(r for r in choose.open_rows(self.FID)

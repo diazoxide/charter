@@ -298,6 +298,19 @@ class ThePaletteOffersAPickerForEach(PersonaIso, unittest.TestCase):
         self.assertEqual({r.id: r.title for r in _rows(self.FID)}["pick:persona"],
                          "persona — pick one")
 
+    def test_nothing_chosen_is_the_empty_string_and_never_none(self):
+        """charter's own convention for "there is none", one module over: `switch._pin`
+        records that "empty is what every charter reader already treats as absent", and
+        `choose.current` is declared to answer a name.
+
+        **Pinned on the function rather than on a row, because both callers that exist
+        today mask it**: `open_rows` tests `if now` and `roster` compares `n == now`, and
+        `None` and `""` behave identically in both. A third caller writing `f"on {now}"`
+        would print the word `None`. That masking is the shape this repo has been bitten
+        by four times, so the contract is asserted where it is stated.
+        """
+        self.assertEqual(choose.current(choose.PERSONA, self.FID), "")
+
     def test_a_long_list_is_not_capped(self):
         """Thirty workspaces are thirty rows in the picker. The menu answered twelve plus
         a row saying how many it had hidden; this surface has nowhere to hide them."""

@@ -3534,7 +3534,7 @@ def _draw_palette(args) -> int:
     harness = state.harness_pane(fid) or ""
     reg = builtin_actions.build(fid, current_density=_current_density(fid))
     snapshot = gather.cached(fid) or {}
-    client = getattr(args, "client", "") or ""
+    client = getattr(args, "client", "")
     opened: list[choose.Roster] = []
     try:
         surface = palette.Palette(
@@ -3633,11 +3633,17 @@ def _close_palette(socket: str, *, harness: str, overlay_pane: str) -> None:
 def cmd_switch(args) -> int:
     """`charter frame-switch --workspace <name>` / `--persona <name>` — move THIS frame.
 
-    Started by a palette row (`frame/builtin_actions.py`), and typeable by hand from
-    inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
-    `cmd_density`, `cmd_palette` and `cmd_respawn` resolve theirs, and for the same
-    reason: one bind is shared by every frame on `SOCKET`, so the frame a keypress acts on
-    is resolved at the moment it fires, never baked into anything.
+    **Typed by hand, or run by an agent inside the harness.** The picker no longer starts
+    it: a name chosen off `frame/choose.py` is switched in the palette's own process,
+    which is what lets the outcome reach the pane the operator is looking at rather than
+    a status line after that pane is gone. This is the same switch by another door — one
+    that takes a name nobody drew, which is why it still has refusals a picker's row
+    cannot produce.
+
+    The frame is resolved from `$CHARTER_SESSION_ID` exactly as `cmd_density`,
+    `cmd_palette` and `cmd_respawn` resolve theirs, and for the same reason: one bind is
+    shared by every frame on `SOCKET`, so the frame a command acts on is resolved at the
+    moment it runs, never baked into anything.
 
     The switch itself is `frame/switch.py`'s — this function is the tmux half and nothing
     else: which frame, and where the answer is shown.

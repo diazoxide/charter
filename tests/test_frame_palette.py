@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, contain, tui
-from charter.frame import action, actions, builtin_actions, overlay, palette, state, switch
+from charter.frame import action, actions, builtin_actions, overlay, palette, state
 
 from tests._isolation import PersonaIso
 
