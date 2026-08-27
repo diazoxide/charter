@@ -266,6 +266,61 @@ class TestTheSkillsBlockIsMeasuredToo(RosterWidths):
             "the `unused:` label starts in a different column on each row — the name "
             f"column was sized by a guess (offsets {sorted(at)}):\n" + "\n".join(block))
 
+    def test_a_hostile_name_cannot_forge_a_row_in_this_block(self):
+        """The block prints a persona DIRECTORY name, so it needs #472's bound too.
+
+        Reachable, not theoretical. `drift` reports a persona whose name appears in
+        `personas/_skills/*.jsonl`, and `skilluse.record` writes whatever string it is
+        given into that committed log with no `valid_name` between — so the same commit
+        that adds a directory named with a separator can add the log line that pulls it
+        into this block. Without the bound the name writes a second physical line wearing
+        the block's own layout, which is #453's mechanism two reports over.
+        """
+        name = "evil" + chr(0x2028) + "  fake     used but not declared: nothing"
+        try:
+            (config.PERSONAS_DIR / name).mkdir()
+            (config.PERSONAS_DIR / name).rmdir()
+        except OSError:
+            self.skipTest(f"filesystem refuses {name!r}")
+        from charter import skilluse
+
+        drift = {"unused": [], "undeclared": ["a-skill"]}
+        self._roster("ok", name)
+        with mock.patch.object(skilluse, "drift", return_value=drift):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        self.assertEqual(
+            [r for r in rows if r.startswith("  fake")], [],
+            "the persona name wrote its own line in the skills block:\n"
+            + "\n".join(rows))
+        self.assertTrue(
+            any(contain.one_line(name) in r and "a-skill" in r for r in rows),
+            "the bounded name is not in the block:\n" + "\n".join(rows))
+
+    def test_both_directions_of_drift_are_reported(self):
+        """`unused` and `undeclared` are two `if`s, and only the first had a test.
+
+        The sweep deleted the `undeclared` branch and the whole suite stayed green — the
+        half of the block that answers the more interesting question could stop printing
+        and nothing would say so. They are different findings: `unused` is a context cost,
+        `undeclared` is a persona working outside its charter (ADR 0013).
+
+        `drift` is stubbed rather than driven through a usage log, because the property
+        under test is that the report PRINTS both directions, not how `skilluse` derives
+        them.
+        """
+        from charter import skilluse
+
+        drift = {"unused": ["declared-never-used"], "undeclared": ["used-never-declared"]}
+        self._roster("ok")
+        with mock.patch.object(skilluse, "drift", return_value=drift):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        self.assertTrue(any("unused: declared-never-used" in r for r in rows),
+                        "the unused half is missing:\n" + "\n".join(rows))
+        self.assertTrue(
+            any("used but not declared: used-never-declared" in r for r in rows),
+            "the undeclared half is missing — the block reports only one direction of "
+            "drift:\n" + "\n".join(rows))
+
     def test_a_long_name_is_not_cut_out_of_the_block(self):
         """`tui.pad` truncates, so alignment alone would survive a constant here too."""
         long = self.NAMES["well over the boundary"]
