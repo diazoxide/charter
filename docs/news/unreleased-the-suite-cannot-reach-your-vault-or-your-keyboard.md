@@ -62,9 +62,13 @@ mutation that dies under a pipe "reported OK under a pty".
 
 **What this run still cannot promise.** The suite now gives the same verdict from a pipe and
 from a terminal for the two classes above, and a full run under a pty no longer hangs. It is
-not yet identical: 27 tests across eight modules still fail only under a terminal, all of
-them tracing to `os.get_terminal_size()` — the size of the window the suite happens to be
-running in, which is issue #544 and is not fixed here. Measured and written down rather than
-left for the next person to rediscover.
+not yet identical: 28 tests across eight modules still fail only under a terminal, and every
+one of them traces to `os.get_terminal_size()` — the size of the window the run happens to
+be in, not whether it is one. That is issue #544 and it is not fixed here. What the
+measurement adds to it: the pty those 28 were run under had never been given a window size,
+so `get_terminal_size()` answered **0 columns**, and `tui.term_width` guards `$COLUMNS <= 0`
+while doing nothing about a tty that reports zero — the same defect one rung down its own
+ladder, and reachable outside a test by any terminal whose size was never set. Give the same
+pty a size and all 28 pass.
 
 None of this reaches you unless you run charter's own test suite. Nothing to adopt.
