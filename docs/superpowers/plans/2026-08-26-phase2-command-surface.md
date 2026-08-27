@@ -218,4 +218,13 @@ constants, `panel_command`'s `charter panel <slot>` argv, `cli.py`'s `panel` sub
 - The escape hatch works against a **deliberately hung** overlay.
 - **A provider's component can be placed by config and drawn** — Phase 1's criterion, moved here
   because the slot vocabulary made it unreachable there.
-- The suite gives the same answer in two environments.
+- The suite gives the same answer in two environments **and CI is green at the head sha under
+  review**. Two local environments cannot see a CI-only failure: #554's overlay module passed
+  12/12 locally while CI was red at that exact head, and `gh pr checks` reports "no checks
+  reported" and `mergeStateStatus: CLEAN` identically when no run was ever created (#561). Read
+  `gh api repos/diazoxide/charter/commits/<HEAD_SHA>/check-runs`, which cannot confuse the two.
+- **The deletion sweep is run by the repository, not promised by whoever wrote the branch.**
+  See `docs/superpowers/specs/2026-08-27-deletion-sweep-harness.md`. Rounds one through three
+  found thirty-six unpinned guards by hand, and round three's own fix commit — the one whose
+  message says every added guard now has a test — added six more. The rule does not hold while
+  the only thing checking it is the person it constrains.
