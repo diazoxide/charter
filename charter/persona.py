@@ -1268,18 +1268,28 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
         # there sends the reader looking for a missing file; the refusal names the path
         # charter actually resolved to, which is the whole defect (#336).
         refused = definition_refusal(name)
-        # `contain.one_line`, because *name* here is a DIRECTORY name and a directory name
+        # `contain.readable`, because *name* here is a DIRECTORY name and a directory name
         # is not a name charter minted: `personas/` is committed, and a filesystem forbids
         # only `/` and NUL. A U+2028 in one made this single lint row two rows, the second
         # of them indistinguishable from charter's own — the #453 mechanism on the surface
         # that exists to REPORT #453. Reproduced before it was bounded.
+        #
+        # It was `contain.one_line`, which stops that and nothing else: it escapes five
+        # general categories, and U+3164 HANGUL FILLER is `Lo`, not whitespace, and survives
+        # `strip`, so this read `persona '' does not load` — the one sentence whose entire
+        # job is to tell somebody WHICH persona to go and fix, with the name left out
+        # (#498). `readable` decides on the complement instead: printable ASCII is what may
+        # reach the sentence and everything else prints as its escape, so the name is one
+        # the reader can find on disk. Charter mints persona names out of
+        # `[a-z0-9][a-z0-9._-]` (`valid_name`), so a name that resolves is ASCII already and
+        # comes back unchanged; the escapes only ever appear for a directory that is broken.
         #
         # This bounds the MESSAGE and only the message. `cmd_persona_lint` builds the row
         # around it out of the same directory name and bounds its own prefix; `persona
         # list` and `persona stats` still do not, which is #472. A bound here is not a
         # bound on every report that prints this name.
         return [("error", f"persona.md: {refused}" if refused
-                 else f"persona '{contain.one_line(name)}' does not load")]
+                 else f"persona '{contain.readable(name)}' does not load")]
     meta = d["meta"]
     issues: list[tuple[str, str]] = []
     if deep:

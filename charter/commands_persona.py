@@ -737,15 +737,29 @@ def _render_agent(name: str, meta: dict, charter: str) -> str:
     scripts = persona.bin_scripts(name)
     bin_note = ""
     if scripts:
-        # `contain.one_line`, because these are FILENAMES read off the disk, not names
-        # charter minted: `personas/<name>/bin/` is committed and a filesystem forbids only
-        # `/` and NUL. A script named with a U+2028 wrote a second bullet into the brief
-        # the sub-agent is given, formatted exactly like charter's own — #453's mechanism
-        # aimed at the model rather than at the YAML parser. Reproduced before it was
-        # bounded. A path is shown escaped rather than dropped: the agent still has to be
-        # able to run the ones that are fine.
+        # Contained, because these are FILENAMES read off the disk, not names charter
+        # minted: `personas/<name>/bin/` is committed and a filesystem forbids only `/` and
+        # NUL. A script named with a U+2028 wrote a second bullet into the brief the
+        # sub-agent is given, formatted exactly like charter's own — #453's mechanism aimed
+        # at the model rather than at the YAML parser. Reproduced before it was bounded. A
+        # path is shown escaped rather than dropped: the agent still has to be able to run
+        # the ones that are fine.
+        #
+        # `contain.readable` rather than `contain.one_line` (#498). The bullet says "run
+        # them by path", so the property this needs is not "the bullet is one bullet" but
+        # "the path names a file". `one_line` gives the first: it escapes five general
+        # categories, and U+3164 HANGUL FILLER is `Lo`, so a script named with three of them
+        # produced `` `personas/<name>/bin/` `` — a bullet ordering the model to run a
+        # directory, in the one document written for the model. `readable` keeps printable
+        # ASCII and escapes the rest, so the last segment is always there to be read.
+        #
+        # The trade, since it lands on this site hardest: a script whose filename is
+        # legitimately non-ASCII now shows as escapes, and an escaped path is not one the
+        # agent can paste. That is the same outcome as today for a name it cannot see at
+        # all, and better than a path that silently names nothing — but it is a real cost,
+        # unlike at the two lint sites where `valid_name` makes the input ASCII anyway.
         listed = "\n".join(
-            f"  - `{contain.one_line(_rel(path), contain.PATH_DISPLAY_LIMIT)}`"
+            f"  - `{contain.readable(_rel(path), contain.PATH_DISPLAY_LIMIT)}`"
             for _n, path in sorted(scripts.items()))
         bin_note = (
             f"\n- **You carry your own executables.** Run them by path, not by name:\n"
@@ -1138,7 +1152,18 @@ def cmd_persona_lint(args) -> int:
         # name a commit chose, and a filesystem forbids only `/` and NUL. `persona.lint`
         # bounds the message it returns; that left the `f"{n}: …"` around it as the
         # remaining way to write a second physical row wearing charter's own ✗ glyph.
-        shown = contain.one_line(n)
+        #
+        # `contain.readable`, not `contain.one_line`, and the difference is which question
+        # this row asks. Every row here ends in "go and fix this persona", so the row has to
+        # SAY WHICH — and `one_line` promises only that the name cannot forge a second row,
+        # by escaping five general categories. U+3164 HANGUL FILLER is `Lo` and on none of
+        # them, is not whitespace and survives `strip`, so a directory named with three of
+        # them linted as `✗ : no role`: a finding about a persona the row does not name, and
+        # a name the reader cannot search for (#498). `readable` decides on the complement —
+        # printable ASCII is what may reach the row, everything else prints as its escape —
+        # which is the same rule `mcpseen.label` already gives the `mcp: server name …` row
+        # printed a few lines further down this very report.
+        shown = contain.readable(n)
         issues = list(persona.lint(n)) + _agent_sync_issues(n)
         if only:
             issues = [(lvl, msg) for lvl, msg in issues if only in msg]

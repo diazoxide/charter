@@ -600,6 +600,13 @@ class TestTheNextSpellingIsANameCharterDidNotMint(NameBase):
         report that printed nothing at all, so the row is checked to still name the
         persona — and to carry it in its bounded spelling, which says *why* the count held
         rather than leaving a different guard free to have caught it.
+
+        That spelling is `contain.readable` rather than `contain.one_line` since #498. The
+        row prefix was moved because `one_line` decides on five general categories and a
+        name that renders as nothing is on none of them, so this row named no persona at
+        all — a different property from the one measured here, on the same row. The name
+        checked for is asked of the function the row uses, so this test measures line
+        structure and does not also pin which escape delivers it.
         """
         benign = self._lint_report("evil  - stolen: yes")
         self.assertEqual(len(benign), 2, benign)  # one error row + the count line
@@ -609,7 +616,7 @@ class TestTheNextSpellingIsANameCharterDidNotMint(NameBase):
                 name = f"evil{sep}  - stolen: yes"
                 rows = self._lint_report(name)
                 self.assertEqual(len(rows), len(benign), rows)
-                self.assertIn(contain.one_line(name), rows[0])
+                self.assertIn(contain.readable(name), rows[0])
 
     def test_a_script_filename_cannot_forge_a_line_in_the_brief(self):
         """`bin/` is committed and its filenames go into the brief the sub-agent reads.
