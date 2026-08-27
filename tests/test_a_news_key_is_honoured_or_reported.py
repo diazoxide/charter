@@ -374,13 +374,19 @@ class AFileThatIsNotAnEntryIsAlsoSaid(NewsDir):
         self.assertNotIn("`key: value` frontmatter", why)
 
     def test_and_that_sentence_says_what_a_staged_entry_writes(self):
-        """The edit, not just the diagnosis. An author whose entry names no version is
-        usually one who has not staged it, and `unreleased` is the word they need — a
-        sentence that stops at "no version" leaves them to go and find it."""
+        """The edit, not just the diagnosis, and BOTH halves of it.
+
+        An author whose entry names no version is usually one who has not staged it, so
+        the sentence owes them two things: the word to write (`unreleased`) and what takes
+        it off again (`charter news stamp`). A sentence that names only the first tells
+        somebody to write a placeholder and not what ever removes it — which is how a
+        staged entry becomes a permanent one.
+        """
         self.two()
         self.write(f"{_V}-z-nover.md", "---\nheadline: h\n---\n\nb\n")
         why, = news.unreadable()
         self.assertIn(news.UNRELEASED, why)
+        self.assertIn("news stamp", why)
 
     def test_a_version_declared_with_nothing_after_the_colon(self):
         """The same shape `_flag` answers for an ordering field, one field up. The
