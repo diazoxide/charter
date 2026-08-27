@@ -970,11 +970,21 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         #   so this one takes the palette away from every frame on the socket, and with it
         #   every action §4h moved out of the deleted menu, leaving nothing to get them
         #   back with;
-        # * `frame/overlay.py`'s `HATCH_KEY` — the escape hatch, which `conf_text` writes
-        #   AFTER these, so tmux's last-wins leaves the hatch alive and the component's
-        #   key silently dead. Refused here anyway, and deliberately not left to that
-        #   ordering: a guard whose consequence depends on the order two other lines are
-        #   emitted in is a guard nothing can pin (#553).
+        # * `frame/overlay.py`'s `HATCH_KEY` — the escape hatch. `conf_text` writes that
+        #   bind AFTER these, so tmux's last-wins leaves the hatch alive and the
+        #   component's key silently dead. Measured on tmux 3.7c, sourcing both binds in
+        #   the order `conf_text` emits them::
+        #
+        #       $ tmux -L t source-file both.tmux ; echo $?
+        #       0
+        #       $ tmux -L t list-keys -T root | grep F12
+        #       bind-key -T root F12  run-shell -C "#{@charter_hatch}"
+        #
+        #   One line back, not two: the operator's key is simply gone, and `source-file`
+        #   said nothing. Refused here anyway, and deliberately not left to that emission
+        #   order — a guard whose consequence depends on where two other lines are
+        #   emitted is a guard nothing can pin (#553), which is the same trap one level
+        #   up from the one this sweep exists to catch.
         if key is not None and key in bound:
             return None
         if key is not None:
