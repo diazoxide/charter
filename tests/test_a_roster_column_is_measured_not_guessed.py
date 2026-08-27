@@ -385,6 +385,27 @@ class TestTheRewrittenRowsKeptWhatTheyGuarded(RosterWidths):
             forged, [],
             "a vault status wrote its own table row:\n" + "\n".join(rows))
 
+    def test_a_never_dispatched_persona_is_flagged_not_dotted(self):
+        """The glyph fallback, which is the one column cell that is not a lookup.
+
+        `glyph` has no entry for "never dispatched" — that status is decided in the loop,
+        not by `persona.stats` — so the row's marker comes from the `.get` default, and
+        the flag is the whole signal a steward prunes on. Collapse that conditional to its
+        other branch and the loudest row in the report becomes an ordinary `·` bullet,
+        with the words still there and nothing drawing the eye to them. Unpinned until the
+        sweep asked.
+        """
+        self._roster("ok", "other")
+        from charter import dispatch
+
+        with mock.patch.object(dispatch, "tally", return_value={"ok": 3}):
+            rows = self._run(commands_persona.cmd_persona_stats)
+        row = [r for r in rows if r.startswith("other")]
+        self.assertEqual(len(row), 1, "\n".join(rows))
+        self.assertIn("never dispatched", row[0])
+        self.assertIn("⚑ never dispatched", row[0],
+                      "the never-dispatched row lost its flag glyph:\n" + row[0])
+
     def test_the_shared_namespace_reports_no_dispatch_count(self):
         """`_shared` is a namespace, not a persona: nothing is ever dispatched AS it, so a
         number in its DISP cell would be a count of something that cannot happen. The row
