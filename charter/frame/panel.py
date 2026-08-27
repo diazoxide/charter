@@ -97,7 +97,7 @@ import sys
 import time
 
 from .. import contain, tui
-from . import slots, state
+from . import chrome, slots, state
 
 #: How often the version file is checked when nothing else has woken this panel. A
 #: `stat` at this rate is indistinguishable from zero cost (see `state.version`'s own
@@ -140,9 +140,42 @@ def _write(text: str) -> None:
     the same clear-then-write discipline as a panel doing its job, rather than a second
     hand-rolled write that could leave half of tmux's own dead-pane text on screen
     beside it.
+
+    **The clear is prefixed with a reset, because `\\x1b[2J` erases with whatever
+    attributes are currently set.** A renderer that leaves a background on — a
+    provider's, or charter's own after a future edit — makes the NEXT repaint's
+    clear-screen fill the whole pane with it. Measured in a real 20-column pane: after a
+    paint that omitted its reset, the following `\\x1b[H\\x1b[2J` + content came out with
+    row 0 carrying the leaked background and every other row filled with it, and nothing
+    in the session ever cleared it. Constraint 4 still holds — it costs that pane and no
+    other — but it cost it for the rest of the session rather than for one paint. One
+    escape, on a path that already writes two.
+
+    It goes BEFORE the cursor-home rather than after the clear, so
+    ``split("\\x1b[2J", 1)[1]`` still answers the content: four test call sites read the
+    pane that way (`tests/test_frame_panel.py:129,172,193`,
+    `tests/test_component_id_is_the_currency.py:110`).
+
+    **And this is where `NO_COLOR` is honoured** (`chrome.colour_ok`), because it is the
+    one place anything reaches a pane's screen — so a component charter did not write is
+    covered by the same answer as a renderer charter did, and neither has to ask. The
+    strip is `tui.strip_ansi` per LINE and never over the whole write: `sanitize` drops
+    every CSI that is not SGR, so stripping the assembled string would delete the
+    clear-screen that makes a repaint a repaint.
     """
     lines = text.split("\n")[:_rows()]
-    sys.stdout.write("\x1b[H\x1b[2J" + "\n".join(lines))
+    if not chrome.colour_ok():
+        # No SGR at all, the reset included: there is nothing to reset when nothing is
+        # painted, and "no colour on the operator's screen caused by charter" is the
+        # promise rather than "no colour except charter's own housekeeping".
+        return _out("\x1b[H\x1b[2J" + "\n".join(chrome.plain(ln) for ln in lines))
+    _out("\x1b[m\x1b[H\x1b[2J" + "\n".join(lines))
+
+
+def _out(payload: str) -> None:
+    """The write itself — one statement, so the two branches above cannot come to
+    disagree about flushing."""
+    sys.stdout.write(payload)
     sys.stdout.flush()
 
 

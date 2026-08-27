@@ -803,6 +803,34 @@ _NAME_MIN_W = 12
 #: that it does, not a replacement for it.
 _MAX_TODO_LINES = 8
 
+#: The screen column every row's content starts in, everywhere in the frame — one
+#: constant, read, rather than a `"  "` spelled at each call site.
+#:
+#: It is `statusline._HEAD_PAD`'s own width, and `TheInsetIsOneConstant` pins the two
+#: equal rather than this module importing `statusline` at import time (every other
+#: reference here is a deliberate function-level import — a panel repaints on a clock and
+#: `statusline` is the largest module charter has). So the number lives here and the
+#: agreement is a test, which is the same trade `panel._DEFAULT_ROWS` makes with
+#: `slots._DEFAULT_ROWS`.
+#:
+#: "Content is inside something" is what an inset says, and it says it for free: no row
+#: is added, no width changes, and the value is the one already in use. What changes is
+#: that a renderer added next year asks for it instead of typing two spaces, which is how
+#: the sidebar's sections came to line up in the first place (`_HEAD_PAD`'s own comment
+#: in `statusline.py` records the two ways that shipped broken).
+INSET = 2
+
+
+def _inset(marker: str = "") -> str:
+    """*marker* fitted to exactly :data:`INSET` columns — a row's own left edge.
+
+    `tui.pad`, never `marker + " "`: `_persona_chip_cells`' own comment records that this
+    layout has twice been broken by a glyph a font drew wider than the Unicode tables
+    claim, and `pad` measures with `tui.width` so a two-cell marker takes the inset it
+    already has rather than pushing its row one column right of every other.
+    """
+    return tui.pad(marker, INSET)
+
 
 def _sidebar_head(label: str, count: int, width: int) -> str:
     """One section heading for the `right` sidebar — ``▪ personas 6``.
@@ -818,9 +846,23 @@ def _sidebar_head(label: str, count: int, width: int) -> str:
     comment in `statusline.py` records that a decorative glyph on a header shipped broken
     twice: a header is the one row with no sibling beneath it to reveal that a font drew
     it wider than the Unicode tables claim.
+
+    **The label is BOLD and the count stays dim, and no row is added.** A region with a
+    name is what makes a pane read as part of an application rather than as output, and
+    weight is the whole of what it costs here: `tui.strip_ansi` sees `▪ personas 6`
+    before and after, the width arithmetic is untouched (SGR is zero columns), and the
+    fifteen-plus tests that assert a panel's exact LINE COUNT never learn this happened.
+    A heading ROW is the change with the widest blast radius in the frame and it buys
+    nothing weight does not.
+
+    Bold on the label only. The marker keeps the dim it had — it is furniture, not the
+    name — and the count keeps it too, so the heading reads as one word with a number
+    after it rather than as two equal facts.
     """
     from .. import statusline as sl
-    return tui.truncate(f"{sl._DIM}{sl._HEAD_PAD}{label}{sl._R} {count}", width)
+    return tui.truncate(
+        f"{sl._DIM}{sl._HEAD_PAD}{sl._R}{sl._BOLD}{label}{sl._R}{sl._DIM} {count}{sl._R}",
+        width)
 
 
 def _persona_total(cells) -> int:
@@ -855,7 +897,8 @@ def _cap_personas(cells: list, keep: int) -> list:
     shown = cells[:max(0, keep - 1)]
     hidden = _persona_total(cells[len(shown):])
     return [*shown,
-            sl.PersonaChip(None, f"{sl._DIM}  …(+{hidden} more){sl._R}", "", hidden)]
+            sl.PersonaChip(None, f"{sl._DIM}{_inset()}…(+{hidden} more){sl._R}", "",
+                           hidden)]
 
 
 def _persona_rows(cells: list, width: int) -> list[str]:
@@ -955,8 +998,10 @@ def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
         #
         # Two columns of marker, so a title begins in the same column as a persona name
         # and as both headings — `_HEAD_PAD` exists to make that one column, and a section
-        # whose rows started somewhere else would undo it.
-        rows.append(tui.truncate(f"{sl._DIM}-{sl._R} {title}", width))
+        # whose rows started somewhere else would undo it. :data:`INSET` is that column,
+        # asked for rather than spelled: a marker plus a hand-typed space is the same
+        # arithmetic done again, and the second copy is the one that moves.
+        rows.append(tui.truncate(f"{sl._DIM}{_inset('-')}{sl._R}{title}", width))
     hidden = total - len(shown)
     if hidden > 0:
         # The count alone, with no command beside it — unlike `_persona_chip_cells`'
@@ -965,7 +1010,7 @@ def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
         # `…(+4 more · charter ws todo)` is 28: the command would be cut off on every
         # frame charter actually draws, and half a command name is worse than none —
         # it is a thing to type that does not work.
-        rows.append(tui.truncate(f"{sl._DIM}  …(+{hidden} more){sl._R}", width))
+        rows.append(tui.truncate(f"{sl._DIM}{_inset()}…(+{hidden} more){sl._R}", width))
     return rows
 
 
@@ -986,7 +1031,26 @@ def persona_section(width: int, height: int, *, terse: bool) -> list[str]:
     A plane with no personas at all says so in one line. It is not an empty column:
     an empty column is indistinguishable from a pane that failed to draw, which is the
     reading the frame refuses everywhere else.
+
+    **The active persona's row is the whole row, in reverse video, to the pane's edge**
+    — the element that most makes a list read as a list you are *in* rather than a list
+    you are looking at. Three things about where it is applied:
+
+    * **To the FINISHED row `_persona_rows` returns**, never to the cells it composes.
+      Line 892 is a `tui.Row(...).render(width)[0]` and `tui._finish` deletes a pad that
+      goes in before it — measured, a 40-cell highlighted row back at 15 (`chrome.py`).
+    * **Here, not in `_right`**, so the composite pane and its `personas` component reach
+      it through the same helper. `tests/test_builtin_components.py:272` asserts raw byte
+      equality between `slots.render("right")` and its two parts joined; a highlight
+      applied one level up would be the one thing the two sides did not share.
+    * **From `PersonaChip.active`**, which the chips carry as data — not by looking for
+      `▸` or magenta in a rendered head.
+
+    It needs no `[frame] chrome`: reverse video names no colour (it is the operator's own
+    foreground and background exchanged), so it is right on every theme, and tmux
+    converts even its own colours to reverse on a client that has none.
     """
+    from . import chrome
     from .. import statusline as sl
     cells = sl._persona_chip_cells()
     if not cells:
@@ -995,8 +1059,10 @@ def persona_section(width: int, height: int, *, terse: bool) -> list[str]:
     if terse:
         keep = min(keep, _TERSE_ROWS)
     cells = _cap_personas(cells, keep)
+    rows = _persona_rows(cells, width)
     return [_sidebar_head("personas", _persona_total(cells), width),
-            *_persona_rows(cells, width)]
+            *(chrome.reverse(row, width) if c.active else row
+              for c, row in zip(cells, rows))]
 
 
 def todo_section(fid: str, width: int, budget: int, *, terse: bool) -> list[str]:

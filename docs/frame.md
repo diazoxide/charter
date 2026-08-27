@@ -201,8 +201,10 @@ the sentence above:
   five of the options tmux draws a border from — both border styles, plus
   `pane-border-lines`, `pane-border-indicators` and `pane-border-status` — so every rule in
   the frame is one colour and the frame looks the same in your tmux as in charter's own.
-  This is the one place charter overrides a preference of yours rather than deferring to
-  it, and the reason is that two of those options make one rule differ from its neighbour:
+  With `[frame] chrome` left at its default this is the only place charter overrides a
+  preference of yours rather than deferring to it; setting `chrome` adds a second, on
+  charter's own panel panes and never on the pane your harness runs in. The reason for
+  the borders is that two of those options make one rule differ from its neighbour:
   the active-pane colour and the arrow indicators mark some borders and not others, and
   `pane-border-status top` writes your hostname into every rule and takes a row the
   frame's height arithmetic never budgeted for. Window-scoped, so your own windows keep
@@ -441,6 +443,7 @@ none.
 slots = ["top", "bottom", "repos", "right"]
 density = "full"
 mouse = false
+chrome = "off"
 hotkey = "F2"
 history-limit = 50000
 min-cols = 100
@@ -555,6 +558,78 @@ the other way for `repos`, which is a *new* name: a committed `slots = ["top", "
 "right"]` still launches and simply has no table, because an explicit list is the
 primitive and charter does not add to a list you wrote by hand. Add `repos` to it, or
 delete the line and take the default.
+
+### What it looks like
+
+Five things make the frame read as an application rather than as output, and four of them
+are on whatever you write in `charter.toml`:
+
+- **A heading.** Each section of the sidebar and the repo table carries its name in bold
+  with its count still dim — `▪ personas 6`. No row is added anywhere; it is weight, not
+  furniture.
+- **One inset.** Every row's text starts in the same column, whether it is a persona name,
+  a todo title or a heading. One constant, so a panel added later lines up with the ones
+  already there.
+- **The row you are on.** The active persona's row in the sidebar is inverted across the
+  whole pane, to its last column — not a marker at the start of it. Reverse video is your
+  own foreground and background exchanged, so it is right on every colour scheme,
+  including the ones where every grey charter could have picked is somebody's background.
+- **A status you can read without colour.** Every status in the frame carries a glyph or a
+  word that says the same thing as its colour: `⚠` on an alert, `⚑`/`✗` on a persona whose
+  charter is a draft or broken, a count next to a badge. Colour is the second channel,
+  never the only one. charter's own test suite strips every escape from each panel and
+  fails if a status stops being distinguishable.
+- **The surface**, which is the one that is off unless you ask. See below.
+
+**`NO_COLOR` is honoured.** Set it to anything at all — including the empty string, which
+is what a shell that exports it with no value gives you — and the panels emit no escape
+sequences at all. So does a panel whose output is not a terminal, which is what
+`charter panel top --session x > /tmp/log` does. Both were previously written in full
+colour whatever you had asked for.
+
+**Charter never picks a colour out of the 256-colour cube.** Everything it draws is either
+one of the sixteen names your terminal palette defines or a plain attribute (bold, dim,
+reverse) — so what you see is your own scheme, not charter's idea of one. The reason is the
+inverse of the obvious one: an absolute colour is unsafe precisely on the terminals that
+render it faithfully. A 16-colour terminal would downsample charter's grey to your own
+black and look fine; a truecolor terminal on a light theme would get the dark grey
+verbatim.
+
+### A background behind the panels
+
+```toml
+[frame]
+chrome = "dark"     # or "light", or "off" — the default
+```
+
+`chrome` gives charter's own panes a background, so the frame reads as chrome around your
+session rather than as more text beside it. The focused panel is one shade off the others,
+which is also how you can see which pane is live.
+
+tmux paints it, not charter: the value sets `window-style` and `window-active-style` on
+charter's panel panes. That is why it costs nothing on a repaint, cannot wrap a line, fills
+the cells no renderer wrote, survives a resize and a reattach, and comes back by itself if
+a panel dies and is respawned into the same pane — all measured against a real tmux, not
+reasoned about. It is set per pane, so **the pane your
+harness runs in is never touched** — charter does not decide what a colour means inside
+your agent's own rectangle.
+
+**Three words, and no `auto`.** Charter cannot see your theme. A pane cannot ask the
+terminal (a colour query through tmux gets no reply), and `$COLORTERM` inside a pane
+describes the terminal that started the tmux *server* — detach at your desk and reattach
+over ssh and every panel still reads the old answer. So an `auto` would be a guess wearing
+the word for a measurement, and `off` is the default because a background charter chose is
+wrong on somebody's terminal and a frame that was fine before an upgrade should not come
+back worse.
+
+It is a word and not a style string on purpose: tmux expands formats inside a style value
+at draw time, and `charter.toml` is a committed file that arrives from someone else's
+machine. `chrome` names one of three looks charter holds itself; nothing you write there
+reaches tmux. Anything else — a fourth word, a style, a list — leaves the frame at `off`
+and charter still runs.
+
+`NO_COLOR` overrides it: no colour on your screen caused by charter means none, whichever
+process puts the bytes there.
 
 ### Writing the arrangement out
 
@@ -735,7 +810,7 @@ your frame's own `hotkey` are on that list too.
 Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then
 `density`, then the shipped default.
 
-`slots`/`density`/`mouse`/`hotkey` are spelled the same on both sides. `history-limit`,
+`slots`/`density`/`mouse`/`chrome`/`hotkey` are spelled the same on both sides. `history-limit`,
 `min-cols` and `min-rows` are the three that are not: charter.toml spells them with a
 hyphen: the
 resolved settings charter's own code reads back use an underscore
