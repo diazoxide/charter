@@ -84,6 +84,8 @@ at 002, and neither run would be measuring independence from it.
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import shutil
@@ -801,6 +803,137 @@ class TheDispatchOnWhereTheFileIs(PersonaIso):
         one place the constant itself is named, so a change to it is a decision somebody
         made rather than a test quietly following along."""
         self.assertEqual(config.STATE_FILE_MODE, 0o600)
+
+    def test_append_is_o_append_on_the_descriptor_and_truncation_is_not(self) -> None:
+        """`O_APPEND` is a kernel flag, not a starting position, and the difference only
+        shows under concurrency — which is exactly where `trace.record` lives.
+
+        `os.fdopen(fd, "a")` seeks to the end even on a descriptor that lacks `O_APPEND`,
+        so appending *looks* correct either way and every content assertion in this class
+        passes. What `O_APPEND` buys is that each write is positioned at the end **by the
+        kernel, atomically**: two hooks appending to the same trace log in the same instant
+        interleave rather than overwrite. The flag is read back off the descriptor here
+        because there is no non-flaky way to observe that through two processes, and
+        "measured on the wrong thing" is worse than measuring the flag.
+        """
+        for append, want in ((True, True), (False, False)):
+            with self.subTest(append=append):
+                p = self.sd / f"flags-{append}"
+                fd = config._private_fd(p, append=append)
+                try:
+                    got = bool(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND)
+                finally:
+                    os.close(fd)
+                self.assertEqual(got, want,
+                                 f"O_APPEND {'missing from' if want else 'set on'} the "
+                                 f"descriptor for append={append}")
+
+    def test_a_filesystem_that_cannot_hold_a_mode_still_gets_its_write(self) -> None:
+        """The trade `_private_fd` documents, as a case rather than a paragraph.
+
+        exFAT and many network mounts accept the state directory and cannot hold a mode.
+        `secrets.plain_file` refuses to write there — the right call for plaintext secrets,
+        which it reads the mode back to prove. Everything else under `.charter/` is a hook,
+        a status line or a marker, and refusing would take the plane down to protect a mode
+        the filesystem was never going to keep. So the `fchmod` failure is swallowed and
+        the write happens; deleting that `except` would turn every `charter` invocation on
+        such a mount into a traceback.
+        """
+        real = os.fchmod
+        calls = []
+
+        def refuse(fd, mode):
+            calls.append(mode)
+            raise OSError(45, "Operation not supported")
+
+        p = self.sd / "fixed-mode.json"
+        os.fchmod = refuse
+        try:
+            config.write_for(p, "written anyway")
+            self._append(self.sd / "fixed-mode.log", "line\n")
+            config.touch_for(self.sd / "fixed-mode.marker")
+        finally:
+            os.fchmod = real
+        self.assertTrue(calls, "the mode was never even attempted")
+        self.assertEqual(p.read_text(), "written anyway")
+
+    def test_a_failure_between_the_open_and_the_wrapper_does_not_leak_the_descriptor(self) -> None:
+        """`BaseException`, not `Exception`, and that width is the whole point.
+
+        Between `os.open` and `os.fdopen` the descriptor is owned by nothing: no `with`
+        holds it and no file object has taken it over yet. `KeyboardInterrupt` and
+        `GeneratorExit` are not `Exception`s, and both reach exactly that window — a
+        status line rendering on every prompt, a hook interrupted mid-turn. A narrower
+        `except` leaks one descriptor per interrupted write, which is invisible until a
+        long-lived process runs out of them.
+        """
+        seen = []
+        real = os.fdopen
+
+        def interrupt(fd, *a, **kw):
+            seen.append(fd)
+            raise KeyboardInterrupt
+
+        os.fdopen = interrupt
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                config.write_for(self.sd / "interrupted.json", "{}")
+        finally:
+            os.fdopen = real
+        self.assertEqual(len(seen), 1, "the descriptor was never opened")
+        with self.assertRaises(OSError) as caught:
+            os.fstat(seen[0])
+        self.assertEqual(caught.exception.errno, errno.EBADF,
+                         "the descriptor is still open — an interrupted write leaked it")
+
+    def test_text_is_utf_8_whatever_the_locale_says(self) -> None:
+        """Both branches of the dispatch, because both name the encoding.
+
+        `open()` with no *encoding* uses the platform's locale, which on a runner with a
+        C locale is ASCII — and a trace line carries whatever a persona was called, a
+        memory note whatever somebody wrote. A round-trip of pure ASCII cannot tell the
+        two apart, so the fixture is not ASCII.
+        """
+        text = "persona: Ուսուցիչ · naïve café — 日本語 🔐\n"
+        state = self.sd / "utf8.jsonl"
+        committed = config.PERSONAS_DIR / "steward" / "memory" / "utf8.md"
+        config.mkdir_for(committed.parent)
+        for label, p in (("state", state), ("committed", committed)):
+            with self.subTest(label):
+                config.write_for(p, text)
+                self.assertEqual(p.read_bytes(), text.encode("utf-8"))
+                self.assertEqual(p.read_text(encoding="utf-8"), text)
+
+    def test_the_encoding_argument_is_honoured_on_both_branches(self) -> None:
+        """The case above states the DEFAULT; this one states that it is a default.
+
+        A version of `open_for` that dropped *encoding* and let `open()` fall back to the
+        platform locale passes the utf-8 round-trip on every machine whose locale is
+        already utf-8 — which is this laptop, and was how the first cut of that case went
+        green while proving nothing. utf-16 is not any platform's default: a write that
+        ignored the argument would land utf-8 bytes, or raise on an ASCII locale, and
+        either way it cannot come back as the four bytes below.
+        """
+        want = "é".encode("utf-16")
+        state = self.sd / "utf16.txt"
+        committed = config.PERSONAS_DIR / "steward" / "memory" / "utf16.md"
+        config.mkdir_for(committed.parent)
+        for label, path in (("state", state), ("committed", committed)):
+            with self.subTest(label):
+                with config.open_for(path, "w", encoding="utf-16") as f:
+                    f.write("é")
+                self.assertEqual(path.read_bytes(), want,
+                                 "the encoding argument was not the one used")
+
+    def test_bytes_outside_the_state_directory_are_bytes_too(self) -> None:
+        """The committed branch selects its encoding separately, so it needs its own case:
+        passing an encoding along with a binary mode is a `ValueError`, and only a bytes
+        payload on a committed path reaches that line."""
+        p = config.PERSONAS_DIR / "steward" / "refs" / "blob.bin"
+        config.mkdir_for(p.parent)
+        payload = b"\x00\x01\xff not utf-8: \xc3\x28"
+        config.write_for(p, payload)
+        self.assertEqual(p.read_bytes(), payload)
 
     def test_the_atomic_writers_temp_file_is_private_by_construction(self) -> None:
         """`inflight` and `toolgate` write through a temp file and `os.replace`, which

@@ -91,6 +91,58 @@ class MemstoreCase(PersonaIso):
         self.assertFalse(memstore.forget(self.d, "nope"))
 
 
+class TheIndexIsExactlyTheLinesThatSurvive(MemstoreCase):
+    """Two one-line conditionals in `memstore`, neither of which had a case.
+
+    Both sit on lines #505 rewrote (`write_text` → `config.write_for`), so the sweep
+    charged them to that change and found them unpinned. The logic predates it; the cases
+    do not, and "the line was already like that" is not a reason to leave a guard nobody
+    can delete safely.
+    """
+
+    def test_the_header_gets_exactly_one_trailing_newline(self) -> None:
+        """`ensure_index` adds one only when the caller did not. Collapsed either way the
+        index starts with a doubled blank line or with none, and every later append lands
+        against a header that is not the shape `index_append` writes after."""
+        for label, header in (("caller ended it", "# Memory Index\n"),
+                              ("caller did not", "# Memory Index")):
+            with self.subTest(label):
+                d = persona.memory_dir(f"hdr-{len(header)}")
+                d.mkdir(parents=True, exist_ok=True)
+                idx = memstore.ensure_index(d, header)
+                self.assertEqual(idx.read_text(), "# Memory Index\n",
+                                 "the header did not come out with exactly one newline")
+
+    def test_dropping_the_only_line_leaves_an_empty_index_not_a_blank_one(self) -> None:
+        """`_drop_index_line` appends a trailing newline only when something is left.
+
+        Reaching "nothing is left" takes an index with no header — a hand-written one, or
+        one an older charter wrote — because otherwise the header lines survive every drop
+        and the conditional never takes its other branch. That is also what makes it worth
+        a case: the branch is only ever exercised by a file charter did not write, which is
+        the class of input nobody runs by hand. A lone ``"\n"`` is a file with one blank
+        line in it, and `index_drift` reads a blank line back as an entry that does not
+        resolve.
+        """
+        memstore.write(self.d, "only fact", "Solo")
+        idx = memstore.index_path(self.d)
+        idx.write_text("- [Solo](solo.md)\n")      # no header: the drop empties it
+        memstore.forget(self.d, "solo")
+        self.assertEqual(idx.read_text(), "",
+                         "the index kept a blank line where its last entry had been")
+
+    def test_dropping_one_of_several_keeps_the_rest_newline_terminated(self) -> None:
+        """The other side of the same conditional — a file that does not end in a newline
+        is one every later append runs onto the end of."""
+        memstore.write(self.d, "first", "Alpha")
+        memstore.write(self.d, "second", "Beta")
+        memstore.forget(self.d, "alpha")
+        text = memstore.index_path(self.d).read_text()
+        self.assertNotIn("(alpha.md)", text)
+        self.assertIn("(beta.md)", text)
+        self.assertTrue(text.endswith("\n"), f"index does not end in a newline: {text!r}")
+
+
 class SearchFindsShortAndDistinctiveTerms(PersonaIso):
     """`_terms` discarded every token of two characters or fewer.
 
