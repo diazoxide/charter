@@ -183,6 +183,14 @@ def one_line(value, limit: int = DISPLAY_LIMIT) -> str:
     *bounded* rather than merely displayable — an MCP server name, which charter emits
     into YAML and into a tool-grant pattern — the bound belongs at the boundary that reads
     it, and this is what the refusal then uses to say which value it refused.
+
+    Nor does it make the value **visible**, and that is the boundary worth naming because
+    three callers crossed it (#498). :data:`_INVISIBLE` is a list of categories, so a
+    value that renders as nothing without being in one of them — U+3164 HANGUL FILLER is
+    ``Lo`` — comes back unchanged and correct: it forges no row. A caller whose sentence
+    has to NAME something wants :func:`readable` instead. This function is not widened to
+    cover it, because its other callers are printing content into a TUI and want their
+    glyphs.
     """
     s = value if isinstance(value, str) else str(value)
     out = []
@@ -193,6 +201,124 @@ def one_line(value, limit: int = DISPLAY_LIMIT) -> str:
             out.append(ch)
     rendered = "".join(out)
     return rendered if len(rendered) <= limit else rendered[:limit] + "…"
+
+
+#: Shown by :func:`readable` in place of a value whose whole rendering is ASCII spaces —
+#: the empty string, or a name made of nothing else. ``""`` rather than a word, so
+#: ``✗ "": no role`` reads as a persona whose name is blank rather than as a missing word,
+#: and so the marker cannot be confused with a name that spells "blank". The same marker
+#: `mcpseen._name` prints, because it is the same question one report over.
+BLANK = '""'
+
+
+def escape_char(ch: str) -> str:
+    """One codepoint as an escape no other codepoint can also spell.
+
+    Astral planes get the eight-digit ``\\U`` form rather than a long ``\\u``, because
+    ``\\u1f600`` is five hex digits: U+1F600 and the two characters U+1F60 + ``0`` would
+    render the same, and two values that read identically on a report line is the
+    homoglyph finding with a different alphabet.
+
+    Deliberately NOT the escape :func:`one_line` writes. That one spells a codepoint below
+    U+0100 as ``\\xNN`` and everything else with a ``:04x`` — which for an astral codepoint
+    produces the five hex digits above, and ``\\x`` and ``\\u`` forms of two different
+    widths besides. Harmless there: `one_line` escapes only the categories that carry no
+    glyph, and two *controls* that read alike are not a finding. Here the escape is what a
+    reader identifies the value BY, so every form has to be fixed-width and injective.
+
+    **Where the boundary sits is a choice and not a property.** ``<=`` could be ``<`` and
+    U+FFFF would come back as ``\\U0000ffff``: still fixed-width, still injective, still
+    printable ASCII, so no test reddens and none should — the claims above hold either way.
+    It is written as the shorter form for every codepoint that has one, which is the reason
+    to prefer this side rather than a rule anything depends on.
+    """
+    cp = ord(ch)
+    return f"\\u{cp:04x}" if cp <= 0xFFFF else f"\\U{cp:08x}"
+
+
+def escaped(text: str, *, quote: bool = False) -> str:
+    """*text* as printable ASCII — every other codepoint shown as its escape, reversibly.
+
+    **The rule is a complement, and that is the whole point.** Everything else in this
+    module's display layer names a class of *bad* characters: :data:`_INVISIBLE` is five
+    general categories, and a list of categories is a list of spellings that the next
+    codepoint is one step outside of. This says instead what a report line **may** hold —
+    U+0020..U+007E — and escapes the rest, whatever category, plane, script or combining
+    class it belongs to. Nothing has to be added to it when Unicode grows.
+
+    The argument for that complement was made in full one surface over, at
+    `mcpseen._safe`, after three rounds of narrower rules were each walked past: a control
+    character repaints the line, a bidi override reverses it, U+3164 HANGUL FILLER renders
+    as nothing while `str.isprintable` calls it printable, and a Cyrillic ``а`` spells a
+    different value that reads the same. This is that rule, extracted so `mcpseen` and
+    :func:`readable` share one implementation rather than two that drift.
+
+    **Reversible.** ``\\\\`` for a real backslash, ``\\"`` for a real quote when *quote*,
+    an escape for everything outside printable ASCII, and itself for the rest — so the
+    characters printed for a value determine that value. The backslash doubling is what
+    makes that true and is not decoration: without it a committed name holding the six
+    literal characters ``\\u3164`` reads exactly like one holding U+3164, which is one more
+    pair of different values a reader cannot tell apart.
+
+    *quote* escapes the ASCII double quote as well, which is what lets an unescaped ``"``
+    be a delimiter no committed byte can spell. Off by default: a surface that delimits
+    with something else does not need it, and escaping a quote nobody is using as a
+    delimiter only makes an ordinary value harder to read.
+    """
+    return "".join("\\\\" if c == "\\" else '\\"' if (quote and c == '"')
+                   else c if " " <= c <= "~" else escape_char(c) for c in text)
+
+
+def readable(value, limit: int = DISPLAY_LIMIT) -> str:
+    """*value* as one line a reader can **read the value back off**. Never blank.
+
+    A different question from :func:`one_line`, and a second function rather than a wider
+    one, because `one_line` has some ninety callers and the property most of them want is
+    the one it promises: a committed value cannot forge a second ROW. Those callers print
+    workspace names, persona roles, component titles and forge text into a TUI, and a
+    non-ASCII value there is ordinary content that should reach the screen as its glyphs.
+    Widening `one_line` would escape every one of them to make three call sites legible.
+
+    So this is for the three surfaces where the value is an **identifier** — a name a
+    sentence tells somebody to go and fix, a path a sub-agent is told to run. There, being
+    able to tell which one it is beats keeping the glyph, and `one_line` cannot deliver it:
+    it decides on :data:`_INVISIBLE`, a list of five categories, and U+3164 HANGUL FILLER
+    (``Lo``), U+2800 BRAILLE PATTERN BLANK (``So``), U+115F and U+1160 (``Lo``) are on none
+    of them, are not `isspace`, and survive `strip`. A persona directory named with three
+    of them linted as ``✗ : no role`` — a row naming no persona (#498).
+
+    **Blankness is decided, not enumerated.** After :func:`escaped`, the string holds only
+    U+0020..U+007E, and the ASCII space is the only member of that range that renders as
+    nothing. So "this renders as nothing" is exactly "this is spaces", which is a question
+    about the whole class rather than a sample of it, and :data:`BLANK` stands in when the
+    answer is yes. That is why the escape comes first and the emptiness test second; the
+    other order is the growing list this exists to avoid.
+
+    **What it costs, said out loud.** A legitimately non-ASCII value prints as its escapes
+    here. That is a real loss and it is bounded to these surfaces on purpose: charter mints
+    persona names itself (`persona.valid_name` — a lowercase letter or digit, then
+    ``[a-z0-9._-]``), so a name this is asked about is ASCII by construction and comes back
+    byte-identical, and the same holds for the ordinary `bin/` script name. Nowhere a person
+    writes prose — a `role:`, a memory, a workspace title — goes through this.
+
+    Clipped with ASCII dots rather than ``…``, so the promise "what comes back is printable
+    ASCII" holds for a clipped value too and a caller never has to special-case the marker.
+    """
+    # `str(value)` unconditionally, and not `value if isinstance(value, str) else …`: for a
+    # string `str` hands the same object straight back, so the type test in front of it was
+    # a branch that could not change an answer. `one_line` above carries the longer form;
+    # this one does not copy it. The coercion ITSELF is load-bearing and is pinned by a
+    # test — a report surface that raises on a `Path` tells its reader less than one that
+    # prints the path, and "nothing here raises" is this module's rule.
+    shown = escaped(str(value))
+    if len(shown) > limit:
+        shown = shown[:limit] + "..."
+    # `.strip(" ")` and not `.strip()`, and the two are EQUIVALENT here — deliberately, and
+    # checked: after `escaped` the string is U+0020..U+007E, so a bare `strip` has no other
+    # whitespace left to find and no test can tell them apart. Naming the space is what says
+    # WHY the question is decidable at all; a bare `strip` would read as "whatever Python
+    # calls whitespace", which is the category list this function exists to get away from.
+    return shown if shown.strip(" ") else BLANK
 
 
 #: How much of any ONE path a refusal sentence — or a generated brief — repeats back.

@@ -83,7 +83,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config
+from . import config, contain
 
 #: One file per plane, under the state dir. Never committed — see the module docstring.
 FILE_NAME = "mcp-approved.json"
@@ -248,9 +248,13 @@ def _escape(ch: str) -> str:
     ``\\u1f600`` is five hex digits: U+1F600 and the two characters U+1F60 + ``0`` would
     render the same, and two different commands that read the same on a consent line is
     the homoglyph finding with a different alphabet.
+
+    Lives in :mod:`charter.contain` now, because the same rule decides the same question on
+    a second report (#498) and two copies of an escape table is how the two reports come to
+    disagree about what a value is called. Kept as a name here so the reasoning above sits
+    beside the consent line it was written for.
     """
-    cp = ord(ch)
-    return f"\\u{cp:04x}" if cp <= 0xFFFF else f"\\U{cp:08x}"
+    return contain.escape_char(ch)
 
 
 def _safe(text: str) -> str:
@@ -305,10 +309,14 @@ def _safe(text: str) -> str:
     identifier rather than a destination and is clipped anyway, and the "does this entry
     name anything at all" test in :func:`describe`. The destination goes through
     :func:`_esc`, which loses nothing.
+
+    The escape itself is `contain.escaped` — one implementation, because `contain.readable`
+    decides the same question for the lint row and the "does not load" sentence (#498), and
+    a second copy of this table is how those two reports come to spell the same name two
+    ways. What stays here is the part that is about a CONSENT line and nothing else: the
+    collapsing and the stripping below.
     """
-    out = "".join("\\\\" if c == "\\" else c if " " <= c <= "~" else _escape(c)
-                  for c in text)
-    return _SPACE_RUN.sub(" ", out).strip()
+    return _SPACE_RUN.sub(" ", contain.escaped(text)).strip()
 
 
 def _esc(text: str) -> str:
@@ -333,9 +341,12 @@ def _esc(text: str) -> str:
     :func:`_tok` and :func:`_val` put around it, and — being neither collapsed nor cut — it
     counts its full width against :data:`MAX_LINE`, so padding is refused rather than
     silently tidied away into a line that no longer says what would run.
+
+    `contain.escaped(…, quote=True)` is the escape, shared with :func:`_safe` and with
+    `contain.readable` (#498). The quote flag is the whole of the difference between the
+    two calls, which is what the flag exists to make visible.
     """
-    return "".join("\\\\" if c == "\\" else '\\"' if c == '"'
-                   else c if " " <= c <= "~" else _escape(c) for c in text)
+    return contain.escaped(text, quote=True)
 
 
 def _tok(text: str) -> str:
