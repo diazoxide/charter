@@ -72,7 +72,7 @@ def parse_since(value: str, today: datetime.date | None = None) -> datetime.date
     then takes a full corpus as proof that nothing was recorded recently. A future date is
     accepted and simply matches nothing; that is a real answer, not an error."""
     s = (value or "").strip()
-    m = _REL_RE.match(s)
+    m = _REL_RE.fullmatch(s)
     if m:
         return (today or datetime.date.today()) - datetime.timedelta(
             days=int(m.group(1)) * _REL_DAYS[m.group(2)])

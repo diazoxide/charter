@@ -227,7 +227,7 @@ def marketplace_clone(name: str) -> Path | None:
     not about this function: it is reachable on its own, and a path built from an unchecked
     name is a path.
     """
-    if not isinstance(name, str) or not _MARKETPLACE_RE.match(name):
+    if not isinstance(name, str) or not _MARKETPLACE_RE.fullmatch(name):
         return None
     rows = _claude_json(["marketplace", "list"])
     if not isinstance(rows, list):
@@ -323,7 +323,7 @@ def refresh_argvs(plugin_id: str, scope: str) -> list[list[str]] | None:
     ``-y`` on both mutating steps because charter runs them non-interactively; `claude`
     requires it when stdout is not a TTY and would otherwise refuse rather than prompt.
     """
-    if not isinstance(plugin_id, str) or not _PLUGIN_ID_RE.match(plugin_id):
+    if not isinstance(plugin_id, str) or not _PLUGIN_ID_RE.fullmatch(plugin_id):
         return None
     if scope not in _SCOPES:
         return None

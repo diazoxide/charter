@@ -313,16 +313,17 @@ class TestOrdinaryNamesAreUntouched(unittest.TestCase):
         admitted = sorted({c for c in map(chr, range(0x110000))
                            if persona.valid_name("a" + c)})
         self.assertGreater(len(admitted), 35, "the alphabet sweep found almost nothing")
-        # `_NAME_RE` ends in `$`, and in Python `$` matches before a TRAILING newline — so
-        # `valid_name("a\n")` is true and a `personas/evil\n/` directory resolves, loads and
-        # is written into a generated agent's frontmatter. Found by this sweep, filed as
-        # #577, and NOT fixed here: changing the alphabet every persona and workspace name
-        # is validated against is a different question from three reports that do not name
-        # what they are about. Asserted rather than filtered out, so the day somebody
-        # switches to `fullmatch` this line tells them what it was holding.
+        # This sweep used to hold a `"\n"` at the front. `_NAME_RE` ends in `$`, and in
+        # Python `$` matches at the end of the string OR before a TRAILING newline, so
+        # `valid_name("a\n")` was true and a `personas/evil<LF>/` directory resolved,
+        # loaded, and wrote a blank line into a generated agent's frontmatter. It was
+        # asserted here rather than filtered out precisely so that whoever switched to
+        # `fullmatch` would see what the line was holding — #577 did, and the newline is
+        # gone. The alphabet is now printable ASCII outright, which is what every sentence
+        # in this file already claimed it was.
         self.assertEqual("".join(admitted),
-                         "\n-." + string.digits + "_" + string.ascii_lowercase)
-        joined = "a" + "".join(c for c in admitted if c != "\n")
+                         "-." + string.digits + "_" + string.ascii_lowercase)
+        joined = "a" + "".join(admitted)
         self.assertEqual(contain.readable(joined), joined)
 
     def test_an_ordinary_script_path_is_unchanged(self):

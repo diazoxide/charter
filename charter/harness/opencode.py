@@ -892,7 +892,7 @@ class OpenCodeHarness(Harness):
         from .. import commands
 
         p = (pattern or "").strip()
-        if commands._MCP_RULE_RE.match(p):
+        if commands._MCP_RULE_RE.fullmatch(p):
             server, _, tool = p[len("mcp__"):].partition("__")
             return f"{server}_{tool or '*'}", "*"
         for oc_id, name in TOOL_NAMES.items():
@@ -974,7 +974,7 @@ class OpenCodeHarness(Harness):
         from .. import commands
 
         p = (pattern or "").strip()
-        if not commands._MCP_RULE_RE.match(p):
+        if not commands._MCP_RULE_RE.fullmatch(p):
             return ""
         name, _glob = self.ask_rule(p)
         hit = _shadowed_builtins(name)

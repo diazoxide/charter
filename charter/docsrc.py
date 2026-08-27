@@ -61,7 +61,7 @@ def topics() -> list[str]:
     root = source()
     if root is None:
         return []
-    return sorted(p.stem for p in root.glob("*.md") if _TOPIC.match(p.stem))
+    return sorted(p.stem for p in root.glob("*.md") if _TOPIC.fullmatch(p.stem))
 
 
 def read(topic: str) -> str | None:
@@ -72,7 +72,7 @@ def read(topic: str) -> str | None:
     treat differently.
     """
     root = source()
-    if root is None or not _TOPIC.match(topic or ""):
+    if root is None or not _TOPIC.fullmatch(topic or ""):
         return None
     page = root / f"{topic}.md"
     # Containment is asserted on the RESOLVED page, not on its parent. `page.parent` is

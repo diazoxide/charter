@@ -76,7 +76,7 @@ def _env_bindings(args) -> dict | None:
         pairs[target.strip()] = source.strip()
     for target, source in pairs.items():
         for label, v in (("target", target), ("source", source)):
-            if not _ENV_NAME.match(v or ""):
+            if not _ENV_NAME.fullmatch(v or ""):
                 raise ValueError(f"--env {label} {v!r} is not a valid environment "
                                  f"variable name")
     return pairs or None
@@ -1270,7 +1270,7 @@ def _dotenv_line(name: str, value: str) -> str:
     If none of the three applies, the value is genuinely unrepresentable in
     dotenv and this raises rather than silently corrupting a credential.
     """
-    if not _ENV_NAME_RE.match(name):
+    if not _ENV_NAME_RE.fullmatch(name):
         raise ValueError(
             f"'{name}' is not a valid environment-variable name "
             "(expected [A-Za-z_][A-Za-z0-9_]*)")
