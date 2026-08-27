@@ -1375,8 +1375,13 @@ def _health_mark(name: str, known: set[str] | None = None) -> str:
 
     Cost is why this calls :func:`persona.structural_errors` rather than `lint`: the
     full lint walks the plugin cache, and even `lint(deep=False)` pays for the vault,
-    role, delegate-when and unknown-key checks (plus an import of `commands_persona`)
-    that produce nothing a chip can show. This renders on every single turn.
+    role, delegate-when and unknown-key checks that produce nothing a chip can show.
+    This renders on every single turn.
+
+    A key charter could not read — miscased, or declared twice — IS shown, because
+    `structural_errors` reports it (#575, #509). That is not a soft finding: one of them
+    changes a tool grant, and the chip is the signal the operator was looking straight at
+    while `Borrows: none` handed out the wide one.
     """
     try:
         from . import persona
