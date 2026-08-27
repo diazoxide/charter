@@ -1004,11 +1004,23 @@ class TheOperatorsCredentialStoreIsNeverReached(unittest.TestCase):
             subprocess.Popen(Path(self.dir / "op"))
         self.assertFalse(self.marker.exists())
 
-    def test_a_bare_string_as_the_whole_command_is_refused(self):
-        """Without `shell=True` a string is one program name and no arguments — a
-        different branch from the shell case below, and from the argv list above."""
+    def test_a_bare_string_is_a_program_name_and_is_not_lexed(self):
+        """Without `shell=True` a string is one program NAME — spaces and all — while with
+        it the string is a command line for `/bin/sh`. The two must not be conflated, and
+        a path with no space in it cannot tell them apart: `shlex.split` returns the same
+        one word either way. This one lexes into two, neither of which is `op`, so lexing
+        it would read as "not a credential CLI" for a spawn that is about to run one.
+
+        The directory is not called `vault something`, and that is not fussiness: the first
+        spelling of this case used `vault dir`, whose first lexed word is `vault` — itself
+        a guarded CLI — so the mutation it exists to catch stayed green by being refused
+        for the wrong reason."""
+        spaced = self.dir / "somebodys credentials"
+        spaced.mkdir()
+        shutil.copy(self.dir / "op", spaced / "op")
+        (spaced / "op").chmod(0o755)
         with self.assertRaises(_planeguard.RealVaultReach):
-            subprocess.Popen(str(self.dir / "op"))
+            subprocess.Popen(str(spaced / "op"))
         self.assertFalse(self.marker.exists())
 
     def test_a_command_that_is_all_wrapper_leaves_no_program_to_name(self):
