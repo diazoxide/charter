@@ -14,6 +14,7 @@ import contextlib
 import dataclasses
 import hashlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -2088,6 +2089,893 @@ class TheGateSaysWhatTheCoveringTestsAssert(unittest.TestCase):
         text = sweep.gate_summary(sweep.classify([_result("pinned")]),
                                   "a" * 40, "b" * 40, 60.0, enforce=False)
         self.assertIn("Nothing added here is a line the suite would not miss", text)
+
+
+class TheGateSaysWhichOfThreeThingsItFound(unittest.TestCase):
+    """#617's urgent half: a green gate is not "no survivors".
+
+    The sweep reported `success` on a branch with **eight survivors** under it, which to
+    anyone who does not open the run summary reads as "this branch is clean" — the
+    opposite of what the job exists to say. A conclusion cannot carry the difference, so
+    the answer is a sentence, and the sentence is what the check is named with. There are
+    exactly three things it may say, and no two of them may collapse into one.
+    """
+
+    def test_a_branch_with_nothing_surviving_says_no_survivors(self):
+        gate = sweep.classify([_result("pinned"), _result("pinned")])
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.CLEAN)
+        self.assertEqual(sweep.headline(gate), "no survivors")
+
+    def test_a_branch_with_survivors_says_how_many(self):
+        """The whole finding. `success` with eight under it said nothing; this says 8."""
+        gate = sweep.classify([_result("survived", path=f"charter/{n}.py")
+                               for n in range(8)])
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.SURVIVORS)
+        self.assertEqual(sweep.headline(gate), "8 survivors")
+
+    def test_one_survivor_is_not_called_survivors(self):
+        gate = sweep.classify([_result("survived")])
+        self.assertEqual(sweep.headline(gate), "1 survivor")
+
+    def test_a_shard_that_never_reported_is_no_verdict_and_not_no_survivors(self):
+        """The regression that matters most. Every mutation that DID report went red, so
+        every count on the page is zero — and reading that as a clean branch is exactly
+        the mistake, because the shard that vanished is the one with the answer in it."""
+        gate = sweep.classify([_result("pinned")])
+        self.assertEqual(sweep.gate_conclusion(gate, missing=2), sweep.NO_VERDICT)
+        self.assertEqual(sweep.headline(gate, missing=2, shards=3),
+                         "no verdict: 2 of 3 shards did not report")
+        self.assertNotIn("no survivors", sweep.headline(gate, missing=2, shards=3))
+
+    def test_a_run_that_never_sized_itself_does_not_invent_a_denominator(self):
+        """"1 of 1 shard did not report" describes a sweep that was planned and then lost
+        one. A plan job that failed before it counted anything is a different fact, and a
+        denominator nobody computed is not a denominator."""
+        gate = sweep.classify([])
+        self.assertEqual(sweep.headline(gate, missing=1, shards=0),
+                         "no verdict: the sweep never sized itself")
+        self.assertEqual(sweep.headline(gate, missing=1, shards=1),
+                         "no verdict: 1 of 1 shard did not report")
+        page = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False, 1, 0)
+        self.assertIn("never said how many shards it needed", page)
+        self.assertNotIn("1 of 1", page)
+
+    def test_a_mutation_nobody_measured_is_no_verdict_too(self):
+        gate = sweep.classify([_result("unresolved"), _result("pinned")])
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.NO_VERDICT)
+        self.assertEqual(sweep.headline(gate), "no verdict: 1 not measured")
+
+    def test_a_mutation_that_never_applied_is_no_verdict(self):
+        gate = sweep.classify([_result("unapplied"), _result("pinned")])
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.NO_VERDICT)
+        self.assertEqual(sweep.headline(gate), "no verdict: 1 mutation never applied")
+
+    def test_survivors_outrank_an_unmeasured_mutation_and_both_are_said(self):
+        """"8 survivors, 1 not measured" is a true statement about 8 real findings, and
+        burying them under "no verdict" would lose the only actionable thing on the page.
+        Precedence is `gate_exit_code`'s — 4 over 1 over 3 — because the two answers are
+        one answer in two vocabularies."""
+        gate = sweep.classify([_result("survived", path=f"charter/{n}.py")
+                               for n in range(8)] + [_result("unresolved",
+                                                             path="charter/z.py")])
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.SURVIVORS)
+        self.assertEqual(sweep.headline(gate), "8 survivors, 1 not measured")
+
+    def test_a_missing_shard_outranks_survivors_and_still_names_them(self):
+        """A count taken from two thirds of a plan is a number nobody should quote, so the
+        conclusion is `no verdict` — but the survivors that DID arrive are real and stay
+        on the line."""
+        gate = sweep.classify([_result("survived", path="charter/a.py"),
+                               _result("survived", path="charter/b.py")])
+        self.assertEqual(sweep.gate_conclusion(gate, missing=1), sweep.NO_VERDICT)
+        self.assertEqual(sweep.headline(gate, missing=1, shards=3),
+                         "no verdict: 2 survivors so far, 1 of 3 shards did not report")
+
+    def test_a_platform_survivor_does_not_make_the_headline_say_survivor(self):
+        """The gate never fails on one of these and it must not shout about one either:
+        a check named "1 survivor" for a clause the runner's kernel cannot reach is the
+        noise that gets a gate muted."""
+        gate = sweep.classify([_result("survived", operator="narrow-except",
+                                       before="OSError")])
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.CLEAN)
+        self.assertEqual(sweep.headline(gate), "no survivors")
+
+    def test_the_headline_is_one_line_because_it_is_a_checks_name(self):
+        for gate, missing in ((sweep.classify([_result("pinned")]), 0),
+                              (sweep.classify([_result("survived")]), 0),
+                              (sweep.classify([_result("unapplied")]), 2)):
+            said = sweep.headline(gate, missing, 3)
+            self.assertNotIn("\n", said)
+            self.assertLess(len(said), 90, said)
+
+    def test_the_page_is_headed_with_the_same_sentence_the_check_is_named_with(self):
+        """One sentence, both readers. A summary whose title disagreed with the row on the
+        pull request would be worse than either of them alone."""
+        gate = sweep.classify([_result("survived", path="charter/a.py"),
+                               _result("survived", path="charter/b.py")])
+        text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("## Deletion sweep — 2 survivors", text)
+
+    def test_a_page_missing_a_shard_refuses_to_call_the_branch_clean(self):
+        gate = sweep.classify([_result("pinned")])
+        text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False,
+                                  missing=2, shards=3)
+        self.assertIn("did not report", text)
+        self.assertNotIn("Nothing added here is a line the suite would not miss", text)
+
+    def test_a_page_with_every_shard_in_still_says_the_branch_is_clean(self):
+        text = sweep.gate_summary(sweep.classify([_result("pinned")]),
+                                  "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("Nothing added here is a line the suite would not miss", text)
+
+    def test_saying_it_is_not_failing_on_it(self):
+        """"Distinguish the three states" and "block on two of them" are different asks,
+        and only the first one is #617. `--enforce` remains the single flag that decides."""
+        for results in ([_result("survived")], [_result("unresolved")],
+                        [_result("unapplied")]):
+            gate = sweep.classify(results)
+            self.assertEqual(sweep.verdict_exit_code(gate, missing=2, enforce=False), 0)
+
+    def test_a_shard_that_never_reported_exits_three_once_the_gate_enforces(self):
+        """The same code an unresolved mutation gets, for the same reason: the run has not
+        shown the branch to be clean, and "I could not look" is not "nothing to see"."""
+        gate = sweep.classify([_result("pinned")])
+        self.assertEqual(sweep.verdict_exit_code(gate, missing=1, enforce=True), 3)
+        self.assertEqual(sweep.verdict_exit_code(gate, missing=0, enforce=True), 0)
+
+    def test_a_missing_shard_does_not_downgrade_a_worse_answer(self):
+        gate = sweep.classify([_result("unapplied")])
+        self.assertEqual(sweep.verdict_exit_code(gate, missing=1, enforce=True), 4)
+        gate = sweep.classify([_result("survived")])
+        self.assertEqual(sweep.verdict_exit_code(gate, missing=1, enforce=True), 1)
+
+
+class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
+    """#617's other half: five runs cancelled at `timeout-minutes: 60` across two branches.
+
+    The answer is more machines and never fewer questions. A cap on the mutation count
+    reads as "covered everything" to every reader downstream — the spec says so about
+    silent truncation — so the tests below are mostly one property said several ways:
+    **every mutation lands in exactly one shard.**
+    """
+
+    @staticmethod
+    def _plan(n):
+        return [sweep.Mutation(f"charter/f{i // 7}.py", i, i, "drop-if", "q?",
+                               f"if x{i}: pass", "", "f") for i in range(n)]
+
+    def test_the_shards_partition_the_plan(self):
+        for total in (0, 1, 7, 62, 78, 82, 225):
+            plan = self._plan(total)
+            for count in (1, 2, 3, 8):
+                dealt = [m for i in range(1, count + 1)
+                         for m in sweep.shard_of(plan, i, count)]
+                self.assertEqual(sorted(m.line for m in dealt),
+                                 sorted(m.line for m in plan),
+                                 f"{total} mutations across {count} shard(s)")
+                self.assertEqual(len(dealt), total)
+
+    def test_no_shard_carries_more_than_one_extra_mutation(self):
+        """Round-robin, so the slowest shard decides the wall clock and the slowest shard
+        is within one mutation of the fastest."""
+        plan = self._plan(82)
+        sizes = [len(sweep.shard_of(plan, i, 3)) for i in (1, 2, 3)]
+        self.assertEqual(sorted(sizes), [27, 27, 28])
+
+    def test_a_shard_number_outside_its_count_is_refused_rather_than_clamped(self):
+        """Off-by-one here does not fail loudly: it sweeps one slice twice and another
+        never, and the merge step then reports a complete sweep of an incomplete plan."""
+        plan = self._plan(9)
+        for index, count in ((0, 3), (4, 3), (-1, 3), (1, 0)):
+            with self.assertRaises(ValueError):
+                sweep.shard_of(plan, index, count)
+
+    def test_the_shard_argument_is_parsed_strictly(self):
+        self.assertEqual(sweep.parse_shard("2/3"), (2, 3))
+        for bad in ("2", "2/", "/3", "0/3", "4/3", "", "two/three", "2/3/4"):
+            with self.assertRaises(ValueError, msg=bad):
+                sweep.parse_shard(bad)
+
+    def test_one_shard_measures_what_it_can_finish_in_its_budget(self):
+        """Forty minutes a shard, eleven of which are gone before the first mutation — the
+        checkout, the sandbox clone, the selection map and the unmutated baseline. The
+        literal is here rather than the arithmetic on purpose: a test that recomputed it
+        from the constants would pass whatever the constants became."""
+        self.assertEqual(sweep.per_shard(), 28)
+
+    def test_a_budget_smaller_than_its_own_fixed_cost_still_measures_something(self):
+        """`max(1, …)`, found unpinned by the sweep on this very branch.
+
+        Raise the fixed cost past the budget — a slower runner, a longer suite, a map that
+        stops being cached — and the subtraction goes to zero or below. Without the clamp
+        the division in :func:`shards_for` is by zero, the plan job raises, and the
+        workflow gets an empty shard count: no plan, no shards, no numbers. Which is the
+        #617 failure exactly, arriving out of the arithmetic written to prevent it.
+        """
+        real = sweep.SHARD_FIXED
+        self.addCleanup(lambda: setattr(sweep, "SHARD_FIXED", real))
+        for fixed in (sweep.SHARD_BUDGET, sweep.SHARD_BUDGET + 3600):
+            sweep.SHARD_FIXED = fixed
+            self.assertEqual(sweep.per_shard(), 1, fixed)
+            self.assertEqual(sweep.shards_for(50), 8, fixed)   # capped, and not a crash
+
+    def test_the_two_diffs_that_ran_out_of_time_now_fit(self):
+        """#608's 62 mutations were cancelled twice and #626's 78 three times, at
+        `timeout-minutes: 60`, each run reaching about two thirds of its plan."""
+        self.assertEqual(sweep.shards_for(62), 3)
+        self.assertEqual(sweep.shards_for(78), 3)
+        for total in (62, 78):
+            biggest = max(len(sweep.shard_of(self._plan(total), i, 3))
+                          for i in (1, 2, 3))
+            self.assertLessEqual(biggest, sweep.per_shard())
+
+    def test_a_branch_phase_two_would_have_produced_still_gets_one_job(self):
+        self.assertEqual(sweep.shards_for(1), 1)
+        self.assertEqual(sweep.shards_for(28), 1)
+        self.assertEqual(sweep.shards_for(29), 2)
+
+    def test_a_branch_with_nothing_to_sweep_still_gets_a_job(self):
+        """"The sweep ran and found nothing to do" and "the sweep did not run" are the two
+        answers this whole change is about. A plan of zero shards would make them one."""
+        self.assertEqual(sweep.shards_for(0), 1)
+
+    def test_the_fan_out_is_capped_and_the_sweep_is_not(self):
+        """`MAX_SHARDS` limits how much of the runner pool one branch may hold. It does
+        not limit what gets asked: past the ceiling the shards simply carry more."""
+        self.assertEqual(sweep.shards_for(10_000), 8)
+        plan = self._plan(400)
+        dealt = [m for i in range(1, 9) for m in sweep.shard_of(plan, i, 8)]
+        self.assertEqual(len(dealt), 400)
+
+    def test_a_diff_past_the_ceiling_says_so_out_loud(self):
+        """The spec is explicit that a cap the reader cannot see is worse than the cap."""
+        self.assertEqual(sweep.over_budget(224), "")
+        loud = sweep.over_budget(225)
+        self.assertIn("225 mutations", loud)
+        self.assertIn("still swept", loud)
+        self.assertIn("nothing here is dropped", loud)
+
+
+class EverySurvivorLandsOnTheLineItIsAbout(unittest.TestCase):
+    """The other half of "without failing": the finding goes where the reviewer is looking.
+
+    An annotation renders in the margin of the diff, on the guard itself, and changes
+    nothing about the job's conclusion — which is the shape #617 asks for. The check's
+    name says how many; this says where.
+    """
+
+    def test_an_unpinned_survivor_is_a_warning_on_its_own_file_and_line(self):
+        gate = sweep.classify([_result("survived", path="charter/gitconfig.py", line=42)])
+        said = sweep.annotations(gate)
+        self.assertEqual(len(said), 1)
+        self.assertTrue(said[0].startswith("::warning file=charter/gitconfig.py,line=42,"),
+                        said[0])
+        self.assertIn("Unpinned guard", said[0])
+
+    def test_a_platform_survivor_is_a_notice_and_never_a_warning(self):
+        """The gate never fails on one of these, so it never shouts about one either."""
+        gate = sweep.classify([_result("survived", operator="narrow-except",
+                                       before="OSError")])
+        said = sweep.annotations(gate)
+        self.assertEqual(len(said), 1)
+        self.assertTrue(said[0].startswith("::notice "), said[0])
+
+    def test_a_mutation_that_never_applied_is_an_error_because_it_is_a_defect_here(self):
+        gate = sweep.classify([_result("unapplied")])
+        self.assertTrue(sweep.annotations(gate)[0].startswith("::error "))
+
+    def test_a_masked_cluster_says_so_rather_than_reading_as_two_lone_survivors(self):
+        gate = sweep.classify([_result("survived", line=1), _result("survived", line=9)])
+        self.assertEqual(len(gate.masked), 2)
+        for line in sweep.annotations(gate):
+            self.assertIn("Masked cluster", line)
+
+    def test_an_unmeasured_mutation_is_annotated_too(self):
+        gate = sweep.classify([_result("unresolved", path="charter/z.py", line=3)])
+        said = sweep.annotations(gate)
+        self.assertIn("::warning file=charter/z.py,line=3,", said[0])
+        self.assertIn("No verdict", said[0])
+
+    def test_past_the_cap_the_ones_not_drawn_are_counted_out_loud(self):
+        """GitHub draws ten annotations of a level and then stops, with no error and no
+        warning. Silence there is the silent-truncation shape again."""
+        gate = sweep.classify([_result("survived", path=f"charter/{n}.py")
+                               for n in range(14)])
+        said = sweep.annotations(gate)
+        self.assertEqual(len(said), 10)                     # nine findings and the note
+        self.assertEqual(sum(1 for s in said if "file=" in s), 9)
+        self.assertIn("5 of these 14 are not shown", said[-1])
+        self.assertIn("all 14", said[-1])
+
+    def test_the_cap_is_a_levels_budget_and_not_one_kind_of_findings(self):
+        """Masked clusters, lone survivors and unmeasured mutations are all warnings, so
+        they share one budget of ten. Capping each family at ten instead would emit thirty
+        and have GitHub silently draw the first ten of them."""
+        gate = sweep.classify(
+            [_result("survived", path="charter/m.py", line=n) for n in (1, 9)]
+            + [_result("survived", path=f"charter/u{n}.py") for n in range(9)]
+            + [_result("unresolved", path=f"charter/z{n}.py") for n in range(9)])
+        said = sweep.annotations(gate)
+        self.assertEqual(sum(1 for s in said if s.startswith("::warning file=")), 9)
+        self.assertEqual(len(said), 10)
+
+    def test_the_urgent_families_are_the_ones_that_survive_the_cap(self):
+        """A masked cluster is the finding a reviewer is least able to reach alone, and an
+        unmeasured mutation is a fact about the runner rather than about the branch. When
+        only nine of twenty fit, that is the order they go in."""
+        gate = sweep.classify(
+            [_result("survived", path="charter/m.py", line=n) for n in (1, 9)]
+            + [_result("unresolved", path=f"charter/z{n}.py") for n in range(20)])
+        drawn = [s for s in sweep.annotations(gate) if "file=" in s]
+        self.assertEqual(sum(1 for s in drawn if "Masked cluster" in s), 2)
+        self.assertEqual(sum(1 for s in drawn if "No verdict" in s), 7)
+
+    def test_a_notice_does_not_spend_a_warnings_budget(self):
+        """Platform-deferred survivors are notices, which is a separate ten."""
+        gate = sweep.classify(
+            [_result("survived", path=f"charter/u{n}.py") for n in range(9)]
+            + [_result("survived", path=f"charter/p{n}.py", operator="narrow-except",
+                       before="OSError") for n in range(4)])
+        said = sweep.annotations(gate)
+        self.assertEqual(sum(1 for s in said if s.startswith("::warning ")), 9)
+        self.assertEqual(sum(1 for s in said if s.startswith("::notice ")), 4)
+
+    def test_a_path_with_a_comma_or_a_colon_in_it_cannot_move_the_annotation(self):
+        """A `,` starts the next property and a `:` can close the list early, so an
+        unescaped one annotates the wrong place or nothing at all."""
+        gate = sweep.classify([_result("survived", path="charter/a,b:c.py")])
+        self.assertIn("file=charter/a%2Cb%3Ac.py,line=1,", sweep.annotations(gate)[0])
+
+    def test_a_newline_in_the_message_cannot_end_the_command_early(self):
+        gate = sweep.classify([_result("survived", before="if x:\n    return 100%")])
+        said = sweep.annotations(gate)
+        self.assertEqual(len(said), 1)
+        self.assertNotIn("\n", said[0])
+
+    def test_an_annotation_is_not_a_failure(self):
+        gate = sweep.classify([_result("survived"), _result("unapplied",
+                                                            path="charter/b.py")])
+        self.assertTrue(sweep.annotations(gate))
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=False), 0)
+
+
+class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
+    """One question, several machines, one answer — which means a round trip through JSON.
+
+    Everything `classify` and the summary read has to survive it, not merely the verdict
+    string. The strongest form of that is the one asserted first: the page a merge writes
+    is the page a single run would have written, character for character.
+    """
+
+    @staticmethod
+    def _mixed():
+        ev = sweep.Evidence(["tests.test_a"],
+                            [("tests.test_a", "test_it_refuses",
+                              ["self.assertEqual(f(None), [])"])])
+        return [_result("survived", path="charter/a.py", evidence=ev),
+                _result("survived", path="charter/b.py", line=1),
+                _result("survived", path="charter/b.py", line=9),
+                _result("survived", path="charter/c.py", operator="narrow-except",
+                        before="OSError"),
+                _result("unresolved", path="charter/d.py"),
+                _result("pinned", path="charter/e.py")]
+
+    def test_the_merged_page_is_the_page_one_machine_would_have_written(self):
+        results = self._mixed()
+        here = sweep.gate_summary(sweep.classify(results), "a" * 40, "b" * 40, 60.0, False)
+        there = sweep.gate_summary(
+            sweep.classify(sweep.results_from_json(sweep.as_json(results))),
+            "a" * 40, "b" * 40, 60.0, False)
+        self.assertEqual(here, there)
+        self.assertIn("self.assertEqual(f(None), [])", there)
+
+    def test_a_survivors_own_platform_is_recomputed_and_not_read_from_the_file(self):
+        """The shard that measured it and the machine that merges it are two computers.
+        Trusting the shard's answer would let one platform's verdict be reported as
+        another's."""
+        back = sweep.results_from_json(sweep.as_json(self._mixed()))
+        self.assertEqual(len(sweep.classify(back).platform), 1)
+
+    def test_a_file_nothing_executes_does_not_come_back_as_a_file_that_ignores_it(self):
+        """The absence that has to survive the trip. "Nothing measured executes this file"
+        and "one module executes it and does not name the symbol" are different findings
+        and different next moves, and an evidence pass that never ran must not arrive
+        looking like one that ran and found nothing."""
+        never = _result("survived", path="charter/a.py")          # evidence pass not run
+        ran = _result("survived", path="charter/b.py",
+                      evidence=sweep.Evidence(["tests.test_a"], []))
+        back = sweep.results_from_json(sweep.as_json([never, ran]))
+        self.assertIsNone(back[0].evidence)
+        self.assertEqual(back[1].evidence, sweep.Evidence(["tests.test_a"], []))
+        page = sweep.gate_summary(sweep.classify(back), "a" * 40, "b" * 40, 60.0, False)
+        self.assertIn("nothing measured executes this file", page)
+        self.assertIn("**not one names `f`**", page)
+
+    def test_the_shards_add_up_to_the_whole_sweep(self):
+        results = self._mixed()
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(3):
+                (Path(tmp) / f"sweep-results-{i + 1}.json").write_text(
+                    sweep.as_json(results[i::3]))
+            merged, missing = sweep.merge(Path(tmp), 3)
+        self.assertEqual(missing, 0)
+        self.assertEqual(len(merged), len(results))
+        self.assertEqual(sorted(r.mutation.path for r in merged),
+                         sorted(r.mutation.path for r in results))
+
+    def test_a_masked_cluster_split_across_two_machines_is_still_a_masked_cluster(self):
+        """The reason the sorting happens at the merge and not in the shard.
+
+        Two guards in sequence mask each other, and the round-robin deal puts neighbours
+        in *different* shards on purpose — so neither shard can see the pair. Classify one
+        shard at a time and a masked cluster reads as two lone survivors in two jobs, each
+        of which looks equivalent on its own, which is the exact reading the bucket exists
+        to prevent.
+        """
+        pair = [_result("survived", path="charter/a.py", line=1, symbol="close"),
+                _result("survived", path="charter/a.py", line=9, symbol="close")]
+        for one in pair:                       # one shard at a time sees a lone survivor
+            self.assertEqual(len(sweep.classify([one]).unpinned), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, r in enumerate(pair, start=1):
+                (Path(tmp) / f"sweep-results-{i}.json").write_text(sweep.as_json([r]))
+            merged, missing = sweep.merge(Path(tmp), 2)
+        gate = sweep.classify(merged)
+        self.assertEqual((missing, len(gate.masked), gate.unpinned), (0, 2, []))
+        self.assertIn("### Masked cluster",
+                      sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False))
+
+    def test_a_shard_that_wrote_nothing_is_counted_as_a_shard_that_did_not_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "sweep-results-1.json").write_text(sweep.as_json([]))
+            merged, missing = sweep.merge(Path(tmp), 3)
+        self.assertEqual((len(merged), missing), (0, 2))
+
+    def test_a_result_file_that_will_not_parse_is_not_a_shard_that_answered(self):
+        """There is no third reading of a truncated upload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "a.json").write_text(sweep.as_json([]))
+            (Path(tmp) / "b.json").write_text('[{"path": "charter/a.py"')
+            (Path(tmp) / "c.json").write_text('[{"path": "charter/a.py"}]')
+            merged, missing = sweep.merge(Path(tmp), 3)
+        self.assertEqual((len(merged), missing), (0, 2))
+
+    def test_an_empty_sweep_that_ran_is_not_a_sweep_that_did_not(self):
+        """A shard with nothing to do writes `[]`, and `[]` is an answer. The directory
+        being empty is the other thing entirely."""
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "sweep-results-1.json").write_text(sweep.as_json([]))
+            ran, ran_missing = sweep.merge(Path(tmp), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            gone, gone_missing = sweep.merge(Path(tmp), 1)
+        self.assertEqual((ran, ran_missing), ([], 0))
+        self.assertEqual(gone_missing, 1)
+        self.assertEqual(sweep.gate_conclusion(sweep.classify(ran), ran_missing),
+                         sweep.CLEAN)
+        self.assertEqual(sweep.gate_conclusion(sweep.classify(gone), gone_missing),
+                         sweep.NO_VERDICT)
+
+    def test_a_directory_that_is_not_there_is_no_verdict_and_not_a_clean_one(self):
+        merged, missing = sweep.merge(Path("/nonexistent-sweep-shards"), 2)
+        self.assertEqual((merged, missing), ([], 2))
+
+    def test_a_plan_that_never_said_how_many_shards_is_not_no_shards(self):
+        """A plan job that fails leaves the output empty. Reading an empty string as zero
+        would turn the loudest failure this workflow has into the quietest kind of pass."""
+        self.assertEqual(sweep.expected_shards("3"), 3)
+        self.assertEqual(sweep.expected_shards(" 3 "), 3)
+        for nothing in ("", None, "0", "-1", "many", "3.5", []):
+            self.assertEqual(sweep.expected_shards(nothing), 0, repr(nothing))
+
+
+class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
+    """The three commands `.github/workflows/sweep.yml` runs, run.
+
+    Every decision the workflow makes now lives here rather than in YAML — how many jobs,
+    which slice, what the check is called — for #572's reason: a rule inside a `run:`
+    block is not reachable from a test, so it cannot be swept, so it is a guard the
+    harness is structurally unable to hold itself to. What is left in the YAML is which
+    values are passed, and these cases run the commands that consume them.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sweep-gate-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                   GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=self.tmp, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        (self.tmp / "charter").mkdir()
+        (self.tmp / "charter" / "m.py").write_text("a = 1\n")
+        run("add", "-A")
+        run("commit", "-qm", "one")
+        self.base = sweep.git("rev-parse", "HEAD", cwd=self.tmp).strip()
+        run("checkout", "-q", "-b", "side")
+        (self.tmp / "charter" / "m.py").write_text(textwrap.dedent("""
+            def close(arm, pane):
+                if arm is None:
+                    return []
+                if pane is None:
+                    return []
+                return [arm, pane]
+        """).lstrip())
+        run("add", "-A")
+        run("commit", "-qm", "two")
+        self.workdir = self.tmp / "wd"
+        self.outputs = self.tmp / "outputs.txt"
+        self.summary = self.tmp / "summary.md"
+
+    def _cli(self, *args):
+        said = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        try:
+            with contextlib.redirect_stdout(said):
+                code = sweep.main(list(args))
+        finally:
+            os.chdir(cwd)
+        return code, said.getvalue()
+
+    def _read_outputs(self):
+        return dict(line.split("=", 1)
+                    for line in self.outputs.read_text().splitlines() if line)
+
+    def test_the_plan_costs_no_test_runs_and_says_how_many_jobs_it_needs(self):
+        """The number the job used to guess. It was sized against 30 to 52 mutations and
+        met 78, five times, and every one of those runs was cancelled at the cap."""
+        code, said = self._cli("--plan", "--base", self.base,
+                               "--workdir", str(self.workdir),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        out = self._read_outputs()
+        self.assertEqual(int(out["mutations"]), 2)      # the two refusals added above
+        self.assertEqual(out["shards"], "1")
+        self.assertEqual(out["matrix"], "[1]")
+
+    def test_a_diff_past_the_fan_out_ceiling_warns_on_the_pull_request(self):
+        """A log line is not loud. `over_budget` reaching the plan's stdout as a workflow
+        command is what puts it in the run's annotations instead of in a fold, and the
+        spec's rule is that a cap the reader cannot see is worse than the cap."""
+        plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
+                               "", "f") for n in range(300)]
+        real = sweep.plan_for
+        sweep.plan_for = lambda *a: (plan, {})
+        self.addCleanup(lambda: setattr(sweep, "plan_for", real))
+        code, said = self._cli("--plan", "--base", self.base,
+                               "--workdir", str(self.workdir),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertIn("::warning title=The deletion sweep is over its budget::", said)
+        self.assertIn("nothing here is dropped", said)
+        # And it still asks about all three hundred, on the eight machines it is allowed.
+        self.assertEqual(self._read_outputs()["shards"], "8")
+        self.assertEqual(len([m for i in range(1, 9)
+                              for m in sweep.shard_of(plan, i, 8)]), 300)
+
+    def test_a_diff_inside_the_ceiling_says_nothing_about_the_ceiling(self):
+        code, said = self._cli("--plan", "--base", self.base,
+                               "--workdir", str(self.workdir),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertNotIn("::warning", said)
+
+    def test_the_matrix_names_every_shard_the_plan_asked_for(self):
+        """The workflow fans out over exactly this list, so a plan of three shards that
+        emitted two entries would sweep two thirds of the branch and say nothing.
+
+        Driven through the CLI rather than by recomputing `shards_for` here: a test that
+        rebuilds the answer out of the same function it is checking agrees with that
+        function whatever it says, which is the shape that survives its own mutation.
+        """
+        real = sweep.plan_for
+        self.addCleanup(lambda: setattr(sweep, "plan_for", real))
+        for total, shards, matrix in ((0, "1", "[1]"), (28, "1", "[1]"),
+                                      (29, "2", "[1, 2]"), (78, "3", "[1, 2, 3]")):
+            plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
+                                   "", "f") for n in range(total)]
+            sweep.plan_for = lambda *a, _p=plan: (_p, {})
+            self.outputs.unlink(missing_ok=True)
+            code, said = self._cli("--plan", "--base", self.base,
+                                   "--workdir", str(self.workdir),
+                                   "--github-output", str(self.outputs))
+            self.assertEqual(code, 0, said)
+            out = self._read_outputs()
+            self.assertEqual((out["mutations"], out["shards"], out["matrix"]),
+                             (str(total), shards, matrix), f"{total} mutations")
+
+    def test_the_shard_the_workflow_names_is_the_shard_the_sweep_runs(self):
+        """`--shard "$SHARD/$SHARDS"` is a string assembled in YAML, and the one thing it
+        must not do is arrive as something else. A slice that is silently wrong does not
+        fail — it sweeps some mutations twice and others never, and the merge then reports
+        a complete sweep of an incomplete plan."""
+        seen = []
+        for name, stub in (("sweep", lambda *a, **k: (seen.append(a[-1]), ([], []))[1]),
+                           ("load_map", lambda *a, **k: {})):
+            real = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, real)
+        code, said = self._cli("--gate", "--jobs", "1", "--base", self.base,
+                               "--shard", "2/3", "--no-baseline",
+                               "--workdir", str(self.workdir))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(seen, [(2, 3)])
+
+    def test_the_slice_a_shard_takes_is_the_slice_it_says_it_took(self):
+        """The log line a cancelled run leaves behind is the only trace of what it was
+        doing, so it names the shard and how much of the plan the shard was given."""
+        said = io.StringIO()
+        plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
+                               "", "close") for n in range(1, 6)]
+        real = sweep.plan_for
+        sweep.plan_for = lambda *a: (plan, {})
+        self.addCleanup(lambda: setattr(sweep, "plan_for", real))
+        with contextlib.redirect_stdout(said):
+            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0, (2, 3))
+        self.assertIn("5 mutations across 1 file(s); shard 2 of 3 takes 2 of them",
+                      said.getvalue())
+        self.assertEqual([r.mutation.line for r in results], [2, 5])
+
+    def test_no_shard_at_all_still_means_the_whole_plan(self):
+        """Found by the sweep, on this branch, against this file: forcing `if shard is not
+        None` to always-true left every test green, because nothing in the suite ran an
+        UNSHARDED sweep any more. A local `tools/sweep.py --gate` is the ordinary way this
+        tool is used, and it had quietly become the path no test walked."""
+        said = io.StringIO()
+        plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
+                               "", "close") for n in range(1, 6)]
+        real = sweep.plan_for
+        sweep.plan_for = lambda *a: (plan, {})
+        self.addCleanup(lambda: setattr(sweep, "plan_for", real))
+        with contextlib.redirect_stdout(said):
+            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0, None)
+        self.assertEqual([r.mutation.line for r in results], [1, 2, 3, 4, 5])
+        self.assertIn("5 mutations across 1 file(s)\n", said.getvalue())
+        self.assertNotIn("shard", said.getvalue())
+
+    def test_a_branch_with_nothing_to_sweep_writes_an_empty_answer_and_not_no_answer(self):
+        """A shard that writes nothing is indistinguishable from a shard that was
+        cancelled, which is the whole of #617 arriving one level down."""
+        code, said = self._cli("--gate", "--base", "HEAD", "--path", "charter",
+                               "--workdir", str(self.workdir),
+                               "--json", str(self.tmp / "r.json"))
+        self.assertEqual(code, 0, said)
+        self.assertEqual((self.tmp / "r.json").read_text(), "[]")
+        merged, missing = sweep.merge(self.tmp, 1)
+        self.assertEqual((merged, missing), ([], 0))
+
+    def _shards(self, *payloads):
+        where = self.tmp / "shards"
+        where.mkdir(exist_ok=True)
+        for i, results in enumerate(payloads, start=1):
+            (where / f"sweep-results-{i}.json").write_text(sweep.as_json(results))
+        return where
+
+    def test_the_merge_names_the_branch_with_its_own_answer(self):
+        where = self._shards([_result("survived", path="charter/a.py")],
+                             [_result("pinned", path="charter/b.py")])
+        code, said = self._cli("--verdict", str(where), "--shards", "2",
+                               "--ref", "a" * 40, "--base", "b" * 40, "--annotate",
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self._read_outputs(),
+                         {"conclusion": "survivors", "headline": "1 survivor"})
+        self.assertIn("## Deletion sweep — 1 survivor", self.summary.read_text())
+        self.assertIn("::warning file=charter/a.py,line=1,", said)
+
+    def test_a_shard_that_never_reported_reaches_the_check_as_no_verdict(self):
+        where = self._shards([_result("pinned", path="charter/b.py")])
+        code, said = self._cli("--verdict", str(where), "--shards", "3",
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self._read_outputs()["conclusion"], "no-verdict")
+        self.assertEqual(self._read_outputs()["headline"],
+                         "no verdict: 2 of 3 shards did not report")
+        self.assertIn("did not report", self.summary.read_text())
+
+    def test_a_plan_that_never_ran_is_no_verdict_and_says_which_job_failed(self):
+        """`needs.plan.outputs.shards` is the empty string when that job failed. An empty
+        string is not zero shards."""
+        code, said = self._cli("--verdict", str(self._shards()), "--shards", "",
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self._read_outputs(),
+                         {"conclusion": "no-verdict",
+                          "headline": "no verdict: the sweep never sized itself"})
+        self.assertIn("never said how many shards it needed", self.summary.read_text())
+        self.assertIn("an unknown number of shard(s)", said)
+
+    def test_a_complete_merge_of_a_clean_branch_says_no_survivors(self):
+        where = self._shards([_result("pinned", path="charter/a.py")],
+                             [_result("pinned", path="charter/b.py")])
+        code, said = self._cli("--verdict", str(where), "--shards", "2",
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self._read_outputs(),
+                         {"conclusion": "clean", "headline": "no survivors"})
+
+    def test_the_merge_blocks_nothing_until_it_is_told_to(self):
+        where = self._shards([_result("survived", path="charter/a.py")])
+        self.assertEqual(self._cli("--verdict", str(where), "--shards", "3")[0], 0)
+        self.assertEqual(
+            self._cli("--verdict", str(where), "--shards", "3", "--enforce")[0], 1)
+
+
+class TheCheckIsNamedWithTheAnswer(unittest.TestCase):
+    """`$GITHUB_OUTPUT` is the whole mechanism, so what goes into it is load-bearing."""
+
+    def test_the_conclusion_and_the_headline_are_written_where_a_job_name_can_read_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.txt"
+            sweep._write_output(str(out), conclusion="survivors", headline="8 survivors")
+            self.assertEqual(out.read_text(), "conclusion=survivors\nheadline=8 survivors\n")
+
+    def test_a_value_with_a_line_break_of_either_spelling_is_refused(self):
+        """`key=value` is one line. A value carrying a break would not set an output, it
+        would inject the next one — and a bare `\\r` ends a line for the runner's parser
+        just as `\\n` does, so both are refused rather than only the one that is easy to
+        picture."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.txt"
+            for injected in ("8 survivors\nheadline=none", "8 survivors\rheadline=none"):
+                with self.assertRaises(ValueError, msg=repr(injected)):
+                    sweep._write_output(str(out), headline=injected)
+            self.assertFalse(out.exists())
+
+    def test_nothing_is_written_when_there_is_nowhere_to_write_it(self):
+        sweep._write_output(None, headline="8 survivors")
+
+
+class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
+    """`.github/workflows/sweep.yml`, read as a tree rather than grepped.
+
+    Everything above is about what `sweep.py` can say. These are about whether anything
+    ever hears it — which is the half #617 was actually about, and the half no unit test
+    of this module can reach. The reader is `tests/test_workflows.py`'s, because a second
+    YAML parser in this repository would be a second thing to be wrong.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from tests import test_workflows
+        root = Path(__file__).resolve().parent.parent
+        cls.wf = test_workflows.load(
+            (root / ".github/workflows/sweep.yml").read_text(encoding="utf-8"))
+        cls.jobs = cls.wf["jobs"]
+
+    def _run(self, job, step_name):
+        for step in self.jobs[job]["steps"]:
+            if step.get("name") == step_name:
+                return step["run"]
+        self.fail(f"{job} has no step named {step_name!r}")
+
+    def test_the_check_a_reviewer_sees_is_named_with_the_sweeps_own_answer(self):
+        """The whole fix. A job name may interpolate `needs.<job>.outputs.*`, so the row
+        on the pull request reads `deletion sweep / 8 survivors` instead of a tick beside
+        a name that says the same thing on every branch."""
+        name = self.jobs["verdict"]["name"]
+        self.assertIn("needs.collect.outputs.headline", name)
+        self.assertIn("no verdict", name)          # when collect itself did not answer
+        self.assertEqual(self.jobs["verdict"]["needs"], "collect")
+
+    def test_the_job_whose_exit_code_would_block_has_a_name_that_never_moves(self):
+        """Branch protection matches a check by name, and the answering job's name IS the
+        answer — different on every branch, which is the point and also what makes it
+        useless as a required check. `collect` is the one to require, because it is where
+        `--enforce` would land and its name is a constant."""
+        self.assertNotIn("${{", self.jobs["collect"]["name"])
+        self.assertIn("${{", self.jobs["verdict"]["name"])
+
+    def test_the_job_that_carries_the_answer_runs_even_when_the_sweep_did_not(self):
+        """`always()` on both, because the state this exists to report is the one where a
+        shard was cancelled. A chain that only runs on success can never say so."""
+        for job in ("collect", "verdict"):
+            self.assertEqual(self.jobs[job]["if"], "always()", job)
+
+    def test_one_shards_trouble_does_not_cancel_the_others(self):
+        self.assertEqual(self.jobs["sweep"]["strategy"]["fail-fast"], "false")
+
+    def _commands(self):
+        """Every line of every `run:` body that is a command rather than a comment.
+
+        The comments matter here: the merge step's own comment SAYS `--enforce`, at length
+        and on purpose, because that is where somebody will come looking to turn the gate
+        on. Grepping the file would find it and pass, which would make this check the
+        thing it is meant to catch — a guard that is satisfied by prose.
+        """
+        return [line for job in self.jobs.values() for step in job["steps"]
+                for line in step.get("run", "").splitlines()
+                if line.strip() and not line.strip().startswith("#")]
+
+    def test_the_gate_still_blocks_nothing(self):
+        """`--enforce` is the single flag, and it is absent. The spec's staging argument
+        applies to this job's own credibility: a gate whose numbers nobody has read gets
+        disabled the first time it is inconvenient."""
+        self.assertEqual([line for line in self._commands() if "--enforce" in line], [])
+
+    def test_the_gate_never_charges_the_whole_tree_from_ci_either(self):
+        """Stage B is fourteen hours. It is not a pull-request check and never will be."""
+        self.assertEqual([line for line in self._commands() if "--all" in line], [])
+
+    def test_a_shard_is_told_which_slice_it_is_and_where_to_write_it(self):
+        run = self._run("sweep", "Sweep the guards this branch adds")
+        self.assertIn('--shard "$SHARD/$SHARDS"', run)
+        self.assertIn('--json "sweep-results-$SHARD.json"', run)
+        # And nothing that would have it write a page of its own: a slice of the answer
+        # must never render as the answer.
+        self.assertNotIn("--summary", run)
+        self.assertNotIn("--annotate", run)
+
+    def test_the_merge_is_the_only_step_that_tells_the_branch_anything(self):
+        run = self._run("collect", "One answer for the whole sweep")
+        for flag in ("--verdict shards", '--shards "${SHARDS:-}"', "--annotate",
+                     '--summary "$GITHUB_STEP_SUMMARY"',
+                     '--github-output "$GITHUB_OUTPUT"'):
+            self.assertIn(flag, run)
+
+    def test_the_shard_count_is_passed_through_without_a_default_that_hides_a_failure(self):
+        """`${SHARDS:-}` and not `${SHARDS:-1}`. An empty value means the plan job never
+        answered, and defaulting it to a number here would turn the loudest failure this
+        workflow has into a complete-looking sweep of one shard."""
+        run = self._run("collect", "One answer for the whole sweep")
+        self.assertIn('--shards "${SHARDS:-}"', run)
+        self.assertNotIn('${SHARDS:-1}', run)
+
+    def test_the_plan_sizes_the_run_and_leaves_the_map_for_the_shards(self):
+        run = self._run("plan", "How many mutations, and how many jobs they need")
+        self.assertIn("--plan", run)
+        self.assertIn("--warm-map", run)
+        self.assertIn('--github-output "$GITHUB_OUTPUT"', run)
+        self.assertEqual(self.jobs["sweep"]["strategy"]["matrix"]["shard"],
+                         "${{ fromJSON(needs.plan.outputs.matrix) }}")
+
+    def test_the_shards_restore_the_map_the_plan_measured(self):
+        """Otherwise a second machine costs a whole trace, which is the largest fixed cost
+        there is and the reason sharding looked affordable in the first place."""
+        keys = [step["with"]["key"] for job in ("plan", "sweep")
+                for step in self.jobs[job]["steps"]
+                if "cache@" in step.get("uses", "")]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys[0], keys[1])
+        # And keyed on the tree the map was measured on, the way `tree_hash` is. A key
+        # that did not move with the sources would hand a shard a map of another tree,
+        # which is a selection that certifies guards it never ran.
+        self.assertIn("hashFiles('charter/**/*.py', 'tests/**/*.py')", keys[0])
+        # And the directory that is cached has to be the one the tool writes into. Two
+        # spellings of the same path in two languages is where this silently becomes a
+        # cache of an empty directory that always misses and never says so.
+        paths = [step["with"]["path"] for job in ("plan", "sweep")
+                 for step in self.jobs[job]["steps"] if "cache@" in step.get("uses", "")]
+        self.assertEqual(set(paths), {"${{ runner.temp }}/sweep/cache"})
+        for job, step in (("plan", "How many mutations, and how many jobs they need"),
+                          ("sweep", "Sweep the guards this branch adds")):
+            self.assertIn('--workdir "$RUNNER_TEMP/sweep"', self._run(job, step))
+        with tempfile.TemporaryDirectory() as tmp:
+            here = Path(tmp) / "sweep"
+            # `Path.resolve` and not `sweep.resolved`: comparing the tool against its own
+            # spelling of a path would agree with whatever that spelling became, and the
+            # bug this pins is the two languages disagreeing (#572 was that, on macOS,
+            # where `$TMPDIR` goes through `/var -> /private/var`).
+            self.assertEqual(sweep.workdir_for(Path(tmp), str(here)), here.resolve())
+
+    def test_nothing_the_sweep_writes_needs_more_than_a_read_only_token(self):
+        """The reason the answer is a name and not a `neutral` conclusion: `neutral` needs
+        `checks: write`, in the job that runs this repository's own code against mutated
+        copies of it."""
+        self.assertEqual(self.wf["permissions"], {"contents": "read"})
 
 
 class TheGateNeverChargesTheWholeTree(unittest.TestCase):

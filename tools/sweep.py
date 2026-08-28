@@ -50,11 +50,20 @@ question should be "did my test look closely enough", not "can I suppress this".
 
 Stdlib only. `pyproject.toml` says ``dependencies = []`` and that is load-bearing.
 
+**And it says which of three things it found.** A gate that blocks nothing still has to
+say something, and reporting `success` on a branch with eight survivors under it says the
+opposite of what the job exists for. Completed-and-clean, completed-with-N-survivors, and
+*did not complete* are three answers, they are not two, and the last of them is what a
+sweep spread over several machines has to be able to report when one of them is cancelled.
+
     python3 tools/sweep.py                      # this branch, against its merge-base
     python3 tools/sweep.py --ref 5b02b3f        # some other commit
     python3 tools/sweep.py --path tools         # sweep the sweep
     python3 tools/sweep.py --all                # the whole tree, as a number
     python3 tools/sweep.py --gate               # as CI runs it (stage C)
+    python3 tools/sweep.py --plan               # how many mutations, how many jobs
+    python3 tools/sweep.py --gate --shard 2/3   # one job's slice of that plan
+    python3 tools/sweep.py --verdict shards/ --shards 3      # all of them, added up
 """
 from __future__ import annotations
 
@@ -1584,11 +1593,21 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
     return ("survived" if full.green else "pinned"), subset, full
 
 
-def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str, list[str]],
-          workdir: Path, jobs: int, dirty: dict[str, bytes], second_order: int = 0,
-          log=print, full_timeout: float = FULL_TIMEOUT
-          ) -> tuple[list[Result], list["Pair"]]:
-    """Every mutation, run; every survivor, re-run against the whole suite."""
+def plan_for(root: Path, ref: str, scope: dict[str, set[int]], dirty: dict[str, bytes]
+             ) -> tuple[list[Mutation], dict[str, bytes]]:
+    """Every mutation this branch offers, and the sources they were read from.
+
+    Split out of :func:`sweep` so that the gate can ask *how big is this going to be*
+    without paying for a single test run — the whole answer is `ast`, and it costs a
+    second. #617's plan job runs exactly this and nothing else, which is what lets the
+    job that measures decide how many jobs the measuring needs.
+
+    Extracted for the second reason too, the structural one #572 taught: a rule that
+    lives inside a caller is not reachable from a test, so it cannot be swept, so it is a
+    guard this harness is unable to hold itself to. The order is load-bearing now that
+    more than one machine walks this list — see :func:`shard_of` — so it is a property
+    something has to be able to assert.
+    """
     plan: list[Mutation] = []
     sources: dict[str, bytes] = {}
     for rel, lines in sorted(scope.items()):
@@ -1597,7 +1616,23 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
             continue
         sources[rel] = blob
         plan.extend(mutations_for(rel, blob, lines))
-    log(f"  {len(plan)} mutations across {len(scope)} file(s)")
+    return plan, sources
+
+
+def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str, list[str]],
+          workdir: Path, jobs: int, dirty: dict[str, bytes], second_order: int = 0,
+          log=print, full_timeout: float = FULL_TIMEOUT,
+          shard: tuple[int, int] | None = None
+          ) -> tuple[list[Result], list["Pair"]]:
+    """Every mutation, run; every survivor, re-run against the whole suite."""
+    plan, sources = plan_for(root, ref, scope, dirty)
+    whole = len(plan)
+    if shard is not None:
+        plan = shard_of(plan, *shard)
+        log(f"  {whole} mutations across {len(scope)} file(s); "
+            f"shard {shard[0]} of {shard[1]} takes {len(plan)} of them")
+    else:
+        log(f"  {whole} mutations across {len(scope)} file(s)")
     if not plan:
         return [], []
 
@@ -1894,7 +1929,12 @@ def as_json(results: list[Result]) -> str:
         "modules": r.modules,
         "platform": sys.platform,
         "platform_caveat": platform_caveat(r.mutation),
-        "naming": [] if not r.evidence else [
+        # `null` and not `[]` when the evidence pass never ran, because the two say
+        # different things and the report prints them differently: "nothing measured
+        # executes this file" against "N modules execute it and not one names the symbol".
+        # A shard writes this file and another machine reads it (#617), so an absence that
+        # arrives as an empty list is an absence that arrives as the wrong answer.
+        "naming": None if r.evidence is None else [
             {"module": m, "test": t, "asserts": a} for m, t, a in r.evidence.naming],
     } for r in results], indent=1)
 
@@ -1991,6 +2031,303 @@ def gate_exit_code(gate: Gate, enforce: bool) -> int:
     return 3 if gate.unresolved else 0
 
 
+# --------------------------------------------------------------------------------------
+# 8a. Sizing the gate — how many jobs this branch's mutations need (#617)
+# --------------------------------------------------------------------------------------
+#
+# Two of the last three substantial branches could not finish the gate at all: #608's 62
+# mutations were cancelled at `timeout-minutes: 60` twice, and #626's 78 were cancelled
+# three times, each run reaching roughly 53 of them. The job had been sized against the
+# 30–52 that Phase 2's branches produced, and `retune-string` roughly doubles the count on
+# any diff that touches string constants — which a guard table and a config reader are
+# made of almost nothing else.
+#
+# The one answer that was never available is "sweep fewer of them". A cap on the mutation
+# count reads, to everyone downstream, as "covered everything" — the spec says so about
+# silent truncation and it is the same lie the whole harness exists to refuse. So NOTHING
+# below drops a mutation. The numbers here size the *fan-out*: how many machines the same
+# complete question is spread across.
+
+#: What one shard is allowed to spend on mutations and fixed costs together, in seconds.
+#: Deliberately under `sweep.yml`'s `timeout-minutes`, because the two failures are not
+#: symmetrical: a shard that finishes with time to spare costs a few runner-minutes, and a
+#: shard cancelled at the cap reports *nothing at all* — not a partial answer, not the
+#: survivors it had already printed, nothing the merge step can read.
+SHARD_BUDGET = 40 * 60
+
+#: What a shard pays before it measures its first mutation. Measured on `ubuntu-latest`
+#: and not on a workstation, because that is where the budget has to hold:
+#:
+#: * checkout at ``fetch-depth: 0`` and the interpreter — 3 s;
+#: * the selection map, traced — **250 s**, and restored from cache — under 5 s;
+#: * the sandbox clone — about 15 s;
+#: * the unmutated baseline — about 240 s, the same 7,693 tests `test.yml` runs in 4 min.
+#:
+#: The baseline is the expensive half and it is not negotiable: a shard that skips it
+#: cannot tell a survivor from a tree that was already red, which is the spec's second way
+#: a sweep lies. So every shard buys its own — the marginal cost of a machine.
+#:
+#: The map is the half that CAN be shared, and `sweep.yml` warms it once for all of them.
+#: This constant is deliberately the NO-CACHE figure anyway, and rounded up past even
+#: that: a pull request from a fork cannot write that cache, and a budget that only holds
+#: when the cache hits is a budget that fails on exactly the runs nobody is watching.
+SHARD_FIXED = 12 * 60
+
+#: What one mutation costs a shard. Read off the runs that ran out of time rather than off
+#: a workstation: #626 reached about 53 of its 78 inside the hour, and the fixed cost of a
+#: run with no map cache was about 515 s, which leaves **58 s** each. A workstation
+#: measures 24 s at `--jobs 3`; CI is slower and the gate must be sized against CI.
+#:
+#: Together: 78 mutations over the three shards this sizing asks for is 26 each, so
+#: 515 + 26×58 ≈ 34 min with no cache and under 30 with one — inside the budget, and well
+#: inside `sweep.yml`'s hour.
+SECONDS_A_MUTATION = 60
+
+#: The most jobs one pull request may fan out to. Not a limit on what gets swept — every
+#: mutation is still dealt to a shard past this point, they just get more each — but a
+#: limit on how much of the runner pool one branch may hold at once.
+MAX_SHARDS = 8
+
+
+def per_shard() -> int:
+    """How many mutations one shard can measure inside :data:`SHARD_BUDGET`."""
+    return max(1, (SHARD_BUDGET - SHARD_FIXED) // SECONDS_A_MUTATION)
+
+
+def shards_for(mutations: int) -> int:
+    """How many jobs *mutations* of them need, so that none of them runs out of time.
+
+    At least one, always: a branch with nothing to sweep still gets a job, because "the
+    sweep ran and found nothing to do" and "the sweep did not run" are the two answers
+    #617 is about and they must not arrive as the same silence.
+    """
+    return max(1, min(MAX_SHARDS, -(-mutations // per_shard())))
+
+
+def over_budget(mutations: int) -> str:
+    """Why this diff will be slow, said out loud, or ``""`` when it will not be.
+
+    :data:`MAX_SHARDS` is a ceiling on machines and never on questions, so a diff past it
+    is still swept whole — its shards simply carry more than the budget and some of them
+    may be cancelled. That is a real risk to the run and it gets said here rather than
+    discovered in a cancelled job: the spec's rule about silent truncation is that a cap
+    the reader cannot see is worse than the cap.
+    """
+    ceiling = MAX_SHARDS * per_shard()
+    if mutations <= ceiling:
+        return ""
+    return (f"{mutations} mutations is past the {ceiling} that {MAX_SHARDS} shards can "
+            f"measure inside {SHARD_BUDGET // 60} minutes each. Every one of them is "
+            f"still swept — nothing here is dropped — but a shard may be cancelled at "
+            f"the job timeout, and a cancelled shard reports no verdict rather than a "
+            f"short one.")
+
+
+def shard_of(plan: list[Mutation], index: int, count: int) -> list[Mutation]:
+    """Slice *index* of *count*, dealt one mutation at a time across the whole plan.
+
+    **Dealt, and not cut by file** — which is the correction the numbers forced on #617's
+    own proposal. Sharding by file sounds right and does nothing here: both diffs that ran
+    out of time were dominated by a *single new file*, so a job-per-file hands one job all
+    78 of `gitconfig.py`'s mutations and the other jobs nothing. Round-robin also spreads
+    the expensive ones, and they arrive in clumps — a survivor costs a full suite run
+    where a red costs seconds, and survivors cluster inside the function that has no test.
+
+    *index* is 1-based because it is a job number a person reads on a check ("shard 2 of
+    3"), and off-by-one here does not fail loudly: it silently sweeps one slice twice and
+    another not at all, and the merge step would report a complete sweep of an incomplete
+    plan. So it is refused rather than clamped.
+    """
+    # One comparison and not two: `count < 1` as a separate clause is unreachable, because
+    # no *index* can satisfy `1 <= index <= 0` either. A second guard that can never be the
+    # one that fires is a line the suite would not miss, and this file's own rule is that
+    # such a line gets deleted rather than kept for shape.
+    if not 1 <= index <= count:
+        raise ValueError(f"shard {index} of {count} is not a shard")
+    return plan[index - 1::count]
+
+
+# --------------------------------------------------------------------------------------
+# 8b. The conclusion — the three things a gate run can have found (#617)
+# --------------------------------------------------------------------------------------
+#
+# A gate that blocks nothing still has to SAY something, and until #617 this one did not.
+# It reported `success` on a branch with eight survivors under it, which to anyone who
+# does not open the run summary reads as "this branch is clean" — the exact opposite of
+# what the job exists to say. A run that was cancelled at the timeout reported `cancelled`,
+# which reads as infrastructure noise rather than as a missing answer.
+#
+# **GitHub's vocabulary cannot express this, and that is why the answer is not a
+# conclusion.** A job driven by a `run:` step concludes `success` or `failure` and nothing
+# else; `neutral` — the one conclusion that means "I looked, here is what I found, this is
+# not a pass/fail" — exists only on the Checks API, which needs `checks: write` and a
+# check run created by hand. `sweep.yml`'s header refuses that in as many words: this job
+# runs the repository's own code against mutated copies of it, and is the last place in
+# the repository to hold a writable token. Trading that for a prettier icon is not a trade
+# worth making.
+#
+# So the conclusion stays `success` and the *check's name* carries the answer. A job name
+# can interpolate `needs.<job>.outputs.*`, so a one-step job that does nothing but exist
+# renders on the pull request as `deletion sweep / 8 survivors` — green, blocking nothing,
+# and no longer silent. The survivors additionally arrive as annotations on the lines they
+# are about, which is where a reviewer is already looking.
+
+#: Completed, and every mutation this branch offered goes red.
+CLEAN = "clean"
+#: Completed, and N of them do not. The interesting case, and the one that was
+#: indistinguishable from `CLEAN` on the pull request until #617.
+SURVIVORS = "survivors"
+#: Did not complete. A shard that never reported, a mutation that timed out, or an edit
+#: that never reached the tree — three spellings of the same thing, which is that the
+#: numbers on this page are not an answer about this branch.
+NO_VERDICT = "no-verdict"
+
+
+def gate_conclusion(gate: Gate, missing: int = 0) -> str:
+    """Which of the three a run found. *missing* is shards that never reported.
+
+    The precedence is :func:`gate_exit_code`'s, deliberately — 4 outranks 1 outranks 3 —
+    because the two answers are the same answer in two vocabularies and a branch that
+    disagreed with itself about which would be worse than either. A shard that never
+    reported joins `unapplied` at the top: both mean the counts below are not evidence.
+
+    Survivors outrank an unresolved mutation and do not outrank a missing shard. That is
+    not a severity ranking, it is what each one licenses a reader to believe: "8
+    survivors, 2 not measured" is still a true statement about 8 real findings, whereas
+    "8 survivors" from two thirds of a plan is a number nobody should quote.
+    """
+    if missing or gate.unapplied:
+        return NO_VERDICT
+    if gate.actionable:
+        return SURVIVORS
+    return NO_VERDICT if gate.unresolved else CLEAN
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def headline(gate: Gate, missing: int = 0, shards: int = 1) -> str:
+    """The answer in one line, short enough to be a check's NAME.
+
+    This string is the whole fix for "a green gate is not no survivors": it is what the
+    pull request's check list says next to the tick, so the count is readable without
+    opening a run summary, downloading an artifact, or knowing the job exists.
+
+    *shards* below one means the run never got as far as deciding how many it needed, and
+    that is said as itself rather than as "1 of 1 did not report" — a denominator nobody
+    computed is not a denominator, and inventing one here would describe a sweep that was
+    never planned as a sweep that was planned and lost.
+    """
+    conclusion = gate_conclusion(gate, missing)
+    if conclusion == CLEAN:
+        return "no survivors"
+    found = _plural(len(gate.actionable), "survivor", "survivors")
+    unsure = []
+    if missing:
+        unsure.append(f"{missing} of {_plural(shards, 'shard', 'shards')} did not report"
+                      if shards >= 1 else "the sweep never sized itself")
+    if gate.unapplied:
+        unsure.append(f"{_plural(len(gate.unapplied), 'mutation', 'mutations')} never "
+                      "applied")
+    if gate.unresolved:
+        unsure.append(f"{len(gate.unresolved)} not measured")
+    if conclusion == SURVIVORS:
+        return f"{found}, {'; '.join(unsure)}" if unsure else found
+    if gate.actionable:
+        return f"no verdict: {found} so far, {'; '.join(unsure)}"
+    return f"no verdict: {'; '.join(unsure)}"
+
+
+#: How many annotations of one LEVEL, per step, GitHub will draw before it stops. Not per
+#: kind of finding — three of the families below are all warnings, and they share this one
+#: budget. Going past it is not an error and produces no warning: the extras are simply
+#: not there, which is the silent-truncation shape again, so the cap announces itself in
+#: the annotation stream — and reserves one of its own slots to do it, because the note
+#: saying "and eleven more" is otherwise the first thing the cap eats.
+ANNOTATION_CAP = 10
+
+
+def _escape(text: str) -> str:
+    """A workflow command's message, with the three characters that would end it early."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _property(text: str) -> str:
+    """A workflow command's *property* value — two more characters than a message.
+
+    A `,` starts the next property and a `:` can close the property list early, so a file
+    path with either in it would silently annotate the wrong place, or nothing. Escaped
+    rather than trusted: these are paths and questions out of the tree, not constants.
+    """
+    return _escape(text).replace(":", "%3A").replace(",", "%2C")
+
+
+def _annotation(level: str, r: Result, title: str, body: str) -> str:
+    m = r.mutation
+    return (f"::{level} file={_property(m.path)},line={m.line},endLine={m.end_line},"
+            f"title={_property(title)}::{_escape(body)}")
+
+
+def annotations(gate: Gate) -> list[str]:
+    """One workflow command per finding, so a survivor lands ON THE LINE it is about.
+
+    The check's name says how many there are; this says where. A reviewer reading the
+    diff sees the marker in the margin of the guard itself, which is the one place the
+    question "did my test look closely enough" can actually be answered — and none of it
+    changes the job's conclusion, so the gate goes on blocking nothing.
+
+    The families are in the order they should survive :data:`ANNOTATION_CAP`, because they
+    share a level's budget and the ones past it are not drawn: a masked cluster before a
+    lone survivor, because two guards hiding each other is the finding a reviewer is least
+    able to reach on their own; both before an unmeasured mutation, which is a fact about
+    the runner rather than about the branch.
+    """
+    families = (
+        ("error", gate.unapplied, "Sweep defect — the mutation never applied",
+         "The edit never reached the tree, so the run that followed measured the "
+         "UNMUTATED file and would have called this a survivor. Every number on this "
+         "sweep is suspect until it is zero."),
+        ("warning", gate.masked, "Masked cluster — two guards hiding each other",
+         "Another survivor shares this function. Two guards in sequence each look "
+         "equivalent alone, so neither is pinned and they are read together."),
+        ("warning", gate.unpinned, "Unpinned guard — no test goes red without this line",
+         "Deleting it leaves the suite green. Write the test, or delete the line — "
+         "\"equivalent mutant\" and \"dead code\" are one finding."),
+        ("warning", gate.unresolved, "No verdict — this mutation was never measured",
+         "The run timed out rather than failing. That is not a red and it is not a pin; "
+         "nothing here has been shown to be tested."),
+        ("notice", gate.platform, "Platform-deferred — never fails this gate",
+         f"A narrowed catch on an exception the operating system decides. On "
+         f"{sys.platform} the clause may be unreachable rather than untested, and one "
+         f"machine cannot tell those apart."),
+    )
+    total: dict[str, int] = {}
+    for level, results, _, _ in families:
+        total[level] = total.get(level, 0) + len(results)
+    # One slot back when a level is over budget, for the note that says so. Spending all
+    # ten on findings and adding the note as an eleventh loses the note — which is the
+    # one line that has to arrive, because it is the difference between "these ten" and
+    # "these ten of twenty-two".
+    room = {level: ANNOTATION_CAP - 1 if n > ANNOTATION_CAP else ANNOTATION_CAP
+            for level, n in total.items()}
+    out: list[str] = []
+    drawn: dict[str, int] = {}
+    for level, results, title, body in families:
+        for r in sorted(results, key=lambda r: (r.mutation.path, r.mutation.line)):
+            if drawn.get(level, 0) >= room[level]:
+                break
+            drawn[level] = drawn.get(level, 0) + 1
+            out.append(_annotation(level, r, title, f"{r.mutation.question} — {body}"))
+    for level, n in total.items():
+        if n > ANNOTATION_CAP:
+            out.append(f"::{level} title=Not every finding is drawn here::" + _escape(
+                f"{n - room[level]} of these {n} are not shown — GitHub draws "
+                f"{ANNOTATION_CAP} annotations of one level per step and then stops "
+                f"without saying so. The run summary lists all {n}."))
+    return out
+
+
 def _summary_rows(results: list[Result]) -> list[str]:
     """One markdown bullet per survivor, carrying WHAT THE COVERING TESTS ASSERT.
 
@@ -2023,21 +2360,32 @@ def _summary_rows(results: list[Result]) -> list[str]:
     return out
 
 
-def gate_summary(gate: Gate, ref: str, base: str, elapsed: float,
-                 enforce: bool) -> str:
+def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
+                 enforce: bool, missing: int = 0, shards: int = 1) -> str:
     """The markdown a reviewer reads on the pull request."""
     out: list[str] = []
     w = out.append
     verdict = ("**would fail**" if gate.actionable or gate.unapplied
                else "**would pass**")
-    w(f"## Deletion sweep — {len(gate.actionable)} actionable survivor(s)")
+    # The headline and not the count, and the same string the check is NAMED with. A page
+    # whose title disagreed with the row on the pull request would be worse than either of
+    # them alone, so there is one sentence and both readers get it.
+    w(f"## Deletion sweep — {headline(gate, missing, shards)}")
     w("")
+    # No wall clock when the answer was merged rather than measured: the step that adds
+    # up several machines' results took a second and did not spend the sweep's time, and
+    # printing its own second there would understate a forty-minute run by two orders of
+    # magnitude on the one line a reader skims.
+    took = f"{elapsed / 60:.1f} min" if elapsed is not None else "merged from its shards"
     w(f"`{ref[:12]}` against `{base[:12]}`, added lines only, "
-      f"{elapsed / 60:.1f} min on {sys.platform} / CPython "
+      f"{took} on {sys.platform} / CPython "
       f"{'.'.join(str(n) for n in sys.version_info[:3])}.")
     w("")
     w("| outcome | n | what it means |")
     w("|---|---:|---|")
+    if missing:
+        w(f"| **did not report** | {f'{missing} of {shards}' if shards >= 1 else '?'} | "
+          "a shard that never wrote a result — read nothing below as a count |")
     w(f"| pinned | {gate.pinned} | a test goes red without the line |")
     w(f"| **unpinned** | {len(gate.unpinned)} | a guard with no test behind it |")
     w(f"| **masked cluster** | {len(gate.masked)} | two or more in one function; "
@@ -2054,6 +2402,21 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float,
         w(f"> **Reporting only.** This job blocks nothing; it {verdict} with `--enforce`. "
           "The spec's own staging argument says a gate whose numbers nobody has seen gets "
           "disabled the first time it is inconvenient, so the numbers come first.")
+        w("")
+    if missing:
+        w("### Did not report — this page is not a count")
+        w("")
+        if shards >= 1:
+            w(f"{missing} of {shards} shard(s) wrote no result. A shard is cancelled at "
+              "the job timeout rather than stopping short, so what it had already "
+              "measured is gone with it — the tables below are the shards that *did* "
+              "answer, and a branch with survivors in the missing slice looks exactly "
+              "like this one. Re-run the sweep; do not read it as clean.")
+        else:
+            w("The sweep **never said how many shards it needed**, so nothing here knows "
+              "how much of this branch was measured, or whether any of it was. That is "
+              "the job that sizes the sweep failing before it sized anything — and it is "
+              "**no verdict**, not a clean one.")
         w("")
     if gate.unapplied:
         w("### Not applied — read nothing else on this page until this is zero")
@@ -2095,10 +2458,77 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float,
         for r in gate.unresolved:
             w(f"- `{r.mutation.tag}` in `{r.mutation.symbol}`")
         w("")
-    if not gate.actionable and not gate.unapplied and not gate.unresolved:
+    if gate_conclusion(gate, missing) == CLEAN:
         w("Every mutation this branch offered goes red. Nothing added here is a line the "
           "suite would not miss.")
     return "\n".join(out)
+
+
+# --------------------------------------------------------------------------------------
+# 8c. Merging shards back into one answer (#617)
+# --------------------------------------------------------------------------------------
+
+def results_from_json(payload: str) -> list[Result]:
+    """A shard's results, read back from what :func:`as_json` wrote.
+
+    The gate is one question answered on several machines, so the answer has to survive a
+    round trip through a file — and everything :func:`classify` and :func:`_summary_rows`
+    read has to survive it, not merely the verdict string. `platform_caveat` is recomputed
+    from the operator and the shipped source rather than trusted from the file, so a shard
+    that ran on a different platform than the merge cannot smuggle its own answer in.
+    """
+    def outcome(o: dict | None) -> Outcome | None:
+        return None if not o else Outcome(o["green"], o["ran"], o["detail"])
+
+    out: list[Result] = []
+    for row in json.loads(payload):
+        m = Mutation(path=row["path"], line=row["line"], end_line=row["end_line"],
+                     operator=row["operator"], question=row["question"],
+                     before=row["before"], after=row["after"], symbol=row["symbol"])
+        # `null` means the evidence pass never ran, which is not the same as running and
+        # finding nothing: `_summary_rows` tells "nothing measured executes this file"
+        # from "N modules execute it and not one names the symbol" by exactly that field,
+        # and a round trip that flattened the two would report the wrong one.
+        evidence = None
+        if row["naming"] is not None:
+            evidence = Evidence(row["modules"],
+                                [(n["module"], n["test"], n["asserts"])
+                                 for n in row["naming"]])
+        out.append(Result(m, row["verdict"], outcome(row["subset"]), outcome(row["full"]),
+                          row["modules"], evidence))
+    return out
+
+
+def merge(directory: Path, shards: int) -> tuple[list[Result], int]:
+    """Every shard's results, and how many shards did not report.
+
+    Counted, not named: the merge asks *how many of the answers arrived*, and answering
+    that by parsing shard numbers out of filenames would put the workflow's shell quoting
+    and this function's regex in a position to disagree — which is a way to report a
+    complete sweep of an incomplete plan. A file is one shard's answer if it parses, and
+    a file that will not parse is a shard that did not report; there is no third reading
+    of a truncated upload.
+    """
+    results: list[Result] = []
+    reported = 0
+    for f in sorted(Path(directory).glob("*.json")) if Path(directory).is_dir() else []:
+        try:
+            results.extend(results_from_json(f.read_text(encoding="utf-8")))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        reported += 1
+    return results, max(0, shards - reported)
+
+
+def verdict_exit_code(gate: Gate, missing: int, enforce: bool) -> int:
+    """What the merge step exits with. **Zero until somebody turns it on**, as before.
+
+    A shard that never reported is the same answer as a mutation that never resolved —
+    *no verdict*, exit 3 — and for the same reason: the run has not shown the branch to
+    be clean, and "I could not look" must not render as "nothing to see".
+    """
+    code = gate_exit_code(gate, enforce)
+    return 3 if enforce and missing and code == 0 else code
 
 
 # --------------------------------------------------------------------------------------
@@ -2175,6 +2605,37 @@ def timeout_for(measured: float) -> float:
     return max(FULL_TIMEOUT, measured * 6)
 
 
+def parse_shard(text: str) -> tuple[int, int]:
+    """``"2/3"`` as ``(2, 3)``. Anything else is refused rather than guessed at.
+
+    A shard argument that parses loosely is a shard that runs the wrong slice, and a
+    wrong slice does not fail: it sweeps some mutations twice and others never, and the
+    merge step reports a whole plan. So `2`, `2/`, `0/3` and `4/3` are all errors here,
+    where they would all be survivable further in.
+    """
+    index, sep, count = str(text).partition("/")
+    if not sep or not index.strip().isdigit() or not count.strip().isdigit():
+        raise ValueError(f"--shard wants N/M, not {text!r}")
+    pair = (int(index), int(count))
+    if not 1 <= pair[0] <= pair[1]:
+        raise ValueError(f"--shard {text} is not a shard of anything")
+    return pair
+
+
+def expected_shards(text: str | None) -> int:
+    """How many shards the plan asked for, or ``0`` when the plan never said.
+
+    An empty value is not "no shards were needed" — it is a plan job that never got as
+    far as sizing itself, which is the loudest failure this workflow has. Reading it as
+    zero would turn that into the quietest kind of pass, which is the whole of #617.
+    """
+    try:
+        n = int(str(text).strip())
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    return n if n > 0 else 0
+
+
 def exit_code(results: list[Result]) -> int:
     """What a plain (non-gate) run exits with.
 
@@ -2227,7 +2688,34 @@ def main(argv: list[str] | None = None) -> int:
                    help="Append the gate's markdown to this file — $GITHUB_STEP_SUMMARY "
                         "on CI, so the numbers are on the pull request rather than in a "
                         "log nobody opens.")
+    p.add_argument("--plan", action="store_true",
+                   help="Say how many mutations this branch offers and how many jobs "
+                        "they need, then stop. Costs one `ast` pass and no test runs.")
+    p.add_argument("--warm-map", action="store_true", dest="warm_map",
+                   help="Measure the selection map into --workdir and stop, so that the "
+                        "shards restore it instead of each measuring it again.")
+    p.add_argument("--shard", default=None, metavar="N/M",
+                   help="Sweep only slice N of M, dealt one mutation at a time across "
+                        "the whole plan. Nothing is dropped: the other slices are other "
+                        "jobs. --second-order sees only its own slice and is weaker "
+                        "under it; the masked-cluster BUCKET is not, because --verdict "
+                        "classifies the merged results and not one shard's.")
+    p.add_argument("--verdict", default=None, metavar="DIR",
+                   help="Merge every shard's --json from DIR into one answer, and say "
+                        "which of the three a run found. Needs --shards.")
+    p.add_argument("--shards", default=None, metavar="N",
+                   help="How many shards --verdict should have heard from. An empty or "
+                        "unreadable value is a sweep that never sized itself, which is "
+                        "no verdict and not a clean one.")
+    p.add_argument("--annotate", action="store_true",
+                   help="Print each finding as a GitHub workflow command, so a survivor "
+                        "lands on the line of the diff it is about.")
+    p.add_argument("--github-output", default=None, metavar="PATH", dest="github_output",
+                   help="Append `key=value` lines here — $GITHUB_OUTPUT on CI, which is "
+                        "how the check that carries the answer gets its NAME.")
     args = p.parse_args(argv)
+    if args.verdict:
+        return _merge_step(args)
     if args.gate and args.all:
         p.error("--gate charges the lines a branch added; --all charges the whole tree. "
                 "The gate never sweeps the whole tree — that is stage B, and it is a "
@@ -2259,11 +2747,19 @@ def main(argv: list[str] | None = None) -> int:
         scope = added_lines(root, base, ref, paths)
         log(f"  diff against {base[:12]}: {len(scope)} file(s), "
             f"{sum(len(v) for v in scope.values())} added line(s)")
+    if args.plan or args.warm_map:
+        return _plan_step(args, root, ref, scope, dirty, workdir, cache_dir, log)
     if not scope:
         log("  nothing under the swept paths changed. Nothing to do.")
         if args.summary:
             _append(args.summary, "## Deletion sweep\n\nNothing under the swept paths "
                                   "changed on this branch, so there was nothing to sweep.\n")
+        # An empty result set and not a missing file. Downstream — the merge step, and
+        # anyone reading the artifact — "the sweep ran and found nothing to do" and "the
+        # sweep never reported" are the two answers #617 is about, and a shard that
+        # writes nothing here is indistinguishable from a shard that was cancelled.
+        if args.json:
+            Path(args.json).write_text(as_json([]))
         return 0
 
     # The map is measured on a clean checkout of the ref, so that a mutation is the only
@@ -2301,7 +2797,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2 if args.enforce or not args.gate else 0
 
     results, pairs = sweep(root, ref, scope, selection, workdir, args.jobs, dirty,
-                           args.second_order, log, full_timeout)
+                           args.second_order, log, full_timeout,
+                           parse_shard(args.shard) if args.shard else None)
     elapsed = time.time() - started
     text = report(results, root, ref, base, baseline, elapsed, pairs)
     log("")
@@ -2318,13 +2815,114 @@ def main(argv: list[str] | None = None) -> int:
     gate = classify(results)
     if args.summary:
         _append(args.summary, gate_summary(gate, ref, base, elapsed, args.enforce))
+    _say(args, gate, log)
+    return gate_exit_code(gate, args.enforce)
+
+
+def _say(args, gate: Gate, log, missing: int = 0, shards: int = 1) -> None:
+    """The counts, the one-line answer, and the annotations — in that order.
+
+    The headline is printed on every gate run and not only the sharded one. A local
+    `--gate` and CI are answering the same question, and the value of one sentence that
+    means the same thing everywhere is that nobody has to learn two vocabularies to read
+    the same sweep twice.
+    """
     log("")
     log(f"gate: {len(gate.unpinned)} unpinned, {len(gate.masked)} in masked cluster(s), "
         f"{len(gate.platform)} platform-deferred, {len(gate.unresolved)} unresolved, "
         f"{len(gate.unapplied)} not applied, {gate.pinned} pinned")
+    log(f"gate: {headline(gate, missing, shards)}")
     if not args.enforce:
         log("gate: reporting only — nothing here blocks. Pass --enforce to make it.")
-    return gate_exit_code(gate, args.enforce)
+    if args.annotate:
+        for line in annotations(gate):
+            log(line)
+    _write_output(args.github_output,
+                  conclusion=gate_conclusion(gate, missing),
+                  headline=headline(gate, missing, shards))
+
+
+def _write_output(path: str | None, **values: str) -> None:
+    """`key=value` into `$GITHUB_OUTPUT`, one line each.
+
+    Single-line values only, and every value here is one by construction — :func:`headline`
+    exists to be short. A value with a newline in it would need the heredoc form, and a
+    caller that got that wrong would inject workflow outputs rather than set one, so a
+    newline is refused instead of encoded.
+    """
+    if not path:
+        return
+    lines = []
+    for key, value in values.items():
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"{key} is not a single line: {value!r}")
+        lines.append(f"{key}={value}")
+    _append(path, "\n".join(lines))
+
+
+def _plan_step(args, root: Path, ref: str, scope: dict[str, set[int]],
+               dirty: dict[str, bytes], workdir: Path, cache_dir: Path,
+               log) -> int:
+    """Size the sweep, and optionally leave the selection map where the shards will find it.
+
+    This is the job that decides how many jobs the gate needs, and it is cheap on purpose:
+    the mutation count is an `ast` pass over the diff, so the decision costs a second and
+    is made from the real number rather than from a guess about how big branches get. The
+    guess is exactly what ran out — the job was sized against Phase 2's 30–52 mutations
+    and met 78.
+    """
+    plan, _ = plan_for(root, ref, scope, dirty)
+    shards = shards_for(len(plan))
+    log(f"  {len(plan)} mutations → {shards} shard(s) of at most {per_shard()} each")
+    loud = over_budget(len(plan))
+    if loud:
+        # An annotation and not a log line. A cap nobody can see is the failure the spec
+        # names about silent truncation, and a warning in a fold nobody opens is a cap
+        # nobody can see.
+        log(f"::warning title={_property('The deletion sweep is over its budget')}::"
+            + _escape(loud))
+    _write_output(args.github_output, mutations=str(len(plan)), shards=str(shards),
+                  matrix=json.dumps(list(range(1, shards + 1))))
+    if args.warm_map:
+        # From a sandbox, for the reason `main` builds it from one: the map is measured on
+        # a clean checkout of the ref so that a mutation is the only thing that ever
+        # differs from what was traced. The cache is keyed on the tree's own hash, so the
+        # shards find this one only if they are asking about the very same tree.
+        log("  warming the selection map for the shards…")
+        box = Sandbox(root, run_dir(workdir) / "map", ref, dirty)
+        load_map(box.path, tuple(args.paths or DEFAULT_PATHS), cache_dir, args.jobs,
+                 args.refresh_map, log)
+        shutil.rmtree(run_dir(workdir), ignore_errors=True)
+    return 0
+
+
+def _merge_step(args) -> int:
+    """One answer for a sweep that ran on several machines.
+
+    The merge and not the shards is where the pull request gets told anything, and that
+    is the point: a shard writes a result file and says nothing, so there is exactly one
+    place that decides what this branch is told and exactly one sentence it says. Before
+    #617 there were N step summaries and no sentence at all.
+    """
+    shards = expected_shards(args.shards)
+    results, missing = merge(Path(args.verdict), max(shards, 1))
+    # `shards` stays 0 when the plan never answered, and travels that way: everything
+    # downstream renders "how many did not report" differently from "how many there were
+    # supposed to be is not known", and flattening the second into `1 of 1` would report
+    # a sweep that was never planned as a sweep that was planned and lost one shard.
+    if not shards:
+        missing = max(missing, 1)
+    gate = classify(results)
+    if args.summary:
+        # "merge-base" and not "the merge-base": the header shortens a sha to twelve
+        # characters, and a fallback longer than that comes out clipped mid-word.
+        _append(args.summary, gate_summary(gate, args.ref, args.base or "merge-base",
+                                           None, args.enforce, missing, shards))
+    print(f"merged {len(results)} result(s) from "
+          f"{f'{shards - missing} of {shards}' if shards else 'an unknown number of'} "
+          f"shard(s)")
+    _say(args, gate, print, missing, shards)
+    return verdict_exit_code(gate, missing, args.enforce)
 
 
 def _append(path: str, text: str) -> None:
