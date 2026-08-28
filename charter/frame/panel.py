@@ -626,9 +626,16 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
     # `slots.ANIMATED`).
     animates = slot in slots.ANIMATED
     old_handler = _install_sigwinch(resized)
-    if evs is not None:
-        evs.open()
     try:
+        # INSIDE the `try`, and that placement is the whole of the second paragraph
+        # above. `open` ends by writing `\x1b[?1004h` to the pane, and a write to a pane
+        # whose far end has gone raises — from OUTSIDE this block that would leak the
+        # SIGWINCH handler this function exists to hand back AND leave the tty in the mode
+        # `open` had already installed a line earlier, with nothing on the machine left to
+        # put either back. `close` is idempotent and reads `_fd`, which `open` sets before
+        # that write, so a failed `open` is still fully unwound here.
+        if evs is not None:
+            evs.open()
         seen, handled = "", False
         while True:
             seen = _tick(resized, seen, slot, fid, paint=paint, events=evs,

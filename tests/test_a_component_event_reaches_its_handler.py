@@ -753,6 +753,28 @@ class ThePanelOpensAndClosesTheEventPathAroundItsLoop(unittest.TestCase):
                          paint=lambda name, fid: None)
         self.assertEqual(evs.log, ["open", "close"])
 
+    def test_an_open_that_raises_leaks_neither_the_handler_nor_the_mode(self):
+        """`open` ends by writing `\\x1b[?1004h`, and a write to a pane whose far end has
+        gone raises. From outside `_watch`'s `try` that leaked the SIGWINCH handler and
+        left the tty in the mode `open` had installed a line earlier — with the panel then
+        going to `_hold`, which never returns, so nothing on the machine put either back.
+        """
+        import signal as _signal
+
+        class _Boom(self._Evs):
+            def open(self_):
+                self_.log.append("open")
+                raise OSError("the pane went away")
+
+        evs = _Boom()
+        before = _signal.getsignal(_signal.SIGWINCH)
+        with mock.patch("charter.frame.state.version", return_value="v1"):
+            with self.assertRaises(OSError):
+                panel._watch("top", "f-1", once=True, evs=evs,
+                             paint=lambda name, fid: None)
+        self.assertEqual(evs.log, ["open", "close"])
+        self.assertIs(_signal.getsignal(_signal.SIGWINCH), before)
+
     def test_a_loop_that_raises_still_puts_the_tty_back(self):
         """`panel._hold` never returns, so a mode left changed here is a pane in a state
         nothing on the machine puts back."""
