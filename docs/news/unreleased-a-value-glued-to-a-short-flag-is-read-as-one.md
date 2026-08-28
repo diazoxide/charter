@@ -49,16 +49,18 @@ spawn charter against your live plane. It had been repairing this ordering on it
 since the defect was filed; that repair is deleted with this fix, which makes its removal a
 second regression test — the suite stays green on production's parse alone.
 
-Two neighbours found while measuring this one are **not** fixed here, and are filed rather
+Two neighbours found while measuring this one are **not** fixed here, and were filed rather
 than quietly absorbed: [#556](https://github.com/diazoxide/charter/issues/556), a value
 attached to a *bundled* short option (`env -iC<dir> cat x.json`, which relocates into the
 vault directory and is allowed), and
 [#555](https://github.com/diazoxide/charter/issues/555), `env` accepting assignments to
 names that are not shell identifiers while the parser stops at the first token it cannot
-read as one (`env a-b=1 cat <vault>`). Both are live, both are unchanged in either direction
-by this fix, and both are a different question from the one #547 asked — a fix that widens
-its own scope until it is answering three questions is how a guard change stops being
-reviewable. `SECURITY.md`'s position is unmoved: guard rails, not guarantees — four
+read as one (`env a-b=1 cat <vault>`). Both were live, both were unchanged in either
+direction by this fix, and both are a different question from the one #547 asked — a fix
+that widens its own scope until it is answering three questions is how a guard change stops
+being reviewable. *(Both are closed in this same release, by their own change: see "An
+option is its letter, and an assignment is whatever will do the assigning".)*
+`SECURITY.md`'s position is unmoved: guard rails, not guarantees — four
 rounds of adversarial review established that deciding what a shell will execute, without
 executing it, is not winnable in a Python tokeniser. This was a mis-ordering with a correct
 answer, and it has one now.

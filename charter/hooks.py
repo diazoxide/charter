@@ -1694,11 +1694,17 @@ _SHELL_KEYWORDS = frozenset(
 #: which is a fail-OPEN on the exact input this table exists to catch. Same reasoning as
 #: :data:`_TAKES_VALUE` a few hundred lines up, and the same failure it was written for.
 _WRAPPER_VALUE_FLAGS = {
-    "env": ("-u", "--unset", "-C", "--chdir"),
+    # `-P` (BSD `env -P utilpath`, the PATH the utility is looked up on) was missing, and a
+    # missing value flag is the same fail-open as a missing bundle letter: `env -P /bin cat
+    # <vault>` named `/bin` as the program, `cat` as an argument, and printed the vault.
+    # Found by the #556 sweep, not by the issue.
+    "env": ("-u", "--unset", "-C", "--chdir", "-P"),
+    # `-T` (`--command-timeout`) was missing for the same reason: `sudo -T 5 cat <vault>`
+    # named `5` as the program.
     "sudo": ("-u", "--user", "-g", "--group", "-p", "--prompt", "-C", "--close-from",
              "-r", "--role", "-t", "--type", "-h", "--host", "-D", "--chdir",
-             "-R", "--chroot", "-U", "--other-user"),
-    "doas": ("-u", "-C"),
+             "-R", "--chroot", "-U", "--other-user", "-T", "--command-timeout"),
+    "doas": ("-u", "-C", "-a"),
     "nice": ("-n", "--adjustment"),
     "ionice": ("-c", "--class", "-n", "--classdata", "-p", "--pid"),
     "chrt": ("-p", "--pid"),
@@ -1713,7 +1719,44 @@ _WRAPPER_VALUE_FLAGS = {
     # separate value and stays. Attached spellings are handled by the `=`/glued branches.
     "xargs": ("-I", "--replace", "-n", "--max-args", "-L", "--max-lines", "-P",
               "--max-procs", "-d", "--delimiter", "-s", "--max-chars", "-a",
-              "--arg-file", "-E"),
+              "--arg-file", "-E", "-J", "-R", "-S"),
+}
+
+#: Short option LETTERS that take NO value, per wrapper — the other half of
+#: :data:`_WRAPPER_VALUE_FLAGS`, and the half a bundle walk cannot do without.
+#:
+#: getopt bundles short options, so `-iC<dir>` is `-i -C <dir>` and the chdir flag is not
+#: the first thing in its own token. A reader that matches a flag by `tok.startswith(flag)`
+#: only ever sees a short option written FIRST, so `env -iC.charter/vaults cat x.json`
+#: relocated into the vault directory and printed it while three other spellings of the same
+#: flag were denied (#556). `xargs -0a<file>` and `sudo -bD<dir>` are the same token by
+#: construction.
+#:
+#: Per wrapper for the reason the value table is: `env -i` takes nothing while `stdbuf -i`
+#: takes a value, and one flat set is a fail-open on the exact input both tables exist to
+#: catch. **The value table is consulted FIRST for every letter in the walk**, so a letter
+#: that appears in both would behave as value-taking — the fail-closed way round. That
+#: ordering is deliberately NOT load-bearing: `TestTheTwoLetterTablesCannotDisagree` holds
+#: the two tables disjoint per wrapper, which is why a hand-check can swap the order and see
+#: nothing change, and why swapping it back is not a repair anyone will need to make.
+#:
+#: A letter in NEITHER table ends the walk rather than being guessed at — and since #555's
+#: round the end of a walk is no longer silent: an option this grammar could not place
+#: leaves the program unnamed, and `_split_env_chdir` reports the rest of the segment as
+#: files this command may open. That is what stops the next missing letter from being a
+#: bypass rather than a false negative (`env -P <path>` and `sudo -T <n>` were both live
+#: fail-opens found that way, and are in the value table above/below now).
+_WRAPPER_NOVALUE_LETTERS = {
+    "env": "0iv",           # BSD: `env [-0iv] [-C workdir] [-P utilpath] [-S string]`
+    "sudo": "ABbEeHiKklNnPSsVv",
+    "doas": "Lns",
+    "xargs": "0oprtx",
+    "timeout": "v",
+    "exec": "cl",           # bash: `exec [-cl] [-a name]`
+    "command": "pvV",
+    "setsid": "cfw",
+    "time": "alpqv",
+    "ionice": "th",
 }
 
 #: Wrapper flags naming a file the WRAPPER ITSELF opens, per wrapper. A wrapper normally
@@ -1784,6 +1827,122 @@ _SPLIT_STRING_FLAGS = ("-S", "--split-string")
 
 #: `timeout 5 cat <vault>` — the duration is a bare positional, not a flag.
 _DURATION_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
+
+#: Bare POSITIONAL operands a wrapper takes BEFORE the program, per wrapper.
+#:
+#: A wrapper normally hands its own argv straight to the program, which is why naming
+#: `toks[0]` after the flags is right for almost all of them. Two put an argument of their
+#: own in front of the program, and the parser named that argument as the program:
+#:
+#:     chrt 5 cat .charter/vaults/x.json          -> ALLOW, `5` read as the program
+#:     su-exec root cat .charter/vaults/x.json    -> ALLOW, `root` read as the program
+#:
+#: `timeout`'s duration is the same shape and was the only instance modelled — found by
+#: sweeping that branch rather than by a report. It keeps its own `_DURATION_RE` branch
+#: below instead of joining this table, because "the token looks like a duration" is what
+#: `timeout 5\n` needs to NOT be a duration (#577) and a count would lose that.
+#:
+#: Consuming a leading operand moves the program rightward and can never swallow one, so a
+#: wrapper listed here by mistake costs a denial and one missing costs a vault.
+_WRAPPER_LEADING_OPERANDS = {
+    "chrt": 1,        # `chrt [options] <priority> <command> [<arg>…]`
+    "su-exec": 1,     # `su-exec <user-spec> <command> [<arg>…]`
+}
+
+#: Wrappers whose OPERAND SCAN accepts `name=value` — and accepts it by its own rule, which
+#: is not the shell's.
+#:
+#: **This is the two-questions-one-constant defect (#555).** `_ENV_ASSIGN_RE` is a shell
+#: IDENTIFIER, and that is right for the front of a segment: bash answers *"a-b=1: command
+#: not found"*, so `a-b=1` there is a program name and not an assignment. `env` is a
+#: different parser reading the same bytes, and its operand scan is `strchr(arg, '=')` —
+#: GNU coreutils and BSD alike, verified on both this machine's `env` and the source: ANY
+#: argument containing an `=` is an assignment, and the scan keeps going until it meets one
+#: without. So `env a-b=1 cat .charter/vaults/x.json` sets a variable named `a-b` and the
+#: utility is the `cat`, while the guard named `a-b=1` as the program, found no reader, and
+#: printed the vault. `a.b=1`, `1FOO=1`, `x y=1` and `=1` are the same token; so is a `--`
+#: in front of any of them.
+#:
+#: The naive repair — widen `_ENV_ASSIGN_RE` — moves denials in both directions, because the
+#: same constant answers the shell's question at the front of a segment (`git -c a.b=c`, an
+#: operand with a query string). Two parsers, two predicates: the shell's stays where the
+#: shell decides, and this one is applied ONLY inside the operand scan of a wrapper that
+#: really does the assigning.
+#:
+#: Consuming a token here is the fail-CLOSED direction — it moves the program rightward and
+#: can never swallow one — so a wrapper listed by mistake costs a denial of a command that
+#: would not have run anyway, while one missing costs a vault.
+#:
+#: **Still grammar-driven and not padded**, because "fail-closed" is not a licence to list
+#: every wrapper. These two are the ones whose own usage carries the operand — `sudo -h`
+#: prints `[VAR=value]` on this machine, and `env`'s whole purpose is the assignment.
+#: `doas` was in this set for a round and is not any more: its usage is
+#: `doas [-Lns] [-a style] [-C config] [-u user] command [args]`, with no assignment operand
+#: at all, so `doas a-b=1 cat <vault>` execs a program named `a-b=1` and reads nothing. A
+#: hand-check found it — deleting it changed no test, which is what a row with no grammar
+#: behind it looks like.
+_WRAPPER_ASSIGN_OPERANDS = frozenset(("env", "sudo"))
+
+
+def _wrapper_option(base: str, tok: str) -> tuple[str, str, bool, bool]:
+    """``(flag, attached value, the value is the NEXT token, this grammar placed it)`` for
+    one of *base*'s option tokens.
+
+    **A short option is its LETTER, not its position in the token** — that is the property
+    #556 is, and `tok.startswith(flag)` is the spelling that stood in for it. getopt bundles,
+    so `-iC<dir>` is `-i -C <dir>`; the flag the guard models was sitting behind one letter
+    it also models, and the whole token matched nothing.
+
+    So the token is read in this order, and the order is what keeps the two halves from
+    disagreeing (the #547 repair, applied one level in):
+
+    1. :func:`_flag_name_value` — the LONG `--flag=value` form and a value glued to a short
+       flag that is FIRST. Unchanged, and still ahead of everything else.
+    2. otherwise, for a single-dash token, the letters are walked. A letter in
+       :data:`_WRAPPER_VALUE_FLAGS` takes the rest of the token as its value (or the next
+       token when nothing is left); a letter in :data:`_WRAPPER_NOVALUE_LETTERS` is stepped
+       over; anything else ENDS the walk unplaced rather than being guessed at, because
+       guessing in the permissive direction is what `env -i cat <vault>` punishes.
+
+    The fourth field is the honest half. ``False`` means this grammar could not account for
+    the token, so **the next token is not reliably the program** — a value flag nobody has
+    listed looks exactly like a flag that takes nothing, and the caller has no way to tell
+    from here. Callers that may not miss treat the rest of the segment as reachable; see
+    :func:`_split_env_chdir`.
+    """
+    if tok == "--":
+        # POSIX end-of-options: placed, and it takes nothing. Not left to the walk below,
+        # where it would come back UNPLACED and put the whole rest of the segment into
+        # `reads` for a token that means nothing more than "the options stop here".
+        return "", "", False, True
+    takes = _WRAPPER_VALUE_FLAGS.get(base, ())
+    if base == "env":
+        takes = takes + _SPLIT_STRING_FLAGS
+    name, value = _flag_name_value(tok, takes)
+    if value:
+        return name, value, False, True         # `--chdir=<dir>`, `-C<dir>`, `-Sfoo=1`
+    if name in takes:
+        return name, "", True, True             # `-C <dir>`, `--chdir <dir>`
+    # **A long option needs no branch of its own, and it had one.** `--nonesuch` walks into
+    # the loop below, whose first character is the second `-`; that is in no wrapper's
+    # no-value letters, so the walk ends UNPLACED on its first step — the same answer an
+    # early return gave, which is why deleting the early return changed nothing across
+    # 6.9M (wrapper, token) pairs. `takes` is likewise not filtered down to two-character
+    # spellings first: `"-" + ch` is two characters, so the membership test does that
+    # filtering itself. Both invariants are asserted rather than assumed —
+    # `TestTheWalkNeedsNoFilterOfItsOwn` in
+    # `tests/test_an_option_is_its_letter_not_its_position.py` — because a `-` appearing in
+    # a no-value table, or a bare `--` in a value table, is what would make either line
+    # start mattering again, and an unpinned reason is how dead code comes back to life.
+    short = frozenset(takes)
+    novalue = _WRAPPER_NOVALUE_LETTERS.get(base, "")
+    for j, ch in enumerate(tok[1:], start=1):
+        if "-" + ch in short:
+            attached = tok[j + 1:]
+            return "-" + ch, attached, not attached, True
+        if ch not in novalue:
+            return "", "", False, False         # a letter this grammar cannot place
+    return "", "", False, True                  # every letter placed, none takes a value
 
 
 def _flag_name_value(tok: str, spellings: tuple[str, ...]) -> tuple[str, str]:
@@ -1878,33 +2037,74 @@ def _split_env_chdir(
         if tok not in _SHELL_KEYWORDS and base not in _WRAPPERS:
             break
         toks.pop(0)
-        # the wrapper's OWN options, and the operands that are not the program
+        # the wrapper's OWN options, and the operands that are not the program.
+        #
+        # **A `-…` token is read as an OPTION wherever it stands, even past the point where
+        # the wrapper's own grammar has stopped reading options.** `env` is
+        # `option* assignment* utility arg*` — verified on this machine in both directions:
+        # `env FOO=1 -i sh -c …` answers *"env: -i: No such file or directory"* (the `-i` is
+        # the UTILITY), and `env -Sfoo=1 -Sbar=2 sh -c …` leaves `bar` unset and a variable
+        # literally named `-Sbar` in the environment (the second `-S…` is an ASSIGNMENT).
+        # Modelling that faithfully would make this parser deny LESS than `origin/main`
+        # does on both rows, which `tests/test_guard_differential.py` forbids outright and
+        # which is the wrong direction anyway: reading a stray `-Sbar=2` as one more `-S`
+        # unpacks it and keeps scanning rightward for a program, and reading a stray `-i` as
+        # a flag steps over a token that cannot be a reader. Both reach the same verdict on
+        # a command that RUNS, and neither can hand the guard a program that is not there.
+        leading = _WRAPPER_LEADING_OPERANDS.get(base, 0)
         while toks:
             nxt = toks[0]
-            if base == "env" and nxt.startswith(_SPLIT_STRING_FLAGS):
-                toks.pop(0)
-                rest = _flag_name_value(nxt, _SPLIT_STRING_FLAGS)[1]
-                if not rest and toks:
-                    rest = toks.pop(0)
-                try:
-                    import shlex
-                    toks = shlex.split(rest) + toks
-                except ValueError:
-                    toks = rest.split() + toks
-                continue
             if nxt.startswith("-") and len(nxt) > 1:
                 toks.pop(0)
                 # ONE reading of the flag, giving both its NAME and its VALUE: the name is
                 # what decides whether the next token is the program, the value is where a
                 # chdir flag relocates to. Two readings is how the value came to be lost.
-                takes = _WRAPPER_VALUE_FLAGS.get(base, ())
-                name, value = _flag_name_value(nxt, takes)
-                if not value and nxt in takes and toks:
+                name, value, wants_next, placed = _wrapper_option(base, nxt)
+                if wants_next and toks:
                     value = toks.pop(0)             # the value is the NEXT token
+                    if nxt != name:
+                        # A value taken from the next token because a letter INSIDE a
+                        # bundle asked for it (`env -iC <dir>`, which really does chdir —
+                        # verified). That token is the program if this grammar is wrong
+                        # about the letter's arity, so the rest of the segment is reported
+                        # as reachable and the leak guard keeps its eyes on it. Same
+                        # reasoning as the unplaced branch below; the difference is only
+                        # how much of the token was placed.
+                        reads.extend(toks)
+                if not placed:
+                    # An option this wrapper's grammar could not account for. The token
+                    # after it is NOT reliably the program — a value flag nobody listed is
+                    # indistinguishable from one that takes nothing, which is how `env -P
+                    # /bin cat <vault>` came to name `/bin` as the program and print the
+                    # vault. So the guard stops trusting the program and reports the rest of
+                    # the segment as files this command may open; the leak guard asks the
+                    # same `_names_a_vault_path` of them it asks of a reader's operands.
+                    # This is what keeps a SHORT table a false negative instead of a bypass.
+                    reads.extend(toks)
+                    continue
+                if name in _SPLIT_STRING_FLAGS and base == "env":
+                    # `env -S 'cat <vault>'` packs a whole command into one token, and
+                    # `env -iS…` packs it behind a bundled `-i` (#556's sweep: a live vault
+                    # read). Treated as tokens rather than skipped, because skipping leaves
+                    # an empty argv and the guard sees no program at all.
+                    try:
+                        import shlex
+                        toks = shlex.split(value) + toks
+                    except ValueError:
+                        toks = value.split() + toks
+                    continue
                 if value and name in _WRAPPER_CHDIR_FLAGS.get(base, ()):
                     chdir = value
                 if value and name in _WRAPPER_READ_FLAGS.get(base, ()):
                     reads.append(value)
+                continue
+            if base in _WRAPPER_ASSIGN_OPERANDS and "=" in nxt:
+                # THIS wrapper's rule for what an assignment is, not the shell's (#555).
+                env.append(toks.pop(0))
+                continue
+            if leading:
+                leading -= 1
+                toks.pop(0)     # the wrapper's own operand, not the program
                 continue
             if base == "timeout" and _DURATION_RE.match(nxt):
                 toks.pop(0)     # the duration, not the program
@@ -2294,6 +2494,107 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     return out
 
 
+#: Builtins that put a variable into the environment every LATER segment inherits.
+#: `declare`/`typeset` do it only with `-x`; `export` always does.
+_EXPORT_BUILTINS = ("export", "declare", "typeset")
+
+
+def _exported_env(segments: list[list[str]]) -> list[list[str]]:
+    """For each segment, the ``VAR=value`` assignments an EARLIER segment of the same
+    command line has exported into the environment that segment will run in.
+
+    **The property is "what this command line has set for its later segments", and the
+    spelling that stood in for it was "an assignment attached to the invocation" (#496).**
+    `_split_env` hands a guard the prefix on the command itself, so
+    `GIT_DIR=<plane>/.git git checkout feature` was refused — and `export
+    GIT_DIR=<plane>/.git && git checkout feature`, the same variable reaching the same git
+    for the same reason, was allowed. Verified end to end against git 2.50.1: the plane
+    root's HEAD moved and nothing was printed. The one-credential guard had the identical
+    gap on `export GIT_SSH_COMMAND=…` (found by this sweep, not by the issue) and is wired
+    to the same answer.
+
+    Parallel to *segments* rather than folded into the caller's walk, because two guards
+    ask it and a second hand-written copy would grow its own blind spots — the reason
+    :func:`_plane_root_git` exists at all.
+
+    **The shapes modelled, each because a shell really does it** (checked against bash 5
+    and zsh, both of which agree):
+
+    * ``export NAME=VALUE`` — and ``declare -x`` / ``typeset -x``, which are `export`
+      spelled two other ways and bundle their `x` (`declare -gx`).
+    * ``NAME=VALUE`` as a segment of its own, then ``export NAME``. A bare assignment
+      segment sets a SHELL variable and exports nothing — `FOO=1; <child>` really does
+      leave `FOO` unset in the child, so it is tracked but not exported until something
+      exports it.
+    * ``set -a`` (``set -o allexport``), after which a bare assignment segment IS exported.
+
+    **This environment only ever GROWS**, which is the same invariant `_git_target`'s
+    subject list keeps and for the same reason. `unset`, ``export -n`` and a subshell that
+    ends are not modelled: forgetting a variable is the fail-OPEN direction, and a list that
+    gets shorter as the command line gets longer is a bypass by construction. The cost is
+    refusing `export GIT_DIR=<plane>/.git && unset GIT_DIR && git checkout feature`, a
+    command nobody types by accident.
+
+    **The honest boundary is `cd`'s.** charter models the shell effects it has evidence for
+    in the argv it was handed: a `$(…)`, a sourced file, a `~/.bashrc`, and a `GIT_DIR`
+    already in the session's environment before the hook ran are all outside it — the
+    `PreToolUse` payload carries the command and the cwd, not the environment the command
+    will inherit, so for the last one there is nothing to read. Stated limits, not gaps.
+    """
+    out: list[list[str]] = []
+    exported: list[str] = []
+    shell_vars: dict[str, str] = {}
+    allexport = False
+    for toks in segments:
+        out.append(list(exported))
+        i = 0
+        while i < len(toks) and toks[i] in _SHELL_KEYWORDS:
+            i += 1
+        rest = toks[i:]
+        if not rest:
+            continue
+        prog = os.path.basename(rest[0]).lower()
+        args = rest[1:]
+        if prog == "set":
+            # `set -a`, `set -ax`, `set -o allexport` — the letter, not the token, for the
+            # reason `_wrapper_option` walks letters: `-ax` is `-a -x`.
+            if any((a.startswith("-") and not a.startswith("--") and "a" in a[1:])
+                   or a == "allexport" for a in args):
+                allexport = True
+            continue
+        if prog in _EXPORT_BUILTINS:
+            if prog != "export" and not any(
+                    a.startswith("-") and not a.startswith("--") and "x" in a[1:]
+                    for a in args):
+                # `declare FOO=1` without `-x` is a shell variable, not an export.
+                for a in args:
+                    if _ENV_ASSIGN_RE.match(a):
+                        shell_vars[a.split("=", 1)[0]] = a
+                continue
+            # No `startswith("-")` skip here, and that is deliberate rather than an
+            # oversight: `shell_vars`' keys all come from `_ENV_ASSIGN_RE`, so every one of
+            # them is a shell identifier and none starts with `-`. A flag token can
+            # therefore neither be recorded by the first arm nor found by the second, which
+            # is what a differential over 213,927 segment lists says too. The skip was here
+            # and was deleted; `test_a_flag_cannot_be_mistaken_for_a_variable_name` pins the
+            # reason, since an unpinned reason is how dead code comes back to life.
+            for a in args:
+                if _ENV_ASSIGN_RE.match(a):
+                    shell_vars[a.split("=", 1)[0]] = a
+                    exported.append(a)
+                elif a in shell_vars:
+                    exported.append(shell_vars[a])   # `FOO=1; export FOO`
+            continue
+        if all(_ENV_ASSIGN_RE.match(t) for t in rest):
+            # A segment that is NOTHING but assignments: a shell variable each, exported
+            # only under `set -a`.
+            for t in rest:
+                shell_vars[t.split("=", 1)[0]] = t
+                if allexport:
+                    exported.append(t)
+    return out
+
+
 def _plane_root_git(cmd: str, cwd: str, root: Path):
     """Yield ``(subcommand, args-after-it)`` for every git invocation in *cmd* that acts on
     the PLANE ROOT — the walk both plane-root guards share.
@@ -2327,7 +2628,8 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
     if not parsed:
         return
     here = cwd
-    for _toks in segments:
+    carried = _exported_env(segments)
+    for _toks, before in zip(segments, carried):
         prog, env, args = _split_env(_toks)
         base = os.path.basename(prog or "")
         # A `cd` earlier in the SAME command moves where the later segments run. Without
@@ -2345,7 +2647,10 @@ def _plane_root_git(cmd: str, cwd: str, root: Path):
         if not rest:
             continue                        # global options only: no subcommand to judge
         try:
-            if not any(t.resolve() == root for t in _git_target(here, pre, env)):
+            # `before + env`, in that order: an assignment attached to THIS invocation
+            # overrides one an earlier `export` set, which is what git itself does.
+            if not any(t.resolve() == root
+                       for t in _git_target(here, pre, before + env)):
                 continue
         except OSError:
             continue
@@ -2952,8 +3257,14 @@ def _single_credential_hit(cmd: str) -> tuple[str, str] | None:
     # straight through it.
     lower_prefix_hosts = {p.lower(): h for p, h in ssh_prefix_hosts.items()}
     lower_prefixes = tuple(lower_prefix_hosts)
-    for _toks in _segment_argv(cmd):
-        prog, env, argv = _split_env(_toks)
+    segments = _segment_argv(cmd)
+    # The environment an earlier segment EXPORTED reaches this git exactly as an attached
+    # prefix does, and `export GIT_SSH_COMMAND=/tmp/k && git push` walked past this guard
+    # while the attached spelling was denied — the same defect as #496, in the guard next
+    # door, found by sweeping its shape rather than by a report.
+    for _toks, before in zip(segments, _exported_env(segments)):
+        prog, seg_env, argv = _split_env(_toks)
+        env = before + seg_env
         # Case-folded for the reason `_is_charter` and `_VAULT_PATH_RE` are: APFS and NTFS
         # resolve `GIT` and `git` to the same binary, so a case-sensitive compare here is
         # one Shift key from absent — `GIT push git@host:o/r.git` walked straight past it.

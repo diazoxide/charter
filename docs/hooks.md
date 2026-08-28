@@ -121,11 +121,17 @@ rule while one who reads a bare refusal files an issue.
   is the branch creation it is rather than a directory called `<branch>`
   ([#483](https://github.com/diazoxide/charter/issues/483)). Every one of those is a row in
   the guard's corpus (`tests/test_plane_root_checkout_is_two_commands.py`), crossed with the
-  commands rather than listed beside them. What the walk still does not carry across
-  segments is an environment assignment: `export GIT_DIR=<plane>/.git && git checkout
-  <branch>` reaches the root and is allowed
-  ([#496](https://github.com/diazoxide/charter/issues/496)), pinned as an `ALLOW` row so
-  closing it turns the row red rather than passing unnoticed.
+  commands rather than listed beside them. The walk also carries the **environment a command
+  line establishes for its later segments**, so `export GIT_DIR=<plane>/.git && git checkout
+  <branch>` reaches the same denial the attached `GIT_DIR=… git …` does
+  ([#496](https://github.com/diazoxide/charter/issues/496)) — as do `declare -x`/`typeset
+  -x`, `GIT_DIR=…; export GIT_DIR`, and a bare assignment under `set -a`. A bare
+  `GIT_DIR=…;` segment on its own is *not* one of them, because a shell exports nothing
+  there. That environment only ever grows: `unset` and `export -n` are not modelled, since
+  forgetting a variable is the direction that opens a door. What is still outside it is the
+  same boundary `cd` has — a `$(…)`, a sourced file, and a `GIT_DIR` already in the
+  session's environment before the hook ran, which the `PreToolUse` payload does not carry
+  at all.
 - **Plane-root history wipe.** A `git reset --hard` (or `--merge`/`--keep`) in the plane root
   that would take commits off the branch which no remote has a copy of — the command that
   destroyed eleven memory commits in one session. Only that: the unstage
