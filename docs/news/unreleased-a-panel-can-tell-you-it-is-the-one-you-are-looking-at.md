@@ -82,7 +82,17 @@ from one nothing has happened to yet.
 
 A handler that never returns freezes that one pane. The other panels keep painting, your
 harness is untouched, and `F12` still takes you back to it — the escape hatch runs in
-tmux's own key table and needs no charter code to be working.
+tmux's own key table and needs no charter code to be working. That pane also keeps the
+terminal mode charter set for it, so typing into it echoes nothing until you kill it; the
+restore runs when the panel stops, and a handler that never returns never lets it.
+
+## One more refusal
+
+A **part of a composite** cannot declare events. A composite draws its parts inside its own
+pane, so a part is never placed on the frame and charter dispatches to whatever owns the
+pane. A part that declared events would get none — this release's own defect, one level
+down — so it is refused when it registers, naming both components and saying to put the
+declaration on the composite.
 
 ## Nothing to adopt
 

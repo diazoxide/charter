@@ -115,6 +115,14 @@ not have, and it would add a new way for the `select` and the `write` on either 
 handler to fail half-way. The operator's way out is unchanged and is not charter's code:
 `overlay.HATCH_KEY` is matched in tmux's own root key table before any byte reaches this
 process.
+
+**"And nothing else" has one exception and it belongs in the sentence rather than under
+it**: a handler that never returns never reaches `panel._watch`'s ``finally`` either, so
+that pane keeps the mode :meth:`Dispatcher.open` installed — ``ICANON`` and ``ECHO`` off —
+for the life of the process. Typing into it echoes nothing. That is a WEDGED pane looking
+wedged rather than a second failure, and it is bounded to the same one pane; but a
+docstring that said the pane was simply frozen would be describing a tidier failure than
+the one this design actually has.
 """
 
 from __future__ import annotations
@@ -190,7 +198,19 @@ _CHUNK = 4096
 #: it wrong would have taken a panel with stdout piped to a file (`charter panel
 #: acme.metrics --session x > /tmp/log`) from "no focus events, which is fine" to
 #: `panel._hold`, painting a refusal for a component that had done nothing wrong.
-_CANNOT_SAY = (AttributeError, OSError, ValueError, termios.error)
+#:
+#: `TypeError` is here for the same reason and was the same miss one step further out.
+#: A stream stand-in answers `fileno()` with whatever it likes, and what it answers is
+#: handed straight to `termios.tcgetattr`::
+#:
+#:     termios.tcgetattr(None)   -> TypeError: argument must be an int, or have a fileno()
+#:     select.select([None], ..) -> TypeError: argument must be an int, or have a fileno()
+#:
+#: `frame/pane.py` never meets that case — it passes what it gets to
+#: `os.get_terminal_size`, which raises `OSError` — so its set is complete for ITS
+#: questions and this one is a superset rather than a disagreement. A `MagicMock` stdout,
+#: which is what `mock.patch("sys.stdout")` installs, reaches this exact path.
+_CANNOT_SAY = (AttributeError, OSError, TypeError, ValueError, termios.error)
 
 
 def wanted(c) -> tuple[str, ...]:
@@ -208,8 +228,15 @@ def wanted(c) -> tuple[str, ...]:
     which this project deletes rather than keeps (#568). What makes it unreachable is
     itself pinned, by the case that asks a component declaring neither for its ``on_event``
     and gets ``None``.
+
+    ``is not None`` rather than truthiness, which is the same question `Component`'s own
+    validation asks one module over. A callable object defining a falsy ``__bool__`` or an
+    empty ``__len__`` — a handler written as an instance of a class rather than as a
+    function — passes construction and would silently get no dispatcher here, which is
+    #607's defect with a new spelling.
     """
-    return tuple(k for k in c.events if k in DELIVERED) if c.on_event else ()
+    return tuple(k for k in c.events if k in DELIVERED) \
+        if c.on_event is not None else ()
 
 
 class Dispatcher:
@@ -275,6 +302,13 @@ class Dispatcher:
         self._size = pane.size()
         if not any(k in self._kinds for k in _FROM_INPUT):
             return
+        if self._fd is not None:
+            # Already open. Without this a second `open` would read the mode the FIRST one
+            # installed and keep it as `_before`, so `close` would "restore" the pane to
+            # cbreak — ECHO off, for good. `panel._run` builds one dispatcher per panel so
+            # this cannot happen there today; it is a property of the object rather than of
+            # its one caller, and the case below is what keeps it one.
+            return
         stream = pane.stream() if self._stream is None else self._stream
         try:
             fd = stream.fileno()
@@ -304,11 +338,17 @@ class Dispatcher:
     def close(self) -> None:
         """Withdraw the request and put the tty back exactly as it was found.
 
-        Idempotent and never raising, because both callers are a ``finally``: `_watch`'s,
-        which runs before `panel._hold` can paint a reason and hold the pane forever, and
-        :meth:`_deliver`'s, which runs while a stranger's exception is being turned into a
-        message. A restore that raised in either would leave the operator's pane in a mode
-        charter chose and nothing puts back.
+        Idempotent, and it does not raise for any of the ways a pane can be gone
+        (:data:`_CANNOT_SAY`) — which matters because both callers are a ``finally``:
+        `_watch`'s, which runs before `panel._hold` can paint a reason and hold the pane
+        forever, and :meth:`_deliver`'s, which runs while a stranger's exception is being
+        turned into a message.
+
+        It is not an unconditional promise, and the honest version is worth more than the
+        tidy one: something a stream stand-in raises from outside that set escapes the
+        withdrawal below. What that costs is bounded by the order — the mode is already
+        back — and `panel._watch` hands its `SIGWINCH` handler back from a nested
+        ``finally`` for exactly this case.
 
         **`TCSANOW` and never `TCSADRAIN`, and this one was measured the hard way.**
         `TCSADRAIN` waits for the terminal to consume everything already written, and on a
@@ -320,16 +360,33 @@ class Dispatcher:
         (see :meth:`open`), so a drain here protects nothing and can only wedge — and a
         wedge in the `finally` that holds the operator's tty mode is the worst place on the
         path to put one.
+
+        **The RESTORE goes first and the withdrawal second, and the order is the whole
+        function.** It was the other way round, with ``_fd``/``_before`` cleared on the very
+        first line, and that made "idempotent" mean "the second call is a guaranteed
+        no-op": anything that raised or blocked in between lost the `tcsetattr` FOREVER,
+        because the retry from `panel._watch`'s `finally` would find ``_fd`` already
+        ``None`` and return. And there is something that can block. This clears ``ICANON``
+        and ``ECHO`` and deliberately leaves the input flags alone, so ``IXON`` is still on:
+        an operator who selects this pane and presses Ctrl-S puts the pty in XOFF, and the
+        `flush` inside :meth:`_write` then waits for an XON that may never come. That
+        hazard is not new — `panel._out` flushes into the same pane on every paint and has
+        always been able to wait there — but doing it AHEAD of the mode restore would have
+        been, and it would have left the operator with a pane that echoes nothing and no
+        process left to put it back.
         """
-        fd, before, self._fd, self._before = self._fd, self._before, None, None
+        fd, before = self._fd, self._before
         if fd is None:
             return
         try:
-            self._write(FOCUS_OFF)
+            termios.tcsetattr(fd, termios.TCSANOW, before)
         except _CANNOT_SAY:
             pass
+        # Only now: the mode the operator cares about is back, so a second call has
+        # nothing left to retry and the withdrawal below may fail without costing it.
+        self._fd = self._before = None
         try:
-            termios.tcsetattr(fd, termios.TCSANOW, before)
+            self._write(FOCUS_OFF)
         except _CANNOT_SAY:
             pass
 
@@ -355,7 +412,13 @@ class Dispatcher:
         if overlay.RESIZE not in self._kinds:
             return
         was, now = self._size, pane.size()
-        self._size = now
+        if now is not None:
+            # Stored only when it IS a rectangle. Overwriting with `None` would spend the
+            # comparison: a pty answers "no size" between a resize and the `TIOCSWINSZ`
+            # that follows (`frame/pane.py` calls that ordinary, not exotic), and one such
+            # reading in the middle would leave `was` as `None` on the next tick — so the
+            # resize that actually happened would never fire at all.
+            self._size = now
         if was is not None and now is not None and was != now:
             self._deliver(Event(overlay.RESIZE))
 
@@ -396,8 +459,18 @@ class Dispatcher:
             return self._feed(b"", final=True)
         try:
             chunk = os.read(self._fd, _CHUNK)
-        except OSError:
-            chunk = b""
+        except (BlockingIOError, InterruptedError):
+            # Not end of input, and telling them apart matters because the answer here is
+            # PERMANENT. `EAGAIN` means "ready a moment ago, nothing now" — a race that
+            # exists the instant anything in a provider's import graph puts `O_NONBLOCK`
+            # on fd 1 (asyncio adding stdout to an event loop does exactly that) — and
+            # `EINTR` is a signal this process handles, `SIGWINCH` being the one it arms
+            # itself. Folding either into the branch below would retire a component's
+            # events for the life of the panel over a syscall that meant "ask again".
+            return False
+        except _CANNOT_SAY:
+            self.close()
+            return False
         if not chunk:
             self.close()
             return False

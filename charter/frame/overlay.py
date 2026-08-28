@@ -190,11 +190,19 @@ _SPLIT_ROWS = 5
 #: `component.EVENT_KINDS` asks to degrade in, and not the `#{client_flags}` guard §4i
 #: warns about, which reads `attached,focused` with the feature dead.
 #:
-#: **This surface acts on neither**, and that is not an oversight: the overlay is the
-#: ACTIVE, zoomed pane for its whole life, so it never asks for `\x1b[?1004h` and no
-#: focus report ever reaches its decoder. `frame/events.py` is what these are decoded
-#: for, one pane over. `Surface.handle` returning `None` for them is pinned, so this
-#: addition cannot start moving a palette's selection.
+#: **This surface acts on neither**, and that is not an oversight: the overlay runs in a
+#: pane `open_argv` splits for it moments earlier, nothing in that pane writes
+#: `\x1b[?1004h`, and tmux sends focus reports only to a pane whose program asked
+#: (measured — see `frame/events.py`). `frame/events.py` is what these are decoded for,
+#: one pane over. `Surface.handle` returning `None` for them is pinned, so this addition
+#: cannot move a palette's selection.
+#:
+#: **What it would cost if one did arrive is a repaint, and that is stated rather than
+#: waved away.** `Surface.run` sets `repaint = True` for every event its `handle` does not
+#: turn into a verdict, so a focus report would redraw the pane where before these bytes
+#: were consumed and produced nothing. A palette redraws on every keystroke already, so
+#: the cost is one the surface pays constantly by design — but "cannot reach it" and
+#: "would be free if it did" are two claims, and only the first was true.
 KEY, CLICK, SCROLL, RESIZE = "key", "click", "scroll", "resize"
 FOCUS, BLUR = "focus", "blur"
 

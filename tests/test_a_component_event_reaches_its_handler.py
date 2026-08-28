@@ -30,6 +30,7 @@ import time
 import unittest
 from unittest import mock
 
+from charter import tui
 from charter.frame import component, events, overlay, panel
 
 from tests.test_component_providers import _source
@@ -179,6 +180,22 @@ class CharterDeliversThreeOfTheSixAndSaysWhich(unittest.TestCase):
     def test_a_component_with_no_handler_wants_nothing(self):
         c, _seen = _component(events=(), on_event=None)
         self.assertEqual(events.wanted(c), ())
+
+    def test_a_handler_that_is_falsy_is_still_a_handler(self):
+        """`Component` accepts any callable, and a handler written as an instance of a
+        class rather than as a function may define a falsy `__bool__` or an empty
+        `__len__`. Asking truthiness here would give it no dispatcher at all — #607's
+        defect with a new spelling — so the question is `is not None`, which is the one
+        `Component`'s own validation asks."""
+        class _Falsy:
+            def __bool__(self_):
+                return False
+
+            def __call__(self_, ev):
+                return True
+
+        c, _seen = _component(events=("focus",), on_event=_Falsy())
+        self.assertEqual(events.wanted(c), ("focus",))
 
 
 class TheWithdrawalUndoesExactlyWhatTheRequestAsked(unittest.TestCase):
@@ -361,6 +378,29 @@ class ADispatcherTakesOnlyWhatItNeeds(unittest.TestCase):
         self.assertFalse(d.reading)
         d.close()
 
+    def test_a_stream_whose_fileno_is_not_a_descriptor_is_left_alone(self):
+        """`termios.tcgetattr(None)` raises `TypeError`, not `OSError` — measured — so a
+        guard set widened only for `termios.error` still sent this to `panel._hold`,
+        painting a refusal for a component that had done nothing wrong. A `MagicMock`
+        stdout, which `mock.patch("sys.stdout")` installs, reaches this exact path."""
+        class _Vague:
+            def fileno(self_):
+                return None
+
+            def write(self_, _s):
+                pass
+
+            def flush(self_):
+                pass
+
+        with self.assertRaises(TypeError):
+            termios.tcgetattr(None)          # the measurement this case exists for
+        c, _seen = _component(events=("focus",))
+        d = events.Dispatcher(c, stream=_Vague())
+        d.open()
+        self.assertFalse(d.reading)
+        d.close()
+
     def test_a_pane_behind_a_real_descriptor_with_no_tty_is_the_same_answer(self):
         fd = os.open(os.devnull, os.O_RDWR)
         self.addCleanup(os.close, fd)
@@ -371,6 +411,108 @@ class ADispatcherTakesOnlyWhatItNeeds(unittest.TestCase):
         d = events.Dispatcher(c, stream=stream)
         d.open()
         self.assertFalse(d.reading)
+
+
+class TheRestoreIsTheThingCloseCannotAffordToLose(unittest.TestCase):
+    """`close` runs in two `finally`s and the mode it puts back is the operator's.
+
+    These are the cases an adversarial read of the first version produced. Each one is a
+    way the restore could be skipped or lost, and each was reachable.
+    """
+
+    def setUp(self):
+        self.tty = _Pty(self)
+
+    def _open(self):
+        c, _seen = _component(events=("focus",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        self.tty.sent()
+        return d
+
+    def test_a_withdrawal_that_raises_does_not_cost_the_mode(self):
+        """The withdrawal writes to the pane and the restore does not, so the write is the
+        half that can fail — and it used to run FIRST, with `_fd` already cleared, so a
+        raise there lost the `tcsetattr` permanently: the retry from `_watch`'s `finally`
+        found `_fd` `None` and returned."""
+        before = _mode(self.tty.slave)
+        d = self._open()
+        self.assertNotEqual(_lflags(self.tty.slave), before[3])
+
+        class _Refuses:
+            def fileno(self_):
+                return self.tty.slave
+
+            def write(self_, _s):
+                raise OSError("the pane went away")
+
+            def flush(self_):
+                pass
+
+        d._stream = _Refuses()
+        d.close()
+        self.assertEqual(_mode(self.tty.slave), before,
+                         "a failing withdrawal took the mode restore with it")
+
+    def test_the_mode_is_back_before_the_withdrawal_is_even_attempted(self):
+        """The case the ordering actually exists for, and the one a raising stream cannot
+        show: a withdrawal that BLOCKS.
+
+        `open` clears `ICANON`/`ECHO` and deliberately leaves the input flags alone, so
+        `IXON` is still on — an operator who selects this pane and presses Ctrl-S puts the
+        pty in XOFF and the flush inside `_write` waits for an XON that may never come.
+        With the withdrawal ahead of the restore, `close` parks there in a `finally` with
+        the operator's pane still echoing nothing and no process left to fix it.
+
+        Run on a thread with a deadline, so a regression is red rather than a hang.
+        """
+        import threading
+
+        before = _mode(self.tty.slave)
+        d = self._open()
+        released = threading.Event()
+
+        class _Blocks:
+            def fileno(self_):
+                return self.tty.slave
+
+            def write(self_, _s):
+                released.wait(10.0)
+
+            def flush(self_):
+                pass
+
+        d._stream = _Blocks()
+        t = threading.Thread(target=d.close, daemon=True)
+        t.start()
+        try:
+            deadline = time.time() + 5.0
+            while time.time() < deadline and _mode(self.tty.slave) != before:
+                time.sleep(0.02)
+            self.assertEqual(
+                _mode(self.tty.slave), before,
+                "close() parked on the withdrawal with the operator's mode still changed")
+        finally:
+            released.set()
+            t.join(10.0)
+
+    def test_a_second_close_after_a_failed_one_is_not_a_silent_no_op(self):
+        """Whatever `close` gives up on, the mode is back before it can."""
+        before = _mode(self.tty.slave)
+        d = self._open()
+        d.close()
+        d.close()
+        self.assertEqual(_mode(self.tty.slave), before)
+
+    def test_opening_twice_does_not_capture_cbreak_as_the_mode_to_restore(self):
+        """A second `open` used to read the mode the FIRST one installed and keep it as
+        `_before`, so `close` would "restore" the pane to ECHO off, for good."""
+        before = _mode(self.tty.slave)
+        d = self._open()
+        d.open()
+        d.close()
+        self.assertEqual(_mode(self.tty.slave), before)
 
 
 class AnEventReachesTheComponentThatOwnsThePane(unittest.TestCase):
@@ -456,6 +598,24 @@ class AnEventReachesTheComponentThatOwnsThePane(unittest.TestCase):
         self.assertEqual(seen, [])
         self.assertTrue(d.reading)
 
+    def test_nothing_available_right_now_is_not_end_of_input(self):
+        """`EAGAIN` and `EINTR` mean "ask again"; the branch beside them retires the
+        component's events for the life of the panel. Folding them together means one
+        `O_NONBLOCK` race — which anything putting stdout on an asyncio loop creates — or
+        one `SIGWINCH` landing in the read costs a component every later event, silently,
+        with no `failure` to paint."""
+        for err in (BlockingIOError(11, "EAGAIN"), InterruptedError(4, "EINTR")):
+            with self.subTest(err=type(err).__name__):
+                c, _seen = _component(events=("focus",))
+                d = events.Dispatcher(c, stream=self.tty.stream)
+                d.open()
+                self.addCleanup(d.close)
+                self.tty.deliver(b"\x1b[I")
+                with mock.patch("charter.frame.events.os.read", side_effect=err):
+                    self.assertFalse(d.poll(1.0))
+                self.assertTrue(d.reading, "a retryable read retired the input path")
+                self.assertIsNone(d.failure)
+
     def test_end_of_input_closes_the_path_and_does_not_end_the_panel(self):
         """The pane is still a rectangle this process can paint into. A panel that stopped
         repainting because its input closed would be taking a pane it was only lent."""
@@ -521,6 +681,20 @@ class AResizeIsTheRectangleMovingAndNotTheSignal(unittest.TestCase):
         with mock.patch("charter.frame.pane.size", return_value=None):
             d.note_resize()
         self.assertEqual(seen, [])
+
+    def test_a_reading_charter_could_not_take_does_not_swallow_the_resize(self):
+        """A pty answers "no size" between a resize and the `TIOCSWINSZ` that follows —
+        `frame/pane.py` calls that ordinary. Storing that `None` spends the comparison: the
+        next tick sees `was is None` and the resize that really happened never fires."""
+        c, seen = _component(events=("resize",))
+        d = self._dispatcher(c, os.terminal_size((40, 8)))
+        with mock.patch("charter.frame.pane.size", return_value=None):
+            d.note_resize()
+        self.assertEqual(seen, [])
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((120, 8))):
+            d.note_resize()
+        self.assertEqual([e.kind for e in seen], [overlay.RESIZE])
 
     def test_a_component_that_did_not_declare_resize_gets_none(self):
         c, seen = _component(events=("focus",))
@@ -694,10 +868,31 @@ class ThePanelPaintsWhatTheEventChanged(unittest.TestCase):
         class _Evs:
             failure = "acme.metrics stopped taking events — KeyError: 'no such row'"
 
-        with mock.patch("charter.frame.slots._width", return_value=78):
+        with mock.patch("charter.frame.slots.content_width", return_value=78), \
+             mock.patch("charter.frame.slots.inset_rows", side_effect=lambda t, n: t), \
+             mock.patch("charter.frame.panel._rows", return_value=6):
             got = panel._component_text(object(), "acme.metrics", "f-1", evs=_Evs())
         self.assertIn("acme.metrics", got)
         self.assertIn("KeyError", got)
+
+    def test_the_reason_is_wrapped_across_the_pane_and_never_clipped_to_one_line(self):
+        """Every other provider failure reaches a pane through `_wrap`, and `_wrap`'s own
+        docstring says why: "the tail of a refusal is the half that says what to do about
+        it". This message names the component first and what broke last, and
+        " charter: acme.metrics stopped taking events - " is 45 characters on its own — so
+        a single `tui.truncate` in a 30-column side panel clips the exception ALWAYS."""
+        class _Evs:
+            failure = ("acme.metrics stopped taking events — "
+                       "ZeroDivisionError: division by zero")
+
+        with mock.patch("charter.frame.slots.content_width", return_value=30), \
+             mock.patch("charter.frame.slots.inset_rows", side_effect=lambda t, n: t), \
+             mock.patch("charter.frame.panel._rows", return_value=8):
+            got = panel._component_text(object(), "acme.metrics", "f-1", evs=_Evs())
+        self.assertGreater(len(got.split("\n")), 1, "the reason was clipped to one line")
+        self.assertIn("ZeroDivisionError", got)
+        for line in got.split("\n"):
+            self.assertLessEqual(tui.width(line), 30, line)
 
     def test_the_reason_is_contained_before_it_is_measured(self):
         """#472's order. The reason quotes a stranger's exception text, and an escape
@@ -705,7 +900,9 @@ class ThePanelPaintsWhatTheEventChanged(unittest.TestCase):
         class _Evs:
             failure = "acme.metrics stopped taking events — KeyError: 'a\x1b[2Jb'"
 
-        with mock.patch("charter.frame.slots._width", return_value=200):
+        with mock.patch("charter.frame.slots.content_width", return_value=200), \
+             mock.patch("charter.frame.slots.inset_rows", side_effect=lambda t, n: t), \
+             mock.patch("charter.frame.panel._rows", return_value=6):
             got = panel._component_text(object(), "acme.metrics", "f-1", evs=_Evs())
         self.assertNotIn("\x1b[2J", got)
 
@@ -775,6 +972,27 @@ class ThePanelOpensAndClosesTheEventPathAroundItsLoop(unittest.TestCase):
         self.assertEqual(evs.log, ["open", "close"])
         self.assertIs(_signal.getsignal(_signal.SIGWINCH), before)
 
+    def test_a_close_that_raises_still_hands_the_sigwinch_handler_back(self):
+        """`_watch` exists as its own function so the handler it arms is restored by its
+        own `finally` (`RunOnceLoop.test_once_true_restores_the_previous_sigwinch_handler`).
+        A flat `close(); signal.signal(...)` puts the fallible call FIRST and defeats
+        exactly that — leaving a handler waking a loop with nothing left to repaint for the
+        rest of a held process's life."""
+        import signal as _signal
+
+        class _Raises(self._Evs):
+            def close(self_):
+                self_.log.append("close")
+                raise RuntimeError("the pane went away mid-restore")
+
+        evs = _Raises()
+        before = _signal.getsignal(_signal.SIGWINCH)
+        with mock.patch("charter.frame.state.version", return_value="v1"):
+            with self.assertRaises(RuntimeError):
+                panel._watch("top", "f-1", once=True, evs=evs,
+                             paint=lambda name, fid: None)
+        self.assertIs(_signal.getsignal(_signal.SIGWINCH), before)
+
     def test_a_loop_that_raises_still_puts_the_tty_back(self):
         """`panel._hold` never returns, so a mode left changed here is a pane in a state
         nothing on the machine puts back."""
@@ -841,6 +1059,60 @@ class TheCommittedRectangleDoesNotCostAComponentItsHandler(unittest.TestCase):
         reg.register(c)
         placed = reg.place(c.id, edge="bottom", size=component.Fixed(2))
         self.assertEqual(events.wanted(placed), ("focus",))
+
+
+class ACompositesPartCannotDeclareEventsNothingWouldDeliver(unittest.TestCase):
+    """#607's own defect, one level down, refused where the message names a fixable thing.
+
+    `panel._dispatcher` asks `wanted()` of the component PLACED on the frame, and a part is
+    never placed — its parent draws it inside its own pane (`Registry.on_edge`). So a
+    child's declaration would pass every check `Component` makes, build a handler, and
+    receive nothing, ever: exactly the state this whole branch exists to end.
+    """
+
+    def _leaf(self, cid, **kw):
+        base = dict(id=cid, title=cid, edge="right", size=component.Fixed(1),
+                    render=lambda ctx: [cid])
+        base.update(kw)
+        return component.Component(**base)
+
+    def test_a_part_that_declares_events_is_refused_and_names_both(self):
+        from charter.frame import registry
+
+        reg = registry.Registry()
+        reg.register(self._leaf("acme.head", events=("focus",),
+                                on_event=lambda ev: True))
+        reg.register(self._leaf("acme.body", size=component.Fill()))
+        with self.assertRaises(component.ComponentError) as e:
+            reg.register(self._leaf("acme.side",
+                                    children=("acme.head", "acme.body")))
+        self.assertIn("acme.head", str(e.exception))
+        self.assertIn("acme.side", str(e.exception))
+        self.assertIn("focus", str(e.exception))
+
+    def test_a_composite_may_declare_them_itself(self):
+        """The refusal is about WHERE the declaration sits, not about composites. The
+        parent owns the pane, so the parent is what charter can dispatch to."""
+        from charter.frame import registry
+
+        reg = registry.Registry()
+        reg.register(self._leaf("acme.head"))
+        reg.register(self._leaf("acme.body", size=component.Fill()))
+        side = reg.register(self._leaf(
+            "acme.side", children=("acme.head", "acme.body"),
+            events=("focus",), on_event=lambda ev: True))
+        self.assertEqual(events.wanted(side), ("focus",))
+
+    def test_a_composite_of_ordinary_parts_is_untouched(self):
+        """Charter's own sidebar is this shape, so the refusal must not reach it."""
+        from charter.frame import registry
+
+        reg = registry.Registry()
+        reg.register(self._leaf("acme.head"))
+        reg.register(self._leaf("acme.body", size=component.Fill()))
+        side = reg.register(self._leaf("acme.side",
+                                       children=("acme.head", "acme.body")))
+        self.assertEqual(side.children, ("acme.head", "acme.body"))
 
 
 class AProviderCanDeclareAHandlerAndCharterBuildsIt(unittest.TestCase):

@@ -498,6 +498,25 @@ class Registry:
                 raise ComponentError(
                     f"component {c.id} is built from {cid}, which {self._parent[cid]} "
                     f"already draws — one pane draws it, and two claims have no answer")
+            if child.events:
+                # #607's own defect, one level down, and refused for the reason that issue
+                # exists: `frame/panel.py:_dispatcher` asks `wanted()` of the component
+                # PLACED on the frame, and a part is never placed — its parent draws it
+                # (`on_edge`). So a child's declaration would pass every check, build a
+                # handler, and receive nothing, ever, with nothing anywhere saying so.
+                #
+                # The refusal rather than delivering to children as well, and the argument
+                # is `EVENT_KINDS`'s own about `drag`: widening this later costs nothing,
+                # while a provider that shipped against child delivery makes narrowing it
+                # impossible. A part that needs events says so through the composite that
+                # owns the pane, which is also the only thing that knows which of its parts
+                # a pointer would have been over.
+                raise ComponentError(
+                    f"component {c.id} is built from {cid}, which declares events "
+                    f"{', '.join(child.events)} — a part shares its parent's pane and is "
+                    f"never placed on the frame, so charter would dispatch to {c.id} and "
+                    f"nothing would ever reach {cid}. Declare the events on {c.id} and let "
+                    f"it tell its parts")
             if isinstance(child.size, Fill):
                 fills.append(cid)
         if len(fills) != 1:

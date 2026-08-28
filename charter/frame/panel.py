@@ -344,12 +344,26 @@ def _component_text(reg, cid: str, fid: str, *, evs=None) -> str:
     #512 is what it costs to ship.
     """
     from . import ctx as _ctx, gather
+    from .registry import _fit, _wrap
     try:
         if evs is not None and evs.failure:
-            # `contain.one_line` BEFORE the width arithmetic, as below and for the same
-            # reason: the reason quotes a stranger's exception text.
-            return tui.truncate(f" charter: {contain.one_line(evs.failure)}",
-                                slots._width())
+            # WRAPPED across the pane's rows, exactly as `Registry.draw` wraps the same
+            # class of message, and never truncated to one line. `_wrap`'s own docstring
+            # says why that is not cosmetic: "the tail of a refusal is the half that says
+            # what to do about it". Measured against this message in a 30-column `right`
+            # panel — " charter: acme.metrics stopped taking events — " is 45 characters
+            # on its own, so a single `tui.truncate` clips the exception text ALWAYS,
+            # which is the only part naming what broke.
+            #
+            # `content_width`/`inset_rows`, not `slots._width()`, so the reason sits in
+            # the same rectangle the component's own rows do and the operator's `pad`
+            # reaches it. `contain.one_line` BEFORE the width arithmetic (#472): the text
+            # quotes a stranger's exception, and `tui.width` on an unescaped escape
+            # sequence measures something the terminal is not about to draw.
+            width = slots.content_width(cid)
+            return slots.inset_rows(
+                "\n".join(_fit(_wrap(f"charter: {contain.one_line(evs.failure)}", width),
+                               width=width, height=_rows(), escape=True)), cid)
         c = reg.get(cid)
         snapshot = gather.read(fid) if c.needs else {}
         drew = reg.draw(cid, _ctx.build(c.needs, width=slots.content_width(cid),
@@ -645,9 +659,17 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
                 return 0
             handled = _wait(evs)
     finally:
-        if evs is not None:
-            evs.close()
-        signal.signal(signal.SIGWINCH, old_handler)
+        # Nested, so the handler goes back even if `close` raises. `signal.signal` cannot
+        # fail here and `close` can, and a flat sequence put the fallible call FIRST —
+        # which would have defeated the very guarantee this function was split out to make
+        # (`RunOnceLoop.test_once_true_restores_the_previous_sigwinch_handler`), leaving a
+        # handler waking a loop that has nothing left to repaint for the rest of a held
+        # process's life.
+        try:
+            if evs is not None:
+                evs.close()
+        finally:
+            signal.signal(signal.SIGWINCH, old_handler)
 
 
 def run(slot: str, fid: str, *, once: bool = False) -> int:

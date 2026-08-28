@@ -1135,9 +1135,17 @@ repaint that follows, from the one snapshot every component in that repaint shar
 
 **A handler that raises costs the component its events, and the pane says so.** It is
 retired — no further events are delivered to it — and its pane draws the reason instead of
-its rows, the same answer charter gives a provider that fails to import. A handler that
-never returns freezes that one pane and nothing else: the other panels keep painting, your
-harness is untouched, and `F12` still returns you to it.
+its rows, the same answer charter gives a provider that fails to import.
+
+A handler that never returns freezes that one pane. The other panels keep painting, your
+harness is untouched, and `F12` still returns you to it — but that pane also keeps the
+terminal mode charter set for it, so typing into it echoes nothing until you kill it.
+
+**A part of a composite cannot declare events.** A composite draws its parts inside its own
+pane, so a part is never placed on the frame and charter dispatches to the component that
+owns the pane. A part that declared events would receive nothing, which is the thing this
+release exists to stop happening — so it is refused when it registers, and the message says
+to declare them on the composite instead.
 
 ### Picking a workspace when the frame opens
 
