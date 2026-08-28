@@ -230,6 +230,16 @@ class TheSentencesThemselvesStillSayWhatTheySaid(unittest.TestCase):
             self.assertIn(Path(root).name, said, said)
         self.assertEqual(len(said.splitlines()), 1, said)
 
+    def test_and_it_lists_them_alphabetically_rather_than_in_tuple_order(self):
+        """`sorted`, doing work: `data_roots()` answers personas, workspaces, persona-state
+        — which is not alphabetical — and two refusals read side by side should not differ
+        by the order a tuple happens to be written in."""
+        names = [Path(r).name for r in contain.data_roots()]
+        self.assertNotEqual(names, sorted(names),
+                            "the roots are already in order, so this proves nothing")
+        said = contain._not_plane_data("/nonexistent/elsewhere")
+        self.assertIn("(" + ", ".join(sorted(names)) + ")", said, said)
+
 
 if __name__ == "__main__":
     unittest.main()
