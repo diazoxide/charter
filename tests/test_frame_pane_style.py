@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -851,15 +852,47 @@ class RealTmuxAcceptsEveryWordAndPaintsPerPane(_TmuxServerFixture, PersonaIso):
         self.assertEqual(self._style(pane), "bg=blue")
 
 
-class TheFrameDocumentsTheKeys(unittest.TestCase):
-    """`docs/frame.md` is where an operator reads what they may write. A key that exists
-    and is not documented is a key nobody finds."""
+class TheDocumentedExampleIsRunThroughCharter(unittest.TestCase):
+    """`docs/frame.md` is where an operator reads what they may write, and the example
+    they will paste is **parsed and resolved here** rather than eyeballed.
 
-    def test_both_keys_are_in_the_operator_documentation(self):
-        text = (Path(__file__).resolve().parents[1] / "docs" / "frame.md").read_text()
-        for needle in ('bg = "brightblack"', "pad = 1"):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, text)
+    A documented `charter.toml` that charter refuses is worse than no example: the whole
+    arrangement falls back to `slots` and the operator sees a frame that ignored the file
+    they copied from the docs. Read out of the markdown, through `tomllib`, through the
+    real `instance.frame_of` — so a key renamed in the code and not in the docs is red.
+    """
+
+    def _blocks(self) -> list[str]:
+        md = (Path(__file__).resolve().parents[1] / "docs" / "frame.md").read_text()
+        start = md.index("### A colour and an inset for one pane")
+        end = md.index("### Writing the arrangement out", start)
+        return re.findall(r"```toml\n(.*?)```", md[start:end], re.S)
+
+    def test_the_section_exists_and_carries_an_example(self):
+        """The control for the loop below, which passes vacuously on zero blocks."""
+        self.assertEqual(len(self._blocks()), 1)
+
+    def test_the_documented_example_resolves_to_the_frame_it_describes(self):
+        import tomllib
+        cfg = tomllib.loads(self._blocks()[0])
+        f = instance.frame_of(cfg)
+        self.assertEqual(f["slots"], ["top", "bottom", "repos", "right"],
+                         "the documented arrangement was refused whole")
+        got = {p["use"]: (p["bg"], p["pad"]) for p in f["components"]}
+        self.assertEqual(got, {"identity": (None, 0), "attention": (None, 0),
+                               "repos": ("black", 1), "sidebar": ("brightblack", 1)})
+
+    def test_the_seventeen_words_are_named_in_the_documentation(self):
+        """An operator cannot guess a closed vocabulary. Asked of the table rather than of
+        a sentence, so a colour added to `FRAME_PANE_BG` and not to the docs is red."""
+        md = (Path(__file__).resolve().parents[1] / "docs" / "frame.md").read_text()
+        for word in instance.FRAME_PANE_BG:
+            if word.startswith("bright"):
+                continue        # named once as the rule, not sixteen times as a list
+            with self.subTest(word=word):
+                self.assertIn(f"`{word}`", md)
+        self.assertIn("`bright` forms", md)
+        self.assertIn(f"`0` to `{instance.FRAME_PANE_PAD_MAX}`", md)
 
 
 if __name__ == "__main__":                        # pragma: no cover
