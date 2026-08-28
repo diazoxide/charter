@@ -284,46 +284,11 @@ class _AFrameWithProviderPanels(PersonaIso):
                                          "-F", "#{client_name}").stdout.strip()),
                       timeout=10.0):
                 self.addCleanup(self._reap, pid, fd)
-                self._drain(fd)
                 return fd
             refusals.append(term)
             self._reap(pid, fd)
         self.skipTest("no tmux client will attach on this machine, and focus events need "
                       "one — tried TERM=" + ", ".join(refusals))
-
-    @staticmethod
-    def _drain(fd: int) -> None:
-        """Read and discard everything the attached client paints, for as long as it runs.
-
-        **This file is the first here to use a pty in BOTH directions, and only one of them
-        had a reader.** tmux writes the client's whole screen to the master and `_inject`
-        writes mouse reports back down it. Nothing consumed the screen: the focus cases
-        never had to, because they read the frame through `capture-pane`, which asks the
-        SERVER and not the client. Four panels repainting for the life of a case put far
-        more through that direction than a pty buffers, and a tmux client blocked writing
-        its screen is a tmux client not reading its input — so the reports `_inject` sends
-        would sit in a queue nobody empties, and the case would fail having proved nothing
-        about routing.
-
-        Stated as prevention rather than as a fix: it has not been seen, here or on CI,
-        because a case lives about a second and the buffer does not fill that fast. It is
-        a race whose losing side is a flake on a slower or busier machine than this one,
-        and one draining thread is a great deal cheaper than diagnosing it there.
-
-        A daemon thread, so a case that fails before its cleanup cannot leave one holding
-        the process open.
-        """
-        import threading
-
-        def pump():
-            while True:
-                try:
-                    if not os.read(fd, 65536):
-                        return
-                except OSError:
-                    return
-
-        threading.Thread(target=pump, daemon=True).start()
 
     @staticmethod
     def _reap(pid: int, fd: int) -> None:
