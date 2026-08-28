@@ -1327,12 +1327,19 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         bg = table.get("bg")
         if bg is not None and pane_bg(bg) is None:
             return None
-        # And the inset. `0` is a real declared value and falsy, so the refusal is `is
-        # None` — `if not pane_pad(pad)` would refuse `pad = 0` and accept nothing else
-        # about it, which is the spelling-not-property shape this project has paid for
-        # six times.
-        pad = table.get("pad", 0)
-        if pane_pad(pad) is None:
+        # And the inset. Called ONCE, with the answer kept: `pad = table.get("pad", 0)`
+        # followed by `if pane_pad(pad) is None` reads as two steps and is one — `pane_pad`
+        # answers its own argument unchanged, so the second call could not have produced a
+        # different value and the line below would have been a guard with nothing behind
+        # it. The same is true of `bg` above, which is why `pane_bg` is asked there and not
+        # again at the placement: it too answers the object it was given (see its
+        # docstring — the containment lives in `pane_bg_options`, not in the return).
+        #
+        # `0` is a real declared value and falsy, so the refusal is `is None`. `if not
+        # pane_pad(...)` would refuse `pad = 0` and say nothing else about it, which is the
+        # spelling-not-property shape this project has paid for six times.
+        pad = pane_pad(table.get("pad", 0))
+        if pad is None:
             return None
         if cid in _builtins.SLOT_OF:
             c = reg.get(cid)
@@ -1343,7 +1350,7 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
                                         and not isinstance(table["size"], bool)):
                 return None
             out.append(_built_in_placement(reg, cid, visible=visible, key=key,
-                                           bg=pane_bg(bg), pad=pane_pad(pad)))
+                                           bg=bg, pad=pad))
             continue
         # Not one of charter's own: a component id, which is placeable exactly when an
         # installed distribution declares it. Asked of entry point METADATA — nothing is
@@ -1354,7 +1361,7 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
                 or not isinstance(size, int) or isinstance(size, bool) or size < 1):
             return None
         out.append(_placement(cid, edge=edge, size=Fixed(size), visible=visible, key=key,
-                              bg=pane_bg(bg), pad=pane_pad(pad)))
+                              bg=bg, pad=pad))
     return out
 
 

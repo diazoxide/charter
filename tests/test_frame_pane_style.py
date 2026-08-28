@@ -239,6 +239,35 @@ class AnUnusableStyleTakesTheArrangementWithIt(unittest.TestCase):
             with self.subTest(key=key):
                 self._fell_back([{"use": "identity"}, {"use": "repos", key: 2}])
 
+    def test_the_boundary_check_is_the_only_answer_and_the_placement_is_not_a_second(self):
+        """**Why there is no second sanitiser on the way into the placement.**
+
+        `_placement(..., bg=pane_bg(bg), pad=pane_pad(pad))` was written first and deleted:
+        both functions answer their own argument unchanged (asserted in
+        `TheVocabularyIsClosedAndCharterOwnsEveryValue` and
+        `ThePadIsBoundedAtTheConfigBoundary`), and the check three lines above has already
+        turned away everything they would have turned away — so the call could not change a
+        value and could not change an outcome. A line that cannot is a second, weaker
+        answer to a question already answered, which is what #568 deleted the last of.
+
+        This is what has to stay pinned for that deletion to be safe: what reaches a
+        placement is either `None`/`0` or a word already in the table, **whatever the file
+        said** — and it is asked of every word rather than of one, because "the hostile one
+        is refused" is a spelling and "nothing else can get here" is the property."""
+        for bad in ("chartreuse", "colour236", "bg=#{?1,colour196,colour46}"):
+            with self.subTest(bg=bad):
+                f = instance.frame_of({"frame": {"component": [
+                    {"use": "repos", "bg": bad}]}})
+                self.assertEqual(f["components"], [])
+        for word in instance.FRAME_PANE_BG:
+            for pad in range(0, instance.FRAME_PANE_PAD_MAX + 1):
+                with self.subTest(bg=word, pad=pad):
+                    f = _arrangement(repos={"bg": word, "pad": pad})
+                    p = next(p for p in f["components"] if p["use"] == "repos")
+                    self.assertIn(p["bg"], instance.FRAME_PANE_BG)
+                    self.assertEqual(p["pad"], pad)
+                    self.assertEqual(instance.pane_bg(p["bg"]), p["bg"])
+
     def test_a_usable_style_survives_and_reaches_the_placement(self):
         """The control, and it is not optional: every assertion above is a negative, and
         a `component_tables` that refused everything would pass all of them."""
