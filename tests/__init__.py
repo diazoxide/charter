@@ -30,6 +30,19 @@ os.environ["CODEX_HOME"] = os.path.join(_SANDBOX, "codex")
 os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
 os.makedirs(os.environ["CODEX_HOME"], exist_ok=True)
 
+# The config file charter never writes and every `git` it spawns reads: the operator's own
+# `~/.gitconfig`. Redirected here for the same reason as the two above and with a sharper
+# consequence — a fixture repository inherits `commit.gpgsign = true`, and with 1Password's
+# `op-ssh-sign` behind it `git commit` parks on a biometric prompt and the suite never
+# returns (#641). Not a failure: a hang, with no verdict and no line saying why, and one CI
+# can never see because a runner has no signing config. See `tests/_gitguard.py`.
+#
+# ABOVE the `_ttyguard` import below and so above everything that pulls charter in:
+# `charter.config` resolves a plane at import and reads a git worktree pointer on the way.
+from . import _gitguard      # noqa: E402  (imports no charter module, by design)
+
+_gitguard.install()
+
 # The FOURTH fixture, installed FIRST because it is the one thing here that must be true
 # before `charter` is imported at all: the suite's own file descriptors. `charter.util`
 # computes `_USE_COLOR` from `sys.stderr.isatty()` at import, and `sys.stdin`'s tty-ness
@@ -67,6 +80,17 @@ _envguard.install()
 from . import _planeguard      # noqa: E402  (env above must be set before charter loads)
 
 _planeguard.install()
+
+# The one thing the tripwire above cannot do is ANSWER. `doctor.check_forge_auth` runs
+# `gh auth status --hostname github.com` — the operator's real token, validated against a
+# real forge, 28 times per run from 18 modules (#638). Refusing that would only redden
+# them, so this answers it with a recorded reply, and `_planeguard.RealForgeReach` refuses
+# every forge-CLI spawn that is left. BELOW `_planeguard.install()`, deliberately: the
+# refusal is armed first, so anything this fixture does not cover fails by name rather than
+# reaching github.com.
+from . import _forgeprobe      # noqa: E402
+
+_forgeprobe.install()
 
 # And the one thing no guard can prevent, only clean up after: a run that was KILLED.
 # Measured — a `kill -9` two seconds into `test_frame_overlay_escape_hatch` leaves a live

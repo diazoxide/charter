@@ -28,6 +28,7 @@ from unittest import mock
 from charter import statusline, workspace
 from charter.frame import slots, state
 
+from tests import _gitguard
 from tests._isolation import PersonaIso
 
 
@@ -76,7 +77,15 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
 
     def _run(self, *, fid: str | None, tty: bool = False, pane: str = _PANE,
              harness: str = "claude-code", payload: dict | None = None) -> str:
-        env = {"CHARTER_SESSION_ID": fid} if fid else {}
+        # `clear=True` below empties the environment, and `statusline.render` reaches
+        # `inventory.plane_repo`, which runs `git remote get-url origin`. A git child of a
+        # cleared environment reads the operator's own `~/.gitconfig` — the one thing this
+        # suite must not let it do (#641) — so the redirect is put back explicitly. Ten
+        # cases in this module were the only place in 7,984 that stepped outside it, and
+        # `tests._planeguard.AmbientGitConfig` is what found them.
+        env = dict(_gitguard.environment())
+        if fid:
+            env["CHARTER_SESSION_ID"] = fid
         if pane:
             env["TMUX_PANE"] = pane
         if harness:
@@ -301,6 +310,7 @@ class SuppressionSaysSoOnDemand(PersonaIso, unittest.TestCase):
 
     def _row(self, env: dict):
         from charter import doctor
+        env = {**_gitguard.environment(), **env}      # `clear=True`, see `_run` above
         with mock.patch.dict(os.environ, env, clear=True), \
              mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)):
             return doctor.check_frame()
