@@ -660,6 +660,18 @@ class TheSynonymShape(unittest.TestCase):
         """)
         self.assertEqual(_by(muts, "drop-normalise"), [])
 
+    def test_a_swap_that_is_not_type_correct_everywhere_is_not_in_the_table(self):
+        """`index` is on `list`, `tuple` and `str`; `rindex` is on `str` alone. Swapping
+        it would turn `args.index("-m")` into an `AttributeError` — a red for a reason that
+        has nothing to do with which end was searched, which is a false pin. Measured
+        before the pair was dropped: all five `.index(` calls in `charter/` are on lists."""
+        self.assertNotIn("index", sweep.SYNONYMS)
+        muts = _mutations("""
+            def f(args):
+                return args.index("-m")
+        """)
+        self.assertEqual(_by(muts, "swap-synonym"), [])
+
     def test_every_pair_in_the_table_names_the_one_axis_it_moves(self):
         """The table is the justification. A pair with no axis written down is a swap
         somebody liked the look of, and that is how this becomes a general-purpose mutation

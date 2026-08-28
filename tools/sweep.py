@@ -368,7 +368,13 @@ SYNONYMS = {
     "partition": ("rpartition", "which end"),
     "rpartition": ("partition", "which end"),
     "find": ("rfind", "which end"),    "rfind": ("find", "which end"),
-    "index": ("rindex", "which end"),
+    # `index`/`rindex` is deliberately NOT here, and the reason is the rule the table is
+    # built on. A pair belongs only if the swap is type-correct wherever the name appears,
+    # and `index` is on `list`, `tuple` and `str` while `rindex` is on `str` alone — so
+    # `args.index("-m")` would mutate into an `AttributeError`. That reddens the suite for
+    # a reason that has nothing to do with which end was searched, which is a FALSE PIN,
+    # which is the failure this whole file exists to prevent. Checked against the tree
+    # before dropping it: all five `.index(` calls in `charter/` are on lists.
     "min": ("max", "which extreme"),   "max": ("min", "which extreme"),
     "any": ("all", "how many"),        "all": ("any", "how many"),
     "sorted": ("list", "ordering"),
