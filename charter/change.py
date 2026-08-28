@@ -167,6 +167,9 @@ def read(ws: str, slug: str) -> dict:
     regular file with nothing to object to, and only ``dir_refusal`` — which resolves —
     catches it.
     """
+    # `path_for` refuses anything that is not a change name, so `slug` is
+    # `[A-Za-z0-9][A-Za-z0-9._-]*` from here down and the messages below need no further
+    # containment — `validate` does contain it, because `write` calls that one FIRST.
     p = path_for(ws, slug)
     refusal = contain.dir_refusal(p.parent) or contain.file_refusal(p)
     if refusal:
@@ -174,12 +177,11 @@ def read(ws: str, slug: str) -> dict:
     try:
         raw = p.read_text()
     except OSError as exc:
-        raise RecordError(f"change {contain.readable(slug)}: cannot be read ({exc})") from exc
+        raise RecordError(f"change '{slug}': cannot be read ({exc})") from exc
     try:
         rec = json.loads(raw)
     except ValueError as exc:
-        raise RecordError(
-            f"change {contain.readable(slug)}: the record is not JSON ({exc})") from exc
+        raise RecordError(f"change '{slug}': the record is not JSON ({exc})") from exc
     validate(rec, slug)
     return rec
 

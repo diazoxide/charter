@@ -231,12 +231,11 @@ def cmd_change_drop(args) -> int:
     why = _why(args, "why this repo is out")
     if why is None:
         return 1
-    # Asked of every name, not only of one that is not already a member: a member's name
-    # came out of a validated record and passes by construction, so the unconditional form
-    # is the same rule with one fewer way to be wrong.
-    if not contain.segment_ok(repo):
-        util.err(contain.refusal(contain.readable(repo)))
-        return REFUSED
+    # No `segment_ok` gate here, deliberately, and it was measured rather than reasoned:
+    # `..` reaches `change.write` below, `_repo_name` refuses the exclusion it would have
+    # written, and the operator gets the same exit code and the same sentence — so a gate
+    # here is a line no test can redden. `add` is the opposite case and keeps its own: there
+    # the resolver has to answer *before* a name is joined onto a directory.
     if change.exclusion(rec, repo) is not None:
         util.err(f"'{repo}' is already excluded from '{slug}'.")
         return REFUSED
@@ -277,11 +276,10 @@ def cmd_change_forget(args) -> int:
     if not change.exists(ws, slug):
         util.err(f"no change {contain.readable(slug)} in workspace '{ws}'.")
         return REFUSED
-    try:
-        removed = change.forget(ws, slug)
-    except change.RecordError as exc:
-        util.err(str(exc))
-        return 1
+    # No `RecordError` handler: `exists` above has already put this slug through
+    # `path_for`, so the only way out of `forget` is a path charter must not write — a
+    # committed link at the record's own name — which is the `None` below.
+    removed = change.forget(ws, slug)
     if removed is None:
         util.err(f"could not delete the record for {contain.readable(slug)}.")
         return 1

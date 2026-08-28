@@ -164,7 +164,10 @@ class TestBothRefusalsAreAsked(ChangeIso):
         os.symlink(elsewhere, change.changes_dir("ws"))
         records, refused = change.all_for("ws")
         self.assertEqual(records, [])
-        self.assertTrue(refused)
+        # The DIRECTORY is what was refused, named as such. Without the directory check the
+        # listing still refuses every file inside it one at a time — same exit, same empty
+        # `records`, and a report that blames five records for a link on their parent.
+        self.assertEqual([slug for slug, _ in refused], [change.DIRNAME])
 
 
 class TestAFailedReadRaises(ChangeIso):
@@ -421,6 +424,27 @@ class TestTheListing(ChangeIso):
     def test_a_workspace_with_no_changes_directory_lists_nothing_and_refuses_nothing(self):
         self.assertEqual(change.all_for("ws"), ([], []))
 
+    def test_records_come_back_in_slug_order(self):
+        """The listing IS the order — there is no rank field and nothing to disagree with
+        the name, which is only true while the read is sorted."""
+        for slug in ("zeta", "alpha", "middle"):
+            change.write("ws", slug, dict(GOOD, change=slug))
+        records, _ = change.all_for("ws")
+        self.assertEqual([r["change"] for r in records], ["alpha", "middle", "zeta"])
+
+    def test_an_emptied_changes_directory_holds_no_records(self):
+        """`any`, not `all`: an empty directory satisfies `all` vacuously, and the answer
+        that matters to `_ws_meta_paths` is "is there something git could untrack here"."""
+        change.write("ws", "only-one", dict(GOOD, change="only-one"))
+        change.forget("ws", "only-one")
+        self.assertTrue(change.changes_dir("ws").exists())
+        self.assertFalse(change.has_records("ws"))
+
+    def test_a_directory_holding_a_record_and_something_else_still_holds_a_record(self):
+        change.write("ws", "only-one", dict(GOOD, change="only-one"))
+        (change.changes_dir("ws") / "README.txt").write_text("notes\n")
+        self.assertTrue(change.has_records("ws"))
+
     def test_the_log_directory_is_not_a_record(self):
         change.write("ws", "good-one", dict(GOOD, change="good-one"))
         change.log_dir("ws").mkdir(parents=True)
@@ -457,6 +481,168 @@ class TestTheStoreIsCreatedLazily(ChangeIso):
         change.forget("ws", "component-api-2")
         self.assertFalse(change.exists("ws", "component-api-2"))
         self.assertTrue(log.exists())
+
+
+class TestTheShapeIsAskedNotAssumed(ChangeIso):
+    """Every `isinstance` in `validate` is a guard, and a record arriving from a hand edit
+    or an older charter is where the wrong shape comes from. Without these, a JSON list
+    where an object belongs reaches the loop below it as an `AttributeError` — a traceback
+    where the record was supposed to be named."""
+
+    def test_a_record_that_is_not_an_object_is_refused(self):
+        self.put("component-api-2", "[1, 2, 3]")
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        self.assertIn("not an object", str(cm.exception))
+
+    def test_members_must_be_a_list(self):
+        rec = json.loads(json.dumps(GOOD))
+        rec["members"] = {"repo": "charter"}
+        self.put_record("component-api-2", rec)
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        self.assertIn("'members' is not a list", str(cm.exception))
+
+    def test_a_member_must_be_an_object(self):
+        rec = json.loads(json.dumps(GOOD))
+        rec["members"] = ["charter"]
+        rec["excluded"] = []
+        self.put_record("component-api-2", rec)
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        self.assertIn("member is not an object", str(cm.exception))
+
+    def test_needs_must_be_a_list(self):
+        rec = json.loads(json.dumps(GOOD))
+        rec["members"] = [{"repo": "charter", "branch": "b", "needs": "charter-metrics"}]
+        rec["excluded"] = []
+        self.put_record("component-api-2", rec)
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        self.assertIn("'needs' is not a list", str(cm.exception))
+
+    def test_excluded_must_be_a_list(self):
+        rec = json.loads(json.dumps(GOOD))
+        rec["excluded"] = {"repo": "charter-slack"}
+        self.put_record("component-api-2", rec)
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        self.assertIn("'excluded' is not a list", str(cm.exception))
+
+    def test_an_exclusion_must_be_an_object(self):
+        rec = json.loads(json.dumps(GOOD))
+        rec["excluded"] = ["charter-slack"]
+        self.put_record("component-api-2", rec)
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        self.assertIn("exclusion is not an object", str(cm.exception))
+
+    def test_a_why_that_is_not_a_string_is_refused(self):
+        for value in (12, None, ["a"], {"a": 1}):
+            with self.subTest(value=value):
+                rec = json.loads(json.dumps(GOOD))
+                rec["why"] = value
+                self.put_record("component-api-2", rec)
+                with self.assertRaises(change.RecordError):
+                    change.read("ws", "component-api-2")
+
+    def test_a_branch_that_is_not_a_non_empty_string_is_refused(self):
+        for branch in (None, "", 3, ["x"], {}):
+            with self.subTest(branch=branch):
+                self.assertIsNotNone(change.branch_refusal(branch))
+
+    def test_a_record_charter_may_not_open_raises_rather_than_answering_empty(self):
+        """`file_refusal` asks one `lstat` — is this a link, is it a regular file, how big
+        is it — and a file the process may not READ passes all three. The `OSError` handler
+        is what keeps that arriving as a named refusal instead of a traceback, and it is
+        the same "never answers `{}`" property one layer down."""
+        if os.geteuid() == 0:
+            self.skipTest("root reads anything, so there is nothing to measure")
+        change.write("ws", "component-api-2", json.loads(json.dumps(GOOD)))
+        p = change.path_for("ws", "component-api-2")
+        p.chmod(0o000)
+        self.addCleanup(p.chmod, 0o600)
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        self.assertIn("cannot be read", str(cm.exception))
+
+
+class TestEveryRefusalIsOneLineWhateverItNames(ChangeIso):
+    """A refusal is a report line **about** a value charter would not accept — and that
+    value is exactly the one that must not be able to write a second line into the report.
+
+    Asked as a property over every refusing entry point rather than site by site, because
+    the containment call at each site is invisible in its own output: a test that only
+    checks `assertRaises` stays green with every `contain.readable` deleted, which is how
+    ninety of them come to be a comment with a runtime cost.
+    """
+
+    ESC = "\x1b"
+    HOSTILE = "ok\n  charter  branch main  landed"
+
+    def _refusal(self, fn, *a) -> str:
+        with self.assertRaises(change.RecordError) as cm:
+            fn(*a)
+        return str(cm.exception)
+
+    def _messages(self) -> list[str]:
+        out = [
+            self._refusal(change.path_for, "ws", self.HOSTILE),
+            self._refusal(change.path_for, "ws", f"api{self.ESC}[2K"),
+            # `write` validates BEFORE it resolves the path, so the slug reaching these
+            # messages has been through nothing at all.
+            self._refusal(change.write, "ws", self.HOSTILE, json.loads(json.dumps(GOOD))),
+        ]
+        hostile_name = json.loads(json.dumps(GOOD))
+        hostile_name["change"] = self.HOSTILE
+        out.append(self._refusal(change.validate, hostile_name, "component-api-2"))
+        for field, value in (("repo", f"api{self.ESC}[2K/../x"),
+                             ("branch", f"b{self.ESC}[2K"),
+                             ("needs", [f"api{self.ESC}[2K/x"])):
+            rec = json.loads(json.dumps(GOOD))
+            rec["members"] = [{"repo": "api", "branch": "b", "needs": []}]
+            rec["excluded"] = []
+            rec["members"][0][field] = value
+            out.append(self._refusal(change.validate, rec, "component-api-2"))
+        rec = json.loads(json.dumps(GOOD))
+        rec["excluded"] = [{"repo": f"x{self.ESC}[2K/y", "why": "w", "at": "t"}]
+        out.append(self._refusal(change.validate, rec, "component-api-2"))
+        rec = json.loads(json.dumps(GOOD))
+        rec[f"sneaky{self.ESC}[2K"] = 1
+        out.append(self._refusal(change.validate, rec, "component-api-2"))
+        for key in ("why", "created", "by"):
+            rec = json.loads(json.dumps(GOOD))
+            rec[key] = self.HOSTILE
+            out.append(self._refusal(change.validate, rec, "component-api-2"))
+        rec = json.loads(json.dumps(GOOD))
+        rec["excluded"] = [{"repo": "x", "why": self.HOSTILE, "at": "t"}]
+        out.append(self._refusal(change.validate, rec, "component-api-2"))
+        return out
+
+    def test_a_branch_refusal_cannot_forge_a_second_line_either(self):
+        """`branch_refusal` answers a sentence rather than raising, and the leading-dash
+        arm is reached BEFORE the one-line arm — so that message carries a value nothing
+        else has looked at yet."""
+        for branch in (f"-b\n  charter  branch main  landed", f"-{self.ESC}[2K"):
+            with self.subTest(branch=branch):
+                msg = change.branch_refusal(branch)
+                self.assertEqual(len(msg.splitlines()), 1, msg)
+                self.assertNotIn(self.ESC, msg)
+
+    def test_there_are_refusals_to_measure(self):
+        """The control. A helper that raised on its own first line would make every
+        assertion below pass over an empty list."""
+        self.assertGreaterEqual(len(self._messages()), 8)
+
+    def test_no_refusal_can_forge_a_second_line(self):
+        for msg in self._messages():
+            with self.subTest(msg=msg[:60]):
+                self.assertEqual(len(msg.splitlines()), 1, msg)
+
+    def test_no_refusal_carries_an_escape_through(self):
+        for msg in self._messages():
+            with self.subTest(msg=msg[:60]):
+                self.assertNotIn(self.ESC, msg)
 
 
 def _args(**kw):

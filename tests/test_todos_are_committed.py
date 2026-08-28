@@ -131,9 +131,17 @@ class TestChangesTravelWithTheWorkspace(PersonaIso):
         self.assertEqual(_un_ignored("alpha"), set(cw._ws_meta_paths("alpha")))
 
     def test_the_landing_log_is_in_neither_list(self):
-        log = "workspaces/alpha/changes/log"
+        log = f"workspaces/alpha/{change.DIRNAME}/{change.LOG_DIRNAME}"
         self.assertNotIn(log, _un_ignored("alpha"))
         self.assertNotIn(log, cw._ws_meta_paths("alpha"))
+
+    def test_the_block_re_ignores_the_directory_change_itself_calls_the_log(self):
+        """The block spells the two names as literals — `charter.change` imports this
+        module, so it cannot import back — and this is what keeps the literal and the
+        constant one name. Renaming `LOG_DIRNAME` without touching the block would
+        otherwise leave the log un-ignored, which is a merge sha per host in a commit."""
+        self.assertIn(f"/workspaces/alpha/{change.DIRNAME}/{change.LOG_DIRNAME}/",
+                      workspace._live_block(["alpha"]).splitlines())
 
     def test_git_itself_still_ignores_the_landing_log_inside_a_shared_changes_dir(self):
         """Asked of git rather than of the block's text: re-including `changes/` and then

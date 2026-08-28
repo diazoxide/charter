@@ -113,6 +113,27 @@ class TestTheHappyPath(ChangeCommands):
         for word in ("state", "landed", "pr", "number", "ci", "checks", "url", "remote"):
             self.assertNotIn(f'"{word}"', text)
 
+    def test_a_member_with_no_blockers_shows_no_needs(self):
+        """The negative half of `test_needs_is_recorded_and_shown`: without it, printing an
+        empty `needs:` on every row would pass both."""
+        self.create()
+        self.call(commands_change.cmd_change_add, change="component-api-2", repo="charter")
+        code, out, _ = self.call(commands_change.cmd_change_show, change="component-api-2")
+        self.assertEqual(code, 0)
+        self.assertNotIn("needs:", out)
+
+    def test_a_change_with_no_exclusions_prints_no_excluded_section(self):
+        self.create()
+        code, out, _ = self.call(commands_change.cmd_change_show, change="component-api-2")
+        self.assertEqual(code, 0)
+        self.assertNotIn("excluded", out)
+
+    def test_an_empty_workspace_lists_nothing_and_says_how_to_start(self):
+        code, out, err = self.call(commands_change.cmd_change_list)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "")
+        self.assertIn("charter change create", err)
+
 
 class TestTheContainmentProperty(ChangeCommands):
     def test_a_repo_with_no_clone_is_refused_and_names_charter_clone(self):
@@ -347,6 +368,16 @@ class TestDrop(ChangeCommands):
         self.assertEqual(rec["excluded"], [])
         self.assertIsNotNone(change.member(rec, "charter"))
 
+    def test_dropping_a_name_that_is_a_path_is_refused(self):
+        self.create()
+        for repo in ("..", "a/b", "x\\x00y"):
+            with self.subTest(repo=repo):
+                code, _, err = self.call(commands_change.cmd_change_drop,
+                                         change="component-api-2", repo=repo, why="out")
+                self.assertEqual(code, commands_change.REFUSED)
+                self.assertIn("is not a name", err)
+                self.assertEqual(change.read("ws", "component-api-2")["excluded"], [])
+
 
 class TestForget(ChangeCommands):
     def test_forget_deletes_the_record(self):
@@ -407,6 +438,50 @@ class TestABranchNameIsArgvNotARef(ChangeCommands):
                                 repo=ns.repo, branch=ns.branch)
         self.assertEqual(code, 1)
         self.assertIn("FLAG", err)
+
+
+class TestTheWritePathIsContainedToo(ChangeCommands):
+    """`create` is the one verb that writes without reading first, so it is the one where
+    `contain.writable` is the gate rather than a second opinion. A committed link at
+    `changes/` would otherwise relocate every record written under it — `mkdir(exist_ok=
+    True)` accepts a symlink to a directory without complaint."""
+
+    def test_creating_into_a_changes_directory_that_links_out_of_the_plane_is_refused(self):
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        os.symlink(elsewhere, change.changes_dir("ws"))
+        code, _, err = self.call(commands_change.cmd_change_create,
+                                 change="component-api-2", why="x")
+        self.assertEqual(code, 1)
+        self.assertIn("control plane", err)
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_forget_declines_a_record_that_is_a_link_out_of_the_plane(self):
+        elsewhere = self.tmp / "elsewhere.json"
+        elsewhere.write_text("{}")
+        change.changes_dir("ws").mkdir(parents=True)
+        os.symlink(elsewhere, change.changes_dir("ws") / "component-api-2.json")
+        code, _, err = self.call(commands_change.cmd_change_forget, change="component-api-2")
+        self.assertEqual(code, 1)
+        self.assertIn("could not delete", err)
+        self.assertTrue(elsewhere.exists())
+
+
+class TestTheAuthorIsOneLine(ChangeCommands):
+    """`by` comes out of `git config`, a file on this machine charter did not write, and it
+    lands in a record a LIVE workspace commits and every `show` prints back."""
+
+    def _author_with(self, stdout: str) -> str:
+        from unittest import mock
+        with mock.patch.object(commands_change.util, "run",
+                               return_value=SimpleNamespace(stdout=stdout)):
+            return commands_change._author()
+
+    def test_only_the_first_line_is_taken(self):
+        self.assertEqual(self._author_with("Real Name\n✓ merged everything\n"), "Real Name")
+
+    def test_an_unset_git_identity_still_produces_a_name(self):
+        self.assertTrue(self._author_with(""))
 
 
 class TestHostileValuesRenderAsOneRow(ChangeCommands):
