@@ -70,7 +70,10 @@ def _why(args, tail: str) -> str | None:
     if not why:
         util.err(f"--why is required: one line saying {tail}.")
         return None
-    if contain.one_line(why) != why:
+    # `change.TEXT_LIMIT`, not `contain`'s row budget: the record's own bound and this one
+    # have to be the same number, or a `why` charter accepts here is a record charter then
+    # refuses to read back. Where it is drawn, `contain.one_line` clips it to a row.
+    if contain.one_line(why, limit=change.TEXT_LIMIT) != why:
         util.err("--why must be one plain line — it is repeated back on a report row and "
                  "written into a pull request body. Longer reasoning belongs in "
                  "workspace.md, which is where this plane keeps prose.")
@@ -181,10 +184,11 @@ def cmd_change_add(args) -> int:
         util.info(f"Clone it first: charter clone {contain.readable(repo)} -w {ws}")
         return REFUSED
     if change.member(rec, repo) is not None:
-        util.err(f"'{repo}' is already a member of '{slug}'.")
+        shown = contain.readable(repo)
+        util.err(f"'{shown}' is already a member of '{slug}'.")
         util.info(f"Change its branch or blockers by editing "
                   f"workspaces/{ws}/changes/{slug}.json, or drop it first: "
-                  f"charter change drop {slug} {repo} --why \"…\"")
+                  f"charter change drop {slug} {shown} --why \"…\"")
         return REFUSED
 
     branch = getattr(args, "branch", None) or change.default_branch(slug)
@@ -209,7 +213,7 @@ def cmd_change_add(args) -> int:
         util.warn(f"the exclusion recorded on {contain.one_line(lifted['at'])} is lifted: "
                   f"{contain.one_line(lifted['why'])}")
     print(_member_line(rec, {"repo": repo, "branch": branch, "needs": needs}))
-    util.ok(f"'{repo}' is a member of '{slug}'")
+    util.ok(f"'{contain.readable(repo)}' is a member of '{slug}'")
     return 0
 
 
@@ -237,13 +241,13 @@ def cmd_change_drop(args) -> int:
     # here is a line no test can redden. `add` is the opposite case and keeps its own: there
     # the resolver has to answer *before* a name is joined onto a directory.
     if change.exclusion(rec, repo) is not None:
-        util.err(f"'{repo}' is already excluded from '{slug}'.")
+        util.err(f"'{contain.readable(repo)}' is already excluded from '{slug}'.")
         return REFUSED
     was_member = change.member(rec, repo) is not None
     blocked = change.dependents(rec, repo)
     if blocked:
-        util.err(f"'{repo}' cannot be dropped from '{slug}': "
-                 + ", ".join(f"'{b}'" for b in blocked) + " still need"
+        util.err(f"'{contain.readable(repo)}' cannot be dropped from '{slug}': "
+                 + ", ".join(f"'{contain.readable(b)}'" for b in blocked) + " still need"
                  + ("" if len(blocked) > 1 else "s") + " it to land first.")
         util.info("Drop those members first, or edit their `needs` — a blocker nothing "
                   "will land is a member that never becomes ready.")
@@ -255,10 +259,11 @@ def cmd_change_drop(args) -> int:
     code = _save(ws, slug, rec)
     if code:
         return code
+    shown = contain.readable(repo)
     if was_member:
-        util.ok(f"'{repo}' excluded — {len(rec['members'])} member(s) left")
+        util.ok(f"'{shown}' excluded — {len(rec['members'])} member(s) left")
     else:
-        util.ok(f"'{repo}' excluded (never a member)")
+        util.ok(f"'{shown}' excluded (never a member)")
     return 0
 
 

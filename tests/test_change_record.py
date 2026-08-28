@@ -262,9 +262,16 @@ class TestABranchNameIsArgv(ChangeIso):
                 self.assertIsNotNone(change.branch_refusal(branch))
 
     def test_a_branch_that_is_not_one_line_is_refused(self):
-        for branch in ("a\nb", "a b", "a\rb", "a\x1b[31mb", "x" * 300):
+        for branch in ("a\nb", "a\u2028b", "a\rb", "a\x1b[31mb",
+                       "x" * (change.TEXT_LIMIT + 1)):
             with self.subTest(branch=repr(branch)):
                 self.assertIsNotNone(change.branch_refusal(branch))
+
+    def test_a_branch_a_little_longer_than_a_report_row_is_accepted(self):
+        """The record's bound is `contain`'s PATH budget, not its ROW budget. Refusing a
+        value for being one row long would send somebody to hand-edit the file; the row
+        budget still applies where rows are drawn, and is measured there."""
+        self.assertIsNone(change.branch_refusal("x" * (contain.DISPLAY_LIMIT + 20)))
 
     def test_an_ordinary_branch_is_accepted(self):
         self.assertIsNone(change.branch_refusal("change/component-api-2"))
@@ -287,6 +294,19 @@ class TestWhyIsOneLineAndRequired(ChangeIso):
         with self.assertRaises(change.RecordError) as cm:
             change.read("ws", "component-api-2")
         self.assertIn("why", str(cm.exception))
+
+    def test_a_why_a_little_longer_than_a_report_row_is_kept_whole(self):
+        rec = json.loads(json.dumps(GOOD))
+        rec["why"] = "w" * (contain.DISPLAY_LIMIT + 40)
+        change.write("ws", "component-api-2", rec)
+        self.assertEqual(change.read("ws", "component-api-2")["why"], rec["why"])
+
+    def test_a_why_longer_than_a_committed_value_may_be_is_refused(self):
+        rec = json.loads(json.dumps(GOOD))
+        rec["why"] = "w" * (change.TEXT_LIMIT + 1)
+        self.put_record("component-api-2", rec)
+        with self.assertRaises(change.RecordError):
+            change.read("ws", "component-api-2")
 
     def test_a_why_that_cannot_be_one_line_is_refused(self):
         """It belongs in `workspace.md`, which is where this plane keeps prose. A newline
@@ -592,6 +612,7 @@ class TestEveryRefusalIsOneLineWhateverItNames(ChangeIso):
             # `write` validates BEFORE it resolves the path, so the slug reaching these
             # messages has been through nothing at all.
             self._refusal(change.write, "ws", self.HOSTILE, json.loads(json.dumps(GOOD))),
+            self._refusal(change.validate, json.loads(json.dumps(GOOD)), self.HOSTILE),
         ]
         hostile_name = json.loads(json.dumps(GOOD))
         hostile_name["change"] = self.HOSTILE
@@ -628,6 +649,15 @@ class TestEveryRefusalIsOneLineWhateverItNames(ChangeIso):
                 msg = change.branch_refusal(branch)
                 self.assertEqual(len(msg.splitlines()), 1, msg)
                 self.assertNotIn(self.ESC, msg)
+
+    def test_the_slug_is_asked_about_before_anything_else_is(self):
+        """The words, not the exit. With `validate`'s own slug check deleted a hostile slug
+        is still refused — by `path_for`, one line later in `write` — but only after every
+        sentence in `validate` has already named it, and those sentences name it plainly."""
+        with self.assertRaises(change.RecordError) as cm:
+            change.write("ws", self.HOSTILE, json.loads(json.dumps(GOOD)))
+        self.assertIn("is not a change name", str(cm.exception))
+        self.assertNotIn("calls itself", str(cm.exception))
 
     def test_there_are_refusals_to_measure(self):
         """The control. A helper that raised on its own first line would make every

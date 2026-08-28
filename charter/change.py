@@ -85,6 +85,15 @@ KEYS = ("change", "why", "created", "by", "members", "excluded")
 #: rather than merely unwritten.
 MEMBER_KEYS = ("repo", "branch", "needs")
 
+#: How long a record's own text may be. `contain`'s PATH budget rather than its ROW budget,
+#: and the difference is load-bearing in both directions: a `why` a little over one row is a
+#: legitimate `why` and refusing it would send somebody to hand-edit the file, while the row
+#: budget still applies where rows are drawn — `contain.one_line` clips to `DISPLAY_LIMIT` at
+#: every printing site, and that clipping is a thing a test can see precisely because this
+#: bound is the looser one. What is refused here is a character with no glyph, which is a
+#: question about the value's shape rather than its length.
+TEXT_LIMIT = contain.PATH_DISPLAY_LIMIT
+
 #: One exclusion's keys — a repository considered and deliberately left out. ``why`` is
 #: required by the same rule that requires the change's own: the exclusion is the only
 #: artifact that makes a permanently partial world explicable six months later.
@@ -247,60 +256,74 @@ def all_for(ws: str) -> tuple[list[dict], list[tuple[str, str]]]:
 # --------------------------------------------------------------------------- #
 
 def validate(rec, slug: str) -> None:
-    """Raise :class:`RecordError` unless *rec* is a change record for *slug*."""
-    if not isinstance(rec, dict):
-        raise RecordError(f"change {contain.readable(slug)}: the record is not an object")
-    _closed(rec, KEYS, f"change {contain.readable(slug)}")
+    """Raise :class:`RecordError` unless *rec* is a change record for *slug*.
 
+    **The slug is asked about first, and that is what lets every sentence below name it
+    plainly.** From the second line down, *slug* is `[A-Za-z0-9][A-Za-z0-9._-]*` — a value
+    no report row can be forged out of — so containing it again at each of the fourteen
+    messages would be fourteen calls no test could redden. :func:`read` has already asked
+    this through :func:`path_for`; :func:`write` has not, because it validates the record
+    before it resolves the path, so the invariant belongs here rather than in an order the
+    callers have to keep.
+
+    A record that calls *itself* something else is a different question, and that one IS
+    contained: the record is the untrusted half.
+    """
+    if not instance.change_name_ok(slug):
+        raise RecordError(f"{contain.readable(slug)} is not a change name")
+    if not isinstance(rec, dict):
+        raise RecordError(f"change '{slug}': the record is not an object")
+    _closed(rec, KEYS, f"change '{slug}'")
+
+    # No second `change_name_ok`, on `rec["change"]`: the line above has just established
+    # that it EQUALS *slug*, which the first line established is a change name.
     if rec["change"] != slug:
         raise RecordError(
-            f"change {contain.readable(slug)}: the record calls itself "
+            f"change '{slug}': the record calls itself "
             f"{contain.readable(rec['change'])}. The filename and the name are one "
             "identity — the name is what a merge commit's trailer carries, so a record "
             "that disagrees with its own file has two of them.")
-    if not instance.change_name_ok(rec["change"]):
-        raise RecordError(f"{contain.readable(rec['change'])} is not a change name")
     for key in ("why", "created", "by"):
-        _one_line(rec[key], f"change {contain.readable(slug)}: {key}")
+        _one_line(rec[key], f"change '{slug}': {key}")
 
     if not isinstance(rec["members"], list):
-        raise RecordError(f"change {contain.readable(slug)}: 'members' is not a list")
+        raise RecordError(f"change '{slug}': 'members' is not a list")
     seen: set[str] = set()
     for m in rec["members"]:
         if not isinstance(m, dict):
-            raise RecordError(f"change {contain.readable(slug)}: a member is not an object")
-        _closed(m, MEMBER_KEYS, f"change {contain.readable(slug)}: member")
-        repo = _repo_name(m["repo"], f"change {contain.readable(slug)}: member")
+            raise RecordError(f"change '{slug}': a member is not an object")
+        _closed(m, MEMBER_KEYS, f"change '{slug}': member")
+        repo = _repo_name(m["repo"], f"change '{slug}': member")
         if repo in seen:
             raise RecordError(
-                f"change {contain.readable(slug)}: '{repo}' is a member twice")
+                f"change '{slug}': '{repo}' is a member twice")
         seen.add(repo)
         complaint = branch_refusal(m["branch"])
         if complaint:
-            raise RecordError(f"change {contain.readable(slug)}: member '{repo}': {complaint}")
+            raise RecordError(f"change '{slug}': member '{repo}': {complaint}")
         if not isinstance(m["needs"], list):
             raise RecordError(
-                f"change {contain.readable(slug)}: member '{repo}': 'needs' is not a list")
+                f"change '{slug}': member '{repo}': 'needs' is not a list")
         for n in m["needs"]:
-            _repo_name(n, f"change {contain.readable(slug)}: member '{repo}': needs")
+            _repo_name(n, f"change '{slug}': member '{repo}': needs")
 
     if not isinstance(rec["excluded"], list):
-        raise RecordError(f"change {contain.readable(slug)}: 'excluded' is not a list")
+        raise RecordError(f"change '{slug}': 'excluded' is not a list")
     for e in rec["excluded"]:
         if not isinstance(e, dict):
             raise RecordError(
-                f"change {contain.readable(slug)}: an exclusion is not an object")
-        _closed(e, EXCLUSION_KEYS, f"change {contain.readable(slug)}: exclusion")
-        repo = _repo_name(e["repo"], f"change {contain.readable(slug)}: exclusion")
+                f"change '{slug}': an exclusion is not an object")
+        _closed(e, EXCLUSION_KEYS, f"change '{slug}': exclusion")
+        repo = _repo_name(e["repo"], f"change '{slug}': exclusion")
         if repo in seen:
             raise RecordError(
-                f"change {contain.readable(slug)}: '{repo}' is both a member and excluded")
+                f"change '{slug}': '{repo}' is both a member and excluded")
         for key in ("why", "at"):
-            _one_line(e[key], f"change {contain.readable(slug)}: exclusion '{repo}': {key}")
+            _one_line(e[key], f"change '{slug}': exclusion '{repo}': {key}")
 
     complaint = order_refusal(rec)
     if complaint:
-        raise RecordError(f"change {contain.readable(slug)}: {complaint}")
+        raise RecordError(f"change '{slug}': {complaint}")
 
 
 def _closed(obj: dict, keys: tuple[str, ...], where: str) -> None:
@@ -332,7 +355,7 @@ def _one_line(value, where: str) -> str:
     """
     if not isinstance(value, str) or not value.strip():
         raise RecordError(f"{where}: expected a non-empty string, got {contain.readable(value)}")
-    if contain.one_line(value) != value:
+    if contain.one_line(value, limit=TEXT_LIMIT) != value:
         raise RecordError(
             f"{where}: {contain.readable(value)} is not one plain line. This is repeated "
             "back on a report row and written into a pull request body, where a newline "
@@ -373,9 +396,9 @@ def branch_refusal(branch) -> str | None:
         return (f"branch {contain.readable(branch)} begins with '-', so it reaches git as a "
                 "FLAG rather than as a branch. `git check-ref-format` accepts "
                 "`refs/heads/-b`, so ref grammar does not answer this.")
-    if contain.one_line(branch) != branch:
+    if contain.one_line(branch, limit=TEXT_LIMIT) != branch:
         return (f"branch {contain.readable(branch)} is not one plain line — it carries a "
-                "character with no glyph, or is longer than a report row.")
+                "character with no glyph, or is longer than a committed value may be.")
     return None
 
 

@@ -26,7 +26,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
-from charter import change, commands_change, workspace
+from charter import change, commands_change, contain, workspace
 from tests._isolation import PersonaIso
 
 
@@ -540,7 +540,7 @@ class TestHostileValuesRenderAsOneRow(ChangeCommands):
         is given, so a value escaped afterwards is padded to the wrong width and the column
         stops lining up at exactly the row somebody else controls."""
         self._hand_write({"change": "hostile", "why": "w", "created": "t", "by": "t",
-                          "members": [{"repo": "a\x07b", "branch": "x", "needs": []},
+                          "members": [{"repo": "a\u2028b", "branch": "x", "needs": []},
                                       {"repo": "short", "branch": "y", "needs": []}],
                           "excluded": []})
         code, out, _ = self.call(commands_change.cmd_change_show, change="hostile")
@@ -549,12 +549,167 @@ class TestHostileValuesRenderAsOneRow(ChangeCommands):
         self.assertEqual(len(rows), 2)
         self.assertEqual(len({ln.index("branch ") for ln in rows}), 1)
 
+    def test_an_excluded_repo_is_named_on_its_row_rather_than_silently_shortened(self):
+        """The exclusion rows are a second table over the same untrusted names, and this is
+        the half `tui` cannot supply. `tui.sanitize` *removes* a character with no glyph, so
+        a raw cell renders `x<U+2028>b` as `xb` — a row naming a repository that is not the
+        one in the record, which is #498's finding exactly. `contain.one_line` escapes it
+        instead, so the reader sees which repository it is."""
+        self._hand_write({"change": "hostile", "why": "w", "created": "t", "by": "t",
+                          "members": [],
+                          "excluded": [{"repo": "x\u2028b", "why": "no components",
+                                        "at": "t"}]})
+        code, out, _ = self.call(commands_change.cmd_change_show, change="hostile")
+        self.assertEqual(code, 0)
+        self.assertIn("\\u2028", out)
+        self.assertEqual(len([ln for ln in out.splitlines()
+                              if "no components" in ln]), 1)
+
     def test_a_refused_record_is_named_in_the_listing_without_forging_a_row(self):
         self._hand_write({"change": "hostile", "why": "w\nx", "created": "t", "by": "t",
                           "members": [], "excluded": []})
         code, _, err = self.call(commands_change.cmd_change_list)
         self.assertEqual(code, 1)
         self.assertIn("hostile", err)
+
+
+class TestNoRefusalCanForgeARowEither(ChangeCommands):
+    """The command surface's half of the same property. A repo name and a change slug both
+    arrive as **argv**, so they reach a refusal without having passed through the record at
+    all — and a refusal is a line of charter's own output that a value must not be able to
+    write a second one of.
+
+    Measured as a **comparison** with the same refusal over a benign value, rather than
+    against a literal count: the count includes the workspace banner and whatever tips the
+    command prints, and a test that hard-codes those measures the tips instead of the
+    property. Each case asserts the benign refusal printed something first, so a command
+    that fell silent cannot pass by printing nothing twice."""
+
+    HOSTILE = "api\n  charter  branch main  landed"
+
+    def _lines(self, fn, **kw) -> int:
+        _, _, err = self.call(fn, **kw)
+        return len(err.strip().splitlines())
+
+    def _same(self, fn, benign: dict, hostile: dict) -> None:
+        want = self._lines(fn, **benign)
+        self.assertGreaterEqual(want, 2, "the benign refusal printed nothing to compare")
+        self.assertEqual(self._lines(fn, **hostile), want)
+
+    def test_the_no_clone_refusal_does_not_grow_for_a_hostile_repo(self):
+        self.create()
+        self._same(commands_change.cmd_change_add,
+                   {"change": "component-api-2", "repo": "charter-slack"},
+                   {"change": "component-api-2", "repo": self.HOSTILE})
+
+    def test_the_unknown_change_refusal_does_not_grow_for_a_hostile_slug(self):
+        self._same(commands_change.cmd_change_add,
+                   {"change": "never-created", "repo": "charter"},
+                   {"change": self.HOSTILE, "repo": "charter"})
+
+    def test_the_bad_slug_refusal_does_not_grow_for_a_hostile_slug(self):
+        self._same(commands_change.cmd_change_create,
+                   {"change": "..", "why": "x"},
+                   {"change": self.HOSTILE, "why": "x"})
+
+    def test_the_forget_refusal_does_not_grow_for_a_hostile_slug(self):
+        self.create()
+        self._same(commands_change.cmd_change_forget,
+                   {"change": "never-created"}, {"change": self.HOSTILE})
+
+    def test_the_already_excluded_refusal_does_not_grow_for_a_hostile_repo(self):
+        self.create()
+        for repo in ("gone", self.HOSTILE):
+            self.call(commands_change.cmd_change_drop, change="component-api-2",
+                      repo=repo, why="first")
+        self._same(commands_change.cmd_change_drop,
+                   {"change": "component-api-2", "repo": "gone", "why": "again"},
+                   {"change": "component-api-2", "repo": self.HOSTILE, "why": "again"})
+
+    def test_the_duplicate_member_refusal_does_not_grow_for_a_hostile_repo(self):
+        """A repo name is `segment_ok`, which asks about separators, `..` and NUL and
+        nothing else — so a line break is a legal repository name and a legal directory
+        name, and this member is a real clone with one in it."""
+        self.clone(self.HOSTILE)
+        self.create()
+        for repo in ("charter", self.HOSTILE):
+            self.call(commands_change.cmd_change_add, change="component-api-2", repo=repo)
+        self._same(commands_change.cmd_change_add,
+                   {"change": "component-api-2", "repo": "charter"},
+                   {"change": "component-api-2", "repo": self.HOSTILE})
+
+    def test_a_hostile_blocker_name_cannot_forge_the_drop_refusal(self):
+        d = change.changes_dir("ws")
+        d.mkdir(parents=True, exist_ok=True)
+        for slug, blocker in (("benign", "web"), ("hostile", "we\nb  charter  landed")):
+            (d / f"{slug}.json").write_text(json.dumps({
+                "change": slug, "why": "w", "created": "t", "by": "t",
+                "members": [{"repo": "api", "branch": "b", "needs": []},
+                            {"repo": blocker, "branch": "b", "needs": ["api"]}],
+                "excluded": []}))
+        self._same(commands_change.cmd_change_drop,
+                   {"change": "benign", "repo": "api", "why": "out"},
+                   {"change": "hostile", "repo": "api", "why": "out"})
+
+
+class TestALongValueIsClippedWhereTheRowIs(ChangeCommands):
+
+    def _hand_write(self, rec: dict) -> None:
+        d = change.changes_dir("ws")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{rec['change']}.json").write_text(json.dumps(rec))
+
+    """The record's own bound is `contain`'s PATH budget, so a `why` a little longer than a
+    row is a legitimate record — and the ROW budget is then doing real work at the printing
+    site rather than being belt over a brace."""
+
+    def test_a_long_why_is_clipped_on_the_row(self):
+        long = "w" * (contain.DISPLAY_LIMIT + 60)
+        self.create(why=long)
+        code, out, _ = self.call(commands_change.cmd_change_show, change="component-api-2")
+        self.assertEqual(code, 0)
+        row = [ln for ln in out.splitlines() if ln.startswith("  why:")][0]
+        self.assertLess(len(row), len(long))
+        self.assertTrue(row.endswith("…"))
+
+    def test_the_command_and_the_record_hold_a_why_to_the_same_bound(self):
+        """Two bounds that disagree is a `why` charter accepts and then refuses to read
+        back — a record it wrote and cannot open."""
+        self.create(why="w" * change.TEXT_LIMIT)
+        self.assertEqual(len(change.read("ws", "component-api-2")["why"]),
+                         change.TEXT_LIMIT)
+
+    def test_no_printed_row_can_be_as_long_as_the_value_behind_it(self):
+        """The record's bound is `TEXT_LIMIT`; a ROW's is `DISPLAY_LIMIT`, and the gap
+        between them is exactly what every `contain.one_line` at a printing site is for.
+        Asked of every line of both commands at once, with every text field of the record
+        set to the longest value the record will hold — so a cell somebody forgets to
+        contain fails this without anybody adding a case for it."""
+        long = "v" * (change.TEXT_LIMIT - 1)
+        self._hand_write({
+            "change": "component-api-2", "why": long, "created": long, "by": long,
+            "members": [{"repo": "m" * 300, "branch": long, "needs": []},
+                        {"repo": "n" * 300, "branch": long, "needs": ["m" * 300]}],
+            "excluded": [{"repo": "x" * 300, "why": long, "at": long}]})
+        for fn in (commands_change.cmd_change_show, commands_change.cmd_change_list):
+            kw = {"change": "component-api-2"} if fn is commands_change.cmd_change_show else {}
+            code, out, _ = self.call(fn, **kw)
+            self.assertEqual(code, 0)
+            self.assertTrue(out.strip())
+            for line in out.splitlines():
+                with self.subTest(fn=fn.__name__, line=line[:40]):
+                    self.assertLess(len(line), change.TEXT_LIMIT, line[:120])
+
+    def test_a_long_branch_is_clipped_on_the_row(self):
+        long = "b" * (contain.DISPLAY_LIMIT + 60)
+        self.create()
+        self.call(commands_change.cmd_change_add, change="component-api-2",
+                  repo="charter", branch=long)
+        code, out, _ = self.call(commands_change.cmd_change_show, change="component-api-2")
+        self.assertEqual(code, 0)
+        row = [ln for ln in out.splitlines() if "branch " in ln][0]
+        self.assertLess(len(row), len(long))
+        self.assertTrue(row.endswith("…"))
 
 
 class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
