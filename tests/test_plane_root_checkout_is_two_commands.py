@@ -684,6 +684,13 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
         # How a session in the clone spells the plane root without naming it absolutely.
         self.up = os.path.relpath(self.root, self.clone)
         self.assertTrue(self.up.startswith(".."), self.up)
+        # #504's clone: the plane root is its work tree because its own `.git/config` says
+        # so, with nothing on any command line saying it. A route, not a spelling — which
+        # is why it gets a cwd of its own rather than a `tail` variant.
+        self.cfgclone = config.WORKSPACES_DIR / "ws" / "cfg"
+        self.cfgclone.mkdir(parents=True, exist_ok=True)
+        self._git("init", "-q", "-b", "main", str(self.cfgclone))
+        self._in(self.cfgclone, "config", "core.worktree", str(self.root))
 
     def routes(self, sub: str, rest: str):
         """``(label, cwd, command)`` for every way one shell command reaches the root."""
@@ -751,6 +758,22 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                f"declare -x GIT_DIR={self.root}/.git && git {tail}")
         yield ("GIT_DIR exported by set -a", self.clone,
                f"set -a; GIT_DIR={self.root}/.git; git {tail}")
+        # #504: the third spelling of the work tree, and the only route on this list that
+        # is a property of a repository ON DISK. Nothing in this command line names the
+        # plane root — the argv is the bare command and the environment is empty — so it is
+        # the one route no amount of reading the invocation can reach, and the guard reads
+        # the repository's config to answer it.
+        yield "core.worktree in the repo's config", self.cfgclone, f"git {tail}"
+        # And the same key reached from OUTSIDE that repository, which is where the cwd
+        # stops being the thing to read the config of. Verified on git 2.50.1 from a second
+        # clone: both spellings answer `--show-toplevel` with the plane root, because a
+        # `--git-dir` with no `--work-tree` beside it takes the work tree from the config of
+        # the repository it names. Two rows, because `GIT_DIR` is the same option as
+        # environment and the pair is what #477 already had to learn once.
+        yield ("core.worktree reached by --git-dir", self.clone,
+               f"git --git-dir={self.cfgclone}/.git {tail}")
+        yield ("core.worktree reached by GIT_DIR", self.clone,
+               f"GIT_DIR={self.cfgclone}/.git git {tail}")
 
     def test_a_head_move_is_denied_by_every_route(self):
         movers = []
@@ -770,7 +793,7 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
         # would leave every remaining assertion green while covering less than it did.
         self.assertGreaterEqual(len(movers), 8, movers)
         labels = {label for label, _cwd, _cmd in self.routes("checkout", "feature")}
-        self.assertGreaterEqual(len(labels), 25, sorted(labels))
+        self.assertGreaterEqual(len(labels), 28, sorted(labels))
         for must in ("--git-dir, separated", "--git-dir=, attached",
                      "--work-tree and --git-dir", "--git-dir relative to a -C",
                      "GIT_DIR in the environment", "GIT_WORK_TREE in the environment",
@@ -788,7 +811,12 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                      "GIT_WORK_TREE exported by an earlier segment",
                      "GIT_DIR assigned, then exported by name",
                      "GIT_DIR exported by declare -x",
-                     "GIT_DIR exported by set -a"):
+                     "GIT_DIR exported by set -a",
+                     # Round seven (#504). The route with no token in it at all, and the
+                     # two that name the repository whose config carries it.
+                     "core.worktree in the repo's config",
+                     "core.worktree reached by --git-dir",
+                     "core.worktree reached by GIT_DIR"):
             self.assertIn(must, labels)
 
     def test_a_restore_is_allowed_by_every_route(self):
@@ -802,34 +830,74 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                 with self.subTest(route=label, cmd=cmd):
                     self.assertIsNone(_decision(self.run_cmd(cmd, cwd=cwd)), f"{label}: {cmd}")
 
-    def test_core_worktree_in_a_repos_config_is_a_route_this_guard_does_not_follow(self):
-        """**A LIMIT, pinned with its issue (#504).**
+    def test_core_worktree_in_a_repos_config_reaches_the_root_and_is_denied(self):
+        """**The limit this row used to pin, closed (#504).**
 
         `core.worktree` is git's THIRD spelling of the work tree, after `--work-tree` and
         `GIT_WORK_TREE`, and the only one that is a property of a repository on disk rather
         than a token on the command line. A clone carrying it has the plane root as its
-        working tree for every command it runs, and `_git_target` — which reads argv and
-        environment — sees a plain `git checkout <branch>` in a clone.
+        working tree for every command it runs, so `_git_target` — reading argv and
+        environment — saw a plain `git checkout <branch>` in a clone and stood aside.
 
-        Asserted the way a limit has to be: git is asked whether the route really reaches
-        the root, so the row cannot pass because the fixture stopped working. If it ever
-        starts being denied this fails, and #504 is where the decision is written down.
+        Still asserted the way the limit was: git is asked whether the route really reaches
+        the root, so this cannot pass because the fixture stopped working. The route is in
+        `routes()` as well, which is what crosses it with every command in `COMMANDS`; this
+        stays because it is the one row that measures the reach and the refusal in the same
+        method, and because the old version of it is what would have caught the fix being
+        reverted with the corpus left green.
 
         Not the same as `-c core.worktree=<plane>` on the command line: git 2.50.1 does not
-        honour that one — verified, `--show-toplevel` still answers the clone — so the
-        spelling an agent would actually type is already harmless.
+        honour that one — verified, `--show-toplevel` still answers the clone, with and
+        without an explicit `--git-dir` — so the spelling an agent would actually type is
+        already harmless and charter deliberately does not read it.
         """
-        clone = config.WORKSPACES_DIR / "ws" / "cfg"
-        clone.mkdir(parents=True, exist_ok=True)
-        self._git("init", "-q", "-b", "main", str(clone))
-        self._in(clone, "config", "core.worktree", str(self.root))
-        top = subprocess.run(["git", "-C", str(clone), "rev-parse", "--show-toplevel"],
+        top = subprocess.run(["git", "-C", str(self.cfgclone), "rev-parse", "--show-toplevel"],
                              capture_output=True, text=True).stdout.strip()
         self.assertEqual(Path(top).resolve(), self.root.resolve(),
                          "the fixture stopped reaching the root, so the row below proves "
                          "nothing about the guard")
-        self.assertIsNone(_decision(self.run_cmd("git checkout feature", cwd=clone)),
-                          "LIMIT #504 closed — say so in the news entry and flip this row")
+        r = self.run_cmd("git checkout feature", cwd=self.cfgclone)
+        self.assertEqual(_decision(r), "deny")
+        self.assertIn("PLANE ROOT", _reason(r))
+
+    def test_the_same_key_reached_from_outside_that_repository(self):
+        """`--git-dir` with no `--work-tree` beside it takes the work tree from the config
+        of the repository it NAMES, so the cwd is the wrong file to read — verified on git
+        2.50.1 from a second clone, which answers `--show-toplevel` with the plane root.
+
+        Its own row because the corpus above crosses it with commands and this measures the
+        reach: a guard that discovered the repository from the cwd whatever the invocation
+        said would pass every route row and miss this one.
+        """
+        for spelling in (f"git --git-dir={self.cfgclone}/.git checkout feature",
+                         f"GIT_DIR={self.cfgclone}/.git git checkout feature"):
+            with self.subTest(cmd=spelling):
+                top = subprocess.run(
+                    ["git", "-C", str(self.clone), f"--git-dir={self.cfgclone}/.git",
+                     "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+                self.assertEqual(Path(top.stdout.strip()).resolve(), self.root.resolve(),
+                                 "the fixture stopped reaching the root")
+                r = self.run_cmd(spelling, cwd=self.clone)
+                self.assertEqual(_decision(r), "deny", spelling)
+                self.assertIn("PLANE ROOT", _reason(r), spelling)
+
+    def test_and_the_c_form_of_the_same_key_is_not_read(self):
+        """The other half of the same measurement, and the reason it is a separate test.
+
+        `git -c core.worktree=<plane> checkout feature` does not reach the plane root — git
+        ignores the command-line form, verified on 2.50.1 in both spellings — so reading it
+        would only manufacture a refusal for a command that does nothing. The fixture asks
+        git first, so this row cannot quietly become an assertion about a form that DOES
+        reach the root.
+        """
+        cmd = f"git -c core.worktree={self.root} checkout feature"
+        top = subprocess.run(["git", "-C", str(self.clone), "-c",
+                              f"core.worktree={self.root}", "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True).stdout.strip()
+        self.assertEqual(Path(top).resolve(), self.clone.resolve(),
+                         "git now honours -c core.worktree; this row is about a form that "
+                         "no longer exists and the guard has to read it after all")
+        self.assertIsNone(_decision(self.run_cmd(cmd, cwd=self.clone)), cmd)
 
     def test_a_route_that_does_not_reach_the_root_is_still_not_the_root(self):
         """The reach is not "anything with a `-C` in it". A relative `-C` that lands in the
