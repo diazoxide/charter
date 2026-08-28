@@ -60,7 +60,11 @@ class GitConfigCase(unittest.TestCase):
         self.repo = self.tmp / "repo"
         self.elsewhere = self.tmp / "elsewhere"
         self.spaced = self.tmp / "pl ane"
-        for d in (self.repo, self.elsewhere, self.spaced):
+        # A directory whose name holds a real tab, so `_ESCAPES` has something to be right
+        # about: git writes `\t` for it and reads it back, and a reader that dropped the
+        # escape table would answer with a two-character `\` `t` instead.
+        self.tabbed = self.tmp / "ta\tbbed"
+        for d in (self.repo, self.elsewhere, self.spaced, self.tabbed):
             d.mkdir(parents=True)
         _git("init", "-q", "-b", "main", str(self.repo))
         self.config = self.repo / ".git" / "config"
@@ -100,6 +104,8 @@ class CharterReadsWhatGitReads(GitConfigCase):
             "unquoted, with a space": lambda: str(self.spaced),
             "with a trailing comment": lambda: f"{self.elsewhere} # why",
             "with trailing whitespace": lambda: f"{self.elsewhere}\t ",
+            "a tab written as an escape": lambda: '"' + str(self.tabbed).replace(
+                "\t", "\\t") + '"',
             "the section header in capitals": lambda: str(self.elsewhere),
         }
         for label, make in forms.items():
@@ -145,6 +151,33 @@ class CharterReadsWhatGitReads(GitConfigCase):
                 self.assertEqual(self.git_top(), self.repo.resolve())
                 self.assertIsNone(self.mine())
 
+    def test_a_bare_section_that_is_not_core_does_not_name_a_work_tree(self):
+        """`core.worktree` is `core`'s. The subsection row beside this one pins the other
+        half of the same condition, and dropping either leaves the other passing — so a
+        `[gui]` or a `[difftool]` carrying the key is its own row.
+        """
+        self.write(f"[gui]\n\tworktree = {self.elsewhere}\n")
+        self.assertEqual(self.git_top(), self.repo.resolve())
+        self.assertIsNone(self.mine())
+
+    def test_a_header_is_closed_by_its_FIRST_bracket(self):
+        """`rest.find("]")`, not `rfind`, and git is asked rather than assumed.
+
+        `[core] ; note]` is a section header with a comment after it that happens to hold a
+        bracket. git reads the section as `core` and honours the key under it — verified.
+        Taking the LAST bracket instead makes the section `core] ; note`, the key belongs to
+        nothing, and the work tree this guard exists to notice goes unreported. The
+        subsection row above cannot tell the two apart, which is why this is its own.
+        """
+        self.write(f"[core] ; note]\n\tworktree = {self.elsewhere}\n")
+        self.assertEqual(self.git_top(), self.elsewhere,
+                         "git no longer reads this header as `core`")
+        self.assertEqual(self.mine(), self.elsewhere)
+
+    def test_a_subsection_name_holding_a_bracket_is_still_a_subsection(self):
+        self.write(f'[core "a]b"]\n\tworktree = {self.elsewhere}\n')
+        self.assertIsNone(self.mine())
+
     def test_a_value_continued_onto_the_next_line(self):
         """A trailing backslash continues a value in git's config format. Rare for a path
         and cheap to read correctly; the alternative is a truncated directory name, which
@@ -184,10 +217,40 @@ class WhichRepositoryItAsks(GitConfigCase):
         (sub / ".git").write_text("gitdir: ../.git/modules/sub\n")
         self.assertEqual(self.mine(cwd=sub), self.elsewhere)
 
-    def test_a_pointer_that_names_nothing_is_not_followed(self):
+    def test_a_pointer_whose_LABEL_is_not_gitdir_is_not_followed(self):
+        """The label test, with the consequence of dropping it made visible.
+
+        Every junk pointer in the row below is refused twice over — by the label check and
+        by the empty target beneath it — so neither line can be shown to matter on its own.
+        This one has a real directory after the colon, with a real config in it, so a
+        reader that skipped the label would follow `notgitdir:` into it and answer with a
+        work tree nothing in git ever named.
+        """
+        planted = self.repo / ".git" / "planted"
+        planted.mkdir(parents=True)
+        (planted / "config").write_text(f"[core]\n\tworktree = {self.elsewhere}\n")
         sub = self.repo / "sub"
         sub.mkdir()
-        for junk in ("", "not a pointer\n", "gitdir:\n", "gitdir\n"):
+        (sub / ".git").write_text(f"notgitdir: {planted}\n")
+        self.assertIsNone(gitconfig.configured_work_tree(sub))
+        # Non-vacuity: the same file with git's own label DOES reach it, so the row above
+        # is about the label and not about the directory being unreadable.
+        (sub / ".git").write_text(f"gitdir: {planted}\n")
+        got = gitconfig.configured_work_tree(sub)
+        self.assertEqual(Path(got).resolve(), self.elsewhere)
+
+    def test_a_pointer_that_names_nothing_is_not_followed(self):
+        """Every junk shape, with a config sitting where an EMPTY target would land.
+
+        `base / ""` is `base`, so a `gitdir:` with nothing after it silently means "the
+        directory the `.git` file is in" — and the guard against that can only be shown to
+        matter when there is something there to find. There is: a file called `config` at a
+        repository's top level is ordinary, and this one carries the key.
+        """
+        sub = self.repo / "sub"
+        sub.mkdir()
+        (sub / "config").write_text(f"[core]\n\tworktree = {self.elsewhere}\n")
+        for junk in ("", "not a pointer\n", "gitdir:\n", "gitdir\n", "gitdir:   \n"):
             with self.subTest(pointer=repr(junk)):
                 (sub / ".git").write_text(junk)
                 self.assertIsNone(gitconfig.configured_work_tree(sub))
@@ -236,11 +299,15 @@ class WhatItCostsAndWhatItRefusesToCost(GitConfigCase):
         is exactly as strong as it was before this existed, rather than hanging on a file
         that is not a config.
         """
+        cap = 262_144
+        self.assertEqual(gitconfig.MAX_CONFIG_BYTES, cap,
+                         "the bound moved; this row computes its fixture from the literal "
+                         "so that changing the constant is visible rather than absorbed")
         padding = "\t; " + "x" * 200 + "\n"
-        body = ("[core]\n" + padding * (gitconfig.MAX_CONFIG_BYTES // len(padding) + 8)
+        body = ("[core]\n" + padding * (cap // len(padding) + 8)
                 + f"\tworktree = {self.elsewhere}\n")
         self.write(body)
-        self.assertGreater(self.config.stat().st_size, gitconfig.MAX_CONFIG_BYTES)
+        self.assertGreater(self.config.stat().st_size, cap)
         self.assertEqual(self.git_top(), self.elsewhere.resolve(),
                          "the fixture no longer reaches git, so the bound proves nothing")
         self.assertIsNone(self.mine())
@@ -248,11 +315,20 @@ class WhatItCostsAndWhatItRefusesToCost(GitConfigCase):
     def test_nothing_here_raises(self):
         """Same promise the rest of the guard path keeps: a hook may cost a session its
         briefing and never its turn."""
-        for bad in ("", "\x00/x", "/nonexistent/deep/path", self.tmp / "gone"):
+        for bad in ("", "\x00/x", "/nonexistent/deep/path", self.tmp / "gone", 0, None):
             with self.subTest(cwd=repr(bad)):
                 self.assertIsNone(gitconfig.configured_work_tree(bad))
         self.config.write_bytes(b"[core]\n\tworktree = \xff\xfe\n")
         self.assertIsNotNone(gitconfig.configured_work_tree(self.repo))
+
+    def test_a_config_that_is_not_a_file_answers_nothing(self):
+        """A repository whose `config` is a directory. `open()` raises `IsADirectoryError`
+        — an `OSError` — and the module's promise is that every way the read can fail
+        answers "no work tree named" rather than raising into a PreToolUse hook.
+        """
+        self.config.unlink()
+        self.config.mkdir()
+        self.assertIsNone(gitconfig.configured_work_tree(self.repo))
 
 
 if __name__ == "__main__":

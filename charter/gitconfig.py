@@ -91,7 +91,12 @@ def configured_work_tree(cwd, git_dir=None) -> Path | None:
     value = _core_worktree(gd)
     if not value:
         return None
-    return Path(value) if os.path.isabs(value) else gd / value
+    # `gd / value` for both, because `Path.__truediv__` already DISCARDS the left side when
+    # the right is absolute — ``Path("/a/b") / "/tmp/z"`` is ``/tmp/z``. An
+    # ``os.path.isabs`` branch in front of it was two spellings of one answer, and a line
+    # no test could go red without: the deletion sweep found it, and the absolute row of
+    # `test_each_form_of_the_value_agrees_with_git` is what makes deleting it safe.
+    return gd / value
 
 
 def _as_path(value) -> Path | None:
@@ -143,11 +148,15 @@ def _pointer_target(dot: Path, base: Path) -> Path | None:
         return None
     label, sep, target = line[0].partition(":")
     if not sep or label.strip().lower() != "gitdir":
+        # Both halves, and neither is redundant: without the LABEL test a `worktree:
+        # <dir>` line — or any other `<word>: <path>` a tool might write into a `.git`
+        # file — would be followed as though git had written it, which is a directory
+        # charter would then read a config out of on somebody else's say-so.
         return None
     target = target.strip()
     if not target:
         return None
-    return Path(target) if os.path.isabs(target) else base / target
+    return base / target          # absolute targets discard `base` — see `configured_work_tree`
 
 
 def _core_worktree(git_dir: Path) -> str | None:
