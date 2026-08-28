@@ -104,13 +104,19 @@ EDGES = ("top", "bottom", "left", "right")
 #:
 #: **What a pointer event carries.** ``row`` and ``col`` are cells of YOUR rectangle — the
 #: one `ctx.width` and `ctx.height` describe — not of the pane, so an operator's
-#: `[frame] pad` is already out of them and a click landing in that margin is not
-#: delivered at all. ``name`` is which button (``left``/``middle``/``right``) or which way
-#: the wheel went (``up``/``down``); modifier keys are not reported. A click arrives
-#: TWICE, a press then a release, told apart by ``pressed`` — and either one can arrive
-#: without the other, because tmux routes each by where the pointer was at the time. Act
-#: on one of them; a component that waits for a matching pair will wait forever the first
-#: time somebody drags out of your pane.
+#: `[frame] pad` is already out of them and an event landing in that margin is not
+#: delivered at all. Nor is one on a pane charter could not measure, which is the moment
+#: `panel._unmeasured` is on screen instead of your rows.
+#:
+#: ``name`` is which button (``left``/``middle``/``right``) or which way the wheel went
+#: (``up``/``down``). Modifier keys are not reported, and the buttons §4f named no kind for
+#: — the thumb buttons, the horizontal wheel — are dropped rather than reported as one of
+#: the three, because a button charter cannot name is one it should not make up.
+#:
+#: A click arrives TWICE, a press then a release, told apart by ``pressed`` — and either
+#: one can arrive without the other, because tmux routes each by where the pointer was at
+#: the time. Act on one of them; a component that waits for a matching pair will wait
+#: forever the first time somebody drags out of your pane.
 EVENT_KINDS = ("key", "click", "scroll", "focus", "blur", "resize")
 
 #: The slices of the plane snapshot a component may declare in ``needs`` — and therefore

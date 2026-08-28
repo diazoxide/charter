@@ -51,14 +51,27 @@ Three things follow, and all three are now pinned by cases that drive a real tmu
 
 `row` and `col` are cells of the component's **own rectangle** — the one `ctx.width` and
 `ctx.height` describe. If you set `[frame] pad`, those cells are charter's, not the
-component's, and charter takes them off before delivering; a click landing in the margin is
+component's, and charter takes them off before delivering; an event landing in the margin is
 not delivered at all. That is the one subtraction charter does, and it is charter's because
 charter drew the pad — tmux has never heard of it.
+
+Nothing is delivered against a pane charter could not measure either. `slots._width()`
+answers a stated 80-column fallback for such a pane so that a renderer always has a number,
+and translating a click against that would report a cell of an invented canvas — at the one
+moment the pane is showing `charter: pane size unknown` rather than the component's rows.
 
 `name` is the button (`left`, `middle`, `right`) or the wheel's direction (`up`, `down`).
 Right- and middle-clicks measurably reach a panel, so a component that acts on one button
 can now tell. Modifier keys are not reported: a shift-click is a `left` click, which is what
 whoever pressed it meant.
+
+Buttons charter has no name for are dropped rather than reported as one it does. That is
+less obvious than it sounds, because an SGR button number is not one number: xterm keeps it
+in three separate bit positions, and the thumb buttons on an ordinary mouse arrive as
+128–131 — which tmux was measured forwarding to a panel verbatim. Taken as the low two bits
+alone, a thumb-button press is a `left` click, and a component acting on left clicks acts on
+it. The same reassembly is what keeps a drag from arriving as a click at every cell it
+crosses, and a shifted wheel from scrolling the way you did not.
 
 A click arrives **twice** — a press, then a release, told apart by `pressed`. Either can
 arrive without the other, because tmux routes each by where the pointer was at the time; a

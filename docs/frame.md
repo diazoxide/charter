@@ -1179,11 +1179,19 @@ delivers them wherever they arrive, and whether they arrive at all is decided by
 
 **What a pointer event tells a component.** `ev.row` and `ev.col` are cells of the
 component's own rectangle — the one `ctx.width` and `ctx.height` describe — so any `pad`
-you set is already accounted for, and a click that lands in that margin is not delivered.
-`ev.name` is the button (`left`, `middle`, `right`) or the direction (`up`, `down`);
-modifier keys are not reported. A click arrives as two events, a press then a release,
-told apart by `ev.pressed` — and either can arrive without the other, because tmux routes
-each one by where the pointer was at the time. Act on one of them.
+you set is already accounted for, and a pointer event landing in that margin is not
+delivered at all. Neither is one on a pane charter cannot currently measure, which is the
+moment the pane is showing `charter: pane size unknown` rather than the component.
+
+`ev.name` is the button (`left`, `middle`, `right`) or the direction (`up`, `down`).
+Modifier keys are not reported — a shift-click is a `left` click. The extra buttons a mouse
+may have (the thumb buttons, and the horizontal wheel a trackpad swipe reports) are not
+delivered: charter has no name for them, and reporting one as a `left` click would be
+worse than reporting nothing.
+
+A click arrives as two events, a press then a release, told apart by `ev.pressed` — and
+either can arrive without the other, because tmux routes each one by where the pointer was
+at the time. Act on one of them.
 
 The wheel arrives as fast as it is turned, and a handler that answers truthy repaints for
 every event it answers truthy to — so a component that redraws on `scroll` redraws as often

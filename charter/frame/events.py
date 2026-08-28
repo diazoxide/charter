@@ -288,10 +288,14 @@ _CHUNK = 4096
 #:     termios.tcgetattr(None)   -> TypeError: argument must be an int, or have a fileno()
 #:     select.select([None], ..) -> TypeError: argument must be an int, or have a fileno()
 #:
-#: `frame/pane.py` never meets that case — it passes what it gets to
-#: `os.get_terminal_size`, which raises `OSError` — so its set is complete for ITS
-#: questions and this one is a superset rather than a disagreement. A `MagicMock` stdout,
-#: which is what `mock.patch("sys.stdout")` installs, reaches this exact path.
+#: `frame/pane.py`'s set is a SUBSET rather than a disagreement, and the one case it does
+#: not cover is worth naming rather than claiming away: `os.get_terminal_size(None)` raises
+#: `TypeError` too, so a stand-in whose `fileno()` answered ``None`` would escape
+#: `pane.size()`. No production stream reaches it — `pane.claim()` takes the real `stdout`
+#: before a provider's import can replace it, and a real descriptor is an `int` — which is
+#: why that module has not needed the member and this one does. A `MagicMock` stdout, which
+#: is what `mock.patch("sys.stdout")` installs, reaches this exact path and answers
+#: `OSError`, because a `MagicMock` has an `__index__`.
 _CANNOT_SAY = (AttributeError, OSError, TypeError, ValueError, termios.error)
 
 
@@ -665,15 +669,26 @@ class Dispatcher:
         see is not. `pad = 0` — the shipped default — makes the test below the pane's own
         bounds, which tmux has already guaranteed, and the branch costs that panel nothing.
 
+        **A pane charter could not measure is not a rectangle to translate against**, which
+        is :meth:`note_resize`'s rule for the same reason one event over. `pane.size()` is
+        asked rather than `slots._width()`, and the difference is the whole guard: `_width`
+        answers its stated 80-column fallback for a pane it could not measure, and a click
+        translated against that would be delivered in cells of an invented canvas. It would
+        also be delivered while the pane is showing `panel._unmeasured`'s message rather
+        than the component's rows — so the component would be told where it was clicked at
+        the one moment it is not what is on screen. Nothing fires instead.
+
         The rectangle is measured now rather than remembered from the last paint, which is
         :meth:`note_resize`'s choice for its own reason: a `SIGWINCH` between the paint and
         the click makes the two disagree, and the pane's CURRENT rectangle is the one the
-        operator was looking at when they pressed. One measurement answers both halves
-        (`slots.content_rect`), so the pad taken off and the width tested against cannot
-        come from two different readings of the tty.
+        operator was looking at when they pressed. One reading answers both halves, so the
+        pad taken off and the width tested against cannot come from two readings of the tty.
         """
         from . import slots
-        pad, width = slots.content_rect(self._c.id)
+        size = pane.size()
+        if size is None:
+            return None
+        pad, width = slots.content_rect(self._c.id, size.columns)
         col = ev.col - pad
         return None if not 0 <= col < width else ev._replace(col=col)
 

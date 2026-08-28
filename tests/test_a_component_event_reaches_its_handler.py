@@ -347,6 +347,46 @@ class TheDecoderReadsTheButtonNumberAsTheBitfieldItIs(unittest.TestCase):
         speaking the wrong encoding — dropped rather than given a fourth name."""
         self.assertEqual(overlay.decode(b"\x1b[<3;20;5M"), ([], b""))
 
+    def test_the_thumb_buttons_are_not_a_left_click(self):
+        """**Bit 7 is the third place xterm keeps the button number**, and reading only
+        the low two bits makes button 8 a `left` click — which a component that acts on
+        `left` then acts on.
+
+        Reachable, not theoretical: measured on tmux 3.7c and 3.2, `\\x1b[<128;20;5M`
+        injected at a non-active pane that asked for 1000+1006 was forwarded to it
+        VERBATIM, along with 129, 130 and 131. §4f named no kind for these, so a button
+        charter cannot name is one charter does not report."""
+        for button in (128, 129, 130, 131):
+            with self.subTest(button=button):
+                self.assertEqual(overlay.decode(b"\x1b[<%d;20;5M" % button), ([], b""))
+
+    def test_the_wheel_with_the_motion_bit_is_not_a_scroll(self):
+        """`96` is the wheel bit and the motion bit together. Testing bit 6 before bit 5
+        reports it as a scroll nobody performed; answering motion FIRST is what makes the
+        order impossible to get wrong."""
+        for button in (96, 97):
+            with self.subTest(button=button):
+                self.assertEqual(overlay.decode(b"\x1b[<%d;20;5M" % button), ([], b""))
+
+    def test_every_button_a_terminal_can_send_is_named_or_dropped(self):
+        """The whole 8-bit space, against the encoding rather than against the
+        implementation: motion first, then one number reassembled from its three bit
+        positions, then the six names this contract has. Nothing is left to a branch order.
+
+        A loop rather than eight cases because the defect this closes was in the SPACE
+        between the values anyone thought to write down — 0, 1, 2 and 64 were all correct
+        while 128 was a left click."""
+        names = {0: ("click", "left"), 1: ("click", "middle"), 2: ("click", "right"),
+                 4: ("scroll", "up"), 5: ("scroll", "down")}
+        for button in range(256):
+            number = ((button & 3) + (4 if button & 64 else 0)
+                      + (8 if button & 128 else 0))
+            want = [] if button & 32 else [names[number]] if number in names else []
+            evs, tail = overlay.decode(b"\x1b[<%d;20;5M" % button)
+            with self.subTest(button=button):
+                self.assertEqual([(e.kind, e.name) for e in evs], want)
+                self.assertEqual(tail, b"")
+
     def test_press_and_release_are_told_apart_by_the_final_byte(self):
         press, _t = overlay.decode(b"\x1b[<0;20;5M")
         release, _t = overlay.decode(b"\x1b[<0;20;5m")
@@ -683,6 +723,18 @@ class TheRestoreIsTheThingCloseCannotAffordToLose(unittest.TestCase):
 class AnEventReachesTheComponentThatOwnsThePane(unittest.TestCase):
     def setUp(self):
         self.tty = _Pty(self)
+        # A pane charter CAN measure, which is what a panel in a tmux window has and what
+        # this process does not: these cases hand the dispatcher an explicit `stream`,
+        # while `pane.size()` measures the descriptor `pane.claim()` took — `sys.stdout`
+        # here, with no tty behind it under a test runner. `_on_canvas` refuses to
+        # translate a pointer against a rectangle charter could not measure, so without
+        # this every pointer case below would pass for the wrong reason: nothing delivered,
+        # because nothing was measurable. `AResizeIsTheRectangleMovingAndNotTheSignal`
+        # mocks the same call for the same reason.
+        patcher = mock.patch("charter.frame.pane.size",
+                             return_value=os.terminal_size((40, 8)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _open(self, c):
         d = events.Dispatcher(c, stream=self.tty.stream)
@@ -879,47 +931,59 @@ class APointerEventArrivesInTheComponentsOwnColumns(unittest.TestCase):
         self.tty = _Pty(self)
 
     def _clicked(self, *, pad: int, cols: int, col: int, kind=overlay.CLICK):
-        """What the handler is handed for a click at pane column *col*, or ``None``."""
+        """EVERY event the handler was handed for a click at pane column *col*.
+
+        The whole list, not ``seen[0] if seen else None``, and the sweep is why. That
+        spelling could not tell a dropped event from a handler CALLED WITH ``None`` — the
+        recording handler appends whatever it is given — so deleting `_deliver`'s
+        ``if ev is None: return False`` left every margin case below still green while a
+        margin click reached a stranger's code as `None`. A component doing `ev.kind` on
+        it raises, is retired, and loses its pane. That survivor is what this signature
+        change closes.
+        """
         c, seen = _component(events=(kind,))
         d = events.Dispatcher(c, stream=self.tty.stream)
-        with mock.patch("charter.frame.slots._width", return_value=cols), \
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((cols, 8))), \
                 mock.patch("charter.frame.slots.pad_for", return_value=pad):
             d.open()
             self.addCleanup(d.close)
             self.tty.sent()
             self.tty.deliver(b"\x1b[<0;%d;5M" % (col + 1))
             d.poll(1.0)
-        return seen[0] if seen else None
+        return seen
 
     def test_the_pad_is_taken_off_the_column(self):
         """A pane 40 wide with `pad = 3` gives the component columns 0..33 at pane columns
         3..36. A click on its first cell is pane column 3, and the component must be told
         `0` — the cell it actually drew there."""
-        ev = self._clicked(pad=3, cols=40, col=3)
-        self.assertIsNotNone(ev, "a click on the component's first cell was dropped")
-        self.assertEqual(ev.col, 0)
+        seen = self._clicked(pad=3, cols=40, col=3)
+        self.assertEqual([e.col for e in seen], [0])
 
     def test_the_last_cell_of_the_canvas_is_the_last_cell_of_the_canvas(self):
         """`content_width` is `cols - 2 * pad` = 34, so the component's last column is 33
         and it sits at pane column 36. One off at this end is the end that silently drops
         a real click rather than mis-reporting one."""
-        ev = self._clicked(pad=3, cols=40, col=36)
-        self.assertIsNotNone(ev, "the canvas's last cell was treated as margin")
-        self.assertEqual(ev.col, 33)
+        seen = self._clicked(pad=3, cols=40, col=36)
+        self.assertEqual([e.col for e in seen], [33])
 
-    def test_a_click_in_the_left_margin_is_dropped_rather_than_clamped(self):
+    def test_a_click_in_the_left_margin_reaches_the_handler_not_at_all(self):
         """Those cells are charter's; the component never drew in them. A clamp would
         report a click on a cell the operator can SEE is empty as a click on the first cell
         of a row they can see is not — `EVENT_KINDS`'s "fires wrongly" at the one place the
-        distinction can still be made."""
+        distinction can still be made.
+
+        `assertEqual(seen, [])` and never `assertIsNone(seen[0] …)`: the handler must not
+        be CALLED, and the weaker spelling could not tell that from being called with
+        `None`. See :meth:`_clicked`."""
         for col in (0, 1, 2):
             with self.subTest(col=col):
-                self.assertIsNone(self._clicked(pad=3, cols=40, col=col))
+                self.assertEqual(self._clicked(pad=3, cols=40, col=col), [])
 
-    def test_a_click_in_the_right_margin_is_dropped_too(self):
+    def test_a_click_in_the_right_margin_reaches_it_not_at_all_either(self):
         for col in (37, 38, 39):
             with self.subTest(col=col):
-                self.assertIsNone(self._clicked(pad=3, cols=40, col=col))
+                self.assertEqual(self._clicked(pad=3, cols=40, col=col), [])
 
     def test_an_unpadded_pane_hands_the_column_straight_through(self):
         """The shipped default is `pad = 0`, and there the test is the pane's own bounds —
@@ -927,24 +991,44 @@ class APointerEventArrivesInTheComponentsOwnColumns(unittest.TestCase):
         sees exactly what tmux reported."""
         for col in (0, 17, 39):
             with self.subTest(col=col):
-                ev = self._clicked(pad=0, cols=40, col=col)
-                self.assertIsNotNone(ev)
-                self.assertEqual(ev.col, col)
+                self.assertEqual([e.col for e in self._clicked(pad=0, cols=40, col=col)],
+                                 [col])
 
     def test_the_row_is_not_touched_at_all(self):
         """Nothing insets a row: `inset_rows` pads the LEFT of each one and `panel._write`
         homes the cursor before the first, so a component's row 0 is its pane's row 0. This
         goes red the day anything grows a top inset without teaching this module about it —
         which is the whole reason to assert a number that is currently a no-op."""
-        ev = self._clicked(pad=3, cols=40, col=10)
-        self.assertEqual(ev.row, 4, "the row was translated by something")
+        self.assertEqual([e.row for e in self._clicked(pad=3, cols=40, col=10)], [4],
+                         "the row was translated by something")
+
+    def test_a_pane_that_could_not_be_measured_fires_nothing(self):
+        """`slots._width()` answers its stated 80-column fallback for a pane it could not
+        measure, and `pane.size()` answers `None` — the difference is the whole guard.
+
+        Translating against the fallback would deliver a click in cells of an invented
+        canvas, and would do it at the one moment the pane is showing `panel._unmeasured`'s
+        message instead of the component's rows: the component would be told where it was
+        clicked while what is on screen is not the component. `note_resize` refuses the
+        same reading for the same reason — "a rectangle charter could not measure is not
+        one end of a comparison"."""
+        c, seen = _component(events=("click",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        self.tty.sent()
+        with mock.patch("charter.frame.pane.size", return_value=None):
+            self.tty.deliver(b"\x1b[<0;5;5M")
+            d.poll(1.0)
+        self.assertEqual(seen, [])
 
     def test_a_scroll_is_translated_the_same_way(self):
         """Both pointer kinds carry a position, so both are translated. A `scroll` left in
         pane columns would be the same defect surviving in the kind nobody checked."""
         c, seen = _component(events=("scroll",))
         d = events.Dispatcher(c, stream=self.tty.stream)
-        with mock.patch("charter.frame.slots._width", return_value=40), \
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))), \
                 mock.patch("charter.frame.slots.pad_for", return_value=3):
             d.open()
             self.addCleanup(d.close)
@@ -959,7 +1043,8 @@ class APointerEventArrivesInTheComponentsOwnColumns(unittest.TestCase):
         drop the event for landing in a margin it was never in."""
         c, seen = _component(events=("focus",))
         d = events.Dispatcher(c, stream=self.tty.stream)
-        with mock.patch("charter.frame.slots._width", return_value=40), \
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))), \
                 mock.patch("charter.frame.slots.pad_for", return_value=3):
             d.open()
             self.addCleanup(d.close)
@@ -986,7 +1071,8 @@ class APointerEventArrivesInTheComponentsOwnColumns(unittest.TestCase):
         c, seen = _component(events=("click",))
         self.assertEqual(c.id, "acme.metrics")
         d = events.Dispatcher(c, stream=self.tty.stream)
-        with mock.patch("charter.frame.slots._width", return_value=40), \
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))), \
                 mock.patch.object(instance, "component_style", side_effect=styled):
             d.open()
             self.addCleanup(d.close)
@@ -996,15 +1082,25 @@ class APointerEventArrivesInTheComponentsOwnColumns(unittest.TestCase):
         self.assertEqual([e.col for e in seen], [0],
                          "the click was translated by some other name's pad")
 
-    def test_the_pad_and_the_width_come_from_one_measurement(self):
-        """`content_rect` asks the tty once and derives both halves from that reading.
-        Asking twice would let a `SIGWINCH` land in between, translating a click by a pad
-        afforded against one width and testing it against another — `panel._watch` repaints
-        on exactly that signal, so the window is real rather than theoretical."""
-        from charter.frame import slots
-        with mock.patch("charter.frame.slots._width", return_value=40) as width:
-            slots.content_rect("acme.metrics")
-        self.assertEqual(width.call_count, 1)
+    def test_the_dispatcher_measures_the_pane_once_for_one_event(self):
+        """The pad taken off and the width tested against come from ONE reading. Asking
+        twice would let a `SIGWINCH` land in between — translating a click by a pad
+        afforded against one width and testing it against another — and `panel._watch`
+        repaints on exactly that signal, so the window is real rather than theoretical.
+
+        Asked of the dispatcher rather than of `content_rect`, because `content_rect` now
+        takes the width as an argument and it is the CALLER that has to take only one
+        reading."""
+        c, _seen = _component(events=("click",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        self.tty.sent()
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))) as size:
+            self.tty.deliver(b"\x1b[<0;5;5M")
+            d.poll(1.0)
+        self.assertEqual(size.call_count, 1)
 
 
 class AResizeIsTheRectangleMovingAndNotTheSignal(unittest.TestCase):

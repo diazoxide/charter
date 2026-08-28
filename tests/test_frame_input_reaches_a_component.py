@@ -553,6 +553,22 @@ class APointerReachesTheComponentItLandedOn(_AFrameWithProviderPanels):
         self.assertTrue(_await(lambda: "POINT-click:right:" in self._pointed()),
                         f"a right-click was not named as one: {self._pointed()!r}")
 
+    def test_a_button_charter_has_no_name_for_reaches_nobody(self):
+        """tmux forwards the thumb buttons (8–11, encoded as 128–131) to a pane that asked
+        for reporting, verbatim — measured on 3.7c and 3.2. Read as `button & 3` alone,
+        button 8 is a LEFT click and a component acting on left clicks acts on it.
+
+        A real click is landed first, for `test_a_click_on_the_border_is_nobodys_event`'s
+        reason: a negative that cannot fail is worth nothing."""
+        self._select(self.harness)
+        self._point(self.pane[POINT_CID], row=0, col=2)
+        self.assertTrue(_await(lambda: "POINT-click:left:0,2:up" in self._pointed()),
+                        f"the route itself is broken: {self._pointed()!r}")
+        self._point(self.pane[POINT_CID], row=0, col=5, button=128)
+        time.sleep(1.0)
+        self.assertIn("POINT-click:left:0,2:up", self._pointed(),
+                      "a button charter has no name for was delivered as one it does")
+
     def test_a_press_and_a_release_are_two_events_and_say_which(self):
         """`overlay.py` keeps no press state and a release can arrive with no press, so a
         component gets both and is told which it has — the last one drawn here is the
