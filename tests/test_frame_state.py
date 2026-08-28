@@ -289,9 +289,18 @@ class RespawnAttempts(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.respawn_attempt("f-1", "../../../etc/passwd"))
 
     def test_a_write_that_fails_cannot_count_rather_than_raising(self):
-        """Same must-not-raise promise as `bump`: this runs from a tmux hook."""
+        """Same must-not-raise promise as `bump`: this runs from a tmux hook.
+
+        **Not `Path.write_text` any more, and the reason is the change that broke it.**
+        This used to patch `pathlib.Path.write_text`, which pinned the test to the WRITER'S
+        SPELLING rather than to the property it is named for: routing the writer through
+        `config.write_for` (#582) left the mock aimed at a call nobody makes, the write
+        succeeded, and the case went red having found nothing. `config.write_for` is what
+        `frame/state.py` actually depends on, so that is what a failing filesystem is
+        injected at — the same shape `test_frame_gather` uses for its unlink.
+        """
         state.respawn_attempt("f-1", "top")
-        with mock.patch("pathlib.Path.write_text", side_effect=OSError("full")):
+        with mock.patch.object(state.config, "write_for", side_effect=OSError("full")):
             self.assertIsNone(state.respawn_attempt("f-1", "top"))
 
 

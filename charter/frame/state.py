@@ -114,7 +114,17 @@ def bump(fid: str) -> None:
     more here than it would if a failure were still visible: ``os.replace`` only ever
     touches the target file by fully replacing it, never partially, so a write that
     cannot complete leaves the previous version exactly as a reader last saw it rather
-    than corrupting it silently. Does nothing for an *fid* :func:`frame_dir` refuses, and
+    than corrupting it silently.
+
+    **The temp file goes through `config.write_for`, and that is what settles the mode of
+    the destination too.** ``os.replace`` carries the SOURCE's mode onto the target, so
+    while this was `Path.write_text` it wrote a 0644 temp file and then moved 0644 onto
+    ``version`` — with nothing in the directory ever looking wrong. Ten writers in this
+    module share that shape (#582). ``os.replace`` itself needs no dispatch: a rename
+    cannot cross filesystems, so an atomic write into ``.charter/`` is written beside its
+    destination and is a state path by construction.
+
+    Does nothing for an *fid* :func:`frame_dir` refuses, and
     nothing for a write that fails after the directory exists (a full filesystem, say) —
     this runs from charter's hooks, where raising costs a session its turn, so every
     failure here is a no-op rather than an exception.
