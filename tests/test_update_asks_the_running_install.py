@@ -98,13 +98,38 @@ class WhereThisCharterLoadedFrom(unittest.TestCase):
             self.assertFalse(channel.running_inside(d))
         self.assertFalse(channel.running_inside(Path("/nonexistent/charter")))
 
-    def test_a_sibling_whose_name_starts_the_same_is_not_the_tree(self):
-        """The `startswith` trap, asked here rather than left to a reviewer: a plane at
-        `<parent>/charter-old` is not the tree `<parent>/charter` was imported from, and a
-        string prefix cannot tell them apart."""
+    def test_a_directory_whose_NAME_is_a_prefix_is_not_an_ancestor(self):
+        """The `startswith` trap, and the fixture that actually springs it.
+
+        A sibling — `<parent>/charter-old` beside `<parent>/charter` — is the obvious
+        fixture and it does not catch anything: a string prefix answers it correctly, since
+        the sibling's name is LONGER. What a prefix comparison gets wrong is the other
+        direction, a directory whose whole path spells the opening of this one:
+        `…/wt/chart` is a string prefix of `…/wt/charter` and is an ancestor of nothing.
+        Written after the version without it survived being replaced by `startswith`.
+        """
         here = channel.package_dir()
+        self.assertFalse(channel.running_inside(str(here)[:-2]))
         self.assertFalse(channel.running_inside(here.parent / (here.name + "-old")))
         self.assertFalse(channel.running_inside(str(here) + "-old"))
+
+    def test_a_plane_root_behind_a_symlink_is_still_the_tree(self):
+        """Both ends resolve, for the reason `contain.within_data` gives one module over: a
+        macOS temp directory lives under `/var/folders/…`, which is itself a link to
+        `/private/var/…`, and any plane behind a linked mount is the same shape. Comparing
+        a resolved package directory against an unresolved root answers "not the tree" for
+        a plane that IS the tree — and this refusal's whole job is to fire there.
+
+        Residue, stated: this pins the ROOT side. The package side is `Path(__file__)
+        .resolve()`, and whether that resolve is load-bearing depends on where the suite
+        was imported from, so no fixture here can decide it.
+        """
+        here = channel.package_dir()
+        with tempfile.TemporaryDirectory() as d:
+            link = Path(d) / "plane"
+            link.symlink_to(here.parent, target_is_directory=True)
+            self.assertTrue(channel.running_inside(link))
+            self.assertFalse(channel.running_inside(Path(d) / "elsewhere"))
 
     def test_it_answers_rather_than_raises_on_a_path_it_cannot_resolve(self):
         """Same promise the refusal helpers in `contain` keep, and bounded the same way:
