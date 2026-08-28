@@ -2423,7 +2423,12 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         w("")
         w("A mutation whose edit never landed runs the **unmutated** tree, passes, and is "
           "reported as a survivor. Every number above is suspect while this is non-zero.")
-        for r in gate.unapplied:
+        # Sorted, like every other section on this page. These two were the only ones
+        # printed in whatever order the results arrived in — which, once a sweep is merged
+        # from several machines, is the order the shard files were read. The same shards
+        # merged twice have to produce the same page, and holding that in `merge` alone
+        # made it a property nothing here could assert.
+        for r in sorted(gate.unapplied, key=lambda r: (r.mutation.path, r.mutation.line)):
             w(f"- `{r.mutation.tag}` — {r.subset.detail if r.subset else ''}")
         w("")
     if gate.masked:
@@ -2455,7 +2460,8 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         w("The run timed out rather than failing, twice. That is not a red and it is "
           "emphatically not a pin. Re-run on a quieter machine before reading this sweep "
           "as clean.")
-        for r in gate.unresolved:
+        for r in sorted(gate.unresolved,
+                        key=lambda r: (r.mutation.path, r.mutation.line)):
             w(f"- `{r.mutation.tag}` in `{r.mutation.symbol}`")
         w("")
     if gate_conclusion(gate, missing) == CLEAN:

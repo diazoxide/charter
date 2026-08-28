@@ -2610,6 +2610,63 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
         self.assertIn("### Masked cluster",
                       sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False))
 
+    def test_the_same_shards_merged_twice_produce_the_same_page(self):
+        """`[32/43]` from the sharded self-sweep: `sorted` in :func:`merge` swapped for
+        `list` and nothing went red.
+
+        It was load-bearing, and only just. Every section of the page sorts its own rows
+        except the not-applied and unresolved lists, which printed in arrival order — so
+        the page's determinism rested entirely on the order the shard files happened to be
+        read in. Those two sort now, which is where it belongs, and the merge stays
+        ordered so the result set itself does not depend on a directory listing.
+        """
+        # TWO of each, because one of a kind cannot be put in the wrong order — and a
+        # single unresolved row is exactly why the first version of this test passed with
+        # that section unsorted.
+        rows = [_result("unapplied", path="charter/z.py", line=9),
+                _result("unapplied", path="charter/a.py", line=1),
+                _result("unresolved", path="charter/y.py", line=7),
+                _result("unresolved", path="charter/b.py", line=3)]
+        forwards = sweep.gate_summary(sweep.classify(rows),
+                                      "a" * 40, "b" * 40, None, False)
+        backwards = sweep.gate_summary(sweep.classify(list(reversed(rows))),
+                                       "a" * 40, "b" * 40, None, False)
+        self.assertEqual(forwards, backwards)
+        for earlier, later in (("charter/a.py:1", "charter/z.py:9"),
+                               ("charter/b.py:3", "charter/y.py:7")):
+            self.assertLess(forwards.index(earlier), forwards.index(later))
+
+    def test_the_merge_reads_the_shards_in_a_settled_order(self):
+        """And the result set itself, not only the page it renders."""
+        # The directory listing is made to disagree with sorted order deliberately. Writing
+        # the files "out of order" is not enough — a filesystem is free to hand them back
+        # sorted anyway, and this one does, so that version of this test passed whether or
+        # not `merge` sorted anything.
+        real = sweep.Path
+
+        class _ReverseListing:
+            def __init__(self, where):
+                self._p = real(where)
+
+            def is_dir(self):
+                return self._p.is_dir()
+
+            def glob(self, pattern):
+                return sorted(self._p.glob(pattern), reverse=True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, path in (("a.json", "charter/a.py"), ("z.json", "charter/z.py")):
+                (Path(tmp) / name).write_text(
+                    sweep.as_json([_result("pinned", path=path)]))
+            sweep.Path = _ReverseListing
+            try:
+                merged, missing = sweep.merge(tmp, 2)
+            finally:
+                sweep.Path = real
+        self.assertEqual(missing, 0)
+        self.assertEqual([r.mutation.path for r in merged],
+                         ["charter/a.py", "charter/z.py"])
+
     def test_a_shard_that_wrote_nothing_is_counted_as_a_shard_that_did_not_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "sweep-results-1.json").write_text(sweep.as_json([]))

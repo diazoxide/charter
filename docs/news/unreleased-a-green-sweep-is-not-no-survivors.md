@@ -91,7 +91,7 @@ kind of pass.
 
 ## The sweep swept the gate that reports it
 
-127 mutations, against a change whose whole subject is the sweep. It found seven lines of
+127 mutations, against a change whose whole subject is the sweep. It found eight lines of
 its own that no test went red without.
 
 **The unsharded path had stopped being tested.** Forcing `if shard is not None` to
@@ -137,7 +137,14 @@ subset's detail is printed is the *not-applied* section, and nothing round-tripp
 not-applied result. That is the case where a shard says "the edit never landed" and the
 merge has to be able to say why.
 
-All seven are pinned now. An eighth survivor is not a finding about this code at all: it is a
+**And a page merged from several machines was only accidentally reproducible.** Every
+section sorts its own rows except the not-applied and unresolved lists, which printed in
+whatever order the results arrived — so the page's determinism rested entirely on the
+order the shard files happened to be read in. Those two sort now, which is where it
+belongs, and the merge stays ordered so the result set does not depend on a directory
+listing either.
+
+All eight are pinned now. A ninth survivor is not a finding about this code at all: it is a
 string inside a *type annotation*, which `from __future__ import annotations` means the
 interpreter never evaluates, so no test can ever go red without it. That is a blind spot
 in the string operator's scoping rather than a guard, and it is filed as one (#632)
