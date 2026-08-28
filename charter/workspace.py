@@ -764,12 +764,30 @@ def _live_block(names) -> str:
     ``todos`` needs the same pair: a shared task list is one of the better reasons to make
     a workspace LIVE at all, and without a line here the list would simply never travel,
     which is the quietest way this could fail.
+
+    ``changes`` needs the pair **and a third line that re-ignores ``changes/log``**, and
+    that asymmetry is the whole design of the store rather than an exception to it. A
+    change record holds intent — which repositories, which branch in each, which must land
+    first, which was excluded and why — and intent is exactly what a teammate needs and git
+    cannot derive. ``changes/log/<host>.jsonl`` holds the opposite: a past-tense
+    declaration carrying merge shas, per host, appended without a lock, and it is committed
+    **never**, for the same reason ``pieces/`` is not. Re-ignoring works only because its
+    parent was re-included two lines above — git cannot re-include a file whose parent
+    directory is excluded — which is why the three lines are written together here rather
+    than as a rule someone reconstructs.
+
+    The names are literals rather than ``change.DIRNAME``/``LOG_DIRNAME`` because
+    :mod:`charter.change` imports this module; ``tests/test_todos_are_committed.py`` pins
+    them against those constants, which is the same job an import would have done and the
+    one that also catches ``_ws_meta_paths`` drifting away from this list.
     """
     lines = [_LIVE_BEGIN]
     for n in sorted(names):
         lines += [f"!/workspaces/{n}/workspace.json", f"!/workspaces/{n}/workspace.md",
                   f"!/workspaces/{n}/memory", f"!/workspaces/{n}/memory/**",
-                  f"!/workspaces/{n}/todos", f"!/workspaces/{n}/todos/**"]
+                  f"!/workspaces/{n}/todos", f"!/workspaces/{n}/todos/**",
+                  f"!/workspaces/{n}/changes", f"!/workspaces/{n}/changes/**",
+                  f"/workspaces/{n}/changes/log/"]
     lines.append(_LIVE_END)
     return "\n".join(lines)
 
@@ -1181,7 +1199,16 @@ def read_vision(name: str) -> str:
 # scaffold/restore), never committed.                                              #
 # --------------------------------------------------------------------------- #
 
-STRUCTURE_VERSION = 2  # v2: memory is a per-file DB (MEMORY.md index), not a lone notes.md
+# v3 creates no directory, and that is deliberate. `changes/` is created lazily by the
+# first `charter change create` — an always-present, always-empty one would break
+# `charter workspace live --off`, whose path list is filtered by existence and relies on
+# that filter doubling as a non-emptiness filter. The bump exists so every workspace made
+# by an older charter flags itself, `reinit` runs `refresh_live_block()`, and a LIVE
+# workspace picks up the three new un-ignore lines. Without it a plane that went LIVE
+# before this version keeps a block that never mentions `changes`, and the records simply
+# never travel — the same silent half-failure `todos/` had.
+STRUCTURE_VERSION = 3  # v2: memory is a per-file DB (MEMORY.md index), not a lone notes.md
+                       # v3: the managed .gitignore block shares `changes/` (not its log)
 _STRUCTURE_MARKER = ".charter-structure"
 _LEGACY_STRUCTURE_MARKER = ".edm-structure"   # pre-rename; migrated in place on read
 

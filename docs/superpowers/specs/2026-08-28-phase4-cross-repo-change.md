@@ -1240,7 +1240,9 @@ plan in `plans/` reads as ready to execute, and this phase is not approved.)*
 - Run the suite in **two environments** and say which; they must agree. **The count is
   deliberately not pinned here**: Phase 2's 5880 is stale by the time this phase starts, and a
   number carried forward from another branch is a fixture, not a baseline. Measure it at this
-  branch's head as Task 1 Step 0 and write it into this line then.
+  branch's head as Task 1 Step 0 and write it into this line then. **Measured at
+  `2fe663a` (the merge-base for Tasks 1–4): 7385 tests, OK, in both — CPython 3.14.4, and
+  CPython 3.12 with `CHARTER_*`/`CLAUDE_*`/`ANTHROPIC_*`/`TMUX*` unset.**
 - `PersonaIso`; new `patch.dict(os.environ, …)` MUST pass `clear=True`.
 - `tui.width()` never `len()`. `contain.one_line` **before** width arithmetic.
 - Repo names use `contain.segment_ok`, **never** `workspace.valid_name` — `org/.github` is a

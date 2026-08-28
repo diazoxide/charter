@@ -111,6 +111,26 @@ def workspace_name_ok(name) -> bool:
             and WORKSPACE_NAME_RE.fullmatch(name) is not None)
 
 
+#: The alphabet a cross-repo change's slug is minted in — :data:`WORKSPACE_NAME_RE`'s
+#: shape, and its own object rather than an alias, because the two names travel to
+#: different places and widening one must not widen the other by accident. A workspace name
+#: is a directory here; a change slug is a directory entry here **and** a branch name in
+#: every member repository **and** the value of a ``Charter-Change:`` trailer in somebody
+#: else's merge commit forever. The leading-character rule is what keeps a slug out of
+#: argv's flag position, which is the same guard `change.branch_refusal` makes explicit one
+#: field over.
+CHANGE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def change_name_ok(name) -> bool:
+    """Can *name* name a cross-repo change? Asked in :func:`workspace_name_ok`'s two
+    halves, for its reasons: containment first (:func:`contain.segment_ok` — could this
+    string name one entry in a directory at all), then the alphabet, which is the right
+    rule here because charter mints these names itself."""
+    return (isinstance(name, str) and contain.segment_ok(name)
+            and CHANGE_NAME_RE.fullmatch(name) is not None)
+
+
 def default_workspace_of(cfg: dict, fallback: str) -> str:
     """The workspace this plane lands on when nothing else decided — ``[workspace] default``.
 
