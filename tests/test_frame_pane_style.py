@@ -668,6 +668,27 @@ class ThePadComesOutOfTheBudget(PersonaIso, unittest.TestCase):
             got = slots.inset_rows("a\nbb\n", "repos")
         self.assertEqual(got, "  a\n  bb\n  ")
 
+    def test_every_row_shape_these_panes_take_is_inset_the_same_way(self):
+        """`inset_rows` is spelled with `replace` rather than a split and a join, because
+        the split form carries an equivalent mutant nothing can pin (`split`/`rsplit` with
+        no `maxsplit` are one function). The two spellings have to agree, so the cases that
+        could tell them apart are asked here rather than argued in a docstring: a blank
+        line, a trailing newline, a bare `\\r` — which `splitlines` WOULD have split on and
+        `split("\\n")` does not — and no newline at all.
+
+        Written as the property (every line starts with the lead, and stripping the lead
+        gives the original lines back) rather than against the other implementation, so it
+        stays meaningful once that implementation is gone."""
+        with mock.patch.dict(config.FRAME, _arrangement(repos={"pad": 2})), _pane(120):
+            for text in ("", "a", "a\nb", "a\n", "\n\n", "\n", "a\n\nb\n", "x\ry"):
+                with self.subTest(text=text):
+                    got = slots.inset_rows(text, "repos")
+                    lines = got.split("\n")
+                    self.assertEqual(len(lines), len(text.split("\n")))
+                    for ln in lines:
+                        self.assertTrue(ln.startswith("  "), repr(ln))
+                    self.assertEqual([ln[2:] for ln in lines], text.split("\n"))
+
     def test_inset_rows_is_the_identity_at_no_pad(self):
         """`" " * 0` is `""` and the join is the split's inverse, so a pane with no pad
         gets back the value it was given — trailing newline included.

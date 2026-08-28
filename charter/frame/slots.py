@@ -1045,12 +1045,23 @@ def inset_rows(text: str, name: str) -> str:
     the property those guards were reaching for pinned without the guard.
 
     Deleted rather than kept as a fast path, because the cost it saves is not one this
-    module spends: a split and a join over a pane's worth of rows is a few microseconds
+    module spends: this is one pass over a pane's worth of rows, a few microseconds
     against `render`'s measured 4 816µs, and `panel._write` splits the same string again
     one call later regardless.
+
+    **`replace` rather than a split and a join, and the sweep is why.** The obvious
+    spelling — ``"\\n".join(lead + line for line in text.split("\\n"))`` — carries an
+    equivalent mutant that no test could ever pin: `str.split` and `str.rsplit` with no
+    ``maxsplit`` are the same function, so `tools/sweep.py`'s ``swap-synonym`` operator
+    turns one into the other and nothing anywhere can tell. That is not a missing test, and
+    "add a suppression" is the move this repo has no mechanism for on purpose. Saying it
+    without a split says the same thing and leaves nothing to swap: **every newline gains
+    the lead after it, and the first line gains it in front.** Verified equal to the split
+    form on every case these rows can take — empty, no newline, trailing newline, blank
+    lines, a bare ``\\r`` — at every pad including zero.
     """
     lead = " " * pad_of(name)
-    return "\n".join(lead + line for line in text.split("\n"))
+    return lead + text.replace("\n", "\n" + lead)
 
 
 def _sidebar_head(label: str, count: int, width: int) -> str:
