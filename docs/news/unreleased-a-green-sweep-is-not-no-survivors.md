@@ -91,7 +91,7 @@ kind of pass.
 
 ## The sweep swept the gate that reports it
 
-119 mutations, against a change whose whole subject is the sweep. It found two lines of
+127 mutations, against a change whose whole subject is the sweep. It found four lines of
 its own that no test went red without.
 
 **The unsharded path had stopped being tested.** Forcing `if shard is not None` to
@@ -105,7 +105,20 @@ zero. Deleting it changed no answer with today's constants and would have made t
 job raise with tomorrow's — no plan, no shards, no numbers, which is the failure this
 whole change exists to prevent, arriving out of the arithmetic written to prevent it.
 
-Both are pinned now. A third survivor is not a finding about this code at all: it is a
+**And the annotation escaping was asserted by absence.** The tests checked that a newline
+was *gone* from a workflow command, never that it had become `%0A` — so retuning `%0D` or
+`%0A` or `%25` left the suite green. A wrong encoding there does not break anything
+visibly: the runner prints a mangled message, which is the kind of wrong nobody files and
+nobody can read either. The bytes are pinned now, and pinning them pins the order too,
+because `%` has to be escaped first or the `%` of `%0A` gets escaped a second time.
+
+**And the reserved annotation slot had no case on its boundary.** When a level is over
+budget the tenth slot goes to the line that says how many were not drawn — otherwise that
+line is the first thing the cap eats. Every test had either far fewer than ten findings or
+far more, so "always ten" and "always nine" both passed, and "always ten" is the one that
+loses the note. There is a case at nine, ten and eleven now.
+
+All four are pinned now. A fifth survivor is not a finding about this code at all: it is a
 string inside a *type annotation*, which `from __future__ import annotations` means the
 interpreter never evaluates, so no test can ever go red without it. That is a blind spot
 in the string operator's scoping rather than a guard, and it is filed as one (#632)

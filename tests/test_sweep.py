@@ -2387,6 +2387,25 @@ class EverySurvivorLandsOnTheLineItIsAbout(unittest.TestCase):
         self.assertIn("5 of these 14 are not shown", said[-1])
         self.assertIn("all 14", said[-1])
 
+    def test_exactly_the_cap_is_drawn_whole_and_one_more_costs_a_slot(self):
+        """The boundary the reserved slot turns on, found unpinned by the sweep.
+
+        At exactly ten there is nothing to announce, so all ten are findings. At eleven
+        the note has to fit inside the same ten, so nine are. Without a case sitting on
+        the boundary, "always ten" and "always nine" both pass — and "always ten" is the
+        one that loses the note, which is the only line that distinguishes *these ten*
+        from *these ten of twenty-two*.
+        """
+        def drawn(n):
+            gate = sweep.classify([_result("survived", path=f"charter/{i}.py")
+                                   for i in range(n)])
+            said = sweep.annotations(gate)
+            return sum(1 for s in said if "file=" in s), len(said)
+
+        self.assertEqual(drawn(9), (9, 9))       # under the cap: no note
+        self.assertEqual(drawn(10), (10, 10))    # exactly the cap: still no note
+        self.assertEqual(drawn(11), (9, 10))     # one over: nine findings and the note
+
     def test_the_cap_is_a_levels_budget_and_not_one_kind_of_findings(self):
         """Masked clusters, lone survivors and unmeasured mutations are all warnings, so
         they share one budget of ten. Capping each family at ten instead would emit thirty
@@ -2431,6 +2450,18 @@ class EverySurvivorLandsOnTheLineItIsAbout(unittest.TestCase):
         said = sweep.annotations(gate)
         self.assertEqual(len(said), 1)
         self.assertNotIn("\n", said[0])
+
+    def test_the_escaping_is_the_encoding_the_runner_decodes_and_not_merely_removal(self):
+        """Found by the sweep on this branch: retuning `"%0D"` left every test green.
+
+        Asserting that the newline is *gone* is not asserting that it became `%0A`. A
+        wrong encoding does not break the command — the runner prints a mangled message,
+        which is the kind of wrong nobody files and nobody can read either. So the bytes
+        are pinned, and pinning them pins the ORDER too: `%` has to be escaped first, or
+        the `%` of `%0A` gets escaped again and `a\\nb` comes out as `a%250Ab`.
+        """
+        self.assertEqual(sweep._escape("100% done\r\nnext"), "100%25 done%0D%0Anext")
+        self.assertEqual(sweep._property("a,b:c%d\ne"), "a%2Cb%3Ac%25d%0Ae")
 
     def test_an_annotation_is_not_a_failure(self):
         gate = sweep.classify([_result("survived"), _result("unapplied",
