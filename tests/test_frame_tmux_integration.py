@@ -4277,6 +4277,53 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                          "charter's frame is drawn differently on the operator's server "
                          "than on charter's own")
 
+    def _require_pane_scoped_borders(self) -> None:
+        """Skip unless THIS tmux really keeps `pane-border-style` per pane.
+
+        **Probed, never a version string**, per this plane's rule and this module's own
+        docstring — and here the probe is the only honest form, because the thing being
+        detected does not fail loudly. Below `tmuxctl.PANE_BORDER_FLOOR` the option is a
+        window option: `set -p` returns 0 and writes the WINDOW, so a test that assumed
+        pane scope would not error, it would assert against a frame where charter's write
+        had leaked onto the harness — which is exactly what CI's tmux 3.4 did to the first
+        version of these tests.
+
+        The probe performs that write on a throwaway session this test owns, so the only
+        thing it can damage is its own.
+        """
+        session = f"probe-{self._pane_counter}"
+        self._pane_counter += 1
+        r = self._srv("new-session", "-d", "-s", session, "-x", "40", "-y", "10",
+                      "-P", "-F", "#{pane_id}", "--", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pane = r.stdout.strip()
+        self._srv("set", "-w", "-t", pane, "pane-border-style", "fg=default")
+        self._srv("set", "-p", "-t", pane, "pane-border-style", "bg=red")
+        window = self._srv("show", "-wv", "-t", pane, "pane-border-style").stdout.strip()
+        self._srv("kill-session", "-t", session)
+        if window != "fg=default":
+            raise unittest.SkipTest(
+                "this tmux has no pane scope for `pane-border-style` — `set -p` wrote the "
+                f"window ({window!r}), which is what `tmuxctl.PANE_BORDER_FLOOR` gates")
+
+    def test_the_floor_agrees_with_what_this_tmux_actually_does(self):
+        """The version constant, checked against the binary rather than against tmux's
+        source. Where a real tmux is present its behaviour is the authority, so a
+        `PANE_BORDER_FLOOR` moved without a measurement goes red on the machine that could
+        have measured it."""
+        v = tmuxctl.version()
+        if v is None:
+            raise unittest.SkipTest("no readable tmux version to check the floor against")
+        supported = True
+        try:
+            self._require_pane_scoped_borders()
+        except unittest.SkipTest:
+            supported = False
+        self.assertEqual(supported, v >= tmuxctl.PANE_BORDER_FLOOR,
+                         f"tmux {v} {'does' if supported else 'does not'} keep "
+                         "`pane-border-style` per pane, which is not what "
+                         f"`PANE_BORDER_FLOOR` {tmuxctl.PANE_BORDER_FLOOR} says")
+
     #: The colour every panel in a surfaced screenshot is painted, and the only
     #: non-default background on the screen — the harness pane is never painted, and every
     #: pane runs `cat` and writes nothing.
@@ -4383,6 +4430,8 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
             "the control rendered no seam, so this machine cannot testify")
         for design in ("window", "pane"):
             with self.subTest(design=design):
+                if design == "pane":
+                    self._require_pane_scoped_borders()
                 shot = self._screenshot(arm=True, surface=self._SURFACE, design=design)
                 self._painted(shot)
                 self.assertEqual(self._seams(shot), [])
@@ -4400,6 +4449,7 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         moment, never against a remembered colour: the window-wide frame is the control
         that proves this test can see the box.
         """
+        self._require_pane_scoped_borders()
         boxed = self._screenshot(arm=True, surface=self._SURFACE, design="window")
         painted = self._painted(boxed)
         self.assertEqual(self._harness_edges(boxed), {painted},
@@ -4416,6 +4466,7 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         Per-pane edges are set with `set -p`, and ADR 0018's line holds here the way it
         holds for the surface: the harness pane is never an argument, so it has nothing of
         charter's on it and inherits the window's own."""
+        self._require_pane_scoped_borders()
         session = f"hb-{self._pane_counter}"
         self._pane_counter += 1
         r = self._srv("new-session", "-d", "-s", session, "-x", "80", "-y", "24",
