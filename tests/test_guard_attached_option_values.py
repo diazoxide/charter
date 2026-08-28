@@ -39,15 +39,19 @@ so the answer cannot depend on which one a reviewer happened to try.
 **What this file does NOT claim.** `SECURITY.md` says guard rails, not guarantees, and
 deciding what a shell will execute without executing it is not winnable in a Python
 tokeniser. This is one mis-ordering with a correct answer — getopt gives a short option
-everything glued after it, `=` included — not an attempt to close the class. Two neighbours
-found while measuring this one are NOT fixed here and are filed rather than pinned as
-limits, because they are defects and not decisions: #556, a value attached to a BUNDLED
-short option (`env -iC<dir> cat x.json`), and #555, `env` accepting assignments to names
-that are not shell identifiers while this parser stops at the first token it cannot read as
-one (`env a-b=1 cat <vault>`). Both are live on `main` and both are unchanged by this fix,
-in either direction. They are deliberately absent from the tables below: a row asserting
-today's ALLOW would have to be deleted by whoever closes them, and a test that has to be
-deleted to make a fix pass teaches the wrong reflex.
+everything glued after it, `=` included — not an attempt to close the class.
+
+**The two neighbours found while measuring this one are closed now, and they have their own
+files** rather than rows here, because each is its own property and this table is #547's
+measurement verbatim:
+
+* #556 — a value attached to a BUNDLED short option (`env -iC<dir> cat x.json`).
+  `tests/test_an_option_is_its_letter_not_its_position.py`. The `bundled` spelling in
+  `TestEveryFlagWhoseValueCanBeAttached` below is that fix crossed with this file's axis,
+  which is where the two meet.
+* #555 — `env` accepting assignments to names that are not shell identifiers while this
+  parser stopped at the first token it could not read as one (`env a-b=1 cat <vault>`).
+  `tests/test_the_assignment_rule_belongs_to_the_parser.py`.
 """
 
 from __future__ import annotations
@@ -153,10 +157,12 @@ class TestTheSixSpellingsThroughTheRealHook(PersonaIso):
 #: `(wrapper, flag whose value may be attached, what the value has to reach)`. One row per
 #: flag in `_WRAPPER_CHDIR_FLAGS`/`_WRAPPER_READ_FLAGS` — the two tables where a LOST value
 #: is a lost denial rather than a cosmetic misparse.
+#: The fifth field is a letter of the SAME wrapper that takes no value, so the flag can be
+#: bundled behind it — #556's spelling, crossed with this file's axis.
 ATTACHED_VALUE_FLAGS = (
-    ("env", "-C", "--chdir", "cat x.json"),
-    ("sudo", "-D", "--chdir", "cat x.json"),
-    ("xargs", "-a", "--arg-file", "echo"),
+    ("env", "-C", "--chdir", "cat x.json", "i"),
+    ("sudo", "-D", "--chdir", "cat x.json", "b"),
+    ("xargs", "-a", "--arg-file", "echo", "0"),
 )
 
 
@@ -169,20 +175,35 @@ class TestEveryFlagWhoseValueCanBeAttached(unittest.TestCase):
     four name the same file; the `=` in it is the whole point.
     """
 
-    def _cmds(self, wrapper: str, short: str, long: str, tail: str):
+    def _cmds(self, wrapper: str, short: str, long: str, tail: str, lead: str):
         target = ".charter/vaults" if wrapper != "xargs" else VAULT
         return {
             "separated": f"{wrapper} {short} {target} {tail}",
             "glued": f"{wrapper} {short}{target} {tail}",
             "long with =": f"{wrapper} {long}={target} {tail}",
             "glued, = in the value": f"{wrapper} {short}x=y/../{target} {tail}",
+            # #556: the same flag, one letter in. `-iC<dir>` is `-i -C <dir>` to getopt, and
+            # a reader that matches by `tok.startswith(flag)` sees a short option only when
+            # it is written first.
+            "bundled, glued": f"{wrapper} -{lead}{short[1:]}{target} {tail}",
+            "bundled, separated": f"{wrapper} -{lead}{short[1:]} {target} {tail}",
         }
 
     def test_every_spelling_is_denied(self):
-        for wrapper, short, long, tail in ATTACHED_VALUE_FLAGS:
-            for spelling, cmd in self._cmds(wrapper, short, long, tail).items():
+        for wrapper, short, long, tail, lead in ATTACHED_VALUE_FLAGS:
+            for spelling, cmd in self._cmds(wrapper, short, long, tail, lead).items():
                 with self.subTest(wrapper=wrapper, spelling=spelling):
                     self.assertIsNotNone(hooks._leak_reason(cmd), cmd)
+
+    def test_the_bundling_letter_really_takes_no_value(self):
+        """Non-vacuity for the two rows above: if `lead` took a value of its own, the
+        `bundled` spellings would be testing a different command than they claim and would
+        pass for the wrong reason."""
+        for wrapper, _short, _long, _tail, lead in ATTACHED_VALUE_FLAGS:
+            with self.subTest(wrapper=wrapper):
+                self.assertIn(lead, hooks._WRAPPER_NOVALUE_LETTERS[wrapper])
+                self.assertNotIn(
+                    "-" + lead, hooks._WRAPPER_VALUE_FLAGS.get(wrapper, ()))
 
     def test_the_value_itself_comes_back_whole(self):
         """Stated as the parse, because "denied" can be true for the wrong reason. A short

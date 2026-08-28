@@ -735,6 +735,22 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                f"GIT_DIR={self.root}/.git git {tail}")
         yield ("GIT_WORK_TREE in the environment", self.clone,
                f"GIT_WORK_TREE={self.root} GIT_DIR={self.root}/.git git {tail}")
+        # #496: the SAME variable, set by an earlier segment of the SAME command line
+        # instead of attached to the invocation. The attached spelling was refused as of
+        # #477 and this one was allowed — verified end to end against git 2.50.1, the plane
+        # root's HEAD moved and the hook printed nothing. `_exported_env` is the carried
+        # state that answers them together; every shape a shell really exports with is a
+        # route, because "a list of the ones somebody thought of" is what #477 already was.
+        yield ("GIT_DIR exported by an earlier segment", self.clone,
+               f"export GIT_DIR={self.root}/.git && git {tail}")
+        yield ("GIT_WORK_TREE exported by an earlier segment", self.clone,
+               f"export GIT_WORK_TREE={self.root}; git {tail}")
+        yield ("GIT_DIR assigned, then exported by name", self.clone,
+               f"GIT_DIR={self.root}/.git; export GIT_DIR; git {tail}")
+        yield ("GIT_DIR exported by declare -x", self.clone,
+               f"declare -x GIT_DIR={self.root}/.git && git {tail}")
+        yield ("GIT_DIR exported by set -a", self.clone,
+               f"set -a; GIT_DIR={self.root}/.git; git {tail}")
 
     def test_a_head_move_is_denied_by_every_route(self):
         movers = []
@@ -754,7 +770,7 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
         # would leave every remaining assertion green while covering less than it did.
         self.assertGreaterEqual(len(movers), 8, movers)
         labels = {label for label, _cwd, _cmd in self.routes("checkout", "feature")}
-        self.assertGreaterEqual(len(labels), 20, sorted(labels))
+        self.assertGreaterEqual(len(labels), 25, sorted(labels))
         for must in ("--git-dir, separated", "--git-dir=, attached",
                      "--work-tree and --git-dir", "--git-dir relative to a -C",
                      "GIT_DIR in the environment", "GIT_WORK_TREE in the environment",
@@ -763,7 +779,16 @@ class TestEveryRouteToThePlaneRootIsTheSameRoute(CheckoutCase):
                      # both of these were live bypasses that a generous floor would hide.
                      "--work-tree alone", "--work-tree elsewhere, from the ROOT",
                      "GIT_WORK_TREE elsewhere, from the ROOT",
-                     "--git-dir through a .. segment", "GIT_DIR through a .. segment"):
+                     "--git-dir through a .. segment", "GIT_DIR through a .. segment",
+                     # Round six (#496). Named individually for the same reason: each is a
+                     # shell spelling a real shell exports with, and the guard reads the
+                     # environment a command line ESTABLISHES rather than a list of the
+                     # spellings that establish it.
+                     "GIT_DIR exported by an earlier segment",
+                     "GIT_WORK_TREE exported by an earlier segment",
+                     "GIT_DIR assigned, then exported by name",
+                     "GIT_DIR exported by declare -x",
+                     "GIT_DIR exported by set -a"):
             self.assertIn(must, labels)
 
     def test_a_restore_is_allowed_by_every_route(self):
@@ -1075,10 +1100,30 @@ PINNED: tuple[tuple[str, str, str, str], ...] = (
     #     HEAD and is not refused. Pinned as facts rather than left as silent gaps, each
     #     naming the issue that tracks it. Closing one turns its row RED, which is the
     #     point: a limit should not disappear without somebody noticing and saying so.
-    ("ALLOW", "clone", "export GIT_DIR={root}/.git && git checkout feature",
-     "LIMIT #496: the shared walk carries a `cd` across segments and not an env assignment, "
-     "so the ATTACHED spelling `GIT_DIR=… git …` is refused (#477) and this one is not. "
-     "git: Switched to branch 'feature', and the root's symbolic-ref follows"),
+    # #496 CLOSED. This row was recorded as a limit — the shared walk carried a `cd` across
+    # segments and not an env assignment, so the ATTACHED spelling `GIT_DIR=… git …` was
+    # refused (#477) and the exported one was not. `_exported_env` carries the environment a
+    # command line establishes, so both reach the same `_git_target`. Flipped rather than
+    # deleted, for the reason the #430 rows below were.
+    ("DENY", "clone", "export GIT_DIR={root}/.git && git checkout feature",
+     "#496: an `export` reaches the next segment, and now the guard reads it"),
+    ("DENY", "clone", "export GIT_WORK_TREE={root}; git checkout feature",
+     "#496: the other repository-naming variable, and a `;` carries as far as an `&&`"),
+    ("DENY", "clone", "declare -x GIT_DIR={root}/.git && git checkout feature",
+     "#496: `declare -x` is `export` spelled another way, and its `x` bundles"),
+    ("DENY", "clone", "GIT_DIR={root}/.git; export GIT_DIR; git checkout feature",
+     "#496: a shell variable exported by name in a later segment"),
+    ("DENY", "clone", "set -a; GIT_DIR={root}/.git; git checkout feature",
+     "#496: under `set -a` a bare assignment segment IS exported — verified against bash"),
+    ("ALLOW", "clone", "GIT_DIR={root}/.git; git checkout feature",
+     "the precision half of #496: a bare assignment segment exports NOTHING — "
+     "`FOO=1; <child>` leaves FOO unset in the child, verified — so git never sees it"),
+    ("ALLOW", "clone",
+     "export GIT_DIR={root}/.git && GIT_DIR={clone}/.git git checkout feature",
+     "the other precision half: an assignment ATTACHED to the invocation overrides one an "
+     "earlier `export` set, which is git's own rule. The carried environment is passed "
+     "BEFORE the segment's own prefix for exactly this; swapping the two makes this row "
+     "red and nothing else, which is how a hand-check found it unpinned"),
     # #430 CLOSED. These six rows were recorded as limits — `prog` came from token 0, so a
     # wrapper word or a shell keyword standing in front of `git` hid it from every guard in
     # the module. `_split_env_chdir` strips the wrapper run before naming the program and
@@ -1226,7 +1271,9 @@ class TestThePinnedCorpusIsTheBaseline(CheckoutCase):
     #: to lower the number, which is indistinguishable from a limit quietly reappearing. An
     #: exact set fails in BOTH directions and says which issue moved: closing one leaves an
     #: issue listed here with no row, and adding one leaves a row citing an issue not here.
-    LIMIT_ISSUES = {"#430", "#496"}
+    #: #496 left this set in round six: `_exported_env` carries what a command line exports
+    #: into its later segments, so the row that recorded it moved to DENY above.
+    LIMIT_ISSUES = {"#430"}
 
     def test_every_known_limit_names_the_issue_that_tracks_it(self):
         """A limit with no issue behind it is a gap somebody decided to live with and then
@@ -1258,7 +1305,11 @@ class TestThePinnedCorpusIsTheBaseline(CheckoutCase):
                      "alias", "ambig", "notes/a.md", "$(echo",
                      # Round five's axes: #483's separated short `-C`, and #477's three
                      # spellings of "the repository is over there".
-                     "--git-dir=", "--git-dir ", "--work-tree", "GIT_DIR=", "GIT_WORK_TREE="):
+                     "--git-dir=", "--git-dir ", "--work-tree", "GIT_DIR=", "GIT_WORK_TREE=",
+                     # Round six's axis (#496): the environment a command line ESTABLISHES
+                     # for its later segments, in every shape a shell really exports with.
+                     "export GIT_DIR", "export GIT_WORK_TREE", "declare -x", "set -a;",
+                     "export GIT_DIR;"):
             with self.subTest(axis=axis):
                 self.assertIn(axis, commands, f"no row covers {axis!r} any more")
 
