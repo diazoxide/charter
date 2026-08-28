@@ -265,7 +265,8 @@ def cmd_worktree_list(args) -> int:
                 said = f"silent {quiet}" if quiet else ""
             body.append((r["piece"], branch, state, who, said))
         # Four widths, not five: the outcome has nothing to its right, so padding it would
-        # buy trailing space `_finish` strips anyway — `_STATS_HEADS`' own rule.
+        # buy trailing space the `.rstrip()` below takes straight off again — the rule
+        # `_STATS_HEADS` states for the same shape one command over.
         widths = [tui.column("", [row[i] for row in body]) for i in range(4)]
         for row in body:
             cells = "".join(tui.pad(c, w) for c, w in zip(row, widths))

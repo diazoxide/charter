@@ -2348,17 +2348,22 @@ def _checks():
 #: the control plane rather than of this list.
 #:
 #: **A second spelling of something the checks already say, and it is here because the
-#: alternative is worse.** `Result.render` needs the column's width before the first row
-#: is drawn, and `cmd_doctor` draws each row as its check lands — deliberately, so a
-#: preflight killed by its hook timeout names where it stopped instead of printing nothing
-#: at all. Sizing from the results would mean collecting every check before drawing one,
-#: which is precisely the behaviour that streaming replaced.
+#: alternative forecloses something.** `Result.render` needs the column's width before the
+#: first row is drawn, and `cmd_doctor` is written to draw each row as its check lands —
+#: deliberately, so a preflight killed by its hook timeout names where it stopped instead
+#: of printing nothing at all. Sizing the column from the results would mean collecting
+#: every check before drawing one, which is exactly the shape streaming replaced.
+#:
+#: That streaming is **not delivered today**, and the honest note is worth more than the
+#: convenient one: :func:`_checks` is an eager list literal, so `iter_all` yields from a
+#: run that has already finished and `cmd_doctor` prints its rows all at once. Sizing from
+#: the results would therefore cost nothing *right now* — and would silently make the
+#: streaming fix unavailable to whoever writes it. This costs a list instead.
 #:
 #: So the names are stated ahead of the run and **pinned by equality** against what
 #: `run_all` actually produces — the same discipline `MIN_PYTHON` has against
-#: `pyproject.toml`, and the same one `NOT_ROUTED_YET` has in the state-mode suite: a
-#: check renamed, added or removed fails that test on the commit that does it. Unpinned
-#: this would be a list that rots into a wrong width; pinned, it cannot.
+#: `pyproject.toml`: a check renamed, added or removed fails that test on the commit that
+#: does it. Unpinned this would be a list that rots into a wrong width; pinned, it cannot.
 _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
