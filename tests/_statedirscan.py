@@ -76,16 +76,23 @@ does not matter" — that was false on the exact flow above, where the loose dir
 actually is, so a writer routed through it is right about a path this reader cannot name.
 The scan's job is to prove every writer is routed; the guard is `config`.
 
-A **function that returns a local** (``d = contain.child(...)`` … ``return d``) is not
-recognised as a state-path source: :func:`_returns` reads the return expression, and
-substituting locals into it was measured to over-taint catastrophically — every function
-returning any local out of a module that touches the state directory becomes a state path,
-including the ones returning strings and ints, and the scan starts reporting committed
-directories it can never be cleaned of. `frame.state.frame_dir` has that shape, so the
-frame's per-frame files are outside both halves. Their directory is created through
-`config.private_mkdir`, so the exposure is the narrower one — a ``.charter/frame/`` that
-pre-existed loose — but it is a gap and it is filed rather than papered over (#582, which
-carries the measurement of what full substitution does to this scan).
+**A function that returns a local** (``d = contain.child(...)`` … ``return d``) IS
+recognised now, and getting there took three measurements rather than one (#582).
+`frame.state.frame_dir` has exactly that shape, and while it was invisible so were the
+eleven writers in `frame/state.py`, `gather`'s cache file and two `tmux.conf` writes in
+`commands_frame` — none of which any half of this scan could see. Substituting every local
+into every return closes it and is far worse: 189 functions become state paths where 41
+are, the taint follows the *data* (a workspace NAME read from a state pointer) rather than
+the path, and the scan reports committed directories under ``workspaces/`` that it can only
+be cleaned of by routing them through the private walk — the #331 defect. So what is
+followed is decided by the **shape of the return**, and :func:`_returns` carries the
+numbers.
+
+The **named half is cross-module too** now. It used to know only the state-path helpers
+defined in its own file, which is why `gather.save` stayed invisible even once `frame_dir`
+was seen: its path comes from `gather._cache_file`, whose state-ness comes from
+`frame.state.frame_dir` one import away. Both halves are handed the same package-wide
+answer by :func:`_scan`.
 
 **``os.replace``/``os.rename`` destinations are not scanned**, which is a decision rather
 than an oversight. An atomic writer's temp file carries its own mode onto the destination,
@@ -153,9 +160,130 @@ def state_attribute_names() -> set[str]:
     return out
 
 
+#: The calls that build **a path out of a path**: `contain.child` (the package's own
+#: "a path under this root" constructor), `Path`, and `pathlib`'s own three growers.
+#:
+#: A vocabulary rather than a heuristic, and small on purpose — every name here is a
+#: constructor whose result is a path *because of what it is*, not because of what was
+#: passed to it. That is what lets :func:`_returns` follow a local through one of them
+#: without following it through `read_text()`, `json.loads`, `int()` or a `.get`.
+_PATH_CTORS = ("child", "joinpath", "with_name", "with_suffix", "Path")
+
+
+def _is_ctor(node: ast.AST) -> bool:
+    """Is *node* a call to one of :data:`_PATH_CTORS`?"""
+    if not isinstance(node, ast.Call):
+        return False
+    fn = node.func
+    name = getattr(fn, "attr", None) if isinstance(fn, ast.Attribute) else \
+        getattr(fn, "id", None)
+    return name in _PATH_CTORS
+
+
+def _is_path_arithmetic(node: ast.AST) -> bool:
+    """Is *node* a path being BUILT — a ``/`` join or a constructor call?
+
+    ``or`` and ``if``/``else`` are transparent, because
+    ``None if d is None else d / NAME`` is one path expression wearing a guard.
+    """
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return True
+    if isinstance(node, ast.IfExp):
+        return _is_path_arithmetic(node.body) or _is_path_arithmetic(node.orelse)
+    if isinstance(node, ast.BoolOp):
+        return any(_is_path_arithmetic(v) for v in node.values)
+    return _is_ctor(node)
+
+
+def _is_bare_name(node: ast.AST) -> bool:
+    """Is *node* just a local being handed back? Same two transparent wrappers."""
+    if isinstance(node, ast.Name):
+        return True
+    if isinstance(node, ast.IfExp):
+        return _is_bare_name(node.body) or _is_bare_name(node.orelse)
+    if isinstance(node, ast.BoolOp):
+        return any(_is_bare_name(v) for v in node.values)
+    return False
+
+
+def _call_assigns(fn, *, ctors_only: bool) -> dict[str, str]:
+    """``{name: source}`` for locals bound to a CALL — every call, or only a constructor.
+
+    Narrower than :func:`_local_assigns` in both directions, and deliberately: only calls
+    (a local bound to a string or a subscript cannot be a path source), and — when
+    *ctors_only* — only the calls that build a path out of a path.
+
+    A constructor's own **arguments** are expanded from the wider map before the entry is
+    stored, so ``p = _dir()`` … ``q = p.with_name('x')`` … ``return q`` is one question
+    rather than two hops the rule falls out of halfway through. That is safe in the
+    direction that matters: the gate is still that the returned local was built BY a
+    constructor, and `with_name` on a value read out of a file is not a thing anybody
+    writes — where full substitution's problem is precisely that it never asks what built
+    the local at all.
+    """
+    wide: dict[str, str] = {}
+    ctors: dict[str, str] = {}
+    for n in ast.walk(fn):
+        if not (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and isinstance(n.value, ast.Call)):
+            continue
+        name, src = n.targets[0].id, ast.unparse(n.value)
+        wide.setdefault(name, src)
+        if _is_ctor(n.value):
+            ctors.setdefault(name, src)
+    if not ctors_only:
+        return wide
+    return {k: _expand(v, wide) for k, v in ctors.items()}
+
+
 def _returns(fn: ast.AST) -> list[str]:
-    return [ast.unparse(n.value) for n in ast.walk(fn)
-            if isinstance(n, ast.Return) and n.value is not None]
+    """Every return expression of *fn*, plus the substituted form of the PATH ones.
+
+    **A function that returns a local used to be invisible here**, which is how eleven
+    frame-state writers and two more in `commands_frame` sat outside both halves of this
+    scan: `frame.state.frame_dir` is ``d = contain.child(_root(), fid)`` … ``return d``,
+    and reading the return expression alone sees the name ``d`` and nothing else (#582).
+
+    **Substituting every local into every return was measured on this tree and is far
+    worse.** It makes 189 functions state paths where 41 are — including every one that
+    returns a `str` or an `int` read out of a state file (`frame.state.version`,
+    `frame.choose.current`, `workspace.resolve`) — and the taint then follows the *data*
+    rather than the *path*: a workspace NAME resolved from a state pointer flows into
+    `workspace.ensure`, and the scan reports ``wd.mkdir(...)`` on ``workspaces/<name>/``,
+    a **committed** directory. Three such false positives on the ``mkdir`` half and five
+    on the file half, and the only way to "fix" them is to route committed directories
+    through the private walk — the #331 defect. Narrowing that to "locals whose binding
+    mentions state" was measured too: 138 functions and the same eight false positives.
+
+    So the question asked here is not *does this return mention a state path* but **is
+    this return a path at all**, and it is asked of the return's own shape:
+
+    * a **path being built** — ``a / b``, or one of :data:`_PATH_CTORS` — may substitute
+      any call-bound local, because ``/`` is path arithmetic and a name read out of a file
+      is never the left operand of one. This is what makes `frame.gather._cache_file`
+      (``None if d is None else d / _CACHE_NAME``) visible.
+    * a **bare local handed back** may substitute only a local bound by a path
+      constructor. This is `frame_dir`, and it is the narrow case: ``return d`` says
+      nothing about what ``d`` is, so what stands in for a type here is the one call that
+      made it.
+    * anything else — ``.read_text()``, ``json.loads``, an f-string, a comparison — is not
+      followed at all.
+
+    Measured against this tree: **two** functions gained (`frame.state.frame_dir` and
+    `frame.gather._cache_file`), none lost, and zero false positives on either half.
+    """
+    out = []
+    for n in ast.walk(fn):
+        if not (isinstance(n, ast.Return) and n.value is not None):
+            continue
+        expr = ast.unparse(n.value)
+        out.append(expr)
+        if _is_path_arithmetic(n.value):
+            out.append(_expand(expr, _call_assigns(fn, ctors_only=False)))
+        elif _is_bare_name(n.value):
+            out.append(_expand(expr, _call_assigns(fn, ctors_only=True)))
+    return out
 
 
 #: One compiled alternation per set of state names, because the package-wide scan asks
@@ -246,18 +374,32 @@ def _expand(expr: str, assigns: dict[str, str], rounds: int = 4,
     return text
 
 
-def violations(source: str, state_names: set[str]) -> list[tuple[int, str]]:
+def violations(source: str, state_names: set[str], *, sites=None,
+               module: str = "", aliases: dict | None = None,
+               package_funcs: set[str] = frozenset()) -> list[tuple[int, str]]:
     """``(line, path expression)`` for every ``mkdir``/``makedirs`` in *source* whose path
     is state-derived **by its own spelling** — the named half. The handed half, where the
-    path arrives as a parameter, is :func:`handed_violations`."""
+    path arrives as a parameter, is :func:`handed_violations`.
+
+    *module*, *aliases* and *package_funcs* are how this half asks the **cross-module**
+    question the handed half already asked. Without them the named half could only
+    recognise a state-path helper defined in the same file, so
+    `frame.gather.save`'s ``tmp.write_text`` — whose path comes from `_cache_file`, whose
+    own state-ness comes from `frame.state.frame_dir` one module over — was outside both
+    halves even once :func:`_returns` could see `frame_dir` (#582). They default to
+    "nothing known", so a caller asking about one string in isolation (the accuracy cases
+    in `test_the_state_directory_is_charters_to_choose.py`) gets exactly what it used to.
+    """
     tree = ast.parse(source)
     state_funcs = state_path_functions(tree, state_names)
     out = []
-    for node, exprs, enclosing in _mkdir_sites(tree):
+    for node, exprs, enclosing in (sites or _mkdir_sites)(tree):
         assigns = _local_assigns(enclosing)
         for expr in exprs:
             full = _expand(expr, assigns)
-            if _mentions_state(full, state_names) or _calls(full, state_funcs):
+            if _mentions_state(full, state_names) or _calls(full, state_funcs) or (
+                    package_funcs and _is_state_call(full, module, aliases or {},
+                                                     package_funcs)):
                 out.append((node.lineno, expr))
                 break
     return out
@@ -488,25 +630,16 @@ def _write_sites(tree: ast.AST):
             yield node, tuple(exprs), here
 
 
-def write_violations(source: str, state_names: set[str]) -> list[tuple[int, str]]:
+def write_violations(source: str, state_names: set[str], **kw) -> list[tuple[int, str]]:
     """``(line, path expression)`` per file write in *source* on a path that is
     state-derived **by its own spelling** — the named half, for files.
 
     :func:`violations` with :func:`_write_sites` in place of :func:`_mkdir_sites`; the two
-    are one question asked about two kinds of inode, so they share every piece of the
-    reasoning below them.
+    are one question asked about two kinds of inode, so they are now literally one
+    function rather than two copies of the same eight lines — which is how the two answers
+    would come to drift apart, this file's own history being made of exactly that.
     """
-    tree = ast.parse(source)
-    state_funcs = state_path_functions(tree, state_names)
-    out = []
-    for node, exprs, enclosing in _write_sites(tree):
-        assigns = _local_assigns(enclosing)
-        for expr in exprs:
-            full = _expand(expr, assigns)
-            if _mentions_state(full, state_names) or _calls(full, state_funcs):
-                out.append((node.lineno, expr))
-                break
-    return out
+    return violations(source, state_names, sites=_write_sites, **kw)
 
 
 def _params(fn) -> list[str]:
@@ -777,9 +910,14 @@ def _scan(named, handed) -> dict[str, list[tuple[int, str]]]:
     """
     names = state_attribute_names()
     mods = load_package()
+    # The package-wide answer, computed once and handed to BOTH halves. The named half
+    # used to get only its own module's, so a helper one import away was invisible to it
+    # while the handed half saw straight through the same call (#582).
+    package_funcs = package_state_functions(mods, names)
     found: dict[str, list[tuple[int, str]]] = {}
     for module, (path, tree) in mods.items():
-        hits = named(path.read_text(), names)
+        hits = named(path.read_text(), names, module=module,
+                     aliases=_aliases(tree, module), package_funcs=package_funcs)
         if hits:
             found[str(path.relative_to(PACKAGE.parent))] = hits
     for f, hits in handed(mods, names).items():

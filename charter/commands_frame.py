@@ -2757,7 +2757,12 @@ def cmd_launch(args) -> int:
 
     conf_path = fdir / "tmux.conf"
     status_path = fdir / "exit"
-    conf_path.write_text(_PLACEHOLDER_CONF)
+    # `config.write_for`, not `Path.write_text`: this file is under `.charter/frame/<fid>/`
+    # and `write_text` creates at `0o777 & ~umask` — 0644 by default, 0666 under `umask
+    # 000`. The frame's tmux config carries the session id, the hotkey and the toggles, and
+    # a world-WRITABLE one is tmux configuration another account gets to choose for this
+    # session (#582; the dispatch is #505's).
+    config.write_for(conf_path, _PLACEHOLDER_CONF)
 
     # `env=` and not merely `tmuxctl.run(env=env)` below: the second only sets what the
     # tmux CLIENT runs with, and a client's environment reaches the new pane ONLY when
@@ -2789,9 +2794,10 @@ def cmd_launch(args) -> int:
     state.record_harness_pane(fid, harness_pane)
 
     frame = config.FRAME
-    conf_path.write_text(conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
-                                   history_limit=frame["history_limit"], session=fid,
-                                   toggles=instance.frame_toggles(frame)))
+    config.write_for(conf_path,
+                     conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
+                               history_limit=frame["history_limit"], session=fid,
+                               toggles=instance.frame_toggles(frame)))
     src = tmuxctl.run("loading the frame's config",
                       tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
                       env=env)

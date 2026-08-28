@@ -452,6 +452,210 @@ class TheFilesInItAreChartersToChooseToo(APlaneTheCliCanRunIn):
             "stopped dispatching and is privatising everything")
 
 
+class ThePersonaPointersAreChartersToChooseToo(APlaneTheCliCanRunIn):
+    """#581: the three writers #505 routed the rest of the package's state around.
+
+    `persona.set_active` writes ``.charter/sessions/<sid>.persona``,
+    ``.charter/terminals/<tid>.persona`` and — with neither id to key on — the plane-wide
+    ``active-persona``. All three went out at ``0o777 & ~umask``.
+
+    **The write side is the sharp half, not the read side.** A persona *name* is also the
+    name of a committed directory under ``personas/``, so a readable pointer leaks nothing
+    new. But those two directories decide which charter a session runs as, and under
+    ``umask 000`` the pointers were 0666 — another account on the machine got to choose
+    the persona a session would adopt.
+
+    Driven through the CLI rather than through `set_active` directly, because the ids come
+    out of the child's own environment and *which* pointer gets written is a property of
+    the process, exactly as the umask is.
+    """
+
+    #: What `charter persona use` keys its pointers on: ``$CHARTER_SESSION_ID`` for the
+    #: session file (`session.current`) and ``$TMUX_PANE`` for the terminal one
+    #: (`session.terminal`). Both set, so one run exercises both pointer writers; the
+    #: plane-wide file has a case of its own, because it is the branch that runs only when
+    #: there is nothing to key on.
+    IDS = {"CHARTER_SESSION_ID": "sess-581", "TMUX_PANE": "%581"}
+
+    def _use(self, tag: str, um: int, env_extra: dict) -> Path:
+        plane = self.plane(tag)
+        sd = plane / ".charter"
+        sd.mkdir()
+        os.chmod(sd, 0o755)          # the pre-existing loose one, by hand — #331's case
+        env = dict(self.child_env(), **env_extra)
+        old = os.umask(um)
+        try:
+            control = plane / f"control-{um:03o}"
+            control.write_text("x")
+            proc = subprocess.run(
+                [sys.executable, "-m", "charter", "persona", "use", "steward"],
+                cwd=plane, env=env, input="", text=True, capture_output=True, timeout=120)
+        finally:
+            os.umask(old)
+        self.assertNotIn("Traceback (most recent call last):",
+                         (proc.stdout or "") + (proc.stderr or ""),
+                         f"{proc.stdout}\n{proc.stderr}")
+        self.assertEqual(stat.S_IMODE(sd.stat().st_mode), 0o755,
+                         "precondition: charter must not have chmod-ed the directory it "
+                         "did not create, or this case is not about the files")
+        self.assertEqual(
+            stat.S_IMODE(control.stat().st_mode), 0o666 & ~um,
+            "precondition: the umask is not in force in this process, so 'the umask no "
+            "longer decides it' is not being tested")
+        return plane
+
+    def _pointers(self, plane: Path, *globs: str) -> list[Path]:
+        found = [f for g in globs for f in sorted(plane.glob(g)) if f.is_file()]
+        self.assertTrue(found, f"none of {globs} was written — `charter persona use` "
+                               f"stopped writing the pointer this case is about")
+        return found
+
+    def test_the_session_and_terminal_pointers_are_private_under_every_umask(self) -> None:
+        seen: dict[int, set] = {}
+        for um in UMASKS:
+            with self.subTest(umask=oct(um)):
+                plane = self._use(f"persona-ptr-{um:03o}", um, self.IDS)
+                files = self._pointers(plane, ".charter/sessions/*.persona",
+                                       ".charter/terminals/*.persona")
+                self.assertEqual(len(files), 2, f"expected both pointers: {files}")
+                for f in files:
+                    self.assertEqual(
+                        stat.S_IMODE(f.stat().st_mode) & 0o077, 0,
+                        f"under umask {oct(um)}, {f.relative_to(plane)} came out "
+                        f"{oct(stat.S_IMODE(f.stat().st_mode))[-3:]} inside a 0755 "
+                        f"`.charter/` — another account gets to say which persona this "
+                        f"session runs as")
+                seen[um] = {stat.S_IMODE(f.stat().st_mode) for f in files}
+        self.assertEqual(len(set(map(frozenset, seen.values()))), 1,
+                         f"the umask still decides it: "
+                         f"{[(oct(u), sorted(map(oct, m))) for u, m in seen.items()]}")
+
+    def test_the_plane_wide_pointer_is_private_too(self) -> None:
+        """The third writer, and the branch that runs only when there is neither a session
+        id nor a pane id to key on — a bare shell. Its own case because the one above
+        cannot reach it: with the ids set, `set_active` never touches this file."""
+        stripped = {k: "" for k in ("CHARTER_SESSION_ID", "TMUX_PANE", "TERM_SESSION_ID",
+                                    "STY", "SSH_TTY")}
+        for um in UMASKS:
+            with self.subTest(umask=oct(um)):
+                plane = self._use(f"persona-plane-{um:03o}", um, stripped)
+                for f in self._pointers(plane, ".charter/active-persona"):
+                    self.assertEqual(stat.S_IMODE(f.stat().st_mode) & 0o077, 0,
+                                     f"{f.relative_to(plane)} is "
+                                     f"{oct(stat.S_IMODE(f.stat().st_mode))[-3:]}")
+                self.assertEqual(
+                    sorted(p.name for p in (plane / ".charter").glob("sessions/*")), [],
+                    "a session pointer was written, so the plane-wide branch this case is "
+                    "named for did not run")
+
+
+class TheFramesOwnStateIsChartersToChooseToo(PersonaIso):
+    """#582: the eleven writers in `frame/state.py`, `gather`'s cache and the frame's
+    ``tmux.conf`` — every one of them a ``Path.write_text`` at the umask.
+
+    **A temp file plus `os.replace` is not a way out of this; it is why it stayed quiet.**
+    `os.replace` carries the SOURCE's mode onto the destination, so ten of these wrote a
+    0644 temp file and then moved 0644 onto the real one, with nothing in the directory
+    ever looking wrong.
+
+    The exposure needs the directory above them to be loose, which charter deliberately
+    does not guarantee: `frame_dir` calls `config.private_mkdir`, which leaves a directory
+    it did not create exactly as it is (#331). So the fixture is the case that makes it
+    real — a ``.charter/frame/`` restored from a tarball, made by hand, or carried over
+    from a charter older than 0.53. Frame state carries the workspace name, the harness,
+    the tmux server socket, the session id and the pane layout.
+
+    In-process rather than through the CLI: every writer here is reached from a tmux
+    ``run-shell`` child or a hook, and standing one up would be testing tmux. The writer
+    this class cannot reach — `commands_frame`'s ``tmux.conf`` — is covered by
+    `tests/_statedirscan.py`, which reports every one of them when they are not routed.
+    """
+
+    FID = "ws-4242"
+
+    def _drive(self) -> list[Path]:
+        """Every recorder in `frame.state`, plus `gather`'s cache — the writers by name.
+
+        Listed rather than discovered, and the honest reason is that there is no property
+        to discover them by: they are eleven functions with eleven signatures. What keeps
+        the list from rotting is the scan, which reports a twelfth on the day it is written
+        without going through `config`.
+        """
+        from charter.frame import gather, state
+        state.bump(self.FID)
+        state.record_exit(self.FID, 0)
+        state.record_harness_pane(self.FID, "%0")
+        state.record_harness_session(self.FID, "$1")
+        state.record_server(self.FID, "charter")
+        state.record_workspace(self.FID, "alpha")
+        state.record_density(self.FID, "full")
+        state.record_hidden(self.FID, ("todos",))
+        state.record_identity(self.FID, {"CHARTER_SESSION_ID": self.FID})
+        state.record_panes(self.FID, panels={"top": "%1"})
+        state.respawn_attempt(self.FID, "top")
+        gather.save(self.FID, {"repos": [], "worktrees": [], "todos": []})
+        files = sorted(p for p in (Path(config.STATE_DIR) / "frame").rglob("*")
+                       if p.is_file())
+        self.assertGreaterEqual(
+            len(files), 12,
+            f"only {len(files)} file(s) under `.charter/frame/` — the recorders this case "
+            f"names stopped writing, so it is measuring nothing: {files}")
+        return files
+
+    def test_every_frame_state_file_is_private_under_every_umask(self) -> None:
+        seen: dict[int, set] = {}
+        for um in UMASKS:
+            with self.subTest(umask=oct(um)):
+                root = Path(config.STATE_DIR) / "frame"
+                shutil.rmtree(root, ignore_errors=True)
+                root.mkdir(parents=True)
+                os.chmod(root, 0o755)      # pre-existing, and charter will not chmod it
+                old = os.umask(um)
+                try:
+                    control = Path(config.STATE_DIR) / f"control-{um:03o}"
+                    control.write_text("x")
+                    files = self._drive()
+                finally:
+                    os.umask(old)
+                self.assertEqual(
+                    stat.S_IMODE(root.stat().st_mode), 0o755,
+                    "precondition: charter chmod-ed a directory it did not create, so "
+                    "this case is no longer about the files (#331)")
+                self.assertEqual(
+                    stat.S_IMODE(control.stat().st_mode), 0o666 & ~um,
+                    "precondition: the umask is not in force, so this measures nothing")
+                for f in files:
+                    self.assertEqual(
+                        stat.S_IMODE(f.stat().st_mode) & 0o077, 0,
+                        f"under umask {oct(um)}, {f.name} came out "
+                        f"{oct(stat.S_IMODE(f.stat().st_mode))[-3:]} inside a 0755 "
+                        f"`.charter/frame/` — readable by every account on the machine, "
+                        f"and it carries the workspace, the harness and the tmux socket")
+                seen[um] = {stat.S_IMODE(f.stat().st_mode) for f in files}
+        self.assertEqual(len(set(map(frozenset, seen.values()))), 1,
+                         f"the umask still decides it: "
+                         f"{[(oct(u), sorted(map(oct, m))) for u, m in seen.items()]}")
+
+    def test_the_replaced_destination_carries_the_temp_files_mode(self) -> None:
+        """The half that makes ten of these writers correct at all, asserted rather than
+        reasoned: the atomic writers never open the destination, so the only thing that
+        can make it private is the mode of the file `os.replace` moves onto it."""
+        old = os.umask(0o000)
+        try:
+            self._drive()
+        finally:
+            os.umask(old)
+        version = Path(config.STATE_DIR) / "frame" / self.FID / "version"
+        self.assertTrue(version.is_file(), "fixture: `bump` wrote nothing")
+        self.assertEqual(stat.S_IMODE(version.stat().st_mode) & 0o077, 0,
+                         "the destination of an `os.replace` came out at the umask, which "
+                         "means the temp file did — `os.replace` carries the source's "
+                         "mode and never the destination's")
+        self.assertEqual(list((Path(config.STATE_DIR) / "frame" / self.FID).glob("*.tmp")),
+                         [], "a temp file was left behind, so the replace did not happen "
+                             "and this case measured the temp file instead")
+
+
 class ThePrivateWalkItself(PersonaIso):
     """`config.private_mkdir`, at the level the CLI sweep cannot reach."""
 
@@ -1463,6 +1667,150 @@ class TheWriteScanSeesWhatItClaims(unittest.TestCase):
             "any module could opt out of the scan by naming a function `write_for`")
 
 
+class TheScanFollowsAPathAndNotItsContents(unittest.TestCase):
+    """#582's second finding: a function that returns a **local** was invisible here, and
+    the obvious way to fix it makes the scan useless.
+
+    `frame.state.frame_dir` is ``d = contain.child(_root(), fid)`` … ``return d``, and
+    :func:`_statedirscan._returns` reads the return *expression* — so it saw the name
+    ``d``, decided `frame_dir` was not a state path, and the eleven writers under it went
+    unreported by both halves for as long as that was true.
+
+    **Substituting every local into every return was measured on the real tree and is much
+    worse**: 189 functions become state paths where 41 are, and the taint then follows the
+    *data* rather than the path — a workspace name read out of a state pointer flows into
+    `workspace.ensure`, and ``workspaces/<name>/`` is reported as a state directory. That
+    can only be "fixed" by routing committed directories through the private walk, i.e.
+    the #331 defect.
+
+    So the rule is about the **shape of the return**, and these are the cases that hold it
+    to that shape rather than to the number of functions it happens to produce today.
+    """
+
+    def setUp(self) -> None:
+        self.names = scan.state_attribute_names()
+
+    # -- what it now sees -------------------------------------------------- #
+    def test_a_returned_local_built_by_a_path_constructor_is_a_state_path(self) -> None:
+        """`frame_dir`'s exact shape, and the one this change exists for."""
+        src = ("def _root():\n    return config.STATE_DIR / 'frame'\n\n"
+               "def frame_dir(fid):\n    d = contain.child(_root(), fid)\n"
+               "    return d\n\n"
+               "def bump(fid):\n    d = frame_dir(fid)\n"
+               "    (d / 'version').write_text('1')\n")
+        self.assertEqual([ln for ln, _ in scan.write_violations(src, self.names)], [10])
+
+    def test_a_guarded_path_join_is_still_a_path(self) -> None:
+        """`gather._cache_file`'s shape: ``None if d is None else d / NAME``. The guard is
+        transparent — one path expression wearing a `None` check — and the local may be
+        bound by any call, because ``/`` is path arithmetic and a value read out of a file
+        is never the left operand of one."""
+        src = ("def _dir(fid):\n    return config.STATE_DIR / 'frame' / fid\n\n"
+               "def _cache_file(fid):\n    d = _dir(fid)\n"
+               "    return None if d is None else d / 'cache.json'\n\n"
+               "def save(fid):\n    f = _cache_file(fid)\n"
+               "    f.write_text('{}')\n")
+        self.assertEqual([ln for ln, _ in scan.write_violations(src, self.names)], [10])
+
+    def test_a_returned_local_the_constructor_grew_is_followed_too(self) -> None:
+        """`with_name`/`with_suffix`/`joinpath` are the same constructor question wearing
+        `pathlib`'s other spellings, and a rule that knew only `contain.child` would be a
+        rule about one call site."""
+        for ctor in ("p.with_name('x')", "p.with_suffix('.tmp')", "p.joinpath('x')",
+                     "Path(p)"):
+            with self.subTest(ctor=ctor):
+                src = ("def _dir():\n    return config.STATE_DIR / 'frame'\n\n"
+                       f"def leaf():\n    p = _dir()\n    q = {ctor}\n    return q\n\n"
+                       "def w():\n    leaf().write_text('x')\n")
+                self.assertEqual([ln for ln, _ in scan.write_violations(src, self.names)],
+                                 [10])
+
+    # -- what it still refuses to follow ----------------------------------- #
+    def test_a_value_read_out_of_a_state_file_is_not_a_state_path(self) -> None:
+        """`frame.state.version` — ``return (d / 'version').read_text().strip()`` — is a
+        `str`, and the whole over-taint is this function being called a path source.
+
+        The probe is not that `version` is unlisted (nothing would notice) but that a
+        directory named after what it returns is not reported: that is the false positive
+        full substitution produces, on a **committed** path."""
+        src = ("def _dir():\n    return config.STATE_DIR / 'frame'\n\n"
+               "def version():\n    d = _dir()\n"
+               "    return (d / 'version').read_text().strip()\n\n"
+               "def make():\n    (config.WORKSPACES_DIR / version()).mkdir()\n")
+        self.assertEqual(scan.violations(src, self.names), [])
+
+    def test_a_name_resolved_from_a_pointer_does_not_taint_the_directory_named_after_it(
+            self) -> None:
+        """`workspace.resolve` / `workspace.ensure`, which is the false positive by name.
+
+        ``chosen() or DEFAULT`` is a `str`, and ``workspaces/<that>`` is committed — the
+        operator's to mode, and the one thing #331 says charter must not tighten."""
+        src = ("def _pointer():\n    return config.SESSIONS_DIR / 'x.workspace'\n\n"
+               "def chosen():\n    p = _pointer()\n    return p.read_text().strip()\n\n"
+               "def resolve():\n    return chosen() or 'default'\n\n"
+               "def ensure(name):\n    wd = config.WORKSPACES_DIR / name\n"
+               "    wd.mkdir(parents=True, exist_ok=True)\n\n"
+               "def go():\n    ensure(resolve())\n")
+        mods = scan.modules_from({"workspace": src})
+        self.assertEqual(scan.handed_violations(mods, self.names), {})
+        self.assertEqual(scan.violations(src, self.names), [])
+
+    def test_a_returned_local_bound_by_an_ordinary_call_is_not_followed(self) -> None:
+        """The narrow half of the rule: ``return d`` says nothing about what ``d`` is, so
+        what stands in for a type is the one call that made it. A `read_text()` is not one
+        of those calls, and neither is anything else outside the constructor vocabulary."""
+        src = ("def _dir():\n    return config.STATE_DIR / 'frame'\n\n"
+               "def label():\n    d = _dir().read_text()\n    return d\n\n"
+               "def w():\n    (config.WORKSPACES_DIR / label()).mkdir()\n")
+        self.assertEqual(scan.violations(src, self.names), [])
+
+    def test_the_constructor_vocabulary_is_what_it_says_it_is(self) -> None:
+        """A list is a spelling, so the one here is asserted rather than assumed: every
+        entry builds a path OUT OF a path, which is the property that lets a return be
+        followed through it."""
+        self.assertEqual(set(scan._PATH_CTORS),
+                         {"child", "joinpath", "with_name", "with_suffix", "Path"})
+
+    # -- the named half asks the cross-module question --------------------- #
+    def test_the_named_half_sees_a_helper_in_another_module(self) -> None:
+        """`gather.save` again, and the reason it stayed invisible even once `frame_dir`
+        was seen: its path comes from `gather._cache_file`, whose state-ness comes from
+        `frame.state.frame_dir` one import away. The named half used to know only the
+        helpers defined in its own file."""
+        mods = scan.modules_from({
+            "frame.state": ("def frame_dir(fid):\n"
+                            "    d = contain.child(config.STATE_DIR / 'frame', fid)\n"
+                            "    return d\n"),
+            "frame.gather": ("from . import state\n\n"
+                             "def _cache_file(fid):\n"
+                             "    d = state.frame_dir(fid)\n"
+                             "    return None if d is None else d / 'cache.json'\n\n"
+                             "def save(fid):\n    f = _cache_file(fid)\n"
+                             "    f.write_text('{}')\n")})
+        names = self.names
+        pkg = scan.package_state_functions(mods, names)
+        self.assertIn("frame.state.frame_dir", pkg)
+        self.assertIn("frame.gather._cache_file", pkg)
+        path, tree = mods["frame.gather"]
+        hits = scan.write_violations(
+            ("from . import state\n\n"
+             "def _cache_file(fid):\n"
+             "    d = state.frame_dir(fid)\n"
+             "    return None if d is None else d / 'cache.json'\n\n"
+             "def save(fid):\n    f = _cache_file(fid)\n"
+             "    f.write_text('{}')\n"),
+            names, module="frame.gather",
+            aliases=scan._aliases(tree, "frame.gather"), package_funcs=pkg)
+        self.assertEqual([ln for ln, _ in hits], [9])
+
+    def test_without_the_package_answer_it_falls_back_to_what_it_always_saw(self) -> None:
+        """The default is "nothing known", so a caller asking about one string in
+        isolation — every accuracy case above — gets exactly the old behaviour."""
+        src = ("from . import state\n\n"
+               "def save(fid):\n    state.frame_dir(fid).write_text('x')\n")
+        self.assertEqual(scan.write_violations(src, self.names), [])
+
+
 class EveryStateWriterGoesThroughTheWalk(unittest.TestCase):
     def test_no_mkdir_in_the_package_can_make_a_loose_state_directory(self) -> None:
         found = scan.scan_package()
@@ -1474,41 +1822,33 @@ class EveryStateWriterGoesThroughTheWalk(unittest.TestCase):
             + "\n".join(f"  {f}:{ln}  {expr}.mkdir(…)"
                         for f, hits in found.items() for ln, expr in hits))
 
-    #: The writers #505 did **not** close, by file and by the path expression at the site
-    #: — never by line number, which two people editing the same module would invalidate
-    #: without either of them touching a mode.
-    #:
-    #: Both are `persona.set_active`: the per-session and per-terminal persona pointers
-    #: (``f``, bound by ``for f in (sf, tf)``) and the plane-wide ``active-persona``. They
-    #: are three lines and they are out of this change only because two other branches
-    #: were live in `charter/persona.py` when it landed, and an edit in the middle of them
-    #: buys a conflict for no schedule. Filed as #581, with the measurement.
-    #:
-    #: This list is a **ratchet, not an allowance**. The assertion below is equality, so a
-    #: writer that gets routed fails here as a stale entry and a new unrouted one fails as
-    #: an unlisted leak — neither direction can happen quietly, and "add a line to make the
-    #: test pass" is a diff a reviewer sees.
-    NOT_ROUTED_YET = {"charter/persona.py": ["config.ACTIVE_PERSONA_FILE", "f"]}
-
     def test_no_write_in_the_package_can_leave_a_loose_state_file(self) -> None:
+        """**The list this used to compare against is gone, and that is the fix.**
+
+        #505 routed every file writer it could reach and left three in `persona.set_active`
+        — the per-session and per-terminal persona pointers and the plane-wide
+        ``active-persona`` — out of that change, because two other branches were live in
+        `charter/persona.py` at the time. They sat in a `NOT_ROUTED_YET` ratchet so that
+        the scan reported them rather than passing over them, and #581 is them being
+        routed. The assertion was equality in both directions precisely so that routing
+        one would fail here as a *stale entry*: it did, and deleting the entry is the
+        other half of the fix.
+
+        With nothing left to list, this reads exactly like the ``mkdir`` half above —
+        which is what it should always have looked like, because they are one property
+        asked about two kinds of inode. An empty dict compared against an empty constant
+        is a constant that can only ever be right, and a test that iterated it to check
+        its entries still named real files had nothing left to iterate.
+        """
         found = {f: sorted(expr for _ln, expr in hits)
                  for f, hits in scan.scan_package_writes().items()}
-        expected = {f: sorted(e) for f, e in self.NOT_ROUTED_YET.items()}
         self.assertEqual(
-            found, expected,
+            found, {},
             "a file under `.charter/` written without `config.write_for` / `open_for` / "
             "`touch_for` comes out at `0o777 & ~umask`, and the directory above it is not "
             "guaranteed to be 0700 — charter does not chmod a state directory it did not "
-            "create (#331, #505). Route it. If it really is out of reach, move it into "
-            "`NOT_ROUTED_YET` and say why there; if it is now routed, delete its entry.\n"
-            f"  found:  {found}\n  listed: {expected}")
-
-    def test_the_ratchet_names_files_that_exist(self) -> None:
-        """The one way an equality assertion cannot notice a stale entry: the module gets
-        renamed or deleted, and the list keeps naming a path nobody will look at again."""
-        for f in self.NOT_ROUTED_YET:
-            self.assertTrue((REPO_ROOT / f).is_file(),
-                            f"NOT_ROUTED_YET names {f}, which is not a file any more")
+            "create (#331, #505). Route it.\n"
+            f"  found: {found}")
 
 
 if __name__ == "__main__":

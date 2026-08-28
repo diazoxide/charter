@@ -1,0 +1,106 @@
+---
+version: unreleased
+headline: the persona pointers and every frame state file are 0600 because charter says so — and the scan that proves it can now see a path a function returns
+security: true
+---
+
+0.53.x settled the mode of the files under `.charter/`: they are written through
+`config.write_for` / `open_for` / `touch_for`, which settle the mode on the descriptor
+before any content lands ([#505](https://github.com/diazoxide/charter/issues/505)).
+Sixteen writers were still outside that. Three were known and listed; thirteen were
+invisible, and the second half of this entry is why.
+
+## The three that were listed
+
+`persona.set_active` writes `.charter/sessions/<sid>.persona`,
+`.charter/terminals/<tid>.persona` and — with neither id to key on — the plane-wide
+`active-persona`. They were left out of #505 because two other branches were live in
+`charter/persona.py` at the time, so they went into a `NOT_ROUTED_YET` ratchet instead:
+the coverage scan reported them rather than passing over them, and the assertion was
+**equality**, so routing one would fail the test as a stale entry rather than quietly
+passing ([#581](https://github.com/diazoxide/charter/issues/581)).
+
+Measured on a plane whose `.charter/` already existed at 0755 — which charter will not
+chmod, deliberately ([#331](https://github.com/diazoxide/charter/issues/331)):
+
+```
+f 644  .charter/sessions/<session>.persona      umask 022
+f 666  .charter/sessions/<session>.persona      umask 000
+```
+
+The read side leaks little: a persona *name* is also the name of a committed directory
+under `personas/`. The write side is the sharp half — those two directories decide which
+charter a session runs as, and a 0666 pointer is one another account on the machine gets
+to set. All three go through `config.write_for` now, and the ratchet is empty and gone: the
+file half of the scan reads exactly like the directory half, because they are one property
+asked about two kinds of inode.
+
+## The thirteen nobody could see
+
+`charter/frame/state.py` writes ten files — `version`, `exit`, `harness`, `session`,
+`server`, `workspace`, `density`, `hidden`, `identity`, `panes` — plus a respawn counter,
+`gather` writes its cache, and `commands_frame` writes the frame's `tmux.conf` twice. Every
+one of them was `Path.write_text`, at the umask.
+
+**A temp file plus `os.replace` is not a way out of that; it is why it stayed quiet.**
+`os.replace` carries the *source's* mode onto the destination, so ten of these wrote a 0644
+temp file and then moved 0644 onto the real one, with nothing in the directory ever looking
+wrong. Frame state carries the workspace name, the harness, the tmux server socket, the
+session id and the pane layout; the `tmux.conf` carries the session id, the hotkey and the
+toggles, and a world-*writable* one is tmux configuration another account gets to choose.
+
+As with #505, this is defence in depth on a plane charter built — `frame_dir` creates its
+directory through `config.private_mkdir`, so the file is 0644 inside a 0700 directory. It
+stops being defence in depth on a `.charter/frame/` that charter did not create: restored
+from a tarball, made by hand, or carried over from a charter older than 0.53.
+
+## Why nothing had ever reported them
+
+`tests/_statedirscan.py` reads the package and asks whether any writer can reach
+`.charter/` without going through `config`. It follows a module-level function whose
+**return expression** names a state path. `frame.state.frame_dir` does not name one:
+
+```python
+def frame_dir(fid, create=False):
+    d = contain.child(_root(), fid)
+    ...
+    return d                 # a local — the scan read the expression, not the binding
+```
+
+so `frame_dir` was not a state path, and neither half of the scan saw anything under
+`frame/` ([#582](https://github.com/diazoxide/charter/issues/582)).
+
+**The obvious fix was measured on this tree and is far worse.** Substituting every local
+into every return makes 189 functions state paths where 41 are — including every one that
+returns a `str` or an `int` read *out of* a state file — and the taint then follows the
+data rather than the path: a workspace name resolved from a state pointer flows into
+`workspace.ensure`, and the scan reports `workspaces/<name>/`, a **committed** directory,
+as charter's own state. Three such false positives on the directory half and five on the
+file half, and the only way to clear them is to route committed directories through the
+private walk — which is #331 verbatim. Narrowing that to "locals whose binding mentions
+state" was measured too: 138 functions, and the same eight false positives.
+
+So the question the scan asks is no longer *does this return mention a state path* but
+**is this return a path at all**, decided from the return's own shape:
+
+* a path being *built* — `a / b`, or one of `contain.child` / `Path` / `joinpath` /
+  `with_name` / `with_suffix` — may substitute any call-bound local, because `/` is path
+  arithmetic and a value read out of a file is never the left operand of one;
+* a bare local handed back may substitute only a local a path constructor built, because
+  `return d` says nothing about what `d` is and the call that made it is what stands in
+  for a type;
+* anything else — `read_text()`, `json.loads`, an f-string, a comparison — is not followed.
+
+Measured against the package: **two** functions gained, `frame.state.frame_dir` and
+`frame.gather._cache_file`; none lost; zero false positives on either half. With the
+writers put back as they were, the scan names all thirteen.
+
+The named half also asks the **cross-module** question now. It used to know only the
+state-path helpers defined in its own file, which is why `gather.save` stayed invisible
+even once `frame_dir` was seen — its path comes from `gather._cache_file`, whose state-ness
+comes from `frame.state.frame_dir` one import away. Both halves are handed the same
+package-wide answer.
+
+Nothing to adopt. Existing files are tightened the next time charter writes them; a file
+charter never writes again keeps the mode it has, so a plane that has been running a while
+is still worth one `chmod 700 .charter`.
