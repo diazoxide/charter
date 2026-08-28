@@ -728,20 +728,25 @@ is in neither rectangle — so a frame whose panels were all `brightblack` came 
 boxes with your terminal's own black running between them, which reads as seams rather than
 as an application. Charter puts a background behind the rules as well.
 
-Which colour, given a rule has a pane on each side and they may be different colours: the
-one your components **agree** on when they all resolve to the same background, and the
-frame-wide `chrome` colour when they do not. A gutter in the frame's own colour between two
-differently-coloured panels is what an application looks like; a gutter in no colour between
-two identically-coloured panels is a seam. A plane that sets no `bg` at all is unchanged —
-every pane is the frame-wide colour, so the rules are too.
+**Each panel's edges are its own**, so the rule between two panels is their shared colour
+and the rules around **your harness pane are left alone** — charter does not draw a box
+around the one rectangle it does not own. That needs tmux **3.7 or newer**, where
+`pane-border-style` is a per-pane option.
 
-There is one rule colour and not two, and that is deliberate: tmux draws the border of the
-active pane from a second option, and letting the two differ is exactly the defect that put
-charter in charge of these options in the first place — a rule that changes colour halfway
-along, where it passes the active pane's corner. Which pane is live is shown on the pane
-itself (its background is one shade off the others), never on the border. `chrome = "off"`
-with no `bg` anywhere puts the rules back to your terminal's own, and `NO_COLOR` takes the
-background off them while leaving the frame's rules drawn.
+On tmux 3.2 to 3.6 it is a window option only, so there is one rule colour for the whole
+frame: the one your components **agree** on when they all resolve to the same background,
+and the frame-wide `chrome` colour when they do not. That closes the seam and costs a rule
+of charter's colour on the three sides of your harness — the lesser of two imperfect
+renderings, and the reason the per-pane version exists. A plane that sets no `bg` at all is
+unchanged either way: every pane is the frame-wide colour, so the rules are too.
+
+A pane's two edge colours are always identical, and that is deliberate: tmux draws the
+border of the active pane from a second option, and letting the two differ is exactly the
+defect that put charter in charge of these options in the first place — a rule that changes
+colour halfway along, where it passes the active pane's corner. Which pane is live is shown
+on the pane itself (its background is one shade off the others), never on the border.
+`chrome = "off"` with no `bg` anywhere puts the rules back to your terminal's own, and
+`NO_COLOR` takes the background off them while leaving the frame's rules drawn.
 
 `pad` is how many cells that pane leaves empty at its **left and right edges** — one number,
 both sides. Charter draws this one: tmux paints backgrounds and insets nothing.

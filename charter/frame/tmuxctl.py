@@ -110,6 +110,35 @@ SESSION_ENV_FLOOR = (3, 2)
 #: same reason `RESIZE_HOOK_FLOOR` is not folded into `FLOOR`.
 PANE_ENV_FLOOR = (3, 0)
 
+#: The first tmux release in which `pane-border-style` and `pane-active-border-style` are
+#: PANE options rather than only window options — so a panel can be given its own edges
+#: and the harness pane can keep the terminal's, which is what stops charter's surface
+#: drawing a box around the one rectangle it does not own (ADR 0018).
+#:
+#: **Read out of tmux's own source at every release either side of the line, and confirmed
+#: by running both sides.** `options-table.c`'s entry for `pane-border-style` is
+#: ``OPTIONS_TABLE_WINDOW`` in 3.2, 3.3a, 3.4, 3.5, 3.6 and 3.6a, and
+#: ``OPTIONS_TABLE_WINDOW|OPTIONS_TABLE_PANE`` in 3.7, 3.7a, 3.7c and master. Run against
+#: a real 3.7c: ``set -p -t <panel>`` stores on the pane, ``show -p`` on the sibling and on
+#: the harness both answer ``''``, and the window's own value is untouched. Run against a
+#: real 3.2 built from source on this machine: the same ``set -p`` is **rc 0 and writes the
+#: WINDOW**, ``show -p`` on a pane nobody set answers the window's value, and ``set -p -u``
+#: removes the window's.
+#:
+#: **That silent-success is the whole reason this is a version gate and not a probe.** A
+#: refused option is loud and already handled — `tmuxctl.run` reports it and the launch
+#: continues. This one is not refused: below the line every per-pane write lands on the
+#: window, so the LAST panel written would decide every rule in the frame, and an `off`
+#: would `-u` away charter's own #514 border pin for the whole window. A probe that
+#: measured it would have to perform exactly that write to find out. So the gate is on the
+#: WRITE, not on the value, and below it charter uses the frame-wide answer
+#: (`instance.border_bg`) it used before per-pane edges existed.
+#:
+#: HIGHER than `FLOOR`, and a separate constant for `RESIZE_HOOK_FLOOR`'s reason: an
+#: operator on 3.2 is explicitly still allowed to launch, and what they lose here is one
+#: shade on one row of cells, not a frame.
+PANE_BORDER_FLOOR = (3, 7)
+
 #: The session-scoped tmux environment variable carrying the interpreter that runs
 #: charter from inside a frame — `"$CHARTER_PY" -m charter …`, never a bare `charter`
 #: off `$PATH`. Defined HERE, not in either of the two modules that build text around it
