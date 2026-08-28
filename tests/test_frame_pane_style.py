@@ -288,6 +288,17 @@ class OneWalkOverTheArrangement(unittest.TestCase):
                 self.assertEqual(instance.component_style(f, name),
                                  {"bg": None, "pad": 0})
 
+    def test_a_placement_with_no_pad_and_one_with_a_null_pad_read_the_same(self):
+        """Two shapes for "no pad" — a placement from a charter that predates the key, and
+        one carrying the key with nothing in it — and both have to answer `0` rather than
+        `None`, because what reads this multiplies it (`" " * n`)."""
+        for placed in ({"slot": "right", "use": "sidebar"},
+                       {"slot": "right", "use": "sidebar", "pad": None}):
+            with self.subTest(placed=placed):
+                self.assertEqual(
+                    instance.component_style({"components": [placed]}, "right"),
+                    {"bg": None, "pad": 0})
+
     def test_a_frame_with_no_components_key_at_all_does_not_raise(self):
         """A frame relaunched by a charter that predates this key has a resolved config
         without it — `_split_panels` already reads `chrome` with `.get` for that reason."""

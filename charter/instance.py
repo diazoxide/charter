@@ -756,6 +756,12 @@ def component_style(frame: dict, name) -> dict:
     """
     for placed in frame.get("components") or ():
         if isinstance(placed, dict) and name in (placed.get("slot"), placed.get("use")):
+            # `or 0` rather than `.get("pad", 0)`, and the difference is a real case: a
+            # placement built by a charter that predates this key has no `pad` at all
+            # (`.get` covers that), and one built with `pad=None` has the key with nothing
+            # in it (`.get` would hand `None` to `" " * n`). Both mean "no pad", so the
+            # falsy read is the one that says so — this is not the `if not pane_pad(v)`
+            # mistake one function up, where `0` and "refused" are different answers.
             return {"bg": placed.get("bg"), "pad": placed.get("pad") or 0}
     return {"bg": None, "pad": 0}
 
