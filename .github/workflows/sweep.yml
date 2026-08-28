@@ -5,6 +5,13 @@ on:
 
 # Read-only, declared rather than inherited. This job runs the repository's own code
 # against mutated copies of it, which is the last place to hold a writable token.
+#
+# It is also the reason the answer below is carried by a check's NAME rather than by its
+# conclusion. GitHub gives a `run:`-driven job two conclusions, `success` and `failure`;
+# the third one this sweep needs — `neutral`, meaning "I looked, here is the count, this
+# is not a pass or a fail" — exists only on the Checks API, which needs `checks: write`
+# and a check run created by hand. That is a writable token, in this job, for a prettier
+# icon. Not a trade worth making, so `verdict` below is a job whose name is the answer.
 permissions:
   contents: read
 
@@ -19,23 +26,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sweep:
-    name: Every guard this branch adds is a line a test goes red without
+  # ------------------------------------------------------------------------------------
+  # 1. How big is this? Answered before anything is spent on answering it.
+  # ------------------------------------------------------------------------------------
+  plan:
+    name: Size the sweep
     runs-on: ubuntu-latest
     # Stage C of `docs/superpowers/specs/2026-08-27-deletion-sweep-harness.md`.
     #
     # **Scoped to the lines this branch ADDED**, never to the tree. The whole-tree number
     # is stage B — roughly 5,672 mutations and fourteen hours — and it is not a
-    # pull-request check and never will be. Measured on real branches from this phase: 30
-    # to 52 mutations each, a 262 s unmutated baseline, and about 24 s a mutation, so a
-    # gate run is twenty-odd minutes.
+    # pull-request check and never will be.
     #
-    # **It reports and blocks nothing.** `--enforce` is the flag that changes that and it
-    # is deliberately absent here. The spec's staging argument — a gate whose baseline
-    # nobody has seen gets disabled the first time it is inconvenient — applies to this
-    # job's own credibility too. Turn it on by adding `--enforce` to the step below, once
-    # the numbers on a few real branches have been read and believed.
-    timeout-minutes: 60
+    # This job used to be the whole workflow, sized against the 30 to 52 mutations Phase 2
+    # produced. #608 brought 62 and #626 brought 78, and five runs across the two were
+    # cancelled at the cap having measured about two thirds of the plan (#617). So the
+    # count is now measured rather than assumed: one `ast` pass over the diff, no test
+    # runs, and `tools/sweep.py` decides how many jobs it needs from the real number.
+    #
+    # **Nothing is dropped to make it fit.** A cap on the mutations would read, to every
+    # reader downstream, as "covered everything" — the spec says exactly that about silent
+    # truncation. What is capped is the fan-out, and when a diff is past even that the
+    # plan says so out loud instead of quietly measuring less.
+    timeout-minutes: 30
+    outputs:
+      mutations: ${{ steps.size.outputs.mutations }}
+      shards: ${{ steps.size.outputs.shards }}
+      matrix: ${{ steps.size.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,7 +69,19 @@ jobs:
           # #508's entire defect, out of the sweep's reach. `sweep.reach()` says so in the
           # report rather than letting a smaller sweep read like a clean one.
           python-version: "3.12"
-      - name: Sweep the guards this branch adds
+      # The selection map is one trace of the whole suite — 350 s measured, and the
+      # largest fixed cost a shard pays. It is content-addressed on the tree it measured,
+      # so this step saves it once here and every shard below restores it instead of
+      # measuring it again. A fork's pull request cannot write this cache and will simply
+      # measure its own; `SHARD_FIXED` in `sweep.py` is the no-cache figure for that
+      # reason, because a budget that only holds when the cache hits is a budget that
+      # fails on exactly the runs nobody is watching.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/sweep/cache
+          key: sweep-map-${{ hashFiles('charter/**/*.py', 'tests/**/*.py') }}
+      - name: How many mutations, and how many jobs they need
+        id: size
         env:
           # Through the environment and not interpolated into the script. A `${{ }}` inside
           # `run:` is textual substitution before bash ever sees it, which is how a value
@@ -67,13 +96,161 @@ jobs:
           else
             set --
           fi
+          python3 tools/sweep.py --plan --warm-map --jobs 4 \
+            --workdir "$RUNNER_TEMP/sweep" \
+            --github-output "$GITHUB_OUTPUT" "$@"
+
+  # ------------------------------------------------------------------------------------
+  # 2. The sweep itself, on as many machines as the plan asked for.
+  # ------------------------------------------------------------------------------------
+  sweep:
+    name: Sweep shard ${{ matrix.shard }} of ${{ needs.plan.outputs.shards }}
+    needs: plan
+    runs-on: ubuntu-latest
+    # The backstop and not the budget. `sweep.py` sizes a shard for forty minutes; this is
+    # what catches a box that turned out to be slower than that, and it is deliberately
+    # the same hour the unsharded job had — the fix for running out of time is more
+    # machines, not a longer rope, because a shard cancelled here reports nothing at all
+    # and a longer rope only moves where that happens.
+    timeout-minutes: 60
+    strategy:
+      # One shard's trouble must not cancel the others: three quarters of an answer, said
+      # to be three quarters of an answer, beats none of one.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/sweep/cache
+          key: sweep-map-${{ hashFiles('charter/**/*.py', 'tests/**/*.py') }}
+      # No --summary and no --annotate here, deliberately. A shard has a slice of the
+      # answer and must never write a page that looks like the answer: five partial
+      # tables on one pull request is the same defect #617 is about, arriving five times.
+      # The merge step below is the only thing that tells this branch anything.
+      - name: Sweep the guards this branch adds
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.plan.outputs.shards }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            set -- --base "$BASE_SHA"
+          else
+            set --
+          fi
           python3 tools/sweep.py --gate --jobs 4 \
-            --json sweep-results.json \
-            --summary "$GITHUB_STEP_SUMMARY" "$@"
+            --shard "$SHARD/$SHARDS" \
+            --workdir "$RUNNER_TEMP/sweep" \
+            --json "sweep-results-$SHARD.json" "$@"
       - name: Keep the result set, whatever the sweep said
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: deletion-sweep
-          path: sweep-results.json
+          name: deletion-sweep-${{ matrix.shard }}
+          path: sweep-results-${{ matrix.shard }}.json
           if-no-files-found: ignore
+
+  # ------------------------------------------------------------------------------------
+  # 3. One answer, from however many shards came back.
+  # ------------------------------------------------------------------------------------
+  collect:
+    name: Add up what the shards found
+    needs: [plan, sweep]
+    # `always()`, because the case this exists for is the one where a shard did NOT
+    # finish. A merge step that only runs when every shard succeeded can never say "two
+    # of three shards did not report", which is precisely the sentence #617 asks for.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      headline: ${{ steps.say.outputs.headline }}
+      conclusion: ${{ steps.say.outputs.conclusion }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      # `continue-on-error`, because "no artifacts at all" is an answer this step has to
+      # be able to reach the next line with. Every shard being cancelled is exactly the
+      # #626 failure, and it must produce `no verdict` rather than a second red job with
+      # a download error in it.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          path: shards
+          pattern: deletion-sweep-*
+          merge-multiple: true
+      - name: One answer for the whole sweep
+        id: say
+        env:
+          # Empty when the plan job never finished — which `expected_shards` reads as "the
+          # sweep never sized itself", not as "no shards were needed". Those two are the
+          # whole distinction, so the empty string is handled there and not with a `||`
+          # default here that would quietly turn one into the other.
+          SHARDS: ${{ needs.plan.outputs.shards }}
+          # `github.sha` and NOT the pull request's head: on a `pull_request` event this
+          # is the merge commit, which is what `actions/checkout` gave the shards and so
+          # is the tree they actually swept. Naming the branch head on a page about the
+          # merge result would be one sha out on every run with a moving base.
+          SWEPT_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # `--enforce` is the one flag that makes any of this block a merge, and it is
+          # deliberately absent. The spec's staging argument — a gate whose baseline
+          # nobody has seen gets disabled the first time it is inconvenient — applies to
+          # this job's own credibility. Add it here, once the numbers on a few real
+          # branches have been read and believed. Nothing else in this file changes.
+          python3 tools/sweep.py --verdict shards \
+            --shards "${SHARDS:-}" \
+            --ref "$SWEPT_SHA" \
+            --base "${BASE_SHA:-}" \
+            --annotate \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------------------------
+  # 4. The answer, spelled where it can be read without opening anything.
+  # ------------------------------------------------------------------------------------
+  #
+  # This job does nothing. Its NAME is the deliverable: a job name may interpolate
+  # `needs.<job>.outputs.*`, so the pull request's check list reads
+  # `deletion sweep / 8 survivors` — or `no survivors`, or `no verdict: 2 of 3 shards
+  # did not report`. A green tick beside a silent name is what reported eight survivors as
+  # a clean branch (#617), and a conclusion cannot carry the difference: see the note at
+  # the top of this file for why `neutral` is not available to a job like this one.
+  #
+  # It stays green in all three cases. Distinguishing the states is not the same as
+  # failing on them, and this workflow still blocks nothing.
+  #
+  # **This job is not the one to make required, later.** Branch protection matches a check
+  # by NAME, and this one's name is the answer — it is different on every branch, which is
+  # the entire point and also what makes it useless as a required check. The job to require
+  # is `collect`, whose name never moves and whose exit code is what `--enforce` changes.
+  # Requiring this one instead would protect a branch against a string.
+  verdict:
+    # Quoted, because the fallback carries a `: ` and an unquoted plain scalar with one
+    # in it is a mapping to YAML rather than a string. The runtime value carries one too
+    # ("no verdict: 2 of 3 shards did not report"), but that arrives after parsing.
+    name: "${{ needs.collect.outputs.headline || 'no verdict: the sweep did not report' }}"
+    needs: collect
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Say it in the log as well as in the name
+        env:
+          HEADLINE: "${{ needs.collect.outputs.headline || 'no verdict: the sweep did not report' }}"
+          CONCLUSION: ${{ needs.collect.outputs.conclusion || 'no-verdict' }}
+        run: |
+          set -euo pipefail
+          printf 'deletion sweep: %s (%s)\n' "$HEADLINE" "$CONCLUSION"
+          printf 'This check reports and blocks nothing. The run summary has the table.\n'
