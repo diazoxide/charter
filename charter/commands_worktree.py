@@ -232,6 +232,22 @@ def cmd_worktree_list(args) -> int:
         if not rows:
             continue
         util.info(f"{clone.name}")
+        # `{branch:<28}` was the sharpest of the four constants and the only one wrong on
+        # ORDINARY input: a branch name past 28 characters is a Tuesday, and `:<n` pads a
+        # short value while doing nothing at all to a long one — it PUSHES, so that row's
+        # state, claimant and outcome land where no other row's do and the table stops
+        # being a table. `:<24` on a piece and `:<16` on a claimant are guesses about
+        # somebody else's names for the same reason, and `str.format` counts characters
+        # where a terminal lays out cells, so a CJK piece name well inside the constant
+        # still shifted its row by one column per glyph (#508, #592, #600).
+        #
+        # Sized per clone rather than across the whole listing, and that is the same
+        # trade `_status_for_workspace` records (#597): `is_dirty` is a `git status` per
+        # worktree, so sizing every clone's rows together would make an operator wait for
+        # every repo's git before the first line appeared. A clone's own worktrees are one
+        # table under one heading, its rows are already materialised by `list_for`, and
+        # the heading above them has already told the reader where the wait is going.
+        body = []
         for r in rows:
             if r["prunable"]:
                 # The worktree dir is gone (deleted without `git worktree prune`) — git
@@ -247,7 +263,14 @@ def cmd_worktree_list(args) -> int:
                 # An age, never a verdict. Whether `silent 3d` is a problem is the reader's
                 # call — charter has not verified that the worker is gone (ADR 0009).
                 said = f"silent {quiet}" if quiet else ""
-            print(f"    {r['piece']:<24} {branch:<28} {state:<8} {who:<16} {said}".rstrip())
+            body.append((r["piece"], branch, state, who, said))
+        # Four widths, not five: the outcome has nothing to its right, so padding it would
+        # buy trailing space the `.rstrip()` below takes straight off again — the rule
+        # `_STATS_HEADS` states for the same shape one command over.
+        widths = [tui.column("", [row[i] for row in body]) for i in range(4)]
+        for row in body:
+            cells = "".join(tui.pad(c, w) for c, w in zip(row, widths))
+            print(f"    {cells}{row[4]}".rstrip())
             total += 1
     if not total:
         util.info("No worktrees. Create one: "

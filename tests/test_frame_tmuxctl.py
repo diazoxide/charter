@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from charter.frame import tmuxctl
+from tests._tmuxsocket import OPERATOR_SOCKET, OPERATOR_TMUX
 
 
 class Version(unittest.TestCase):
@@ -170,9 +171,9 @@ class OperatorServer(unittest.TestCase):
     """
 
     def test_a_real_tmux_environment_yields_the_socket_and_the_session(self):
-        env = {"TMUX": "/private/tmp/tmux-502/default,70029,1"}
+        env = {"TMUX": OPERATOR_TMUX}
         self.assertEqual(tmuxctl.operator_server(env),
-                         ("/private/tmp/tmux-502/default", "$1"))
+                         (OPERATOR_SOCKET, "$1"))
 
     def test_no_tmux_variable_means_charter_is_not_inside_one(self):
         self.assertIsNone(tmuxctl.operator_server({}))
@@ -223,8 +224,8 @@ class ServerArgv(unittest.TestCase):
 
     def test_an_absolute_path_selects_the_operators_existing_server(self):
         self.assertEqual(
-            tmuxctl.server_argv("/private/tmp/tmux-502/default", "list-windows", "-a"),
-            ["tmux", "-S", "/private/tmp/tmux-502/default", "list-windows", "-a"])
+            tmuxctl.server_argv(OPERATOR_SOCKET, "list-windows", "-a"),
+            ["tmux", "-S", OPERATOR_SOCKET, "list-windows", "-a"])
 
     def test_nothing_is_ever_joined(self):
         """The argv rule, at the one place every tmux command in charter now passes
@@ -328,7 +329,7 @@ class ChainedCommands(unittest.TestCase):
         other — so it is refused, not guessed at."""
         self.assertIsNone(tmuxctl.chain([
             tmuxctl.server_argv("charter", "kill-pane", "-t", "%1"),
-            tmuxctl.server_argv("/private/tmp/tmux-502/default", "kill-pane", "-t", "%2")]))
+            tmuxctl.server_argv(OPERATOR_SOCKET, "kill-pane", "-t", "%2")]))
 
     def test_nothing_to_chain_is_nothing_to_run(self):
         """`overlay.close_argvs` answers `[]` when it will not build a close at all, and

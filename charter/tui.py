@@ -250,6 +250,30 @@ def column(header: str, cells: Iterable[str], gap: int = 2,
     return (w if cap is None else min(w, cap)) + gap
 
 
+def _env_columns() -> int | None:
+    """``$COLUMNS`` as a number, or ``None`` when it is unset or is not one.
+
+    Answers what the variable *says*, never whether it is usable — see
+    :func:`term_width` for why that judgement is made in exactly one place.
+    """
+    try:
+        return int(os.environ[TERMINAL_SIZE_VARS[0]])
+    except (KeyError, ValueError):
+        return None
+
+
+def _tty_columns() -> int | None:
+    """The tty's own column count, or ``None`` when there is no tty to ask.
+
+    Same contract as :func:`_env_columns`: a number or nothing, and no opinion about
+    whether the number is a width.
+    """
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return None
+
+
 def term_width(default: int = 80, floor: int = 1) -> int:
     """Terminal width: ``$COLUMNS`` (:data:`TERMINAL_SIZE_VARS`), else the tty size,
     else *default*.
@@ -257,22 +281,35 @@ def term_width(default: int = 80, floor: int = 1) -> int:
     Clamped to at least *floor*. Status-line style programs get their size via
     ``$COLUMNS`` because stdout is a pipe, hence the env-first order.
 
-    Only a **positive** ``$COLUMNS`` counts. A real environment in this project exports
-    ``COLUMNS=0``; ``int("0")`` parses happily, so the env branch accepted it and
-    ``max(floor, 0)`` turned a meaningless value into a plausible-looking floor-width
-    render — the whole status line silently squeezed into 24 columns. Zero and
-    negatives now fall through to the tty size like any other unusable value.
+    **A width is a positive number, whichever source produced it — and that is asked
+    once, here, rather than by each source about itself.** The env branch used to carry
+    its own ``if w <= 0: raise ValueError(w)``, because a real environment in this
+    project exports ``COLUMNS=0`` and ``int("0")`` parses happily: ``max(floor, 0)``
+    turned a meaningless value into a plausible-looking floor-width render, and the whole
+    status line squeezed into 24 columns. The guard was right and it was attached to a
+    **spelling** — ``$COLUMNS`` being zero — instead of to the property, so one rung
+    lower on the same ladder the identical value walked straight through: a tty that
+    reports zero columns handed back ``max(1, 0) == 1`` and charter drew every table,
+    row and panel one column wide (#594).
+
+    That tty is ordinary, not exotic. A pty created without a window size reports zero
+    until someone calls ``TIOCSWINSZ`` — which is what :func:`os.openpty` gives you, and
+    so what tooling, some CI shells and a terminal attached before its size is negotiated
+    all give you. The suite has been carrying the evidence: under a real pty, 28 failures
+    across 8 modules were all terminal-size, and giving that pty a size made all 28 pass.
+
+    So each source answers with a number or with nothing (:func:`_env_columns`,
+    :func:`_tty_columns`), the *answer* is what is judged, and a source with no usable
+    answer is indistinguishable from a source with no answer at all. Adding a third
+    source is then one entry in the tuple rather than a fourth place to remember the
+    zero. *default* is not asked the question: it is the caller's own stated fallback for
+    "nothing could be measured", and *floor* is the last word on all three paths.
     """
-    try:
-        w = int(os.environ["COLUMNS"])
-        if w <= 0:
-            raise ValueError(w)
-    except (KeyError, ValueError):
-        try:
-            w = os.get_terminal_size().columns
-        except OSError:
-            w = default
-    return max(floor, w)
+    for ask in (_env_columns, _tty_columns):
+        w = ask()
+        if w is not None and w > 0:
+            return max(floor, w)
+    return max(floor, default)
 
 
 # Internal aliases: node methods take a ``width`` parameter by API contract,
