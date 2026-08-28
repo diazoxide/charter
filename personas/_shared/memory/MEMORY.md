@@ -34,3 +34,4 @@ Written by the persona as it learns; committed and shared.
 - [TWO TEST/TMUX TRAPS measured on charter #598 (2026-08-28). (1) io.Unsupp](two-test-tmux-traps-measured-on-charter-598-2026.md)
 - [A PANEL PROCESS'S PANE *IS* sys.stdout. charter paints to it and measure](a-panel-process-s-pane-is-sys-stdout-charter-pai.md)
 - [test_plugin_freshness's test_every_top_level_directory_is_classified rea](test-plugin-freshness-s-test-every-top-level-dir.md)
+- [A TEST THAT COMPUTES ITS EXPECTATION FROM THE THING UNDER TEST SURVIVES](a-test-that-computes-its-expectation-from-the-th.md)

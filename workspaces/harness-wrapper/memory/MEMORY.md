@@ -21,3 +21,6 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [On the panel-visible-failure branch (#382), _panel_died_hook_argv and cm](20260824-015930-on-the-panel-visible-failure-branch-382-panel-di.md)
 - [In the charter repo, git worktrees don't get their own control plane: ch](20260824-172537-in-the-charter-repo-git-worktrees-don-t-get-thei.md)
 - [tools/sweep.py: a near-synonym mutation pair must be type-correct on EVE](20260828-102655-tools-sweep-py-a-near-synonym-mutation-pair-must.md)
+- [tmux pane-border-style scope is version-dependent and silently wrong at ](20260828-205545-tmux-pane-border-style-scope-is-version-dependen.md)
+- [A tmux style value is NOT validated the way you'd hope: 'set -w pane-bor](20260828-205556-a-tmux-style-value-is-not-validated-the-way-you-.md)
+- [capture-pane -p -e trims trailing spaces, so a tmux pane painted with wi](20260828-205557-capture-pane-p-e-trims-trailing-spaces-so-a-tmux.md)
