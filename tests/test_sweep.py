@@ -512,17 +512,26 @@ class TheStringShape(unittest.TestCase):
             sorted(["'bmqib'", "'lfz'", "'puifs'", "'uijse'", "'qsf'", "' boe '",
                     "'%t!'"]))
 
-    def test_the_width_literal_inside_an_fstring_is_reached(self):
+    def test_the_width_literal_inside_an_fstring_is_reached_where_positions_are_exact(self):
         """#508's defect exactly: `f"{name:<28}"`, a layout claim with nothing measuring
         it, which had to be hand-checked because this operator did not exist. The segment's
         span carries no quotes, so the splice is raw text and `span_is_sound` proves the
         round-trip a different way — the bytes at the span ARE the characters of the value.
+
+        BOTH arms are asserted, because the interesting one is the older interpreter. PEP
+        701 landed in 3.12; before it `ast` gives an f-string's internal nodes approximate
+        positions, the bytes at the span are not the value, and the check refuses. That is
+        the tool asking one fewer question rather than making an edit it cannot describe —
+        and :func:`sweep.reach` is what stops it being a silent difference.
         """
         muts = _mutations("""
             def f(name):
                 return f"{name:<28}"
         """)
-        self.assertEqual(_afters(muts, "retune-string"), ["<39"])
+        if sys.version_info >= (3, 12):
+            self.assertEqual(_afters(muts, "retune-string"), ["<39"])
+        else:
+            self.assertEqual(_by(muts, "retune-string"), [])
 
     def test_an_fstring_segment_whose_source_is_not_its_value_is_refused(self):
         """`{{` is two source characters and one value character, so a raw splice at that
@@ -531,7 +540,17 @@ class TheStringShape(unittest.TestCase):
         muts = _mutations("""
             MARK = f"a{{b}}c{0:<28}"
         """)
-        self.assertEqual(_afters(muts, "retune-string"), ["<39"])
+        self.assertEqual(_afters(muts, "retune-string"),
+                         ["<39"] if sys.version_info >= (3, 12) else [])
+
+    def test_the_report_says_when_the_interpreter_puts_a_shape_out_of_reach(self):
+        """A sweep that asks fewer questions than it could, and does not say so, is the
+        quietest way this tool can mislead: the report reads exactly like a clean one. So
+        the header names the shapes this interpreter cannot reach, next to the platform it
+        measured on and for the same reason."""
+        text = sweep.report([], Path("."), "a" * 12, "b" * 12, None, 1.0)
+        self.assertEqual("f-string" in text, sys.version_info < (3, 12))
+        self.assertIn(".".join(str(n) for n in sys.version_info[:3]), text)
 
     def test_a_bytes_constant_is_retuned_as_bytes(self):
         muts = _mutations("""
@@ -669,6 +688,28 @@ class TheSynonymShape(unittest.TestCase):
         muts = _mutations("""
             def f(args):
                 return args.index("-m")
+        """)
+        self.assertEqual(_by(muts, "swap-synonym"), [])
+
+    def test_a_function_in_a_module_is_not_a_method_on_a_type(self):
+        """`shlex.split` and `re.split` live in a namespace with no `rsplit` in it at all,
+        so the swap is an `AttributeError` rather than a question about which end was
+        searched. The pair is justified by two methods on one TYPE, and a module is not an
+        instance of anything. Measured on `charter/`: eight such call sites."""
+        muts = _mutations("""
+            import shlex
+
+            def f(command, name):
+                return shlex.split(command), name.split(",")
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"), ["name.rsplit"])
+
+    def test_a_module_reached_through_a_package_is_recognised_too(self):
+        muts = _mutations("""
+            import os
+
+            def f(p):
+                return os.path.split(p)
         """)
         self.assertEqual(_by(muts, "swap-synonym"), [])
 

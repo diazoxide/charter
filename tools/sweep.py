@@ -104,6 +104,26 @@ PLATFORM_SENSITIVE = frozenset({
 })
 
 
+def reach() -> str:
+    """What this interpreter puts out of the sweep's reach, or "" when nothing does.
+
+    A sweep that asks fewer questions than it could, and does not say so, is the quietest
+    way this tool can mislead: fewer mutations, no survivors among them, and a report that
+    reads exactly like a clean one.
+
+    PEP 701 is the one case measured so far. Before 3.12, `ast` gives an f-string's
+    internal nodes approximate positions, so `retune-string` cannot prove that the bytes at
+    a segment's span are the segment's value — and it refuses rather than splicing over a
+    position it cannot vouch for. The consequence is concrete: `f"{name:<28}"` is where a
+    width literal lives in this tree, it is #508's whole defect, and on 3.11 the sweep
+    cannot see it. CI's gate job pins 3.12 for exactly this reason.
+    """
+    if sys.version_info < (3, 12):
+        return ("literals inside an f-string (positions are approximate before PEP 701; "
+                "run the sweep on 3.12+ to reach them)")
+    return ""
+
+
 def platform_caveat(mutation: "Mutation") -> str:
     """Why this survivor might be a platform artefact rather than a missing test."""
     if mutation.operator != "narrow-except":
@@ -533,6 +553,35 @@ def read_positions(tree: ast.AST) -> set[int]:
     return out
 
 
+def module_names(tree: ast.AST) -> set[str]:
+    """Every name this file binds by importing something.
+
+    A near-synonym pair is justified by two methods living on the same *type*, and a
+    module is not an instance of anything. `shlex.split` and `re.split` are functions in a
+    namespace that has no `rsplit` at all, so swapping them raises `AttributeError` —
+    a red for a reason that has nothing to do with which end was searched, which is a
+    false pin, which is the failure this file exists to prevent. Measured on `charter/`:
+    eight call sites, all of them `shlex.split` or `re.split`.
+
+    `from x import y` counts too. `y` may be a module or it may be a class, and this side
+    cannot tell; skipping a swap that would have been fine costs one mutation, and offering
+    one that crashes costs a guard wrongly certified as tested.
+    """
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                out.add(alias.asname or alias.name.split(".")[0])
+    return out
+
+
+def _receiver_root(node: ast.AST) -> str:
+    """The leftmost name of an attribute chain — `os` in `os.path.split`."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else ""
+
+
 def _docstrings(tree: ast.AST) -> set[int]:
     """The ids of every docstring constant — prose, not a value, and never mutated."""
     out: set[int] = set()
@@ -557,6 +606,7 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
     parents = _parents(tree)
     docstrings = _docstrings(tree)
     reads = read_positions(tree)
+    modules = module_names(tree)
     in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
                   for part in ast.walk(node) if part is not node}
 
@@ -771,7 +821,8 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # :data:`SYNONYMS`. The mutant is type-correct by construction, so a red here is a
         # test noticing the AXIS rather than a test noticing a crash.
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr in SYNONYMS:
+                and node.func.attr in SYNONYMS \
+                and _receiver_root(node.func.value) not in modules:
             other, axis = SYNONYMS[node.func.attr]
             yield (node.func, f"{sp.text(node.func.value)}.{other}", "swap-synonym",
                    f"is `{axis}` pinned, or does `{other}` pass the same tests?")
@@ -791,7 +842,9 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # missing at another, where the two spellings agree on every path a test happens
         # to use and disagree on the one the operator's machine actually has.
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr in NORMALISERS and not node.args and not node.keywords:
+                and node.func.attr in NORMALISERS and not node.args \
+                and not node.keywords \
+                and _receiver_root(node.func.value) not in modules:
             yield (node, sp.text(node.func.value), "drop-normalise",
                    f"is `{node.func.attr}()` pinned, or does every test use a path that "
                    "needs no normalising?")
@@ -1670,6 +1723,8 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     w("=" * 86)
     w(f"measured on      : {sys.platform}, CPython "
       f"{'.'.join(str(n) for n in sys.version_info[:3])}")
+    if reach():
+        w(f"NOT ASKED ABOUT  : {reach()}")
     if baseline is not None:
         w(f"baseline          : Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}")
     w(f"mutations applied : {len(results)}")
@@ -1968,6 +2023,8 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float,
     w(f"| platform-deferred | {len(gate.platform)} | the clause may be unreachable on "
       f"{sys.platform}; never fails this gate |")
     w(f"| unresolved | {len(gate.unresolved)} | no verdict — timed out, not measured |")
+    if reach():
+        w(f"| not asked about | — | {reach()} |")
     w(f"| not applied | {len(gate.unapplied)} | the edit never reached the tree — a bug "
       "in the sweep |")
     w("")

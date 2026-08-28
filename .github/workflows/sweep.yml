@@ -45,6 +45,12 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          # 3.12 at the earliest, and that is a floor rather than a preference. Before PEP
+          # 701 (3.12) `ast` gives an f-string's internal nodes approximate positions, so
+          # `retune-string` cannot vouch for the bytes it would splice and refuses — which
+          # puts `f"{name:<28}"`, where a width literal actually lives in this tree and
+          # #508's entire defect, out of the sweep's reach. `sweep.reach()` says so in the
+          # report rather than letting a smaller sweep read like a clean one.
           python-version: "3.12"
       - name: Sweep the guards this branch adds
         env:
