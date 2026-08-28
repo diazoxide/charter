@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "charter-textual-repos"
+version = "0.1.0"
+description = "An experiment: charter's repo table drawn with Textual, shipped as a third-party charter.components provider"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+
+# THE WHOLE POINT OF THE EXPERIMENT LIVES ON THIS LINE.
+#
+# charter's own pyproject.toml says `dependencies = []`, asserted by
+# tests/test_packaging.py::test_runtime_has_zero_dependencies and led with in
+# CONTRIBUTING.md. Textual pulls ten transitive distributions. They are declared HERE, by
+# a package the operator chose to install, and charter discovers this package through
+# `importlib.metadata` — which is stdlib. Nothing in charter's tree changes.
+dependencies = ["charter-cp", "textual>=0.80"]
+
+[project.entry-points."charter.components"]
+# Two components, because the experiment is a comparison and not a demo.
+#
+# `textual.repos` is the ADAPTER: a Textual app driven headless, whose composited screen
+# is handed back to charter as a list of lines. It obeys `render(ctx) -> list[str]`
+# exactly as written.
+#
+# `textual.live` is the TAKEOVER: `render` starts a real Textual app on the pane's own
+# tty and never returns. It is the only shape in which Textual's event loop, mouse
+# handling and alternate screen actually exist — and it is outside the contract, which is
+# the finding.
+"textual.repos" = "charter_textual_repos:adapter_component"
+"textual.live" = "charter_textual_repos:live_component"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/charter_textual_repos"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
