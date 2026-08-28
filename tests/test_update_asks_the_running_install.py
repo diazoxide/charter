@@ -113,6 +113,24 @@ class WhereThisCharterLoadedFrom(unittest.TestCase):
         self.assertFalse(channel.running_inside(here.parent / (here.name + "-old")))
         self.assertFalse(channel.running_inside(str(here) + "-old"))
 
+    def test_a_charter_installed_behind_a_symlink_is_still_this_tree(self):
+        """The PACKAGE side of the same resolve, which the sweep could delete with the
+        suite green — the row below pins the ROOT side only.
+
+        `package_dir` reads this module's `__file__` at call time, so a charter reached
+        through a linked prefix is a fixture rather than a subprocess. Without the resolve
+        it answers with the link, `running_inside` compares two spellings of one directory
+        and says they are different, and the refusal that exists to stop an install landing
+        on the tree somebody is editing does not fire.
+        """
+        here = channel.package_dir()
+        with tempfile.TemporaryDirectory() as d:
+            link = Path(d) / "charter"
+            link.symlink_to(here, target_is_directory=True)
+            with mock.patch.object(channel, "__file__", str(link / "channel.py")):
+                self.assertEqual(channel.package_dir(), here)
+                self.assertTrue(channel.running_inside(here.parent))
+
     def test_a_plane_root_behind_a_symlink_is_still_the_tree(self):
         """Both ends resolve, for the reason `contain.within_data` gives one module over: a
         macOS temp directory lives under `/var/folders/…`, which is itself a link to
@@ -276,10 +294,11 @@ class AVersionNumberCannotTellADevBuildFromItsRelease(PersonaIso):
         self.enterContext(
             mock.patch.object(commands_update, "_handoff", return_value=(True, "")))
 
-    def _run(self):
+    def _run(self, **kw):
+        args = argparse.Namespace(**{"to": None, "bump": False, **kw})
         err = io.StringIO()
         with redirect_stderr(err), redirect_stdout(io.StringIO()):
-            code = commands_update.cmd_update(argparse.Namespace(to=None, bump=False))
+            code = commands_update.cmd_update(args)
         return code, err.getvalue()
 
     def test_a_dev_build_under_a_stable_plane_is_moved_onto_the_wheel(self):
@@ -290,6 +309,43 @@ class AVersionNumberCannotTellADevBuildFromItsRelease(PersonaIso):
         # And it says which of the two "0.53.0"s it is installing, rather than printing
         # `installing charter 0.53.0 → 0.53.0 …` at somebody.
         self.assertIn("over the dev build", err)
+
+    def test_an_explicit_target_on_a_dev_plane_says_it_is_overriding_the_channel(self):
+        """The line that tells an operator their `--to` beat the channel their plane
+        declares — which the sweep could make unconditional with the suite green, so it
+        would also greet a stable plane with news about a dev channel it does not track.
+
+        Both directions in one test, because the line is only informative if it appears
+        exactly where the override happened.
+        """
+        (self.tmp / "charter.toml").write_text('schema = 1\n[update]\nchannel = "dev"\n')
+        config.use(self.tmp)
+        with installed_by(None):
+            _code, dev_said = self._run(to="0.54.0")
+        self.assertIn("tracks the dev channel", dev_said)
+        self.assertIn("--to 0.54.0 overrides it", dev_said)
+
+        (self.tmp / "charter.toml").write_text('schema = 1\n[update]\nchannel = "stable"\n')
+        config.use(self.tmp)
+        with installed_by(None):
+            _code, stable_said = self._run(to="0.54.0")
+        self.assertNotIn("tracks the dev channel", stable_said)
+
+    def test_a_genuine_version_move_says_so_in_the_old_words(self):
+        """The other side of the branch that picks the wording, which the sweep could force
+        one way with the suite green: nothing asserted what an ORDINARY upgrade prints.
+
+        `installing charter A → B …` is what every stable update has always said, and it
+        must not become "over the dev build this process is running" for a plane that has
+        no dev build anywhere near it.
+        """
+        with mock.patch.object(commands_update, "_latest", lambda live=True: "0.54.0"), \
+                installed_by(None):
+            code, err = self._run()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.moved, ["0.54.0"])
+        self.assertIn("installing charter 0.53.0 → 0.54.0", err)
+        self.assertNotIn("over the dev build", err)
 
     def test_and_a_wheel_already_on_the_target_still_installs_nothing(self):
         """The idempotence the module docstring promises. The new condition may only add
