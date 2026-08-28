@@ -805,6 +805,84 @@ def chrome_option_names() -> tuple[str, ...]:
                                for name, _value in pairs))
 
 
+def border_bg(frame: dict, chrome) -> str | None:
+    """The background clause every rule in *frame* is drawn over, or ``None`` for a frame
+    whose rules keep the terminal's own — `commands_frame._chrome_argvs`' *surface*.
+
+    **A pane border is the one cell that belongs to no pane, and that is the whole
+    problem.** :func:`chrome_options` and :func:`pane_bg_options` paint a pane's INTERIOR
+    (``window-style``); the rule between two panes is drawn from `pane-border-style`, a
+    different option, and charter has pinned it to `commands_frame._CHROME_STYLE` — an
+    ``fg`` and an attribute, no ``bg`` — since #514. So a frame whose panes are all painted
+    grey came out as grey rectangles separated by a one-cell strip of the terminal's own
+    black. Measured on 3.7c, the same three panes with `bg = "brightblack"` on each, read
+    off an attached client's wire::
+
+        before  '\\x1b[100m … \\x1b[2m\\x1b[49m│\\x1b[0m\\x1b[100m'   <- ESC[49m: the seam
+        after   '\\x1b[100m … \\x1b[2m│\\x1b[0m\\x1b[100m'            <- the surface runs through
+
+    **Which colour, when the two sides of a rule may be different colours.** There is no
+    "panel side" to match: tmux draws ONE border, not two half-borders. (On 3.7c it will
+    take a pane-scoped `pane-border-style` from the pane above or left of the rule and
+    ignore the other side's entirely; at `tmuxctl.FLOOR` that option has no pane scope at
+    all and ``set -p`` silently writes the WINDOW's — measured both ways. A per-side design
+    is therefore unavailable, one-sided where it exists, and silently window-wide where it
+    does not.)
+
+    So the rule takes the surface the frame's own components AGREE on, and the frame-wide
+    `[frame] chrome` surface when they do not agree. A gutter in the frame's own colour
+    between two differently-coloured panels is what an application looks like; a gutter in
+    NO colour between two identically-coloured panels is a seam, and the seam is the whole
+    report.
+
+    **Resolved by the same expression every pane resolves itself with** —
+    ``pane_bg_options(bg) or chrome_options(chrome)``, `commands_frame._surface_argvs`'
+    own — asked of every placement at once instead of one at a time. That is what makes
+    "they agree" mean the thing an operator can see rather than "they wrote the same word":
+    a component that names no ``bg`` takes the frame-wide surface, and agrees with one that
+    named the colour that surface already is.
+
+    **The universe is the ARRANGEMENT, not the panes on screen**, and that is deliberate
+    twice over. It is what makes the launch path and the live path (`cmd_chrome`) answer
+    identically by construction — both read `config.FRAME` and neither needs a pane map,
+    which is the disagreement #610 cost — and it is what stops the frame's rules changing
+    colour when a toggle key hides a panel or a narrow terminal drops one. A plane that
+    wrote no ``[[frame.component]]`` at all has no per-pane colours to agree about, so the
+    set is empty and the frame-wide word is the answer, which is what it was before this
+    key existed.
+
+    ``None`` where `[frame] chrome` is ``off`` and nothing named a colour, and it is the
+    same ``None`` a frame got before any of this: `_chrome_argvs` then emits
+    `_CHROME_STYLE` unchanged, so `off` is the REMOVAL of the surface from the rule rather
+    than a third style of it. The two border options are charter's own at every level
+    (#514 pins them whether or not there is a surface), which is why this needs no unset
+    where :func:`chrome_option_names` needs one — the option is always set, and what
+    changes is whether it carries a colour.
+
+    **What comes back is charter's own constant, never the operator's word.** It is a
+    value out of :data:`FRAME_PANE_BG` or :data:`FRAME_CHROME` — those tables' own
+    ``window-style`` entries, indexed by a word that was only ever a key — and the two
+    reasons that rule exists were both re-measured on 3.7c against *this* option rather
+    than assumed from `window-style`'s own:
+
+    * ``set -w pane-border-style 'bg=#{?#{==:1,1},colour196,colour46}'`` is **rc 0** and
+      reads back verbatim. A border style is FORMAT-EXPANDED at draw time exactly as a
+      window style is, so a free string in a committed `charter.toml` would be a
+      stranger's value reaching a tmux evaluator here too.
+    * ``bg=chartreuse`` is **rc 0** as well — tmux knows the X11 colour names, and
+      ``chartreuse`` is a fixed RGB point no theme moves, which is the hazard
+      :data:`FRAME_PANE_COLOURS` refuses ``colour24`` for. tmux refusing a value
+      (``bg=notacolour`` is rc 1, ``invalid style:``) is therefore not the boundary
+      charter needs, and is not asked to be.
+    """
+    surfaces = {dict(pane_bg_options(placed.get("bg"))
+                     or chrome_options(chrome)).get("window-style")
+                for placed in frame.get("components") or ()}
+    if len(surfaces) == 1:
+        return surfaces.pop()
+    return dict(chrome_options(chrome)).get("window-style")
+
+
 def verbosity_for(level) -> str:
     """How much each panel says at *level*. :data:`DEFAULT_VERBOSITY` for anything else.
 

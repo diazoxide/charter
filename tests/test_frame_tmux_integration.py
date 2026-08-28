@@ -3811,7 +3811,7 @@ _RULE_GLYPHS = frozenset(chr(c) for c in range(0x2500, 0x2580))
 _SGR_RE = re.compile("\x1b\\[([0-9;]*)m")
 
 
-def _sgr_runs(text: str) -> list[tuple[frozenset, str]]:
+def _sgr_runs(text: str, *, carry: bool = False) -> list[tuple[frozenset, str]]:
     """`(appearance, character)` for every printable cell of *text*.
 
     The appearance is NORMALISED, not the raw escape bytes, because two spellings of one
@@ -3821,14 +3821,25 @@ def _sgr_runs(text: str) -> list[tuple[frozenset, str]]:
     is the spelling-versus-property trap this repo keeps paying for, so the property
     (what a cell LOOKS like) is what gets compared.
 
-    Line-scoped: `capture-pane -e` re-states a line's attributes at its start, and a run
-    carried across a newline would attribute one row's colour to the next.
+    Line-scoped by default: `capture-pane -e` re-states a line's attributes at its start,
+    and a run carried across a newline would attribute one row's colour to the next.
+
+    ***carry* turns that off, and it is needed for a BACKGROUND.** The re-statement is
+    tmux's optimiser, not a rule: a row whose background is already what the previous row
+    ended on gets no SGR at all, so a horizontal rule drawn over the frame's surface comes
+    back looking like a rule over the terminal's own — measured on 3.7c, where the vertical
+    rules carry `ESC[100m` and the horizontal ones carry nothing because the painted panel
+    above them already left the terminal there. A real terminal carries attributes across a
+    newline, so this is the faithful reading; the line-scoped default is the conservative
+    one and #514's tests keep it.
     """
     out: list[tuple[frozenset, str]] = []
+    fg: object = "default"
+    bg: object = "default"
+    attrs: set[int] = set()
     for line in text.split("\n"):
-        fg: object = "default"
-        bg: object = "default"
-        attrs: set[int] = set()
+        if not carry:
+            fg, bg, attrs = "default", "default", set()
         i = 0
         while i < len(line):
             m = _SGR_RE.match(line, i)
@@ -3872,12 +3883,17 @@ def _sgr_runs(text: str) -> list[tuple[frozenset, str]]:
     return out
 
 
-def _rule_states(text: str) -> set:
+def _rule_states(text: str, *, carry: bool = False) -> set:
     """The distinct appearances every pane-border cell in *text* is drawn with.
 
     One entry means every rule in the frame looks the same, which IS #514's property.
+
+    *carry* is `_sgr_runs`' own, and a frame with a SURFACE needs it: tmux does not
+    re-state a background a row already inherits, so the horizontal rules read as the
+    terminal's own default while the vertical ones read as the surface, and the property
+    would come back false on a frame that renders perfectly uniform.
     """
-    return {state for state, ch in _sgr_runs(text) if ch in _RULE_GLYPHS}
+    return {state for state, ch in _sgr_runs(text, carry=carry) if ch in _RULE_GLYPHS}
 
 
 def _rule_glyphs(text: str) -> set:
@@ -3949,10 +3965,20 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                             ("pane-border-status", "top")):
             self.assertEqual(self._srv("set", "-wg", name, value).returncode, 0)
 
-    def _screenshot(self, *, arm: bool, hostile: bool = False) -> str:
+    def _screenshot(self, *, arm: bool, hostile: bool = False,
+                    surface: str | None = None, rules_too: bool = True) -> str:
         """Build the frame on the inner server, show it through the outer one, and return
-        what the outer pane holds — the frame's whole screen, escapes and all."""
-        session = f"f{int(arm)}{int(hostile)}-{self._pane_counter}"
+        what the outer pane holds — the frame's whole screen, escapes and all.
+
+        *surface* paints the three PANELS the way `_surface_argvs` paints them (pane-scoped
+        `window-style`, harness pane untouched). *rules_too* decides whether
+        `_chrome_argvs` is handed the matching background as well, and the two together are
+        what make the seam a measurement instead of a claim: painted panes with unpainted
+        rules is the frame the operator reported, and it is this class's own "render the
+        defect first" discipline applied to a defect that is a background rather than a
+        foreground."""
+        session = (f"f{int(arm)}{int(hostile)}{int(bool(surface))}{int(rules_too)}"
+                   f"-{self._pane_counter}")
         self._pane_counter += 1
         r = self._srv("new-session", "-d", "-s", session, "-x", "100", "-y", "24",
                       "-P", "-F", "#{pane_id}", "--", "cat")
@@ -3971,15 +3997,26 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
             self._hostile()
         if arm:
             # The production argv, never a hand-retyped `set-option` — see `_run`.
-            for cmd in commands_frame._chrome_argvs(socket=self.SOCKET_NAME,
-                                                    harness_pane=harness):
+            for cmd in commands_frame._chrome_argvs(
+                    socket=self.SOCKET_NAME, harness_pane=harness,
+                    surface=surface if rules_too else None):
                 self.assertEqual(_run(cmd).returncode, 0, cmd)
         for direction, before, size in self._SPLITS:
-            args = ["split-window", "-t", harness, direction]
+            args = ["split-window", "-t", harness, direction, "-P", "-F", "#{pane_id}"]
             if before:
-                args.append(before)
+                args.insert(4, before)
             args += ["-l", size, "--", "cat"]
-            self.assertEqual(self._srv(*args).returncode, 0, args)
+            r = self._srv(*args)
+            self.assertEqual(r.returncode, 0, args)
+            if surface:
+                # The production argv again, and pane-scoped exactly as production is —
+                # so the harness pane is never an argument here, which is the boundary
+                # ADR 0018 draws and the reason the frame's rules cannot borrow its
+                # colour from a pane it is not allowed to paint.
+                for cmd in commands_frame._surface_argvs(
+                        socket=self.SOCKET_NAME, pane_id=r.stdout.strip(), chrome="off",
+                        bg=surface.removeprefix("bg=")):
+                    self.assertEqual(_run(cmd).returncode, 0, cmd)
         self.assertEqual(self._srv("select-pane", "-t", harness).returncode, 0)
         host = f"host-{session}"
         r = self._outer("new-session", "-d", "-s", host, "-x", "100", "-y", "24",
@@ -3997,7 +4034,13 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         deadline = time.time() + 10
         shot = ""
         while time.time() < deadline:
-            got = self._outer("capture-pane", "-p", "-e", "-t", host)
+            # `-N` keeps the trailing spaces on each row, and without it a SURFACE is
+            # invisible to this harness: every pane here runs `cat` and writes nothing, so
+            # a painted pane is a rectangle of spaces and `capture-pane` trims the whole
+            # of it, leaving the background SGR with no cell to describe. It adds no
+            # glyph, so `_rule_states` and `_rule_glyphs` see exactly what they saw
+            # before. Available at `tmuxctl.FLOOR` as well as on 3.7c (measured).
+            got = self._outer("capture-pane", "-p", "-e", "-N", "-t", host)
             if got.returncode == 0:
                 shot = got.stdout
             if _rule_states(shot):
@@ -4068,6 +4111,68 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                          (_rule_glyphs(own), _rule_states(own)),
                          "charter's frame is drawn differently on the operator's server "
                          "than on charter's own")
+
+    #: The colour every panel in a surfaced screenshot is painted, and the only
+    #: non-default background on the screen — the harness pane is never painted, and every
+    #: pane runs `cat` and writes nothing.
+    _SURFACE = "bg=brightblack"
+
+    def _backgrounds(self, shot: str) -> tuple[set, set]:
+        """`(what the rules are drawn over, what the painted panes are drawn over)`.
+
+        Read out of ONE capture rather than compared against an SGR constant this test
+        would have to know: the surfaced panes are the only cells on the screen with a
+        background at all, so "the rule matches the panels" is answerable without this
+        file knowing what `brightblack` is spelled as on the wire.
+        """
+        cells = _sgr_runs(shot, carry=True)
+        rules = {dict(s)["bg"] for s, ch in cells if ch in _RULE_GLYPHS}
+        panes = {dict(s)["bg"] for s, _ch in cells} - {"default"}
+        return rules, panes
+
+    def _seam(self) -> tuple[set, set]:
+        """The defect, rendered — this class's `_control` for a background rather than a
+        foreground. Panels painted, rules left as `_CHROME_STYLE` alone: every border cell
+        comes back over the terminal's own background while the panes on both sides of it
+        are over another, which is the one-cell strip the operator reported.
+
+        Skips rather than fails on a machine that cannot render it, for `_control`'s
+        reason: a harness that cannot see the seam cannot testify about its absence.
+        """
+        rules, panes = self._backgrounds(
+            self._screenshot(arm=True, surface=self._SURFACE, rules_too=False))
+        if not rules:
+            raise unittest.SkipTest("this machine rendered no pane borders at all")
+        if not panes:
+            raise unittest.SkipTest(
+                "this tmux painted no pane background through a nested client, so there "
+                "is no surface here for a rule to fail to match")
+        return rules, panes
+
+    def test_a_surfaced_frame_really_does_render_a_seam_between_its_panes(self):
+        """The defect itself, named rather than only used as a control."""
+        rules, panes = self._seam()
+        self.assertEqual(rules, {"default"},
+                         "the rules already carry a background before charter puts one "
+                         f"there, so the seam does not reproduce here: {rules}")
+        self.assertNotEqual(rules, panes)
+
+    def test_the_frames_rules_are_drawn_over_the_frames_own_surface(self):
+        """The fix, on the screen the operator judges it by. Every border cell is drawn
+        over the same background as the panes it runs between, so there is no strip left
+        between them — and #514's property survives it: still ONE appearance for every
+        rule in the frame, including the ones running past the active pane's corner."""
+        self._seam()
+        shot = self._screenshot(arm=True, surface=self._SURFACE)
+        rules, panes = self._backgrounds(shot)
+        self.assertEqual(len(panes), 1,
+                         f"the panels came out more than one colour: {panes}")
+        self.assertEqual(rules, panes,
+                         "a rule is still drawn over a different background than the "
+                         f"panes it separates: rules={rules} panes={panes}")
+        self.assertEqual(len(_rule_states(shot, carry=True)), 1,
+                         "the surfaced frame draws its rules two ways — #514, reopened "
+                         "on the background instead of the foreground")
 
     def test_charters_chrome_reaches_charters_own_window_and_no_other(self):
         """The boundary the `-w` scope is for, measured on a real server rather than
