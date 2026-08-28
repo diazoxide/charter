@@ -759,8 +759,10 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "client with a real terminal can press. `os._exit`s in its `finally`.",
         "tests/test_frame_input_reaches_a_component.py:execvp":
             "The same `tmux attach` inside a `pty.fork` child once more: tmux sends a "
-            "pane focus report only while a client is attached, so `focus`/`blur` cannot "
-            "be exercised without a real one. `os._exit`s in its `finally`.",
+            "pane focus report only while a client is attached, and a mouse report has "
+            "to be put on a real client's terminal for tmux to route it — so neither "
+            "`focus`/`blur` nor `click`/`scroll` can be exercised without a real one. "
+            "`os._exit`s in its `finally`.",
     }
 
     _WATCHED = ("execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp",

@@ -182,6 +182,14 @@ class CharterDeliversFiveOfTheSixAndSaysWhich(unittest.TestCase):
         c, _seen = _component(events=("key",))
         self.assertEqual(c.events, ("key",))
 
+    def test_every_kind_read_off_the_pane_is_a_kind_charter_delivers(self):
+        """`_FROM_INPUT` is what makes `open` take the pane's input and change its terminal
+        mode. A kind in it that `DELIVERED` does not carry would put a pane in cbreak, ask
+        its terminal to report, decode what arrived and then drop every event — the cost of
+        the feature with none of it, on a provider's pane."""
+        for kind in events._FROM_INPUT:
+            self.assertIn(kind, events.DELIVERED)
+
     def test_the_pointer_is_carried_now(self):
         """The whole of this change, at the one constant that decides it. `click` and
         `scroll` were declarable and delivered nowhere for a release; they are delivered
@@ -959,6 +967,34 @@ class APointerEventArrivesInTheComponentsOwnColumns(unittest.TestCase):
             self.tty.deliver(b"\x1b[I")
             self.assertTrue(d.poll(1.0), "a focus event was dropped as out of bounds")
         self.assertEqual([(e.kind, e.col) for e in seen], [(overlay.FOCUS, 0)])
+
+    def test_the_pad_taken_off_is_the_pad_that_pane_was_drawn_with(self):
+        """The cross-module agreement, and the one this whole class is worthless without:
+        `panel._component_text` insets by `slots.inset_rows(rows, cid)` and sizes by
+        `slots.content_width(cid)`, so the dispatcher has to ask under the SAME name or it
+        subtracts one component's pad from another component's click.
+
+        Asked by giving two names different pads and checking which one moved the column —
+        a case that a dispatcher asking under a slot name, a title, or a hard-coded default
+        would fail while every other case here still passed.
+        """
+        from charter import instance
+
+        def styled(_frame, name):
+            return {"bg": None, "pad": 3 if name == "acme.metrics" else 0}
+
+        c, seen = _component(events=("click",))
+        self.assertEqual(c.id, "acme.metrics")
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        with mock.patch("charter.frame.slots._width", return_value=40), \
+                mock.patch.object(instance, "component_style", side_effect=styled):
+            d.open()
+            self.addCleanup(d.close)
+            self.tty.sent()
+            self.tty.deliver(b"\x1b[<0;4;5M")          # pane column 3
+            d.poll(1.0)
+        self.assertEqual([e.col for e in seen], [0],
+                         "the click was translated by some other name's pad")
 
     def test_the_pad_and_the_width_come_from_one_measurement(self):
         """`content_rect` asks the tty once and derives both halves from that reading.

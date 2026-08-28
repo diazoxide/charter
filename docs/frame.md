@@ -98,6 +98,13 @@ the harness. The wheel never moves it, either way. Both measured on 3.7c and 3.2
 | do you keep native drag-select? | while no mouse-requesting pane is active | no |
 | a click on a pane border | reaches nobody — a border is a cell in neither pane | reaches nobody |
 
+One consequence of that first column worth knowing, because it is new: a panel whose
+component declares `click` or `scroll` asks *its own* terminal to report, so if you select
+that panel's pane (with your tmux prefix, say), your terminal starts reporting and native
+selection goes for as long as it is the active pane. Selecting the harness back — or `F12`
+— ends it. Panels that declare neither ask for nothing and change nothing, which is every
+panel charter ships.
+
 **Focus events are on inside a frame charter launched, and off inside your own tmux.** tmux
 ships `focus-events` off, and it is a server-wide setting; charter turns it on for its own
 private server, which is what lets a panel know it stopped being the active pane. Inside a
@@ -1177,6 +1184,12 @@ you set is already accounted for, and a click that lands in that margin is not d
 modifier keys are not reported. A click arrives as two events, a press then a release,
 told apart by `ev.pressed` — and either can arrive without the other, because tmux routes
 each one by where the pointer was at the time. Act on one of them.
+
+The wheel arrives as fast as it is turned, and a handler that answers truthy repaints for
+every event it answers truthy to — so a component that redraws on `scroll` redraws as often
+as somebody scrolls it. That is one pane's work and it stops when they stop, but a handler
+that only needs to move a cursor should say so by returning falsy when nothing on screen
+would differ.
 
 Declaring a kind that does not fire is not an error and never becomes one. A declaration
 says what a component *handles*; it is not a promise from charter that the event happens.

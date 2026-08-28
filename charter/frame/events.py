@@ -217,17 +217,24 @@ Event = overlay.Event
 #: EVENT_KINDS docstring already turns down both.
 DELIVERED = (overlay.FOCUS, overlay.BLUR, overlay.RESIZE, overlay.CLICK, overlay.SCROLL)
 
+#: The two that arrive because the pane asked to be told about its own focus, and the two
+#: that arrive with a POSITION. **They are separate because :meth:`Dispatcher.open` asks
+#: the terminal for one WITHOUT the other**, which is the whole of its per-declaration
+#: split; `_POINTER` is also what :meth:`Dispatcher._on_canvas` translates.
+_FOCUSING = (overlay.FOCUS, overlay.BLUR)
+_POINTER = (overlay.CLICK, overlay.SCROLL)
+
 #: The delivered kinds that need the pane's own input read. ``resize`` is not among them:
 #: a `SIGWINCH` already reaches this process and `pane.size()` already answers the
 #: rectangle, so a component that wants only that costs its pane's terminal nothing.
-_FROM_INPUT = (overlay.FOCUS, overlay.BLUR, overlay.CLICK, overlay.SCROLL)
-
-#: The two kinds that arrive with a POSITION, and so the two this module translates before
-#: delivering — see :meth:`Dispatcher._on_canvas`.
-_POINTER = (overlay.CLICK, overlay.SCROLL)
-
-#: The two that arrive because the pane asked to be told about its own focus.
-_FOCUSING = (overlay.FOCUS, overlay.BLUR)
+#:
+#: Derived rather than spelled a third time. Written out, this was the same four names in
+#: a second order, and the two lists it duplicates are the ones `open` branches on — so a
+#: kind added to one and forgotten here would open no input path at all, and a kind here
+#: that neither branch claims would put a pane in cbreak and then ask its terminal for
+#: nothing. Neither is a shape a test would obviously reach for; not being able to write
+#: it down twice is better than pinning it.
+_FROM_INPUT = _FOCUSING + _POINTER
 
 #: What the pane writes to ask its terminal to report its own focus, and the withdrawal.
 #: `overlay.MOUSE_ON`/`MOUSE_OFF` are the pointer's pair, written from here too and
