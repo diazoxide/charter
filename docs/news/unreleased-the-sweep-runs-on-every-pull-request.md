@@ -72,9 +72,23 @@ Both were checked against a defect already known and already fixed: run over the
 before the roster-column fix, the sweep now finds the `{:<28}` width literal on its own —
 the finding that had to be hand-written last time because no operator could see it.
 
+## And every mutation now proves it happened
+
+A mutation whose edit never lands runs the *unmutated* tree, passes, and gets reported as a
+survivor — which sends somebody to write a test for a line that is already covered. So each
+one carries a fingerprint of the file it was read from, and refuses if the tree it is handed
+is a different one.
+
+That check earned its place within a day of being written. Two sweeps of the same checkout
+were running at once and quietly sharing sandboxes, each applying mutations to the other's
+files. **486 of 489 mutations refused to answer.** Without the check the same run would have
+printed a confident table of pinned guards and survivors, about bytes neither sweep chose.
+Sandboxes are now private to a run; the trace cache, which is content-addressed, is still
+shared.
+
 ## The sweep swept itself again
 
-It found 123 of its own 198 mutations survived, deleted two of its own lines that turned
-out to guard nothing, and the operator table — the half that decides every verdict — now
-holds. The report renderer is still thin, and the number in the pull request says so
-rather than rounding it up.
+It deleted three of its own lines that turned out to guard nothing — including one guarding
+a loop over the very list it was testing for emptiness — and closed the operator table, the
+half that decides every verdict. The report renderer is thinner, and the number in the pull
+request says so rather than rounding it up.
