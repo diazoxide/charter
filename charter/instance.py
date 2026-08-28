@@ -1065,6 +1065,37 @@ FRAME_FIELDS = {
     #: provider author, `docs/frame.md` says it to the operator, and both point back here.
     #: The palette is the exception and does not need this flag: while it is open it is
     #: the active surface, so its own request is the one that reaches the terminal.
+    #:
+    #: **And there is a SECOND cost to turning it on, measured when charter began
+    #: delivering the pointer and owed to anyone about to set this.** With tmux's own
+    #: mouse on, tmux does not merely report a click — its default `MouseDown1Pane`
+    #: binding SELECTS the pane under the pointer before forwarding it. Measured on 3.7c
+    #: and at the 3.2 floor, identically — **with the terminal already reporting in both
+    #: rows**, which off the flag is the harness's doing and not charter's, and is the
+    #: precondition the paragraph above is entirely about::
+    #:
+    #:     mouse off  click a panel  -> panel receives it,  active pane: the harness
+    #:     mouse ON   click a panel  -> panel receives it,  active pane: THE PANEL
+    #:     either     wheel a panel  -> panel receives it,  active pane: the harness
+    #:
+    #: So the first row is not a promise that a click arrives with the flag off. It is the
+    #: answer to a different question — *if* one arrives, does it move the keyboard — and
+    #: the two must not be read as one, because with the flag off and the harness asking
+    #: for nothing the terminal is never asked to report and no click happens at all.
+    #:
+    #: So with this on, clicking a panel takes the keyboard off the harness until the
+    #: operator puts it back (`overlay.HATCH_KEY`, or their own prefix keys) — which is
+    #: exactly the click-to-focus charter's own delivery refuses to do, arriving from tmux
+    #: instead. The wheel never does it, on either version.
+    #:
+    #: Charter does not rebind `MouseDown1Pane` to prevent it, and that is a decision
+    #: rather than an omission: `bind -n` writes tmux's ROOT key table, which is
+    #: server-wide and shared by every frame on charter's private server
+    #: (`commands_frame.conf_text` records what a bind carrying one frame's assumptions
+    #: costs the next), and dropping the `select-pane` would also take away clicking BACK
+    #: to a pane — including the harness. Point-to-act is what this flag OFF already
+    #: gives; what ON buys is certainty that the event fires at all, and the keyboard
+    #: following a click is the price of tmux's own semantics for the setting.
     "mouse": (False, "mouse"),
     #: The pane surface, off by default — see :data:`FRAME_CHROME` for what the three
     #: words mean, why there is no fourth, and why the value is a word rather than a

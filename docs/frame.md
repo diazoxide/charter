@@ -78,6 +78,33 @@ control that program and cannot promise you either behaviour. Keys always work. 
 charter draws over a whole pane and drives itself is the exception — while it is open it
 *is* the active pane, so its own request is the one that reaches your terminal.
 
+**When a click does reach a panel, it acts where you pointed and does not move your
+keyboard.** Charter delivers a click and a scroll to whichever panel the pointer is over,
+in that panel's own cells, and never selects the pane — the frame exists to keep the
+harness the thing you type into, and a click that quietly moved the keyboard somewhere
+else would be the opposite of that. Measured on tmux 3.7c and 3.2 alike.
+
+**With `mouse = true`, tmux itself moves the keyboard on a click, and charter cannot stop
+it.** That is tmux's own behaviour for the setting: with its mouse on, tmux selects the
+pane under the pointer before handing the click on. So turning this on buys you clicks
+that always work, and costs you a keyboard that follows them — press `F12` to get back to
+the harness. The wheel never moves it, either way. Both measured on 3.7c and 3.2:
+
+| | `mouse = false` (default) | `mouse = true` |
+|---|---|---|
+| does a click reach the panel? | only while the active pane is asking your terminal to report — your harness decides | always, from the moment you attach |
+| does a click move your keyboard? | **no** | **yes**, to the panel you clicked |
+| does the wheel move your keyboard? | no | no |
+| do you keep native drag-select? | while no mouse-requesting pane is active | no |
+| a click on a pane border | reaches nobody — a border is a cell in neither pane | reaches nobody |
+
+One consequence of that first column worth knowing, because it is new: a panel whose
+component declares `click` or `scroll` asks *its own* terminal to report, so if you select
+that panel's pane (with your tmux prefix, say), your terminal starts reporting and native
+selection goes for as long as it is the active pane. Selecting the harness back — or `F12`
+— ends it. Panels that declare neither ask for nothing and change nothing, which is every
+panel charter ships.
+
 **Focus events are on inside a frame charter launched, and off inside your own tmux.** tmux
 ships `focus-events` off, and it is a server-wide setting; charter turns it on for its own
 private server, which is what lets a panel know it stopped being the active pane. Inside a
@@ -1137,27 +1164,50 @@ The two go together or not at all. A component that declares `events` and suppli
 nothing — a declaration with nothing behind it looks exactly like a kind charter never
 fires, and that ambiguity is the thing this refusal exists to remove.
 
-**Three of the six kinds fire today.**
+**Five of the six kinds fire today.**
 
 | kind | fires |
 |---|---|
 | `resize` | Always. Your pane's rectangle changed. |
 | `focus`, `blur` | Inside a frame charter launched, on a terminal that reports focus. |
-| `key`, `click`, `scroll` | Never yet. Declarable, and delivered nowhere. |
+| `click`, `scroll` | Whenever a pointer report reaches the panel — see *Mouse is off by default*. |
+| `key` | Never. Declarable, and delivered nowhere. |
 
 `focus` and `blur` need tmux's `focus-events`, which charter turns on for its own server
 and cannot turn on inside a tmux you already have (see *Inside a tmux you already have*) —
 and your terminal emulator has to report focus in the first place. `key` is not delivered
 because your harness owns the keyboard: tmux routes typing to the active pane, which is the
 harness's, so the only keystrokes a panel could see are the ones you typed into the wrong
-pane. `click` and `scroll` are the subject of *Mouse is off by default* above, and there is
-a second reason on top of that one: tmux routes a pointer by position and a click does not
-move focus, so a click on an unfocused panel would be a second, silent focus that disagrees
-with where your keyboard is going. Charter would rather deliver nothing than deliver that.
+pane. `click` and `scroll` are the subject of *Mouse is off by default* above: charter
+delivers them wherever they arrive, and whether they arrive at all is decided by your
+`[frame] mouse` setting and by the harness.
+
+**What a pointer event tells a component.** `ev.row` and `ev.col` are cells of the
+component's own rectangle — the one `ctx.width` and `ctx.height` describe — so any `pad`
+you set is already accounted for, and a pointer event landing in that margin is not
+delivered at all. Neither is one on a pane charter cannot currently measure, which is the
+moment the pane is showing `charter: pane size unknown` rather than the component.
+
+`ev.name` is the button (`left`, `middle`, `right`) or the direction (`up`, `down`).
+Modifier keys are not reported — a shift-click is a `left` click. The extra buttons a mouse
+may have (the thumb buttons, and the horizontal wheel a trackpad swipe reports) are not
+delivered: charter has no name for them, and reporting one as a `left` click would be
+worse than reporting nothing.
+
+A click arrives as two events, a press then a release, told apart by `ev.pressed` — and
+either can arrive without the other, because tmux routes each one by where the pointer was
+at the time. Act on one of them.
+
+The wheel arrives as fast as it is turned, and a handler that answers truthy repaints for
+every event it answers truthy to — so a component that redraws on `scroll` redraws as often
+as somebody scrolls it. That is one pane's work and it stops when they stop, but a handler
+that only needs to move a cursor should say so by returning falsy when nothing on screen
+would differ.
 
 Declaring a kind that does not fire is not an error and never becomes one. A declaration
 says what a component *handles*; it is not a promise from charter that the event happens.
-Give anything a pointer could do a key or a palette action as well.
+Give anything a pointer could do a key or a palette action as well — on a plane where the
+harness never asks the terminal to report, the pointer is not a route to anything.
 
 **A handler is told what happened; `render` is what draws.** Nothing `on_event` returns
 reaches your pane — the return value only says whether to repaint, and the repaint runs

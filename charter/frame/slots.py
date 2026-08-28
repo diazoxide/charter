@@ -991,6 +991,33 @@ def pad_of(name) -> int:
     return pad_for(name, _width())
 
 
+def content_rect(name, cols: int) -> tuple[int, int]:
+    """*name*'s canvas inside a pane *cols* wide: the column its cells START in, and how
+    many there are.
+
+    The first number is what :func:`inset_rows` puts in front of every row; the second is
+    what :func:`content_width` tells the renderer. They were derived separately for as
+    long as only the renderer needed them, and #607's pointer half is what made the pair
+    one question: a click arrives in the PANE's coordinates and a component draws in
+    THESE, so `frame/events.py` needs the origin and the width or it translates a click
+    by one pad into a rectangle sized by another.
+
+    **The width is passed in rather than measured here**, which is :func:`pad_for`'s own
+    reason a second time: the renderer has a pane it measured through :func:`_width`, and
+    `events.Dispatcher._on_canvas` has one it measured through `pane.size()` — because it
+    must be able to tell a pane it could NOT measure from one that is 80 columns wide, and
+    `_width`'s stated fallback cannot say which it was. One arithmetic, two callers, each
+    supplying the reading it is entitled to.
+
+    What this does NOT claim is that the pad and the width a PAINT uses come from one
+    reading: `panel._component_text` still asks :func:`content_width` and then
+    :func:`inset_rows`, which measures again. That window is older than this function and
+    is not closed by it.
+    """
+    pad = pad_for(name, cols)
+    return pad, cols - 2 * pad
+
+
 def content_width(name) -> int:
     """The cells *name*'s renderer may compose into — the pane's width less its pad.
 
@@ -1006,14 +1033,12 @@ def content_width(name) -> int:
     it cannot — and `tui.truncate` answers ``""`` for a non-positive width regardless, so
     the arithmetic here needs no second guard of its own.
 
-    The pane is measured ONCE and handed to both halves, rather than `_width() - 2 *
-    pad_of(name)`: that spelling asks the tty twice per call and, worse, asks it twice at
-    two different moments — a `SIGWINCH` landing between them would compose a row from one
-    width and inset it by a pad afforded against another. `panel._watch` repaints on
-    exactly that signal.
+    The pane is measured ONCE and handed to both halves of :func:`content_rect`, rather
+    than `_width() - 2 * pad_of(name)`: that spelling asks the tty twice, and worse, asks
+    it twice at two different moments — a `SIGWINCH` landing between them would compose a
+    row from one width and inset it by a pad afforded against another.
     """
-    cols = _width()
-    return cols - 2 * pad_for(name, cols)
+    return content_rect(name, _width())[1]
 
 
 def inset_rows(text: str, name: str) -> str:
