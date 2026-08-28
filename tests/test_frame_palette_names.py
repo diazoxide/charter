@@ -368,11 +368,13 @@ class ANameIsStillNotAnAction(_Frame, unittest.TestCase):
         """Forty workspaces and forty personas are eighty rows and zero offers. This is
         the mutation that would undo Task 6 while every display assertion above stayed
         green."""
-        reg = builtin_actions.build(self.FID, current_density="full")
+        reg = builtin_actions.build(self.FID, current_density="full",
+                                    current_chrome="off")
         before = len(reg.offers(fid=self.FID, snapshot={}))
         _plane_workspaces(*[f"ws{i:02d}" for i in range(40)])
         _plane_personas(*[f"pe{i:02d}" for i in range(40)])
-        reg = builtin_actions.build(self.FID, current_density="full")
+        reg = builtin_actions.build(self.FID, current_density="full",
+                                    current_chrome="off")
         self.assertEqual(len(reg.offers(fid=self.FID, snapshot={})), before)
         self.assertGreaterEqual(len(self._typed("0").rows), 8)
 

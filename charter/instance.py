@@ -584,6 +584,23 @@ def chrome_options(level) -> tuple[tuple[str, str], ...]:
     return FRAME_CHROME[lv] if lv else ()
 
 
+def chrome_option_names() -> tuple[str, ...]:
+    """Every tmux option name :data:`FRAME_CHROME` can set, in the order it names them.
+
+    **Derived from the table, never spelled beside it**, and that is the whole reason it
+    is a function. `off` is the absence of these options rather than a style of its own,
+    so turning a running frame's surface off means UNSETTING them — and a second list
+    saying which is a list that a third row in the table would quietly leave behind, with
+    the symptom being one option surviving a keypress that said "off". The table is the
+    only place the option names are written.
+
+    `dict.fromkeys` rather than a `set`: what a caller does with this is build tmux argvs,
+    and an order that changes between runs is a diff nobody can read in a test failure.
+    """
+    return tuple(dict.fromkeys(name for pairs in FRAME_CHROME.values()
+                               for name, _value in pairs))
+
+
 def verbosity_for(level) -> str:
     """How much each panel says at *level*. :data:`DEFAULT_VERBOSITY` for anything else.
 

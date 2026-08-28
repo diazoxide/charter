@@ -24,7 +24,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import config, util
+from . import config, tui, util
 from .secrets import base, fingerprint, registry
 
 
@@ -55,6 +55,26 @@ def _portable_file(p) -> str:
 #: it prevents surfaces much later and in disguise: a typo'd source name is simply unset,
 #: and an unset source is (deliberately) a hard error at read time about a credential.
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+#: Cells between one column of `vault list` and the next, stated once because the rule
+#: under the header has to be drawn from the same number the columns are SIZED with.
+#: `tui.column` counts the gap inside the width it returns, so the rule for a column is
+#: that width less this — never a second constant beside the first, which is what the
+#: old `"-" * 18` under a `{:<18}` was.
+#:
+#: **Its value is deliberately not pinned, and that is measured rather than assumed.**
+#: Raise it to 3 and every case in `test_a_table_column_is_measured_in_cells` stays green,
+#: because both sides move together: the column is sized `gap=_GAP` and the rule is drawn
+#: `w - _GAP`, so every offset is unchanged and only the whitespace between columns grows.
+#: A test spelling `2` would pass forever and see nothing — #508's own finding about `28`,
+#: in the other direction.
+#:
+#: What a gap BUYS is pinned, and the boundary is 0: at zero the widest value in a column
+#: runs straight into the next cell and nothing on the row says where the column ended.
+#: `test_the_widest_value_in_a_column_is_still_followed_by_a_separator` holds that, and
+#: the measurement is recorded here so nobody re-derives it (`_BRANCH_TEXT_MIN_W`'s
+#: precedent, #597).
+_GAP = 2
 
 
 def _env_bindings(args) -> dict | None:
@@ -303,10 +323,38 @@ def cmd_vault_list(args) -> int:
     # SCOPE earns a column because a two-file registry invites exactly two questions —
     # "why can't my teammate see this vault" and "why is this vault in git" — and both are
     # answered by where it is registered.
-    fmt = "{:<18} {:<16} {:<12} {:<7} {}"
-    print(fmt.format("VAULT", "PROVIDER", "PERSONA", "SCOPE", "STATUS"))
-    print(fmt.format("-" * 18, "-" * 16, "-" * 12, "-" * 7, "-" * 28))
-    for name in sorted(vs):
+    #
+    # `{:<18}`/`{:<16}`/`{:<12}` were guesses about names charter did not mint: a vault
+    # name and a persona name are the operator's and a provider name is a plugin's, so any
+    # of the three can be longer than its constant — at which point `:<n` PUSHES that row's
+    # remaining columns right of every other row's and the table stops lining up.
+    # `str.format` also counts CHARACTERS where a terminal lays out cells, so a persona
+    # named in CJK measures well inside the constant and still shifts its row by one column
+    # per glyph (#508, #592, #600).
+    #
+    # Sized from the four columns that cost nothing to know — the registry document is
+    # already loaded — and never from STATUS, which is one `health()` per vault and may
+    # reach a keychain, a file that is not there, or a helper waiting on input.
+    # `_status_for_workspace` records the same trade (#597): collecting every row before
+    # drawing one makes the operator wait for every vault before the header appears. STATUS
+    # has nothing to its right, so it needs no width anyway.
+    heads = ("VAULT", "PROVIDER", "PERSONA", "SCOPE")
+    body = [(name, vs[name].get("provider", "?"), vs[name].get("persona") or "—",
+             registry.scope_of(name)) for name in sorted(vs)]
+    widths = [tui.column(h, [row[i] for row in body], gap=_GAP)
+              for i, h in enumerate(heads)]
+
+    def line(cells, last: str) -> str:
+        return ("".join(tui.pad(c, w) for c, w in zip(cells, widths)) + last).rstrip()
+
+    # One padder for the header, the rule and every row. Two code paths that each believe
+    # they agree about the widths is the fastest way back to a misaligned report (#508),
+    # and the rule was exactly that: five constants written a second time, which lined up
+    # with the header only for values shorter than what they both spelled.
+    print(line(heads, "STATUS"))
+    print(line(tuple("-" * max(1, w - _GAP) for w in widths), "-" * len("STATUS")))
+    for row in body:
+        name = row[0]
         try:
             prov = registry.provider_for(name, doc)
             # `env_overlay` raises when a declared identity's variable is unset, which is
@@ -316,9 +364,7 @@ def cmd_vault_list(args) -> int:
             ok, detail = prov.health()
         except base.VaultError as e:
             detail = str(e).split("\n")[0]
-        persona = vs[name].get("persona") or "—"
-        print(fmt.format(name, vs[name].get("provider", "?"), persona,
-                         registry.scope_of(name), detail))
+        print(line(row, detail))
     return 0
 
 

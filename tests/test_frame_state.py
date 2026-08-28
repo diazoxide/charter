@@ -15,6 +15,7 @@ from unittest import mock
 
 from tests._isolation import PersonaIso
 from charter.frame import state
+from tests._tmuxsocket import OPERATOR_SOCKET
 
 
 def _a_dead_pid() -> int:
@@ -515,7 +516,7 @@ class ReapAcrossServers(PersonaIso, unittest.TestCase):
     check deleted outright.
     """
 
-    THEIRS = "/private/tmp/tmux-502/default"
+    THEIRS = OPERATOR_SOCKET
 
     def _frame_on(self, stem, server):
         fid = f"{stem}-{_a_dead_pid()}"

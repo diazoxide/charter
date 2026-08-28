@@ -560,6 +560,61 @@ def density(fid: str) -> str | None:
         return None
 
 
+def record_chrome(fid: str, level: str) -> None:
+    """Write down the pane surface THIS RUNNING FRAME is on, overriding `[frame] chrome`.
+
+    :func:`record_density`'s twin, for :func:`density`'s reason and no other: charter.toml
+    is hand-maintained and committed, this directory is machine-written and `reap` deletes
+    it whole when the frame ends. A palette row that edited an operator's own file to
+    change what one running frame looks like would be a keypress with a commit in it.
+
+    **The surface is the one element a keypress can change without moving a pane**, which
+    is why this exists at all rather than riding on `record_density`. `window-style` is a
+    pane option and tmux repaints from it on the spot — measured on an attached client,
+    both tmux 3.7c and tmux 3.2: ``set-option -p window-style bg=black`` on a pane that
+    was already drawn put ``\x1b[40m`` on the client's wire with no `refresh-client` and
+    no re-layout. So `commands_frame.cmd_chrome` records here and sets an option, and
+    nothing splits.
+
+    Same must-not-raise, atomic-write shape as :func:`record_density`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "chrome.tmp"
+    try:
+        tmp.write_text(f"{level}\n")
+        os.replace(tmp, d / "chrome")
+    except OSError:
+        return
+
+
+def chrome(fid: str) -> str | None:
+    """The surface this frame was last set to by hand, or ``None`` for "never set".
+
+    ``None`` is the ordinary case: a frame starts at whatever `[frame] chrome` resolved to
+    — `off` unless the plane's own file says otherwise — and only a palette row writes
+    here. The caller falls back to the configured value; `commands_frame._current_chrome`
+    is the one place that does.
+
+    **The text is NOT validated here**, for :func:`density`'s reason exactly:
+    `instance.chrome_level` is the one gate on that closed set and it sits at the point of
+    use, so a truncated or hand-edited file degrades to the configured value in the same
+    way an unknown word in charter.toml does. A second half-copy of the enum in this
+    module is how the two come to disagree — and here the stakes are higher than a
+    density's, because the value on the other side of that gate is on its way to a tmux
+    style: `instance.chrome_options` maps a WORD to constants charter holds, so a word
+    nobody recognises yields no tmux command at all.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "chrome").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def record_hidden(fid: str, names) -> None:
     """Write down which components THIS RUNNING FRAME is not drawing.
 

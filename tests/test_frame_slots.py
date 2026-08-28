@@ -25,6 +25,7 @@ from charter import config, instance, persona, statusline, todos, tui, workspace
 from charter.frame import gather, layout, slots, state
 
 from tests._isolation import PersonaIso
+from tests._tmuxsocket import OPERATOR_SOCKET
 
 
 def _row(name, *, branch="main", dirty=False, tracked_dirty=False, ahead=0, behind=0,
@@ -127,7 +128,7 @@ class Render(PersonaIso, unittest.TestCase):
         on every repaint, forever — the same defect
         `test_the_bottom_row_names_the_configured_hotkey_not_a_hardcoded_one` exists
         for, reached through the other server instead of the wrong config value."""
-        state.record_server("f-in-tmux", "/private/tmp/tmux-502/default")
+        state.record_server("f-in-tmux", OPERATOR_SOCKET)
         with mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
             out = slots.render("bottom", "f-in-tmux")
         self.assertNotIn("palette", out)

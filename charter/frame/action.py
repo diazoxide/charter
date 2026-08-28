@@ -241,7 +241,7 @@ class ActionCtx(_ctx.Ctx):
     """
 
 
-_ctx.declare(ActionCtx, _ctx.Contract(serves=SERVES, geometry=IDENTITY, noun="action",
+_ctx.declare(ActionCtx, _ctx.Contract(serves=SERVES, always=IDENTITY, noun="action",
                                       declared="touches"))
 
 

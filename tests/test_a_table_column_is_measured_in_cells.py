@@ -36,11 +36,13 @@ import re
 import unicodedata
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import (commands, commands_worktree, config, persona, pieces, tui,
-                     workspace)
+from charter import (commands, commands_secrets, commands_worktree, commands_workspace,
+                     config, doctor, persona, pieces, tui, workspace)
+from charter.secrets import registry as vault_registry
 from tests._isolation import PersonaIso
 
 #: A base character with a combining acute, built with `chr` so no editor and no
@@ -140,6 +142,27 @@ class TableCase(PersonaIso):
             f"the column holding {marker!r} starts at cells {sorted(at)} — different on "
             f"different rows, so it was sized by a guess or measured in characters:\n"
             + "\n".join(data))
+
+    def assert_heads(self, rows: list[str], head_marker: str, marker: str,
+                     *, least: int = 2) -> None:
+        """The header's *head_marker* begins in the same cell as *marker* on EVERY row.
+
+        Every row, not the first one that carries it: the rows are sorted by name, so
+        "the one the assertion happens to reach" is decided by the alphabet rather than by
+        the case, and a short row lines up with the header under a broken width exactly as
+        it does under a correct one. Measured — a probe reading `next(...)` here passed
+        against the constant it was written to catch.
+        """
+        data = [r for r in rows if marker in tui.strip_ansi(r)]
+        self.assertGreaterEqual(len(data), least,
+                                f"{marker!r} is on {len(data)} row(s), needed {least}:\n"
+                                + "\n".join(rows))
+        head = next(r for r in rows if head_marker in tui.strip_ansi(r))
+        at = self.cells_before(head, head_marker)
+        for r in data:
+            self.assertEqual(at, self.cells_before(r, marker),
+                             f"the header sits at cell {at} and this row's column does "
+                             f"not:\n{head}\n{r}")
 
     def assert_readable(self, rows: list[str], value: str) -> None:
         """*value* appears IN FULL on some row.
@@ -615,6 +638,582 @@ class TestRecallColumnsLineUp(RecallCase):
                                    if "/memory/" in ln))
         self.assertEqual(len(addr) - len(addr.lstrip(" ")),
                          row.index("persona:"), "\n".join([row, addr]))
+
+
+# --------------------------------------------------------------------------- #
+# worktree list — `{piece:<24} {branch:<28} {state:<8} {who:<16} {said}` (#600) #
+# --------------------------------------------------------------------------- #
+class WorktreeListCase(TableCase):
+    """`worktree list` starts from GIT and joins the record onto what git found (ADR
+    0011), so the rows are stubbed and the record is real.
+
+    `list_for` shells out to `git worktree list --porcelain` and `is_dirty` to `git
+    status` per row; what is under test is the arithmetic between them, and a real
+    worktree per fixture name would be a `git init` per case for values git never sees.
+    `tests/test_worktree.py` drives the real thing.
+    """
+
+    WS = "alpha"
+    REPO = "svc"
+
+    #: The last column, identical on every row, so its offset is the SUM of the four
+    #: widths in front of it — one marker that fails if any of them is wrong.
+    TAIL = "silent 3d"
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.ensure(self.WS)
+        workspace.scaffold(self.WS)
+        self.rows: list[dict] = []
+        self.enterContext(mock.patch.object(
+            commands_worktree.workspace, "repo_trees",
+            return_value=[workspace.workspace_dir(self.WS) / self.REPO]))
+        self.enterContext(mock.patch.object(
+            commands_worktree.worktree, "list_for",
+            side_effect=lambda clone, ws: list(self.rows)))
+        self.enterContext(mock.patch.object(
+            commands_worktree.worktree, "is_dirty", return_value=False))
+        # An age, not a verdict — and a FIXED one, so `said` is the same string on every
+        # row. A real `silence()` returns the age of the claim, which differs per row by
+        # however long the fixture took to build and would make the tail unusable as a
+        # single offset.
+        self.enterContext(mock.patch.object(
+            commands_worktree.pieces, "silence", return_value="3d"))
+
+    def worktree_row(self, piece: str, branch: str | None = None) -> None:
+        self.rows.append({"piece": piece, "branch": branch if branch is not None else piece,
+                          "path": f"/w/{piece}", "prunable": False})
+
+    def claim(self, piece: str, *, repo: str | None = None) -> None:
+        """Record a real claim so the WHO column holds something.
+
+        Unclaimed rows render `pieces.claimant(None)` — the string `unknown` — on every
+        row, which is a column that cannot tell "drawn" from "dropped": with every row
+        identical, removing the cell entirely leaves the rows still agreeing with each
+        other. A claimed piece puts a value on the row that only that row has.
+        """
+        pieces.record(self.WS, "claimed", repo or self.REPO, piece, reason="SO-SAID")
+
+    def listing(self) -> list[str]:
+        return self.run_cmd(commands_worktree.cmd_worktree_list,
+                            SimpleNamespace(workspace=self.WS, repo=None))
+
+
+class TestWorktreeListColumnsLineUp(WorktreeListCase):
+    def test_a_branch_name_past_the_constant_does_not_push_its_row(self):
+        """`{branch:<28}`, and #600's own words: **a branch name past 28 characters is
+        ordinary**, so this table is wrong today rather than one commit away.
+
+        The name here is this repo's own convention — `charter worktree add` names the
+        branch after the piece, and the pieces in this project's log run to thirty-four
+        characters. Nothing unusual has to happen for the row after it to be misaligned.
+        """
+        self.worktree_row("slice")
+        self.worktree_row("fix-the-four-tables-that-pad-into-a-constant")
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_a_piece_name_past_the_constant_does_not_push_its_row(self):
+        self.worktree_row("slice")
+        self.worktree_row("a-piece-named-well-past-twenty-four-characters")
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_a_detached_worktree_writes_its_whole_path_into_the_branch_cell(self):
+        """`branch = r["branch"] or f"detached {r['path']}"` — a path, in a 28-wide
+        column. A worktree on a detached HEAD is first-class here (`list_for` reports what
+        git reports), and the cell it produces is longer than the constant by construction
+        rather than by an unlucky name."""
+        self.worktree_row("slice")
+        self.rows.append({"piece": "loose", "branch": "",
+                          "path": "/very/long/path/to/a/detached/worktree/checkout",
+                          "prunable": False})
+        rows = self.listing()
+        self.assert_aligned(rows, self.TAIL)
+        self.assert_readable(rows, "/very/long/path/to/a/detached/worktree/checkout")
+
+    def test_a_cjk_piece_name_does_not_push_its_row(self):
+        """The `len` half, which no constant can fix: `str.format` pads to CHARACTERS, so
+        a name that measures well inside 24 is drawn one column wide of every other row
+        per glyph."""
+        name = "日本語のピース"
+        self.assert_a_cell_and_a_character_disagree(name)
+        self.worktree_row("slice")
+        self.worktree_row(name)
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_a_combining_mark_does_not_pull_its_row(self):
+        """The other direction, the one a BIGGER constant makes worse: a combining mark is
+        zero cells and one character, so `len` over-pads and the row drifts right.
+
+        `COMBINING` and not `équipe-mémoire`: the obvious spelling has a precomposed `é`,
+        which is one codepoint and one cell, so `len` and `tui.width` agree about it and
+        the case would pass against the defect it is named for (measured, #600)."""
+        self.assert_a_cell_and_a_character_disagree(COMBINING)
+        self.worktree_row("slice")
+        self.worktree_row(COMBINING)
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_the_claimant_is_on_the_row_and_not_merely_between_two_that_line_up(self):
+        """The column the alignment probe cannot see, because dropping it keeps the rows
+        agreeing with each other.
+
+        Measured by a hand mutation: sizing four columns as three drops WHO out of every
+        row — `zip(row, widths)` simply stops early — and the tail's offset stays
+        identical on every row, so every alignment case stayed green. What catches it is
+        asking whether the claimant is readable off the row it belongs to (#589's probe,
+        one column over).
+        """
+        self.worktree_row("slice")
+        self.worktree_row("other")
+        self.claim("slice")
+        rows = self.listing()
+        who = pieces.claimant(pieces.claims(self.WS).get((self.REPO, "slice")))
+        self.assertNotEqual(who, "unknown",
+                            "fixture: the claim did not land, so WHO is the same string "
+                            "on every row and this case cannot fail")
+        self.assert_readable(rows, who)
+        self.assert_aligned(rows, self.TAIL)
+
+    def test_an_ascii_listing_is_the_control(self):
+        """Every value inside every constant, so this row is drawn identically with the
+        fix and without it — a failure naming it is about the table, not the name."""
+        self.worktree_row("slice")
+        self.worktree_row("other")
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_every_piece_and_branch_is_still_readable_off_its_row(self):
+        """The half alignment cannot see — and here it guards the FIX rather than the
+        defect, which is worth saying because it changes what a failure means.
+
+        `{piece:<24}` pushes and never cuts, so this passes against the old code too;
+        `tui.pad` TRUNCATES, so a column the new code sizes too small stays perfectly
+        aligned and quietly loses the end of its value. Every alignment assertion in
+        #508's own suite passed against a restored constant for exactly that reason
+        (#589). A branch a reader cannot read back is one they cannot check out."""
+        long_piece = "a-piece-named-well-past-twenty-four-characters"
+        long_branch = "a-branch-named-well-past-twenty-eight-characters"
+        self.worktree_row("slice")
+        self.worktree_row(long_piece, long_branch)
+        rows = self.listing()
+        for value in (long_piece, long_branch):
+            with self.subTest(value=value):
+                self.assert_readable(rows, value)
+
+    def test_the_widest_in_cells_is_readable_beside_the_widest_in_characters(self):
+        """The pair, ALONE in the table, and alone is what makes it a case.
+
+        `len`-sizing is observable only when the value that DECIDES the width and the
+        value that OVERFLOWS it are different rows. Put a sixty-character ASCII piece in
+        here as well and it decides the width for both, the CJK one fits inside with room
+        to spare, and every assertion passes against the defect."""
+        self.assert_the_widest_two_disagree(WIDEST_IN_CHARACTERS, WIDEST_IN_CELLS)
+        self.worktree_row(WIDEST_IN_CHARACTERS)
+        self.worktree_row(WIDEST_IN_CELLS)
+        rows = self.listing()
+        self.assert_readable(rows, WIDEST_IN_CELLS)
+        self.assert_aligned(rows, self.TAIL)
+
+
+# --------------------------------------------------------------------------- #
+# vault list — `{:<18} {:<16} {:<12} {:<7} {}` (#600)                          #
+# --------------------------------------------------------------------------- #
+class VaultListCase(TableCase):
+    """Registered through the call `charter vault add` makes, so the table under test is
+    fed by the registry rather than by a hand-built document.
+
+    STATUS is stubbed, and for the reason `StatusTableCase` stubs its note: it is one
+    `health()` per vault — the column `cmd_vault_list` deliberately does not size from —
+    and a real one names the vault's own file, so it is a DIFFERENT string on every row.
+    A tail that differs per row cannot be an offset, and what is under test here is the
+    arithmetic in front of it. `tests/test_vault_dir_mode.py` drives the real health line.
+    """
+
+    #: The tail, identical on every row, so its offset is the sum of the four measured
+    #: widths in front of it — one marker that fails if any of them is wrong.
+    TAIL = "STATUS-STANDS-IN"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(mock.patch.object(
+            commands_secrets.registry, "provider_for",
+            return_value=SimpleNamespace(env_overlay=lambda: None,
+                                         health=lambda: (True, self.TAIL))))
+
+    def add(self, name: str, *, provider: str = "plain-file",
+            persona_name: str | None = None) -> str:
+        vault_registry.add_vault(
+            name, provider, {"file": str(config.STATE_DIR / "vaults" / f"{name}.json")},
+            persona=persona_name)
+        return name
+
+    def listing(self) -> list[str]:
+        return self.run_cmd(commands_secrets.cmd_vault_list, SimpleNamespace())
+
+
+class TestVaultListColumnsLineUp(VaultListCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.add("devops")
+
+    def test_a_vault_name_past_the_constant_does_not_push_its_row(self):
+        """`{:<18}` on a name the OPERATOR minted — `charter vault add <name>` takes
+        whatever they type."""
+        self.add("the-shared-team-credentials-vault")
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_a_persona_name_past_the_constant_does_not_push_its_row(self):
+        """`{:<12}` on a persona name, which is a committed directory name charter did not
+        mint either — #508's finding about `persona stats`, one table over."""
+        self.make_persona("a-persona-named-past-twelve", role="Role")
+        self.add("scoped", persona_name="a-persona-named-past-twelve")
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_a_cjk_persona_name_does_not_push_its_row(self):
+        """The `len` half. Two cells per glyph, measured as one character each, so the row
+        is drawn one column right per glyph while sitting well inside the constant."""
+        name = "日本語のペルソナ"
+        self.assert_a_cell_and_a_character_disagree(name)
+        try:
+            self.make_persona(name, role="Role")
+        except OSError:  # pragma: no cover - a filesystem that refuses the name
+            self.skipTest(f"filesystem refuses {name!r}")
+        self.add("wide", persona_name=name)
+        self.assert_aligned(self.listing(), self.TAIL)
+
+    @staticmethod
+    def _starts(line: str) -> list[int]:
+        """The cell each non-blank run on *line* begins at.
+
+        Positional, never `line.index(run)`: every run of dashes is a substring of every
+        longer one, so an index lookup finds the first and reports four columns as
+        starting in the same cell — a probe that cannot fail.
+        """
+        plain = tui.strip_ansi(line)
+        return [tui.width(plain[:m.start()]) for m in re.finditer(r"\S+", plain)]
+
+    def test_the_rule_under_the_header_is_as_wide_as_the_column_it_underlines(self):
+        """The rule was five constants written a SECOND time (`"-" * 18` under `{:<18}`),
+        which is the two-code-paths shape #508 names: it agreed with the header only while
+        every value was inside the number they both spelled.
+
+        Asserted as a relationship — each run of dashes begins where the header cell above
+        it begins — rather than against a number, so it cannot be satisfied by re-spelling
+        today's widths."""
+        self.add("the-shared-team-credentials-vault")
+        rows = self.listing()
+        head = next(r for r in rows if "VAULT" in r)
+        rule = next(r for r in rows if set(tui.strip_ansi(r).strip()) == set("- "))
+        self.assertEqual(self._starts(rule), self._starts(head),
+                         f"the rule does not line up with the header it underlines:"
+                         f"\n{head}\n{rule}")
+
+    def test_the_header_lines_up_with_the_rows_it_heads(self):
+        """The rule case above cannot see this and neither could the old code's own eye
+        test: header and rule went through the SAME format string, so they agreed with
+        each other for every input while both sat left of the rows they described the
+        moment one value passed its constant."""
+        self.add("the-shared-team-credentials-vault")
+        self.assert_heads(self.listing(), "STATUS", self.TAIL)
+
+    def test_the_widest_value_in_a_column_is_still_followed_by_a_separator(self):
+        """What the gap buys, pinned by what it buys rather than by its number.
+
+        `_GAP`'s VALUE is deliberately invisible: the rule under the header is drawn from
+        ``w - _GAP`` and the column is sized with ``gap=_GAP``, so moving it moves both
+        sides together and every offset stays consistent — measured by a hand mutation
+        that raised it to 3 with the whole file green. A gap of ZERO is not invisible:
+        the widest value in a column then runs straight into the next cell, and a reader
+        has nothing telling them where one column ends. Same measurement `worktree
+        history`'s timestamp column carries (#592).
+        """
+        self.add("the-shared-team-credentials-vault")
+        rows = self.listing()
+        widest = "the-shared-team-credentials-vault"
+        row = next(r for r in rows if widest in tui.strip_ansi(r))
+        after = tui.strip_ansi(row)[tui.strip_ansi(row).index(widest) + len(widest):]
+        self.assertGreaterEqual(
+            len(after) - len(after.lstrip(" ")), 1,
+            f"the widest value in the VAULT column touches the next one, so nothing on "
+            f"this row says where the column ends:\n{row}")
+
+    def test_every_vault_and_persona_is_still_readable_off_its_row(self):
+        long_vault = "the-shared-team-credentials-vault"
+        self.make_persona("a-persona-named-past-twelve", role="Role")
+        self.add(long_vault, persona_name="a-persona-named-past-twelve")
+        rows = self.listing()
+        for value in (long_vault, "a-persona-named-past-twelve"):
+            with self.subTest(value=value):
+                self.assert_readable(rows, value)
+
+    def test_the_widest_in_cells_is_readable_beside_the_widest_in_characters(self):
+        """The pair, and nothing else in the table but the control it is compared to."""
+        self.assert_the_widest_two_disagree(WIDEST_IN_CHARACTERS, WIDEST_IN_CELLS)
+        self.add(WIDEST_IN_CHARACTERS)
+        self.add(WIDEST_IN_CELLS)
+        rows = self.listing()
+        self.assert_readable(rows, WIDEST_IN_CELLS)
+        self.assert_aligned(rows, self.TAIL)
+
+
+# --------------------------------------------------------------------------- #
+# workspace list — `{}{:<22}{:<7}{:<7}{}` (#600)                               #
+# --------------------------------------------------------------------------- #
+class WorkspaceListCase(TableCase):
+    """Real directories on disk: `list` reads a directory listing and a structure marker,
+    neither of which costs a subprocess, so nothing here needs stubbing.
+
+    **Made with `mkdir`, not with `workspace.ensure`, and that is the case rather than a
+    shortcut.** `ensure` refuses anything outside ``[A-Za-z0-9._-]``
+    (`instance.workspace_name_ok`), but `list_workspaces` lists **every** directory under
+    ``workspaces/`` that is not hidden and not itself a clone — so a workspace directory
+    made by hand, restored from a tarball, or created by a charter with a different rule
+    reaches this renderer with a name the creation path would never have minted. The
+    values a table has to draw are bounded by what the LISTING can return, not by what
+    the constructor accepts.
+    """
+
+    #: One clone per workspace, so REPOS holds the same string on every row and its offset
+    #: is the sum of the three measured widths in front of it. Named so it cannot appear
+    #: anywhere else on the line: `cells_before` takes the FIRST occurrence, and a marker
+    #: that is also a substring of a workspace name measures the wrong column — `svc` was,
+    #: inside `sixteen-char-svc`, and every row then "lined up" at cell 2.
+    CLONE = "the-only-clone"
+
+    def make(self, name: str) -> str:
+        d = workspace.workspace_dir(name)
+        try:
+            (d / self.CLONE / ".git").mkdir(parents=True, exist_ok=True)
+        except OSError:  # pragma: no cover - a filesystem that refuses the name
+            self.skipTest(f"filesystem refuses {name!r}")
+        return name
+
+    def on_disk(self, name: str) -> str:
+        """The workspace directory name as the RENDERER will see it, matched under NFC —
+        `StatusTableCase.on_disk`'s reason, and the same trap."""
+        want = unicodedata.normalize("NFC", name)
+        return next((n for n in workspace.list_workspaces()
+                     if unicodedata.normalize("NFC", n) == want), name)
+
+    def listing(self) -> list[str]:
+        return self.run_cmd(commands_workspace.cmd_workspace_list, SimpleNamespace())
+
+
+class TestWorkspaceListColumnsLineUp(WorkspaceListCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.make("alpha")
+
+    def test_a_workspace_name_past_the_constant_does_not_push_its_row(self):
+        """`{:<22}` on a name the operator minted with `charter workspace create`, which
+        takes whatever they type inside its character class."""
+        self.make("a-workspace-named-well-past-twenty-two")
+        self.assert_aligned(self.listing(), self.CLONE)
+
+    def test_a_cjk_workspace_name_does_not_push_its_row(self):
+        """The `len` half, which no constant can fix: two cells per glyph measured as one
+        character each, so the row is drawn one column right of the others per glyph.
+
+        Reachable because the LISTING does not validate — see the class docstring."""
+        name = self.make("日本語のワークスペース")
+        self.assert_a_cell_and_a_character_disagree(self.on_disk(name))
+        self.assert_aligned(self.listing(), self.CLONE)
+
+    def test_a_combining_mark_does_not_pull_its_row(self):
+        """The other direction, the one a bigger constant makes worse: zero cells, one
+        character, so `len` over-pads and the row drifts right.
+
+        Checked as it came back OFF THE FILESYSTEM: a filesystem that composes the pair
+        hands the renderer one codepoint, `len` and `tui.width` then agree, and the case
+        passes against the defect it is named for."""
+        name = self.make(COMBINING)
+        self.assert_a_cell_and_a_character_disagree(self.on_disk(name))
+        self.assert_aligned(self.listing(), self.CLONE)
+
+    def test_an_ascii_roster_is_the_control(self):
+        """Every value inside every constant, so these rows are drawn identically with the
+        fix and without it — a failure naming them is about the table, not the name."""
+        self.make("beta")
+        self.assert_aligned(self.listing(), self.CLONE)
+
+    def test_the_header_lines_up_with_the_rows_it_heads(self):
+        """The header went through the same format string as the rows, which looks like
+        one code path and is not: `{:<22}` agrees with itself only while every value is
+        shorter than the constant it spells."""
+        self.make("a-workspace-named-well-past-twenty-two")
+        self.assert_heads(self.listing(), "REPOS", self.CLONE)
+
+    def test_the_stale_marker_is_measured_with_the_name_it_is_appended_to(self):
+        """The name cell is ``n + stale``, so the column has to be sized from the value
+        the row actually draws rather than from the workspace name alone.
+
+        **The marker itself is NOT a cells-versus-characters fixture, and this is where
+        that is written down so nobody builds one on it.** ``" \u26a0"`` measures two
+        characters and two cells — `tui.width` calls U+26A0 one cell — so a case named for
+        `len`-sizing that used it would be a silent control, which is #600's first trap in
+        the other alphabet. What it IS is a value charter appends after the name, and a
+        column sized from the name would be one cell too narrow for every flagged row.
+        """
+        marker = " \u26a0"
+        self.assertIn(f'stale = "{marker}" if',
+                      Path(commands_workspace.__file__).read_text(),
+                      "fixture: `cmd_workspace_list` no longer appends this marker, so "
+                      "what this case measures is not what the table draws")
+        self.assertEqual(len(marker), tui.width(marker),
+                         f"{marker!r} now measures {tui.width(marker)} cells against "
+                         f"{len(marker)} characters — it has become a `len`-sizing "
+                         f"fixture, and the note above needs rewriting rather than "
+                         f"deleting")
+        self.make("beta")
+        with mock.patch.object(commands_workspace.workspace, "needs_reinit",
+                               side_effect=lambda n: n == "beta"):
+            rows = self.listing()
+        self.assertTrue(any(marker in tui.strip_ansi(r) for r in rows),
+                        "fixture: no row carries the marker\n" + "\n".join(rows))
+        self.assert_aligned(rows, self.CLONE)
+
+    def test_every_workspace_name_is_still_readable_off_its_row(self):
+        """The half alignment cannot see, guarding the FIX: `{:<22}` pushed and never
+        cut, so this passes against the old code as well — `tui.pad` truncates, and a
+        column it sizes too small goes on lining up while losing the end of the name
+        (#589)."""
+        long_name = "a-workspace-named-well-past-twenty-two"
+        self.make(long_name)
+        self.assert_readable(self.listing(), long_name)
+
+    def test_the_widest_in_cells_is_readable_beside_the_widest_in_characters(self):
+        """The pair, and it needs to be a pair: `len`-sizing is observable only when the
+        value that DECIDES the width and the value that overflows it are different rows.
+
+        `alpha` from `setUp` is inside both, so it decides neither."""
+        self.assert_the_widest_two_disagree(WIDEST_IN_CHARACTERS, WIDEST_IN_CELLS)
+        self.make(WIDEST_IN_CHARACTERS)
+        self.make(WIDEST_IN_CELLS)
+        rows = self.listing()
+        self.assert_readable(rows, self.on_disk(WIDEST_IN_CELLS))
+        self.assert_aligned(rows, self.CLONE, least=3)
+
+
+# --------------------------------------------------------------------------- #
+# doctor — `  {glyph}  {name:<16} {detail}` (#600)                             #
+# --------------------------------------------------------------------------- #
+class TestDoctorSizesItsNameColumnFromTheChecks(TableCase):
+    """`doctor` is the one of the four that CANNOT size from its rows.
+
+    `cmd_doctor` prints each row as its check lands, deliberately — a preflight killed by
+    its hook timeout used to emit nothing at all, not even the checks that had already
+    passed. So the width is stated ahead of the run from the names the checks carry, and
+    what has to be pinned is that the stated names and the produced names are the same
+    set.
+    """
+
+    def rendered(self, *results) -> list[str]:
+        w = doctor.name_width()
+        return [r.render(w) for r in results]
+
+    def test_the_stated_names_are_the_names_the_checks_produce(self):
+        """The pin, by EQUALITY in both directions — the `NOT_ROUTED_YET` discipline. A
+        check renamed or added fails here as an unlisted name; one removed fails as a
+        stale entry. Without this the list rots into a wrong width and nothing says so.
+
+        `run_all()` rather than a stub: the forge pair is resolved from this plane's
+        `charter.toml`, and a list checked against anything else would not be checked
+        against what `cmd_doctor` prints.
+        """
+        self.assertEqual(sorted(set(doctor.check_names())),
+                         sorted({r.name for r in doctor.run_all()}),
+                         "`doctor._FIXED_CHECK_NAMES` and `_checks()` disagree about "
+                         "which checks exist, so the NAME column is sized for the wrong "
+                         "set of names")
+
+    def test_the_names_are_stated_in_the_order_the_checks_run(self):
+        """Order is not what the width needs, and it IS what a reader of the constant
+        needs — a list in a different order than the report is a list nobody can check by
+        eye against the output they are looking at."""
+        self.assertEqual(doctor.check_names(), [r.name for r in doctor.run_all()])
+
+    def test_the_forge_pair_comes_from_the_plane_rather_than_from_the_list(self):
+        """A GitHub-only plane sizes for `gh`/`gh auth`, and this plane is made one.
+
+        **The obvious version of this case agrees with the default and tests nothing.**
+        `declared_or_default_forges` falls back to GitLab when a plane declares none, so
+        asserting "whatever it resolved is in the list" passes against a hardcoded
+        ``glab`` — measured by a hand mutation that did exactly that, with the case green.
+        #588's shape: a fixture the machine would have chosen anyway.
+
+        So the plane declares GitHub, which is the value charter would never pick on its
+        own, and the pair asserted is the one that declaration produces.
+        """
+        (Path(config.ROOT) / "charter.toml").write_text(
+            'schema = 1\n\n[[forge]]\nkind = "github"\nhost = "github.com"\n'
+            'group = "acme"\n')
+        clis = [f.cli for f in doctor.declared_or_default_forges()]
+        self.assertEqual(clis, ["gh"],
+                         "fixture: the plane's own `[[forge]]` did not reach "
+                         "`declared_or_default`, so this case is about the default again")
+        names = doctor.check_names()
+        self.assertIn("gh", names)
+        self.assertIn("gh auth", names)
+        self.assertNotIn("glab", names)
+        self.assertNotIn("glab auth", names)
+
+    def test_the_name_column_is_measured_in_cells_and_not_in_characters(self):
+        """`name_width` asks `tui.column`, which measures cells — and every check name is
+        ASCII, so `len` and `tui.width` agree about all of them and the unit is
+        unobservable on the real list. Measured: a hand mutation to `max(len(...)) + 2`
+        left the whole file green.
+
+        A check name is a literal in `doctor.py` today, so this states one that is not,
+        rather than pretending doctor has a CJK check. What is under test is the
+        function's contract — the same unit every other table in this package is measured
+        in — not the roster it happens to be asked about.
+        """
+        wide = "\u65e5\u672c\u8a9e\u30c1\u30a7\u30c3\u30af"      # 7 characters, 14 cells
+        self.assert_a_cell_and_a_character_disagree(wide)
+        with mock.patch.object(doctor, "_FIXED_CHECK_NAMES", ("git", wide)):
+            self.assertEqual(doctor.name_width(), tui.column("", ["git", wide]))
+            self.assertGreater(doctor.name_width(), len(wide) + 2,
+                               "the NAME column was sized by characters, so a name that "
+                               "is 7 characters and 14 cells would be drawn 7 columns "
+                               "wide of every other row")
+
+    def test_the_detail_column_starts_in_the_same_cell_on_every_row(self):
+        """The property, on the two names that sit exactly ON the old constant beside one
+        that does not: `workspace clones` and `credential paths` are both sixteen, so
+        `{:<16}` gave them a single word space where every shorter name got a column."""
+        rows = self.rendered(
+            doctor.Result("git", doctor.OK, detail="DETAIL"),
+            doctor.Result("workspace clones", doctor.OK, detail="DETAIL"),
+            doctor.Result("credential paths", doctor.OK, detail="DETAIL"))
+        self.assert_aligned(rows, "DETAIL", least=3)
+
+    def test_a_name_at_the_old_constant_is_still_separated_from_its_detail(self):
+        """What `{:<16}` cost on a sixteen-character name was not a cut value — it was the
+        SEPARATION, and a single space is a word space rather than a column boundary. The
+        same measurement `worktree history`'s timestamp column carries."""
+        row = tui.strip_ansi(self.rendered(
+            doctor.Result("workspace clones", doctor.OK, detail="3 clones"))[0])
+        after = row[row.index("workspace clones") + len("workspace clones"):]
+        self.assertGreaterEqual(
+            len(after) - len(after.lstrip(" ")), 2,
+            f"the name column is no wider than the name it holds, so it degraded to a "
+            f"word space in front of the detail:\n{row}")
+
+    def test_a_name_wider_than_the_stated_column_pushes_rather_than_being_cut(self):
+        """The direction that matters when the pin above is what has gone wrong.
+
+        `tui.pad` truncates, so a stated width that does not know about a name would cut
+        the one thing the row is FOR — which check this is. `render` treats the width as a
+        floor, so an unknown name pushes its own row instead: loud, and readable.
+        """
+        name = "a-check-nobody-told-the-column-about"
+        row = tui.strip_ansi(doctor.Result(name, doctor.OK, detail="DETAIL").render(4))
+        self.assertIn(name, row, row)
+        self.assertIn("DETAIL", row, row)
+
+    def test_a_row_rendered_with_no_width_is_as_wide_as_itself(self):
+        """`render()` with nothing stated is what a single `Result` printed on its own
+        should be, and what the cases that assert on one row's text already call."""
+        row = tui.strip_ansi(doctor.Result("git", doctor.OK, detail="DETAIL").render())
+        self.assertTrue(row.endswith("git  DETAIL"), row)
 
 
 if __name__ == "__main__":  # pragma: no cover
