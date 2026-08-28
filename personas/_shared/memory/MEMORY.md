@@ -32,3 +32,5 @@ Written by the persona as it learns; committed and shared.
 - [FIVE ways a mutation sweep lies, all measured on charter 2026-08-26/27.](five-ways-a-mutation-sweep-lies-all-measured-on-.md)
 - [A FIXTURE THAT AGREES WITH THE MACHINE'S DEFAULT TESTS NOTHING. Measured](a-fixture-that-agrees-with-the-machine-s-default.md)
 - [TWO TEST/TMUX TRAPS measured on charter #598 (2026-08-28). (1) io.Unsupp](two-test-tmux-traps-measured-on-charter-598-2026.md)
+- [A PANEL PROCESS'S PANE *IS* sys.stdout. charter paints to it and measure](a-panel-process-s-pane-is-sys-stdout-charter-pai.md)
+- [test_plugin_freshness's test_every_top_level_directory_is_classified rea](test-plugin-freshness-s-test-every-top-level-dir.md)

@@ -54,6 +54,7 @@ Stdlib only. `pyproject.toml` says ``dependencies = []`` and that is load-bearin
     python3 tools/sweep.py --ref 5b02b3f        # some other commit
     python3 tools/sweep.py --path tools         # sweep the sweep
     python3 tools/sweep.py --all                # the whole tree, as a number
+    python3 tools/sweep.py --gate               # as CI runs it (stage C)
 """
 from __future__ import annotations
 
@@ -101,6 +102,26 @@ PLATFORM_SENSITIVE = frozenset({
     "ConnectionResetError", "ConnectionAbortedError", "InterruptedError", "TimeoutError",
     "PermissionError", "FileNotFoundError", "NotADirectoryError", "IsADirectoryError",
 })
+
+
+def reach() -> str:
+    """What this interpreter puts out of the sweep's reach, or "" when nothing does.
+
+    A sweep that asks fewer questions than it could, and does not say so, is the quietest
+    way this tool can mislead: fewer mutations, no survivors among them, and a report that
+    reads exactly like a clean one.
+
+    PEP 701 is the one case measured so far. Before 3.12, `ast` gives an f-string's
+    internal nodes approximate positions, so `retune-string` cannot prove that the bytes at
+    a segment's span are the segment's value — and it refuses rather than splicing over a
+    position it cannot vouch for. The consequence is concrete: `f"{name:<28}"` is where a
+    width literal lives in this tree, it is #508's whole defect, and on 3.11 the sweep
+    cannot see it. CI's gate job pins 3.12 for exactly this reason.
+    """
+    if sys.version_info < (3, 12):
+        return ("literals inside an f-string (positions are approximate before PEP 701; "
+                "run the sweep on 3.12+ to reach them)")
+    return ""
 
 
 def platform_caveat(mutation: "Mutation") -> str:
@@ -189,12 +210,17 @@ def added_lines(repo: Path, base: str, ref: str, paths: tuple[str, ...]
 
 
 def all_lines(root: Path, paths: tuple[str, ...]) -> dict[str, set[int]]:
-    """Every line of every swept file — what ``--all`` charges instead of a diff."""
+    """Every line of every swept file — what ``--all`` charges instead of a diff.
+
+    There is no ``if base.exists()`` here, and its absence is a finding rather than an
+    oversight. It was written, the sweep deleted it, and the suite stayed green on 3.12
+    and 3.14: `rglob` on a directory that is not there yields nothing, so the guard
+    refused a loop that was already empty. Per §4 of the spec that makes it dead code and
+    dead code gets deleted — "equivalent mutant" and "unreachable line" are one finding.
+    """
     found: dict[str, set[int]] = {}
     for p in paths:
         base = root / p
-        if not base.exists():
-            continue
         for f in sorted(base.rglob("*.py")):
             rel = f.relative_to(root).as_posix()
             n = len(f.read_bytes().splitlines())
@@ -220,6 +246,13 @@ class Mutation:
     symbol: str         #: enclosing def/class, for the evidence pass
     source: bytes = b""  #: the whole mutated file
     span: tuple[int, int] = (0, 0)   #: byte span replaced, so two can be composed
+    #: A digest of the file this mutation was READ FROM. The sandbox refuses to apply a
+    #: mutation to anything else, which is the fifth way a sweep lies (#586) closed by
+    #: construction: a mutant tree that is really the pristine tree passes its tests and is
+    #: reported SURVIVED, and a false survivor is the failure that ends adoption — it sends
+    #: somebody to write a test for a line that is already covered, and the first person
+    #: who chases one and finds that out stops believing the tool.
+    origin: str = ""
 
     @property
     def tag(self) -> str:
@@ -314,6 +347,255 @@ def _body_of(parent: ast.AST, node: ast.AST) -> list[ast.stmt] | None:
     return None
 
 
+#: The two comparisons that differ by their boundary and by nothing else. `<` and `<=`
+#: accept the same values but one number apart, so a mutant is always type-correct, always
+#: runs, and asks exactly one question: **is the edge pinned, or only the direction?**
+#: `==` is deliberately absent — `!=` is not a near-synonym of `==`, it is its negation,
+#: and a whole-condition inversion is a different (and much coarser) question.
+BOUNDARY = {ast.Lt: ("<", "<="), ast.LtE: ("<=", "<"),
+            ast.Gt: (">", ">="), ast.GtE: (">=", ">")}
+
+#: Every comparison operator, spelled. A chained comparison (`0 <= i < n`) is one node, so
+#: moving the boundary of ONE link means re-spelling the whole chain, and a link this table
+#: could not spell would be silently dropped — a mutation that is not the mutation the
+#: report describes.
+#:
+#: Subscripted directly, with no `.get` and no skip-if-missing guard, because the guard
+#: would be a line nothing can reach: `ast` has exactly these ten comparison operators and
+#: they are all here. `TheBoundaryShape` asserts that completeness against
+#: `ast.cmpop.__subclasses__()` instead, which is the same protection moved to the one
+#: place that can actually fail — the suite, on the day Python grows an eleventh.
+
+CMP_TEXT = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">",
+            ast.GtE: ">=", ast.Is: "is", ast.IsNot: "is not", ast.In: "in",
+            ast.NotIn: "not in"}
+
+#: Near-synonyms: two names from the **standard library** documented as doing the same job
+#: and differing along exactly one axis. The axis is written down for each pair because it
+#: is the whole justification — a swap along one axis produces a mutant that is still
+#: type-correct, still runs, and asks one question rather than "does this code work at all".
+#:
+#: Nothing charter-specific is in this table and nothing may be added to it from a finding.
+#: That is the same discipline as :data:`NARROW_TO`: the perturbation is chosen from what
+#: Python guarantees, never from what this project's answer key happened to contain. A
+#: table drawn from findings is a table that scores well on the findings it was drawn from.
+SYNONYMS = {
+    "lower": ("upper", "case"),        "upper": ("lower", "case"),
+    "startswith": ("endswith", "which end"), "endswith": ("startswith", "which end"),
+    "lstrip": ("rstrip", "which side"), "rstrip": ("lstrip", "which side"),
+    "strip": ("lstrip", "how much"),
+    "split": ("rsplit", "which end"),  "rsplit": ("split", "which end"),
+    "partition": ("rpartition", "which end"),
+    "rpartition": ("partition", "which end"),
+    "find": ("rfind", "which end"),    "rfind": ("find", "which end"),
+    # `index`/`rindex` is deliberately NOT here, and the reason is the rule the table is
+    # built on. A pair belongs only if the swap is type-correct wherever the name appears,
+    # and `index` is on `list`, `tuple` and `str` while `rindex` is on `str` alone — so
+    # `args.index("-m")` would mutate into an `AttributeError`. That reddens the suite for
+    # a reason that has nothing to do with which end was searched, which is a FALSE PIN,
+    # which is the failure this whole file exists to prevent. Checked against the tree
+    # before dropping it: all five `.index(` calls in `charter/` are on lists.
+    "min": ("max", "which extreme"),   "max": ("min", "which extreme"),
+    "any": ("all", "how many"),        "all": ("any", "how many"),
+    "sorted": ("list", "ordering"),
+}
+
+#: Calls that only ever *normalise* their receiver and return the same kind of thing, so
+#: dropping one is a mutation that always parses and always runs. This is #572's own shape:
+#: the map keys were `resolve()`d on both sides and the prefix that chose them was not, and
+#: "a normalisation applied at one site and missing at another" is the bug that hid behind
+#: the double `resolve()` two lines away. A test that never sees a symlink, a relative path
+#: or a trailing separator cannot tell the mutant from the shipped line.
+NORMALISERS = ("resolve", "absolute", "expanduser", "casefold")
+
+
+def _shift_char(ch: str) -> str:
+    """A different character of the same class, or *ch* when it has no class.
+
+    Letters rotate within their case, digits within the digits. Everything else — the
+    punctuation, the whitespace, the escapes, the control bytes, the non-ASCII — is left
+    exactly where it was, because that is the string's *shape* and this operator asks
+    about its *value*.
+    """
+    if "a" <= ch <= "z":
+        return "a" if ch == "z" else chr(ord(ch) + 1)
+    if "A" <= ch <= "Z":
+        return "A" if ch == "Z" else chr(ord(ch) + 1)
+    if "0" <= ch <= "9":
+        return "0" if ch == "9" else chr(ord(ch) + 1)
+    return ch
+
+
+def retune(text: str) -> str:
+    """*text*, re-spelled: same length, same character classes, a different value.
+
+    **This is the principled general form the spec said a string constant did not have,
+    and the argument for it is that it perturbs the value while holding every structural
+    property the surrounding code can depend on.** Same type, same length, same
+    punctuation, same escapes, same case pattern, same digits-are-digits. So a format
+    string is still a format string (`{:<28}` -> `{:<39}`), a regex is still a regex, a
+    terminal escape is still an escape (`\\x1b[?1000h` -> `\\x1b[?2111i`), a path is still
+    a path. It is the string analogue of :data:`retune-constant`'s ``n + 1``: the smallest
+    edit guaranteed to be a *different value of the same kind*.
+
+    It is derived from the constant and from nothing else. There is no table of "the other
+    mouse-tracking mode" and no list of colour names — the objection to fitting the answer
+    key is what this form answers, because it cannot fit an answer key it never reads.
+
+    A character **immediately after a backslash** is left alone. In a raw string that
+    backslash and its neighbour are one escape — `\\d` in a regex, `\\1` in a replacement —
+    and shifting the neighbour turns a working pattern into `re.error: bad escape \\e`.
+    That is a red for a reason that has nothing to do with the property, which is the one
+    outcome this whole file exists to refuse.
+    """
+    out: list[str] = []
+    escaped = False
+    for ch in text:
+        out.append(ch if escaped else _shift_char(ch))
+        escaped = ch == "\\" and not escaped
+    return "".join(out)
+
+
+#: Calls whose string argument — or whose string *receiver* — is read by the program
+#: rather than shown to a person. A key, a pattern, a separator, a prefix. Standard-library
+#: names only, so this is a statement about Python and not about charter.
+READERS = frozenset({
+    "get", "setdefault", "pop", "getattr", "setattr", "hasattr", "delattr", "getenv",
+    "startswith", "endswith", "removeprefix", "removesuffix", "split", "rsplit",
+    "partition", "rpartition", "replace", "count", "find", "rfind", "index", "join",
+    "compile", "match", "search", "fullmatch", "sub", "subn", "findall", "finditer",
+    "glob", "rglob", "encode", "decode", "format",
+})
+
+
+def read_positions(tree: ast.AST) -> set[int]:
+    """The ids of the string constants whose **value the program reads**.
+
+    `retune-string` is scoped to these, and the scoping is the honest half of the operator.
+    A string is a claim in two different ways, and only one of them is a claim a test can
+    hold. A key, a comparison operand, a pattern, a separator, a format spec, a table entry
+    — those decide what the program *does*, and a test that does not notice one changing is
+    a test with a hole in it. A log line decides what the program *says*, and nothing in a
+    suite is obliged to assert it.
+
+    **Measured on `charter/` before choosing:** 8,471 string constants are mutable at all,
+    of which 2,458 sit in a read position. Mutating all 8,471 took the tree's mutation
+    count from 7,006 to 14,801 — more than double, and the difference spent almost entirely
+    on prose (2,328 f-string fragments alone). Scoped as below it is 9,319, and on real
+    pull requests from this phase the gate goes from 15–35 mutations to roughly 30–50,
+    which is still the twenty-odd minutes the cost model was built around. A gate that
+    doubles in price to report unasserted log messages is a gate somebody switches off, and
+    the spec's own staging argument says the credibility is the deliverable. Widening this
+    is one predicate; it should be done with a measurement behind it, as this was.
+
+    Every position below is a property of Python, not of this project. Nothing here was
+    chosen because a finding happened to have that shape.
+    """
+    out: set[int] = set()
+
+    def take(node: ast.AST | None) -> None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            out.add(id(node))
+
+    for node in ast.walk(tree):
+        # `x == "yes"`, `k in ("a", "b")` — the value decides a branch.
+        if isinstance(node, ast.Compare) and all(
+                isinstance(o, (ast.Eq, ast.NotEq, ast.In, ast.NotIn, ast.Is, ast.IsNot))
+                for o in node.ops):
+            for operand in (node.left, *node.comparators):
+                take(operand)
+                for elt in getattr(operand, "elts", []):
+                    take(elt)
+        # `{"components": …}` and `d["components"]` — the value selects the data.
+        if isinstance(node, ast.Dict):
+            for key in node.keys:
+                take(key)
+        if isinstance(node, ast.Subscript):
+            take(node.slice)
+        # `d.get("k")`, `re.compile(p)`, `"-".join(xs)`, `"{:<12}".format(n)`.
+        if isinstance(node, ast.Call):
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else (
+                node.func.id if isinstance(node.func, ast.Name) else "")
+            if name in READERS:
+                for arg in node.args:
+                    take(arg)
+                if isinstance(node.func, ast.Attribute):
+                    take(node.func.value)
+        # `"%s says" % x` — the template is machinery, however prose-like it reads.
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            take(node.left)
+        # The `<28` of `f"{name:<28}"`. A width is a layout claim and #508 is what one
+        # costs when nothing measures it.
+        if isinstance(node, ast.FormattedValue) and node.format_spec is not None:
+            for part in ast.walk(node.format_spec):
+                take(part)
+
+    # A module-level `NAME = "…"`: a constant with a docstring making a specific claim for
+    # its value and nothing measuring it. `MOUSE_ON` and `_MARK` are two of round two's
+    # five, and both are scalars — as are `_CHROME_ROWS`, `_SPLIT_ROWS` and `_MIN_TITLE`,
+    # the three the integer operator already covers.
+    #
+    # The VALUE only, deliberately, and not every string inside a container assigned to an
+    # upper-case name. Measured on `charter/`: walking into containers takes the read
+    # positions from 2,826 to 4,065, and what those 1,239 extra mutations ask for is a test
+    # per member of every membership table in the tree. A member is read through the
+    # container, not at the assignment — so where one genuinely decides something, the
+    # lookup that reads it is a read position on its own and is already covered above.
+    for stmt in getattr(tree, "body", []):
+        target = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 \
+                and isinstance(stmt.targets[0], ast.Name):
+            target = stmt.targets[0].id
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            target = stmt.target.id
+        if target and target.lstrip("_").isupper():
+            take(stmt.value)
+    return out
+
+
+def module_names(tree: ast.AST) -> set[str]:
+    """Every name this file binds by importing something.
+
+    A near-synonym pair is justified by two methods living on the same *type*, and a
+    module is not an instance of anything. `shlex.split` and `re.split` are functions in a
+    namespace that has no `rsplit` at all, so swapping them raises `AttributeError` —
+    a red for a reason that has nothing to do with which end was searched, which is a
+    false pin, which is the failure this file exists to prevent. Measured on `charter/`:
+    eight call sites, all of them `shlex.split` or `re.split`.
+
+    `from x import y` counts too. `y` may be a module or it may be a class, and this side
+    cannot tell; skipping a swap that would have been fine costs one mutation, and offering
+    one that crashes costs a guard wrongly certified as tested.
+    """
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                out.add(alias.asname or alias.name.split(".")[0])
+    return out
+
+
+def _receiver_root(node: ast.AST) -> str:
+    """The leftmost name of an attribute chain — `os` in `os.path.split`."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else ""
+
+
+def _docstrings(tree: ast.AST) -> set[int]:
+    """The ids of every docstring constant — prose, not a value, and never mutated."""
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)) and isinstance(body, list) and body \
+                and isinstance(body[0], ast.Expr) \
+                and isinstance(body[0].value, ast.Constant) \
+                and isinstance(body[0].value.value, str):
+            out.add(id(body[0].value))
+    return out
+
+
 def _iter_operators(tree: ast.Module, sp: _Spans):
     """Yield ``(node, replacement, operator, question)`` for every recognised shape.
 
@@ -322,16 +604,20 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
     engine: a shape earns a place by having caught a real unpinned line.
     """
     parents = _parents(tree)
+    docstrings = _docstrings(tree)
+    reads = read_positions(tree)
+    modules = module_names(tree)
+    in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
+                  for part in ast.walk(node) if part is not node}
 
     # A module-level constant is a guard too, and the spec's shape table has no row for
     # one. Five of round two's eighteen overlay findings are exactly this — `_CHROME_ROWS`,
     # `_SPLIT_ROWS`, `_MIN_TITLE`, `MOUSE_ON`, `_MARK` — a number or a string with a
-    # docstring making a specific claim for the value, and nothing measuring it. Only the
-    # two forms with a principled general perturbation are mutated here: an integer, moved
-    # by one, and a sum of named parts, dropped to each part. A string constant has no
-    # honest general perturbation — picking `1003` over `1000` for `MOUSE_ON` is fitting
-    # the answer key, not recognising a shape — so it stays a known gap and is reported
-    # as one rather than faked.
+    # docstring making a specific claim for the value, and nothing measuring it. An integer
+    # is moved by one and a sum of named parts is dropped to each part; the STRING half of
+    # this shape used to be a declared gap ("picking 1003 over 1000 for MOUSE_ON is fitting
+    # the answer key") and is now `retune-string` below, whose general form is stated at
+    # :func:`retune` — the value moved, every structural property held.
     for stmt in tree.body:
         target = None
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 \
@@ -379,7 +665,11 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # first finding, `harness_rows`' `if _edge_of(slot) not in _COLUMN_EDGES`, lives
         # inside a `sum(...)` generator, and a shape table that only knows the statement
         # spelling of `if` cannot see it at all.
-        if isinstance(node, ast.comprehension) and node.ifs:
+        # No `and node.ifs` on this line, and its absence is a finding of this tool against
+        # itself. It was written, the self-sweep deleted it, and `tests.test_sweep` stayed
+        # green: the guard refused to enter a loop over the very list it was testing for
+        # emptiness. §4 again — an equivalent mutant and a dead line are one finding.
+        if isinstance(node, ast.comprehension):
             for cond in node.ifs:
                 # `True` rather than excising the `if` keyword: the filter is gone either
                 # way, and this keeps the splice inside one expression's span, so every
@@ -458,6 +748,107 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
             yield (node, sp.text(node.orelse), "collapse-ifexp",
                    "is this branch pinned?")
 
+        # ------------------------------------------------------------------------------
+        # String and regex constants (#569). The general form is :func:`retune`.
+        # ------------------------------------------------------------------------------
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)) \
+                and id(node) in reads and id(node) not in docstrings:
+            raw = node.value if isinstance(node.value, str) \
+                else node.value.decode("latin-1")
+            moved = retune(raw)
+            if moved != raw:
+                if id(node) in in_fstring:
+                    # A literal segment of an f-string, including a `{x:<28}` FORMAT SPEC,
+                    # which is where a width literal actually lives in this tree. Its span
+                    # holds no quotes, so the replacement is raw text and not a repr — but
+                    # only when the source and the value are the same bytes. If the segment
+                    # spells anything with an escape, a brace or a quote, the two disagree
+                    # and splicing raw text is a guess; those are dropped rather than
+                    # guessed at. Below 3.12 the positions themselves are approximate, and
+                    # `span_is_sound` cannot vet an unquoted fragment, so this check is the
+                    # only thing standing between the tool and an edit it cannot describe.
+                    if isinstance(node.value, str) and sp.text(node) == node.value:
+                        yield (node, moved, "retune-string",
+                               "is this literal pinned, or would any spelling do?")
+                else:
+                    rep = repr(moved) if isinstance(node.value, str) \
+                        else repr(moved.encode("latin-1"))
+                    yield (node, rep, "retune-string",
+                           "is this literal pinned, or would any spelling do?")
+
+        # An integer written in a base other than ten was written that way because its
+        # digits are the point: `0o600` is a permission, `0x1b` is a byte. So the spelling
+        # is the evidence that the value is deliberate, and a deliberate value is a claim.
+        # Decimal literals are deliberately NOT mutated here — every `0`, `1` and `2` index
+        # in the tree would become a mutation, and the thresholds that matter are reached
+        # instead by `shift-boundary`, which asks the same question of `x > 28` without
+        # asking it of `xs[0]`.
+        if isinstance(node, ast.Constant) and isinstance(node.value, int) \
+                and not isinstance(node.value, bool) \
+                and sp.text(node)[:2].lower() in ("0o", "0x", "0b"):
+            # Re-spelled in its own base, because the report is read by a person: a
+            # permission that came back `385` instead of `0o601` is a mutation nobody can
+            # check at a glance.
+            base = {"0o": oct, "0x": hex, "0b": bin}[sp.text(node)[:2].lower()]
+            yield (node, base(node.value + 1), "retune-constant",
+                   "is this value pinned, or would any number do?")
+
+        # ------------------------------------------------------------------------------
+        # Semantic near-synonyms (#569): one axis moved, everything else held.
+        # ------------------------------------------------------------------------------
+
+        # `a < b` -> `a <= b`. The boundary, and only the boundary. A guard written one
+        # notch out is the defect this catches, and the whole-condition operators above
+        # cannot see it: `drop-if` asks whether the refusal exists at all, which a test
+        # that never approaches the edge answers perfectly well.
+        if isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+            for i, op in enumerate(node.ops):
+                swap = BOUNDARY.get(type(op))
+                if not swap:
+                    continue
+                spelled = [f"({sp.text(x)})" for x in operands]
+                ops = [CMP_TEXT[type(o)] for o in node.ops]
+                ops[i] = swap[1]
+                parts = [spelled[0]]
+                for o, right in zip(ops, spelled[1:]):
+                    parts += [o, right]
+                yield (node, " ".join(parts), "shift-boundary",
+                       f"is the boundary pinned, or only the direction ({swap[0]} vs "
+                       f"{swap[1]})?")
+
+        # `x.lower()` -> `x.upper()`, `sorted(xs)` -> `list(xs)`, and the rest of
+        # :data:`SYNONYMS`. The mutant is type-correct by construction, so a red here is a
+        # test noticing the AXIS rather than a test noticing a crash.
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in SYNONYMS \
+                and _receiver_root(node.func.value) not in modules:
+            other, axis = SYNONYMS[node.func.attr]
+            yield (node.func, f"{sp.text(node.func.value)}.{other}", "swap-synonym",
+                   f"is `{axis}` pinned, or does `{other}` pass the same tests?")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id in SYNONYMS and not node.keywords \
+                and len(node.args) == 1 and not any(
+                    isinstance(a, ast.Starred) for a in node.args):
+            # One positional argument and no keywords, deliberately. `sorted(xs, key=f)`
+            # -> `list(xs, key=f)` is a `TypeError`, which reddens the suite for a reason
+            # that has nothing to do with the ordering — a false pin, and the false pin is
+            # the failure this file exists to prevent.
+            other, axis = SYNONYMS[node.func.id]
+            yield (node.func, other, "swap-synonym",
+                   f"is `{axis}` pinned, or does `{other}` pass the same tests?")
+
+        # `p.resolve()` -> `p`. #572's own shape: a normalisation applied at one site and
+        # missing at another, where the two spellings agree on every path a test happens
+        # to use and disagree on the one the operator's machine actually has.
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in NORMALISERS and not node.args \
+                and not node.keywords \
+                and _receiver_root(node.func.value) not in modules:
+            yield (node, sp.text(node.func.value), "drop-normalise",
+                   f"is `{node.func.attr}()` pinned, or does every test use a path that "
+                   "needs no normalising?")
+
 
 def span_is_sound(sp: _Spans, node: ast.AST) -> bool:
     """Does the source at *node*'s span actually parse back into *node*?
@@ -475,6 +866,16 @@ def span_is_sound(sp: _Spans, node: ast.AST) -> bool:
     change is worse than one not offered.
     """
     text = sp.text(node)
+    # An f-string's literal segment — ` ok` in `f"{n} ok"`, and the `<28` of a `{n:<28}`
+    # format spec, which is where a width literal actually lives in this tree. Its span
+    # holds no quotes, so it cannot be re-parsed as an expression, and the arms below would
+    # refuse every one of them. The round-trip is proved a different way and a stronger
+    # one: the bytes at the span ARE the characters of the value, so a splice here replaces
+    # exactly the text the mutation claims to replace. A quoted literal never satisfies
+    # this — its span includes the quotes and its value does not.
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+            and text == node.value:
+        return True
     try:
         if isinstance(node, ast.stmt):
             reparsed = ast.parse(text).body
@@ -547,7 +948,8 @@ def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
         out.append(Mutation(
             path=path, line=node.lineno, end_line=node.end_lineno or node.lineno,
             operator=operator, question=question, before=before, after=replacement,
-            symbol=_enclosing(tree, node), source=mutated, span=sp.span(node)))
+            symbol=_enclosing(tree, node), source=mutated, span=sp.span(node),
+            origin=hashlib.sha256(source).hexdigest()))
     out.sort(key=lambda m: (m.path, m.line, m.operator, m.after))
     return out
 
@@ -655,8 +1057,9 @@ def tree_hash(root: Path, paths: tuple[str, ...]) -> str:
     h = hashlib.sha256()
     for top in sorted(set(paths) | {"tests"}):
         base = root / top
-        if not base.exists():
-            continue
+        # No `if base.exists()`: see :func:`all_lines`. Measured on 3.12.13 and 3.14.4 —
+        # deleting the guard left the suite green, because the `rglob` it guarded yields
+        # nothing for a directory that is not there.
         for f in sorted(base.rglob("*.py")):
             h.update(f.relative_to(root).as_posix().encode())
             h.update(hashlib.sha256(f.read_bytes()).digest())
@@ -843,6 +1246,32 @@ def _named(ids) -> str:
     return "; ".join(short[:3]) + (f" (+{len(short) - 3} more)" if len(short) > 3 else "")
 
 
+def run_dir(workdir: Path) -> Path:
+    """Where THIS run's sandboxes live — one directory per process.
+
+    :func:`workdir_for` gives one workdir per checkout, which is right for the trace cache
+    (content-addressed, so sharing it is the whole point) and wrong for the sandboxes. Two
+    sweeps of the same checkout — two agents on one box, or one person who forgot the first
+    run was still going — would otherwise apply mutations to each other's trees: each one
+    restoring a file the other was about to run against, and each one's verdicts about
+    bytes neither of them chose.
+
+    **Measured, on this file, by accident.** Two sweeps overlapped and 486 of 489 mutations
+    came back `unapplied` — the digest check refusing to produce a verdict from a tree it
+    did not recognise. That refusal is what made the collision visible at all; before it,
+    the same run would have printed a plausible table of pins and survivors. This is the
+    other half of that fix: the collision should not happen in the first place.
+
+    The cache stays shared. It is keyed by a hash of the tree, so two runs of one checkout
+    want exactly the same map and paying for it twice is pure loss.
+    """
+    return workdir / f"run-{os.getpid()}"
+
+
+class NotApplied(Exception):
+    """The mutant tree is not a mutant. See :meth:`Sandbox.apply`."""
+
+
 class Sandbox:
     """A private clone of the tree. The operator's checkout is never written to."""
 
@@ -877,12 +1306,36 @@ class Sandbox:
         self._clean_failures: dict[tuple[str, ...], frozenset] = {}
 
     def apply(self, mutation: Mutation) -> None:
+        """Write the mutant, having first proved this IS the tree the mutation came from.
+
+        The fifth way a sweep lies (#586): the edit does not match — a quoting difference,
+        an anchor that moved, a sandbox at the wrong ref — so the "mutant" tree is the
+        **unmutated** tree, the suite passes, and the guard is reported as a SURVIVOR. That
+        is the only one of the five that errs toward *more* work rather than less, and it
+        is the one that ends adoption: somebody writes a test for a line already covered,
+        discovers it, and never trusts the tool again.
+
+        Two assertions, and they are different questions. The digest says *this is the file
+        I read* — a sandbox at another ref, or a file some earlier restore did not undo,
+        fails here rather than producing a verdict about the wrong bytes. The inequality
+        says *and the bytes really changed*. Neither is expensive and neither is optional:
+        a verdict from an edit that did not happen is not a verdict.
+        """
+        current = (self.path / mutation.path).read_bytes()
+        if mutation.origin and hashlib.sha256(current).hexdigest() != mutation.origin:
+            raise NotApplied(
+                f"{mutation.path} in this sandbox is not the file the mutation was read "
+                f"from, so nothing here would be a verdict about {mutation.tag}")
         self.apply_source(mutation.path, mutation.source)
 
     def apply_source(self, rel: str, blob: bytes) -> None:
         """Write one file, remembering what was there so :meth:`restore` can undo it."""
         target = self.path / rel
-        self._pristine.setdefault(rel, target.read_bytes())
+        was = target.read_bytes()
+        if was == blob:
+            raise NotApplied(f"the mutant of {rel} is byte-identical to the tree it "
+                             f"replaces — this edit did not happen")
+        self._pristine.setdefault(rel, was)
         target.write_bytes(blob)
 
     def restore(self) -> None:
@@ -1073,7 +1526,12 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
     """
     # Measured BEFORE the mutation goes anywhere near the tree.
     clean = box.clean_failures(modules) if modules else frozenset()
-    box.apply(mutation)
+    try:
+        box.apply(mutation)
+    except NotApplied as why:
+        # Its own outcome, not a survivor and not a pin. This is a defect in the TOOL, and
+        # the one thing it must never do is quietly become a finding about the code.
+        return "unapplied", Outcome(False, 0, str(why), conclusive=False), None
     if modules:
         subset = box.subset(modules)
         if not subset.conclusive:
@@ -1144,7 +1602,7 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         return [], []
 
     log(f"  building {jobs} sandbox(es)…")
-    boxes = [Sandbox(root, workdir / f"w{i}", ref, dirty) for i in range(jobs)]
+    boxes = [Sandbox(root, run_dir(workdir) / f"w{i}", ref, dirty) for i in range(jobs)]
     for box in boxes:
         box.full_timeout = full_timeout
     free: list[Sandbox] = list(boxes)
@@ -1182,7 +1640,7 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         if full is not None:
             how += f", then all {full.ran or '?'}"
         label = {"survived": "SURVIVED", "pinned": "pinned  ",
-                 "unresolved": "UNRESOLVED"}[verdict]
+                 "unresolved": "UNRESOLVED", "unapplied": "NOT APPLIED"}[verdict]
         log(f"    [{n}/{len(plan)}] {label}  {mutation}   ({how})")
         return Result(mutation, verdict, subset, full, modules)
 
@@ -1254,7 +1712,10 @@ def _second_order(results: list[Result], boxes: list["Sandbox"],
                     break
             time.sleep(0.05)
         try:
-            box.apply_source(pair[0].path, combined)
+            try:
+                box.apply_source(pair[0].path, combined)
+            except NotApplied:
+                return None
             outcome = box.full()
         finally:
             box.restore()
@@ -1275,6 +1736,7 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     survivors = [r for r in results if r.verdict == "survived"]
     unresolved = [r for r in results if r.verdict == "unresolved"]
     pinned = [r for r in results if r.verdict == "pinned"]
+    unapplied = [r for r in results if r.verdict == "unapplied"]
     pairs = pairs or []
     out: list[str] = []
     w = out.append
@@ -1283,14 +1745,33 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     w("=" * 86)
     w(f"measured on      : {sys.platform}, CPython "
       f"{'.'.join(str(n) for n in sys.version_info[:3])}")
+    if reach():
+        w(f"NOT ASKED ABOUT  : {reach()}")
     if baseline is not None:
         w(f"baseline          : Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}")
     w(f"mutations applied : {len(results)}")
     w(f"pinned            : {len(pinned)}")
     w(f"SURVIVED          : {len(survivors)}")
     w(f"UNRESOLVED        : {len(unresolved)}")
+    if unapplied:
+        w(f"NOT APPLIED       : {len(unapplied)}  (a defect in this tool, not a finding)")
     w(f"wall clock        : {elapsed / 60:.1f} min")
     w("")
+
+    if unapplied:
+        w("-" * 86)
+        w("NOT APPLIED — these mutations never reached the tree")
+        w("-" * 86)
+        w("The mutant was byte-identical to the tree it replaced, or the sandbox held a")
+        w("different file from the one the mutation was read from. Either way the run that")
+        w("followed would have measured the UNMUTATED tree and reported a survivor for a")
+        w("line that is already covered. That is a bug here, not a finding about the code,")
+        w("and the sweep is not complete until it is zero.")
+        for r in sorted(unapplied, key=lambda r: (r.mutation.path, r.mutation.line)):
+            m = r.mutation
+            w(f"  {m.path}:{m.line}  [{m.operator}]  "
+              f"{r.subset.detail if r.subset else ''}")
+        w("")
 
     if unresolved:
         w("-" * 86)
@@ -1307,8 +1788,12 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
         w("")
 
     if not survivors:
-        w("Every mutation this diff offered goes red. Nothing added here is a line the")
-        w("suite would not miss.")
+        if unresolved or unapplied:
+            w("No survivor — but see above: not every mutation was measured, so this is")
+            w("not the same claim as a clean sweep.")
+        else:
+            w("Every mutation this diff offered goes red. Nothing added here is a line the")
+            w("suite would not miss.")
         return "\n".join(out)
 
     w("A survivor is a line you can delete with the whole suite still green")
@@ -1415,7 +1900,209 @@ def as_json(results: list[Result]) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# 8. CLI
+# 8. The gate — stage C
+# --------------------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class Gate:
+    """One sweep, sorted into the outcomes a gate is allowed to act on differently.
+
+    The buckets are not cosmetic and they are not a severity ranking. Each one is a
+    different *kind of claim*, and collapsing any two of them is a way this gate gets
+    switched off within a week:
+
+    * ``unpinned`` — a guard with no test behind it. The finding. Actionable.
+    * ``masked`` — two or more survivors inside one function. Also actionable, and MORE
+      urgent, not less: two guards in sequence mask each other, so none of them can be
+      called equivalent on its own. Separated because the advice differs — these are read
+      together or not at all.
+    * ``platform`` — a narrowed catch on an exception type the operating system decides.
+      Measured on this project: `except OSError` around a pty read is dead code on macOS
+      and live on Linux. **The gate never fails on one of these.** A gate that fails a pull
+      request for a clause the runner's kernel cannot reach is a gate somebody disables,
+      and they will be right to.
+    * ``unresolved`` — no verdict. A timeout is not a red and not a survivor. Under load
+      this repository hits it repeatedly, and "I could not look" must never render as
+      "nothing to see".
+    * ``unapplied`` — the mutation never reached the tree (#586). A defect in the tool.
+    """
+
+    unpinned: list[Result] = dataclasses.field(default_factory=list)
+    masked: list[Result] = dataclasses.field(default_factory=list)
+    platform: list[Result] = dataclasses.field(default_factory=list)
+    unresolved: list[Result] = dataclasses.field(default_factory=list)
+    unapplied: list[Result] = dataclasses.field(default_factory=list)
+    pinned: int = 0
+
+    @property
+    def actionable(self) -> list[Result]:
+        """Survivors a person should act on. Platform-deferred ones are not among them."""
+        return self.unpinned + self.masked
+
+
+def classify(results: list[Result]) -> Gate:
+    """Sort a sweep into :class:`Gate`'s buckets."""
+    gate = Gate()
+    crowded: dict[tuple[str, str], int] = {}
+    for r in results:
+        if r.verdict == "survived":
+            key = (r.mutation.path, r.mutation.symbol)
+            crowded[key] = crowded.get(key, 0) + 1
+    for r in results:
+        if r.verdict == "pinned":
+            gate.pinned += 1
+        elif r.verdict == "unresolved":
+            gate.unresolved.append(r)
+        elif r.verdict == "unapplied":
+            gate.unapplied.append(r)
+        elif r.verdict == "survived":
+            if platform_caveat(r.mutation):
+                gate.platform.append(r)
+            elif crowded.get((r.mutation.path, r.mutation.symbol), 0) > 1:
+                gate.masked.append(r)
+            else:
+                gate.unpinned.append(r)
+    return gate
+
+
+def gate_exit_code(gate: Gate, enforce: bool) -> int:
+    """What a gate run exits with. **Zero until somebody turns it on.**
+
+    The spec's staging argument — "a gate whose baseline nobody has seen gets disabled the
+    first time it is inconvenient" — applies to the gate's own credibility as much as to
+    the tree's. So the first version of this job reports its numbers on every pull request
+    and blocks nothing; `--enforce` is the one flag that changes that, and it should be set
+    only once the numbers on real branches have been looked at and believed.
+
+    When it does enforce, the codes are distinct because the responses are:
+
+    * **1** — an actionable survivor. Write the test, or delete the line.
+    * **3** — nothing actionable, but something could not be measured. Re-run it; do not
+      read it as clean.
+    * **4** — a mutation never applied. The tool is wrong, and its numbers are not
+      evidence about this branch either way.
+    """
+    if not enforce:
+        return 0
+    if gate.unapplied:
+        return 4
+    if gate.actionable:
+        return 1
+    return 3 if gate.unresolved else 0
+
+
+def _summary_rows(results: list[Result]) -> list[str]:
+    """One markdown bullet per survivor, carrying WHAT THE COVERING TESTS ASSERT.
+
+    That field is what made 82 survivors triageable rather than merely alarming, and it is
+    the difference between a gate that gets read and a gate that gets muted. `release.yml`'s
+    `-z "$claimed"` refusal (#558) is why: deleting it left the run still exiting 1, for a
+    different reason, so the honest first question about a survivor is "did my test look
+    closely enough" — which nobody can answer from a line number alone.
+    """
+    out: list[str] = [""]
+    for r in sorted(results, key=lambda r: (r.mutation.path, r.mutation.line)):
+        m = r.mutation
+        out.append(f"- **`{m.path}:{m.line}`** in `{m.symbol}` — _{m.question}_")
+        out.append(f"  - shipped: `{_oneline(m.before, 100)}`")
+        out.append(f"  - mutant `[{m.operator}]`: "
+                   f"`{_oneline(m.after, 100) or '(the statement, deleted)'}`")
+        ev = r.evidence
+        if ev is None or not ev.modules:
+            out.append("  - covered by: **nothing measured executes this file**")
+        elif ev.nothing_names_it:
+            out.append(f"  - covered by: {len(ev.modules)} module(s) execute this file and "
+                       f"**not one names `{m.symbol}`**")
+        else:
+            asserted = [a for _, _, asserts in ev.naming for a in asserts]
+            out.append(f"  - covered by: {len(ev.naming)} test(s) naming `{m.symbol}` — "
+                       + ", ".join(f"`{module.split('.')[-1]}.{name}`"
+                                   for module, name, _ in ev.naming[:3]))
+            for a in asserted[:3]:
+                out.append(f"    - asserts `{a}`")
+    return out
+
+
+def gate_summary(gate: Gate, ref: str, base: str, elapsed: float,
+                 enforce: bool) -> str:
+    """The markdown a reviewer reads on the pull request."""
+    out: list[str] = []
+    w = out.append
+    verdict = ("**would fail**" if gate.actionable or gate.unapplied
+               else "**would pass**")
+    w(f"## Deletion sweep — {len(gate.actionable)} actionable survivor(s)")
+    w("")
+    w(f"`{ref[:12]}` against `{base[:12]}`, added lines only, "
+      f"{elapsed / 60:.1f} min on {sys.platform} / CPython "
+      f"{'.'.join(str(n) for n in sys.version_info[:3])}.")
+    w("")
+    w("| outcome | n | what it means |")
+    w("|---|---:|---|")
+    w(f"| pinned | {gate.pinned} | a test goes red without the line |")
+    w(f"| **unpinned** | {len(gate.unpinned)} | a guard with no test behind it |")
+    w(f"| **masked cluster** | {len(gate.masked)} | two or more in one function; "
+      "none is safe to call equivalent alone |")
+    w(f"| platform-deferred | {len(gate.platform)} | the clause may be unreachable on "
+      f"{sys.platform}; never fails this gate |")
+    w(f"| unresolved | {len(gate.unresolved)} | no verdict — timed out, not measured |")
+    if reach():
+        w(f"| not asked about | — | {reach()} |")
+    w(f"| not applied | {len(gate.unapplied)} | the edit never reached the tree — a bug "
+      "in the sweep |")
+    w("")
+    if not enforce:
+        w(f"> **Reporting only.** This job blocks nothing; it {verdict} with `--enforce`. "
+          "The spec's own staging argument says a gate whose numbers nobody has seen gets "
+          "disabled the first time it is inconvenient, so the numbers come first.")
+        w("")
+    if gate.unapplied:
+        w("### Not applied — read nothing else on this page until this is zero")
+        w("")
+        w("A mutation whose edit never landed runs the **unmutated** tree, passes, and is "
+          "reported as a survivor. Every number above is suspect while this is non-zero.")
+        for r in gate.unapplied:
+            w(f"- `{r.mutation.tag}` — {r.subset.detail if r.subset else ''}")
+        w("")
+    if gate.masked:
+        w("### Masked cluster")
+        w("")
+        w("Two guards in sequence hide each other, so each one looks equivalent on its "
+          "own and neither is pinned. Read these together.")
+        out.extend(_summary_rows(gate.masked))
+        w("")
+    if gate.unpinned:
+        w("### Unpinned")
+        w("")
+        w("Delete the line and the suite stays green. Either write the test, or delete the "
+          "line — there is no suppression list, and \"equivalent mutant\" and \"dead code\" "
+          "are one finding.")
+        out.extend(_summary_rows(gate.unpinned))
+        w("")
+    if gate.platform:
+        w("### Platform-deferred (not a gate failure)")
+        w("")
+        w(f"A narrowed catch on an exception the operating system decides. On "
+          f"{sys.platform} the clause may never be entered at all, which is *unreachable* "
+          "rather than *untested*, and the two are indistinguishable from one machine.")
+        out.extend(_summary_rows(gate.platform))
+        w("")
+    if gate.unresolved:
+        w("### Unresolved — no verdict")
+        w("")
+        w("The run timed out rather than failing, twice. That is not a red and it is "
+          "emphatically not a pin. Re-run on a quieter machine before reading this sweep "
+          "as clean.")
+        for r in gate.unresolved:
+            w(f"- `{r.mutation.tag}` in `{r.mutation.symbol}`")
+        w("")
+    if not gate.actionable and not gate.unapplied and not gate.unresolved:
+        w("Every mutation this branch offered goes red. Nothing added here is a line the "
+          "suite would not miss.")
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------------------
+# 9. CLI
 # --------------------------------------------------------------------------------------
 
 def repo_root(start: Path) -> Path:
@@ -1441,6 +2128,66 @@ def workdir_for(root: Path, override: str | None) -> Path:
         return resolved(override)
     digest = hashlib.sha256(str(resolved(root)).encode()).hexdigest()[:12]
     return resolved(Path(tempfile.gettempdir()) / f"charter-sweep-{digest}")
+
+
+def base_for(root: Path, ref: str, override: str | None) -> str:
+    """What the branch is charged against: the merge-base, not the tip.
+
+    Extracted from `main()` for the reason #572 taught: **a rule that lives inside
+    `main()` is not reachable from a test, so it cannot be swept, so it is a guard the
+    harness is structurally unable to hold itself to.** `workdir_for` had to come out of
+    `main()` before the bug that made this tool unusable on macOS could be pinned. This
+    function, `dirty_for`, `timeout_for` and `exit_code` are the same move applied to the
+    rest of the CLI, and the self-sweep's "renderer + CLI, ~0 of 49" row is what that
+    hazard looks like when nobody applies it.
+
+    `origin/main` when the remote is there, `main` when it is not — a fresh clone, a
+    worktree, and CI all differ on that. The merge-base and not the tip, because a branch
+    is answerable for what IT added and not for what main gained while it was open.
+    """
+    if override:
+        return git("rev-parse", override, cwd=root).strip()
+    upstream = "origin/main" if git("rev-parse", "--verify", "--quiet", "origin/main",
+                                    cwd=root, check=False).strip() else "main"
+    return git("merge-base", ref, upstream, cwd=root).strip()
+
+
+def dirty_for(root: Path, paths: tuple[str, ...], ref_arg: str) -> dict[str, bytes]:
+    """Uncommitted work, but only when the sweep is about the working tree.
+
+    `--ref HEAD` means "what I have here", so the sandboxes carry what is not committed
+    yet — that is what makes the tool usable before a commit. Any other ref names a
+    specific historical tree, and pouring today's uncommitted files into it would sweep a
+    tree that has never existed and report findings against it.
+    """
+    return dirty_files(root, paths) if ref_arg == "HEAD" else {}
+
+
+def timeout_for(measured: float) -> float:
+    """The full-suite cap, taken from THIS machine's own baseline rather than a constant.
+
+    Six times what the suite just took, never below the floor. A fixed forty minutes is
+    generous on an idle box and far too tight on a shared one: measured at a load average
+    of 100, a five-minute suite ran past 2400 s and two known-unpinned guards came back
+    "pinned" on the strength of a stopwatch. Six, and not two, because the mutants that
+    matter most are exactly the ones that make the suite slow.
+    """
+    return max(FULL_TIMEOUT, measured * 6)
+
+
+def exit_code(results: list[Result]) -> int:
+    """What a plain (non-gate) run exits with.
+
+    3 and not 0 for an unmeasured mutation: a sweep that could not measure some of its
+    mutations has not shown the branch to be clean, and anything reading this code must
+    not treat "I could not look" as "nothing to see". 4 outranks both, because a mutation
+    that never applied means the other numbers are not evidence either.
+    """
+    if any(r.verdict == "unapplied" for r in results):
+        return 4
+    if any(r.verdict == "survived" for r in results):
+        return 1
+    return 3 if any(r.verdict == "unresolved" for r in results) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1469,17 +2216,27 @@ def main(argv: list[str] | None = None) -> int:
                         "enclosing function, together. Two guards in sequence mask each "
                         "other, and a masked mutant looks equivalent one at a time.")
     p.add_argument("--keep", action="store_true", help="Leave the sandboxes behind.")
+    p.add_argument("--gate", action="store_true",
+                   help="Report as a CI gate: sort the survivors into unpinned, masked "
+                        "cluster and platform-deferred, and exit by the gate's rules.")
+    p.add_argument("--enforce", action="store_true",
+                   help="Make --gate blocking. Off by default and deliberately: a gate "
+                        "whose numbers nobody has seen gets disabled the first time it is "
+                        "inconvenient.")
+    p.add_argument("--summary", default=None, metavar="PATH",
+                   help="Append the gate's markdown to this file — $GITHUB_STEP_SUMMARY "
+                        "on CI, so the numbers are on the pull request rather than in a "
+                        "log nobody opens.")
     args = p.parse_args(argv)
+    if args.gate and args.all:
+        p.error("--gate charges the lines a branch added; --all charges the whole tree. "
+                "The gate never sweeps the whole tree — that is stage B, and it is a "
+                "14-hour job, not a pull-request check.")
 
     root = repo_root(Path.cwd())
     paths = tuple(args.paths or DEFAULT_PATHS)
     ref = git("rev-parse", args.ref, cwd=root).strip()
-    if args.base:
-        base = git("rev-parse", args.base, cwd=root).strip()
-    else:
-        upstream = "origin/main" if git("rev-parse", "--verify", "--quiet", "origin/main",
-                                        cwd=root, check=False).strip() else "main"
-        base = git("merge-base", ref, upstream, cwd=root).strip()
+    base = base_for(root, ref, args.base)
 
     workdir = workdir_for(root, args.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -1491,7 +2248,7 @@ def main(argv: list[str] | None = None) -> int:
     log(f"  workdir: {workdir}")
     started = time.time()
     log(f"sweeping {ref[:12]} (paths: {', '.join(paths)})")
-    dirty = dirty_files(root, paths) if args.ref == "HEAD" else {}
+    dirty = dirty_for(root, paths, args.ref)
     if dirty:
         log(f"  carrying {len(dirty)} uncommitted file(s) into the sandboxes")
 
@@ -1504,12 +2261,15 @@ def main(argv: list[str] | None = None) -> int:
             f"{sum(len(v) for v in scope.values())} added line(s)")
     if not scope:
         log("  nothing under the swept paths changed. Nothing to do.")
+        if args.summary:
+            _append(args.summary, "## Deletion sweep\n\nNothing under the swept paths "
+                                  "changed on this branch, so there was nothing to sweep.\n")
         return 0
 
     # The map is measured on a clean checkout of the ref, so that a mutation is the only
     # thing that ever differs from what was traced.
     log("  preparing the reference sandbox…")
-    ref_box = Sandbox(root, workdir / "ref", ref, dirty)
+    ref_box = Sandbox(root, run_dir(workdir) / "ref", ref, dirty)
     selection = load_map(ref_box.path, paths, cache_dir, args.jobs, args.refresh_map, log)
 
     baseline = None
@@ -1521,16 +2281,24 @@ def main(argv: list[str] | None = None) -> int:
         took = time.time() - started_baseline
         log(f"    Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}"
             f" in {took:.0f}s")
-        # Six times what this machine, right now, took to run the suite once — and never
-        # below the floor. The mutants that matter are the ones that make the suite SLOW,
-        # and the sweep may be sharing the box with itself.
-        full_timeout = max(FULL_TIMEOUT, took * 6)
+        full_timeout = timeout_for(took)
         if full_timeout > FULL_TIMEOUT:
             log(f"    full-suite timeout raised to {full_timeout / 60:.0f} min for this box")
         if not baseline.green:
             log("  ! the tree is RED before any mutation. Every mutation below will look")
             log("  ! pinned for a reason that has nothing to do with the guard. Fix first.")
-            return 2
+            if args.summary:
+                _append(args.summary,
+                        "## Deletion sweep — not run\n\nThe tree is **red before any "
+                        "mutation**, so every mutation would have looked pinned for a "
+                        f"reason that has nothing to do with any guard: {baseline.detail}\n")
+            # A reporting gate blocks nothing, and that has to include this. A red baseline
+            # is a real problem and the summary above says so in the loudest terms the page
+            # has — but failing a pull request over it, on a job whose numbers nobody has
+            # read yet, is precisely the "inconvenient the first time" that gets a gate
+            # switched off. `--enforce` is the flag that decides, for this and everything
+            # else, and it decides once.
+            return 2 if args.enforce or not args.gate else 0
 
     results, pairs = sweep(root, ref, scope, selection, workdir, args.jobs, dirty,
                            args.second_order, log, full_timeout)
@@ -1541,15 +2309,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(as_json(results))
     if not args.keep:
-        for child in workdir.glob("w*"):
-            shutil.rmtree(child, ignore_errors=True)
-        shutil.rmtree(workdir / "ref", ignore_errors=True)
-    if any(r.verdict == "survived" for r in results):
-        return 1
-    # 3, not 0: a sweep that could not measure some of its mutations has not shown the
-    # branch to be clean, and a gate reading this must not treat "I could not look" as
-    # "nothing to see".
-    return 3 if any(r.verdict == "unresolved" for r in results) else 0
+        # This run's sandboxes and no others. A `workdir.glob("w*")` here would delete a
+        # concurrent sweep's trees out from under it — the same collision `run_dir` exists
+        # to prevent, arriving at the end instead of the beginning.
+        shutil.rmtree(run_dir(workdir), ignore_errors=True)
+    if not args.gate:
+        return exit_code(results)
+    gate = classify(results)
+    if args.summary:
+        _append(args.summary, gate_summary(gate, ref, base, elapsed, args.enforce))
+    log("")
+    log(f"gate: {len(gate.unpinned)} unpinned, {len(gate.masked)} in masked cluster(s), "
+        f"{len(gate.platform)} platform-deferred, {len(gate.unresolved)} unresolved, "
+        f"{len(gate.unapplied)} not applied, {gate.pinned} pinned")
+    if not args.enforce:
+        log("gate: reporting only — nothing here blocks. Pass --enforce to make it.")
+    return gate_exit_code(gate, args.enforce)
+
+
+def _append(path: str, text: str) -> None:
+    """Add to a file rather than replacing it — `$GITHUB_STEP_SUMMARY` is shared.
+
+    Every step of a job writes to the same file, so a `write_text` here would silently
+    delete whatever an earlier step put on the pull request.
+    """
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(text.rstrip("\n") + "\n")
 
 
 if __name__ == "__main__":       # pragma: no cover - entry point

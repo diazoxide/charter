@@ -181,14 +181,26 @@ final word in the *other* direction: a survivor of a subset is not yet a survivo
 
 **A. The harness** — `tools/sweep.py`, stdlib only. Trace-based selection map, the mutation
 operators above, survivors re-confirmed against the full suite. Runs standalone and prints a
-report a human can act on. Not wired to CI yet.
+report a human can act on. **Shipped** (#565).
 
 **B. The baseline** — run `--all` against `main` and write the number down. This is the first
-honest count of the repo's unpinned guards, and it sets what B→C has to hold flat.
+honest count of the repo's unpinned guards, and it sets what B→C has to hold flat. **Not run**:
+measured at roughly 5,672 mutations and fourteen hours, which is a background job somebody
+schedules, not a step on the way to anything.
 
 **C. The gate** — a CI job on pull requests, scoped to added lines, that fails on a survivor.
 Wire it only after A and B, because a gate whose baseline nobody has seen gets disabled the first
 time it is inconvenient.
+
+**Shipped before B, and the ordering above was the thing re-examined rather than ignored.** Its
+stated reason is credibility, not a technical dependency — and the gate never sweeps the whole
+tree, so B is not on C's critical path at all. What the reason actually asks for is that the
+gate's numbers be *seen* before it can block a branch, and B is a poor way to get that: it
+measures `main`'s standing debt, which is not the number a gate run produces. So the gate ships
+**reporting only** — it prints its table on every pull request, says what it *would* have done,
+and blocks nothing until `--enforce` is added to `.github/workflows/sweep.yml`. That makes the
+gate's own baseline visible on real branches, which is what the ordering was protecting. B
+remains worth doing, as a number, whenever a machine is free.
 
 ## How this gets verified
 
