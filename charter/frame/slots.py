@@ -991,6 +991,27 @@ def pad_of(name) -> int:
     return pad_for(name, _width())
 
 
+def content_rect(name) -> tuple[int, int]:
+    """*name*'s canvas inside its pane: the column its cells START in, and how many.
+
+    **One measurement answers both, and that is the whole reason this is a pair rather
+    than two functions.** `_width() - 2 * pad_of(name)` asks the tty twice, and worse,
+    asks it twice at two different moments — a `SIGWINCH` landing between them would
+    compose a row from one width and inset it by a pad afforded against another, and
+    `panel._watch` repaints on exactly that signal.
+
+    The first number is what :func:`inset_rows` puts in front of every row; the second is
+    what :func:`content_width` tells the renderer. They were derived separately for as
+    long as only the renderer needed them, and #607's pointer half is what made the pair
+    one question: a click arrives in the PANE's coordinates and a component draws in
+    THESE, so `frame/events.py` needs the origin and the width together or it translates
+    a click by one pad into a rectangle sized by another.
+    """
+    cols = _width()
+    pad = pad_for(name, cols)
+    return pad, cols - 2 * pad
+
+
 def content_width(name) -> int:
     """The cells *name*'s renderer may compose into — the pane's width less its pad.
 
@@ -1005,15 +1026,8 @@ def content_width(name) -> int:
     Never negative for a pad the pane can afford — :func:`pad_for` has already dropped one
     it cannot — and `tui.truncate` answers ``""`` for a non-positive width regardless, so
     the arithmetic here needs no second guard of its own.
-
-    The pane is measured ONCE and handed to both halves, rather than `_width() - 2 *
-    pad_of(name)`: that spelling asks the tty twice per call and, worse, asks it twice at
-    two different moments — a `SIGWINCH` landing between them would compose a row from one
-    width and inset it by a pad afforded against another. `panel._watch` repaints on
-    exactly that signal.
     """
-    cols = _width()
-    return cols - 2 * pad_for(name, cols)
+    return content_rect(name)[1]
 
 
 def inset_rows(text: str, name: str) -> str:

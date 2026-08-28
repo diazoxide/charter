@@ -225,6 +225,31 @@ _MARK = ("> ", "  ")
 #: cannot make this scan without end.
 _SGR = re.compile(rb"^\x1b\[<(\d{1,5});(\d{1,5});(\d{1,5})([Mm])")
 
+#: Which button a click report names, by the low two bits of its bitfield.
+#:
+#: **Measured rather than assumed to be unreachable**, tmux 3.7c and 3.2, injected into a
+#: real client over a real pty, against a non-active pane that asked for 1000+1006::
+#:
+#:     right-click  over panel  ->  panel READ b'\\x1b[<2;20;5M\\x1b[<2;20;5m'
+#:     middle-click over panel  ->  panel READ b'\\x1b[<1;20;5M\\x1b[<1;20;5m'
+#:     shift+click  over panel  ->  panel READ b'\\x1b[<4;20;5M\\x1b[<4;20;5m'
+#:
+#: So all three buttons reach a component, and a decoder that called them all `click`
+#: would hand a component a right-click as the thing it dismisses on. That is the wheel's
+#: own defect one branch over — `decode` already refuses to read a bitfield as a whole
+#: number for `up`/`down`, and the buttons deserve it no less.
+#:
+#: The modifier bits (4 shift, 8 meta, 16 ctrl) are deliberately NOT named, which is
+#: :data:`_CSI`'s rule for a modified arrow said here: the low bits name the gesture, the
+#: high ones name the keyboard, and this contract has no use for the keyboard. So
+#: `shift+click` above is a `left` click, which is what the operator who pressed it meant.
+#:
+#: ``3`` is absent and its absence is the guard: in the SGR encoding a release names the
+#: button that was released and the trailing `m` is what makes it a release, so `3` is the
+#: X10 encoding's "no button" leaking out of a terminal that should not be speaking it.
+#: `decode` drops what this cannot name rather than inventing a fourth button.
+_SGR_BUTTONS = {0: "left", 1: "middle", 2: "right"}
+
 #: The prefix of an SGR report that has not all arrived yet. Kept whole rather than
 #: decoded as `ESC`, `[`, `<`, `0`, `;` — five keypresses out of half a mouse click.
 _SGR_PARTIAL = re.compile(rb"^\x1b\[<[\d;]*$")
@@ -326,10 +351,37 @@ class Row(NamedTuple):
 class Event(NamedTuple):
     """One decoded input event.
 
-    *row* is the pane row a pointer event landed on, **0-based**, already converted from
-    the 1-based coordinate tmux hands over. tmux subtracts `pane_left` and any
-    `pane-border-status` row itself — measured — so this module never does that
-    arithmetic and must not start.
+    *name* is the sub-kind: which arrow or named key a ``key`` is, which way a ``scroll``
+    went, and which button a ``click`` used (:data:`_SGR_BUTTONS`). Empty for the kinds
+    that have only one form.
+
+    *row* and *col* are **0-based**, converted here from the 1-based pair tmux hands over,
+    and they are the coordinates of **the rectangle the receiver draws in** — which is the
+    pane for :class:`Surface`, because a surface owns its whole pane, and the component's
+    own canvas for a panel, because a component does not.
+
+    **Two subtractions stand between a terminal's column and a component's, and exactly
+    one of them is charter's.** Keeping them apart is the whole of this docstring:
+
+    * **tmux's.** `pane_left`, and any `pane-border-status` row, are already gone before
+      the bytes reach this process. Measured on 3.7c and 3.2, two panes split `-h -l 40`
+      in a 120-column window, injected into a real client over a real pty::
+
+          click window col 100  ->  panel READ b'\\x1b[<0;20;5M'    (100 - 80)
+          click window col 81   ->  panel READ b'\\x1b[<0;1;5M'
+          with pane-border-status top, window row 5  ->  arrives as row 4
+
+      So **this module never does that arithmetic and must not start.**
+    * **charter's.** The pad an operator asks for with `[frame] pad` is drawn by charter
+      and tmux knows nothing about it — `slots.inset_rows` puts it in front of every row
+      after the component has composed, and `slots.content_width` is the narrower canvas
+      the component was told it had. tmux therefore reports a column in the PANE, and a
+      component reasons in cells of its own rectangle. `events.Dispatcher` subtracts that
+      one, once, on delivery, and drops what lands in the margin — see its `_on_canvas`.
+
+    A decoder that did tmux's subtraction would double it; a dispatcher that skipped
+    charter's would hand a padded component a column it never drew in. Both are the same
+    error and only one of them looks like one.
     """
 
     kind: str
@@ -367,6 +419,15 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
     them and wrong once `frame/events.py` could. Decoding is one question for every caller
     — WHICH kinds a given surface acts on is the caller's, and this surface acts on
     neither.
+
+    **An SGR button number is a bitfield and is read as one, in all three of its halves.**
+    Bit 6 says wheel and the low bits say which way; bit 5 says the pointer MOVED, and
+    that is dropped, because §4f closed the kinds without `drag`; otherwise the low two
+    bits name the button (:data:`_SGR_BUTTONS`) and the modifier bits are ignored the way
+    :data:`_CSI`'s are. Reading the number whole instead of by its bits is one mistake with
+    three faces — a shifted wheel scrolling the wrong way, a drag arriving as a click at
+    every cell it crosses, a right-click indistinguishable from a left — and #621's
+    predecessor shipped only the first of the three fixed.
     """
     evs: list[Event] = []
     while buf:
@@ -388,10 +449,27 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
                     continue           # the horizontal wheel; this list has one axis
                 evs.append(Event(SCROLL, "down" if button & 1 else "up",
                                  row=row_ - 1, col=col - 1))
+            elif button & 32:
+                # **Motion, and it is dropped rather than reported as a click.** §4f closed
+                # the event kinds without `drag`, and bit 5 is the only thing telling a
+                # pointer that MOVED from one that was pressed — reading this number as a
+                # button would announce a drag as a click at every cell it crossed.
+                #
+                # Measured, tmux 3.7c and 3.2, `\x1b[<32;100;5M` injected into a real
+                # client with tmux's own `mouse` both off and ON (so the outer terminal
+                # carried `1002h`): the pane that asked for 1000 received NOTHING either
+                # time. tmux filters motion to what the pane's own mode admits, so this
+                # arm is charter refusing to depend on that filtering for its contract —
+                # the bit is in the protocol, and what a component is handed should be
+                # decided by what the bit says rather than by another program's tidiness.
+                continue
             else:
                 # A release with no press is a click. See the module docstring: it is
                 # measured, not hypothetical.
-                evs.append(Event(CLICK, row=row_ - 1, col=col - 1,
+                name = _SGR_BUTTONS.get(button & 3)
+                if name is None:
+                    continue
+                evs.append(Event(CLICK, name, row=row_ - 1, col=col - 1,
                                  pressed=(kind == b"M")))
             continue
         if not final and (_SGR_PARTIAL.match(buf) or _CSI_PARTIAL.match(buf)):

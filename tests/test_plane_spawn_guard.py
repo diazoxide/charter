@@ -757,7 +757,7 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "The same `tmux attach` inside a `pty.fork` child, and for the same reason "
             "again: the palette's whole entry point is a `bind -n`, which only a real "
             "client with a real terminal can press. `os._exit`s in its `finally`.",
-        "tests/test_frame_focus_reaches_a_component.py:execvp":
+        "tests/test_frame_input_reaches_a_component.py:execvp":
             "The same `tmux attach` inside a `pty.fork` child once more: tmux sends a "
             "pane focus report only while a client is attached, so `focus`/`blur` cannot "
             "be exercised without a real one. `os._exit`s in its `finally`.",

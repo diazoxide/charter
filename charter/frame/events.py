@@ -8,22 +8,88 @@ pane's bytes into `overlay.Event` — but it was wired only to the overlay's OWN
 the palette and the pickers. Nothing carried an event from a PANEL's pane to the
 component drawing in it. This is that carriage.
 
-**Three kinds are delivered and three are not, and the split is measured rather than
-chosen.** :data:`DELIVERED` is ``focus``, ``blur`` and ``resize``.
+**Five kinds are delivered and one is not, and the split is measured rather than chosen.**
+:data:`DELIVERED` is ``focus``, ``blur``, ``resize``, ``click`` and ``scroll``.
 
 * ``key`` is not delivered because the harness owns the keyboard. tmux routes typing to
   the ACTIVE pane, which is the harness's, so a panel's pane receives keystrokes only
   while the operator has deliberately left the harness — and a component that acted on
   them would be acting on the few the operator typed into the wrong pane.
-* ``click`` and ``scroll`` are not delivered because charter cannot yet say what a click
-  on a NON-ACTIVE pane means. tmux routes pointer events by POSITION and a click does not
-  focus the pane (measured against tmux 3.7c, #605), so the pointer would be a second
-  focus, disagreeing with the keyboard's, with no rule anywhere saying which one a
-  component is being driven by. The trade is relocated by "only the active pane requests
-  mouse", not dissolved. `component.EVENT_KINDS` already promises a declaration is
-  "what you HANDLE, never a promise that it FIRES", so both stay declarable and simply do
-  not fire — which is the direction that constant asks for: **degrade to "never fires",
-  never to "fires wrongly"**.
+  `component.EVENT_KINDS` already promises a declaration is "what you HANDLE, never a
+  promise that it FIRES", so it stays declarable and simply does not fire — the direction
+  that constant asks for: **degrade to "never fires", never to "fires wrongly"**.
+
+---
+
+**The pointer delivers where it POINTS and never moves focus, and #621 is what made that
+sayable.** The objection that kept ``click`` undelivered for a release was that a click on
+a non-active pane would be "a second focus, disagreeing with the keyboard's, with no rule
+saying which one a component is being driven by". The rule now exists and a component can
+read it: ``focus`` and ``blur`` fire, so a component renders *you are pointing at me* and
+*you are typing into me* as two states rather than guessing at one. Click-to-focus was
+refused outright — the frame exists to keep the harness the thing you type into — and
+delivering only to the active pane was refused with it, because that makes the pointer
+useless everywhere except the one pane the operator is already typing in.
+
+**What tmux actually does with a pointer over a pane that is not active**, measured for
+this change on **3.7c and 3.2**, two panes split ``-h -l 40`` in a 120x30 window, real
+client on a real pty, reports injected as a reporting terminal sends them::
+
+    tmux mouse off, harness active, both panes asked for 1000+1006
+      click window col 100  ->  panel READ b'\\x1b[<0;20;5M\\x1b[<0;20;5m'   active: harness
+      click window col 81   ->  panel READ b'\\x1b[<0;1;5M'                 active: harness
+      click window col 80   ->  nobody                       (the border)   active: harness
+      wheel over the panel  ->  panel READ b'\\x1b[<64;20;5M'  no copy-mode  active: harness
+
+Both versions, byte for byte. **The active pane never changes**, which is the whole design
+delivered by tmux rather than worked around: the pointer acts where it points and the
+keyboard stays where it was.
+
+**The border is a cell in neither pane and a click there is nobody's event.** #628 gave
+that rule a background, which changes how it LOOKS and not who owns it — measured again
+with ``pane-border-status top`` and a real ``pane-border-style`` set, on both versions::
+
+    click the vertical border      ->  nobody
+    click the border-STATUS row    ->  nobody
+    click window row 5 with a border row above  ->  arrives as row 4
+
+So there is no border case in this module, and the third line is why there must not be:
+tmux subtracts the border row itself. See `overlay.Event` for the two subtractions and
+which single one is charter's.
+
+**``[frame] mouse`` decides whether any of it can happen, and the honest answer has two
+halves rather than one.** tmux asks the OUTER terminal to report the mouse from the active
+pane's request alone, so with the flag off the harness — Claude Code, or whatever the
+operator ran — is the program that decides, and charter does not own it. Measured, harness
+asking for nothing::
+
+    outer terminal modes: ... 1006l 1000l 1002l 1003l     <- never asked to report
+
+Nothing is sent, so nothing arrives, so nothing fires. That is the common case and it is
+the one `component.EVENT_KINDS` and `docs/frame.md` state to a provider author and an
+operator respectively: **a component whose only route to a piece of state is a click has
+no route to it on most planes. Give every pointer affordance a key as well.**
+
+``[frame] mouse = true`` makes reporting unconditional from attach, at the price
+`instance.FRAME_FIELDS` names — and at a second one measured here, which the operator is
+owed before they set it::
+
+    tmux mouse on
+      wheel over the panel   ->  panel receives it        active: harness   (unchanged)
+      click over the panel   ->  panel receives it        active: PANEL     (moved)
+
+**With tmux's own mouse on, a click moves the keyboard**, because tmux's default
+``MouseDown1Pane`` binding selects the pane under the pointer before forwarding. That is
+tmux's semantics for the flag and not something this module can dissolve from inside a
+pane; charter does not rebind it here, and `docs/frame.md` says so beside the trade. The
+wheel never moves it, on either version. So point-to-act is exactly what the flag OFF
+gives, and the flag ON buys certainty about delivery with the keyboard following the
+pointer on click — which is the shape of the argument, stated, rather than a default
+quietly chosen for the operator.
+
+**A pointer event is translated into the component's own columns before it is delivered**,
+and that is charter's subtraction rather than tmux's — :meth:`Dispatcher._on_canvas` is the
+one place it happens and `overlay.Event` is where the two are held apart.
 
 ---
 
@@ -149,15 +215,25 @@ Event = overlay.Event
 #: can currently deliver. Merging them would either refuse a component for declaring a kind
 #: charter may deliver next release, or promise delivery by the act of declaring — and the
 #: EVENT_KINDS docstring already turns down both.
-DELIVERED = (overlay.FOCUS, overlay.BLUR, overlay.RESIZE)
+DELIVERED = (overlay.FOCUS, overlay.BLUR, overlay.RESIZE, overlay.CLICK, overlay.SCROLL)
 
 #: The delivered kinds that need the pane's own input read. ``resize`` is not among them:
 #: a `SIGWINCH` already reaches this process and `pane.size()` already answers the
 #: rectangle, so a component that wants only that costs its pane's terminal nothing.
-_FROM_INPUT = (overlay.FOCUS, overlay.BLUR)
+_FROM_INPUT = (overlay.FOCUS, overlay.BLUR, overlay.CLICK, overlay.SCROLL)
+
+#: The two kinds that arrive with a POSITION, and so the two this module translates before
+#: delivering — see :meth:`Dispatcher._on_canvas`.
+_POINTER = (overlay.CLICK, overlay.SCROLL)
+
+#: The two that arrive because the pane asked to be told about its own focus.
+_FOCUSING = (overlay.FOCUS, overlay.BLUR)
 
 #: What the pane writes to ask its terminal to report its own focus, and the withdrawal.
-#: `overlay.MOUSE_ON`/`MOUSE_OFF` are the same pair for the pointer, one surface over.
+#: `overlay.MOUSE_ON`/`MOUSE_OFF` are the pointer's pair, written from here too and
+#: reached through the overlay rather than respelled: one request, one withdrawal, and one
+#: module that owns what the two spell — a second copy here would be the pair a panel
+#: writes drifting from the pair the palette writes, on the same terminal.
 #:
 #: tmux delivers ``\\x1b[I``/``\\x1b[O`` to a pane's program only when that program has
 #: asked, and only while the server's ``focus-events`` is on — both halves measured against
@@ -260,6 +336,13 @@ class Dispatcher:
         self._tail = b""
         self._size = None
         self._failure: str | None = None
+        #: What :meth:`open` actually asked this terminal for, so :meth:`close` withdraws
+        #: exactly that and nothing else. A `close` that wrote both withdrawals
+        #: unconditionally would tell the terminal to stop reporting a mouse this pane
+        #: never asked about — harmless on its own, and wrong in the way that matters
+        #: here: it would be charter writing a mode change on behalf of a component that
+        #: declared only `focus`, into a pane whose terminal state is not charter's.
+        self._asked: str = ""
 
     # -- what the panel asks ------------------------------------------------ #
 
@@ -289,8 +372,17 @@ class Dispatcher:
 
         Records the pane's rectangle so :meth:`note_resize` has something to compare
         against — always, because ``resize`` needs no input path — and then, only if a kind
-        that comes from input was declared, puts the tty in cbreak and asks the terminal to
-        report focus.
+        that comes from input was declared, puts the tty in cbreak and asks the terminal
+        for exactly the reports those kinds are made of.
+
+        **Exactly those, and the split is the point.** A component that declared only
+        ``focus`` gets ``\\x1b[?1004h`` and no mouse request; one that declared only
+        ``click`` gets the pointer request and is never told about focus. Asking for both
+        whenever either was declared would cost the second one's price for nothing —
+        and for the pointer that price is the operator's own text selection
+        (`instance.FRAME_FIELDS`), taken from a pane whose component never asked. This is
+        `slots.ANIMATED`'s rule at the finest grain the protocol offers: a feature that
+        costs every panel is a feature every panel pays for.
 
         **A pane that cannot be asked is left alone and reports nothing**, which is
         `component.EVENT_KINDS`'s "degrade to never fires" rather than a failure: this is
@@ -332,7 +424,10 @@ class Dispatcher:
         self._before = before
         self._fd = fd
         self._stream = stream
-        self._write(FOCUS_ON)
+        self._asked = ((FOCUS_ON if any(k in self._kinds for k in _FOCUSING) else "")
+                       + (overlay.MOUSE_ON if any(k in self._kinds for k in _POINTER)
+                          else ""))
+        self._write(self._asked)
 
     def close(self) -> None:
         """Withdraw the request and put the tty back exactly as it was found.
@@ -374,7 +469,7 @@ class Dispatcher:
         been, and it would have left the operator with a pane that echoes nothing and no
         process left to put it back.
         """
-        fd, before = self._fd, self._before
+        fd, before, asked = self._fd, self._before, self._asked
         if fd is None:
             return
         try:
@@ -384,8 +479,14 @@ class Dispatcher:
         # Only now: the mode the operator cares about is back, so a second call has
         # nothing left to retry and the withdrawal below may fail without costing it.
         self._fd = self._before = None
+        self._asked = ""
         try:
-            self._write(FOCUS_OFF)
+            # Each request withdrawn, and only the ones :meth:`open` made. The pointer
+            # goes first because it was asked for last, so the pane hands its terminal
+            # back through the same states it took it through — `Surface.run`'s
+            # `MOUSE_OFF + LEAVE` is the same ordering one surface over.
+            self._write((overlay.MOUSE_OFF if overlay.MOUSE_ON in asked else "")
+                        + (FOCUS_OFF if FOCUS_ON in asked else ""))
         except _CANNOT_SAY:
             pass
 
@@ -508,6 +609,10 @@ class Dispatcher:
         """
         if self._failure is not None or ev.kind not in self._kinds:
             return False
+        if ev.kind in _POINTER:
+            ev = self._on_canvas(ev)
+            if ev is None:
+                return False
         try:
             return bool(self._c.on_event(ev))
         except KeyboardInterrupt:
@@ -525,6 +630,45 @@ class Dispatcher:
             # True, so the pane repaints and says so on the very next tick rather than
             # whenever something else happens to move the frame's version.
             return True
+
+    def _on_canvas(self, ev):
+        """*ev* in the component's OWN columns, or ``None`` if it landed in the margin.
+
+        **tmux reports a column in the PANE; a component draws in a narrower rectangle
+        inside it, and the difference is charter's own pad.** `slots.content_width` is what
+        the component was told it had and `slots.inset_rows` is what moved its rows right
+        by `[frame] pad` cells on the way out — neither is anything tmux knows about, so
+        neither is anything tmux subtracted. A dispatcher that handed the pane's column
+        straight over would tell a component with `pad = 3` that a click on its first cell
+        landed on its fourth, and every table row and button it resolved from that column
+        would be off by exactly the operator's own setting.
+
+        **This is not the subtraction tmux already did, and conflating the two is the
+        failure this method is written to make impossible.** `pane_left` and any
+        `pane-border-status` row are gone before the bytes arrive — measured, and
+        `overlay.Event` carries the readings. Charter must not redo those and does not:
+        the only number taken off here is `slots.content_rect`'s pad, which charter drew
+        itself, and the row is not touched at all because nothing insets one (`inset_rows`
+        pads the left of each row, and `panel._write` homes the cursor before the first).
+
+        **A click in the margin is dropped rather than clamped to the edge**, which is
+        `component.EVENT_KINDS`'s rule at the one place it can be applied: those cells are
+        charter's, the component never drew in them, and a clamp would report a click on a
+        cell the operator can see is empty as a click on the first cell of a row they can
+        see is not. `pad = 0` — the shipped default — makes the test below the pane's own
+        bounds, which tmux has already guaranteed, and the branch costs that panel nothing.
+
+        The rectangle is measured now rather than remembered from the last paint, which is
+        :meth:`note_resize`'s choice for its own reason: a `SIGWINCH` between the paint and
+        the click makes the two disagree, and the pane's CURRENT rectangle is the one the
+        operator was looking at when they pressed. One measurement answers both halves
+        (`slots.content_rect`), so the pad taken off and the width tested against cannot
+        come from two different readings of the tty.
+        """
+        from . import slots
+        pad, width = slots.content_rect(self._c.id)
+        col = ev.col - pad
+        return None if not 0 <= col < width else ev._replace(col=col)
 
     def _write(self, payload: str) -> None:
         """One mode request, flushed.

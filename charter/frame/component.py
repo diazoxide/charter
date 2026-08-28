@@ -68,17 +68,17 @@ EDGES = ("top", "bottom", "left", "right")
 #: because this constant is where a provider author meets the question;
 #: `docs/frame.md`'s "Mouse is off by default" says the operator's half of the same fact.
 #:
-#: * ``click`` and ``scroll`` — **charter does not control whether pointer events reach
-#:   your pane** (§4i). tmux asks the outer terminal to report the mouse from the ACTIVE
-#:   pane's own request alone: with `[frame] mouse` off and the harness pane active,
-#:   nothing has asked the terminal to report, so a click on your panel produces no bytes
-#:   at all and there is nothing for tmux to route. It is not that charter drops the
-#:   event — the event never happens. The harness (Claude Code, or whatever the operator
-#:   ran) is the program that decides, and charter does not own it. `[frame] mouse = true`
-#:   is the only setting that makes reporting unconditional, and it costs the operator
-#:   their terminal's own text-selection (see `instance.FRAME_FIELDS`). **So a component
-#:   whose only route to a piece of state is a click has no route to it on most planes.**
-#:   Give every pointer affordance a ``key`` as well.
+#: * ``click`` and ``scroll`` — **charter delivers these, and charter does not control
+#:   whether they ever happen** (§4i). tmux asks the outer terminal to report the mouse
+#:   from the ACTIVE pane's own request alone: with `[frame] mouse` off and the harness
+#:   pane active, nothing has asked the terminal to report, so a click on your panel
+#:   produces no bytes at all and there is nothing for tmux to route. It is not that
+#:   charter drops the event — the event never happens. The harness (Claude Code, or
+#:   whatever the operator ran) is the program that decides, and charter does not own it.
+#:   `[frame] mouse = true` is the only setting that makes reporting unconditional, and it
+#:   costs the operator their terminal's own text-selection (see `instance.FRAME_FIELDS`).
+#:   **So a component whose only route to a piece of state is a click has no route to it
+#:   on most planes.** Give every pointer affordance a ``key`` as well.
 #: * ``focus``/``blur`` — needs tmux's ``focus-events``, which ships OFF.
 #:   `commands_frame.conf_text` turns it on for every frame charter launches, so on
 #:   charter's own server these fire; inside an operator's existing tmux charter sources
@@ -90,14 +90,27 @@ EDGES = ("top", "bottom", "left", "right")
 #: as "still focused" is correct; one that infers focus from elapsed time is not.
 #:
 #: **Which of these charter actually delivers is `frame/events.py`'s `DELIVERED`, and it
-#: is three of the six** (#607). ``focus``, ``blur`` and ``resize`` fire; ``key``,
-#: ``click`` and ``scroll`` are decoded and routed nowhere, because the harness owns the
-#: keyboard and because tmux routes a pointer by POSITION without focusing the pane it
-#: lands in — so a click would be a second focus, disagreeing with the keyboard's. Both
-#: lists are needed and neither can be the other: this one is what a provider may DECLARE
-#: and is closed by the spec, that one is what charter can carry this release. Declaring a
-#: kind charter does not deliver is not an error and does not become one — it is the
-#: paragraph above, live.
+#: is five of the six.** ``focus``, ``blur`` and ``resize`` fire (#607); ``click`` and
+#: ``scroll`` fire now too, **where the pointer is and without moving focus** — measured
+#: on tmux 3.7c and at the 3.2 floor, a pointer over a pane that is not the active one is
+#: routed there in that pane's own coordinates and the keyboard stays where it was. Only
+#: ``key`` is decoded and routed nowhere, because the harness owns the keyboard, so the
+#: only keystrokes a panel could see are ones the operator typed into the wrong pane.
+#:
+#: Both lists are needed and neither can be the other: this one is what a provider may
+#: DECLARE and is closed by the spec, that one is what charter can carry this release.
+#: Declaring a kind charter does not deliver is not an error and does not become one — it
+#: is the paragraph above, live.
+#:
+#: **What a pointer event carries.** ``row`` and ``col`` are cells of YOUR rectangle — the
+#: one `ctx.width` and `ctx.height` describe — not of the pane, so an operator's
+#: `[frame] pad` is already out of them and a click landing in that margin is not
+#: delivered at all. ``name`` is which button (``left``/``middle``/``right``) or which way
+#: the wheel went (``up``/``down``); modifier keys are not reported. A click arrives
+#: TWICE, a press then a release, told apart by ``pressed`` — and either one can arrive
+#: without the other, because tmux routes each by where the pointer was at the time. Act
+#: on one of them; a component that waits for a matching pair will wait forever the first
+#: time somebody drags out of your pane.
 EVENT_KINDS = ("key", "click", "scroll", "focus", "blur", "resize")
 
 #: The slices of the plane snapshot a component may declare in ``needs`` — and therefore
