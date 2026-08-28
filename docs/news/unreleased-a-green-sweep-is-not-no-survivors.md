@@ -91,7 +91,7 @@ kind of pass.
 
 ## The sweep swept the gate that reports it
 
-127 mutations, against a change whose whole subject is the sweep. It found four lines of
+127 mutations, against a change whose whole subject is the sweep. It found five lines of
 its own that no test went red without.
 
 **The unsharded path had stopped being tested.** Forcing `if shard is not None` to
@@ -118,7 +118,13 @@ line is the first thing the cap eats. Every test had either far fewer than ten f
 far more, so "always ten" and "always nine" both passed, and "always ten" is the one that
 loses the note. There is a case at nine, ten and eleven now.
 
-All four are pinned now. A fifth survivor is not a finding about this code at all: it is a
+**And the wall clock was never read back.** The summary prints how long the sweep took,
+or — when the answer was added up from several machines rather than measured — says that
+instead, because a merge takes a second and printing that second would understate a
+forty-minute run by two orders of magnitude. Nothing asserted the minutes, so collapsing
+the whole thing to "merged from its shards" left the suite green and every page saying it.
+
+All five are pinned now. A sixth survivor is not a finding about this code at all: it is a
 string inside a *type annotation*, which `from __future__ import annotations` means the
 interpreter never evaluates, so no test can ever go red without it. That is a blind spot
 in the string operator's scoping rather than a guard, and it is filed as one (#632)
