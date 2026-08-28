@@ -151,6 +151,32 @@ class CharterReadsWhatGitReads(GitConfigCase):
                 self.assertEqual(self.git_top(), self.repo.resolve())
                 self.assertIsNone(self.mine())
 
+    def test_whitespace_around_the_header_and_the_key_is_git_to_drop(self):
+        """git's parser trims around the header, the key and the value. A reader that
+        trimmed only one END of any of them stops recognising a config a human indented by
+        hand — the sweep could turn every `.strip()` here into an `lstrip` or an `rstrip`
+        with nothing going red, because every fixture had its whitespace on one side.
+
+        Each form is put to git first. The obvious fixture — `[ core ]`, spaces INSIDE the
+        brackets — is one git refuses outright (*bad config line*), which is the oracle
+        earning its place: a row written from a guess would have asserted charter's
+        behaviour on a config no repository can have.
+        """
+        for label, body in (
+            ("around the header", f"  [core]  \n\tworktree = {self.elsewhere}\n"),
+            ("around the key and value", f"[core]\n   worktree   =   {self.elsewhere}   \n"),
+            ("a key on the header's own line", f"[core] worktree = {self.elsewhere}\n"),
+            ("both, capitalised", f"\t[CORE]  \n  worktree  =  {self.elsewhere}  \n"),
+            # The KEY's case as well as the section's: git matches both without regard to
+            # it, and `WorkTree` is what a hand-edited config plausibly carries.
+            ("a mixed-case key", f"[core]\n\tWorkTree = {self.elsewhere}\n"),
+        ):
+            with self.subTest(whitespace=label):
+                self.write(body)
+                self.assertEqual(self.git_top(), self.elsewhere,
+                                 "git no longer reads this config, so the row proves nothing")
+                self.assertEqual(self.mine(), self.elsewhere)
+
     def test_a_bare_section_that_is_not_core_does_not_name_a_work_tree(self):
         """`core.worktree` is `core`'s. The subsection row beside this one pins the other
         half of the same condition, and dropping either leaves the other passing — so a
@@ -215,6 +241,10 @@ class WhichRepositoryItAsks(GitConfigCase):
         sub = self.repo / "sub"
         sub.mkdir()
         (sub / ".git").write_text("gitdir: ../.git/modules/sub\n")
+        self.assertEqual(self.mine(cwd=sub), self.elsewhere)
+        # And with whitespace on both sides of both halves, which is what stops a
+        # one-ended trim reading the label as `  gitdir` or the target with a tail.
+        (sub / ".git").write_text("  gitdir  :   ../.git/modules/sub   \n")
         self.assertEqual(self.mine(cwd=sub), self.elsewhere)
 
     def test_a_pointer_whose_LABEL_is_not_gitdir_is_not_followed(self):

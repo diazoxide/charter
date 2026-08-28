@@ -173,25 +173,33 @@ def _core_worktree(git_dir: Path) -> str | None:
     if "worktree" not in text.lower():
         return None
     found = None
-    for section, subsection, key, value in _pairs(text):
-        # A subsection makes it `core.<sub>.worktree`, which is a different key and does
-        # not relocate anything. Named rather than ignored, because `[core "x"]` reads like
-        # `[core]` to a scanner that only looks at the first word.
-        if section == "core" and not subsection and key == "worktree":
+    for section, key, value in _pairs(text):
+        # `core` exactly. `[core "x"]` is `core.x.worktree`, a different key that relocates
+        # nothing, and it is refused by the same comparison rather than by a second field:
+        # the header this carries is its whole text, so a subsection is simply not `core`.
+        if section == "core" and key == "worktree":
             found = value
     return found
 
 
 def _pairs(text: str):
-    """Yield ``(section, subsection, key, value)`` for a git config file's text.
+    """Yield ``(section, key, value)`` for a git config file's text.
 
     A deliberately small subset of git's own parser, and the subset is stated: section
-    headers with an optional quoted subsection, ``key = value`` lines, ``#``/``;`` comments
-    outside quotes, quoted values with git's escapes, and a value continued onto the next
-    line with a trailing backslash. What it does not do is in the module docstring; what it
-    gets wrong yields a value nobody will match, which adds nothing to any caller's list.
+    headers, ``key = value`` lines, ``#``/``;`` comments outside quotes, quoted values with
+    git's escapes, and a value continued onto the next line with a trailing backslash. What
+    it does not do is in the module docstring; what it gets wrong yields a value nobody
+    will match, which adds nothing to any caller's list.
+
+    **The section is its header's whole text, lowercased, and a subsection is not split
+    out.** git's own model is `<section>.<subsection>.<key>`, and a reader that mirrored it
+    would carry a field this module's one question never asks about — `core.worktree` is
+    matched, `core.x.worktree` is not, and ``core "x"`` is not ``core`` without anything
+    having to notice why. The deletion sweep is what made that visible: every line of the
+    subsection split was one no test could go red without, because both spellings answer
+    the same question the same way.
     """
-    section = subsection = ""
+    section = ""
     for line in _logical_lines(text):
         rest = line.strip()
         if not rest:
@@ -200,12 +208,12 @@ def _pairs(text: str):
             end = rest.find("]")
             if end < 0:
                 continue
-            head, rest = rest[1:end].strip(), rest[end + 1:].strip()
-            if '"' in head:
-                name, _, sub = head.partition('"')
-                section, subsection = name.strip().lower(), sub.rsplit('"', 1)[0]
-            else:
-                section, subsection = head.lower(), ""
+            # No `.strip()` on the header's own text: the line was stripped on the way
+            # in, and git refuses spaces INSIDE the brackets outright (`[ core ]` is *bad
+            # config line*, verified on 2.50.1), so there is nothing left in there to trim.
+            # The deletion sweep found it — a line no test could go red without, because
+            # git's own grammar makes the case it handles unreachable.
+            section, rest = rest[1:end].lower(), rest[end + 1:].strip()
             if not rest:
                 # `[core] worktree = x` on one line is legal git, so the remainder of a
                 # header line is a key line rather than something to drop.
@@ -215,7 +223,21 @@ def _pairs(text: str):
         key, sep, value = rest.partition("=")
         if not sep:
             continue          # a valueless key is a boolean, and never names a directory
-        yield section, subsection, key.strip().lower(), _scalar(value)
+        # `.lower()` on both section and key: git matches both without regard to case, so a
+        # hand-written `[CORE]` / `WorkTree` names what git's own writer emits as
+        # `[core]` / `worktree`. Both are pinned.
+        #
+        # **The three `.strip()` calls on this path are a masked cluster, and that is
+        # stated rather than left to be rediscovered.** `line.strip()` above, the header
+        # tail's `.strip()`, and this one each remove whitespace the other two have already
+        # removed for every shape but one, so turning any single one into a one-ended trim
+        # changes no answer — the deletion sweep reports all three and can separate none of
+        # them. Checked by hand rather than assumed equivalent: `line.strip()` is the only
+        # one that sees a line's own indentation before `[` is looked for, the tail's is
+        # the only one that sees `[core] worktree = x`, and this one is the only one that
+        # sees `worktree   = x`. Each covers a shape the others cannot, and their overlap
+        # is what makes the cluster.
+        yield section, key.strip().lower(), _scalar(value)
 
 
 def _logical_lines(text: str):
