@@ -25,12 +25,14 @@ state directory anywhere — so reporting *is* the remedy, and a WARN at every s
 about a directory the operator has decided to leave alone is a check crying wolf. The note
 is on the ✓ line, in the same posture as the "points outside the plane" note beside it.
 
-The next spelling: a provider whose data lives in a directory charter creates and whose
-`loose_dirs()` still answers ``[]``. `reference` is exactly that today — it writes a file
-under ``.charter/vaults/`` through the same private walk, and reports nothing about a
-directory that predates it, on either surface. That is a real gap and it is not this
-file's: it is filed upstream, and the base class's default is the honest ``[]`` rather than
-a guess.
+The next spelling was: a provider whose data lives in a directory charter creates and whose
+`loose_dirs()` still answers ``[]``. `reference` was exactly that — it writes a file under
+``.charter/vaults/`` through the same private walk, and reported nothing about a directory
+that predates it, on either surface. **Closed in #491**, and not by giving `reference` a
+copy of the eight lines: the question moved onto `VaultProvider` and is keyed on
+`file_path`, so every file-backed provider answers it and a provider with no ``file`` still
+gets the honest ``[]``. `tests/test_reference_vault_reports_its_directory.py` holds that
+side, including the assertion that neither provider overrides the method any more.
 """
 
 from __future__ import annotations

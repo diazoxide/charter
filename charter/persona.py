@@ -639,6 +639,47 @@ def _mcp_declared(name: str) -> tuple[dict, list[str]]:
     return out, refused
 
 
+def mcp_vault(vault) -> str | None:
+    """The vault an MCP entry would actually be wrapped with — ``None`` for :data:`NO_VAULT`.
+
+    ``vault: none`` is charter's reserved way of saying *this persona deliberately holds no
+    credentials* (:func:`declares_no_vault`), and :func:`vault_of` has always returned
+    ``None`` for it so that no caller goes looking for a vault literally named ``none``.
+    The MCP path read ``meta["vault"]`` raw and therefore did not. Measured against 0.53.0,
+    on a persona whose charter says ``vault: none``:
+
+        consent line   run uvx analytics-mcp  secrets "T"="k"  vault "none"
+        rendered       charter secret exec none --env T=k --exec -- uvx analytics-mcp
+
+    So charter asked the operator to approve spending the value of a vault named ``none``,
+    recorded the consent, and wrote a launcher into the generated agent that can never
+    work — while `lint` was separately, correctly, calling the same persona one that names
+    no vault. One sentinel, two readings.
+
+    Applied in :func:`mcp_render_entry` and :func:`mcp_credentialed` — the render and the
+    consent list — because those two must agree about which servers carry a credential or
+    the operator is asked about a server the file does not wrap, and vice versa.
+    """
+    v = vault.strip() if isinstance(vault, str) else ""
+    return None if not v or v == NO_VAULT else v
+
+
+def vault_for_mcp(name: str) -> str | None:
+    """The vault *name*'s MCP entries would actually be wrapped with, or ``None``.
+
+    :func:`mcp_vault` applied to the resolved ``vault:``, in ONE place. Both readers that
+    have to agree — :func:`mcp_credentialed`, which decides what the operator is asked
+    about, and :func:`lint`, which decides what they are told — spelled this chain out
+    themselves, and a chain written twice is the thing `file_path` and `loose_dirs` are
+    both about in this same commit.
+
+    The ``or {}`` is load-bearing here and not in the callers' old copies: `resolve` returns
+    ``None`` for a persona whose ``persona.md`` does not load, and `_approve_mcp` reaches
+    `mcp_credentialed` for every name `list_personas` globbed, without asking first.
+    """
+    return mcp_vault((resolve(name) or {}).get("meta", {}).get("vault"))
+
+
 def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     """One declared server, as the generated agent should carry it.
 
@@ -657,6 +698,9 @@ def mcp_render_entry(name: str, vault: str | None, entry: dict) -> dict:
     server through charter would buy nothing and add a process.
     """
     out = {k: v for k, v in entry.items() if k not in ("secrets", "secret_files")}
+    # `vault: none` is the declared ABSENCE of a vault, not the name of one — see
+    # :func:`mcp_vault` for what this line was emitting before it was normalised here.
+    vault = mcp_vault(vault)
     secrets = entry.get("secrets") or {}
     # A separate key, not a marker inside `secrets`, because these are different MECHANISMS
     # rather than two spellings of one: `secrets` puts a VALUE in the environment,
@@ -726,7 +770,10 @@ def mcp_credentialed(name: str) -> list[tuple[str, dict, str, str]]:
     than by the digest, so such an entry is still REPORTED as withheld instead of
     vanishing from both lists at once.
     """
-    vault = (resolve(name) or {}).get("meta", {}).get("vault")
+    # `vault_for_mcp`, which is `mcp_render_entry`'s own normalisation: a persona declaring
+    # `vault: none` holds no credential to withhold, and a consent prompt about one is a
+    # prompt about nothing that records an approval for a command that cannot run.
+    vault = vault_for_mcp(name)
     out = []
     for server, entry in sorted(mcp_servers(name).items()):
         if mcpseen.needs_consent(vault, entry):
@@ -1639,12 +1686,69 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
                        f"letters, digits, '_', '.' and '-' (64 max). Rename it in "
                        f"`{MCP_FILE}`"))
     if servers:
-        vault = (resolve(name) or {}).get("meta", {}).get("vault")
-        needs_secrets = sorted(s for s, e in servers.items() if (e or {}).get("secrets"))
-        if needs_secrets and (not vault or vault == "none"):
+        # `vault_for_mcp`, so this row and the render agree about what "has a vault" means.
+        # It was `not vault or vault == "none"` — a second spelling of the sentinel, written
+        # out beside a `NO_VAULT` constant that exists to stop exactly that, and one that
+        # reads a whitespace-only `vault:  ` as a vault name.
+        vault = vault_for_mcp(name)
+        # `mcpseen.declares_credential`, not `entry.get("secrets")`. `secrets` and
+        # `secret_files` are two mechanisms for one thing and every other reader treats
+        # them as one — `needs_consent`, `mcp_render_entry`, `secret exec --env/--file`.
+        # This line was the odd one out, so a server declaring only `secret_files` against
+        # a persona naming no vault rendered without its credential and was reported by
+        # NOTHING: not here, because the key was not read, and not by `mcp_withheld`,
+        # because with no vault there is no consent to withhold. `secret_files` is what
+        # Google ADC needs (#190) — the exact declaration #489's reproduction carries.
+        # `e`, not `e or {}`. A committed `{"mcpServers": {"x": null}}` puts `None` here,
+        # and `declares_credential` answers that with False by construction — its
+        # `isinstance(entry, dict)` is the guard, and it is pinned. A second guard in front
+        # of a pinned one is a line no test can go red without, which the sweep reported and
+        # which this file's own rule says to delete rather than to leave looking careful.
+        wants = sorted(s for s, e in servers.items() if mcpseen.declares_credential(e))
+        if wants and not vault:
             issues.append(("error",
-                           f"mcp: server(s) {', '.join(needs_secrets)} declare `secrets` but "
-                           f"this persona names no vault — add `vault:` or drop the secrets"))
+                           f"mcp: server(s) {', '.join(wants)} declare `secrets` or "
+                           f"`secret_files` but this persona names no vault — add `vault:` "
+                           f"or drop the declaration"))
+    # The credential this persona declares and is NOT running with (#489). Standing state,
+    # said by the command you run BECAUSE a persona is misbehaving — which is the whole
+    # finding: `mcp_withheld` had exactly one caller, `sync-agents`, on the run that wrote
+    # the file. That warning is correct and it is said once. After it scrolls, a persona
+    # running without the credential it declares is byte-identical in
+    # `.claude/agents/<name>.md` to one that never declared a vault at all, and the failure
+    # it produces arrives three layers away as an MCP server failing to authenticate.
+    #
+    # A WARNING, not an error, and that is a decision rather than a default. Withholding is
+    # the #330 gate working: the operator may have read the command and declined it, and
+    # charter must not overrule that with an exit code — `charter persona lint` returning 1
+    # forever would make the finding something planes turn off. What charter owes is that
+    # the state stays VISIBLE, which is what this row is. `doctor` reports it without a
+    # second sentence of its own: `check_personas` already counts these issues and names
+    # the persona, and one fact with two wordings is the drift this file keeps recording.
+    #
+    # Nothing is re-derived here. `mcp_withheld` computes the list `sync-agents` prints, so
+    # the two surfaces cannot disagree about which servers are withheld — the failure mode
+    # of a report that recomputes its own answer.
+    for server, line in mcp_withheld(name):
+        if line:
+            issues.append((
+                "warn",
+                f"mcp: '{mcpseen.label(server)}' declares a credential this machine has "
+                f"not approved, so the generated sub-agent runs it WITHOUT the vault and "
+                f"it will fail to authenticate. Read the command and approve it with "
+                f"`charter persona sync-agents --approve-mcp`, or drop `secrets`/"
+                f"`secret_files` from `{MCP_FILE}` if it should hold no credential"))
+        else:
+            # `describe` cannot render this entry, so it can never be approved (#427) and
+            # `--approve-mcp` refuses it by name. Telling the operator to run that command
+            # would be a nudge that cannot work, which is the one thing a nudge may not be
+            # (#371) — so this is a different sentence AND a different level: the entry has
+            # to change before any answer to the consent question exists.
+            issues.append((
+                "error",
+                f"mcp: '{mcpseen.label(server)}' declares a credential and "
+                f"{mcpseen.UNRENDERABLE} — it can never be approved, so the vault is "
+                f"withheld permanently. Fix the entry in `{MCP_FILE}`"))
 
     return issues
 

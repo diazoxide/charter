@@ -152,6 +152,17 @@ vault wrapper — so the persona keeps working and the server fails at authentic
 than silently running with a credential nobody sanctioned. `sync-agents` prints the exact
 command it withheld from, which is the thing worth looking at.
 
+**And it keeps saying so after that run scrolls.** The generated agent carries no trace of
+what was withheld — an entry with its vault withheld renders byte-identically to one that
+declared no `secrets` at all, in a file you are told never to hand-edit, so it reads as
+intended output ([#489](https://github.com/diazoxide/charter/issues/489)). `charter persona
+lint` names each withheld server and both ways out (approve it, or drop the declaration),
+and `charter doctor` reaches it through the personas line. It is a **warning**, not an
+error: declining a server is a decision you are allowed to make, and charter's job is to
+keep it visible rather than to overrule it with an exit code. The one case that *is* an
+error is an entry charter cannot show in full — no approval can ever exist for it, so
+"approve it" is advice that cannot work and the committed entry has to change.
+
 `--approve-mcp` asks **per server**, and prints the entry before it asks:
 
 ```

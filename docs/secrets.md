@@ -43,6 +43,17 @@ directory and the `chmod` to run. It stays a **green** line rather than a warnin
 will not fix this one for you, so saying it is the remedy, and a warning at every session
 start about a directory you have decided to leave alone is a check nobody reads twice.
 
+**Every vault charter keeps a file for says this, not only `plain-file`.** A `reference`
+vault sits in the same `.charter/vaults/` and used to report nothing at all about it, so
+two vaults side by side in one loose directory disagreed about whether there was anything
+to say ([#491](https://github.com/diazoxide/charter/issues/491)). Its health line now
+carries the same three facts a plain-file one does, in the same words: the loose directory,
+the file's own mode when charter did not write it (`perms 644 (want 600)`), and whether the
+file is there at all — `not created yet (<path>)`, which used to read as `no references
+yet` and made a mistyped `--file` indistinguishable from a vault nobody had filled in. The
+values in a reference file are not secrets, but the file lists every item and field this
+plane reaches and the directory lists the vault names, which is what the report is for.
+
 **The files in it are a different answer, and on purpose.** Every file charter writes under
 `.charter/` — the vault registry, `guard-seen.json`, the trace log, the ephemeral persona
 store, the session and workspace pointers, the caches — is **0600**, whatever your umask
