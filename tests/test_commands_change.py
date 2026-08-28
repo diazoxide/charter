@@ -827,13 +827,27 @@ class TestTheCommandSurfacesOwnEdges(ChangeCommands):
         self.assertEqual(len(hostile.strip().splitlines()),
                          len(benign.strip().splitlines()))
 
-    def test_the_lifted_exclusion_warning_cannot_be_as_long_as_the_reason(self):
+    def test_the_lifted_exclusion_warning_cannot_be_as_long_as_what_it_quotes(self):
+        """**Both** fields it quotes, one case each. The reason is the operator's; the
+        timestamp is charter's own — until the record is hand-edited, which is the only
+        state this store ever assumes about a file it did not write this second."""
         long = "w" * (change.TEXT_LIMIT - 1)
         self.create()
         self.call(commands_change.cmd_change_drop, change="component-api-2",
                   repo="charter", why=long)
         _, _, err = self.call(commands_change.cmd_change_add,
                               change="component-api-2", repo="charter")
+        self.assertIn("lifted", err)
+        for line in err.splitlines():
+            self.assertLess(len(line), change.TEXT_LIMIT, line[:80])
+
+        d = change.changes_dir("ws")
+        (d / "stamped.json").write_text(json.dumps(
+            {"change": "stamped", "why": "w", "created": "t", "by": "t", "members": [],
+             "excluded": [{"repo": "charter", "why": "short", "at": long}]}))
+        _, _, err = self.call(commands_change.cmd_change_add,
+                              change="stamped", repo="charter")
+        self.assertIn("lifted", err)
         for line in err.splitlines():
             self.assertLess(len(line), change.TEXT_LIMIT, line[:80])
 
