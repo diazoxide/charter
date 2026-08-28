@@ -2196,6 +2196,22 @@ class TheGateSaysWhichOfThreeThingsItFound(unittest.TestCase):
         text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
         self.assertIn("## Deletion sweep — 2 survivors", text)
 
+    def test_the_page_says_how_long_it_took_or_that_it_did_not_measure_that(self):
+        """`elapsed is None`, found unpinned by the sweep on the branch that added it.
+
+        A merge adds up several machines' results in about a second, and printing that
+        second as the sweep's wall clock would understate a forty-minute run by two orders
+        of magnitude, on the one line a reader skims. So the merged page says where its
+        number came from instead — and the *measured* page has to actually carry the
+        minutes, or "says so instead" is the only thing either page ever says.
+        """
+        gate = sweep.classify([_result("pinned")])
+        measured = sweep.gate_summary(gate, "a" * 40, "b" * 40, 1234.0, enforce=False)
+        merged = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, enforce=False)
+        self.assertIn("20.6 min on ", measured)
+        self.assertNotIn("merged from its shards", measured)
+        self.assertIn("merged from its shards on ", merged)
+
     def test_a_page_missing_a_shard_refuses_to_call_the_branch_clean(self):
         gate = sweep.classify([_result("pinned")])
         text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False,
