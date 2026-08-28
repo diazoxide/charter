@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from .. import contain
-from . import component, overlay
+from . import component, overlay, pane
 
 #: What the header says the palette is, before the operator types anything.
 HEADING = "charter"
@@ -282,6 +282,27 @@ def own_the_tty(surface: overlay.Surface, *, fd: int | None = None, out=None,
 
     ---
 
+    **`out` defaults to the pane this process was CLAIMED, never to `sys.stdout`** — #611,
+    which is #606's property reaching the other pane-owning process. This name is not an
+    output stream here, it is the rectangle: it is what the surface paints into AND the
+    descriptor `size` measures, so the two cannot be allowed to come from a mutable global
+    that any library the process imported may have replaced. `commands_frame.cmd_palette`
+    claims above `builtin_actions.build`, which is where a provider's module first gets to
+    run (Textual's `redirect_stdout`, a `rich` console, `colorama`, a logging handler
+    installed at import) — measured on `main` before the claim: every byte of one whole
+    palette, the alternate-screen enter included, went into a `_PrintCapture` and the pane
+    got nothing at all, while `size` asked `os.get_terminal_size(-1)` and raised into a
+    pane `_close_palette` was already killing. `frame/pane.py` carries the argument.
+
+    `pane.stream()` and not `pane.size()`: this function measures the descriptor it is
+    painting into, whichever stream that is, so an explicit *out* (every test with a real
+    pty passes one) is measured as itself rather than against a claim nobody took. The
+    fallback inside `stream()` is `sys.stdout` for a process that claimed no pane, which
+    is the same answer this parameter defaulted to before and is why no existing caller
+    moves.
+
+    ---
+
     **`then` is how one pane holds more than one surface**, and it is Task 6's whole
     mechanism: a chosen row is offered to it, and a `Surface` coming back is run next, in
     this same pane, without the tty leaving raw mode in between. `None` — the default, and
@@ -303,7 +324,7 @@ def own_the_tty(surface: overlay.Surface, *, fd: int | None = None, out=None,
     tmux's own root key table before any byte reaches this process.
     """
     fd = sys.stdin.fileno() if fd is None else fd
-    out = sys.stdout if out is None else out
+    out = pane.stream() if out is None else out
     before = termios.tcgetattr(fd)
     tty.setraw(fd)
     try:
