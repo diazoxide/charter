@@ -61,6 +61,19 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #: `tui.column` counts the gap inside the width it returns, so the rule for a column is
 #: that width less this — never a second constant beside the first, which is what the
 #: old `"-" * 18` under a `{:<18}` was.
+#:
+#: **Its value is deliberately not pinned, and that is measured rather than assumed.**
+#: Raise it to 3 and every case in `test_a_table_column_is_measured_in_cells` stays green,
+#: because both sides move together: the column is sized `gap=_GAP` and the rule is drawn
+#: `w - _GAP`, so every offset is unchanged and only the whitespace between columns grows.
+#: A test spelling `2` would pass forever and see nothing — #508's own finding about `28`,
+#: in the other direction.
+#:
+#: What a gap BUYS is pinned, and the boundary is 0: at zero the widest value in a column
+#: runs straight into the next cell and nothing on the row says where the column ended.
+#: `test_the_widest_value_in_a_column_is_still_followed_by_a_separator` holds that, and
+#: the measurement is recorded here so nobody re-derives it (`_BRANCH_TEXT_MIN_W`'s
+#: precedent, #597).
 _GAP = 2
 
 
