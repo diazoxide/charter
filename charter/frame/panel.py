@@ -49,6 +49,20 @@ the directory absent, or present and empty — that is one syscall per tick, alo
 one `state.version` already pays, and the panel paints nothing. It is self-limiting by
 construction rather than by a budget: the ticking stops when the records do.
 
+**A panel can now READ its pane, and only when a component asked it to** (#607). The loop
+below is otherwise unchanged: `_wait` replaces the tick's `time.sleep` with a `select` of
+the same length when — and only when — the placed component declared an event kind charter
+delivers, so an event wakes the panel the instant it arrives instead of at the next tick
+boundary, and a panel that declared nothing pays and changes nothing at all. Charter's own
+four are in that second group, so the frame an operator has today is byte-identical and
+syscall-identical to the one they had before the dispatcher existed.
+
+The event itself never draws. A handler answers "repaint me" and `_tick` treats that as a
+fourth reason to run the paint it already had — the rows are still `render`'s, still
+escaped and clipped by `Registry.draw`, still written by `_write`. `frame/events.py` holds
+the whole mechanism and the argument for it; what lives here is the loop it hangs off and
+the `finally` that puts the operator's tty mode back.
+
 **SIGWINCH matters because a resize does not bump the frame's version.** Only charter's
 own hooks call `state.bump`; the operator resizing their terminal does not. Without a
 handler, a pane sits with content painted for the OLD size until some unrelated activity
@@ -254,7 +268,7 @@ def _paint(slot: str, fid: str) -> None:
     _write(_unmeasured() or slots.render(slot, fid))
 
 
-def _component_painter(reg, cid: str):
+def _component_painter(reg, cid: str, evs=None):
     """A paint function for *cid*, drawn out of *reg* — `_paint`'s shape for a component.
 
     **The registry is built once and closed over, not rebuilt per tick.** A panel drawing
@@ -272,13 +286,18 @@ def _component_painter(reg, cid: str):
     reason stronger than symmetry: `ctx.build` hands a component a `width` and a `height`
     it is entitled to draw to the edge of, so a guess passed through this door is a guess a
     stranger's code has already been told is a measurement.
+
+    *evs* is this component's event path (`frame/events.py`), or ``None`` for one that
+    declared nothing charter delivers. Closed over here for the same reason *reg* is: what
+    this panel draws was decided once, when `run` resolved the name, and asking per tick
+    would put the question on the repaint path.
     """
     def paint(_name: str, fid: str) -> None:
-        _write(_unmeasured() or _component_text(reg, cid, fid))
+        _write(_unmeasured() or _component_text(reg, cid, fid, evs=evs))
     return paint
 
 
-def _component_text(reg, cid: str, fid: str) -> str:
+def _component_text(reg, cid: str, fid: str, *, evs=None) -> str:
     """*cid*'s rows for this pane, as the one string `_write` takes.
 
     ``ctx`` is built from what the component DECLARED (§4e), so a component that declared
@@ -316,9 +335,21 @@ def _component_text(reg, cid: str, fid: str) -> str:
     the clause below THAT one is `except BaseException`, so there the two lines are the
     only reason an interrupt survives a stranger's renderer at all.
     `TheOperatorsInterruptIsNotAComponentFailure` pins both halves.
+
+    **A component whose event handler raised draws this message instead of its rows**
+    (#607), which is `registry.Registry`'s answer to a provider that fails on import or
+    while building, given to the fourth moment one can fail. The trade is real and
+    `frame/events.py` states it: a working ``render`` loses its pane because the HANDLER
+    broke. The alternative is a component that quietly stops being interactive, which
+    #512 is what it costs to ship.
     """
     from . import ctx as _ctx, gather
     try:
+        if evs is not None and evs.failure:
+            # `contain.one_line` BEFORE the width arithmetic, as below and for the same
+            # reason: the reason quotes a stranger's exception text.
+            return tui.truncate(f" charter: {contain.one_line(evs.failure)}",
+                                slots._width())
         c = reg.get(cid)
         snapshot = gather.read(fid) if c.needs else {}
         drew = reg.draw(cid, _ctx.build(c.needs, width=slots.content_width(cid),
@@ -332,6 +363,30 @@ def _component_text(reg, cid: str, fid: str) -> str:
         return tui.truncate(
             f" charter: {contain.one_line(cid)} unavailable ({type(e).__name__})",
             slots._width())
+
+
+def _dispatcher(reg, cid: str):
+    """*cid*'s event path, or ``None`` for a component charter delivers nothing to.
+
+    **``None`` is the whole cost promise** (#607). A panel whose component declared no
+    event kind charter fires builds no dispatcher, so `_watch` sleeps as it always has, the
+    pane's tty keeps whatever mode it was in, and nothing asks the terminal to report
+    anything. Charter's own four panels never reach this function at all — they are drawn
+    by `slots.SLOTS` off the branch above — so the frame an operator has today is
+    byte-identical and syscall-identical to the one they had before this existed.
+
+    Built from the REGISTERED component rather than from the id, so a provider that failed
+    to load gets no event path either: `Registry._stand_in` declares no events, which is
+    correct — a standin is charter's own message about somebody else's failure, and a
+    message does not handle a click.
+
+    Imported here rather than at module scope, following this module's own precedent for
+    `builtins` and `gather`: `charter panel top` is the common case and must not pay for
+    the import of a decoder it will never call.
+    """
+    from . import events as _events
+    c = reg.get(cid)
+    return _events.Dispatcher(c) if _events.wanted(c) else None
 
 
 def _hold(reason: str, *, once: bool, rc: int) -> int:
@@ -448,8 +503,28 @@ def _install_sigwinch(resized: dict) -> object:
     return signal.signal(signal.SIGWINCH, lambda *_a: resized.__setitem__("flag", True))
 
 
+def _wait(evs, timeout: float = TICK) -> bool:
+    """Wait out one tick, and answer whether an event changed what to draw.
+
+    **The one place a panel decides how it waits**, so "a panel with no declared events
+    behaves exactly as it did before this feature existed" is a property one function
+    holds rather than a claim spread across the loop. With no dispatcher this is the
+    `time.sleep` `_watch` has always ended its iteration with.
+
+    With one, a `select` of the same length replaces it (`events.Dispatcher.poll`) — the
+    same idle cost, and it wakes the instant the pane says something instead of at the
+    next tick boundary. A *second* mechanism beside the sleep is what this deliberately is
+    not: a panel that both slept and polled would have two clocks to keep in step.
+    """
+    if evs is None:
+        time.sleep(timeout)
+        return False
+    return evs.poll(timeout)
+
+
 def _tick(resized: dict, seen: str, slot: str, fid: str, *,
-          animating: bool = False, paint=None) -> str:
+          animating: bool = False, paint=None, events=None,
+          handled: bool = False) -> str:
     """One loop iteration's decision AND its effect — split out of `run` so the
     DECISION (paint now, or wait) can be exercised without also exercising `run`'s
     `while True`/`time.sleep`, which a test cannot call directly without either hanging
@@ -493,16 +568,33 @@ def _tick(resized: dict, seen: str, slot: str, fid: str, *,
     instead. A parameter rather than a branch inside the loop, because the choice is made
     once, where `run` resolves the name: asking "is this a component?" every tick would
     put an installed-distribution scan on the repaint path.
+
+    *handled* is the fourth reason, and it is the ONLY way an event reaches the screen
+    (#607): a component's handler answered truthy for "repaint me", so what this panel
+    would draw now differs from what is on it. Deliberately a reason to run the existing
+    paint rather than a second way to draw — the rows are still `render`'s, still escaped
+    and clipped by `registry.Registry.draw`, still written by `_write`. `_watch` is what
+    computes it, from `_wait`.
+
+    *events* is that component's event path, and it is asked for a ``resize`` immediately
+    BEFORE the paint. The order is the property: a handler that recomputes a layout for a
+    new rectangle has done so by the time `render` is asked for rows, so a resize costs one
+    repaint rather than one that is wrong and one that corrects it. It is asked on every
+    paint rather than only when *resized* is set, because `events.Dispatcher.note_resize`
+    answers from the pane's MEASURED rectangle — the flag is how this loop learns to look,
+    and the rectangle is what the event is about.
     """
     now = state.version(fid)
-    if resized["flag"] or now != seen or animating:
+    if resized["flag"] or now != seen or animating or handled:
+        if events is not None:
+            events.note_resize()
         resized["flag"] = False
         (paint or _paint)(slot, fid)
         return now
     return seen
 
 
-def _watch(slot: str, fid: str, *, once: bool, paint=None) -> int:
+def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
     """The live loop: paint on every version bump, resize, or spinner frame, until killed.
 
     The third reason is the only one that repeats on its own, and it is bounded twice over
@@ -517,6 +609,12 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None) -> int:
     the rest of a held process's life would keep waking a loop that has nothing left to
     repaint, and `RunOnceLoop.test_once_true_restores_the_previous_sigwinch_handler`
     already pins that this module leaks no handler past its own work.
+
+    **The event path is opened and closed by the same `finally`, for that same reason and
+    a sharper one** (#607): what `evs.open()` displaces is the operator's own tty mode, and
+    a panel that reached `_hold` — which never returns — having left `ECHO` off would leave
+    the pane in a state nothing on the machine puts back. `evs.close()` is idempotent and
+    never raises, so it is safe to run after a handler failure has already closed it.
     """
     resized = {"flag": True}  # the first pass always paints, resized or not
     inflight_cache = _new_inflight_cache()
@@ -528,15 +626,20 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None) -> int:
     # `slots.ANIMATED`).
     animates = slot in slots.ANIMATED
     old_handler = _install_sigwinch(resized)
+    if evs is not None:
+        evs.open()
     try:
-        seen = ""
+        seen, handled = "", False
         while True:
-            seen = _tick(resized, seen, slot, fid, paint=paint,
-                         animating=animates and bool(_running(inflight_cache)))
+            seen = _tick(resized, seen, slot, fid, paint=paint, events=evs,
+                         animating=animates and bool(_running(inflight_cache)),
+                         handled=handled)
             if once:
                 return 0
-            time.sleep(TICK)
+            handled = _wait(evs)
     finally:
+        if evs is not None:
+            evs.close()
         signal.signal(signal.SIGWINCH, old_handler)
 
 
@@ -614,7 +717,7 @@ def _run(slot: str, fid: str, *, once: bool = False) -> int:
     from . import builtins as _builtins
     cid = _builtins.component_id(slot)
     try:
-        painter = None
+        painter = evs = None
         if cid in _builtins.SLOT_OF:
             # One of charter's own, under either spelling: `slots.SLOTS` draws it,
             # exactly as it has since there were four names and nothing else.
@@ -628,8 +731,9 @@ def _run(slot: str, fid: str, *, once: bool = False) -> int:
             # `try` all the same — this is a stranger's distribution metadata being read,
             # and the promise this function makes is that a panel PAINTS why it stopped.
             reg.place(cid)
-            painter = _component_painter(reg, cid)
-        return _watch(slot, fid, once=once, paint=painter)
+            evs = _dispatcher(reg, cid)
+            painter = _component_painter(reg, cid, evs)
+        return _watch(slot, fid, once=once, paint=painter, evs=evs)
     except Exception as e:
         reason = f"{contain.one_line(slot)} panel stopped ({type(e).__name__}: {e})"
         print(f"charter panel: {reason}", file=sys.stderr)

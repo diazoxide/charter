@@ -177,13 +177,26 @@ _MIN_TITLE = 8
 #: in a short frame, which is the one way this number could cost anything.
 _SPLIT_ROWS = 5
 
-#: The event kinds this surface produces. A subset of `component.EVENT_KINDS` — §4f
-#: closed that list at six, and `focus`/`blur` are not among these because they do not
-#: exist yet: `focus-events` is off by default in tmux and gates the whole path, and with
-#: it off `#{client_flags}` still reads `attached,focused`, so a guard written against
-#: that flag passes with the feature dead (§4i). Task 7 of the Phase 2 plan turns it on;
-#: until then a `focus` this module invented would fire never or wrongly.
+#: The event kinds :func:`decode` produces. A subset of `component.EVENT_KINDS` — §4f
+#: closed that list at six, and `key` is the only one of these this SURFACE acts on
+#: besides the pointer pair (:meth:`Surface.handle`).
+#:
+#: `focus`/`blur` joined the decoder with #607, and the sentence they replace said they
+#: could not exist because `focus-events` ships off in tmux and gates the whole path.
+#: Task 7 of the Phase 2 plan (#559) turned it on: `commands_frame.conf_text` writes
+#: `set -g focus-events on` for every frame charter launches, so the bytes are real on
+#: charter's own server. They are still absent inside an operator's existing tmux, where
+#: charter sources no config at all — which is "never fires", the direction
+#: `component.EVENT_KINDS` asks to degrade in, and not the `#{client_flags}` guard §4i
+#: warns about, which reads `attached,focused` with the feature dead.
+#:
+#: **This surface acts on neither**, and that is not an oversight: the overlay is the
+#: ACTIVE, zoomed pane for its whole life, so it never asks for `\x1b[?1004h` and no
+#: focus report ever reaches its decoder. `frame/events.py` is what these are decoded
+#: for, one pane over. `Surface.handle` returning `None` for them is pinned, so this
+#: addition cannot start moving a palette's selection.
 KEY, CLICK, SCROLL, RESIZE = "key", "click", "scroll", "resize"
+FOCUS, BLUR = "focus", "blur"
 
 #: What :meth:`Surface.handle` answers with. Strings rather than an enum for the reason
 #: the rest of this package uses strings: they appear in a test's failure message as
@@ -216,6 +229,23 @@ _CSI_KEYS = {b"A": "up", b"B": "down", b"C": "right", b"D": "left",
              b"H": "home", b"F": "end"}
 _TILDE_KEYS = {b"1": "home", b"4": "end", b"5": "pgup", b"6": "pgdn", b"7": "home",
                b"8": "end"}
+
+#: The two CSI sequences that are not a key at all but this pane's own focus changing.
+#: tmux's spelling, measured against real tmux 3.7c: selecting a pane whose program had
+#: written `\x1b[?1004h` delivered `b'\x1b[I'`, selecting away delivered `b'\x1b[O'`, and
+#: the client's own terminal losing and regaining focus delivered the same pair to the
+#: active pane.
+#:
+#: **Matched only with NO parameters, and that is a guard rather than tidiness.** `CSI I`
+#: is ECMA-48's CHT and `CSI O` is a private form; both take a numeric parameter in every
+#: use that is not this one, so `\x1b[3I` is a cursor movement some program echoed and not
+#: three focus events. Requiring the parameter list to be empty is
+#: `component.EVENT_KINDS`'s "degrade to never fires, never to fires wrongly" applied at
+#: the only place that can tell the two apart.
+#:
+#: Before #607 both fell through to :data:`_CSI_KEYS`, which has no name for either, and
+#: were consumed and dropped — so this changes nothing about what the palette sees.
+_CSI_FOCUS = {b"I": FOCUS, b"O": BLUR}
 
 #: One WHOLE CSI: `ESC [`, its numeric parameters, and the final byte that ends it —
 #: ECMA-48's own shape, `0x40`–`0x7e`.
@@ -322,6 +352,13 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
     path — otherwise Ctrl-Up types `1;5A`, F1 types `P`, and a paste types the brackets
     tmux wrapped it in. The rule is one rule; only where it is enforced was ever in
     question.
+
+    **Two of those whole sequences are not keys, and #607 gave them their names.**
+    ``\\x1b[I`` and ``\\x1b[O`` are this pane gaining and losing focus (:data:`_CSI_FOCUS`);
+    they used to be consumed and dropped, which was right while nothing could receive
+    them and wrong once `frame/events.py` could. Decoding is one question for every caller
+    — WHICH kinds a given surface acts on is the caller's, and this surface acts on
+    neither.
     """
     evs: list[Event] = []
     while buf:
@@ -361,6 +398,11 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
                 buf = buf[2:]
                 continue
             params, final_byte, buf = m[1], m[2], buf[m.end():]
+            if not params and final_byte in _CSI_FOCUS:
+                # This pane gained or lost focus. Not a key, and never named as one: a
+                # `focus` reaching `_CSI_KEYS` would be a keypress spelled `I`.
+                evs.append(Event(_CSI_FOCUS[final_byte]))
+                continue
             # For the `~` family the FIRST parameter names the key and the rest are
             # modifiers, exactly as the final byte names it for the others — so
             # `\x1b[5;5~` (Ctrl-PgUp) is PgUp, and one rule covers both families rather

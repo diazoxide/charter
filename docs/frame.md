@@ -1088,6 +1088,57 @@ same property that makes `F12` work against a pane that has stopped answering. T
 palette is the one taking your keys; Escape closes it, and the first is an ordinary pane
 you can select and close the same way.
 
+### What a component can be told about
+
+A component declares which events it handles, and supplies one function to receive them:
+
+```python
+component.Component(
+    id="acme.metrics", title="Metrics", edge="right", size=component.Fixed(12),
+    events=("focus", "blur"),
+    on_event=lambda ev: remember(ev.kind),   # answer truthy to repaint
+    render=lambda ctx: [line_for(remembered())],
+)
+```
+
+The two go together or not at all. A component that declares `events` and supplies no
+`on_event` is refused when it loads, and so is one that supplies `on_event` and declares
+nothing — a declaration with nothing behind it looks exactly like a kind charter never
+fires, and that ambiguity is the thing this refusal exists to remove.
+
+**Three of the six kinds fire today.**
+
+| kind | fires |
+|---|---|
+| `resize` | Always. Your pane's rectangle changed. |
+| `focus`, `blur` | Inside a frame charter launched, on a terminal that reports focus. |
+| `key`, `click`, `scroll` | Never yet. Declarable, and delivered nowhere. |
+
+`focus` and `blur` need tmux's `focus-events`, which charter turns on for its own server
+and cannot turn on inside a tmux you already have (see *Inside a tmux you already have*) —
+and your terminal emulator has to report focus in the first place. `key` is not delivered
+because your harness owns the keyboard: tmux routes typing to the active pane, which is the
+harness's, so the only keystrokes a panel could see are the ones you typed into the wrong
+pane. `click` and `scroll` are the subject of *Mouse is off by default* above, and there is
+a second reason on top of that one: tmux routes a pointer by position and a click does not
+move focus, so a click on an unfocused panel would be a second, silent focus that disagrees
+with where your keyboard is going. Charter would rather deliver nothing than deliver that.
+
+Declaring a kind that does not fire is not an error and never becomes one. A declaration
+says what a component *handles*; it is not a promise from charter that the event happens.
+Give anything a pointer could do a key or a palette action as well.
+
+**A handler is told what happened; `render` is what draws.** Nothing `on_event` returns
+reaches your pane — the return value only says whether to repaint, and the repaint runs
+your ordinary `render`. A handler is handed no `ctx` either: the plane is read at the
+repaint that follows, from the one snapshot every component in that repaint shares.
+
+**A handler that raises costs the component its events, and the pane says so.** It is
+retired — no further events are delivered to it — and its pane draws the reason instead of
+its rows, the same answer charter gives a provider that fails to import. A handler that
+never returns freezes that one pane and nothing else: the other panels keep painting, your
+harness is untouched, and `F12` still returns you to it.
+
 ### Picking a workspace when the frame opens
 
 `charter <harness>` used to resolve a workspace silently and go straight in. If **nothing

@@ -218,7 +218,11 @@ class NeedsAreTheDeclaredCost(unittest.TestCase):
 
 class EventsAreTheClosedFive(unittest.TestCase):
     def test_every_named_kind_is_accepted(self):
-        self.assertEqual(_c(events=component.EVENT_KINDS).events,
+        """The `on_event` is not decoration here: since #607 a declaration with nothing
+        behind it is refused, so "every kind is accepted" can only be asked of a
+        component that could actually receive one."""
+        self.assertEqual(_c(events=component.EVENT_KINDS,
+                            on_event=lambda ev: None).events,
                          tuple(component.EVENT_KINDS))
 
     def test_drag_was_deliberately_excluded_and_stays_excluded(self):
