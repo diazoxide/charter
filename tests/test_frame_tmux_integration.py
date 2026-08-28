@@ -52,13 +52,24 @@ STATUS and is exactly what a void destroys — retries a trial that measured not
 everything else here (`_a_measured_death`), and a menu is now WAITED for on the terminal
 it is drawn on rather than slept at (:class:`_Screen`).
 
-**One test here still cannot carry a probe, and says so rather than pretending**:
+**The last test that could not carry a probe now carries one — #609, and it took a
+measurement to find out that the obstacle written here was not this test's.**
 `WindowInsideAnOperatorsTmux.test_nothing_of_the_operators_tmux_is_written_by_a_whole_launch`
-reads the code a whole real `cmd_launch` returns, and that pane carries charter's
-production `pane-died` PAIR — `[0]` the write hook, `[1]` `kill-session`. There is no free
-index: `[1]` is where a probe would go and is charter's teardown, and measured against tmux
-3.7c a `[2]` armed beside them never runs at all, because `kill-session` at `[1]` takes the
-server down first. A void death there is still read as an exit code of `1`.
+reads the code a whole real `cmd_launch` returns, and this paragraph used to say that pane
+carried charter's production `pane-died` PAIR — `[0]` the write hook, `[1]` `kill-session`
+— leaving no free index. That pair is the PRIVATE-SERVER path's. This test drives
+`_launch_in_operator_tmux`, whose own docstring says it installs no hooks on the harness
+pane at all ("the harness's exit code travels without hooks here"), and `show-hooks -p` on
+that pane during a real launch confirms it: **empty**. `_PROBE_INDEX` was free the whole
+time, and the test was asserting where its siblings skip for a reason that was never true
+of it.
+
+What IS true of it is the other half, and it is why the probe needed something new: this
+launcher runs `kill-window` the instant it has read the code, so the dying pane — and any
+option written on it — is gone microseconds later. So the probe's evidence moves to the
+SERVER for this one caller (`_VoidDeaths._ON_THE_SERVER`), which outlives the window and
+appears in none of the five readings the test snapshots. A void death there is now a
+retried trial and then a skip, exactly like everywhere else.
 
 Every test gets its own tmux SESSION (hooks are per-pane, so a shared session would let
 one test's hook leak into another's pane) on the ONE socket this module owns, and every
@@ -733,14 +744,49 @@ class _VoidDeaths:
     #: option` and prints nothing — three distinguishable answers where the file had two.
     _PROBE_OPTION = "@charter-probe"
 
-    #: What the probe hook's action IS. A tmux command, not a shell command line: nothing
-    #: charter builds appears in it, no `#{pane_dead_status}`, no `set-environment` value
-    #: — so the only thing it can ever report is "tmux reached this pane's hook array",
-    #: which on both tmuxes this suite must pass on is the same question as "did tmux
-    #: have the child's status".
-    _PROBE_ACTION = f"set-option -p {_PROBE_OPTION} ran"
+    #: The two scopes the probe's evidence can be kept at, spelled as the flag both
+    #: `set-option` and `show-options` take for it.
+    #:
+    #: **`-p` — the dying pane's own option — is the default and was the only one until
+    #: #609.** The pane is kept by `remain-on-exit`, so it is still there to be asked
+    #: afterwards and the evidence sits on the very thing it is evidence about.
+    #:
+    #: **`-s` — the server's — is for a caller whose pane is torn down before it can
+    #: ask.** `WindowInsideAnOperatorsTmux
+    #: .test_nothing_of_the_operators_tmux_is_written_by_a_whole_launch` drives a REAL
+    #: `cmd_launch`, and `_launch_in_operator_tmux` runs `kill-window` the instant it has
+    #: read the code — so a pane-scoped answer is destroyed by the very path under test,
+    #: microseconds after it is written. Measured against tmux 3.7c: a `pane-died` hook
+    #: whose action is `set-option -s @charter-probe ran` fires on the dying pane, and the
+    #: option survives that `kill-window` and the frame's whole session. Everything #507
+    #: says about an option over a file holds unchanged at either scope — it is set BY
+    #: TMUX, in the same act as running the array, with no shell, no fork and no
+    #: filesystem in between.
+    #:
+    #: **And it cannot answer that test's own question for it**, which is the thing to
+    #: check before a test writes anything on a server it is asserting nobody wrote to.
+    #: Measured, on the same server, after the hook had fired: the option appears in NONE
+    #: of the five readings that test snapshots — `show-options -g`, `show-options -t
+    #: <their session>`, `show-options -g -w`, `show-options -w -t <their pane>`, and
+    #: `list-keys` all come back without it, because a SERVER option is none of those
+    #: scopes.
+    _ON_THE_PANE, _ON_THE_SERVER = "-p", "-s"
 
-    def _the_array_ran(self, pane: str, timeout: float = _DEADLINE) -> bool:
+    def _probe_where(self, scope: str, pane: str) -> tuple[str, ...]:
+        """The scope flag and the target that goes with it: a pane for `-p`, and for `-s`
+        nothing at all, because a server is not a thing there can be two of."""
+        return (scope, "-t", pane) if scope == self._ON_THE_PANE else (scope,)
+
+    def _probe_action(self, scope: str) -> str:
+        """What the probe hook's action IS, at *scope*. A tmux command, not a shell command
+        line: nothing charter builds appears in it, no `#{pane_dead_status}`, no
+        `set-environment` value — so the only thing it can ever report is "tmux reached
+        this pane's hook array", which on both tmuxes this suite must pass on is the same
+        question as "did tmux have the child's status"."""
+        return f"set-option {scope} {self._PROBE_OPTION} ran"
+
+    def _the_array_ran(self, pane: str, timeout: float = _DEADLINE, *,
+                       scope: str = _ON_THE_PANE) -> bool:
         """Did tmux run *pane*'s `pane-died` array? Polled, up to *timeout*.
 
         Reads the option back off tmux itself. An unarmed or unrun pane answers rc 1 and
@@ -750,14 +796,15 @@ class _VoidDeaths:
         """
         deadline = time.monotonic() + timeout
         while True:
-            got = self._srv("show-options", "-p", "-v", "-t", pane, self._PROBE_OPTION)
+            got = self._srv("show-options", "-v", *self._probe_where(scope, pane),
+                            self._PROBE_OPTION)
             if got.returncode == 0 and got.stdout.strip() == "ran":
                 return True
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.1)
 
-    def _arm_array_probe(self, pane: str) -> None:
+    def _arm_array_probe(self, pane: str, *, scope: str = _ON_THE_PANE) -> None:
         """Install the CONSTANT-action `pane-died` probe hook on *pane*. **The one
         observable that tells a result from a trial that measured nothing.**
 
@@ -786,24 +833,30 @@ class _VoidDeaths:
         runs (7/7 of the voids in `_HOOK_TRIALS`'s 118-trial run). A test that classified
         on the empty status alone would have to treat a real signal death as a void
         trial — which is how a suite stops being able to fail.
+
+        **The HOOK is pane-scoped whatever *scope* says; only its evidence moves.**
+        `set-hook -p -t <pane>` is what makes this one pane's array the subject, and
+        widening that to `-g` would arm every pane on the server — including ones another
+        test in the same class is about. *scope* decides only where the option the action
+        writes LIVES: on the dying pane, or on the server that outlives it. See
+        :data:`_ON_THE_PANE`.
         """
+        where = self._probe_where(scope, pane)
         self.assertEqual(
-            self._srv("set-option", "-p", "-t", pane, self._PROBE_OPTION,
-                      "arming").returncode, 0,
-            f"this tmux will not set the pane option ({self._PROBE_OPTION}) every void "
+            self._srv("set-option", *where, self._PROBE_OPTION, "arming").returncode, 0,
+            f"this tmux will not set the {scope} option ({self._PROBE_OPTION}) every void "
             "check in this module reads — a missing option would then mean 'tmux ran no "
             "hook' everywhere and skip every death-dependent test on a healthy machine")
-        back = self._srv("show-options", "-p", "-v", "-t", pane, self._PROBE_OPTION)
+        back = self._srv("show-options", "-v", *where, self._PROBE_OPTION)
         self.assertEqual(
             (back.returncode, back.stdout.strip()), (0, "arming"),
             f"this tmux set {self._PROBE_OPTION} and would not report it back "
             f"({back.returncode}, {back.stdout!r}) — see above")
         self.assertEqual(
-            self._srv("set-option", "-p", "-u", "-t", pane,
-                      self._PROBE_OPTION).returncode, 0)
+            self._srv("set-option", "-u", *where, self._PROBE_OPTION).returncode, 0)
         self.assertEqual(
             self._srv("set-hook", "-p", "-t", pane, f"pane-died[{self._PROBE_INDEX}]",
-                      self._PROBE_ACTION).returncode, 0)
+                      self._probe_action(scope)).returncode, 0)
 
     def _the_array_never_ran(self, pane: str, what: str) -> None:
         """Assert *pane* is in the ONE state an unset probe option is allowed to mean:
@@ -2957,7 +3010,7 @@ class EarlyDeathIntegration(_VoidDeaths, unittest.TestCase):
         conf = self._conf_dir / f"{name}.conf"
         conf.write_text(commands_frame._PLACEHOLDER_CONF
                         + f"set-hook -g pane-died[{self._PROBE_INDEX}] "
-                          f"'{self._PROBE_ACTION}'\n")
+                          f"'{self._probe_action(self._ON_THE_PANE)}'\n")
         _tmux("set", "-g", "remain-on-exit", "on")  # no-op (and an error) before the
                                                     # first session; `-f` covers that one
         r = _run(layout.session_argv(session=name, conf=str(conf), socket=SOCKET,
@@ -3570,23 +3623,30 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         lands on the developer's live frames. The decoy is checked to be inside this
         test's throwaway plane BEFORE the launch, so the assertion that it was deleted
         can never be evidence about the real one.
+
+        **Tried up to `_HOOK_TRIALS` times, and #609 is what put the loop here.** This is
+        the test that reads a whole launch's own return code, and on a loaded
+        `ubuntu-latest` it went red as `Lists differ: [1] != [21]` at a sha whose OTHER
+        workflow run, started two seconds later on the same image, went green. `1` is
+        `commands_frame._UNKNOWN_DEATH_CODE`, which is what this launcher answers for a
+        death tmux never had the child's status for — #487's window, measured 7 times in
+        118 — so the red described the runner and not charter, in the one test in this
+        module that had no way to say so. It has one now: the harness pane here carries
+        no `pane-died` hook of charter's at all (`_launch_in_operator_tmux`: "the
+        harness's exit code travels without hooks here"), so `_PROBE_INDEX` is free, and
+        the evidence goes on the SERVER because this launcher's own `kill-window` destroys
+        the pane the moment it has the code (:data:`_VoidDeaths._ON_THE_SERVER`).
+
+        **A void is retried and only then skipped, and every other `1` still fails.** Which
+        `1` it is comes off two facts that are already recorded rather than a new guess:
+        whether tmux ran the pane's array, and what `state.exit_code` holds — `None` for a
+        pane that vanished rather than died askably (`_wait_for_harness`'s own `None`, and
+        every early `return 1` before the harness ever ran), the fallback for a death tmux
+        held no status for. A `1` with the array RUN is charter losing an exit code tmux
+        had, and that is the failure this test exists to report.
         """
         name, sid, op_pane, _ = self._operator_server()
-        gate = os.path.join(self._gate_dir, "e2e-gate")
-
-        # Named after a pid that has genuinely exited: since #383 `reap` keeps any
-        # directory whose launcher is still alive, and the `-1` this once carried reads
-        # as `launchd`/`init` — the decoy would have survived for that reason and this
-        # assertion would have been unfailable.
-        decoy = state.frame_dir(
-            f"a-frame-from-a-charter-that-had-no-server-marker-{_a_dead_pid()}",
-            create=True)
-        self.assertIsNotNone(decoy)
-        (decoy / "version").write_text("1\n")
-        self.assertTrue(decoy.is_relative_to(self.tmp),
-                        f"the frame state this test is about to have charter delete is "
-                        f"at {decoy} — outside this test's own throwaway plane "
-                        f"({self.tmp}), so it belongs to somebody real")
+        server_pid = self._srv("display-message", "-p", "#{pid}").stdout.strip()
 
         def _snapshot():
             return tuple(self._srv(*args).stdout for args in (
@@ -3600,64 +3660,160 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                 ("list-keys",)))
 
         before = _snapshot()
-        server_pid = self._srv("display-message", "-p", "#{pid}").stdout.strip()
-        args = SimpleNamespace(harness="frame", rest=["--", *_gate_argv(gate, "exit 21")],
-                               no_frame=False)
-        rc: list[int] = []
 
-        def _run_launch():
-            env = dict(os.environ, TMUX=f"{OP_SOCKET_PATH},{server_pid},{sid[1:]}",
-                       TMUX_PANE=op_pane)
-            # `_no_real_detached_child` because a launch now FORKS (#512): `_spawn_gather`
-            # sends `charter frame-gather` through `util.detach_self`, a real
-            # `subprocess.Popen` carrying `os.environ.copy()`. That child is a separate
-            # PROCESS, so neither `PersonaIso`'s in-process `config.use()` nor
-            # `tests/_planeguard.py` reaches it, and the environment being copied here is
-            # the DEVELOPER'S with no `$CHARTER_ROOT` in it — so on any machine where
-            # `sys.executable` can import charter the child resolves the plane from the
-            # checkout's cwd and gathers, bumps and git-sweeps the operator's live one.
-            # Measured on the machine this was written on: `detach_self` really fired,
-            # with `argv=['frame-gather', '--session', 'demo-<pid>', '--workspace',
-            # 'demo']` and `CHARTER_ROOT=''`. This test is about what a launch writes on
-            # somebody else's tmux SERVER; the gather child is not part of that question,
-            # and it is the one part of a launch that escapes the isolation.
-            # BOTH halves of the tty pair, for the reason `test_frame_launcher._launch`
-            # sets out (#545) and with one aggravation of its own: this launch runs on a
-            # worker THREAD, so `_picker_wanted` finding a terminal here does not merely
-            # hang the test — it hangs a daemon thread nobody is waiting on a prompt from,
-            # and what the assertion below reports is "the frame's own window never
-            # appeared", which is a true sentence about the wrong subject.
-            with mock.patch.dict(os.environ, env, clear=True), \
-                 _no_real_detached_child([]), \
-                 mock.patch("sys.stdout.isatty", return_value=True), \
-                 mock.patch("sys.stdin.isatty", return_value=False), \
-                 mock.patch("charter.workspace.resolve", return_value="demo"), \
-                 mock.patch.dict(config.FRAME, {"slots": []}):
-                rc.append(commands_frame.cmd_launch(args))
+        def _one_whole_launch(attempt: int) -> bool:
+            """One real `cmd_launch` in the operator's server. ``True`` when it measured
+            a death, ``False`` for a trial that measured nothing (`_HOOK_TRIALS`)."""
+            gate = os.path.join(self._gate_dir, f"e2e-gate-{attempt}")
+            # Named after a pid that has genuinely exited: since #383 `reap` keeps any
+            # directory whose launcher is still alive, and the `-1` this once carried reads
+            # as `launchd`/`init` — the decoy would have survived for that reason and this
+            # assertion would have been unfailable.
+            decoy = state.frame_dir(
+                f"a-frame-from-a-charter-that-had-no-server-marker-{_a_dead_pid()}",
+                create=True)
+            self.assertIsNotNone(decoy)
+            (decoy / "version").write_text("1\n")
+            self.assertTrue(decoy.is_relative_to(self.tmp),
+                            f"the frame state this test is about to have charter delete is "
+                            f"at {decoy} — outside this test's own throwaway plane "
+                            f"({self.tmp}), so it belongs to somebody real")
 
-        worker = threading.Thread(target=_run_launch, daemon=True)
-        worker.start()
-        self.assertTrue(self._wait_until(
-            lambda: "demo-" in self._srv("list-windows", "-a", "-F",
-                                     "#{window_name}").stdout),
-            "the frame's own window never appeared in the operator's server")
-        during = _snapshot()
-        self._release(gate)
-        worker.join(timeout=25)
-        self.assertFalse(worker.is_alive(), "cmd_launch never returned")
-        self.assertEqual(rc, [21], "the harness's own exit code did not come back")
-        self.assertEqual(before, during,
-                         "charter wrote something on a server it is only a guest on")
-        self.assertEqual(before, _snapshot())
-        self.assertIn(name, self._srv("list-sessions", "-F", "#{session_name}").stdout.split())
-        self.assertNotIn("demo-", self._srv("list-windows", "-a", "-F",
-                                        "#{window_name}").stdout,
-                         "the frame's window was left behind")
-        self.assertFalse(decoy.exists(),
-                         "a launch is expected to reap a frame directory with no "
-                         "`server` marker — if it has stopped doing that, `state.reap`'s "
-                         "migration case changed and the isolation this class rests on "
-                         "is no longer being exercised by anything")
+            args = SimpleNamespace(harness="frame",
+                                   rest=["--", *_gate_argv(gate, "exit 21")],
+                                   no_frame=False)
+            rc: list[int] = []
+
+            def _run_launch():
+                env = dict(os.environ, TMUX=f"{OP_SOCKET_PATH},{server_pid},{sid[1:]}",
+                           TMUX_PANE=op_pane)
+                # `_no_real_detached_child` because a launch now FORKS (#512):
+                # `_spawn_gather` sends `charter frame-gather` through `util.detach_self`,
+                # a real `subprocess.Popen` carrying `os.environ.copy()`. That child is a
+                # separate PROCESS, so neither `PersonaIso`'s in-process `config.use()` nor
+                # `tests/_planeguard.py` reaches it, and the environment being copied here
+                # is the DEVELOPER'S with no `$CHARTER_ROOT` in it — so on any machine
+                # where `sys.executable` can import charter the child resolves the plane
+                # from the checkout's cwd and gathers, bumps and git-sweeps the operator's
+                # live one. Measured on the machine this was written on: `detach_self`
+                # really fired, with `argv=['frame-gather', '--session', 'demo-<pid>',
+                # '--workspace', 'demo']` and `CHARTER_ROOT=''`. This test is about what a
+                # launch writes on somebody else's tmux SERVER; the gather child is not
+                # part of that question, and it is the one part of a launch that escapes
+                # the isolation.
+                # BOTH halves of the tty pair, for the reason `test_frame_launcher._launch`
+                # sets out (#545) and with one aggravation of its own: this launch runs on
+                # a worker THREAD, so `_picker_wanted` finding a terminal here does not
+                # merely hang the test — it hangs a daemon thread nobody is waiting on a
+                # prompt from, and what the assertion below reports is "the frame's own
+                # window never appeared", which is a true sentence about the wrong subject.
+                with mock.patch.dict(os.environ, env, clear=True), \
+                     _no_real_detached_child([]), \
+                     mock.patch("sys.stdout.isatty", return_value=True), \
+                     mock.patch("sys.stdin.isatty", return_value=False), \
+                     mock.patch("charter.workspace.resolve", return_value="demo"), \
+                     mock.patch.dict(config.FRAME, {"slots": []}):
+                    rc.append(commands_frame.cmd_launch(args))
+
+            worker = threading.Thread(target=_run_launch, daemon=True)
+            worker.start()
+            self.assertTrue(self._wait_until(
+                lambda: "demo-" in self._srv("list-windows", "-a", "-F",
+                                         "#{window_name}").stdout),
+                "the frame's own window never appeared in the operator's server")
+            fid, harness_pane = self._the_frames_own_window()
+            during = _snapshot()
+            # AFTER the snapshot, so nothing this test writes can be mistaken for
+            # something charter wrote — and before the gate, because the death is what the
+            # probe is for. Armed on charter's own pane in charter's own window; the
+            # option its action writes is the SERVER's, which outlives the `kill-window`
+            # this launcher performs the instant it has the exit code.
+            self._arm_array_probe(harness_pane, scope=self._ON_THE_SERVER)
+            self.assertIn(
+                self._probe_action(self._ON_THE_SERVER),
+                self._srv("show-hooks", "-p", "-t", harness_pane).stdout,
+                f"the probe is not in this pane's `pane-died` array at "
+                f"[{self._PROBE_INDEX}] — charter has started arming a hook of its own "
+                "on the harness pane in an operator's tmux, which silently REPLACES this "
+                "probe (`set-hook -p` with an index overwrites that index). Every void "
+                "check below would then read 'tmux ran no hook' and skip on a healthy "
+                "machine")
+            self._release(gate)
+            worker.join(timeout=25)
+            self.assertFalse(worker.is_alive(), "cmd_launch never returned")
+            self.assertEqual(before, during,
+                             "charter wrote something on a server it is only a guest on")
+            self.assertEqual(before, _snapshot())
+            self.assertIn(name,
+                          self._srv("list-sessions", "-F", "#{session_name}").stdout.split())
+            self.assertNotIn("demo-", self._srv("list-windows", "-a", "-F",
+                                            "#{window_name}").stdout,
+                             "the frame's window was left behind")
+            self.assertFalse(decoy.exists(),
+                             "a launch is expected to reap a frame directory with no "
+                             "`server` marker — if it has stopped doing that, `state.reap`'s "
+                             "migration case changed and the isolation this class rests on "
+                             "is no longer being exercised by anything")
+            if rc == [21]:
+                # **The probe is checked on the GREEN path too, and that is what keeps a
+                # broken one from turning this test into a permanent skip.** `21` can only
+                # have come off `#{pane_dead_status}`, so tmux HAD the child's status — and
+                # tmux runs a pane's `pane-died` array once it has it. The array therefore
+                # must have run here, on every healthy machine, every time. A probe that
+                # cannot see that (a scope that stopped resolving, an option this tmux will
+                # not keep across `kill-window`) would be equally blind on the rare
+                # non-21 attempt, where its silence is read as "#487's void" and skips —
+                # which is a suite going quiet about the thing it was written to measure.
+                # Asserted here it is a loud failure on the FIRST run instead.
+                self.assertTrue(
+                    self._the_array_ran(harness_pane, scope=self._ON_THE_SERVER),
+                    "the harness's own exit code came back, so tmux had the child's "
+                    "status and ran this pane's `pane-died` array — but the probe armed "
+                    "on it reports nothing. Its silence on a void would then mean nothing "
+                    "either, and every void would skip a test that could still have been "
+                    "measured")
+                return True
+            # Not the harness's code. `_UNKNOWN_DEATH_CODE` is the ONLY other number this
+            # path can answer for a harness that really started, so anything else is a
+            # launch that bailed somewhere this test has never described.
+            self.assertEqual(rc, [commands_frame._UNKNOWN_DEATH_CODE],
+                             "the harness's own exit code did not come back, and what did "
+                             "is not charter's fallback either")
+            self.assertEqual(
+                state.exit_code(fid), commands_frame._UNKNOWN_DEATH_CODE,
+                "charter answered its fallback code and recorded no exit for this frame — "
+                "the harness pane vanished rather than dying askably (nothing kept it: "
+                "`_remain_on_exit_argv`), or the launch returned before the harness ever "
+                "ran. Both are charter's, and neither is the tmux 3.4 window "
+                "`_HOOK_TRIALS` describes")
+            if self._the_array_ran(harness_pane, scope=self._ON_THE_SERVER):
+                self.fail(
+                    "tmux ran this pane's `pane-died` array — so it HAD the child's "
+                    "status — and charter still answered "
+                    f"{commands_frame._UNKNOWN_DEATH_CODE} instead of the harness's own "
+                    "21. That is an exit code lost between tmux and `cmd_launch`, not a "
+                    "trial that measured nothing")
+            return False
+
+        for attempt in range(self._HOOK_TRIALS):
+            if _one_whole_launch(attempt):
+                return
+        self._no_death_was_delivered()
+
+    def _the_frames_own_window(self) -> tuple[str, str]:
+        """The frame id and harness pane of the window a launch just opened here.
+
+        The window's NAME is the frame id (`layout.window_argv` is given `fid`), and with
+        `[frame] slots` empty the frame's window holds exactly the harness pane — so
+        `#{pane_id}` for that window is it. Read off tmux rather than guessed, because the
+        launcher mints `<workspace>-<its own pid>` on a worker thread and this test never
+        sees the value.
+        """
+        rows = [line.split() for line in self._srv(
+            "list-windows", "-a", "-F", "#{window_name} #{pane_id}").stdout.splitlines()
+            if line.startswith("demo-")]
+        self.assertEqual(len(rows), 1, f"expected exactly one frame window, got {rows!r}")
+        return rows[0][0], rows[0][1]
 
 
 class ASecondFrameOnTheSharedServer(_TmuxServerFixture, PersonaIso):
