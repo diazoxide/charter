@@ -2379,11 +2379,12 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     repository's branch — and the benefit is that no single-path answer has to choose which
     of two real subjects to report.
 
-    A fourth is not an option at all, and #504 is what that cost: `core.worktree`, the key
-    in the repository's OWN config. A repository carrying it has the named directory as its
-    working tree for every command, with nothing on the command line saying so — verified on
-    git 2.50.1, where `git checkout <branch>` inside such a clone wrote that branch's content
-    into the PLANE ROOT. It is read here rather than inferred, by `charter.gitconfig`.
+    A fourth subject is not an option at all, and #504 is what that cost: `core.worktree`,
+    git's THIRD spelling of the work tree, written as a key in the repository's OWN config.
+    A repository carrying it has the named directory as its working tree for every command,
+    with nothing on the command line saying so — verified on git 2.50.1, where `git checkout
+    <branch>` inside such a clone wrote that branch's content into the PLANE ROOT. It is
+    read here rather than inferred, by `charter.gitconfig`.
 
     **It is a SUPERSET of the cwd, not an enumeration of everything git will touch.** The
     list is exactly: the cwd, always; the `--work-tree`/`GIT_WORK_TREE` if one is named; the
@@ -2506,12 +2507,14 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
         # question rather than a list of spellings.
         gd = _at(git_dir)
         out.extend((gd, gd / ".."))
-    # **The third spelling of the work tree, and the only one no token names.** The two
-    # above are options; `core.worktree` is a key in the repository's own `.git/config`,
-    # so a repository carrying it has the named directory as its working tree for every
-    # command and a guard reading argv and environment sees a plain `git checkout feature`
-    # typed inside a workspace clone (#504). Verified end to end on git 2.50.1: from such
-    # a clone, `git checkout <branch>` replaced the PLANE ROOT's working tree.
+    # **The fourth subject, and the only one no token names.** `--work-tree` and
+    # `GIT_WORK_TREE` above are git's first two spellings of the work tree; this is its
+    # third, and it is not an option — `core.worktree` is a key in the repository's own
+    # `.git/config`, so a repository carrying it has the named directory as its working
+    # tree for every command, and a guard reading argv and environment sees a plain
+    # `git checkout feature` typed inside a workspace clone (#504). Verified end to end
+    # on git 2.50.1: from such a clone, `git checkout <branch>` replaced the PLANE ROOT's
+    # working tree.
     #
     # **This is the one place in this function that touches the disk**, and it is what
     # #497 declined to add rather than widen into: a walk up to the repository and one
