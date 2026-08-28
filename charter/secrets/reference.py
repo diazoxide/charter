@@ -42,7 +42,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import util
-from .base import SecretNotFound, VaultError, VaultProvider, make_private_dir
+from .base import (SecretNotFound, VaultError, VaultProvider, loose_dir_note,
+                   make_private_dir, mode_note, short_path as _short)
 
 
 def _op_argv(uri: str, config: dict) -> tuple[list[str], str]:
@@ -126,10 +127,41 @@ _RESOLVERS = {"op": _op_argv, "vault": _vault_argv, "browser": _browser_argv}
 RESOLVE_TIMEOUT = 60.0
 
 
-def scheme_of(value: str) -> str | None:
-    """The reference scheme of *value*, or None if it isn't a supported reference."""
-    scheme = urlsplit(value or "").scheme
+def scheme_of(value) -> str | None:
+    """The reference scheme of *value*, or None if it isn't a supported reference.
+
+    **TOTAL, over anything JSON can hold, and that is not defensive programming.** The
+    vault file is hand-editable and — for this provider especially — *committed*: the whole
+    argument for reference vaults is that a team commits the wiring and a fresh clone
+    inherits it. So the values here are arbitrary JSON, and `_load` checks only that the
+    document is an object. A committed ``{"K": 123}`` reached `urlsplit`, which raised
+    ``AttributeError: 'int' object has no attribute 'decode'`` straight out of
+    :meth:`ReferenceProvider.health` — and `health` is called by `charter vault list` and by
+    `charter doctor`, which catch `VaultError` and nothing else, from the SessionStart hook.
+    The command whose entire job is reporting on this file was the thing the file could
+    crash. Anything that is not a string is not a supported reference, which is the same
+    answer this already gave a string that is not one.
+    """
+    if not isinstance(value, str):
+        return None
+    scheme = urlsplit(value).scheme
     return scheme if scheme in _RESOLVERS else None
+
+
+def _cli_for(scheme: str, data: dict, config: dict) -> str:
+    """The CLI name *scheme*'s resolver would invoke, for the entries in *data*.
+
+    The argv builder is what knows its CLI, and it needs a URI to build one — so the URI
+    handed to it has to be one of *this* scheme's. `health` asked the same question twice,
+    once to decide whether the CLI is on PATH and once to name it, and each spelled the
+    ``next(v for v in data.values() if scheme_of(v) == s)`` search out again. The filter is
+    the whole search: without it the first call gets whichever entry happens to be first,
+    and `_vault_argv` handed an ``op://`` URI raises "malformed Vault reference" out of a
+    health check. One implementation, so the two questions cannot disagree about which
+    entry they are asking about.
+    """
+    return _RESOLVERS[scheme](
+        next(v for v in data.values() if scheme_of(v) == scheme), config)[1]
 
 
 class ReferenceProvider(VaultProvider):
@@ -259,20 +291,98 @@ class ReferenceProvider(VaultProvider):
 
         ``vault list`` and ``doctor`` call this routinely; resolving here would hit
         1Password/Vault on every listing and could prompt for re-auth.
+
+        **What this line says about the FILE, which for three releases was nothing (#491).**
+        A reference vault keeps a file under ``.charter/vaults/`` exactly as a plain-file
+        vault does, and said nothing about the directory holding it or about its own mode.
+        The values in it are not secrets — that is the provider's whole point — but the
+        file lists every item and field this plane reaches and the directory lists the
+        vault NAMES, which is precisely the exposure the report exists for. So three
+        clauses, in the same wording `plain-file` uses because they come from the same two
+        functions in :mod:`charter.secrets.base`:
+
+        * the file is not there at all — ``not created yet (<path>)``, which used to render
+          as ``no references yet``. A vault registered against a mistyped ``--file`` is a
+          failed read, and a failed read must never come out as a benign state: "no
+          references yet" is what an empty vault says, and the operator cannot tell the two
+          apart. `statusline` reads exactly this phrase to mark such a vault ``◦``, so a
+          reference vault was also the one provider whose never-written state was invisible
+          there;
+        * the file's mode, when charter did not write it (:func:`base.mode_note`);
+        * the directories above it that another account can list
+          (:func:`base.loose_dir_note`) — and `doctor` gets that one from
+          :meth:`loose_dirs` rather than from this string, so both surfaces render one list
+          (#471);
+        * an entry that is **not a supported reference at all**. :meth:`set` refuses one,
+          but entries arrive here by hand and by commit as well, and this counted them and
+          named only the schemes that work: every entry unsupported printed a green ``1
+          reference(s) via `` trailing off after the word "via", and one good entry beside
+          one dead one printed ``2 reference(s) via op``. Both read as a healthy vault, and
+          the failure waited for a `get` the operator was doing for another reason.
+
+        Nothing here chmods anything. `_save` writes 0600 and `make_private_dir` walks the
+        parents it creates at 0700; a file or directory that was already there is REPORTED,
+        because a vault's ``file`` may name any path on this machine and tightening one
+        charter did not create is #331 (see :meth:`PlainFileProvider._tighten`).
         """
+        if not self.config.get("file"):
+            # Ahead of `_load`, which reaches the same conclusion through a raise. Said in
+            # `plain-file`'s words rather than `file_path`'s longer sentence, because the
+            # two providers print into the same STATUS column of the same table.
+            return False, "no 'file' configured"
+        p = self.file_path
+        # Collected before the branches and appended by every one of them. This is the
+        # `check_vaults` lesson at provider scale (#471): a note that rides only the branch
+        # where nothing else is wrong is reported in exactly the conditions nobody is in —
+        # and what another account can list is the DIRECTORY, which is just as listable
+        # before this vault's file exists as after.
+        note = loose_dir_note(self.loose_dirs())
+
+        def _line(text: str) -> str:
+            return ", ".join([text] + [s for s in (mode_note(p), note) if s])
+
+        if not p.exists():
+            return True, _line(f"not created yet ({_short(p)})")
         try:
             data = self._load()
         except VaultError as e:
-            return False, str(e)
+            # `_line` here too. `check_vaults` records the rule one level up — the note goes
+            # on EVERY return, not only the green one — and a directory does not stop being
+            # listable because the file inside it is also unparseable.
+            return False, _line(str(e))
         if not data:
-            return True, "no references yet"
+            return True, _line("no references yet")
         needed = sorted({s for s in (scheme_of(v) for v in data.values()) if s})
-        missing = [s for s in needed if not shutil.which(_RESOLVERS[s](
-            next(v for v in data.values() if scheme_of(v) == s), self.config)[1])]
+        missing = [s for s in needed if not shutil.which(_cli_for(s, data, self.config))]
         n = len(data)
-        if missing:
-            clis = ", ".join(sorted({_RESOLVERS[s](
-                next(v for v in data.values() if scheme_of(v) == s), self.config)[1]
-                for s in missing}))
-            return False, f"{n} reference(s), but not on PATH: {clis}"
-        return True, f"{n} reference(s) via {', '.join(needed)}"
+        # An entry `set` would have refused, arriving the way entries actually arrive here:
+        # by hand, or by commit. It resolves to nothing, and the line said nothing about it
+        # — a vault whose every entry was unsupported printed a green ``1 reference(s) via
+        # `` with the sentence trailing off after the word "via", and a vault with one good
+        # entry and one dead one printed ``2 reference(s) via op``, counting the dead one
+        # and naming only the scheme that works. Both read as a healthy vault; the failure
+        # waited for `get`, which is a read the operator is doing for another reason.
+        #
+        # The COUNT here and the names in `charter vault verify`, which already prints
+        # ``<key>: <error>`` per failing reference and exits non-zero. A key comes out of a
+        # committed JSON object, so it is a value charter did not mint landing in a table
+        # row — and the row that carries what is wrong and what to type is the shape
+        # `loose_dir_note` settled on for the surface right beside this one.
+        unsupported = [k for k, v in data.items() if not scheme_of(v)]
+        if unsupported or missing:
+            problems = []
+            if unsupported:
+                problems.append(f"{len(unsupported)} not a supported URI "
+                                f"(charter vault verify names them)")
+            if missing:
+                # Ordered by SCHEME, which `needed` already sorted and `missing` preserves
+                # — not by collecting the CLI names into a set and sorting that. A set of
+                # short strings iterates in hash order, and `str` hashing is randomised per
+                # process, so the old spelling leaned on `sorted` to undo a randomness it
+                # had just introduced; drop the set and the order is a property of the data
+                # rather than of `$PYTHONHASHSEED`. A health line that reorders between runs
+                # is one nobody can diff, and `vault list` output gets pasted into issues.
+                problems.append("not on PATH: " + ", ".join(_cli_for(s, data, self.config)
+                                                            for s in missing))
+            return False, _line(f"{n} reference(s), but " + "; ".join(problems))
+        return True, _line(f"{n} reference(s) via {', '.join(needed)}")

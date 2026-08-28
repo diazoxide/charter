@@ -165,6 +165,15 @@ class ReferenceVault(unittest.TestCase):
         self.assertIn("op", detail)
 
     def test_health_on_an_empty_vault(self):
+        """An empty vault FILE, which is a different fact from no file at all (#491).
+
+        This case used to be asserted with no file on disk, and both states printed
+        ``no references yet`` — so a vault registered against a mistyped ``--file`` read
+        as one somebody had simply not filled in yet. The distinction is
+        `tests/test_reference_vault_reports_its_directory.py`'s subject; what belongs here
+        is that a vault that HAS a file and no entries still says so.
+        """
+        self.f.write_text("{}\n")
         ok, detail = self.p.health()
         self.assertTrue(ok)
         self.assertIn("no references", detail)

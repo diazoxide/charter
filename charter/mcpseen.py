@@ -143,6 +143,33 @@ def path() -> Path:
     return Path(config.STATE_DIR) / FILE_NAME
 
 
+def declares_credential(entry: dict) -> bool:
+    """Does *entry* ask for a vault value at all — through ``secrets`` OR ``secret_files``?
+
+    The vault-free half of :func:`needs_consent`, split out because a second caller asks
+    this exact question about a persona that has **no** vault, where `needs_consent` is
+    False by construction and therefore cannot be that caller's answer.
+
+    `persona.lint` was that caller, and it asked with ``entry.get("secrets")`` alone. The
+    two keys are two MECHANISMS for one thing — `secrets` puts a value in the environment,
+    `secret_files` materialises a 0600 file and puts its path there (#190) — and every
+    other reader treats them as one: `needs_consent` here, `persona.mcp_render_entry` when
+    it decides whether to wrap the command, and `charter secret exec`'s own `--env`/`--file`
+    pair. `lint` was the odd one out, so a server declaring only `secret_files` against a
+    persona naming no vault rendered with no credential and no finding on any surface —
+    and `secret_files` is not the exotic half: it is what Google ADC needs, which is the
+    very declaration #489's own reproduction uses.
+
+    One function, so the next key of this kind is added in one place rather than in the
+    three that happen to be remembered.
+    """
+    if not isinstance(entry, dict):
+        return False
+    secrets, files = entry.get("secrets"), entry.get("secret_files")
+    return bool((isinstance(secrets, dict) and secrets)
+                or (isinstance(files, dict) and files))
+
+
 def needs_consent(vault: str | None, entry: dict) -> bool:
     """Would rendering *entry* hand *vault*'s value to the command a committed file names?
 
@@ -152,11 +179,7 @@ def needs_consent(vault: str | None, entry: dict) -> bool:
     ``None`` now means "no approval can exist", which includes entries that ARE in scope
     and must still be reported.
     """
-    if not vault or not isinstance(entry, dict):
-        return False
-    secrets, files = entry.get("secrets"), entry.get("secret_files")
-    return bool((isinstance(secrets, dict) and secrets)
-                or (isinstance(files, dict) and files))
+    return bool(vault) and declares_credential(entry)
 
 
 def fingerprint(vault: str | None, entry: dict) -> str | None:

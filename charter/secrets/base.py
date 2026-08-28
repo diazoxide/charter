@@ -160,6 +160,12 @@ def loose_dirs(leaf, stop) -> list:
     return out
 
 
+#: :func:`loose_dirs` under a name that reads as what it does from inside a class that also
+#: has a ``loose_dirs`` method. Same object; `plain_file` imported it under this name for
+#: the same reason, and :meth:`VaultProvider.loose_dirs` calls it.
+_dirs_up_to = loose_dirs
+
+
 def _same(p, resolved) -> bool:
     from pathlib import Path
 
@@ -203,6 +209,39 @@ def loose_dir_note(loose) -> str:
         return ""
     named = ", ".join(f"{short_path(d)} {oct(m)[-3:]}" for d, m in loose)
     return f"listed by other accounts: {named} (want 700 — chmod 700)"
+
+
+def mode_note(p) -> str:
+    """``perms 644 (want 600)`` for a vault file that is not 0600, or ``""``.
+
+    The FILE half of :func:`loose_dir_note`, extracted here for the same reason that one
+    exists: `plain-file` rendered this sentence inline inside `health` and `reference`
+    rendered nothing at all, so a vault file another account can read said so on one
+    provider and stayed silent on the other (#491). Both providers write 0600, and both
+    hold something worth not publishing — a reference file is not a secret, but it names
+    every item and field this plane reaches (see :mod:`charter.secrets.reference`).
+
+    Reports, never repairs, which is the posture the read-only paths already take: `health`,
+    `keys` and `ages` NAME a loose mode rather than quietly chmod-ing it, because a health
+    check that writes is the defect whatever it writes to — `doctor` calls this from the
+    SessionStart hook, and a vault's ``file`` may name any path on this machine (#331,
+    :meth:`PlainFileProvider._tighten`).
+
+    Never raises. A health line that can throw is a `doctor` that cannot run, and the empty
+    string is the honest answer for a mode charter could not read: the file's own existence
+    is reported by the branch above every caller's, so silence here is never the only thing
+    said about a file. The catch is `Exception` and not `BaseException`, deliberately —
+    `tests/_planeguard.py` signals a test reaching the real ``.charter/`` with a
+    `BaseException` precisely so a fallback like this cannot turn it into a quiet "".
+    """
+    import os
+    import stat as _stat
+
+    try:
+        mode = _stat.S_IMODE(os.stat(p).st_mode)
+    except Exception:
+        return ""
+    return "" if mode == 0o600 else f"perms {oct(mode)[-3:]} (want 600)"
 
 
 class VaultProvider(ABC):
@@ -353,8 +392,34 @@ class VaultProvider(ABC):
         A provider that stores its data somewhere else entirely (1Password, Vault) has no
         directory of charter's to report, so the honest answer is an empty list rather than
         a guess about a backend charter does not own.
+
+        **Which providers those are is decided by** :attr:`file_path`, **not by a second
+        list somebody keeps in step.** This used to live on `PlainFileProvider` alone, and
+        the base default was a bare ``return []`` — honest for 1Password and *false* for
+        `reference`, which writes a file under ``.charter/vaults/`` through the same private
+        walk and reported nothing about the directory holding it, on `vault list` and on
+        `doctor` alike (#491). A reference file is not a secret; the DIRECTORY still lists
+        every vault name on the plane, which is the exposure this report exists for.
+
+        Two copies of the same eight lines was the wrong number for the same reason
+        :attr:`file_path` gives about the two byte-identical ``path`` properties it
+        replaced: the second copy is how one provider quietly keeps answering the old way.
+        So the question is asked of the one place that already knows where a vault's file
+        is. A provider with no ``file`` in its config — 1Password today, anything backed by
+        a real service tomorrow — makes :attr:`file_path` raise, and the answer is the
+        empty list it always was, without a new attribute for a new provider to forget.
+
+        Never raises: a health line that can throw is a `doctor` that cannot run. The catch
+        is `Exception`, not `BaseException`, deliberately — `tests/_planeguard.py` signals a
+        test reaching the real ``.charter/`` with a `BaseException` precisely so that a
+        fallback like this one cannot turn it into a quiet empty answer.
         """
-        return []
+        from .. import config as _config
+
+        try:
+            return _dirs_up_to(self.file_path.parent, _config.STATE_DIR)
+        except Exception:
+            return []
 
 
 def redact(text: str, secrets: list[str]) -> str:

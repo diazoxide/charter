@@ -14,7 +14,7 @@ import stat
 from pathlib import Path
 
 from .base import (SecretNotFound, VaultError, VaultProvider, loose_dir_note,
-                   loose_dirs as _dirs_up_to, make_private_dir, short_path as _short)
+                   make_private_dir, mode_note, short_path as _short)
 
 
 class PlainFileProvider(VaultProvider):
@@ -210,44 +210,15 @@ class PlainFileProvider(VaultProvider):
             count = len(self._load())
         except VaultError as e:
             return False, str(e)
-        mode = stat.S_IMODE(pp.stat().st_mode)
-        perms = "" if mode == 0o600 else f", perms {oct(mode)[-3:]} (want 600)"
-        return True, f"{count} secret(s){perms}" + (f", {note}" if note else "")
+        # `base.mode_note`, not a second `oct(...)[-3:]` here. `reference` had no sentence
+        # about its file's mode at all, and the fix for that (#491) is one wording for both
+        # providers rather than a copy that goes stale in the same way `loose_dirs` did.
+        return True, ", ".join(
+            [f"{count} secret(s)"] + [s for s in (mode_note(pp), note) if s])
 
-    def loose_dirs(self) -> list:
-        """The other-readable directories holding this vault, named — never chmod-ed.
-
-        Every directory charter creates on the way here is 0700: the vault writers walk
-        each level (:func:`base.make_private_dir`), and since #470 so does whatever creates
-        ``.charter/`` first, which on the ``charter vault add`` flow is the registry write
-        rather than any vault writer.
-
-        A directory that was already there when charter arrived keeps whatever mode it
-        has, and that is the case this exists for: a ``.charter/vaults/`` created before
-        0.51.x, or by ``mkdir -p`` at the umask default, sits at 0755 and lists every vault
-        name on the plane to every account on the machine. `set` does not fix it, because a
-        vault's ``file`` can name any path on this machine and charter chmod-ing a
-        directory it did not create — a home directory, a shared team directory — is the
-        #331 defect over again.
-
-        So it is REPORTED, and reported as a *list* rather than as prose inside `health`'s
-        string: `charter vault list` renders it into its STATUS column and `charter doctor`
-        puts it on the vaults line, both through :func:`base.loose_dir_note` (#471).
-
-        This is the same posture the file mode already takes on the read-only paths:
-        `health`, `keys` and `ages` name a loose mode rather than silently fixing it,
-        because a health check that writes is the defect regardless of what it writes.
-
-        Never raises: a health line that can throw is a `doctor` that cannot run. The catch
-        is `Exception`, not `BaseException`, deliberately — `tests/_planeguard.py` signals
-        a test reaching the real ``.charter/`` with a `BaseException` precisely so that
-        fallbacks like this one cannot turn it into a quiet empty answer.
-        """
-        from .. import config
-
-        try:
-            if not self.config.get("file"):
-                return []
-            return _dirs_up_to(self.file_path.parent, config.STATE_DIR)
-        except Exception:
-            return []
+    # `loose_dirs` is INHERITED — the implementation lives on `base.VaultProvider` and is
+    # keyed on `file_path`, so `reference` answers it too (#491). The eight lines that used
+    # to sit here reported the directory for the one provider that had them; the argument
+    # for why they are not copied per provider is `VaultProvider.loose_dirs`'s, and it is
+    # the same argument `VaultProvider.file_path` makes about the two byte-identical `path`
+    # properties it replaced.
