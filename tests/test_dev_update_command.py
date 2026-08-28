@@ -317,9 +317,14 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
     unreleased code.
 
     #456 split the checkout case in two without weakening it. The CLI install still never
-    happens on a checkout — that is what every test below asserts, on both channels and
-    with and without an explicit target. What changed is that the plugin half, which lives
-    outside the tree, is no longer refused along with it.
+    happens over the tree being edited — that is what every test below asserts, on both
+    channels and with and without an explicit target. What changed is that the plugin half,
+    which lives outside the tree, is no longer refused along with it.
+
+    #537 changed what "the tree being edited" is measured by, and not what happens when it
+    is. Every assertion here is unchanged; the condition under them moved from *the plane
+    root looks like a charter clone* to *the charter running this process loaded from under
+    the plane root*.
     """
 
     def setUp(self):
@@ -338,9 +343,18 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
         return argparse.Namespace(**{"to": None, "bump": False, **kw})
 
     @contextlib.contextmanager
-    def _on_a_checkout(self, claude=True):
-        from charter import doctor, plugincache
-        with mock.patch.object(doctor, "_is_charter_checkout", return_value=True), \
+    def _running_the_tree(self, claude=True):
+        """The condition the refusal is actually about: the charter running this process
+        loaded from under the plane root.
+
+        Patched at `channel.running_inside` and NOT at `doctor._is_charter_checkout`, which
+        is what used to stand here and is the defect #537 records — that one answers about
+        the DIRECTORY, and a maintainer with a clone and a `uv tool` install has both
+        answers at once. `TheRefusalIsAboutTheRunningInstall` builds the disagreement out
+        of real files rather than out of a patch.
+        """
+        from charter import channel, plugincache
+        with mock.patch.object(channel, "running_inside", return_value=True), \
                 mock.patch.object(plugincache, "available", return_value=claude), \
                 mock.patch.object(commands_update, "_refresh_plugin") as refresh, \
                 mock.patch.object(commands_update, "_move_harness") as harness_:
@@ -358,7 +372,7 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
             self.assertEqual(commands_update.cmd_update(self._args()), 2)
         self._installed_nothing()
 
-    def test_a_charter_checkout_cannot_install_over_itself(self):
+    def test_the_running_tree_cannot_be_installed_over(self):
         """The guard #456 says must stay. The CLI is the tree; nothing is installed on it,
         on either channel and whatever else the command goes on to do."""
         for channel in ("dev", "stable"):
@@ -366,7 +380,7 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
                 (self.tmp / "charter.toml").write_text(
                     f'schema = 1\n[update]\nchannel = "{channel}"\n')
                 config.use(self.tmp)
-                with self._on_a_checkout():
+                with self._running_the_tree():
                     commands_update.cmd_update(self._args())
                 self._installed_nothing()
 
@@ -374,7 +388,7 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
         """#456. `doctor`'s `plugin files` row names `charter update` as the fix and a
         maintainer reads that row standing in a checkout — so the command has to do the
         part that is safe here instead of refusing the whole thing."""
-        with self._on_a_checkout() as (refresh, harness_):
+        with self._running_the_tree() as (refresh, harness_):
             self.assertEqual(commands_update.cmd_update(self._args()), 0)
         refresh.assert_called_once()
         # NOT the harness artifact: `_move_harness` writes into the plane root, which on a
@@ -386,7 +400,7 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
         """`--to X.Y.Z` asks for a published CLI to be installed, which is exactly the half
         that cannot happen here. Answering 0 and quietly doing something else would be a
         command reporting success for a thing it did not do."""
-        with self._on_a_checkout() as (refresh, _):
+        with self._running_the_tree() as (refresh, _):
             self.assertEqual(commands_update.cmd_update(self._args(to="0.50.1")), 2)
         refresh.assert_not_called()
         self._installed_nothing()
@@ -397,7 +411,7 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
         path has nothing safe left to do and says so, exit code and all."""
         (self.tmp / "charter.toml").write_text('schema = 1\n[update]\nchannel = "stable"\n')
         config.use(self.tmp)
-        with self._on_a_checkout() as (refresh, _):
+        with self._running_the_tree() as (refresh, _):
             self.assertEqual(commands_update.cmd_update(self._args()), 2)
         refresh.assert_not_called()
         self._installed_nothing()
@@ -406,7 +420,7 @@ class TheProbeAndCheckoutRefusalsStillHold(PersonaIso):
         """The honest end of the same branch. A plane with no Claude Code has no plugin to
         refresh either, and reporting a refresh that did not happen is the overclaim this
         repository keeps having to unwrite."""
-        with self._on_a_checkout(claude=False) as (refresh, _):
+        with self._running_the_tree(claude=False) as (refresh, _):
             self.assertEqual(commands_update.cmd_update(self._args()), 0)
         refresh.assert_not_called()
         self._installed_nothing()

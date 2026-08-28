@@ -15,6 +15,18 @@ first working out whether there is anything to do.
 breaks — the plugin dispatches ``charter hook <name>`` for handlers an older CLI does not
 have, and `hooks.skew_message` is deliberately one-directional, so it stays quiet the other
 way round. The release charter says this; the sequence here obeys it for the same reason.
+
+**Every question about the running install is asked OF the running install** (#537). This
+command decides two things before it does anything — *would an install land on a tree
+somebody is editing*, and *which channel does this run follow* — and it used to answer both
+by looking somewhere adjacent. The first read the CWD: a maintainer standing in a charter
+clone was told "the charter you run is this checkout, moved by git" while their charter was
+the ``uv tool`` install the dev channel documents, three commits behind, with ``charter
+--version`` and the clone's ``HEAD`` naming two different commits that could not disagree
+if the claim were true. The second read the ABSENCE of a plane: ``cd /tmp && charter
+update`` found no ``[update] channel``, took that for *stable*, and failed a version
+comparison against a dev build. ``charter.__file__`` and the PEP 610 ``direct_url.json``
+answer both directly, and `charter.channel` is where they are asked.
 """
 
 from __future__ import annotations
@@ -424,6 +436,12 @@ def _update_dev(args, installed: str) -> int:
 
     util.warn(SHARED_INSTALL_NOTE)
     util.info(f"installing charter from {DEV_SPEC} …")
+    # Which install is being replaced, named rather than left to `readlink -f $(which
+    # charter)`. #537's whole cost was that the two cases — the CLI IS this tree, and the
+    # CLI is an install standing next to it — printed nothing that told them apart, so an
+    # operator in a charter clone read "the charter you run is this checkout" about a `uv
+    # tool` install and copied the install command out of `commands_update.py` instead.
+    util.info(f"  over the charter this process is running: {channel.package_dir()}")
     ok, detail = _sync_dev()
     if not ok:
         util.err(f"could not install the dev build: {detail}")
@@ -463,18 +481,26 @@ def _update_dev_on_a_checkout(args) -> int:
     replaced with a second command to know about.
 
     **The CLI refusal is not weakened, it is stated.** Nothing on this path installs
-    anything: the operator's charter already IS this checkout, moved by git.
+    anything: the operator's charter already IS this tree, moved by git.
+
+    **And "already IS" is now measured** (#537). This branch is reached because
+    `channel.running_inside` said the charter running this process loaded from under the
+    plane root — not because the plane root looks like a charter clone. Standing in the
+    clone with the dev channel's documented ``uv tool`` install on ``PATH``, the old
+    condition printed the sentence above about a binary `git pull` cannot reach, and the
+    two versions said so out loud: ``charter --version`` reported ``main @ e17801c`` while
+    the clone's ``HEAD`` was ``97163fb``.
 
     Two more things it deliberately does not do. It does not move the harness artifact —
     `_move_harness` writes into the plane root, and on a charter checkout the plane root is
     the tree being edited, which is the same objection one directory over. And it does not
     stamp an update baseline, because nothing moved for a news range to be measured from.
     """
-    from . import plugincache
+    from . import channel, plugincache
 
-    util.warn("this is a charter checkout — the CLI here is the tree you are editing, so "
-              "nothing was installed over it.")
-    util.info("  the charter you run is this checkout, moved by git:  charter version")
+    util.warn(f"the charter you are running IS this tree ({channel.package_dir()}), so "
+              f"nothing was installed over it.")
+    util.info("  it moves by git rather than by an installer:  charter version")
     if not plugincache.available():
         util.info("  no `claude` on PATH either, so there is no plugin to refresh — "
                   "there is nothing this command can do from here.")
@@ -489,7 +515,7 @@ def _update_dev_on_a_checkout(args) -> int:
 
 
 def cmd_update(args) -> int:
-    from . import channel, doctor, instance, news
+    from . import channel, instance, news
 
     if news.probing():
         # FIRST, before the checkout refusal below and before anything is read, because
@@ -507,25 +533,32 @@ def cmd_update(args) -> int:
 
     explicit = (getattr(args, "to", None) or "").strip()
 
-    if doctor._is_charter_checkout(config.ROOT):
+    if channel.running_inside(config.ROOT):
         # `CONTRIBUTING.md` tells contributors to run `python3 -m charter …` from the
         # clone. Installing over that is never what "let me try the update command" meant,
         # and the failure is silent: the news phase would hand off to a binary that is not
         # the tree being edited, and report on it as though it were.
         #
+        # **Asked of the running install, not of the cwd** (#537). `_is_charter_checkout`
+        # used to stand here, and it answers a question about the DIRECTORY — so a
+        # maintainer who has both a clone and the `uv tool` install the dev channel
+        # documents was told "the charter you run is this checkout, moved by git" about a
+        # binary `git pull` cannot reach, and left three commits stale. Being in a charter
+        # checkout does not mean running it; `charter.__file__` is what does.
+        #
         # The CLI half. NOT the plugin half — see `_update_dev_on_a_checkout`, which runs
         # for the one shape of this command that has something left to do here.
-        if channel.is_dev() and not explicit:
+        if channel.update_is_dev() and not explicit:
             return _update_dev_on_a_checkout(args)
-        util.err("this is a charter checkout — refusing to install over the tree you are "
-                 "editing.")
+        util.err(f"the charter you are running IS this tree ({channel.package_dir()}) — "
+                 f"refusing to install over the tree you are editing.")
         util.info("  what you probably want:  charter version")
         return 2
 
     installed = _installed_version()
-    if channel.is_dev() and not explicit:
+    if channel.update_is_dev() and not explicit:
         return _update_dev(args, installed)
-    if channel.is_dev():
+    if channel.update_is_dev():
         # `--to X.Y.Z` names a PUBLISHED version, which is the one thing the dev channel
         # does not have. Rather than refuse it, honour it and say what just happened: this
         # is how somebody goes back to a release without first editing charter.toml, and
@@ -549,9 +582,22 @@ def cmd_update(args) -> int:
     # BEFORE anything moves, so an interrupted update still knows where it started.
     _stamp_baseline(installed)
 
-    if target != installed:
+    # `target != installed` compares two version NUMBERS, and a dev build carries the same
+    # number as the release it was built from — that is the whole reason dev builds are
+    # never published (`channel`'s docstring). So "is the running install already the
+    # target" is asked of the install RECORD as well: a git install is not the published
+    # wheel, whatever number it prints. Without that, a plane on the stable channel with a
+    # dev build on it installed nothing, and then `_handoff` reported *the install did not
+    # take* — because `charter --version` ends in a commit rather than in the target
+    # (#537). Nothing to install and a failed verification of it is the worst pair.
+    on_a_dev_build = channel.is_dev_build()
+    if target != installed or on_a_dev_build:
         util.warn(SHARED_INSTALL_NOTE)
-        util.info(f"installing charter {installed} → {target} …")
+        if target == installed:
+            util.info(f"installing the published charter {target} over the dev build this "
+                      f"process is running …")
+        else:
+            util.info(f"installing charter {installed} → {target} …")
         ok, detail = _sync_to(target)
         if not ok:
             util.err(f"could not install {target}: {detail}")

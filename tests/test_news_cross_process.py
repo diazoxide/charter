@@ -40,7 +40,7 @@ from pathlib import Path
 from unittest import mock
 
 import charter
-from charter import (commands, commands_persona, commands_update, doctor, harness,
+from charter import (channel, commands, commands_persona, commands_update, harness,
                      instance, news, root)
 from tests._isolation import child_plane_env, pin_update_channel
 
@@ -55,7 +55,7 @@ STAND_IN, STAND_IN_FN = "persona lint", "cmd_persona_lint"
 #: the guard working, and the suite runs inside exactly the charter checkout `cmd_update`
 #: declines to install over.
 _CLEAR_THE_WAY = (
-    (doctor, "_is_charter_checkout", lambda root: False),
+    (channel, "running_inside", lambda root: False),
     (instance, "load", lambda root: {}),
     (instance, "locked_version", lambda cfg: None),
     (harness, "current", lambda: None),

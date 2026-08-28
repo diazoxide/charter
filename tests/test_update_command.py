@@ -122,18 +122,50 @@ class TheNetworkIsReadOnce(PersonaIso):
 
 
 class ThingsItRefusesOrDegrades(UpdateCase):
-    def test_it_refuses_inside_a_charter_checkout(self):
+    def test_it_refuses_when_the_charter_it_is_running_is_the_tree(self):
         """`CONTRIBUTING.md` tells contributors to run `python3 -m charter` from the
         clone. Installing over that is never what "let me try the update command" meant,
         and the damage is silent — the news phase would then hand off to a binary that is
-        not the tree being edited."""
-        (self.tmp / "charter").mkdir(parents=True, exist_ok=True)
-        (self.tmp / "charter" / "docsrc.py").write_text("")
-        (self.tmp / "pyproject.toml").write_text('name = "charter-cp"\n')
-        code, out = self.update()
+        not the tree being edited.
+
+        Asked of `channel.running_inside`, which is where the running charter says where it
+        loaded from. Patched here because this suite cannot make the charter it imported
+        live under a temporary directory; the *unpatched* half is
+        `TheRefusalIsAboutTheRunningInstall` in
+        `tests/test_update_asks_the_running_install.py`, which measures the real one.
+        """
+        from charter import channel
+        with mock.patch.object(channel, "running_inside", return_value=True):
+            code, out = self.update()
         self.assertEqual(self.moved, [])
         self.assertNotEqual(code, 0)
         self.assertIn("charter version", out)
+
+    def test_standing_in_a_charter_clone_is_not_running_it(self):
+        """#537, reproduced from the files rather than from a patch.
+
+        The plane root here is a charter checkout by every test `doctor` applies — the
+        source tree and a `pyproject.toml` naming the distribution — and the charter running
+        this process is somewhere else entirely, which is the ordinary state of a maintainer
+        who has both a clone and the `uv tool` install the dev channel documents.
+
+        The command used to read the first and claim the second: *the charter you run is
+        this checkout, moved by git*, about a binary `git pull` cannot reach. It installed
+        nothing and said nothing was needed, and `charter --version` reported `main @
+        e17801c` while the clone's `HEAD` was `97163fb` — two commits that could not
+        disagree if the claim were true.
+        """
+        from charter import channel, doctor
+        (self.tmp / "charter").mkdir(parents=True, exist_ok=True)
+        (self.tmp / "charter" / "docsrc.py").write_text("")
+        (self.tmp / "pyproject.toml").write_text('name = "charter-cp"\n')
+        # Both halves of the disagreement, stated: the directory says checkout, the running
+        # install says it is not from here. Nothing is patched to make either one true.
+        self.assertTrue(doctor._is_charter_checkout(self.tmp))
+        self.assertFalse(channel.running_inside(self.tmp))
+        code, _out = self.update()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.moved, ["0.46.0"])
 
     def test_outside_a_harness_it_says_the_artifact_was_not_checked(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
