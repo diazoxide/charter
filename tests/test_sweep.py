@@ -551,6 +551,9 @@ class TheStringShape(unittest.TestCase):
         text = sweep.report([], Path("."), "a" * 12, "b" * 12, None, 1.0)
         self.assertEqual("f-string" in text, sys.version_info < (3, 12))
         self.assertIn(".".join(str(n) for n in sys.version_info[:3]), text)
+        # And on the pull request too, which is the page anybody will actually read.
+        summary = sweep.gate_summary(sweep.classify([]), "a" * 40, "b" * 40, 1.0, False)
+        self.assertEqual("f-string" in summary, sys.version_info < (3, 12))
 
     def test_a_bytes_constant_is_retuned_as_bytes(self):
         muts = _mutations("""
@@ -1875,8 +1878,7 @@ class AMutationThatNeverAppliedIsNotASurvivor(unittest.TestCase):
 
     def test_decide_calls_it_unapplied_and_never_survived(self):
         box = _Refusing()
-        verdict, subset, full = sweep.decide(box, _mutations("x = 1\n")[0] if False
-                                             else self._mutation(), ["tests.test_a"])
+        verdict, subset, full = sweep.decide(box, self._mutation(), ["tests.test_a"])
         self.assertEqual(verdict, "unapplied")
         self.assertIsNone(full)
         self.assertFalse(subset.conclusive)
