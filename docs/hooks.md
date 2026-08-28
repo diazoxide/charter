@@ -114,7 +114,16 @@ rule while one who reads a bare refusal files an issue.
   so `<plane>/.git`, `<plane>/.git/./` and `<plane>/.git/refs/..` are one question — a
   lexical parent made the last of those a live bypass for a round. What it still does not
   place is a `--git-dir` pointing at a **linked worktree's** git dir, whose HEAD is that
-  worktree's and not the root's; that one is a missed denial, never a wrong one. A `-C`
+  worktree's and not the root's; that one is a missed denial, never a wrong one. A fourth
+  spelling of the work tree is in no token at all: `core.worktree` in a repository's own
+  `.git/config` makes the named directory that repository's working tree for every command,
+  so `git checkout <branch>` typed in a workspace clone wrote into the plane root and the
+  guard saw a plain checkout in a clone. The repository's config is read now — the one
+  invocation-derived subject that costs a disk read, at 13–65 µs, stated in
+  `charter/gitconfig.py` along with the routes it declines: `git -c core.worktree=…` on the
+  command line (git ignores it, so it reaches nothing), `include`/`includeIf`, and the
+  global and system configs
+  ([#504](https://github.com/diazoxide/charter/issues/504)). A `-C`
   counts as git's
   change-directory global only **before the subcommand**, which is the only position git
   reads one in — so `git switch -C <branch>`, where `-C` is `switch`'s own `--force-create`,

@@ -2379,16 +2379,25 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     repository's branch — and the benefit is that no single-path answer has to choose which
     of two real subjects to report.
 
+    A fourth subject is not an option at all, and #504 is what that cost: `core.worktree`,
+    git's THIRD spelling of the work tree, written as a key in the repository's OWN config.
+    A repository carrying it has the named directory as its working tree for every command,
+    with nothing on the command line saying so — verified on git 2.50.1, where `git checkout
+    <branch>` inside such a clone wrote that branch's content into the PLANE ROOT. It is
+    read here rather than inferred, by `charter.gitconfig`.
+
     **It is a SUPERSET of the cwd, not an enumeration of everything git will touch.** The
-    list is exactly: the cwd, always; the `--work-tree`/`GIT_WORK_TREE` if one is named; and
-    the `--git-dir`/`GIT_DIR` with its parent if one is named. That is the guarantee — every
+    list is exactly: the cwd, always; the `--work-tree`/`GIT_WORK_TREE` if one is named; the
+    `--git-dir`/`GIT_DIR` with its parent if one is named; and the `core.worktree` written in
+    the config of the repository this invocation is aimed at. That is the guarantee — every
     directory it names is a place this invocation can act on, and it never answers with less
     than the cwd — and it is deliberately NOT a claim that everything git touches appears
-    here. A submodule's own git dir, a `--namespace`, an `includeIf` that redirects a
-    worktree, and a `--git-dir` pointing at a LINKED worktree's git dir (whose HEAD is that
-    worktree's, not the root's) are all subjects this returns nothing for. Round one's
-    docstring said it "returns every subject an invocation names", which is a larger sentence
-    than the code keeps.
+    here. A submodule's own git dir, a `--namespace`, an `include`/`includeIf` that carries
+    the `core.worktree` (see `gitconfig`, which does not follow them and says why), and a
+    `--git-dir` pointing at a LINKED worktree's git dir (whose HEAD is that worktree's, not
+    the root's) are all subjects this returns nothing for. Round one's docstring said it
+    "returns every subject an invocation names", which is a larger sentence than the code
+    keeps.
 
     **Relative paths resolve against the SHELL's directory**, which is what *cwd* carries.
     A `-C` used to be `Path(args[i + 1])`, so a relative one resolved against whatever
@@ -2412,6 +2421,14 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     `_plane_root_git` is the one shell effect charter models), a `GIT_DIR` already in the
     session's environment, and `--git-dir` pointing at a linked worktree's git dir, whose
     HEAD is that worktree's and not the root's.
+
+    **And what it costs**, since one line of it now reads the disk. The `core.worktree`
+    lookup is a walk up to the repository plus one read of a sub-kilobyte file: 13 µs with no
+    repository above the cwd, 35 µs at a repository root with no such key, 47 µs two
+    directories down inside one, and 65 µs where the key is there. That is the price #497
+    declined to pay inside a PR about something else, paid here on purpose, next to a
+    `_plane_root_git` walk that already `shlex`es the command and `realpath`s every subject
+    this returns.
     """
     here = Path(cwd or ".")
     git_dir = work_tree = None
@@ -2491,6 +2508,28 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
         # question rather than a list of spellings.
         gd = _at(git_dir)
         out.extend((gd, gd / ".."))
+    # **The fourth subject, and the only one no token names.** `--work-tree` and
+    # `GIT_WORK_TREE` above are git's first two spellings of the work tree; this is its
+    # third, and it is not an option — `core.worktree` is a key in the repository's own
+    # `.git/config`, so a repository carrying it has the named directory as its working
+    # tree for every command, and a guard reading argv and environment sees a plain
+    # `git checkout feature` typed inside a workspace clone (#504). Verified end to end
+    # on git 2.50.1: from such a clone, `git checkout <branch>` replaced the PLANE ROOT's
+    # working tree.
+    #
+    # **This is the one place in this function that touches the disk**, and it is what
+    # #497 declined to add rather than widen into: a walk up to the repository and one
+    # read of its config, on the PreToolUse path whose common case is a string comparison.
+    # Measured — 13 µs with no repository above the cwd, 35 µs at a repository root with
+    # no such key, 47 µs two directories down inside one, 65 µs where the key is there —
+    # against a `_plane_root_git` walk that already runs `shlex` over the command and
+    # `realpath`s every subject. `gitconfig` owns the read, the bound on it, and the list of
+    # config routes it deliberately does not follow.
+    from . import gitconfig
+    named = _at(git_dir) if git_dir is not None else None
+    configured = gitconfig.configured_work_tree(here, named)
+    if configured is not None:
+        out.append(configured)
     return out
 
 
