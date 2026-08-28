@@ -76,16 +76,21 @@ owed before they set it::
 
     tmux mouse on
       wheel over the panel   ->  panel receives it        active: harness   (unchanged)
-      click over the panel   ->  panel receives it        active: PANEL     (moved)
+      click over the panel   ->  panel receives it        active: harness   (unchanged)
 
-**With tmux's own mouse on, a click moves the keyboard**, because tmux's default
-``MouseDown1Pane`` binding selects the pane under the pointer before forwarding. That is
-tmux's semantics for the flag and not something this module can dissolve from inside a
-pane; charter does not rebind it here, and `docs/frame.md` says so beside the trade. The
-wheel never moves it, on either version. So point-to-act is exactly what the flag OFF
-gives, and the flag ON buys certainty about delivery with the keyboard following the
-pointer on click — which is the shape of the argument, stated, rather than a default
-quietly chosen for the operator.
+**That second row used to read `active: PANEL (moved)`, and closing it is #634.** tmux's
+default ``MouseDown1Pane`` binding selects the pane under the pointer before forwarding,
+so with its own mouse on a click moved the keyboard — the one regime in which this
+module's point-to-act delivery disagreed with what the operator actually saw, and the
+regime an operator opts into *because* they want to click panels. It is not something this
+module can dissolve from inside a pane: the fix is a root-table rebind, conditional on the
+pane under the pointer being one charter split off, and it lives in
+`commands_frame.conf_text` with its measurement. `docs/frame.md` says it beside the trade.
+
+The wheel never moved it, on either version. So point-to-act is now what the flag gives in
+both settings, and what ON still buys — and still costs — is certainty that the event
+fires at all, paid for with the terminal's own drag-select. That trade is unchanged and
+unavoidable; only the keyboard's part of it went away.
 
 **A pointer event is translated into the component's own columns before it is delivered**,
 and that is charter's subtraction rather than tmux's — :meth:`Dispatcher._on_canvas` is the

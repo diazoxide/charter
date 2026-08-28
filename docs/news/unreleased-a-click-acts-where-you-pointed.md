@@ -87,23 +87,22 @@ harness active and not asking, a click on a panel produces no bytes at all. Noth
 dropped — the event never happens. Whether it does is decided by the program you ran, which
 charter does not own. **Give every pointer affordance a key as well.**
 
-Turning it on makes reporting unconditional, and there are now two prices rather than one.
-The first was already documented: you lose your terminal's own drag-select, and no release
-will ever remove that. The second was measured for this change and is new to the docs:
+Turning it on makes reporting unconditional, and the price is that you lose your terminal's
+own drag-select. No release will ever remove that one — it is how tmux works.
 
 ```
 mouse off  click a panel  ->  panel receives it,  active pane: the harness
-mouse ON   click a panel  ->  panel receives it,  active pane: THE PANEL
+mouse ON   click a panel  ->  panel receives it,  active pane: the harness
 either     wheel a panel  ->  panel receives it,  active pane: the harness
 ```
 
-With tmux's own mouse on, tmux selects the pane under the pointer before forwarding the
-click. That is click-to-focus arriving from tmux rather than from charter, and charter does
-not rebind it away: the binding that would have to change is in tmux's root key table, which
-is server-wide and shared by every frame charter launches, and dropping it would also take
-away clicking back to a pane — including your harness. `F12` still returns you to it.
+A *second* price was measured for this change and briefly documented: with tmux's own mouse
+on, tmux's default binding selected the pane under the pointer before forwarding, so a click
+took your keyboard off the harness. **That is fixed in this same release — see *A click on a
+panel stays where it points* — so the table above reads the same in both rows.** A click on
+the harness, or on a pane you split yourself, still selects it exactly as tmux documents.
 
-Point-to-act is therefore what `mouse = false` gives you, and what `mouse = true` buys is
+Point-to-act is therefore what `mouse` gives you either way, and what `mouse = true` buys is
 certainty that the event fires at all. The wheel never moves your keyboard either way.
 
 ## What has not changed

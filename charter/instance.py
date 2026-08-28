@@ -1066,36 +1066,37 @@ FRAME_FIELDS = {
     #: The palette is the exception and does not need this flag: while it is open it is
     #: the active surface, so its own request is the one that reaches the terminal.
     #:
-    #: **And there is a SECOND cost to turning it on, measured when charter began
-    #: delivering the pointer and owed to anyone about to set this.** With tmux's own
-    #: mouse on, tmux does not merely report a click — its default `MouseDown1Pane`
-    #: binding SELECTS the pane under the pointer before forwarding it. Measured on 3.7c
-    #: and at the 3.2 floor, identically — **with the terminal already reporting in both
-    #: rows**, which off the flag is the harness's doing and not charter's, and is the
-    #: precondition the paragraph above is entirely about::
+    #: **The SECOND cost this flag used to carry is gone, and what replaced it is a
+    #: change of tmux's semantics an operator who already set it should know about
+    #: (#634).** tmux's default `MouseDown1Pane` binding is `select-pane -t = \; send-keys
+    #: -M`: with its own mouse on, tmux SELECTS the pane under the pointer before
+    #: forwarding the click, so every click on a panel took the keyboard off the harness.
+    #: Charter now rebinds that key — see `commands_frame.conf_text` for the binding, its
+    #: measurement and why it is conditional rather than blanket. Measured on 3.7c and at
+    #: the 3.2 floor, identically — **with the terminal already reporting in every row**,
+    #: which off the flag is the harness's doing and not charter's, and is the precondition
+    #: the paragraph above is entirely about::
     #:
-    #:     mouse off  click a panel  -> panel receives it,  active pane: the harness
-    #:     mouse ON   click a panel  -> panel receives it,  active pane: THE PANEL
-    #:     either     wheel a panel  -> panel receives it,  active pane: the harness
+    #:     mouse off  click a panel   -> panel receives it,  active pane: the harness
+    #:     mouse ON   click a panel   -> panel receives it,  active pane: the harness
+    #:     either     wheel a panel   -> panel receives it,  active pane: the harness
+    #:     mouse ON   click the HARNESS or a pane the operator split -> that pane, as tmux
     #:
     #: So the first row is not a promise that a click arrives with the flag off. It is the
     #: answer to a different question — *if* one arrives, does it move the keyboard — and
     #: the two must not be read as one, because with the flag off and the harness asking
     #: for nothing the terminal is never asked to report and no click happens at all.
     #:
-    #: So with this on, clicking a panel takes the keyboard off the harness until the
-    #: operator puts it back (`overlay.HATCH_KEY`, or their own prefix keys) — which is
-    #: exactly the click-to-focus charter's own delivery refuses to do, arriving from tmux
-    #: instead. The wheel never does it, on either version.
+    #: **What ON still costs is the drag-select above, and that has not changed.** The
+    #: paragraph that opens this comment is the whole of the trade and it is still
+    #: unavoidable; this only removes a second cost that was never tmux's price for
+    #: reporting, only its default for one key.
     #:
-    #: Charter does not rebind `MouseDown1Pane` to prevent it, and that is a decision
-    #: rather than an omission: `bind -n` writes tmux's ROOT key table, which is
-    #: server-wide and shared by every frame on charter's private server
-    #: (`commands_frame.conf_text` records what a bind carrying one frame's assumptions
-    #: costs the next), and dropping the `select-pane` would also take away clicking BACK
-    #: to a pane — including the harness. Point-to-act is what this flag OFF already
-    #: gives; what ON buys is certainty that the event fires at all, and the keyboard
-    #: following a click is the price of tmux's own semantics for the setting.
+    #: The rebind is charter changing a documented tmux behaviour inside its own private
+    #: server, which is why it is written down in three places rather than one: an
+    #: operator who set `mouse = true` before this release and put the keyboard back with
+    #: `overlay.HATCH_KEY` after every click will find they no longer have to, and a click
+    #: on a pane charter did not create still selects it exactly as tmux says.
     "mouse": (False, "mouse"),
     #: The pane surface, off by default — see :data:`FRAME_CHROME` for what the three
     #: words mean, why there is no fourth, and why the value is a word rather than a
@@ -1496,16 +1497,18 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
     *hotkey* is the key the frame's own palette is bound to — resolved by :func:`frame_of`
     before it calls this, because the comparison has to be against what will actually be
     bound, not against the shipped constant a plane may have moved off. It joins
-    `frame/overlay.py`'s ``HATCH_KEY`` in the set of keys charter has already taken, and a
-    component may have neither. ``None`` means the caller has no palette key to reserve,
-    which is what resolving an arrangement outside a `[frame]` section has; the hatch is
-    reserved regardless, because charter binds it for every frame on its own server.
+    `frame/overlay.py`'s ``HATCH_KEY`` and `frame/tmuxctl.py`'s ``MOUSE_KEYS`` in the set
+    of keys charter has already taken, and a component may have none of them. ``None``
+    means the caller has no palette key to reserve, which is what resolving an arrangement
+    outside a `[frame]` section has; the hatch and the two mouse keys are reserved
+    regardless, because charter binds all three for every frame on its own server.
     """
     tables = section.get(FRAME_COMPONENT_KEY) if isinstance(section, dict) else None
     if not isinstance(tables, list) or not tables:
         return None
     from .frame import builtins as _builtins
     from .frame import overlay as _overlay
+    from .frame import tmuxctl as _tmuxctl
     from .frame.component import EDGES, Fixed
     reg = _builtins.build()
     out: list[dict] = []
@@ -1515,7 +1518,22 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
     # the hatch key is an import, and this line runs only once a plane has actually
     # written `[[frame.component]]` tables — `frame_of` itself is on the path of every
     # command, `charter --version` included, and must stay as cheap as it was.
-    bound: set[str] = {k for k in (hotkey, _overlay.HATCH_KEY) if k}
+    # `frame/tmuxctl.py` costs nothing extra: `frame/overlay.py` imports it already.
+    #
+    # The two MOUSE keys are here for the hatch's reason with the sign flipped. `conf_text`
+    # writes them BEFORE the toggles, so tmux's last-wins leaves the COMPONENT's key alive
+    # and charter's mouse handling silently gone — the wheel stops entering copy-mode and,
+    # since #634, a click on a panel goes back to taking the keyboard off the harness. One
+    # dead binding, nothing anywhere saying which, and the frame still launching at rc 0.
+    # Named off `tmuxctl.MOUSE_KEYS` rather than spelled here, so the key this refuses is
+    # the same object `conf_text` binds.
+    #
+    # `if k` drops a falsy *hotkey* — ``None`` for every caller with no palette key to
+    # reserve — and it is the ONE place this set's invariant is established: `bound` holds
+    # real keys and nothing else. The collision test below leans on that rather than
+    # re-checking, so this filter is load-bearing; see the comment there for what a
+    # ``None`` in here would cost.
+    bound: set[str] = {k for k in (hotkey, _overlay.HATCH_KEY, *_tmuxctl.MOUSE_KEYS) if k}
     for table in tables:
         if not isinstance(table, dict):
             return None
@@ -1562,7 +1580,17 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         #   order — a guard whose consequence depends on where two other lines are
         #   emitted is a guard nothing can pin (#553), which is the same trap one level
         #   up from the one this sweep exists to catch.
-        if key is not None and key in bound:
+        #
+        # **No `key is not None` in front of this, and that is what makes the `if k`
+        # filter above load-bearing rather than decorative.** *hotkey* is ``None`` for
+        # every caller resolving an arrangement outside a `[frame]` section, so without
+        # that filter ``bound`` would hold a ``None`` — and a component that simply
+        # declares no toggle key (the common case: `key` absent, so ``key is None``)
+        # would collide with it and take the WHOLE arrangement down, panels and all.
+        # Guarding here instead would have made the filter unobservable, which is exactly
+        # the shape the deletion sweep calls a survivor: a line nothing can fail without.
+        # One invariant, stated once, where it is established.
+        if key in bound:
             return None
         if key is not None:
             bound.add(key)
