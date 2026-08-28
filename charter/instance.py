@@ -708,15 +708,29 @@ def pane_bg_options(name) -> tuple[tuple[str, str], ...]:
 #:
 #: **A cap and not a clamp**: a ``pad`` above this is REFUSED by
 #: :func:`component_tables` (which refuses the arrangement whole, #535's rule), not
-#: quietly reduced to 8. A value read, validated and then changed into a different one is
-#: the convincing empty this section refuses everywhere else.
+#: quietly reduced. A value read, validated and then changed into a different one is the
+#: convincing empty this section refuses everywhere else.
 #:
-#: Eight because the pad comes out of the pane's own width and the frame's narrowest pane
-#: is the 22-column sidebar (`layout.SLOT_SIZE`): two eights out of twenty-two leaves six
-#: cells, which is already past useful. The cap's real job is the other end — ``pad =
-#: 10**9`` in a committed file is a ``" " * n`` on the repaint path, and this is the line
-#: that stops it being one.
-FRAME_PANE_PAD_MAX = 8
+#: **Five, and the number is derived rather than chosen.** It is the largest pad the
+#: frame's own NARROWEST pane can actually afford: the sidebar is 22 columns
+#: (`layout.SLOT_SIZE`), `frame/slots.py`'s `_PAD_MIN_CONTENT` is 12, and
+#: ``(22 - 12) // 2`` is 5. A cap above that would admit a value that pane always drops —
+#: and the sidebar is one of the two panes the operator named, so "your pad did nothing
+#: and nothing said why" is the precise failure it would buy. Written as a literal here
+#: because `instance` is imported by every command and must not reach `frame/layout.py` at
+#: module scope; `tests/test_frame_pane_style.py`'s `TheCapIsTheNarrowestPanesOwnCeiling`
+#: does the arithmetic and asserts the two agree, which is the trade `slots.INSET` already
+#: makes with `statusline._HEAD_PAD`.
+#:
+#: One number for every pane, rather than a per-pane ceiling from that pane's own width.
+#: A `pad = 5` that means five cells on the sidebar and five on a 200-column repo table is
+#: a value an operator can move between components; a ceiling that changed per pane would
+#: make the same number mean different things in the same file — and the wide pane loses
+#: nothing real, because the ask was one or two cells.
+#:
+#: The cap's other job is the far end: ``pad = 10**9`` in a committed file is a
+#: ``" " * n`` on the repaint path, and this is the line that stops it being one.
+FRAME_PANE_PAD_MAX = 5
 
 
 def pane_pad(value) -> int | None:
@@ -753,9 +767,19 @@ def component_style(frame: dict, name) -> dict:
     ``{"bg": None, "pad": 0}`` for a name nothing declares, which is every name on a plane
     spelled with ``slots``: per-pane style is written in ``[[frame.component]]`` and a
     plane that has not written one gets the frame it had.
+
+    **There is no ``isinstance(placed, dict)`` here and that is deliberate.** One was
+    written and the deletion sweep found it surviving: *every* placement is a dict by
+    construction, because :func:`component_tables` is the only thing that fills this list
+    and the only thing it appends is :func:`_placement`'s return. That is a contract rather
+    than an observation — `TheArrangementIsAlwaysPlacementDicts` pins it against every
+    shape a committed file can take — so a guard here would be defending against an input
+    charter's own resolver cannot produce, which is the second-weaker-answer shape #568
+    deleted the last of. The ``or ()`` beside it stays, because a *missing* ``components``
+    key is real: a frame relaunched by a charter that predates it has one.
     """
     for placed in frame.get("components") or ():
-        if isinstance(placed, dict) and name in (placed.get("slot"), placed.get("use")):
+        if name in (placed.get("slot"), placed.get("use")):
             # `or 0` rather than `.get("pad", 0)`, and the difference is a real case: a
             # placement built by a charter that predates this key has no `pad` at all
             # (`.get` covers that), and one built with `pad=None` has the key with nothing

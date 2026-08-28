@@ -1016,13 +1016,20 @@ def inset_rows(text: str, name: str) -> str:
     there, so it is the pane's own background — tmux's paint, the cells no renderer wrote,
     already filled before charter's first byte reached the pane.
 
-    A pad of zero returns *text* unchanged, including its identity as a single string with
-    no trailing newline: ``" " * 0`` is ``""`` and the join is the split's inverse.
+    **A pad of zero returns *text* unchanged, and there is no early return saying so.**
+    ``if not pad: return text`` was written first and deleted: ``" " * 0`` is ``""`` and
+    ``"\\n".join(s.split("\\n"))`` is ``s``, so the line below already answers a pad of
+    zero with the string it was given — the deletion sweep found the guard surviving,
+    correctly, because it could not change an outcome. `fill`'s two deleted guards are the
+    same finding in the same shape, and `TheDeletedEarlyReturnStaysDeleted` is what keeps
+    the property those guards were reaching for pinned without the guard.
+
+    Deleted rather than kept as a fast path, because the cost it saves is not one this
+    module spends: a split and a join over a pane's worth of rows is a few microseconds
+    against `render`'s measured 4 816µs, and `panel._write` splits the same string again
+    one call later regardless.
     """
-    pad = pad_of(name)
-    if not pad:
-        return text
-    lead = " " * pad
+    lead = " " * pad_of(name)
     return "\n".join(lead + line for line in text.split("\n"))
 
 

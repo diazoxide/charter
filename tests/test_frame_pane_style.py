@@ -208,6 +208,47 @@ class ThePadIsBoundedAtTheConfigBoundary(unittest.TestCase):
                 self.assertIsNone(instance.pane_pad(value))
 
 
+class TheCapIsTheNarrowestPanesOwnCeiling(unittest.TestCase):
+    """`FRAME_PANE_PAD_MAX`'s VALUE, not just its existence.
+
+    The deletion sweep asked the right question — *"is this pinned, or would any number
+    do?"* — and the honest answer was that any number would. It is a derived number now:
+    the largest pad the frame's own narrowest pane can afford. The sidebar is 22 columns,
+    `slots._PAD_MIN_CONTENT` is 12, and a pad takes cells from BOTH sides.
+
+    A cap above that admits a value `pad_for` always drops on the sidebar — which is one
+    of the two panes the operator named, so it would buy exactly "your pad did nothing and
+    nothing said why". The arithmetic lives here rather than in `instance` because
+    `instance` is imported by every command and must not reach `frame/layout.py` at module
+    scope; that is the trade `slots.INSET` already makes with `statusline._HEAD_PAD`.
+    """
+
+    def test_the_cap_is_what_the_sidebar_can_afford(self):
+        from charter.frame import layout
+        sidebar = layout.SLOT_SIZE["right"]
+        self.assertEqual(instance.FRAME_PANE_PAD_MAX,
+                         (sidebar - slots._PAD_MIN_CONTENT) // 2)
+
+    def test_the_largest_admissible_pad_is_one_the_sidebar_actually_takes(self):
+        """The property behind the arithmetic, asked of the function that decides. Not a
+        second copy of the sum: this runs `pad_for` at the sidebar's real width."""
+        from charter.frame import layout
+        sidebar = layout.SLOT_SIZE["right"]
+        with mock.patch.dict(
+                config.FRAME,
+                _arrangement(sidebar={"pad": instance.FRAME_PANE_PAD_MAX})):
+            self.assertEqual(slots.pad_for("sidebar", sidebar),
+                             instance.FRAME_PANE_PAD_MAX)
+
+    def test_one_more_than_the_cap_would_be_dropped_by_that_pane(self):
+        """The other side of the boundary, and the reason the cap is where it is: a pad
+        one larger is one the sidebar could never honour."""
+        from charter.frame import layout
+        sidebar = layout.SLOT_SIZE["right"]
+        over = instance.FRAME_PANE_PAD_MAX + 1
+        self.assertLess(sidebar - 2 * over, slots._PAD_MIN_CONTENT)
+
+
 class AnUnusableStyleTakesTheArrangementWithIt(unittest.TestCase):
     """#535's rule, extended to the two new keys rather than excepted from.
 
@@ -317,6 +358,35 @@ class OneWalkOverTheArrangement(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(instance.component_style(f, name),
                                  {"bg": None, "pad": 0})
+
+    def test_the_arrangement_is_always_placement_dicts(self):
+        """**What makes `component_style`'s deleted `isinstance(placed, dict)` safe.**
+
+        That guard was written and the sweep found it surviving, correctly: every entry in
+        `frame["components"]` is a dict by construction, because `component_tables` is the
+        only thing that fills the list and `_placement`'s return is the only thing it
+        appends. That is a contract, so it is asserted here rather than defended there —
+        asked of every shape a committed `[[frame.component]]` can take, including the ones
+        that make `component_tables` answer `None`.
+        """
+        cases = [
+            [{"use": "identity"}, {"use": "repos", "bg": "blue", "pad": 1}],
+            [{"use": "identity"}, {"use": "repos", "visible": False}],
+            [{"use": "identity"}, "not a table"],
+            [{"use": "identity"}, {"use": "identity"}],
+            [{"use": "nope.nothing", "edge": "right", "size": 9}],
+            [{"use": "repos", "bg": "chartreuse"}],
+            [{"use": "repos", "pad": -1}],
+            ["identity"], [], [7],
+        ]
+        for tables in cases:
+            with self.subTest(tables=tables):
+                f = instance.frame_of({"frame": {"component": tables}})
+                self.assertIsInstance(f["components"], list)
+                for placed in f["components"]:
+                    self.assertIsInstance(placed, dict)
+                    self.assertEqual({"use", "slot", "edge", "size", "visible", "key",
+                                      "bg", "pad"}, set(placed))
 
     def test_a_placement_with_no_pad_and_one_with_a_null_pad_read_the_same(self):
         """Two shapes for "no pad" — a placement from a charter that predates the key, and
@@ -505,11 +575,32 @@ class ThePadComesOutOfTheBudget(PersonaIso, unittest.TestCase):
 
     def test_inset_rows_is_the_identity_at_no_pad(self):
         """`" " * 0` is `""` and the join is the split's inverse, so a pane with no pad
-        gets back the object's own value unchanged — trailing newline included."""
+        gets back the value it was given — trailing newline included.
+
+        **This is the property, and there is no early return implementing it.** `if not
+        pad: return text` was written, the deletion sweep found it surviving, and it was
+        deleted rather than pinned: it could not change an outcome. So these cases are
+        what keeps that true through the general path — the whole point of the deletion is
+        that they stay green without the line."""
         with mock.patch.dict(config.FRAME, _arrangement()), _pane(120):
-            for text in ("", "a", "a\nb", "a\n", "\n\n"):
+            for text in ("", "a", "a\nb", "a\n", "\n\n", "\n", "a\n\nb\n"):
                 with self.subTest(text=text):
                     self.assertEqual(slots.inset_rows(text, "repos"), text)
+
+    def test_an_unpadded_pane_renders_byte_for_byte_what_it_did_before(self):
+        """The deletion's real exit criterion, said at the level an operator sees: with no
+        `pad` anywhere, every slot draws exactly what a plane with no `[[frame.component]]`
+        style at all draws. If the split-and-join round trip were not the identity, this is
+        where it would show — a trailing blank row appearing or disappearing."""
+        for slot in sorted(slots.SLOTS):
+            with self.subTest(slot=slot), _pane(120):
+                with mock.patch.dict(config.FRAME, _arrangement()):
+                    styled = slots.render(slot, "f-1")
+                with mock.patch.dict(config.FRAME,
+                                     instance.frame_of({"frame": {"slots": list(
+                                         instance.FRAME_DEFAULTS["slots"])}})):
+                    bare = slots.render(slot, "f-1")
+                self.assertEqual(styled, bare)
 
     def test_the_pad_lands_outside_every_style_span(self):
         """The pad is background, not paint. A row that ends with a span still OPEN — a

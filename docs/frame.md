@@ -705,8 +705,11 @@ its content, so a vertical pad there removes a repo from the table rather than m
 and which repo goes is a ranking charter made on purpose. Horizontal padding gets narrower;
 vertical padding disappears.
 
-`0` to `8`. Anything else — a negative, a bigger number, `true`, `"2"` — takes the
-arrangement out of play the way an unknown `bg` does.
+`0` to `5`. Five is not a round number picked by hand: it is the widest inset the
+narrowest pane charter draws — the 22-column sidebar — can actually take and still
+have room for a name. A bigger one would be a value that pane always drops, on one of
+the two panes you asked for this on. Anything else — a negative, a bigger number,
+`true`, `"2"` — takes the arrangement out of play the way an unknown `bg` does.
 
 ### Writing the arrangement out
 
