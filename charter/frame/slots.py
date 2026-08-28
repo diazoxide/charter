@@ -1105,12 +1105,32 @@ def todo_section(fid: str, width: int, budget: int, *, terse: bool) -> list[str]
 
     How SHORT is too short is `_todo_rows`' rule and is asked there once: this decides
     only whether there is any room at all.
+
+    **The workspace is the FRAME's, handed in, never one the panel resolved for itself**
+    (#526) — :func:`_frame_workspace`, the rule every other surface of the frame asks.
+    `gather.read` falls through to `gather.scan` on a cold cache, and `scan` with no
+    workspace argument calls `workspace.resolve()` **in the panel process**, which #512
+    established reaches none of the rungs that can speak for the frame: `$CHARTER_WORKSPACE`
+    arrives empty by design (#411), the cwd is the plane root, the per-session pointer is
+    keyed on the FRAME id, and the per-terminal pointer on the panel's own `$TMUX_PANE`.
+    It lands on the declared default. So a frame's first paint listed **`default`'s** open
+    todos under this plane's `▪ todos N` heading — and that is worse here than the blank
+    repo table #512 fixed, because a populated list reads as an answer: three todos an
+    operator has never seen read as three todos they have.
+
+    **The scan fallback stays, and that is a decision rather than an inheritance.** #525
+    took it away from `bottom` and gave that slot a `⋯ gathering…` placeholder instead,
+    on the grounds that `bottom` is the one ANIMATED slot — it repaints five times a
+    second while work is in flight, and a cold `scan()` is a git sweep per repaint. The
+    sidebar is not animated: one scan, on one paint, and a column that draws its todos
+    immediately is worth having. The two slots therefore read the cache by two different
+    rules, deliberately, and the difference is the repaint rate rather than the section.
     """
     from . import gather
     budget = min(budget, _TERSE_ROWS if terse else _MAX_TODO_LINES)
     if budget <= 0:
         return []
-    return _todo_rows(gather.read(fid), width, budget)
+    return _todo_rows(gather.read(fid, workspace=_frame_workspace(fid)), width, budget)
 
 
 def _right(fid: str) -> str:

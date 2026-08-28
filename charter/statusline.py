@@ -108,6 +108,28 @@ _HEAD_PAD = f"{_MARK_HEAD} "
 # Visible width of the whole left/repo block: "  " + "├─ " + name + gaps + branch + ci + mr.
 _LEFT_W = 2 + 3 + _NAME_W + 2 + _BRANCH_W + 2 + _CI_W + 2 + _MR_W
 _RIGHT_MIN_W = 36  # a persona column narrower than this is not worth showing
+
+# --- what a row gives up when the pane cannot hold all of it (#506) ------------------
+#
+# The name cell's floor: the indent, the tree glyphs, and enough label to tell one repo
+# from another. Never zero — a row with no name is not a row about anything.
+_NAME_MIN_W = 2 + 3 + 12
+# The branch cell's floor. `*↑9↓9` is five cells, so this is the markers plus one: the
+# markers are true of the TREE (dirty, unpushed, behind) and the branch name is only what
+# the tree is called, so what this floor protects is the markers.
+_BRANCH_MIN_W = 6
+# Below this much room left over after the markers, the branch NAME is dropped whole
+# rather than cut: `fe…` is not a branch anybody can act on, and spending the cell on the
+# markers instead is the same shown-whole-or-dropped-whole rule :func:`_row_plan` keeps
+# one level up.
+#
+# **Bounded from both sides by a property, and 4/5/6 are indistinguishable between them.**
+# Measured, so the next reader does not go looking: below 4 a stub is drawn again (`a-…`
+# beside the markers, which the tests refuse); above 6 the branch vanishes from an
+# ordinary CLEAN row at the floor, because `main` is four cells in a six-cell cell and
+# there are no markers to pay for. Inside that band no user-facing property can tell one
+# value from another, and a test asserting the number would only pin the spelling.
+_BRANCH_TEXT_MIN_W = 4
 # Render to (COLUMNS − this). The pane gives LESS than `$COLUMNS` advertises, and the
 # amount was measured rather than guessed: at 2, a line ending exactly at COLUMNS−2 lost
 # its final character to the host's own `…` crop (the brand rendered `⬢ charter 0.10…`),
@@ -819,7 +841,8 @@ def _presence_text(ws: str, repo: str, piece: str | None) -> str:
 
 
 def _branch_cell_for(branch_text: str, presence: str, marks_plain: str = "",
-                     marks_col: str = "", is_dirty: bool = False) -> str:
+                     marks_col: str = "", is_dirty: bool = False,
+                     width: int = _BRANCH_W) -> str:
     """The branch cell's contents: branch, markers, and presence **if it still fits**.
 
     The losing order matters more than the layout. Markers and the branch name are true of
@@ -827,15 +850,35 @@ def _branch_cell_for(branch_text: str, presence: str, marks_plain: str = "",
     the branch is truncated only so far as the markers demand — the rule this cell already
     kept — and presence is appended only out of whatever room is genuinely left over. On a
     narrow pane presence disappears and nothing that was there before moves.
+
+    *width* is the cell the caller is about to pad this into, and it is a parameter rather
+    than :data:`_BRANCH_W` because :func:`_row_plan` narrows this cell first on a pane that
+    cannot hold the whole row (#506). Measuring against the constant while the caller pads
+    to something smaller is the defect one layer down from the one #506 is about: the cell
+    would compose 34 columns of branch-and-markers and `tui.Cell` would then cut the
+    markers off the right-hand end — the markers being exactly what the narrowing was
+    protecting.
+
+    **Below :data:`_BRANCH_TEXT_MIN_W` of room the branch name is dropped whole**, not
+    truncated to a stub. `fe…` names no branch a reader can act on, while `*↑2` says the
+    tree is dirty and unpushed whatever it is called — so on the last few columns the
+    markers take the cell outright.
     """
-    br = tui.truncate(branch_text, max(1, _BRANCH_W - tui.width(marks_plain)))
+    room = width - tui.width(marks_plain)
+    if room < _BRANCH_TEXT_MIN_W:
+        return marks_col
+    # `room`, not `max(1, room)`. The clamp was here before the refusal above was, and the
+    # refusal makes it dead: reaching this line means `room` is at least
+    # `_BRANCH_TEXT_MIN_W`. A deletion sweep said so, and two guards where one decides is
+    # the shape this repo keeps shipping — the second one passes because the first one
+    # caught it, and no mutation can turn it red.
+    br = tui.truncate(branch_text, room)
     out = f"{_YELLOW if is_dirty else _DIM}{br}{_R}{marks_col}"
     if not presence:
         return out
     used = tui.width(br) + tui.width(marks_plain)
-    room = _BRANCH_W - used
     need = tui.width(_strip(presence)) + 1        # +1 for the separating space
-    return out + f" {presence}" if room >= need else out
+    return out + f" {presence}" if width - used >= need else out
 
 
 def _strip(text: str) -> str:
@@ -860,7 +903,103 @@ def _presence_for_dir(d) -> str:
         return ""
 
 
-def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None) -> tui.Row:
+class _RowPlan(NamedTuple):
+    """The four cell widths one repo row is composed at. ``0`` means *not drawn at all*.
+
+    A plan is made once per render from the columns the pane actually has, and every row
+    is built from the same one — which is what keeps sibling rows aligned, the property
+    this layout has paid for repeatedly.
+    """
+
+    name: int
+    branch: int
+    ci: int
+    mr: int
+
+
+#: The row every pane at :data:`_LEFT_W` or wider gets. Spelled from the same terms
+#: `_LEFT_W` is, so the two cannot drift.
+_FULL_ROW = _RowPlan(2 + 3 + _NAME_W, _BRANCH_W, _CI_W, _MR_W)
+
+
+def _plan_width(plan: _RowPlan) -> int:
+    """Visible columns a row composed at *plan* occupies — dropped cells cost nothing,
+    and neither does the gap that would have followed one."""
+    drawn = [w for w in plan if w]
+    return sum(drawn) + len(_GAP) * max(0, len(drawn) - 1)
+
+
+def _row_plan(budget: int) -> _RowPlan:
+    """The cell widths for a repo row on a pane *budget* columns wide (#506).
+
+    **The decision is made here, where the row is COMPOSED, and not by the crop at the
+    end.** Composing every row at :data:`_LEFT_W` (95) and letting `_columns` clamp it to
+    the terminal is what #506 reports: each column sits at a fixed offset past the name
+    and the branch, so the cells cut off an 80-column pane are the last two — the CI mark
+    and the open change. A dirty, CI-failing, unpushed repo then read as one that was
+    merely dirty, because the dirty marker rides on the branch cell and survived. A crop
+    cannot know which column it just ate; this can.
+
+    That is the same reading `frame/slots._table_lines` refuses for its own pane ("too
+    narrow for the table is NO table, not a cut one", #488) — but the status line is what
+    an operator sees when they are NOT in a frame, so drawing nothing is not available to
+    it. It takes the other of #506's two honest options: a narrower row SHAPE, whose
+    losing order is written down.
+
+    What a narrow pane gives up, and why in that order:
+
+    1. **The branch text is the first thing to go and the CI mark the last.** "Which
+       branch" is a fact you go and look up; a red pipeline is one you act on. So the
+       branch is the widest column at a wide pane and the first to reach its floor, and
+       that floor is :data:`_BRANCH_MIN_W` — the markers — because dirty/ahead/behind are
+       true of the TREE and outlive what it is called.
+    2. **A cell that cannot be shown whole is not shown**, in the order change → branch →
+       CI. `✗ fa…` is the false-clean reading a trimmed cell produces, and the CI mark is
+       the last thing standing because it is the one cell that changes what a reader does
+       next.
+    3. **Anything a drop left over goes back**, name first. A dropped cell frees more
+       columns than the deficit demanded, and leaving them blank while the repo name is
+       cut to twelve characters spends a narrow pane on nothing.
+
+    An 80-column terminal — `render`'s ordinary narrow case, and `$COLUMNS` is the
+    status-line PANE's width, so any split reaches here — lays out at 72 and loses
+    exactly 23 columns of branch text. Nothing else moves.
+    """
+    # **Written as "start at the floors and spend upward", not "start full and shrink".**
+    # It was the second, with an early return for a wide pane and a shrink loop in front
+    # of the two below — and a deletion sweep took all of it apart: the early return was
+    # unreachable behaviour (a wide pane comes back with `_FULL_ROW` from the general path
+    # anyway), and the shrink loop was redundant with the give-back loop, which recomputes
+    # the same allocation from the floors. Verified as a whole function rather than
+    # reasoned: the two spellings agree at every budget from 1 to 400.
+    #
+    # And this way the two orders are each written down exactly once — the drop order, and
+    # the give-back order that makes the branch narrow before the name does — instead of
+    # the give-back silently overruling a shrink that had already made the same decision.
+    plan = _RowPlan(_NAME_MIN_W, _BRANCH_MIN_W, _CI_W, _MR_W)
+    for i in (3, 1, 2):                       # change, then branch, then CI
+        if _plan_width(plan) <= budget:
+            break
+        plan = plan._replace(**{plan._fields[i]: 0})
+    # The name is filled to its full width before the branch gets a column, which is what
+    # "the branch narrows first" means from this direction.
+    #
+    # `spare > 0` and not `plan[i] and spare > 0`. The second conjunct read as "never
+    # resurrect a cell the drop loop took away", which sounds load-bearing and is not: the
+    # only droppable cell here is the branch, the name is filled first and can absorb
+    # twenty columns, and every budget narrow enough to have dropped the branch has fewer
+    # than twenty spare. A deletion sweep said so. `spare > 0` IS load-bearing — below the
+    # name's own floor `spare` goes negative, and without the guard the name is planned
+    # narrower than the floor it was just given.
+    for i, full in ((0, _FULL_ROW.name), (1, _FULL_ROW.branch)):
+        spare = budget - _plan_width(plan)
+        if spare > 0:
+            plan = plan._replace(**{plan._fields[i]: min(full, plan[i] + spare)})
+    return plan
+
+
+def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None,
+                plan: _RowPlan = _FULL_ROW) -> tui.Row:
     """One table row — ``<lead><label>`` in the name column, then branch+markers, CI, change.
 
     Shared by repo rows and nested worktree rows so the two cannot drift: a worktree's row
@@ -875,22 +1014,41 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None) -> 
     *branch* overrides the looked-up branch text — pass ``""`` to print the markers alone.
     The markers are never part of that override: dirty and ahead/behind are true of the
     tree whatever its branch is called, so they survive an emptied branch cell.
+
+    *plan* is what the pane can afford (:func:`_row_plan`). A cell whose planned width is
+    zero is **not built**, so no gap is spent on it either — the alternative, a zero-width
+    `Cell`, leaves the row carrying `_GAP` for a column that is not there and every cell
+    after the drop starts two columns further right than the plan believes, which pushes
+    the row over its budget and lets `tui.Row` truncate the CI label off the end.
+
+    **Only the BRANCH guard is observable, and that follows from the losing order rather
+    than from luck** — recorded because a deletion sweep will report the other two as
+    equivalent and the next reader deserves to know why rather than deleting them. The
+    change and the CI mark are dropped last and second-last, so each is the final cell on
+    its row by the time it goes, and `tui`'s own `_finish` strips the trailing gap that
+    would have followed it. The branch is dropped from the MIDDLE, with the CI mark still
+    to its right. All three are written the same way anyway: three cells built by one
+    rule is what stops the fourth one somebody adds from being written by a different one.
     """
-    name = tui.Cell(f"{lead}{label}", 2 + 3 + _NAME_W)
+    cells: list[tui.Cell] = [tui.Cell(f"{lead}{label}", plan.name)]
 
     # branch + markers: truncate the *branch* so the markers always survive
     marks_plain, marks_col, is_dirty = _markers(states.get(d, {}))
     text = branches.get(d, "?") if branch is None else branch
-    branch = tui.Cell(_branch_cell_for(text, _presence_for_dir(d),
-                                       marks_plain, marks_col, is_dirty), _BRANCH_W)
+    if plan.branch:
+        cells.append(tui.Cell(_branch_cell_for(text, _presence_for_dir(d), marks_plain,
+                                               marks_col, is_dirty, plan.branch),
+                              plan.branch))
 
     info = gl.get(d, {})
-    ci = tui.Cell(_ci_part(info.get("ci")), _CI_W)
-    change = info.get("change")
-    sigil = info.get("sigil") or "!"   # old caches (pre-forge-protocol) carry no sigil
-    mr_cell = tui.Cell(f"{_GREEN}{sigil}{change}{_R}" if change else "", _MR_W)
+    if plan.ci:
+        cells.append(tui.Cell(_ci_part(info.get("ci")), plan.ci))
+    if plan.mr:
+        change = info.get("change")
+        sigil = info.get("sigil") or "!"   # old caches (pre-forge-protocol) carry no sigil
+        cells.append(tui.Cell(f"{_GREEN}{sigil}{change}{_R}" if change else "", plan.mr))
 
-    return tui.Row(name, branch, ci, mr_cell, gap=_GAP)
+    return tui.Row(*cells, gap=_GAP)
 
 
 def _pick_rows(dirs, budget: int, cur_repo, states, gl) -> list[Path]:
@@ -1037,7 +1195,8 @@ def _silence_rank(age: str) -> int:
         return 0
 
 
-def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[tui.Node]:
+def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=(),
+               budget: int = _LEFT_W) -> list[tui.Node]:
     """One table row per clone, nested under the workspace like a tree:
 
         ├─ <repo>   <branch><markers>   <ci>   <sigil><change>
@@ -1048,6 +1207,13 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[t
 
     Column widths are declared per cell; the kit pads/truncates so sibling
     rows stay aligned and nothing ever exceeds the render width.
+
+    *budget* is the columns the caller actually has for this block, and every row here is
+    composed at :func:`_row_plan`'s answer for it — ONE plan, made once, shared by every
+    row and by the two `tui.Text` lines below them. A per-row plan would be the same
+    mistake as a per-row width: the rows are siblings, and a table whose rows disagree
+    about their columns is not a table. See :func:`_row_plan` for what a narrow pane gives
+    up and in what order (#506).
 
     Bounded by `_MAX_REPO_LINES` TOTAL rows, not by repo count: repos are prioritised
     over worktree rows (every repo gets its own row before any repo's worktrees get
@@ -1061,6 +1227,7 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[t
     """
     if not dirs:
         return []
+    plan = _row_plan(budget)
     # `cur[0] is None` = the cwd is in the root tree, which is a member of EVERY
     # workspace, so it is current whichever one is active.
     cur_repo = cur[1] if (cur and (cur[0] is None or cur[0] == active)) else None
@@ -1102,7 +1269,7 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[t
         # indent + tree + name (padding lands outside the style, not underlined)
         rows.append(_tree_cells(f"  {_DIM}{tree}{_R}",
                                 f"{emph}{color}{d.name}{_R}{badge}",
-                                d, states, branches, gl))
+                                d, states, branches, gl, plan=plan))
 
         if kids:
             wt_budget -= len(kids)
@@ -1129,7 +1296,8 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[t
                 rows.append(_tree_cells(f"  {_DIM}{_TREE_PIPE}{mark}{_R}",
                                         f"{emph_w}{_DIM}{w.name}{_R}",
                                         w, states, branches, gl,
-                                        branch=state if wb == w.name else wb))
+                                        branch=state if wb == w.name else wb,
+                                        plan=plan))
         # ONE summary line per repo, newest piece first — a fixed cost no matter how many
         # worktrees exist, so the footer can't grow with them (the ⑂N badge above carries
         # the true total, and overflow truncates with … rather than dropping pieces
@@ -1140,8 +1308,13 @@ def _repo_rows(dirs, active, cur, states, branches, gl, detail_wts=()) -> list[t
         elif wts and wt_budget > 0:
             wt_budget -= 1
             lead = f"  {_DIM}{_TREE_PIPE}{_R} {_DIM}{_TREE_WT}{_R}"
-            pieces = tui.truncate(" · ".join(w.name for w in wts),
-                                  max(1, _LEFT_W - tui.width("  │   ╰─ ")))
+            # Clamped by `tui.Text` at render time and NOT here. This used to pre-truncate
+            # to `_LEFT_W` minus the lead, which #506 would have made `budget` minus the
+            # lead — and a deletion sweep says neither is worth writing: `Text.render` gets
+            # the same budget, so cropping the joined names first and cropping the finished
+            # line afterwards produce the same string for every input. Two crops to one
+            # width is one crop, and the redundant one was carrying a constant.
+            pieces = " · ".join(w.name for w in wts)
             rows.append(tui.Text(f"{lead}{_DIM}{pieces}{_R}"))
 
     if capped:
@@ -2319,9 +2492,20 @@ def render(payload: dict | None = None) -> str:
         ]))
 
         sid = payload.get("session_id")
-        repo_lines = [r.render(_LEFT_W)[0]
+        # The columns the repo block actually gets, and the one number every row below is
+        # composed for (#506). The single-column branches truncate each line to `width`,
+        # which is the crop #506 is about — so on a narrow pane this is what stops the CI
+        # mark being eaten by it.
+        #
+        # `width`, with no `min(width, _LEFT_W)` in front of it, and a deletion sweep is
+        # why: `_row_plan` cannot return a plan wider than the table — `_LEFT_W` IS what
+        # the full plan sums to, both spelled from the same four cells — so the clamp
+        # restated a property the plan already has. It is pinned where it belongs, on
+        # `_row_plan`, rather than at each caller that would otherwise have to remember it.
+        repo_w = width
+        repo_lines = [r.render(repo_w)[0]
                       for r in _repo_rows(dirs, active, cur, states, branches, gl,
-                                          detail_wts)]
+                                          detail_wts, repo_w)]
         chips = _persona_chips(sid)
     except Exception:
         return f"{_CYAN}⬢{_R} charter"
