@@ -133,7 +133,7 @@ import sys
 import time
 
 from . import config, contain, harness, instance, tui, util, workspace
-from .frame import (builtin_actions, choose, component, gather, layout, overlay,
+from .frame import (builtin_actions, choose, component, gather, layout, overlay, pane,
                     palette, picker, state, switch, tmuxctl)
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
@@ -4059,9 +4059,31 @@ def cmd_palette(args) -> int:
     already open" is a stale-state problem of its own (the hatch deliberately leaves the
     window option naming a pane that is gone), and a guard that refuses the palette after
     an escape-hatch press would be worse than the state it is preventing.
+
+    **``--pane`` is this process being handed a rectangle, so it is where the pane is
+    claimed** (`frame/pane.py`, #606/#611) — and the claim is HERE rather than inside
+    :func:`_draw_palette` for the reason `panel.run` is split from `panel._run`, which is
+    the same split one surface over. The claim has to sit above `builtin_actions.build`,
+    which is the first instant a provider's module can execute in this process
+    (`registry.Registry.add` → `importlib.import_module`); `_draw_palette`'s own `try`
+    starts *below* that build and its `finally` is `_close_palette`. Folding the claim
+    into that `try` would have moved four lines under a `finally` that kills the palette's
+    pane, changing when `_close_palette` runs to satisfy an ordering — so the claim gets
+    the enclosing function instead, exactly as `panel.run` does, and `_draw_palette` keeps
+    the shape it was reviewed in.
+
+    **And the other branch claims nothing, deliberately.** Without ``--pane`` this is a
+    `run-shell` child whose stdout is a pipe: it was given no rectangle, it paints in
+    none, and `frame/pane.py`'s fallback is written for exactly that process. A claim
+    there would record a pipe as "the pane this process was given", which is the sentence
+    that module exists to keep true.
     """
     if getattr(args, "pane", False):
-        return _draw_palette(args)
+        held = pane.claim()
+        try:
+            return _draw_palette(args)
+        finally:
+            pane.release(held)
     return _open_palette(args)
 
 

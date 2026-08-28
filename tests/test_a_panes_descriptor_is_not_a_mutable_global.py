@@ -1,5 +1,5 @@
-"""#606 — a panel's pane IS `sys.stdout`, so a library that rebinds that global takes the
-pane away from charter without anything raising.
+"""#606/#611 — a pane-owning process's pane IS `sys.stdout`, so a library that rebinds that
+global takes the pane away from charter without anything raising.
 
 **The failure is the SECOND paint, and it is silent.** A test that patches `sys.stdout`
 and asserts a width is not this defect: on `main` the first paint was correct, and only
@@ -19,16 +19,29 @@ Measured on `main` before the fix, in a 150x10 pane::
 defect is not about Textual: `rich`, `click`, `tqdm`, `colorama`, a progress bar and a
 logging handler installed at import all reach for the same global. What is pinned is the
 property — *the pane this process was given* — and not the one library that took it.
+
+**Two processes are handed a pane, and #611 is the second one.** `charter panel` is one;
+`charter frame-palette --pane` is the other, and it had the same ordering the other way up
+— `commands_frame._draw_palette` builds its action registry, which imports every installed
+provider, and only then calls `palette.own_the_tty`, whose `out` resolved `sys.stdout` at
+that later instant. So the classes below come in pairs: what the panel does at every
+repaint, the palette does once, for the surface `F2` opens. The measurement is in
+:class:`ThePalettesPaneIsClaimedAboveItsRegistryToo`.
 """
 
 import io
 import os
+import pty
 import sys
+import threading
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from types import SimpleNamespace
 from unittest import mock
 
-from charter.frame import chrome, pane, panel, slots, state
+from charter import commands_frame
+from charter.frame import (builtin_actions, chrome, overlay, palette, pane, panel,
+                           slots, state)
 
 from tests._isolation import PersonaIso
 
@@ -124,6 +137,47 @@ def _paints(text: str) -> list[str]:
     """The paints in *text*, split the way four existing test call sites already split a
     pane's transcript: on the clear-screen that starts each one."""
     return text.split("\x1b[2J")[1:]
+
+
+def _types_on_first_paint(stream_cls, master: int):
+    """*stream_cls*, plus one Ctrl-C typed into *master* the first time it is written to.
+
+    Ctrl-C rather than a named key: `overlay.decode` reads `\\x03` as Escape ("nothing else
+    is going to turn this into a signal"), it is ONE byte so there is no sequence to split
+    across reads, and it CANCELS — so nothing this class drives ever starts an action.
+
+    A factory rather than two written-out subclasses because the arrangement has to be
+    identical on both stand-ins; see `_ran_the_palette` for why both carry it.
+    """
+    class _Typing(stream_cls):
+        def __init__(self) -> None:
+            super().__init__()
+            self._types = master
+
+        def write(self, s):
+            n = super().write(s)
+            if self._types is not None:
+                fd, self._types = self._types, None
+                os.write(fd, b"\x03")
+            return n
+
+    return _Typing()
+
+
+class _AttachedTo:
+    """A `sys.stdin` whose descriptor is a real pty slave.
+
+    `own_the_tty` asks `sys.stdin.fileno()` and hands the number to `termios.tcgetattr`,
+    so this stands in for the palette pane's own tty. Deliberately nothing else: a rebound
+    STDIN is #611's own stated residual — it RAISES rather than silently mispainting, and
+    is not the failure this module is about.
+    """
+
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+
+    def fileno(self) -> int:
+        return self._fd
 
 
 class ARepaintReachesThePaneAfterALibraryTakesStdout(PersonaIso, unittest.TestCase):
@@ -430,6 +484,242 @@ class ColourIsAskedOfThePane(PersonaIso, unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True), _claimed(_Pane()):
             sys.stdout = _NotAPane()
             self.assertTrue(chrome.colour_ok())
+
+
+class ThePalettesPaneIsClaimedAboveItsRegistryToo(PersonaIso, unittest.TestCase):
+    """#611 — the other pane-owning process, and the same ordering the other way up.
+
+    `commands_frame._draw_palette` builds `builtin_actions.build` FIRST — which is
+    `actions.ActionRegistry.add` → `registry.Providers` → `importlib.import_module` on
+    every installed provider — and only then calls `palette.own_the_tty`, whose `out` was
+    `sys.stdout` resolved at that later instant and whose `size` measured `out.fileno()`.
+
+    **Measured on `main`, driving a whole real `charter frame-palette --pane` with a
+    provider that rebinds `sys.stdout` as its module is imported**, into a `_Pane` that
+    reports 150x10::
+
+        pane transcript : ''
+        library's log   : '\\x1b[?1049h\\x1b[?25l\\x1b[?1006h\\x1b[?1000h…'
+        raised          : OSError('[Errno 25] fd -1 is not a terminal')
+
+    Not one byte reached the pane — not even the alternate-screen enter, which is written
+    before the first measurement — and the raise landed in a process whose `finally` had
+    already run `_close_palette`, so what the operator sees is `F2` carving a pane off the
+    harness, drawing nothing in it, and killing it again. `cmd_palette`'s documented
+    "Always 0" goes with it. That is the palette's shape of #606's silent blank, so every
+    assertion here is **on the pane's content** and none is on an exception.
+
+    A REAL pty for stdin, because `own_the_tty` puts a tty in raw mode and `tcgetattr`
+    refuses anything else — the same reason `test_frame_palette.TheTtyIsOwnedAndHandedBack`
+    owns one.
+    """
+
+    FID = "f-palette-pane"
+
+    def setUp(self) -> None:
+        super().setUp()
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter")
+        state.record_harness_pane(self.FID, "%3")
+        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+        # Real tmux commands, and this test is not about them: the pane is closed by an
+        # argv chain aimed at a server that is not running here.
+        self.enterContext(mock.patch.object(commands_frame, "_close_palette"))
+        self.master, self.slave = pty.openpty()
+        self.addCleanup(self._close_pty)
+        # Whatever claim was in force before this test, put back afterwards WHATEVER
+        # happens below. `_ran_the_palette` deliberately survives a worker that never
+        # returns (that is how a broken `out` is reported rather than hung on), and such a
+        # worker never reaches `cmd_palette`'s own `finally` — so without this the next
+        # test in the process reads a claim on a `_Pane` that stopped existing, and
+        # `test_a_process_that_claimed_nothing_answers_for_its_own_stdout` fails for a
+        # reason that has nothing to do with it. Asked through `claim`/`release` rather
+        # than by reading the module's global, since a restore is exactly what they are.
+        held = pane.claim()
+        pane.release(held)
+        self.addCleanup(pane.release, held)
+
+    def _close_pty(self) -> None:
+        """Close both ends — waking anything still blocked on the slave FIRST.
+
+        `test_frame_palette.TheTtyIsOwnedAndHandedBack._close`'s reason, and it applies
+        harder here because this class runs the surface on a WORKER: closing an fd does not
+        wake a thread already inside `os.read` on it, and a daemon left there sits on an fd
+        NUMBER that the next `pty.openpty` in this process may well be handed. One byte
+        through the master ends the read.
+        """
+        try:
+            os.write(self.master, b"\x03")
+        except OSError:
+            pass                       # already closed; nothing left to wake
+        for fd in (self.master, self.slave):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _ran_the_palette(self, real, captured, deadline: float = 10.0):
+        """One whole `charter frame-palette --pane`, with a provider taking `sys.stdout`
+        as its module is imported, driven to an end and answered for.
+
+        `builtin_actions.build` stands in for the import it performs, exactly as
+        `ThePaneIsClaimedAboveAnythingAStrangerWrote` uses `builtins.build` for the panel's
+        — a `rich` console or a logging handler at module scope IS this, and it runs before
+        the palette has painted anything, so there is no correct first frame to hide behind
+        here either.
+
+        **The keystroke is typed by whichever stream the surface actually paints into**,
+        and that is the one arrangement that neither hangs nor cheats. Typed BEFORE the
+        call it is discarded: `tty.setraw` uses ``TCSAFLUSH``, which empties the input
+        queue, so the surface then waits for a byte that is gone. Typed from the main
+        thread in a loop it never arrives either — measured on this exact fixture, the
+        worker sat inside `tcsetattr` for the whole deadline while the loop kept the
+        slave's input queue full. So `_TypesOnFirstPaint` sends it from inside the first
+        `write`, which `Surface.run` performs immediately after raw mode is entered and
+        before its first `read` — and it is mixed into the LIBRARY's stand-in as well as
+        the pane's, so a palette painting into the wrong one still ends, and this class
+        reports a failed assertion about the pane rather than a hung suite.
+
+        The worker is joined on a deadline for the residual case where NEITHER is written
+        to: `assertFalse(is_alive())` is a red, and a bare call would have been a hang.
+        """
+        really_build = builtin_actions.build
+
+        def build_that_rebinds(*a, **kw):
+            sys.stdout = captured
+            return really_build(*a, **kw)
+
+        out: list = []
+
+        def _work() -> None:
+            try:
+                out.append(commands_frame.cmd_palette(
+                    SimpleNamespace(client="", pane=True)))
+            except BaseException as e:              # noqa: BLE001 — reported, not raised
+                out.append(e)
+
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID}, clear=True), \
+             mock.patch.object(builtin_actions, "build",
+                               side_effect=build_that_rebinds), \
+             mock.patch.object(sys, "stdin", _AttachedTo(self.slave)), _measuring():
+            with redirect_stdout(real), redirect_stderr(io.StringIO()):
+                worker = threading.Thread(target=_work, daemon=True,
+                                          name="charter-test-palette")
+                worker.start()
+                worker.join(timeout=deadline)
+        self.assertFalse(worker.is_alive(), "the palette never gave the pane back")
+        return out[0] if out else None
+
+    def _pane_and_capture(self):
+        """The two streams this class tells apart, each able to end the surface — see
+        `_ran_the_palette`."""
+        return (_types_on_first_paint(_Pane, self.master),
+                _types_on_first_paint(_PrintCapture, self.master))
+
+    def test_the_palette_is_drawn_in_the_pane_and_not_in_the_librarys_log(self):
+        real, captured = self._pane_and_capture()
+        rc = self._ran_the_palette(real, captured)
+        # The pane FIRST, and the return code last, deliberately. What the operator loses
+        # is a surface, not a status: on `main` this pane was empty and the capture held a
+        # whole palette, and a test that led with the exception would have been reporting
+        # the symptom's shadow. `cmd_palette` documents "Always 0" and the raise took that
+        # too, so it is asserted — after the thing it is a consequence of.
+        painted = _paints(real.getvalue())
+        self.assertTrue(painted, f"nothing was drawn in the pane: {real.getvalue()!r}")
+        self.assertIn("detach — leave the harness running", painted[0],
+                      f"the palette's own rows never reached the pane: {painted[0]!r}")
+        self.assertEqual(captured.getvalue(), "",
+                         "the palette was drawn into a stream the provider installed")
+        self.assertEqual(rc, 0, f"the palette did not return quietly: {rc!r}")
+
+    def test_the_palette_is_laid_out_for_the_rectangle_the_pane_reports(self):
+        """The measurement, stated apart from where the bytes went — `render` answers
+        exactly *height* lines, so the pane's own transcript carries the number the
+        surface was laid out for. On `main` this raised instead: `os.get_terminal_size(-1)`
+        on the stand-in's descriptor, with `own_the_tty` deliberately carrying no fallback
+        to hide it."""
+        real, captured = self._pane_and_capture()
+        self._ran_the_palette(real, captured)
+        painted = _paints(real.getvalue())
+        self.assertTrue(painted, f"nothing was drawn in the pane: {real.getvalue()!r}")
+        self.assertEqual(len(painted[0].split("\r\n")), _PANE_SIZE.lines,
+                         "the palette was laid out for a rectangle nobody has")
+
+    def test_a_stream_handed_in_is_still_the_one_written_to(self):
+        """The claim is `out`'s DEFAULT, not a replacement for it — and that half had no
+        test anywhere in the suite.
+
+        Found by hand-mutation of the one line #611 changes: dropping the parameter
+        entirely (`out = pane.stream()`, with no `if out is None`) left 338 tests green.
+        Every caller that passes a stream today drives a real pty with `Surface.run`
+        mocked (`test_frame_palette.TheTtyIsOwnedAndHandedBack`,
+        `test_frame_pickers._RealPty`), so nothing was ever written to the stream they
+        passed and nothing could notice it being ignored. A palette that painted into a
+        claim instead of the stream it was handed would put a whole surface on the
+        developer's own terminal in the middle of a test run.
+
+        Both stand-ins type, so the mutation this pins is a failed assertion rather than a
+        hang — see `_ran_the_palette`.
+        """
+        passed = _types_on_first_paint(_Pane, self.master)
+        claimed = _types_on_first_paint(_Pane, self.master)
+        surface = palette.Palette(catalogue=(overlay.Row(id="a.b", title="t"),))
+        with _measuring(), _claimed(claimed):
+            palette.own_the_tty(surface, fd=self.slave, out=passed)
+        self.assertTrue(_paints(passed.getvalue()),
+                        "the surface never painted into the stream it was handed")
+        self.assertEqual(claimed.getvalue(), "",
+                         "the surface ignored its `out` and painted into the claim")
+
+    def test_a_claim_does_not_outlive_the_palette_that_took_it(self):
+        """`cmd_palette` is a command in the one CLI that also runs `charter statusline`
+        and every hook, so a claim left set is the next caller in this process measuring a
+        rectangle that stopped existing — `panel.run`'s own rule (see
+        `test_a_claim_does_not_outlive_the_panel_that_took_it`, which is this one function
+        over) and `_install_sigwinch`'s before it.
+
+        The outer claim is taken and then let go of as `sys.stdout` for that test's reason:
+        a `release` that cleared the global instead of restoring would otherwise answer
+        with the very object being compared against.
+        """
+        outer = _NotAPane()
+        with redirect_stdout(outer):
+            held = pane.claim()
+        try:
+            self._ran_the_palette(*self._pane_and_capture())
+            self.assertIsNot(pane.stream(), sys.stdout)
+            self.assertIs(pane.stream(), outer)
+        finally:
+            pane.release(held)
+
+    def test_the_half_that_only_opens_the_palette_claims_no_pane(self):
+        """The other branch of the same command, and the reason the claim is not simply
+        hoisted above the `if`.
+
+        Without ``--pane`` this process is the hotkey bind's `run-shell` child: it carves
+        the overlay's pane off the harness with tmux commands and paints in nothing at all,
+        so its stdout is a pipe. A claim there would record that pipe as "the pane this
+        process was given", which is precisely the sentence `frame/pane.py`'s fallback
+        exists to keep true — and `charter statusline`, every hook and every test calling
+        `slots._width()` are the same case one command over.
+
+        Asked through `stream()` rather than by reading the module's global: with a claim
+        in force it answers the pipe this branch started in, and with none it follows
+        `sys.stdout` wherever the process's own output went.
+        """
+        pipe, later = _NotAPane(), _NotAPane()
+        seen: list = []
+
+        def _open(_args) -> int:
+            sys.stdout = later          # a library, mid-life, in a process with no pane
+            seen.append(pane.stream())
+            return 0
+
+        with redirect_stdout(pipe), \
+             mock.patch.object(commands_frame, "_open_palette", side_effect=_open):
+            commands_frame.cmd_palette(SimpleNamespace(client="", pane=False))
+        self.assertEqual(seen, [later],
+                         "the half that is handed no rectangle claimed one anyway")
 
 
 if __name__ == "__main__":
