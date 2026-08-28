@@ -30,3 +30,5 @@ Written by the persona as it learns; committed and shared.
 - [A MUTATION SWEEP THAT SCORES ON EXIT CODE IS ITSELF UNPINNED. Measured i](a-mutation-sweep-that-scores-on-exit-code-is-its.md)
 - [Dispatching several agents that each parallelize their own deletion swee](dispatching-several-agents-that-each-parallelize.md)
 - [FIVE ways a mutation sweep lies, all measured on charter 2026-08-26/27.](five-ways-a-mutation-sweep-lies-all-measured-on-.md)
+- [A FIXTURE THAT AGREES WITH THE MACHINE'S DEFAULT TESTS NOTHING. Measured](a-fixture-that-agrees-with-the-machine-s-default.md)
+- [TWO TEST/TMUX TRAPS measured on charter #598 (2026-08-28). (1) io.Unsupp](two-test-tmux-traps-measured-on-charter-598-2026.md)
