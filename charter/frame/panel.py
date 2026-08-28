@@ -286,6 +286,16 @@ def _component_text(reg, cid: str, fid: str) -> str:
     renderer charter did not write only if the declaration is what decides, rather than
     the snapshot being handed over and the declaration describing it afterwards.
 
+    **A provider is handed the padded width and its rows are inset on the way out**, which
+    is `slots.render`'s own two lines said for the other kind of renderer. A component that
+    was told the whole pane and then moved right by the pad would be composing for a width
+    it does not have — `chrome.fill`'s measured W+1, which shears the pane by wrapping
+    every row onto the next. `ctx.width` is what a provider is told, so that is where the
+    pad has to come out (`slots.content_width`), and a provider needs to know nothing about
+    any of it: the frame it draws into is simply that many cells wide. It also means an
+    operator's ``pad`` reaches a stranger's component without that component opting in,
+    which is the whole point of the pad being charter's to draw.
+
     **Never raises**, which is `slots.render`'s promise said again for the other kind of
     renderer. Everything a stranger's code does wrong is already contained one layer down
     — `Registry.draw` catches, names the component, escapes what it returned and clips it
@@ -311,9 +321,9 @@ def _component_text(reg, cid: str, fid: str) -> str:
     try:
         c = reg.get(cid)
         snapshot = gather.read(fid) if c.needs else {}
-        drew = reg.draw(cid, _ctx.build(c.needs, width=slots._width(),
+        drew = reg.draw(cid, _ctx.build(c.needs, width=slots.content_width(cid),
                                         height=_rows(), fid=fid, snapshot=snapshot))
-        return "\n".join(drew)
+        return slots.inset_rows("\n".join(drew), cid)
     except Exception as e:
         # `contain.one_line` BEFORE the width arithmetic, the order the rest of charter
         # keeps: *cid* arrived on this process's own command line, an escape sequence in

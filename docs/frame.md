@@ -674,6 +674,72 @@ on: `window-style` is pane-scoped, it honours a colour and silently ignores `rev
 byte-identical to 3.7c, and the two that were not turned out to be the measuring harness.
 So there is no version gate on any of it.
 
+### A colour and an inset for one pane
+
+`chrome` gives every panel the same background, which is the right default and the wrong
+only answer: on a terminal that is already black, `chrome = "dark"` paints four panes the
+colour the terminal already was, and the frame gains a background and no structure. What
+makes a frame read as an application is that its regions are **told apart**. So each
+component can say its own:
+
+```toml
+[[frame.component]]
+use = "identity"
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
+use = "repos"
+bg = "black"
+pad = 1
+
+[[frame.component]]
+use = "sidebar"
+bg = "brightblack"
+pad = 1
+```
+
+`bg` is one of **seventeen words**: `default`, the eight ANSI colours (`black`, `red`,
+`green`, `yellow`, `blue`, `magenta`, `cyan`, `white`) and their eight `bright` forms. The
+focused pane is drawn in the other member of the pair — `blue` focuses to `brightblue` — so
+you can still see which pane is live. `default` is your terminal's own background, which is
+how one pane steps out of a frame-wide `chrome`.
+
+Names and never `colour236` or `#1c1c1c`, for the reason the rest of charter's colour uses
+names: `blue` is a slot in **your** palette and a cube index is a fixed point that no theme
+moves. And this file is committed, so the colour you write is read on a machine whose theme
+you have never seen. A word charter does not know — like a tmux style string, which tmux
+would expand at draw time — takes the whole arrangement out of play and the frame falls
+back to `slots`, which is visible, rather than one pane quietly losing its colour.
+
+`bg` does not need `chrome` to be on. `chrome`'s default is `off` because a background
+charter chose is wrong on somebody's terminal; a `bg` is a line you wrote by hand about one
+pane, so it applies either way.
+
+`pad` is how many cells that pane leaves empty at its **left and right edges** — one number,
+both sides. Charter draws this one: tmux paints backgrounds and insets nothing.
+
+**The pad comes out of the pane's width, not out of your terminal's.** The repo table
+already gives up columns in a fixed order when its pane is narrow, and a padded pane simply
+starts that arithmetic two cells earlier — the row is composed for the narrower pane rather
+than composed wide and then pushed off its own right edge. On a pane too narrow to afford
+it, the pad is dropped **whole** rather than reduced, so a narrow frame looks exactly as it
+did before you wrote one. If a `pad` pushes the repo table under the width it needs, the
+pane says so and the number it quotes already includes your pad — widen by it and the table
+comes back.
+
+There is no vertical pad, and that is deliberate. `identity` and `attention` are one row
+each, so a top pad would not inset them — it would delete them. The repo table is sized to
+its content, so a vertical pad there removes a repo from the table rather than moving it,
+and which repo goes is a ranking charter made on purpose. Horizontal padding gets narrower;
+vertical padding disappears.
+
+`0` to `5`. Five is not a round number picked by hand: it is the widest inset the
+narrowest pane charter draws — the 22-column sidebar — can actually take and still
+have room for a name. A bigger one would be a value that pane always drops, on one of
+the two panes you asked for this on. Anything else — a negative, a bigger number,
+`true`, `"2"` — takes the arrangement out of play the way an unknown `bg` does.
 ### Writing the arrangement out
 
 `slots` is shorthand. Each name in it places one of charter's built-in components on the
@@ -783,6 +849,9 @@ charter cannot honour is not quietly accepted and ignored: it takes the arrangem
 play. Writing them is still worth it if you like your config explicit — and it is what
 makes the two forms round-trip.
 
+`bg` and `pad` are the two keys that have no `slots` equivalent at all: they say how a pane
+*looks*, not where it sits, so they only exist in the long form.
+
 ### A component charter did not write
 
 `use` is a component id, and not every component id is one of charter's four. A Python
@@ -884,7 +953,8 @@ not `true`/`false` all mean the same thing: the arrangement is ignored and you g
 frame your `slots` (or `density`, or the default) describes. You see your whole arrangement
 not take effect, which is something you can act on, rather than one pane's worth of quiet
 fiction. A `key` charter will not bind, a key two components both claim, and a key equal to
-your frame's own `hotkey` are on that list too.
+your frame's own `hotkey` are on that list too — and so are a `bg` that is not one of the
+seventeen words and a `pad` outside `0`–`8`.
 
 Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then
 `density`, then the shipped default.

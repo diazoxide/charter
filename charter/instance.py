@@ -545,8 +545,15 @@ def density_slots(level) -> list[str]:
 #: costs them a rename; a style string charter accepted that tmux evaluates costs an
 #: unknown amount on a version nobody ran.
 #:
-#: Whole-frame, not per component: one frame has one look, and a colour key per component
-#: would be thirty knobs whose first product is a frame that does not match itself.
+#: **Whole-frame, and that is what it is FOR — it is not the whole of the surface any
+#: more.** This table gives every panel one look, which is the right default and the wrong
+#: only answer: a uniform surface cannot tell one pane from another, and a frame reads as
+#: an application because its regions are distinguishable, not because they are painted.
+#: Reported by the operator against `chrome = "dark"` on a terminal that is already black —
+#: every pane came out the colour the terminal already was, so the frame gained a
+#: background and no structure. :data:`FRAME_PANE_BG` is the per-component half; this stays
+#: the frame-wide default underneath it, and a component that names no ``bg`` still gets
+#: exactly what this table says.
 FRAME_CHROME: dict[str, tuple[tuple[str, str], ...]] = {
     #: Nothing set at all — `show -p` answers `''` for every pane and the frame is
     #: whatever the operator's own terminal already was.
@@ -584,6 +591,203 @@ def chrome_options(level) -> tuple[tuple[str, str], ...]:
     return FRAME_CHROME[lv] if lv else ()
 
 
+#: The eight ANSI colour names, each of which also has a ``bright`` form. The whole
+#: vocabulary a ``[[frame.component]] bg`` may say, doubled to sixteen and given a
+#: seventeenth word by :data:`FRAME_PANE_BG` below.
+#:
+#: **Sixteen names and not 256, and that is a decision rather than an omission.**
+#: ``colour0``–``colour255`` were considered for exactly this key and refused. The names
+#: here are SLOTS in the operator's own palette: ``blue`` is whatever their theme decided
+#: blue is, so a pane painted with it is a pane painted in their scheme. ``colour24`` is a
+#: fixed point in the xterm cube that no theme moves, and — the sharp form of the argument,
+#: which is the inverse of the obvious one — it is unsafe precisely on the terminals that
+#: render it faithfully: a 16-colour client gets it downsampled to something sane, while a
+#: truecolor client on a light theme gets the dark navy verbatim. `tests/
+#: test_frame_appearance.py`'s `TheFrameNamesColoursAndNeverIndexes` asserts charter emits
+#: no cube index and no 24-bit triple anywhere, on both sides of the tmux boundary; this
+#: key is inside that assertion rather than an exception to it, and the test names this
+#: table so a colour added here is checked by the same line.
+#:
+#: The cost of the refusal is bounded and the cost of admitting them is not: an operator
+#: who wanted ``colour24`` and gets ``blue`` has a pane one shade off what they pictured,
+#: in their own scheme; an operator who gets a committed ``colour236`` from a colleague's
+#: dark theme has a black-on-black pane and nothing to read.
+FRAME_PANE_COLOURS: tuple[str, ...] = ("black", "red", "green", "yellow", "blue",
+                                       "magenta", "cyan", "white")
+
+#: The word a component's ``bg`` may say, and the pane options each word means.
+#:
+#: **Per COMPONENT, which is what `[frame] chrome` cannot be.** The operator's report is
+#: the whole argument: with ``chrome = "dark"`` on a terminal that is already black, every
+#: panel came out indistinguishable from the terminal and from every other panel. A frame
+#: reads as an application when its regions are told apart — a sidebar that is visibly a
+#: sidebar — and one global word cannot say that, because whatever it says it says about
+#: all four panes at once.
+#:
+#: **The value is still a WORD and never a style string**, and nothing about that
+#: containment is relaxed by there being more words. A tmux style value is FORMAT-EXPANDED
+#: at draw time (measured on 3.7c: ``bg=#{?#{==:1,1},colour196,colour46}`` is stored
+#: verbatim and reaches the wire as ``ESC[48;5;196m``), and `charter.toml` is committed and
+#: arrives from someone else's machine. So the operator's string is used as a KEY into this
+#: table and never as a value out of it: :func:`pane_bg_options` returns charter's own
+#: constant or nothing at all, exactly as :func:`chrome_options` does, which is what keeps
+#: "no operator string reaches tmux" a property of the code rather than a promise about its
+#: call sites.
+#:
+#: **Both options, always, and never only ``window-style``.** A component that set its own
+#: background and left ``window-active-style`` alone would show ITS colour when unfocused
+#: and the frame-wide `[frame] chrome` colour when focused — two unrelated colours on one
+#: pane, a cell's worth of the defect #514 fixed on the borders. So a ``bg`` decides the
+#: pane whole, and the focused shade comes from the same word.
+#:
+#: **The focused shade is the other member of the pair**, which is `FRAME_CHROME`'s own
+#: "two named slots one step apart" said sixteen times instead of twice: ``blue`` focuses
+#: to ``brightblue`` and ``brightblue`` focuses to ``blue``. The direction reverses on the
+#: bright half because there is nothing brighter in the sixteen, and that is stated rather
+#: than worked around — the property a focus indicator needs is that the live pane is a
+#: shade OFF the others, not that it is a shade lighter.
+#:
+#: ``default`` is the seventeenth word and it is not a colour: it is ``bg=default``, the
+#: terminal's own background, which is how one pane opts out of a frame-wide ``chrome``.
+#: It has no partner, so a pane that asks for it has no focus shade — `chrome = "off"`'s
+#: own answer, said about one pane instead of the frame.
+FRAME_PANE_BG: dict[str, tuple[tuple[str, str], ...]] = {
+    "default": (("window-style", "bg=default"),
+                ("window-active-style", "bg=default")),
+    **{name: (("window-style", f"bg={name}"),
+              ("window-active-style", f"bg=bright{name}"))
+       for name in FRAME_PANE_COLOURS},
+    **{f"bright{name}": (("window-style", f"bg=bright{name}"),
+                         ("window-active-style", f"bg={name}"))
+       for name in FRAME_PANE_COLOURS},
+}
+
+
+def pane_bg(name) -> str | None:
+    """*name* if it names a :data:`FRAME_PANE_BG` colour, else ``None``.
+
+    The one place a component's background arriving from outside charter's own constants
+    is admitted — :func:`chrome_level`'s job for the per-component key, and the same
+    function for the same reason. ``isinstance`` first because ``value in FRAME_PANE_BG``
+    raises ``TypeError`` for an unhashable value (``tomllib`` can hand this a list or a
+    table) and this module is imported by every command, ``charter --version`` included.
+
+    Answers the matched NAME rather than ``True``, the way :func:`chrome_level` and
+    :func:`density_level` do, so a caller can store a value it has already checked instead
+    of storing the raw one and re-checking it later.
+
+    **The containment is not in what this returns — it is in what :func:`pane_bg_options`
+    does with it.** This hands back the object it was given, which for a ``str`` subclass
+    out of a committed file is that subclass. That is harmless precisely because the name
+    is only ever a KEY: the pairs handed to tmux are indexed out of :data:`FRAME_PANE_BG`,
+    so what reaches a tmux evaluator is charter's own constant whatever the key's type
+    was. A version of this that reached for the matched key instead would be the same
+    answer with a lookup in front of it, which is why it does not.
+    """
+    return name if isinstance(name, str) and name in FRAME_PANE_BG else None
+
+
+def pane_bg_options(name) -> tuple[tuple[str, str], ...]:
+    """The ``(option, value)`` pairs *name* means — empty for anything charter does not
+    know, and empty for ``None``, which is a component that named no background at all.
+
+    :func:`chrome_options`' contract for the per-component key: callers hand these to
+    tmux, so what comes back is charter's own constant and never the caller's argument. A
+    word this function did not recognise cannot leave through it.
+
+    Empty is also the ANSWER for a component with no ``bg``, not merely the failure mode:
+    `commands_frame._surface_argvs` falls back to the frame-wide `[frame] chrome` on an
+    empty result, so a component that says nothing gets exactly the surface it got before
+    this key existed.
+    """
+    n = pane_bg(name)
+    return FRAME_PANE_BG[n] if n else ()
+
+
+#: The most cells a component may inset its content by, per side.
+#:
+#: **A cap and not a clamp**: a ``pad`` above this is REFUSED by
+#: :func:`component_tables` (which refuses the arrangement whole, #535's rule), not
+#: quietly reduced. A value read, validated and then changed into a different one is the
+#: convincing empty this section refuses everywhere else.
+#:
+#: **Five, and the number is derived rather than chosen.** It is the largest pad the
+#: frame's own NARROWEST pane can actually afford: the sidebar is 22 columns
+#: (`layout.SLOT_SIZE`), `frame/slots.py`'s `_PAD_MIN_CONTENT` is 12, and
+#: ``(22 - 12) // 2`` is 5. A cap above that would admit a value that pane always drops —
+#: and the sidebar is one of the two panes the operator named, so "your pad did nothing
+#: and nothing said why" is the precise failure it would buy. Written as a literal here
+#: because `instance` is imported by every command and must not reach `frame/layout.py` at
+#: module scope; `tests/test_frame_pane_style.py`'s `TheCapIsTheNarrowestPanesOwnCeiling`
+#: does the arithmetic and asserts the two agree, which is the trade `slots.INSET` already
+#: makes with `statusline._HEAD_PAD`.
+#:
+#: One number for every pane, rather than a per-pane ceiling from that pane's own width.
+#: A `pad = 5` that means five cells on the sidebar and five on a 200-column repo table is
+#: a value an operator can move between components; a ceiling that changed per pane would
+#: make the same number mean different things in the same file — and the wide pane loses
+#: nothing real, because the ask was one or two cells.
+#:
+#: The cap's other job is the far end: ``pad = 10**9`` in a committed file is a
+#: ``" " * n`` on the repaint path, and this is the line that stops it being one.
+FRAME_PANE_PAD_MAX = 5
+
+
+def pane_pad(value) -> int | None:
+    """*value* if it is a padding a component may ask for, else ``None``.
+
+    Zero to :data:`FRAME_PANE_PAD_MAX` inclusive. ``bool`` is refused explicitly for
+    `component_tables`' own reason: ``isinstance(True, int)`` is ``True`` in Python, so
+    ``pad = true`` would otherwise be accepted and mean one cell.
+
+    Answers ``0`` for a declared zero, which is falsy — every caller asks ``is None``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 0 <= value <= FRAME_PANE_PAD_MAX else None
+
+
+def component_style(frame: dict, name) -> dict:
+    """The per-pane style *frame* gives the component called *name* — its ``bg`` and
+    its ``pad``.
+
+    **One reading, asked by two processes on two paths.** `commands_frame._split_panels`
+    needs the ``bg`` to set a pane option at split time; `frame/slots.py` needs the ``pad``
+    on every repaint, in the panel process, which is a different interpreter that never saw
+    the split. Two membership walks over `frame["components"]` is the shape #547 cost —
+    they come to disagree about which name matches — so there is one walk here and both
+    callers ask it.
+
+    *name* matches either spelling a component travels under: the committed slot name
+    (``right``) or the component id (``sidebar``). Both are in the placement
+    (`_placement` stores ``slot`` beside ``use``) precisely because both are live — the
+    launcher splits on slot names and a panel process is started with whichever name the
+    arrangement used.
+
+    ``{"bg": None, "pad": 0}`` for a name nothing declares, which is every name on a plane
+    spelled with ``slots``: per-pane style is written in ``[[frame.component]]`` and a
+    plane that has not written one gets the frame it had.
+
+    **There is no ``isinstance(placed, dict)`` here and that is deliberate.** One was
+    written and the deletion sweep found it surviving: *every* placement is a dict by
+    construction, because :func:`component_tables` is the only thing that fills this list
+    and the only thing it appends is :func:`_placement`'s return. That is a contract rather
+    than an observation — `TheArrangementIsAlwaysPlacementDicts` pins it against every
+    shape a committed file can take — so a guard here would be defending against an input
+    charter's own resolver cannot produce, which is the second-weaker-answer shape #568
+    deleted the last of. The ``or ()`` beside it stays, because a *missing* ``components``
+    key is real: a frame relaunched by a charter that predates it has one.
+    """
+    for placed in frame.get("components") or ():
+        if name in (placed.get("slot"), placed.get("use")):
+            # `or 0` rather than `.get("pad", 0)`, and the difference is a real case: a
+            # placement built by a charter that predates this key has no `pad` at all
+            # (`.get` covers that), and one built with `pad=None` has the key with nothing
+            # in it (`.get` would hand `None` to `" " * n`). Both mean "no pad", so the
+            # falsy read is the one that says so — this is not the `if not pane_pad(v)`
+            # mistake one function up, where `0` and "refused" are different answers.
+            return {"bg": placed.get("bg"), "pad": placed.get("pad") or 0}
+    return {"bg": None, "pad": 0}
 def chrome_option_names() -> tuple[str, ...]:
     """Every tmux option name :data:`FRAME_CHROME` can set, in the order it names them.
 
@@ -933,11 +1137,17 @@ FRAME_COMPONENT_KEY = "component"
 #:   A key is bound because an operator asked for it by name. Held to
 #:   :func:`toggle_key` — which is :data:`_HOTKEY_RE` — because it reaches the same
 #:   ``bind`` line ``[frame] hotkey`` does.
-FRAME_COMPONENT_FIELDS = ("use", "edge", "size", "visible", "key")
+#: * ``bg`` — this pane's background, one word out of :data:`FRAME_PANE_BG`. The key
+#:   `[frame] chrome` could not be: a frame-wide word says one thing about all four panes
+#:   at once, and telling the panes APART is what makes a frame read as an application.
+#: * ``pad`` — how many cells this pane insets its content by, each side. Charter draws
+#:   this one (tmux paints backgrounds and insets nothing), so it comes out of the pane's
+#:   content budget — see `frame/slots.py:pad_of`.
+FRAME_COMPONENT_FIELDS = ("use", "edge", "size", "visible", "key", "bg", "pad")
 
 
 def _placement(cid: str, *, edge: str, size, visible: bool = True,
-               key: str | None = None) -> dict:
+               key: str | None = None, bg: str | None = None, pad: int = 0) -> dict:
     """One resolved placement: the component, where it sits, how big, and whether drawn.
 
     **The one place a placement is spelled**, which is why the rectangle is passed in
@@ -962,17 +1172,36 @@ def _placement(cid: str, *, edge: str, size, visible: bool = True,
     and hands the result to the same re-layout a density change goes through. ``None`` is
     the ordinary answer — a plane spelled with `slots` has no place to write one, and a
     component nobody asked to bind does not get a key.
+
+    ``bg`` and ``pad`` travel here rather than being looked up again downstream, and the
+    reason is that they are read on two different machines' worth of process: the ``bg``
+    by the launcher, at split time, to set a pane option; the ``pad`` by a panel process on
+    every repaint. A placement already IS the one resolved answer about this component's
+    rectangle, and how the rectangle is painted and how far its content sits inside it are
+    the same kind of fact as which edge it is on. ``None``/``0`` is a component that named
+    neither, which is every component on a plane spelled with `slots`.
     """
     from .frame import builtins as _builtins
     return {"use": cid, "slot": _builtins.SLOT_OF.get(cid, cid), "edge": edge,
-            "size": size, "visible": visible, "key": key}
+            "size": size, "visible": visible, "key": key, "bg": bg, "pad": pad}
 
 
-def _built_in_placement(reg, cid: str, *, visible: bool = True,
-                        key: str | None = None) -> dict:
-    """:func:`_placement` for one of charter's own, in the rectangle it declares."""
+def _built_in_placement(reg, cid: str, **style) -> dict:
+    """:func:`_placement` for one of charter's own, in the rectangle it declares.
+
+    **It forwards *style* and restates none of it, which is a defect fixed rather than a
+    style choice.** This used to spell out ``visible=True, key=None, bg=None, pad=0`` —
+    the same four defaults :func:`_placement` already declares — and the hand-check found
+    what that costs: mutating `_placement`'s ``pad`` default from ``0`` to ``1`` changed
+    nothing anywhere, because every call arriving through here passed a ``0`` of its own.
+    Two defaults for one thing, and the second hides the first (`#547`'s shape, and the
+    masking shape the sweep is written to catch).
+
+    So the rectangle — ``edge`` and ``size``, which is all this function is FOR — is what
+    it supplies, and everything else is the caller's or :func:`_placement`'s.
+    """
     c = reg.get(cid)
-    return _placement(cid, edge=c.edge, size=c.size, visible=visible, key=key)
+    return _placement(cid, edge=c.edge, size=c.size, **style)
 
 
 def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None:
@@ -1051,6 +1280,18 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
     hotkey`` was in when a newline in it ran a second tmux command at launch with no
     keypress (:data:`_HOTKEY_RE`). :func:`toggle_key` is that same constant, asked here.
 
+    **``bg`` and ``pad`` are the two keys that describe how a pane LOOKS rather than where
+    it is, and they are checked here for the two different reasons the rest of this
+    function already keeps apart.** ``bg`` is checked because it reaches tmux: a style
+    value is format-expanded at draw time, so the word is a key into :data:`FRAME_PANE_BG`
+    and never a value out of a committed file (`[frame] chrome`'s containment, said per
+    component). ``pad`` is checked because it reaches a repaint: it becomes ``" " * n`` on
+    every paint of that pane, so :data:`FRAME_PANE_PAD_MAX` is what stands between a
+    committed ``pad = 10**9`` and a panel process that stops answering. Both are refused
+    the way everything else here is — whole arrangement, #535 — rather than by dropping the
+    one key, because a pane that quietly lost the colour it asked for is a config value
+    that changed nothing while claiming to decide something.
+
     *hotkey* is the key the frame's own palette is bound to — resolved by :func:`frame_of`
     before it calls this, because the comparison has to be against what will actually be
     bound, not against the shipped constant a plane may have moved off. It joins
@@ -1124,6 +1365,30 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
             return None
         if key is not None:
             bound.add(key)
+        # The pane's own surface. Refused by NAME rather than passed through, which is
+        # what `[frame] chrome`'s containment already is (:data:`FRAME_PANE_BG`): a tmux
+        # style value is format-expanded at draw time and this file arrived from someone
+        # else's machine, so the operator's word is a KEY into charter's table and the
+        # value that reaches tmux comes out of that table. What is stored is
+        # :func:`pane_bg`'s answer and not the object read out of the file, so a `str`
+        # subclass with a hostile `__str__` cannot travel onward either.
+        bg = table.get("bg")
+        if bg is not None and pane_bg(bg) is None:
+            return None
+        # And the inset. Called ONCE, with the answer kept: `pad = table.get("pad", 0)`
+        # followed by `if pane_pad(pad) is None` reads as two steps and is one — `pane_pad`
+        # answers its own argument unchanged, so the second call could not have produced a
+        # different value and the line below would have been a guard with nothing behind
+        # it. The same is true of `bg` above, which is why `pane_bg` is asked there and not
+        # again at the placement: it too answers the object it was given (see its
+        # docstring — the containment lives in `pane_bg_options`, not in the return).
+        #
+        # `0` is a real declared value and falsy, so the refusal is `is None`. `if not
+        # pane_pad(...)` would refuse `pad = 0` and say nothing else about it, which is the
+        # spelling-not-property shape this project has paid for six times.
+        pad = pane_pad(table.get("pad", 0))
+        if pad is None:
+            return None
         if cid in _builtins.SLOT_OF:
             c = reg.get(cid)
             if "edge" in table and table["edge"] != c.edge:
@@ -1132,7 +1397,8 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
                                         and table["size"] == c.size.n
                                         and not isinstance(table["size"], bool)):
                 return None
-            out.append(_built_in_placement(reg, cid, visible=visible, key=key))
+            out.append(_built_in_placement(reg, cid, visible=visible, key=key,
+                                           bg=bg, pad=pad))
             continue
         # Not one of charter's own: a component id, which is placeable exactly when an
         # installed distribution declares it. Asked of entry point METADATA — nothing is
@@ -1142,7 +1408,8 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         if (not reg.providers.supplies(cid) or edge not in EDGES
                 or not isinstance(size, int) or isinstance(size, bool) or size < 1):
             return None
-        out.append(_placement(cid, edge=edge, size=Fixed(size), visible=visible, key=key))
+        out.append(_placement(cid, edge=edge, size=Fixed(size), visible=visible, key=key,
+                              bg=bg, pad=pad))
     return out
 
 
@@ -1167,8 +1434,9 @@ def frame_components(cfg: dict) -> list[dict]:
 
     **Lossless in both directions.** Every list this answers can be written back out as
     ``[[frame.component]]`` tables — one per placement, carrying its ``use``, ``edge``,
-    ``size``, ``visible`` and ``key`` — and :func:`component_tables` resolves those to the
-    same placements again.
+    ``size``, ``visible``, ``key``, ``bg`` and ``pad``, which is
+    :data:`FRAME_COMPONENT_FIELDS` whole — and :func:`component_tables` resolves those to
+    the same placements again.
     That round trip is what "the config maps onto the registry" has to mean if `slots` is
     to be retired later without an operator's committed frame changing under them.
 

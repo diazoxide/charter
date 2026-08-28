@@ -202,9 +202,13 @@ class AnArrangementCharterCannotDrawIsRefusedWhole(unittest.TestCase):
         `key` joined it in Phase 2's Task 5 — the tmux key that toggles this component's
         `visible` on the running frame. It is what made density a NAME for an arrangement
         of visibility rather than a mechanism of its own, and its refusals live in
-        `tests/test_component_toggle_keys.py`."""
+        `tests/test_component_toggle_keys.py`.
+
+        `bg` and `pad` joined it for the per-pane surface: the two keys that say how a
+        pane LOOKS rather than where it sits. Their refusals live in
+        `tests/test_frame_pane_style.py`."""
         self.assertEqual(instance.FRAME_COMPONENT_FIELDS,
-                         ("use", "edge", "size", "visible", "key"))
+                         ("use", "edge", "size", "visible", "key", "bg", "pad"))
 
 
 class OrderIsGeometry(unittest.TestCase):
