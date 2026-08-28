@@ -42,7 +42,7 @@ from tests._isolation import PersonaIso
 from charter import commands_frame, config, instance, statusline, util
 from charter.frame import (builtin_actions, gather, layout, overlay, slots, state,
                            tmuxctl)
-from tests import _envguard
+from tests import _envguard, _tmuxsocket
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
 #: has had a chance to repoint `config`, so it is unavoidably the developer's REAL
@@ -456,8 +456,8 @@ class Chrome(unittest.TestCase):
         operator's socket PATH it aims at a server NAMED by that path, which does not
         exist — and a chrome setting that lands on a server nobody is looking at is the
         quietest possible way for this fix to do nothing."""
-        for cmd in self._argvs(socket="/private/tmp/tmux-502/default"):
-            self.assertEqual(cmd[:3], ["tmux", "-S", "/private/tmp/tmux-502/default"])
+        for cmd in self._argvs(socket=OPERATOR_SOCKET):
+            self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET])
             self.assertNotIn("-L", cmd)
         for cmd in self._argvs(socket="charter"):
             self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
@@ -677,9 +677,9 @@ class PanelRespawnHook(unittest.TestCase):
         that tmux would start empty. `tmuxctl.server_argv` is the one place that knows
         `-L` from `-S`, and asking it is what makes the two shapes impossible to disagree.
         """
-        cmd = self._argv(socket="/private/tmp/tmux-502/default")
+        cmd = self._argv(socket=OPERATOR_SOCKET)
         self.assertEqual(cmd[:4],
-                         ["tmux", "-S", "/private/tmp/tmux-502/default", "set-hook"])
+                         ["tmux", "-S", OPERATOR_SOCKET, "set-hook"])
         self.assertNotIn("-L", cmd)
 
     def test_an_interpreter_path_that_means_something_else_is_not_armed_at_all(self):
@@ -1030,19 +1030,19 @@ class Respawn(PersonaIso, unittest.TestCase):
         `state.frame_server`.
 
         Asserts the SHAPE of both commands, not just that a respawn happened: `-L
-        /private/tmp/…` would still be a `respawn-pane` and would still be the bug."""
-        state.record_server("f-1", "/private/tmp/tmux-502/default")
+        …/tmux-<uid>/…` would still be a `respawn-pane` and would still be the bug."""
+        state.record_server("f-1", OPERATOR_SOCKET)
         fake = _RespawnTmux()
         rc = _respawn(fake, on_argv=True)
         self.assertEqual(rc, 0)
         self.assertEqual([c[:3] for c in fake.liveness],
-                         [["tmux", "-S", "/private/tmp/tmux-502/default"]], fake.calls)
+                         [["tmux", "-S", OPERATOR_SOCKET]], fake.calls)
         self.assertIn("list-windows", fake.liveness[0],
                       "a frame in the operator's tmux is a WINDOW; `list-sessions` "
                       "there asks about sessions that are all theirs")
         self.assertEqual(len(fake.respawns), 1, fake.calls)
         self.assertEqual(fake.respawns[0][:3],
-                         ["tmux", "-S", "/private/tmp/tmux-502/default"])
+                         ["tmux", "-S", OPERATOR_SOCKET])
 
     def test_a_frame_on_charters_own_server_is_still_reached_by_name(self):
         """The other direction, so the test above cannot be satisfied by a `-S` for
@@ -1063,7 +1063,7 @@ class Respawn(PersonaIso, unittest.TestCase):
         Without this the empty stdout of a FAILED `list-windows` would read as "no
         windows", which is the same shape as a torn-down frame and would look like it
         passed for the wrong reason — hence `list_rc`, not an empty live list."""
-        state.record_server("f-1", "/private/tmp/tmux-502/default")
+        state.record_server("f-1", OPERATOR_SOCKET)
         fake = _RespawnTmux(live=("f-1",), list_rc=1)
         rc = _respawn(fake, on_argv=True)
         self.assertEqual(rc, 0)
@@ -3945,8 +3945,13 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
 
 #: The `$TMUX` a real tmux 3.7c exports into every pane it starts —
 #: `<socket path>,<server pid>,<session id>` (measured by printing it from inside one).
-OPERATOR_TMUX = "/private/tmp/tmux-502/default,70029,1"
-OPERATOR_SOCKET = "/private/tmp/tmux-502/default"
+#:
+#: Both halves used to be written out, socket path included — `…/tmux-502/default`,
+#: with **one developer's uid** in the middle of it (#601). `_tmuxsocket` computes the path
+#: the way tmux computes it — `$TMUX_TMPDIR` or `/tmp`, `tmux-<uid>`, resolved — so this is
+#: the socket a tmux started on THIS machine would listen on rather than on that one.
+OPERATOR_SOCKET = _tmuxsocket.OPERATOR_SOCKET
+OPERATOR_TMUX = _tmuxsocket.OPERATOR_TMUX
 
 #: How many "is the harness still there?" asks `_FakeOperatorTmux` answers before it
 #: calls the launcher stuck. Every test here drives the wait loop through at most a

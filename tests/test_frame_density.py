@@ -36,6 +36,7 @@ from unittest import mock
 from charter import (commands_frame, config, inflight, instance, statusline, tui,
                      util)
 from charter.frame import builtin_actions, gather, layout, panel, slots, state
+from tests._tmuxsocket import OPERATOR_SOCKET
 
 from tests._isolation import PersonaIso
 
@@ -1149,7 +1150,7 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         that tuple has already grown from four names to five, and a test carrying a
         parallel copy would go on passing while the fifth never reached a re-laid-out
         pane."""
-        for server in (None, "/private/tmp/tmux-502/default"):
+        for server in (None, OPERATOR_SOCKET):
             with self.subTest(server=server or "charter's own"):
                 # Reset the map each time: the previous iteration left the frame AT
                 # `full`, so without this the second subtest splits nothing and its
@@ -1251,7 +1252,7 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         against `_FRAME_IDENTITY` excludes them by construction. A separate test asserting
         just those four was written first and deleted — it could not fail while this one
         passed, which makes it a claim rather than a check."""
-        state.record_server(self.fid, "/private/tmp/tmux-502/default")
+        state.record_server(self.fid, OPERATOR_SOCKET)
         with mock.patch.dict(os.environ, {"AWS_SECRET_ACCESS_KEY": "SENTINEL-0xC0FFEE"}):
             _, fake = self._run("full")
         carried = self._split_env(fake.calls)
@@ -1275,7 +1276,7 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         server" is now a ROW that says why: `detach-client -s <fid>` names a SESSION, and
         inside an operator's tmux a frame is a WINDOW, so the row is offered with the
         operator's own prefix key named in place of the thing charter cannot do."""
-        state.record_server(self.fid, "/private/tmp/tmux-502/default")
+        state.record_server(self.fid, OPERATOR_SOCKET)
         self._run("full")
         reg = builtin_actions.build(self.fid, current_density="full")
         offer = [o for o in reg.offers(fid=self.fid, snapshot={})
@@ -1302,13 +1303,13 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         The `-S` is what this asserts, not merely that some hook was installed: a hook
         armed with `-L /private/tmp/…` would satisfy "a pane-died command was issued" and
         still be the whole defect."""
-        state.record_server(self.fid, "/private/tmp/tmux-502/default")
+        state.record_server(self.fid, OPERATOR_SOCKET)
         _, fake = self._run("full")
         armed = [c for c in fake.calls if "pane-died" in c and "-u" not in c]
         self.assertEqual(len(armed), 1, fake.calls)
         for cmd in armed:
             self.assertEqual(cmd[:3],
-                             ["tmux", "-S", "/private/tmp/tmux-502/default"])
+                             ["tmux", "-S", OPERATOR_SOCKET])
             self.assertIn(f"--frame {self.fid}", cmd[-1])
 
     def test_a_new_pane_on_charters_own_server_is_armed_for_respawn(self):

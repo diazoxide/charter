@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import inventory, util
+from . import inventory, tui, util
 from .forge.gitlab import GitLabForge
 
 OK, WARN, FAIL = "ok", "warn", "fail"
@@ -34,11 +34,31 @@ class Result:
     detail: str = ""
     hint: str = ""
 
-    def render(self) -> str:
+    def render(self, name_w: int = 0) -> str:
+        """One preflight row. *name_w* is the NAME column's width for the whole table.
+
+        ``{self.name:<16}`` was the constant #600 names, and it is a guess about content
+        in a report where three checks (`credential paths`, `workspace clones`,
+        `plane-root guard`) already sit exactly on it — so the next check named one
+        character longer pushes its detail right of every other row's and the column stops
+        being a column. `cmd_doctor` states the width from :func:`name_width`, which asks
+        the checks rather than guessing.
+
+        **The width is a floor, never a cap.** `tui.pad` truncates, and a check name cut
+        in half is a failure the reader cannot go and look up (#589's readability probe is
+        the whole reason that distinction is written down). So a name wider than the
+        stated column pushes its own row instead — loud, and in the direction that keeps
+        the value readable — and :func:`name_width` plus its pin is what stops that from
+        being how the table normally renders.
+
+        A row rendered with no width stated is as wide as itself, which is what a single
+        `Result` printed on its own should be.
+        """
         code, glyph = _SYMBOL[self.status]
         if _color():
             glyph = f"\033[{code}m{glyph}\033[0m"
-        line = f"  {glyph}  {self.name:<16} {self.detail}".rstrip()
+        line = f"  {glyph}  {tui.pad(self.name, max(name_w, tui.column('', [self.name])))}" \
+               f"{self.detail}".rstrip()
         if self.hint and self.status != OK:
             line += f"\n        → {self.hint}"
         return line
@@ -2320,6 +2340,66 @@ def _checks():
                 check_credential_paths(),
                 check_mcp_launchers(), check_plugin_skew(), check_plugin_freshness()]
     return results
+
+
+#: Every name a check in :func:`_checks` produces that does not depend on this plane's
+#: forges, in the order `_checks` runs them. The forge cli/auth pair belongs at index 3
+#: and is spliced in by :func:`check_names`, because which forge that is is a property of
+#: the control plane rather than of this list.
+#:
+#: **A second spelling of something the checks already say, and it is here because the
+#: alternative is worse.** `Result.render` needs the column's width before the first row
+#: is drawn, and `cmd_doctor` draws each row as its check lands — deliberately, so a
+#: preflight killed by its hook timeout names where it stopped instead of printing nothing
+#: at all. Sizing from the results would mean collecting every check before drawing one,
+#: which is precisely the behaviour that streaming replaced.
+#:
+#: So the names are stated ahead of the run and **pinned by equality** against what
+#: `run_all` actually produces — the same discipline `MIN_PYTHON` has against
+#: `pyproject.toml`, and the same one `NOT_ROUTED_YET` has in the state-mode suite: a
+#: check renamed, added or removed fails that test on the commit that does it. Unpinned
+#: this would be a list that rots into a wrong width; pinned, it cannot.
+_FIXED_CHECK_NAMES = (
+    "python3", "git", "git identity",
+    # ← the forge cli/auth pair is spliced in here, see `check_names`
+    "git auth", "charter.toml", "schema", "plane root", "harness", "frame",
+    "plane-root guard", "guard seen", "nested plane", "workspace clones",
+    "inventory", "vaults", "vault registry", "version lock", "memory indexes",
+    "personas", "persona grant", "front door", "news", "ask rules", "shadowed docs",
+    "credential paths", "mcp", "plugin", "plugin files",
+)
+
+#: Where the forge pair goes in `_FIXED_CHECK_NAMES` — after `git identity`, which is
+#: where `_checks` runs it. A number rather than a marker entry so the tuple holds only
+#: names and the pin below compares like with like.
+_FORGE_NAMES_AT = 3
+
+
+def check_names() -> list[str]:
+    """Every name this plane's preflight will print, **without running a single check**.
+
+    The forge pair is asked of `declared_or_default_forges` — the same call `_checks`
+    makes, so the two cannot disagree about which forge this plane declares. A GitHub-only
+    plane sizes for ``gh``/``gh auth`` and a GitLab one for ``glab``/``glab auth``, rather
+    than for whichever of them somebody wrote down.
+    """
+    pair = []
+    for forge in declared_or_default_forges():
+        pair += [forge.cli, f"{forge.cli} auth"]
+    return (list(_FIXED_CHECK_NAMES[:_FORGE_NAMES_AT]) + pair
+            + list(_FIXED_CHECK_NAMES[_FORGE_NAMES_AT:]))
+
+
+def name_width() -> int:
+    """The NAME column of `charter doctor`, measured in cells from the names it holds.
+
+    In cells rather than characters because cells are what a terminal lays out — the unit
+    `tui.column` measures every other table in this package with. Every check name is
+    ASCII today, so the two agree and this looks like a distinction without a difference;
+    it is the same distinction that drew an 8-glyph CJK name 8 columns wide of every other
+    row in `persona stats` (#508), and it is not something to get right later.
+    """
+    return tui.column("", check_names())
 
 
 def run_all() -> list[Result]:

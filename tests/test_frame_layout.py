@@ -19,6 +19,7 @@ from unittest import mock
 
 from charter import util
 from charter.frame import layout
+from tests._tmuxsocket import OPERATOR_SOCKET
 
 
 SESSION = dict(session="charter-demo-1234", conf="/tmp/f/tmux.conf",
@@ -590,9 +591,9 @@ class WindowInTheOperatorsServer(unittest.TestCase):
     """
 
     def test_the_window_is_created_in_the_operators_own_session(self):
-        cmd = layout.window_argv(socket="/private/tmp/tmux-502/default", session="$1",
+        cmd = layout.window_argv(socket=OPERATOR_SOCKET, session="$1",
                                  window="charter-demo-1234", cwd="/work/repo")
-        self.assertEqual(cmd[:3], ["tmux", "-S", "/private/tmp/tmux-502/default"])
+        self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET])
         self.assertIn("new-window", cmd)
         self.assertEqual(cmd[cmd.index("-t") + 1], "$1")
         self.assertEqual(cmd[cmd.index("-n") + 1], "charter-demo-1234")
@@ -705,9 +706,9 @@ class ServerSelection(unittest.TestCase):
         """`panel_argvs` and `session_argv` grew no new parameter for this: the socket
         they already take is now either charter's own server NAME or a socket PATH, and
         `tmuxctl.server_argv` is the one place that difference turns into `-L` or `-S`."""
-        cmds = layout.panel_argvs(slots=["top"], session="f", socket="/tmp/tmux-1/default",
+        cmds = layout.panel_argvs(slots=["top"], session="f", socket=OPERATOR_SOCKET,
                                   harness_pane="%3")
-        self.assertEqual(cmds[0][:3], ["tmux", "-S", "/tmp/tmux-1/default"])
+        self.assertEqual(cmds[0][:3], ["tmux", "-S", OPERATOR_SOCKET])
 
 
 class NothingUnnamedReachesACommandLine(unittest.TestCase):
@@ -749,7 +750,7 @@ class NothingUnnamedReachesACommandLine(unittest.TestCase):
     def _builders(self, env):
         return {
             "respawn_argv": lambda: layout.respawn_argv(
-                socket="/tmp/tmux-1/default", harness_pane="%7", env=env, cwd="/w",
+                socket=OPERATOR_SOCKET, harness_pane="%7", env=env, cwd="/w",
                 harness_argv=["claude"]),
             "session_argv": lambda: layout.session_argv(
                 session="f", conf="/c", socket="charter", cols=80, rows=24,
