@@ -213,7 +213,12 @@ the sentence above:
   the frame is one colour and the frame looks the same in your tmux as in charter's own.
   With `[frame] chrome` left at its default this is the only place charter overrides a
   preference of yours rather than deferring to it; setting `chrome` adds a second, on
-  charter's own panel panes and never on the pane your harness runs in. The reason for
+  charter's own panel panes and never on the pane your harness runs in — and it also puts
+  that colour BEHIND the frame's rules, because the cell between two panes is in neither
+  of them and would otherwise stay your terminal's own background: a one-cell seam running
+  between panels that are all the same colour. The rules take the colour the frame's
+  components agree on, and the frame-wide `chrome` colour when they name different ones.
+  Still window-scoped, still both border styles set to one value. The reason for
   the borders is that two of those options make one rule differ from its neighbour:
   the active-pane colour and the arrow indicators mark some borders and not others, and
   `pane-border-status top` writes your hostname into every rule and takes a row the
@@ -716,6 +721,27 @@ back to `slots`, which is visible, rather than one pane quietly losing its colou
 `bg` does not need `chrome` to be on. `chrome`'s default is `off` because a background
 charter chose is wrong on somebody's terminal; a `bg` is a line you wrote by hand about one
 pane, so it applies either way.
+
+**The rules between the panes are painted too, and you do not configure them.** A pane
+background fills that pane's rectangle, and the one-cell rule tmux draws between two panes
+is in neither rectangle — so a frame whose panels were all `brightblack` came out as grey
+boxes with your terminal's own black running between them, which reads as seams rather than
+as an application. Charter puts a background behind the rules as well.
+
+Which colour, given a rule has a pane on each side and they may be different colours: the
+one your components **agree** on when they all resolve to the same background, and the
+frame-wide `chrome` colour when they do not. A gutter in the frame's own colour between two
+differently-coloured panels is what an application looks like; a gutter in no colour between
+two identically-coloured panels is a seam. A plane that sets no `bg` at all is unchanged —
+every pane is the frame-wide colour, so the rules are too.
+
+There is one rule colour and not two, and that is deliberate: tmux draws the border of the
+active pane from a second option, and letting the two differ is exactly the defect that put
+charter in charge of these options in the first place — a rule that changes colour halfway
+along, where it passes the active pane's corner. Which pane is live is shown on the pane
+itself (its background is one shade off the others), never on the border. `chrome = "off"`
+with no `bg` anywhere puts the rules back to your terminal's own, and `NO_COLOR` takes the
+background off them while leaving the frame's rules drawn.
 
 `pad` is how many cells that pane leaves empty at its **left and right edges** — one number,
 both sides. Charter draws this one: tmux paints backgrounds and insets nothing.

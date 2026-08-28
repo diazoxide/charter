@@ -1574,6 +1574,13 @@ _CHROME_STYLE = "fg=default,dim"
 #: `pane-border-format` is deliberately NOT here: it is inert while `pane-border-status`
 #: is `off`, and pinning a format nothing renders would be pinning a spelling rather than
 #: the property.
+#:
+#: **The two style entries are where the frame's SURFACE joins its rules**, and the value
+#: written here is the one they carry when there is no surface. `_chrome_argvs` appends
+#: `instance.border_bg`'s background clause to whichever entries are pinned to
+#: `_CHROME_STYLE` — derived from this table the way `instance.chrome_option_names`
+#: derives its own, so a sixth border-style option added here is not the one rule left
+#: with a seam through it.
 _CHROME: tuple[tuple[str, str], ...] = (
     ("pane-border-style", _CHROME_STYLE),
     ("pane-active-border-style", _CHROME_STYLE),
@@ -1583,7 +1590,8 @@ _CHROME: tuple[tuple[str, str], ...] = (
 )
 
 
-def _chrome_argvs(*, socket: str, harness_pane: str) -> list[list[str]]:
+def _chrome_argvs(*, socket: str, harness_pane: str,
+                  surface: str | None = None) -> list[list[str]]:
     """`set-option -w`: charter's own answer for every option tmux draws a border from.
 
     **Charter owns the frame's chrome, and tmux draws all of it.** #514 named two
@@ -1616,9 +1624,50 @@ def _chrome_argvs(*, socket: str, harness_pane: str) -> list[list[str]]:
     fifteen tmux calls a launch already makes. Nothing here runs on a panel's repaint —
     the idle tick this must not touch is `panel.py`'s one `stat`, and these are issued at
     launch and at a density change, never per paint.
+
+    ***surface* is `instance.border_bg`'s background clause, and it closes the SEAM.**
+    `window-style` paints a pane's interior and the rule between two panes is not in any
+    pane, so a frame with every panel painted grey came out as grey rectangles separated
+    by a one-cell strip of the terminal's own black — reported off a screenshot, and read
+    back off an attached client's wire as an `\\x1b[49m` in the middle of two `\\x1b[100m`
+    runs. Appending the same background to the rule removes that `\\x1b[49m` and the
+    surface runs straight through (measured on 3.7c and on `tmuxctl.FLOOR`; both accept
+    the combined value and read it back verbatim). `instance.border_bg` decides WHICH
+    colour and argues why; this decides only that the rule is drawn in it.
+
+    **Both styles, again, and for #514's reason rather than by symmetry.** The whole
+    defect that put these two options here is a rule that changed colour where it passed
+    the active pane's corner, and a BACKGROUND that changed there would be the same defect
+    an order of magnitude more visible. So the surface goes on both or on neither, and the
+    active-pane indication tmux's own default carries — `pane-active-border-style`
+    defaults to the format expression
+    ``#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}``, measured — stays
+    discarded, as it has been since #514. Focus is drawn where it cannot run past a
+    corner: on the pane's own rectangle, by `window-active-style`
+    (`instance.FRAME_PANE_BG` pairs every colour with its focused shade).
+
+    **Which options carry it is derived, not listed**: the ones already pinned to
+    `_CHROME_STYLE` are exactly the styles, which is `instance.chrome_option_names`'
+    discipline said about this table. `pane-border-lines` and the rest are not styles and
+    take no colour.
+
+    ``None`` is the frame that had no surface, and then every value here is `_CHROME`'s
+    own — byte-identical to what charter emitted before this parameter existed, which is
+    what makes `chrome = "off"` a REMOVAL on the live path too: `cmd_chrome` re-issues
+    these `set-option`s and the coloured value is replaced by the uncoloured one. These
+    two options are charter's at every level (#514 pins them with or without a surface),
+    so there is nothing here to `-u`.
+
+    **`NO_COLOR` refuses the surface and keeps the rules**, which is the split that
+    matters: `_CHROME_STYLE` is an attribute over the terminal's own foreground and never
+    a colour charter chose, so it is not what `NO_COLOR` is about, while a background is
+    exactly what it is about. Asked through `chrome.no_colour` so there is one reading of
+    the variable (#547), the same way `_surface_argvs` asks.
     """
+    rule = (f"{_CHROME_STYLE},{surface}"
+            if surface and not chrome_mod.no_colour() else _CHROME_STYLE)
     return [tmuxctl.server_argv(socket, "set-option", "-w", "-t", harness_pane, name,
-                                value)
+                                rule if value == _CHROME_STYLE else value)
             for name, value in _CHROME]
 
 
@@ -2227,21 +2276,6 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     tmuxctl.run("keeping the frame's own dead panes long enough to bring them back",
                 _panel_remain_on_exit_argv(socket=socket, harness_pane=harness_pane),
                 env=env)
-    # And the chrome those panes will be bordered with, armed at the same moment and for
-    # the same reason: this is the one funnel both launch paths and every density change
-    # reach panels through, so a rule cannot come out styled one way on charter's own
-    # server and another way on the operator's (#514, `_chrome_argvs`). Reported but not
-    # fatal, like the splits themselves — a frame whose borders kept tmux's own colours
-    # is a frame that looks wrong, not one that fails.
-    for chrome in _chrome_argvs(socket=socket, harness_pane=harness_pane):
-        tmuxctl.run("styling the frame's own rules", chrome, env=env)
-    panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
-                                    harness_pane=harness_pane, env=pane_env,
-                                    sizes=sizes)
-    # Zipped with `slots`, not just iterated: `_resize_hook_argv` needs to know WHICH slot
-    # each successfully-created pane belongs to (for its size and its resize-pane flag),
-    # and `panel_argvs` returns exactly one command per slot, in the same order (see its
-    # own docstring).
     # The word, resolved once for the whole batch, through `_current_chrome` rather than
     # off `config.FRAME` — which is the difference a live `charter frame-chrome` makes.
     # The configured value says what a frame STARTS at; a frame the operator has since
@@ -2252,6 +2286,29 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     # styles, so a value charter does not know produces no commands at all, which is
     # `off`.
     chrome = _current_chrome(fid)
+    # And the chrome those panes will be bordered with, armed at the same moment and for
+    # the same reason: this is the one funnel both launch paths and every density change
+    # reach panels through, so a rule cannot come out styled one way on charter's own
+    # server and another way on the operator's (#514, `_chrome_argvs`). Reported but not
+    # fatal, like the splits themselves — a frame whose borders kept tmux's own colours
+    # is a frame that looks wrong, not one that fails.
+    #
+    # The rules carry the frame's SURFACE, from the arrangement rather than from `slots`:
+    # this function is handed only the slots being split, which on a density change is the
+    # ones being ADDED (`_relayout` passes `missing`), so a rule colour derived from that
+    # list would change every time a panel appeared. `instance.border_bg` reads
+    # `config.FRAME`, which is the same thing `cmd_chrome` reads on the live path — the
+    # agreement #610 is about, made by construction rather than by two call sites matching.
+    for argv in _chrome_argvs(socket=socket, harness_pane=harness_pane,
+                              surface=instance.border_bg(config.FRAME, chrome)):
+        tmuxctl.run("styling the frame's own rules", argv, env=env)
+    panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
+                                    harness_pane=harness_pane, env=pane_env,
+                                    sizes=sizes)
+    # Zipped with `slots`, not just iterated: `_resize_hook_argv` needs to know WHICH slot
+    # each successfully-created pane belongs to (for its size and its resize-pane flag),
+    # and `panel_argvs` returns exactly one command per slot, in the same order (see its
+    # own docstring).
     panes: dict[str, str] = {}
     for slot, cmd in zip(slots, panel_cmds):
         # Reported by `tmuxctl.run` but not fatal: one decorative panel failing to draw
@@ -3910,8 +3967,10 @@ def cmd_chrome(args) -> int:
     * a *level* outside `instance.FRAME_CHROME` — a closed set of three words charter
       wrote itself, so this can only be a hand-typed argument;
     * a frame with no recorded pane map — nothing to resurface. Unlike `cmd_density` this
-      needs no harness pane and no tmux version: it splits nothing, so `_relayout_target`'s
-      refusals are not this function's.
+      needs no tmux version: it splits nothing, so `_relayout_target`'s refusals are not
+      this function's. It reads the harness pane, but does not REFUSE without one — that
+      is only the window selector for the frame's rules (`_chrome_argvs`), and a frame
+      that has no record of it still gets every pane repainted.
 
     The word is recorded BEFORE the panes are touched, so a frame whose options fail
     halfway still splits its NEXT pane into the surface the operator asked for
@@ -3943,6 +4002,24 @@ def cmd_chrome(args) -> int:
         for argv in _resurface_argvs(socket=socket, pane_id=pane_id, chrome=level,
                                      bg=bg):
             tmuxctl.run("painting a panel's surface", argv)
+    # And the frame's RULES, which are the surface's other half and are not any pane's
+    # (`instance.border_bg`): a level change that repainted the panes and left the borders
+    # would leave the seam this closed running between them — or, going the other way,
+    # leave a grey rule around panes that had just gone back to the terminal's own colour.
+    # `off` is the removal here too, and it needs no `-u`: these two options are charter's
+    # own at every level (#514), so re-issuing them with no surface IS the removal.
+    #
+    # The harness pane is only the WINDOW selector — `-w -t <a pane id>` resolves to that
+    # pane's window — and nothing is set on it, which is `_chrome_argvs`' own boundary.
+    # Skipped rather than refused when the frame has no readable record of it: a frame
+    # launched by a charter that predates `record_harness_pane` has none, and its panes are
+    # already repainted above. `_PANE_ID_RE` is #475's rule about a value off disk that is
+    # about to be a tmux argv, made here exactly as the loop above makes it.
+    harness = state.harness_pane(fid) or ""
+    if _PANE_ID_RE.fullmatch(harness):
+        for argv in _chrome_argvs(socket=socket, harness_pane=harness,
+                                  surface=instance.border_bg(config.FRAME, level)):
+            tmuxctl.run("styling the frame's own rules", argv)
     return 0
 
 
