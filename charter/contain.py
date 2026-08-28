@@ -65,11 +65,13 @@ only that doing half of this while claiming all of it would be worse than filing
 **One assembler for report lines, because two of them drifted.** :func:`sentence` and its
 path-budget twin :func:`path_sentence` are where a line of charter's own output gets its
 untrusted spans contained, and they are here rather than in each module that reports.
-`news` grew a private copy of exactly this (#573) while this module's copy was closed for
-#498, and within one version the two disagreed about the budget and about what to do with
-a field holding several things — the second drift being invisible from either side, since
-neither copy could see the other. That is the argument this module's own opening paragraph
-makes about `valid_name`, turned on this module. A third reporting surface —
+`news` grew a private copy of exactly this (#573) rather than import the one here, which
+was private and carried the wrong budget for a frontmatter value — and, proximately,
+because #498 was open on this module at the time. Within one version the two disagreed
+about the budget and about what to do with a field holding several things — the second
+drift invisible from either side, since neither copy could see the other. That is the
+argument this module's own opening paragraph makes about `valid_name`, turned on this
+module. A third reporting surface —
 `commands_persona`'s tables, `frame/registry`'s entry-point errors, `mcpseen` — now picks
 one of two written-down budgets instead of inventing a third (#576).
 
