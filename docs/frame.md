@@ -817,6 +817,9 @@ charter cannot honour is not quietly accepted and ignored: it takes the arrangem
 play. Writing them is still worth it if you like your config explicit — and it is what
 makes the two forms round-trip.
 
+`bg` and `pad` are the two keys that have no `slots` equivalent at all: they say how a pane
+*looks*, not where it sits, so they only exist in the long form.
+
 ### A component charter did not write
 
 `use` is a component id, and not every component id is one of charter's four. A Python
@@ -882,7 +885,8 @@ not `true`/`false` all mean the same thing: the arrangement is ignored and you g
 frame your `slots` (or `density`, or the default) describes. You see your whole arrangement
 not take effect, which is something you can act on, rather than one pane's worth of quiet
 fiction. A `key` charter will not bind, a key two components both claim, and a key equal to
-your frame's own `hotkey` are on that list too.
+your frame's own `hotkey` are on that list too — and so are a `bg` that is not one of the
+seventeen words and a `pad` outside `0`–`8`.
 
 Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then
 `density`, then the shipped default.
