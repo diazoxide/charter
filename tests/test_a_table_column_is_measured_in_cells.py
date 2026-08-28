@@ -31,6 +31,7 @@ a failure is about the awkward name rather than about the table.
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import unicodedata
@@ -935,6 +936,63 @@ class TestVaultListColumnsLineUp(VaultListCase):
             f"the widest value in the VAULT column touches the next one, so nothing on "
             f"this row says where the column ends:\n{row}")
 
+    def test_a_registration_with_no_provider_still_draws_a_row(self):
+        """`vs[name].get("provider", "?")` — the fallback the deletion sweep found
+        unpinned, and it is reachable rather than defensive.
+
+        The registry is a JSON file on disk. `vault add` always writes a provider, but a
+        hand-edit, a merge of two shared registries, or a file from a charter that spelled
+        the key differently can all produce an entry without one — and `vault list` is
+        precisely the command an operator runs when the registry is in that state. Without
+        the fallback the cell is `None`, `tui.pad` raises on it, and the one command that
+        could have shown them the broken entry dies instead of drawing it.
+        """
+        # A second, intact registration: the broken row has to line up WITH something, and
+        # a table of one is a table every width is right about.
+        self.add("intact-vault")
+        # `setUp` registered `devops`; this edits it on disk, which is the case: `vaults.json` is a file, and `usable_vaults`
+        # already carries the scar of a hand-edit reaching `provider_for` (#347).
+        reg = Path(config.VAULTS_REGISTRY)
+        doc = json.loads(reg.read_text())
+        doc["vaults"]["devops"].pop("provider", None)
+        reg.write_text(json.dumps(doc))
+        self.assertNotIn("provider", vault_registry.vaults()["devops"],
+                         "fixture: the provider is still registered, so the fallback "
+                         "this case is named for cannot be reached")
+        rows = self.listing()
+        row = next((r for r in rows if tui.strip_ansi(r).startswith("devops")), None)
+        self.assertIsNotNone(row, "the row was not drawn at all:\n" + "\n".join(rows))
+        self.assertIn("?", tui.strip_ansi(row), row)
+        self.assert_aligned(rows, self.TAIL)
+
+    def test_the_rule_is_as_wide_as_its_column_and_not_merely_aligned_with_it(self):
+        """The half `test_the_rule_under_the_header_is_as_wide_as_the_column_it_underlines`
+        promises in its name and did not assert.
+
+        Comparing where each run of dashes STARTS cannot see a rule that is one dash per
+        column: every cell is padded to its width either way, so the starts agree while the
+        rule stops describing anything. Measured — the deletion sweep replaced
+        ``max(1, w - _GAP)`` with ``1`` and the whole file stayed green.
+
+        Asserted as a relationship to the widest value in each column rather than to a
+        number, so it cannot be satisfied by re-spelling today's widths.
+        """
+        self.add("the-shared-team-credentials-vault")
+        rows = self.listing()
+        head = tui.strip_ansi(next(r for r in rows if "VAULT" in r))
+        rule = tui.strip_ansi(next(r for r in rows
+                                   if set(r.strip()) == set("- ")))
+        runs = re.findall(r"-+", rule)
+        cells = head.split()
+        self.assertEqual(len(runs), len(cells), f"\n{head}\n{rule}")
+        for i, (run, cell) in enumerate(zip(runs, cells)):
+            with self.subTest(column=cells[i]):
+                self.assertGreaterEqual(
+                    len(run), len(cell),
+                    f"the rule under {cell!r} is {len(run)} dashes for a column holding a "
+                    f"{len(cell)}-character header — it has stopped describing the column "
+                    f"it underlines:\n{head}\n{rule}")
+
     def test_every_vault_and_persona_is_still_readable_off_its_row(self):
         long_vault = "the-shared-team-credentials-vault"
         self.make_persona("a-persona-named-past-twelve", role="Role")
@@ -1069,6 +1127,86 @@ class TestWorkspaceListColumnsLineUp(WorkspaceListCase):
         self.assertTrue(any(marker in tui.strip_ansi(r) for r in rows),
                         "fixture: no row carries the marker\n" + "\n".join(rows))
         self.assert_aligned(rows, self.CLONE)
+
+    def row_for(self, rows: list[str], name: str) -> str:
+        """The row `name` is drawn on, matched on the NAME cell rather than anywhere.
+
+        A workspace name can appear in the REPOS column too — a clone may be named after
+        one — so a substring search picks the wrong row on exactly the tables worth
+        checking.
+        """
+        want = self.on_disk(name)
+        hit = [r for r in rows
+               if tui.strip_ansi(r)[2:].startswith(want)]
+        self.assertEqual(len(hit), 1,
+                         f"{want!r} is on {len(hit)} row(s):\n" + "\n".join(rows))
+        return tui.strip_ansi(hit[0])
+
+    def test_the_active_workspace_is_the_one_that_carries_the_marker(self):
+        """`"* " if n == active else "  "` — and nothing asserted which row got the star.
+
+        The deletion sweep collapsed the conditional so every row was marked the same, and
+        the whole file stayed green: the marker is an INSET, so marking every row or none
+        of them leaves every column exactly where it was. Alignment cannot see this, and
+        the star is the one thing on the table an operator acts on.
+        """
+        self.make("beta")
+        # The active workspace has to be ON the table for a marker to be about anything:
+        # `resolve()` answers `default` in a fresh plane, and a plane that has never made
+        # `workspaces/default/` lists neither it nor a star. That is correct behaviour and
+        # it is not what this case is about, so the directory is made.
+        active = workspace.resolve()
+        self.make(active)
+        rows = self.listing()
+        marked = [tui.strip_ansi(r) for r in rows
+                  if tui.strip_ansi(r).startswith("* ")]
+        self.assertEqual(len(marked), 1,
+                         f"{len(marked)} row(s) carry the active marker:\n"
+                         + "\n".join(rows))
+        self.assertTrue(marked[0][2:].startswith(self.on_disk(active)),
+                        f"the marker is on the wrong row — active is {active!r}:\n"
+                        f"{marked[0]}")
+
+    def test_a_live_workspace_says_live_and_the_rest_say_local(self):
+        """`"live" if n in live else "local"` — the MODE column, which nothing read.
+
+        LIVE means "committed and shared" and LOCAL means "private, nothing committed",
+        which is the difference between a workspace whose memory reaches the team and one
+        whose does not. Collapsing the conditional made every row say the same word and
+        no case noticed.
+        """
+        self.make("beta")
+        workspace.set_live("beta", True)
+        self.assertIn("beta", workspace.live_workspaces(),
+                      "fixture: `set_live` did not take, so both rows would say `local` "
+                      "and this case could not fail")
+        rows = self.listing()
+        self.assertIn("live", self.row_for(rows, "beta"))
+        self.assertIn("local", self.row_for(rows, "alpha"))
+        self.assertNotIn("live", self.row_for(rows, "alpha"))
+
+    def test_the_repo_column_names_the_clones_and_a_dash_when_there_are_none(self):
+        """`", ".join(d.name for d in cl) if cl else "—"` — the last column, and both
+        halves of it were unpinned.
+
+        A workspace with no clones is the ordinary state of a freshly created one, and it
+        is the case the `else` exists for; a workspace with two is what makes the join
+        observable at all, since one clone joins to itself.
+        """
+        empty = "empty-ws"
+        workspace.workspace_dir(empty).mkdir(parents=True, exist_ok=True)
+        for extra in ("second-clone", "third-clone"):
+            (workspace.workspace_dir("alpha") / extra / ".git").mkdir(parents=True,
+                                                                     exist_ok=True)
+        rows = self.listing()
+        alpha = self.row_for(rows, "alpha")
+        for clone in (self.CLONE, "second-clone", "third-clone"):
+            with self.subTest(clone=clone):
+                self.assertIn(clone, alpha, alpha)
+        self.assertIn(", ", alpha, "the clone names were not joined:\n" + alpha)
+        self.assertIn("—", self.row_for(rows, empty),
+                      "a workspace with no clones drew something other than the em dash")
+        self.assertNotIn("—", alpha, "a workspace WITH clones drew the empty marker too")
 
     def test_every_workspace_name_is_still_readable_off_its_row(self):
         """The half alignment cannot see, guarding the FIX: `{:<22}` pushed and never
