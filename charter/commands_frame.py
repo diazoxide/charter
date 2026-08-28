@@ -1671,7 +1671,59 @@ def _chrome_argvs(*, socket: str, harness_pane: str,
             for name, value in _CHROME]
 
 
-def _surface_argvs(*, socket: str, pane_id: str, chrome, bg=None) -> list[list[str]]:
+def _pane_borders_wanted(v: tuple[int, int] | None) -> bool:
+    """Can this tmux give a pane its OWN edges — `tmuxctl.PANE_BORDER_FLOOR`, asked once.
+
+    ``None`` is "charter could not find out", and it answers **False** for the reason the
+    floor constant gives at length: below the line `set -p pane-border-style` is not
+    refused, it is rc 0 and writes the WINDOW. A wrong guess in that direction is not a
+    cosmetic loss but the last panel written deciding every rule in the frame, and an `off`
+    removing charter's own #514 pin window-wide. The frame-wide answer is correct on every
+    tmux; the per-pane one is correct only above the floor, so the unknown takes the one
+    that cannot be wrong.
+
+    A version and not a probe, because the failure below the line is SILENT: there is no
+    refusal to catch, and a probe would have to perform the damaging write to discover it
+    (`tmuxctl.PANE_BORDER_FLOOR`).
+    """
+    return v is not None and v >= tmuxctl.PANE_BORDER_FLOOR
+
+
+def _pane_border_pairs(*, chrome, bg, pane_borders: bool) -> tuple[tuple[str, str], ...]:
+    """This pane's own edges, in this pane's own surface — or nothing at all.
+
+    **The #631 fix in one expression, and the gate that keeps it off the floor.** A
+    window-wide border surface (`instance.border_bg`, which is what #628 shipped) reaches
+    every rule in the frame including the three around the HARNESS, so a plane whose four
+    panels were all grey came out with a grey box drawn round the operator's own session.
+    A pane-scoped one cannot: `_surface_argvs` is only ever handed a PANEL pane, so the
+    harness keeps the window's bare `_CHROME_STYLE` and the rules tmux resolves against it
+    stay the terminal's own.
+
+    Rendered, charter's real four-panel shape at 100x24 on tmux 3.7c, every panel
+    `bg = "brightblack"`, read through a nested client — the harness's three edges, and the
+    rule between two panels::
+
+        window-wide (#628)  harness top ESC[100m   right ESC[100m   panel|panel ESC[100m
+        per pane    (#631)  harness top ESC[49m    right ESC[49m    panel|panel ESC[100m
+
+    *pane_borders* is `tmuxctl.PANE_BORDER_FLOOR` already answered by the caller, which is
+    where the tmux version is known. Below it these two names are WINDOW options wearing a
+    pane's clothes: `set -p` is rc 0 and writes the window, so the last panel written would
+    decide every rule in the frame, and `set -p -u` would remove charter's #514 pin
+    window-wide. Nothing is emitted there and `_chrome_argvs` carries the frame-wide answer
+    instead — one of the two, never both, so the two designs cannot half-apply.
+
+    `instance.pane_border_options` builds the values from charter's own tables and
+    `_CHROME_STYLE`, so no operator string reaches a style here any more than it does one
+    function up.
+    """
+    return (instance.pane_border_options(bg, chrome, _CHROME_STYLE)
+            if pane_borders else ())
+
+
+def _surface_argvs(*, socket: str, pane_id: str, chrome, bg=None,
+                   pane_borders: bool = False) -> list[list[str]]:
     """`set-option -p`: the pane surface `[frame] chrome` asked for, on ONE panel pane.
 
     **tmux paints the background; charter sets an option.** `window-style` and
@@ -1747,11 +1799,14 @@ def _surface_argvs(*, socket: str, pane_id: str, chrome, bg=None) -> list[list[s
     # takes the frame's own answer". One expression, so there is no state in which a pane
     # gets one option from here and the other from there.
     return [tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id, name, value)
-            for name, value in (instance.pane_bg_options(bg)
-                                or instance.chrome_options(chrome))]
+            for name, value in (*(instance.pane_bg_options(bg)
+                                  or instance.chrome_options(chrome)),
+                                *_pane_border_pairs(chrome=chrome, bg=bg,
+                                                    pane_borders=pane_borders))]
 
 
-def _resurface_argvs(*, socket: str, pane_id: str, chrome, bg=None) -> list[list[str]]:
+def _resurface_argvs(*, socket: str, pane_id: str, chrome, bg=None,
+                     pane_borders: bool = False) -> list[list[str]]:
     """:func:`_surface_argvs` for a pane that is ALREADY DRAWN — with the unsets.
 
     **The difference is `off`, and it is not a detail.** On a launch, `off` is free:
@@ -1803,9 +1858,19 @@ def _resurface_argvs(*, socket: str, pane_id: str, chrome, bg=None) -> list[list
     `chrome.no_colour` so there is one reading of the variable (#547).
     """
     want = dict(() if chrome_mod.no_colour()
-                else (instance.pane_bg_options(bg) or instance.chrome_options(chrome)))
+                else (*(instance.pane_bg_options(bg)
+                        or instance.chrome_options(chrome)),
+                      *_pane_border_pairs(chrome=chrome, bg=bg,
+                                          pane_borders=pane_borders)))
+    # The removal reaches the pane's own EDGES too, and only where charter ever wrote
+    # them: below `tmuxctl.PANE_BORDER_FLOOR` a `set -p -u` on these two names removes the
+    # WINDOW's value — charter's own #514 pin, for every rule in the frame — so the gate
+    # is on the unset exactly as it is on the set. `instance.PANE_BORDER_OPTIONS` is the
+    # one list both halves read.
+    removable = (*instance.chrome_option_names(),
+                 *(instance.PANE_BORDER_OPTIONS if pane_borders else ()))
     argvs = [tmuxctl.server_argv(socket, "set-option", "-p", "-u", "-t", pane_id, name)
-             for name in instance.chrome_option_names() if name not in want]
+             for name in removable if name not in want]
     argvs += [tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id, name, value)
               for name, value in want.items()]
     return argvs
@@ -2227,7 +2292,7 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     inside an operator's tmux the cwd is the same cwd, so the hole is the same hole.
     """
     panes = _split_panels(socket, slots=slots, fid=fid, harness_pane=harness_pane,
-                          env=env, pane_env=pane_env, sizes=sizes)
+                          env=env, pane_env=pane_env, sizes=sizes, v=v)
     _install_resize_hook(socket, harness_pane=harness_pane, panes=panes, v=v, env=env,
                          fid=fid)
     # Written down, because a frame's shape can now be CHANGED while it runs (the density
@@ -2240,7 +2305,8 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
 
 def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
                   env: dict | None, pane_env: dict[str, str] | None,
-                  sizes: dict[str, int] | None = None) -> dict[str, str]:
+                  sizes: dict[str, int] | None = None,
+                  v: tuple[int, int] | None = None) -> dict[str, str]:
     """One `split-window` per slot, and the `{slot: pane id}` map that came back.
 
     The splitting half of :func:`_draw_panels`, separated from the hook-and-record half so
@@ -2299,8 +2365,16 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     # list would change every time a panel appeared. `instance.border_bg` reads
     # `config.FRAME`, which is the same thing `cmd_chrome` reads on the live path — the
     # agreement #610 is about, made by construction rather than by two call sites matching.
-    for argv in _chrome_argvs(socket=socket, harness_pane=harness_pane,
-                              surface=instance.border_bg(config.FRAME, chrome)):
+    # Above `tmuxctl.PANE_BORDER_FLOOR` the rules are each pane's own (`_pane_border_pairs`,
+    # set beside that pane's surface below) and the WINDOW's stay bare — which is the whole
+    # of #631: a frame-wide border surface reaches the three rules around the harness, and
+    # a plane whose panels were all grey drew a grey box around the operator's own session.
+    # Below the floor those two options have no pane scope at all, so the frame-wide answer
+    # is the only one that can be given and it is given here. One or the other, never both.
+    pane_borders = _pane_borders_wanted(v)
+    for argv in _chrome_argvs(
+            socket=socket, harness_pane=harness_pane,
+            surface=None if pane_borders else instance.border_bg(config.FRAME, chrome)):
         tmuxctl.run("styling the frame's own rules", argv, env=env)
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
                                     harness_pane=harness_pane, env=pane_env,
@@ -2333,7 +2407,7 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
             # word about this pane.
             bg = instance.component_style(config.FRAME, slot)["bg"]
             for surface in _surface_argvs(socket=socket, pane_id=pane_id, chrome=chrome,
-                                          bg=bg):
+                                          bg=bg, pane_borders=pane_borders):
                 tmuxctl.run("painting a panel's surface", surface, env=env)
     return panes
 
@@ -3342,7 +3416,7 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
         # and hand it the seven-row pane this fix exists to stop.
         keep.update(_split_panels(
             socket, slots=missing, fid=fid, harness_pane=harness_pane, env=None,
-            pane_env=pane_env,
+            pane_env=pane_env, v=v,
             sizes=layout.slot_sizes(
                 want, window_rows=window_rows,
                 content_rows=frame_slots.repos_rows_wanted(
@@ -3967,10 +4041,11 @@ def cmd_chrome(args) -> int:
     * a *level* outside `instance.FRAME_CHROME` — a closed set of three words charter
       wrote itself, so this can only be a hand-typed argument;
     * a frame with no recorded pane map — nothing to resurface. Unlike `cmd_density` this
-      needs no tmux version: it splits nothing, so `_relayout_target`'s refusals are not
-      this function's. It reads the harness pane, but does not REFUSE without one — that
-      is only the window selector for the frame's rules (`_chrome_argvs`), and a frame
-      that has no record of it still gets every pane repainted.
+      refuses on no tmux VERSION either: it splits nothing, so `_relayout_target`'s
+      refusals are not this function's. It reads the version (#631 made which design
+      applies depend on it) and the harness pane, and REFUSES on neither — an unreadable
+      version takes the frame-wide design, which is correct on every tmux, and a frame with
+      no record of its harness pane still gets every pane repainted.
 
     The word is recorded BEFORE the panes are touched, so a frame whose options fail
     halfway still splits its NEXT pane into the surface the operator asked for
@@ -3985,6 +4060,14 @@ def cmd_chrome(args) -> int:
         return 0
     state.record_chrome(fid, level)
     socket = state.frame_server(fid) or SOCKET
+    # Asked once for the whole keypress rather than per pane, and asked at all because
+    # #631 made this function version-dependent where it was not before: above
+    # `tmuxctl.PANE_BORDER_FLOOR` each panel carries its own edges and the window's stay
+    # bare, below it the frame-wide answer is the only one tmux can hold. `version()` is
+    # one `tmux -V`; this path is a keypress that already spawns a process, and it is not
+    # a refusal — an unreadable version answers the frame-wide design, which is correct on
+    # every tmux (`_pane_borders_wanted`).
+    pane_borders = _pane_borders_wanted(tmuxctl.version())
     for slot, pane_id in panes.items():
         # `_PANE_ID_RE` is #475's rule applied to a value that arrived off DISK and is
         # about to be a tmux argv — the same check `_relayout_target` makes of the harness
@@ -4000,7 +4083,7 @@ def cmd_chrome(args) -> int:
         # back until relaunch.
         bg = instance.component_style(config.FRAME, slot)["bg"]
         for argv in _resurface_argvs(socket=socket, pane_id=pane_id, chrome=level,
-                                     bg=bg):
+                                     bg=bg, pane_borders=pane_borders):
             tmuxctl.run("painting a panel's surface", argv)
     # And the frame's RULES, which are the surface's other half and are not any pane's
     # (`instance.border_bg`): a level change that repainted the panes and left the borders
@@ -4017,8 +4100,10 @@ def cmd_chrome(args) -> int:
     # about to be a tmux argv, made here exactly as the loop above makes it.
     harness = state.harness_pane(fid) or ""
     if _PANE_ID_RE.fullmatch(harness):
-        for argv in _chrome_argvs(socket=socket, harness_pane=harness,
-                                  surface=instance.border_bg(config.FRAME, level)):
+        for argv in _chrome_argvs(
+                socket=socket, harness_pane=harness,
+                surface=None if pane_borders
+                else instance.border_bg(config.FRAME, level)):
             tmuxctl.run("styling the frame's own rules", argv)
     return 0
 

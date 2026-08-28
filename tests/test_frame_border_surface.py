@@ -36,7 +36,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, config, instance
-from charter.frame import state
+from charter.frame import state, tmuxctl
 from tests._isolation import PersonaIso
 
 _STYLES = ("pane-border-style", "pane-active-border-style")
@@ -281,6 +281,165 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
                     self.assertNotIn("#", word)
 
 
+class APanelDrawsItsOwnEdgesAndTheHarnessKeepsItsOwn(unittest.TestCase):
+    """#631. `instance.pane_border_options` and `commands_frame._pane_border_pairs`.
+
+    #628 closed the seam by putting the surface on the WINDOW's two border options, which
+    reaches every rule in the frame — including the three around the pane charter does not
+    own. The operator's report: "the dark harness now sits inside a tan box on three
+    sides." Above `tmuxctl.PANE_BORDER_FLOOR` those options are PANE options, so each
+    panel can carry its own edges and the harness, never written, keeps the window's bare
+    style. Measured on 3.7c through a nested client, charter's real four-panel shape::
+
+        window-wide (#628)  harness top ESC[100m   right ESC[100m   panel|panel ESC[100m
+        per pane    (#631)  harness top ESC[49m    right ESC[49m    panel|panel ESC[100m
+    """
+
+    STYLE = "fg=default,dim"
+
+    def test_a_pane_with_a_colour_gets_both_of_its_edges_in_that_colour(self):
+        self.assertEqual(
+            instance.pane_border_options("brightblack", "dark", self.STYLE),
+            (("pane-border-style", "fg=default,dim,bg=brightblack"),
+             ("pane-active-border-style", "fg=default,dim,bg=brightblack")))
+
+    def test_a_pane_with_no_colour_of_its_own_takes_the_frame_wide_one(self):
+        """The same `pane_bg_options(bg) or chrome_options(chrome)` its INTERIOR is
+        painted from, so a pane and its edges cannot come out two colours."""
+        self.assertEqual(
+            [v for _n, v in instance.pane_border_options(None, "dark", self.STYLE)],
+            [f"{self.STYLE},{dict(instance.FRAME_CHROME['dark'])['window-style']}"] * 2)
+
+    def test_a_pane_with_no_surface_at_all_sets_nothing(self):
+        """Not a bare style — the window option already IS that. A pane-scoped copy of the
+        window's own value would be a value `off`'s removal has to find and remove, for a
+        pane that never needed one."""
+        self.assertEqual(instance.pane_border_options(None, "off", self.STYLE), ())
+        self.assertEqual(instance.pane_border_options("nonsense", "off", self.STYLE), ())
+
+    def test_both_edges_always_carry_the_identical_value(self):
+        """#514 surviving the move to pane scope. tmux picks between the two per border
+        CELL — the active one for a cell touching the active pane — so a pane whose two
+        differed would have edges that changed colour at the active pane's corner."""
+        for word in (None, *instance.FRAME_PANE_BG):
+            for level in instance.FRAME_CHROME:
+                with self.subTest(bg=word, chrome=level):
+                    values = {v for _n, v
+                              in instance.pane_border_options(word, level, self.STYLE)}
+                    self.assertLessEqual(len(values), 1, values)
+
+    def test_the_two_option_names_are_the_ones_the_removal_reads(self):
+        """One list, read by the setter and by `_resurface_argvs`' unset — so an option
+        added to the pair cannot be set by one half and left behind by the other."""
+        self.assertEqual(
+            tuple(n for n, _v in instance.pane_border_options("blue", "dark", self.STYLE)),
+            instance.PANE_BORDER_OPTIONS)
+
+    def test_no_operator_string_reaches_a_pane_edge(self):
+        """The containment, on the new key: the value is charter's style constant plus a
+        `window-style` value out of charter's own tables, indexed by a word that was only
+        ever a key."""
+        ours = {v for pairs in instance.FRAME_PANE_BG.values() for _n, v in pairs}
+        ours |= {v for pairs in instance.FRAME_CHROME.values() for _n, v in pairs}
+        for word in (*instance.FRAME_PANE_BG, "colour236", "chartreuse", None, 7,
+                     "bg=#{?#{==:1,1},colour196,colour46}", ["blue"], True):
+            with self.subTest(bg=word):
+                for _n, value in instance.pane_border_options(word, "dark", self.STYLE):
+                    self.assertNotIn("#", value)
+                    self.assertIn(value.removeprefix(f"{self.STYLE},"), ours)
+
+
+class TheFloorCannotHavePerPaneEdgesAndIsNotGivenThem(unittest.TestCase):
+    """`commands_frame._pane_borders_wanted` and `tmuxctl.PANE_BORDER_FLOOR`.
+
+    **The gate is on the WRITE, not on the value, and the reason is that the floor fails
+    silently.** A refused option is loud and already handled — `tmuxctl.run` reports it and
+    the launch continues. Below the floor `set -p pane-border-style` is **rc 0 and writes
+    the WINDOW** (measured against a real 3.2 built from source on this machine): the last
+    panel written would decide every rule in the frame, and an `off` would `set -p -u`
+    charter's own #514 pin away for the whole window.
+    """
+
+    def test_the_floor_is_the_version_the_option_gained_pane_scope_in(self):
+        """Read out of tmux's own `options-table.c` at every release either side of the
+        line — `OPTIONS_TABLE_WINDOW` in 3.2 through 3.6a, `…|OPTIONS_TABLE_PANE` from 3.7
+        — and run on both sides. Pinned so a floor moved without a measurement is red."""
+        self.assertEqual(tmuxctl.PANE_BORDER_FLOOR, (3, 7))
+        self.assertGreater(tmuxctl.PANE_BORDER_FLOOR, tmuxctl.FLOOR,
+                           "an operator charter still lets launch would now be issuing "
+                           "pane-scoped writes their tmux silently applies to the window")
+
+    def test_only_a_version_at_or_above_the_floor_gets_its_own_edges(self):
+        for v, want in ((None, False), ((3, 2), False), ((3, 6), False),
+                        ((3, 7), True), ((3, 9), True), ((4, 0), True)):
+            with self.subTest(v=v):
+                self.assertIs(commands_frame._pane_borders_wanted(v), want)
+
+    def test_an_unreadable_version_takes_the_design_that_cannot_be_wrong(self):
+        """`None` is "charter could not find out", and it answers the frame-wide design —
+        correct on every tmux — rather than the per-pane one, which is correct only above
+        the floor and damaging below it."""
+        self.assertIs(commands_frame._pane_borders_wanted(None), False)
+
+    def test_below_the_floor_no_border_option_is_ever_set_on_a_pane(self):
+        for v in (None, (3, 2), (3, 6)):
+            with self.subTest(v=v):
+                self.assertEqual(
+                    commands_frame._pane_border_pairs(
+                        chrome="dark", bg="brightblack",
+                        pane_borders=commands_frame._pane_borders_wanted(v)), ())
+
+    def test_below_the_floor_no_border_option_is_ever_UNSET_on_a_pane(self):
+        """The half that would be silent damage rather than a missing colour: `set -p -u`
+        on these names removes the WINDOW's value below the floor, and the window's value
+        is charter's #514 pin for every rule in the frame."""
+        for v in (None, (3, 2), (3, 6)):
+            argvs = commands_frame._resurface_argvs(
+                socket="s", pane_id="%3", chrome="off",
+                pane_borders=commands_frame._pane_borders_wanted(v))
+            with self.subTest(v=v):
+                for name in instance.PANE_BORDER_OPTIONS:
+                    self.assertNotIn(name, [a[-1] for a in argvs])
+
+    def test_above_the_floor_off_removes_the_edges_it_set(self):
+        argvs = commands_frame._resurface_argvs(socket="s", pane_id="%3", chrome="off",
+                                                pane_borders=True)
+        tails = [a[a.index("set-option"):] for a in argvs]
+        for name in instance.PANE_BORDER_OPTIONS:
+            with self.subTest(option=name):
+                self.assertIn(["set-option", "-p", "-u", "-t", "%3", name], tails)
+
+    def test_a_pane_that_keeps_its_colour_keeps_its_edges(self):
+        """`off` is the frame's removal and never a component's: a pane whose component
+        named a colour has that colour SET here, edges included, and nothing unset."""
+        argvs = commands_frame._resurface_argvs(socket="s", pane_id="%3", chrome="off",
+                                                bg="brightblack", pane_borders=True)
+        self.assertEqual([a for a in argvs if "-u" in a], [])
+        self.assertIn("fg=default,dim,bg=brightblack", [a[-1] for a in argvs])
+
+    def test_no_colour_takes_the_edges_off_too(self):
+        """The fill is tmux's paint either way, so a `NO_COLOR` that stripped the pane and
+        left its edges would be charter having asked somebody else to paint them."""
+        with mock.patch.dict(os.environ, {"NO_COLOR": ""}, clear=True):
+            self.assertEqual(
+                commands_frame._surface_argvs(socket="s", pane_id="%3", chrome="dark",
+                                              bg="brightblack", pane_borders=True), [])
+            tails = [a[a.index("set-option"):] for a in commands_frame._resurface_argvs(
+                socket="s", pane_id="%3", chrome="dark", bg="brightblack",
+                pane_borders=True)]
+            for name in instance.PANE_BORDER_OPTIONS:
+                self.assertIn(["set-option", "-p", "-u", "-t", "%3", name], tails)
+
+    def test_the_edges_are_set_on_the_pane_and_never_on_the_window(self):
+        """`-p`, which is what keeps them off the harness: `_surface_argvs` is only ever
+        handed a PANEL pane, so ADR 0018's boundary carries the new options unchanged."""
+        for argv in commands_frame._surface_argvs(socket="s", pane_id="%3", chrome="dark",
+                                                  bg="brightblack", pane_borders=True):
+            with self.subTest(argv=argv):
+                self.assertIn("-p", argv)
+                self.assertNotIn("-w", argv)
+
+
 class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
     """**The wiring, which every `_chrome_argvs` test above takes as given.**
 
@@ -293,7 +452,8 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
     come through, with only `tmuxctl.run` faked.
     """
 
-    def _issued(self, frame: dict, slots: list[str], *, fid="f-1") -> list[list[str]]:
+    def _issued(self, frame: dict, slots: list[str], *, fid="f-1",
+                v=None) -> list[list[str]]:
         seen: list[list[str]] = []
         panes = iter(f"%{n}" for n in range(10, 99))
 
@@ -306,23 +466,59 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
                 mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
                 mock.patch.dict(os.environ, {}, clear=True):
             commands_frame._split_panels("sock", slots=slots, fid=fid,
-                                         harness_pane="%1", env=None, pane_env=None)
+                                         harness_pane="%1", env=None, pane_env=None, v=v)
         return seen
 
     def _rules(self, issued: list[list[str]]) -> dict[str, str]:
         return {a[-2]: a[-1] for a in issued
                 if "set-option" in a and "-w" in a and a[-2] in dict(commands_frame._CHROME)}
 
-    def test_a_launch_draws_its_rules_in_the_colour_its_panels_agree_on(self):
+    def test_a_launch_below_the_floor_draws_its_rules_in_the_agreed_colour(self):
+        """The frame-wide design, which is all a tmux without pane-scoped border options
+        can be told. `v=None` is the default here and answers it, which is the safe
+        direction (`_pane_borders_wanted`)."""
         frame = _resolved(*["brightblack"] * 4, chrome="dark")
         rules = self._rules(self._issued(frame, ["top", "bottom", "repos", "right"]))
         self.assertEqual(rules["pane-border-style"],
                          f"{commands_frame._CHROME_STYLE},bg=brightblack")
         self.assertEqual(rules["pane-active-border-style"], rules["pane-border-style"])
 
+    def test_a_launch_above_the_floor_gives_each_panel_its_own_edges(self):
+        """#631's wiring, through the same funnel: the WINDOW keeps charter's bare #514
+        style — which is what the harness inherits and why it is not boxed — and every
+        panel pane that was actually split gets its own two options."""
+        frame = _resolved(*["brightblack"] * 4, chrome="dark")
+        issued = self._issued(frame, ["top", "bottom", "repos", "right"], v=(3, 7))
+        self.assertEqual(self._rules(issued), dict(commands_frame._CHROME),
+                         "the window still carries a surface, so the rules around the "
+                         "harness are still charter's colour")
+        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        per_pane = {}
+        for a in issued:
+            if "set-option" in a and "-p" in a and a[-2] in instance.PANE_BORDER_OPTIONS:
+                per_pane.setdefault(a[a.index("-t") + 1], []).append(a[-1])
+        self.assertEqual(len(per_pane), 4, f"not every panel got its edges: {per_pane}")
+        for pane, values in per_pane.items():
+            with self.subTest(pane=pane):
+                self.assertEqual(values, [want, want])
+
+    def test_no_border_option_is_written_on_the_harness_pane(self):
+        """ADR 0018's boundary, carried by construction rather than by a check: the pane
+        every split TARGETS is never the pane a surface is set on."""
+        frame = _resolved(*["brightblack"] * 4, chrome="dark")
+        for v in (None, (3, 2), (3, 7)):
+            with self.subTest(v=v):
+                for a in self._issued(frame, ["top", "right"], v=v):
+                    if "set-option" in a and "-p" in a:
+                        self.assertNotEqual(a[a.index("-t") + 1], "%1")
+
     def test_a_launch_that_names_no_colour_arms_exactly_what_it_always_did(self):
-        self.assertEqual(self._rules(self._issued({}, ["top", "bottom"])),
-                         dict(commands_frame._CHROME))
+        for v in (None, (3, 2), (3, 7)):
+            with self.subTest(v=v):
+                issued = self._issued({}, ["top", "bottom"], v=v)
+                self.assertEqual(self._rules(issued), dict(commands_frame._CHROME))
+                self.assertEqual([a for a in issued if "set-option" in a and "-p" in a
+                                  and a[-2] in instance.PANE_BORDER_OPTIONS], [])
 
     def test_a_relayout_that_adds_one_pane_still_arms_the_WHOLE_frames_surface(self):
         """`_relayout` calls this funnel with only the slots being ADDED, so a rule colour
@@ -332,6 +528,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         frame = _resolved(*["blue"] * 4, chrome="dark")
         whole = self._rules(self._issued(frame, ["top", "bottom", "repos", "right"]))
         one = self._rules(self._issued(frame, ["right"]))
+        self.assertEqual(one, whole)
         self.assertEqual(one, whole)
         self.assertEqual(one["pane-border-style"],
                          f"{commands_frame._CHROME_STYLE},bg=blue")
@@ -349,6 +546,74 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
                          f"{dict(instance.FRAME_CHROME['dark'])['window-style']}")
 
 
+class TheVersionReachesTheFunnelFromTheFunctionThatKnowsIt(PersonaIso, unittest.TestCase):
+    """**The deletion sweep found this one and it was a real hole.** `_split_panels` takes
+    the tmux version as an argument, and every other test here hands it one directly — so
+    replacing `_draw_panels`' own ``v=v`` with ``v=None`` left the whole suite green while
+    a real frame on a modern tmux silently took the FLOOR design and put the box back round
+    the harness. A per-pane edge production never asks for is a fix that does nothing on a
+    real frame and a test file that says it works, which is what
+    `TheLauncherActuallyAsksForEachPanesColour` in `tests/test_frame_pane_style.py` exists
+    for one key over.
+
+    `_draw_panels` and not `cmd_launch`, and that is a finding rather than a shortcut:
+    `tests/test_frame_launcher.py`'s fake reports no pane id for a `split-window`, so a
+    whole faked launch never reaches the per-pane surface AT ALL — `_surface_argvs` is not
+    called once. That is why the pane-style tests drive this function too, and a test built
+    on the launcher's fake would have passed while asserting nothing.
+    """
+
+    def _calls(self, v):
+        seen: list[list[str]] = []
+        panes = iter(f"%{n}" for n in range(20, 99))
+
+        def fake_run(_why, argv, **_kw):
+            seen.append(list(argv))
+            out = next(panes) if "split-window" in argv else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=out + "\n", stderr="")
+
+        frame = _resolved(*["brightblack"] * 4, chrome="dark")
+        with mock.patch.object(config, "FRAME", frame), \
+                mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            commands_frame._draw_panels("s", slots=["top", "right"], fid="f-v",
+                                        harness_pane="%1", env=None, v=v)
+        return seen
+
+    def _edges(self, calls):
+        return {a[a.index("-t") + 1]: a[-1] for a in calls
+                if "set-option" in a and "-p" in a and a[-2] == "pane-border-style"}
+
+    def _window_rule(self, calls):
+        return next(a[-1] for a in calls
+                    if "set-option" in a and "-w" in a and a[-2] == "pane-border-style")
+
+    def test_a_frame_drawn_on_a_modern_tmux_really_does_get_per_pane_edges(self):
+        calls = self._calls((3, 7))
+        edges = self._edges(calls)
+        self.assertEqual(len(edges), 2,
+                         "the version never reached `_split_panels`, so a real frame "
+                         f"above the floor took the floor's design: {edges}")
+        self.assertEqual(set(edges.values()),
+                         {f"{commands_frame._CHROME_STYLE},bg=brightblack"})
+        self.assertEqual(self._window_rule(calls), commands_frame._CHROME_STYLE,
+                         "the window kept a surface, so the harness is still boxed")
+
+    def test_a_frame_drawn_on_an_old_tmux_really_does_fall_back_to_the_window(self):
+        calls = self._calls((3, 6))
+        self.assertEqual(self._edges(calls), {},
+                         "a frame below the floor wrote a pane-scoped border option, "
+                         "which on that tmux lands on the window")
+        self.assertEqual(self._window_rule(calls),
+                         f"{commands_frame._CHROME_STYLE},bg=brightblack")
+
+    def test_the_harness_pane_is_never_among_the_panes_given_edges(self):
+        for v in ((3, 6), (3, 7)):
+            with self.subTest(v=v):
+                self.assertNotIn("%1", self._edges(self._calls(v)),
+                                 "charter wrote a border style on the harness pane")
+
+
 class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
     """#610's pin, on the border: what a frame LAUNCHES with and what a keypress leaves it
     with must be the same value, at every level and for every colour.
@@ -360,7 +625,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
 
     FID = "fr-border"
 
-    def _launch_value(self, frame, level):
+    def _launch_value(self, frame, level, v=None):
         """What `_split_panels` — the funnel both launch paths and every density change
         come through — actually issues, with the frame's live word recorded rather than
         the resolver stubbed out. A reconstruction of the expression would agree with the
@@ -376,41 +641,80 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
                 mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
                 mock.patch.dict(os.environ, {}, clear=True):
             commands_frame._split_panels("s", slots=["top"], fid=self.FID,
-                                         harness_pane="%1", env=None, pane_env=None)
-        return {a[-2]: a[-1] for a in calls
-                if "-w" in a and a[-2] in dict(commands_frame._CHROME)}
+                                         harness_pane="%1", env=None, pane_env=None, v=v)
+        return self._styles(calls)
 
-    def _live_value(self, frame, level):
+    def _styles(self, calls):
+        """Every border style charter set, keyed by `(scope, option)` — so a value that
+        moved from the window to the pane shows up as a difference rather than as two
+        tests that each still pass."""
+        out = {}
+        for a in calls:
+            if "set-option" not in a or a[-2] not in ("pane-border-style",
+                                                      "pane-active-border-style"):
+                continue
+            out[("-w" if "-w" in a else "-p", a[-2])] = a[-1]
+        return out
+
+    def _live_value(self, frame, level, v=None):
         calls: list[list[str]] = []
         state.record_panes(self.FID, panels={"top": "%2"})
         state.record_harness_pane(self.FID, "%1")
         with mock.patch.object(config, "FRAME", frame), \
                 mock.patch.object(commands_frame.tmuxctl, "run",
                                   lambda _w, argv, **kw: calls.append(argv)), \
+                mock.patch.object(commands_frame.tmuxctl, "version", lambda: v), \
                 mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID},
                                 clear=True):
             commands_frame.cmd_chrome(type("A", (), {"level": level})())
-        return {a[-2]: a[-1] for a in calls if a[-2] in dict(commands_frame._CHROME)}
+        return self._styles(calls)
 
     def test_every_level_crossed_with_every_colour_lands_on_one_value(self):
-        for level in instance.FRAME_CHROME:
-            for word in (None, *instance.FRAME_PANE_BG):
-                frame = _resolved(word, word, word, word)
-                with self.subTest(level=level, bg=word):
-                    self.assertEqual(self._launch_value(frame, level),
-                                     self._live_value(frame, level))
+        """And crossed with the VERSION too, since #631 made which design applies depend
+        on it — a launch above the floor and a keypress below it would be two frames."""
+        for v in (None, (3, 2), (3, 6), (3, 7), (4, 0)):
+            for level in instance.FRAME_CHROME:
+                for word in (None, *instance.FRAME_PANE_BG):
+                    frame = _resolved(word, word, word, word)
+                    with self.subTest(v=v, level=level, bg=word):
+                        self.assertEqual(self._launch_value(frame, level, v),
+                                         self._live_value(frame, level, v))
 
     def test_a_committed_colour_survives_the_level_that_used_to_erase_it(self):
         """`chrome: off` is a removal of the FRAME'S surface, never of a colour a
-        component wrote. The rules stay the panels' colour, because the panels do."""
+        component wrote. The rules stay the panels' colour, because the panels do — on the
+        window below the floor, on the pane itself above it."""
         frame = _resolved(*["brightblack"] * 4)
-        self.assertEqual(
-            self._live_value(frame, "off")["pane-border-style"],
-            f"{commands_frame._CHROME_STYLE},bg=brightblack")
+        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        self.assertEqual(self._live_value(frame, "off", (3, 2))[("-w", "pane-border-style")],
+                         want)
+        self.assertEqual(self._live_value(frame, "off", (3, 7))[("-p", "pane-border-style")],
+                         want)
 
     def test_off_on_a_plane_that_named_no_colour_puts_the_rules_back(self):
-        self.assertEqual(self._live_value({"slots": ["top"]}, "off"),
-                         dict(commands_frame._CHROME))
+        for v in (None, (3, 2), (3, 7)):
+            with self.subTest(v=v):
+                self.assertEqual(
+                    self._live_value({"slots": ["top"]}, "off", v),
+                    {("-w", n): commands_frame._CHROME_STYLE
+                     for n in instance.PANE_BORDER_OPTIONS})
+
+    def test_the_window_carries_the_surface_below_the_floor_and_the_pane_above_it(self):
+        """The switch itself, on the live path: never both, and never neither. A window
+        that kept the frame-wide surface above the floor would go on boxing the harness
+        the per-pane edges exist to unbox; a pane written below it would land on the
+        window anyway and the last panel would decide the frame."""
+        frame = _resolved(*["brightblack"] * 4)
+        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        floor = self._live_value(frame, "dark", (3, 2))
+        self.assertEqual(floor[("-w", "pane-border-style")], want)
+        self.assertNotIn(("-p", "pane-border-style"), floor)
+        above = self._live_value(frame, "dark", (3, 7))
+        self.assertEqual(above[("-p", "pane-border-style")], want)
+        self.assertEqual(above[("-w", "pane-border-style")],
+                         commands_frame._CHROME_STYLE,
+                         "the window kept a surface above the floor, so the rules around "
+                         "the harness are still charter's colour")
 
     def test_a_frame_with_no_harness_pane_still_repaints_its_panes(self):
         """Skipped rather than refused: a frame launched by a charter that predates

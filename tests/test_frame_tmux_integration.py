@@ -4122,19 +4122,27 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
             self.assertEqual(self._srv("set", "-wg", name, value).returncode, 0)
 
     def _screenshot(self, *, arm: bool, hostile: bool = False,
-                    surface: str | None = None, rules_too: bool = True) -> str:
+                    surface: str | None = None, design: str = "pane") -> str:
         """Build the frame on the inner server, show it through the outer one, and return
         what the outer pane holds — the frame's whole screen, escapes and all.
 
         *surface* paints the three PANELS the way `_surface_argvs` paints them (pane-scoped
-        `window-style`, harness pane untouched). *rules_too* decides whether
-        `_chrome_argvs` is handed the matching background as well, and the two together are
-        what make the seam a measurement instead of a claim: painted panes with unpainted
-        rules is the frame the operator reported, and it is this class's own "render the
-        defect first" discipline applied to a defect that is a background rather than a
-        foreground."""
-        session = (f"f{int(arm)}{int(hostile)}{int(bool(surface))}{int(rules_too)}"
-                   f"-{self._pane_counter}")
+        `window-style`, harness pane untouched), and *design* is which of charter's two
+        answers for the RULES is applied — the whole point being that all three renderings
+        come out of the production argvs and differ only in the arguments production would
+        really pass:
+
+        * ``"bare"`` — panels painted, rules left as `_CHROME_STYLE` alone. The defect the
+          operator first reported: a one-cell strip of the terminal's own between panes
+          that are all one colour. This class's "render the defect first" discipline,
+          applied to a background rather than a foreground.
+        * ``"window"`` — `_chrome_argvs` carries the frame-wide surface. What charter does
+          BELOW `tmuxctl.PANE_BORDER_FLOOR`, and what #628 shipped everywhere. Closes the
+          seam and boxes the harness, which is the second defect.
+        * ``"pane"`` — each panel carries its own edges and the window's stay bare. What
+          charter does above the floor.
+        """
+        session = f"f{int(arm)}{int(hostile)}{int(bool(surface))}{design[0]}-{self._pane_counter}"
         self._pane_counter += 1
         r = self._srv("new-session", "-d", "-s", session, "-x", "100", "-y", "24",
                       "-P", "-F", "#{pane_id}", "--", "cat")
@@ -4155,7 +4163,7 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
             # The production argv, never a hand-retyped `set-option` — see `_run`.
             for cmd in commands_frame._chrome_argvs(
                     socket=self.SOCKET_NAME, harness_pane=harness,
-                    surface=surface if rules_too else None):
+                    surface=surface if design == "window" else None):
                 self.assertEqual(_run(cmd).returncode, 0, cmd)
         for direction, before, size in self._SPLITS:
             args = ["split-window", "-t", harness, direction, "-P", "-F", "#{pane_id}"]
@@ -4171,7 +4179,8 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                 # colour from a pane it is not allowed to paint.
                 for cmd in commands_frame._surface_argvs(
                         socket=self.SOCKET_NAME, pane_id=r.stdout.strip(), chrome="off",
-                        bg=surface.removeprefix("bg=")):
+                        bg=surface.removeprefix("bg="),
+                        pane_borders=design == "pane"):
                     self.assertEqual(_run(cmd).returncode, 0, cmd)
         self.assertEqual(self._srv("select-pane", "-t", harness).returncode, 0)
         host = f"host-{session}"
@@ -4273,90 +4282,165 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
     #: pane runs `cat` and writes nothing.
     _SURFACE = "bg=brightblack"
 
-    def _backgrounds(self, shot: str) -> tuple[set, set]:
-        """`(what the rules are drawn over, what the painted panes are drawn over)`.
+    def _grid(self, shot: str) -> list[list[tuple]]:
+        """*shot* as rows of `(appearance, character)`, so a border cell can be compared
+        with the pane cells ON EITHER SIDE OF IT.
 
-        Read out of ONE capture rather than compared against an SGR constant this test
-        would have to know: the surfaced panes are the only cells on the screen with a
-        background at all, so "the rule matches the panels" is answerable without this
-        file knowing what `brightblack` is spelled as on the wire.
+        `_sgr_runs` answers one flat list with the row breaks dropped, which is right for
+        "what colours are the rules" and useless for "does this rule match its
+        neighbours". The printable width of each line is what slices it back into rows.
+        `carry=True` for the reason that flag exists: tmux does not re-state a background a
+        row already inherits.
         """
+        lines = shot.split("\n")
         cells = _sgr_runs(shot, carry=True)
-        rules = {dict(s)["bg"] for s, ch in cells if ch in _RULE_GLYPHS}
-        panes = {dict(s)["bg"] for s, _ch in cells} - {"default"}
-        return rules, panes
+        rows, at = [], 0
+        for line in lines:
+            width = len(_SGR_RE.sub("", line))
+            rows.append(cells[at:at + width])
+            at += width
+        return rows
 
-    def _seam(self) -> tuple[set, set]:
-        """The defect, rendered — this class's `_control` for a background rather than a
-        foreground. Panels painted, rules left as `_CHROME_STYLE` alone: every border cell
-        comes back over the terminal's own background while the panes on both sides of it
-        are over another, which is the one-cell strip the operator reported.
+    def _seams(self, shot: str) -> list[tuple]:
+        """Every rule cell whose background matches NEITHER pane it separates.
 
-        Skips rather than fails on a machine that cannot render it, for `_control`'s
-        reason: a harness that cannot see the seam cannot testify about its absence.
+        The definition of the defect, and it needs no pane geometry: a `─` is compared
+        with the cell above and the cell below it, a `│` with the cells left and right.
+        Junctions are skipped — a `┬` has three neighbours and no one right answer. A
+        border cell may legitimately take either side (tmux draws one border, not two
+        half-borders); what it may never be is a THIRD colour, which is what a seam is.
         """
-        rules, panes = self._backgrounds(
-            self._screenshot(arm=True, surface=self._SURFACE, rules_too=False))
-        if not rules:
+        rows = self._grid(shot)
+        out = []
+        for y, row in enumerate(rows):
+            for x, (state, ch) in enumerate(row):
+                if ch == "\u2500":
+                    sides = [rows[y - 1][x:x + 1], rows[y + 1][x:x + 1]]
+                elif ch == "\u2502":
+                    sides = [row[x - 1:x], row[x + 1:x + 2]]
+                else:
+                    continue
+                near = [dict(c[0][0])["bg"] for c in sides if c and c[0]]
+                if len(near) == 2 and dict(state)["bg"] not in near:
+                    out.append((y, x, dict(state)["bg"], near))
+        return out
+
+    def _harness_edges(self, shot: str) -> set:
+        """The backgrounds the rules touching the UNPAINTED pane are drawn in.
+
+        The harness is the only pane charter never paints, so it is the only pane whose
+        interior cells are the terminal's own — which is how this finds its edges without
+        knowing where tmux put it.
+        """
+        rows = self._grid(shot)
+        out = set()
+        for y, row in enumerate(rows):
+            for x, (state, ch) in enumerate(row):
+                if ch == "\u2500":
+                    sides = [rows[y - 1][x:x + 1], rows[y + 1][x:x + 1]]
+                elif ch == "\u2502":
+                    sides = [row[x - 1:x], row[x + 1:x + 2]]
+                else:
+                    continue
+                near = [dict(c[0][0])["bg"] for c in sides if c and c[0]]
+                if "default" in near:
+                    out.add(dict(state)["bg"])
+        return out
+
+    def _painted(self, shot: str):
+        """The one background the panels are painted in, or a skip naming what this
+        machine could not render. `_control`'s discipline: a harness that cannot see the
+        surface cannot testify about the rules drawn over it."""
+        cells = _sgr_runs(shot, carry=True)
+        if not any(ch in _RULE_GLYPHS for _s, ch in cells):
             raise unittest.SkipTest("this machine rendered no pane borders at all")
-        if not panes:
+        painted = {dict(s)["bg"] for s, _ch in cells} - {"default"}
+        if len(painted) != 1:
             raise unittest.SkipTest(
-                "this tmux painted no pane background through a nested client, so there "
-                "is no surface here for a rule to fail to match")
-        return rules, panes
+                "this tmux did not paint the panels one colour through a nested client "
+                f"({painted}), so there is no surface here for a rule to match")
+        return painted.pop()
 
-    def test_a_surfaced_frame_really_does_render_a_seam_between_its_panes(self):
-        """The defect itself, named rather than only used as a control."""
-        rules, panes = self._seam()
-        self.assertEqual(rules, {"default"},
-                         "the rules already carry a background before charter puts one "
-                         f"there, so the seam does not reproduce here: {rules}")
-        self.assertNotEqual(rules, panes)
+    def test_an_unsurfaced_rule_really_does_leave_a_seam_between_painted_panes(self):
+        """The first defect, rendered — and the control for both tests below. Panels
+        painted, rules left as `_CHROME_STYLE` alone: border cells come back over the
+        terminal's own background while the panes on BOTH sides of them are over another.
+        That one-cell strip is what the operator reported off a screenshot."""
+        shot = self._screenshot(arm=True, surface=self._SURFACE, design="bare")
+        self._painted(shot)
+        self.assertTrue(self._seams(shot),
+                        "no rule here is drawn over a background neither of its "
+                        "neighbours has, so the seam does not reproduce on this tmux and "
+                        "a frame without one would prove nothing")
 
-    def test_the_frames_rules_are_drawn_over_the_frames_own_surface(self):
-        """The fix, on the screen the operator judges it by. Every border cell is drawn
-        over the same background as the panes it runs between, so there is no strip left
-        between them — and #514's property survives it: still ONE appearance for every
-        rule in the frame, including the ones running past the active pane's corner."""
-        self._seam()
-        shot = self._screenshot(arm=True, surface=self._SURFACE)
-        rules, panes = self._backgrounds(shot)
-        self.assertEqual(len(panes), 1,
-                         f"the panels came out more than one colour: {panes}")
-        self.assertEqual(rules, panes,
-                         "a rule is still drawn over a different background than the "
-                         f"panes it separates: rules={rules} panes={panes}")
-        self.assertEqual(len(_rule_states(shot, carry=True)), 1,
-                         "the surfaced frame draws its rules two ways — #514, reopened "
-                         "on the background instead of the foreground")
+    def test_neither_design_leaves_a_seam_between_two_panes_of_one_colour(self):
+        """The property both of charter's answers must have, asked of the screen. A rule
+        may take either side — tmux draws one border, not two half-borders — but it may
+        never be a third colour, and a third colour between two identically-painted panes
+        is exactly the strip this began with."""
+        self.assertTrue(
+            self._seams(self._screenshot(arm=True, surface=self._SURFACE, design="bare")),
+            "the control rendered no seam, so this machine cannot testify")
+        for design in ("window", "pane"):
+            with self.subTest(design=design):
+                shot = self._screenshot(arm=True, surface=self._SURFACE, design=design)
+                self._painted(shot)
+                self.assertEqual(self._seams(shot), [])
 
-    def test_charters_chrome_reaches_charters_own_window_and_no_other(self):
-        """The boundary the `-w` scope is for, measured on a real server rather than
-        argued from the flag: after charter styles its own window, a window the operator
-        already had still resolves to the value THEIR config set."""
-        theirs = self._srv("new-session", "-d", "-s", "theirs", "-x", "80", "-y", "24",
-                           "--", "cat")
-        self.assertEqual(theirs.returncode, 0, theirs.stderr)
-        self.assertEqual(self._srv("set", "-wg", "pane-border-style",
-                                   "fg=blue").returncode, 0)
-        ours = self._srv("new-session", "-d", "-s", "ours", "-x", "80", "-y", "24",
-                         "-P", "-F", "#{pane_id}", "--", "cat")
-        self.assertEqual(ours.returncode, 0, ours.stderr)
+    def test_only_the_per_pane_design_leaves_the_harness_pane_unboxed(self):
+        """#631, on the screen the operator judges it by.
+
+        A window-wide border surface reaches EVERY rule in the frame, including the three
+        around the pane charter does not own — so the frame that closed the seam drew a
+        grey box round the operator's own session. Per-pane edges cannot: `_surface_argvs`
+        is only ever handed a panel pane, so the harness keeps the window's bare style and
+        every rule cell tmux resolves against it is the terminal's own.
+
+        Asserted as a DIFFERENCE between the two designs rendered on this machine at this
+        moment, never against a remembered colour: the window-wide frame is the control
+        that proves this test can see the box.
+        """
+        boxed = self._screenshot(arm=True, surface=self._SURFACE, design="window")
+        painted = self._painted(boxed)
+        self.assertEqual(self._harness_edges(boxed), {painted},
+                         "the frame-wide design did not box the unpainted pane on this "
+                         "tmux, so there is nothing here for the per-pane one to fix")
+        unboxed = self._screenshot(arm=True, surface=self._SURFACE, design="pane")
+        self.assertEqual(self._painted(unboxed), painted)
+        self.assertEqual(self._harness_edges(unboxed), {"default"},
+                         "a rule touching the pane charter never paints is still drawn "
+                         "in charter's colour — the harness is boxed")
+
+    def test_the_harness_pane_carries_no_border_option_of_its_own(self):
+        """The other half of the same boundary, read off tmux rather than off the screen.
+        Per-pane edges are set with `set -p`, and ADR 0018's line holds here the way it
+        holds for the surface: the harness pane is never an argument, so it has nothing of
+        charter's on it and inherits the window's own."""
+        session = f"hb-{self._pane_counter}"
+        self._pane_counter += 1
+        r = self._srv("new-session", "-d", "-s", session, "-x", "80", "-y", "24",
+                      "-P", "-F", "#{pane_id}", "--", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness = r.stdout.strip()
         for cmd in commands_frame._chrome_argvs(socket=self.SOCKET_NAME,
-                                                harness_pane=ours.stdout.strip()):
+                                                harness_pane=harness):
+            _run(cmd)
+        p = self._srv("split-window", "-t", harness, "-P", "-F", "#{pane_id}", "--", "cat")
+        panel = p.stdout.strip()
+        for cmd in commands_frame._surface_argvs(socket=self.SOCKET_NAME, pane_id=panel,
+                                                 chrome="dark", bg="brightblack",
+                                                 pane_borders=True):
             self.assertEqual(_run(cmd).returncode, 0, cmd)
-        # `-A` so tmux reports the value the window RESOLVES to (inherited included), not
-        # only what was set on it locally — the second would answer "nothing" for their
-        # window whether charter had reached it or not.
-        resolved = self._srv("show-options", "-w", "-A", "-v", "-t", "theirs:0",
-                             "pane-border-style")
-        self.assertEqual(resolved.stdout.strip(), "fg=blue",
-                         "charter restyled a window that is not its own")
-        mine = self._srv("show-options", "-w", "-A", "-v", "-t", "ours:0",
-                         "pane-border-style")
-        self.assertEqual(mine.stdout.strip(),
-                         dict(commands_frame._CHROME)["pane-border-style"],
-                         "charter's own window did not take charter's own style")
+        for option in instance.PANE_BORDER_OPTIONS:
+            with self.subTest(option=option):
+                self.assertEqual(
+                    self._srv("show", "-p", "-t", harness, "-v", option).stdout.strip(),
+                    "", "charter wrote a border style on the harness pane")
+                self.assertTrue(
+                    self._srv("show", "-p", "-t", panel, "-v", option).stdout.strip(),
+                    "the panel never got its own edges, so the harness reading '' "
+                    "proves nothing")
+        self._srv("kill-session", "-t", session)
 
 
 class EveryBorderOptionThisTmuxHasIsPinned(_TmuxServerFixture, PersonaIso,
