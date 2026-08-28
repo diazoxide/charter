@@ -644,6 +644,70 @@ and charter still runs.
 `NO_COLOR` overrides it: no colour on your screen caused by charter means none, whichever
 process puts the bytes there.
 
+### A colour and an inset for one pane
+
+`chrome` gives every panel the same background, which is the right default and the wrong
+only answer: on a terminal that is already black, `chrome = "dark"` paints four panes the
+colour the terminal already was, and the frame gains a background and no structure. What
+makes a frame read as an application is that its regions are **told apart**. So each
+component can say its own:
+
+```toml
+[[frame.component]]
+use = "identity"
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
+use = "repos"
+bg = "black"
+pad = 1
+
+[[frame.component]]
+use = "sidebar"
+bg = "brightblack"
+pad = 1
+```
+
+`bg` is one of **seventeen words**: `default`, the eight ANSI colours (`black`, `red`,
+`green`, `yellow`, `blue`, `magenta`, `cyan`, `white`) and their eight `bright` forms. The
+focused pane is drawn in the other member of the pair — `blue` focuses to `brightblue` — so
+you can still see which pane is live. `default` is your terminal's own background, which is
+how one pane steps out of a frame-wide `chrome`.
+
+Names and never `colour236` or `#1c1c1c`, for the reason the rest of charter's colour uses
+names: `blue` is a slot in **your** palette and a cube index is a fixed point that no theme
+moves. And this file is committed, so the colour you write is read on a machine whose theme
+you have never seen. A word charter does not know — like a tmux style string, which tmux
+would expand at draw time — takes the whole arrangement out of play and the frame falls
+back to `slots`, which is visible, rather than one pane quietly losing its colour.
+
+`bg` does not need `chrome` to be on. `chrome`'s default is `off` because a background
+charter chose is wrong on somebody's terminal; a `bg` is a line you wrote by hand about one
+pane, so it applies either way.
+
+`pad` is how many cells that pane leaves empty at its **left and right edges** — one number,
+both sides. Charter draws this one: tmux paints backgrounds and insets nothing.
+
+**The pad comes out of the pane's width, not out of your terminal's.** The repo table
+already gives up columns in a fixed order when its pane is narrow, and a padded pane simply
+starts that arithmetic two cells earlier — the row is composed for the narrower pane rather
+than composed wide and then pushed off its own right edge. On a pane too narrow to afford
+it, the pad is dropped **whole** rather than reduced, so a narrow frame looks exactly as it
+did before you wrote one. If a `pad` pushes the repo table under the width it needs, the
+pane says so and the number it quotes already includes your pad — widen by it and the table
+comes back.
+
+There is no vertical pad, and that is deliberate. `identity` and `attention` are one row
+each, so a top pad would not inset them — it would delete them. The repo table is sized to
+its content, so a vertical pad there removes a repo from the table rather than moving it,
+and which repo goes is a ranking charter made on purpose. Horizontal padding gets narrower;
+vertical padding disappears.
+
+`0` to `8`. Anything else — a negative, a bigger number, `true`, `"2"` — takes the
+arrangement out of play the way an unknown `bg` does.
+
 ### Writing the arrangement out
 
 `slots` is shorthand. Each name in it places one of charter's built-in components on the

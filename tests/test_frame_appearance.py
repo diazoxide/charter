@@ -404,11 +404,32 @@ class TheFrameNamesColoursAndNeverIndexes(PersonaIso, unittest.TestCase):
 
     def test_the_styles_charter_hands_tmux_name_colours_too(self):
         """The same rule on the other side of the boundary: `window-style` takes a
-        colour, and the words in `FRAME_CHROME` are palette slots, not cube indices."""
-        for level, pairs in instance.FRAME_CHROME.items():
-            for name, value in pairs:
-                with self.subTest(level=level, option=name):
-                    self.assertNotRegex(value, r"colour\d|#[0-9a-fA-F]{6}")
+        colour, and the words in `FRAME_CHROME` are palette slots, not cube indices.
+
+        **`FRAME_PANE_BG` is inside this assertion and not an exception to it**, which is
+        the decision the per-component key had to make rather than inherit.
+        `colour0`-`colour255` was considered for it and refused: sixteen names come out of
+        the operator's own palette and a cube index does not, and the argument does not
+        get weaker for the key being per pane — it gets stronger, because a `[[frame
+        .component]] bg` is committed and read on a machine whose theme the author of the
+        file has never seen. Iterated from the table rather than spelled, so a colour added
+        there is checked by this line without anybody remembering to come back."""
+        for table in (instance.FRAME_CHROME, instance.FRAME_PANE_BG):
+            for level, pairs in table.items():
+                for name, value in pairs:
+                    with self.subTest(level=level, option=name):
+                        self.assertNotRegex(value, r"colour\d|#[0-9a-fA-F]{6}")
+
+    def test_every_pane_background_is_one_of_the_sixteen_names_or_default(self):
+        """The positive half, because the regex above is a negative and `bg=chartreuse`
+        would pass it. Named against `FRAME_PANE_COLOURS` so the two cannot drift."""
+        allowed = {"default", *instance.FRAME_PANE_COLOURS,
+                   *(f"bright{c}" for c in instance.FRAME_PANE_COLOURS)}
+        for word, pairs in instance.FRAME_PANE_BG.items():
+            for option, value in pairs:
+                with self.subTest(word=word, option=option):
+                    self.assertTrue(value.startswith("bg="), value)
+                    self.assertIn(value[len("bg="):], allowed)
 
 
 class TheChromeValueIsAWordAndNeverAStyle(unittest.TestCase):

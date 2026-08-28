@@ -365,9 +365,9 @@ def _top(fid: str) -> str:
     left = f" ⬢ {ws}{pin}"
     identity = f"{left}  {gauge}  {persona}" if gauge else f"{left}  {persona}"
     if verbosity(fid) == "terse":
-        return tui.truncate(identity, _width())
+        return tui.truncate(identity, content_width("top"))
     build = f"charter {__version__}{statusline._dev_chip()} "
-    w = _width()
+    w = content_width("top")
     # `+ 1` is the one column that must separate them; without it a full-width identity
     # would butt straight up against the version and read as one word.
     if tui.width(identity) + tui.width(build) + 1 > w:
@@ -671,7 +671,7 @@ def _empty_lines(ws: str, width: int) -> list[str]:
         f"{ws}{sl._R}", width)]
 
 
-def _too_narrow_lines(width: int) -> list[str]:
+def _too_narrow_lines(width: int, pad: int = 0) -> list[str]:
     """What the `repos` pane says when it exists but is narrower than its own table.
 
     **Reachable only by a RESIZE, and that is the whole reason it exists.** At launch
@@ -687,13 +687,22 @@ def _too_narrow_lines(width: int) -> list[str]:
     the reason `layout._table_min_cols` gives: the number that stops the table drawing and
     the number this line quotes must be the same one.
 
+    **And *pad* is added to it, because the number has to be the width the PANE needs.**
+    `statusline._LEFT_W` is what the TABLE needs; a component that asked for ``pad = 3``
+    spends six cells of its pane before the table is composed at all
+    (:func:`content_width`), so a 97-column pane refuses and a message quoting 95 sends the
+    operator to widen a terminal that is already wide enough. They widen, it still refuses,
+    and the config key that caused it is not on screen anywhere. With the pad in the sum
+    the number is one they can act on: widen by it and the table draws. Zero by default, so
+    every pane that has never named a pad quotes exactly what it quoted before.
+
     Bounded through `tui.truncate` like every other line here — this line is drawn at
     widths below 95 by definition, and `⋯` is East-Asian *Ambiguous*.
     """
     from .. import statusline as sl
 
     return [tui.truncate(
-        f"  {sl._DIM}⋯ too narrow for the repo table — {sl._LEFT_W} columns "
+        f"  {sl._DIM}⋯ too narrow for the repo table — {sl._LEFT_W + 2 * pad} columns "
         f"needed{sl._R}", width)]
 
 
@@ -854,6 +863,110 @@ def _inset(marker: str = "") -> str:
     already has rather than pushing its row one column right of every other.
     """
     return tui.pad(marker, INSET)
+
+
+#: The narrowest content a padded pane will accept. Below it the pad is dropped WHOLE.
+#:
+#: :data:`_NAME_MIN_W` rather than a number of this function's own: it is the narrowest row
+#: the frame composes anywhere — a persona's two-cell marker plus enough name to tell two
+#: personas apart, and the floor past which the sidebar gives up its badges instead. A pane
+#: left with less than that is not a narrower panel; it is an empty one, and a frame with a
+#: hole in it is what every refusal in `layout.visible_slots` and `component_tables` exists
+#: to prevent (#535: a missing repo table is a plane that appears to have no clones).
+_PAD_MIN_CONTENT = _NAME_MIN_W
+
+
+def pad_of(name) -> int:
+    """Cells of horizontal inset this pane draws, each side — the pad *name* can AFFORD.
+
+    **Padding is charter's to draw, and that follows from where the surface comes from.**
+    tmux paints the pane's background (`instance.FRAME_PANE_BG`, pane options, no cost on
+    a repaint) and tmux insets nothing: there is no pane option that moves content off the
+    rectangle's left edge. So the inset is composed, here, where the rows are.
+
+    **It comes OUT of the content budget and is never added beside it**, which is the one
+    thing about this that could not be decided by taste. `statusline._row_plan` gives up
+    whole cells in a written-down order when the repo table is narrow, and #506 is what a
+    row composed for one width and painted at another costs — the CI marker falls off the
+    right-hand end and a failing repo renders clean. A pad added on top of a full-width
+    plan is that defect with a new cause, and `chrome.fill`'s own measurement says what
+    happens at the other end: **W+1 shears the pane**, one cell of overflow wrapping every
+    row below it onto the next line. So the renderer is told a narrower pane, plans for the
+    narrower pane, and the cells it gave up are the cells the pad occupies.
+
+    **And it is dropped WHOLE below :data:`_PAD_MIN_CONTENT`, not clamped down to fit.**
+    Clamping would be a value read, validated and then quietly changed into a different one
+    — the shape `instance.FRAME_PANE_PAD_MAX` refuses at the config boundary, said again
+    one layer down — and the operator would have no way to tell a pane that took their
+    three cells from one that took one. Whole-or-nothing is also the rule the table beside
+    it already keeps for a marker (`statusline._row_plan`: shown whole or dropped whole).
+
+    **What it does NOT do is keep a renderer above that renderer's OWN floor**, and that is
+    deliberate rather than missed. `repos` refuses to draw a cut table below
+    `statusline._LEFT_W` and says so; a pad that pushes a 97-column pane under that line
+    gets the refusal, and the operator's own ``pad`` is what put it there. Teaching this
+    function each renderer's minimum would be a second copy of `layout._table_min_cols()`
+    drifting from the first (#547). :func:`_too_narrow_lines` is told the pad instead, so
+    the number it quotes is the width the PANE needs rather than the width the table needs
+    — the operator reads a number they can act on, and widening by it works.
+
+    Read at call time through `config.FRAME`, never cached, exactly as :func:`verbosity`
+    reads the density: a panel repaints on a version bump and a relaunch is what changes
+    this. `instance.component_style` is the one walk over the arrangement, shared with the
+    launcher (`commands_frame._split_panels`), so the pane that gets a colour and the pane
+    that gets an inset cannot come to disagree about which component they are.
+    """
+    from .. import config, instance
+    pad = instance.component_style(config.FRAME, name)["pad"]
+    return pad if _width() - 2 * pad >= _PAD_MIN_CONTENT else 0
+
+
+def content_width(name) -> int:
+    """The cells *name*'s renderer may compose into — the pane's width less its pad.
+
+    **Two questions, kept apart.** :func:`_width` answers *how wide is this pane*, measured
+    from the pane's own tty and reported as measured, with no floor clamped over it; this
+    answers *how wide is my canvas*, which is the first question minus what the operator
+    asked to leave empty at each edge. Every renderer wants the second, which is why this
+    is what they call — and why :func:`_width`'s own contract is untouched: a caller that
+    needs the rectangle (`panel._hold`, painting a failure into a pane whose renderer is
+    the thing that failed) still gets the rectangle.
+
+    Never negative for a pad the pane can afford — :func:`pad_of` has already dropped one
+    it cannot — and `tui.truncate` answers ``""`` for a non-positive width regardless, so
+    the arithmetic here needs no second guard of its own.
+    """
+    return _width() - 2 * pad_of(name)
+
+
+def inset_rows(text: str, name: str) -> str:
+    """*text*'s rows moved right by *name*'s pad — the other half of :func:`content_width`.
+
+    **Takes finished rows and must not hand them back to `tui`.** `chrome.fill`'s module
+    docstring has the measurement: `tui._finish` strips trailing whitespace *including*
+    whitespace hiding behind trailing SGR, so a row that went through here and then back
+    through a `tui` node would come back at its natural width with the inset gone. This is
+    called on `render`'s way out, after every renderer has finished, for that reason.
+
+    **The pad goes on the LEFT of the whole row, outside every span**, which is what makes
+    it background rather than paint. A row that ends in an open span (`chrome.reverse`
+    composes one) keeps its highlight to the content's last column and no further, so a
+    selected row is inset like every other row instead of bleeding into the margin — which
+    is also the only answer consistent with the pad coming out of the budget, since the
+    highlight was composed at :func:`content_width` and has no cells beyond it to fill.
+
+    The right-hand pad is not spelled at all and does not need to be: nothing is written
+    there, so it is the pane's own background — tmux's paint, the cells no renderer wrote,
+    already filled before charter's first byte reached the pane.
+
+    A pad of zero returns *text* unchanged, including its identity as a single string with
+    no trailing newline: ``" " * 0`` is ``""`` and the join is the split's inverse.
+    """
+    pad = pad_of(name)
+    if not pad:
+        return text
+    lead = " " * pad
+    return "\n".join(lead + line for line in text.split("\n"))
 
 
 def _sidebar_head(label: str, count: int, width: int) -> str:
@@ -1191,7 +1304,7 @@ def _right(fid: str) -> str:
     copy of them. Charter never splits a pane (§4d); a composite is how two things share
     one, and this function is that composition for the one composite charter ships.
     """
-    w, h = _width(), _height()
+    w, h = content_width("right"), _height()
     # Asked ONCE and handed to both sections: one pane draws them, so one density decides
     # how much both of them say.
     terse = verbosity(fid) == "terse"
@@ -1376,7 +1489,7 @@ def _bottom(fid: str) -> str:
     todos = sl._todo_count(ws)
     alerts = sl._alerts(ws)
     news = sl._session_news(_session.current(), inflight=False)
-    w = _width()
+    w = content_width("bottom")
 
     # Unconditional, unlike `news` below — this predates Task 4 and stays exactly as it
     # was (`0 todo` included) rather than adopting `_session_news`'s "silent unless
@@ -1478,7 +1591,7 @@ def _repos(fid: str) -> str:
     table draws comes out of the cache; see :func:`_table_row` for the one column that
     costs (presence) and is therefore absent.
     """
-    w = _width()
+    w = content_width("repos")
     # `_table_cap` is the SAME call `repos_rows_wanted` made to size this pane, with the
     # pane's own measured width instead of the window's.
     cap = _table_cap(fid, w)
@@ -1491,7 +1604,11 @@ def _repos(fid: str) -> str:
         # for its own correctness either — `charter panel repos` run by hand into a
         # narrow terminal reaches exactly here, and an unbounded `_table_lines` would
         # draw a false-clean `charter  main` into it.
-        return "\n".join(_too_narrow_lines(w))
+        # The pad goes with the width, so the number the line quotes is what this PANE
+        # needs rather than what the table needs — see :func:`_too_narrow_lines`. Asked of
+        # :func:`pad_of` and not subtracted back out of `w`, because `pad_of` is the one
+        # that knows whether the pad was afforded at all.
+        return "\n".join(_too_narrow_lines(w, pad_of("repos")))
     from . import gather
     # `gather.cached`, never `gather.read` (#512). The two differ by exactly one thing:
     # `read` falls back to a live `scan()` when there is no cache, and a PANEL is the one
@@ -1628,11 +1745,29 @@ def render(slot: str, fid: str) -> str:
     Never raises. A panel that dies leaves a hole in the frame, which is worse than a
     line saying what went wrong — the same promise `statusline.render` already makes and
     documents.
+
+    **The pad is applied HERE, on the way out**, and the two halves of it meet at this
+    line: :func:`content_width` told the renderer a narrower pane and :func:`inset_rows`
+    moves what it composed to the right. Doing it here rather than inside each renderer is
+    what keeps the pad from being spelled four times, and doing it AFTER the renderer is
+    `chrome.fill`'s ordering rule — these are finished rows, and a `tui` node would strip
+    the inset back off (measured; see that module's docstring).
+
+    **Neither failure line is padded, and that is what keeps "never raises" true.** The
+    pad is read out of `config.FRAME` (:func:`pad_of`), so it is one more thing that can
+    go wrong — and a fallback composed through the mechanism that may be the thing that
+    failed is not a fallback. Both lines measure through :func:`_width` alone, which is
+    one `os.get_terminal_size` with its own `OSError` guard and reads no config at all.
+    The `unknown slot` line is outside the `try` entirely, so a padded one would have had
+    nothing to catch it; the `unavailable` line is inside, and would have re-raised on its
+    way out of the handler. A message drawn flush left in a padded pane is a message that
+    is visibly not the panel, which is honest here rather than untidy.
     """
     fn = SLOTS.get(slot)
     if fn is None:
         return tui.truncate(f" charter: unknown slot {slot}", _width())
     try:
-        return fn(fid)
+        return inset_rows(fn(fid), slot)
     except Exception as e:
-        return tui.truncate(f" charter: {slot} unavailable ({type(e).__name__})", _width())
+        return tui.truncate(f" charter: {slot} unavailable ({type(e).__name__})",
+                            _width())

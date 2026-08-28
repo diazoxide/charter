@@ -1622,7 +1622,7 @@ def _chrome_argvs(*, socket: str, harness_pane: str) -> list[list[str]]:
             for name, value in _CHROME]
 
 
-def _surface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
+def _surface_argvs(*, socket: str, pane_id: str, chrome, bg=None) -> list[list[str]]:
     """`set-option -p`: the pane surface `[frame] chrome` asked for, on ONE panel pane.
 
     **tmux paints the background; charter sets an option.** `window-style` and
@@ -1655,6 +1655,32 @@ def _surface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
     turns it into styles — so what reaches tmux is charter's own constant whatever the
     word was. An unknown word yields no commands at all, which is `off`.
 
+    ***bg* is this component's own word, and it WINS WHOLE where it is given.** It is the
+    key `[frame] chrome` could not be: the operator set `chrome = "dark"` on a terminal
+    that was already black and reported panes indistinguishable from the terminal and from
+    each other — which is what a single frame-wide word can always produce, since whatever
+    it says it says about every pane at once. A frame reads as an application because its
+    regions are told apart.
+
+    Whole rather than merged, and that is the half worth stating: a *bg* that set only
+    `window-style` would leave `window-active-style` carrying the frame-wide chrome's
+    colour, so one pane would be two unrelated colours depending on focus — a cell's worth
+    of the two-colour defect #514 fixed on the borders. `instance.pane_bg_options` answers
+    both options or neither, so a pane is one word's answer or the other's and never a
+    blend of them.
+
+    It is the same containment one key over: the operator's word is a KEY into
+    `instance.FRAME_PANE_BG` and the value that reaches tmux comes out of charter's own
+    table. A word charter does not know yields nothing here — and the arrangement carrying
+    it was already refused whole at the config boundary, so this is the second of two
+    answers rather than the only one.
+
+    **It does not need `chrome` to be on.** `chrome`'s default is `off` because a default
+    that repaints a stranger's terminal makes a working frame worse on upgrade; a *bg* is
+    not a default, it is a line somebody wrote by hand about one pane. So a plane can leave
+    `chrome = "off"` and still colour its sidebar, which is the smallest way to answer the
+    report that started this.
+
     All four of charter's panes, not only the two bars: two chrome-coloured panes beside
     two uncoloured ones is a frame that does not match itself.
 
@@ -1667,8 +1693,13 @@ def _surface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
     """
     if chrome_mod.no_colour():
         return []
+    # `or`, not a merge: `pane_bg_options` answers `()` both for a component that named no
+    # background and for one whose word charter does not know, and both mean "this pane
+    # takes the frame's own answer". One expression, so there is no state in which a pane
+    # gets one option from here and the other from there.
     return [tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id, name, value)
-            for name, value in instance.chrome_options(chrome)]
+            for name, value in (instance.pane_bg_options(bg)
+                                or instance.chrome_options(chrome))]
 
 
 def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
@@ -2173,7 +2204,15 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
             # argument (`_surface_argvs`), which is how ADR 0018's boundary holds by
             # construction. Not fatal, like the splits: a frame whose panes kept the
             # terminal's own background is a frame that looks plainer, not one that fails.
-            for surface in _surface_argvs(socket=socket, pane_id=pane_id, chrome=chrome):
+            # And this pane's OWN background where the arrangement gave it one
+            # (`instance.component_style`, the single walk over the placements that
+            # `frame/slots.py` asks for the pad on the other side of the split). Resolved
+            # per slot rather than once for the batch, unlike `chrome` above, because that
+            # is the whole difference between the two keys: one word about the frame, one
+            # word about this pane.
+            bg = instance.component_style(config.FRAME, slot)["bg"]
+            for surface in _surface_argvs(socket=socket, pane_id=pane_id, chrome=chrome,
+                                          bg=bg):
                 tmuxctl.run("painting a panel's surface", surface, env=env)
     return panes
 
