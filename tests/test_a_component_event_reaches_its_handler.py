@@ -138,6 +138,21 @@ class TheDeclarationAndTheHandlerAreOneThing(unittest.TestCase):
             _component(on_event="not a function")
         self.assertIn("callable", str(e.exception))
 
+    def test_the_refusal_contains_what_it_quotes_back(self):
+        """The refusal repeats the value it would not take, and a provider's object
+        answers `repr` with whatever it likes. A message is display text that reaches a
+        terminal (`component.py`'s module docstring is entirely about this), so an escape
+        sequence in that `repr` is an instruction rather than a character — and a refusal
+        that could forge a second line is worse than the value it refuses."""
+        class _Forges:
+            def __repr__(self_):
+                return "harmless\x1b[2J\x1b[Hgone"
+
+        with self.assertRaises(component.ComponentError) as e:
+            _component(on_event=_Forges())
+        self.assertNotIn("\x1b[2J", str(e.exception))
+        self.assertIn("harmless", str(e.exception))
+
     def test_the_pair_together_is_accepted(self):
         c, _seen = _component()
         self.assertEqual(c.events, ("focus", "blur"))
@@ -182,11 +197,14 @@ class CharterDeliversThreeOfTheSixAndSaysWhich(unittest.TestCase):
         self.assertEqual(events.wanted(c), ())
 
     def test_a_handler_that_is_falsy_is_still_a_handler(self):
-        """`Component` accepts any callable, and a handler written as an instance of a
-        class rather than as a function may define a falsy `__bool__` or an empty
-        `__len__`. Asking truthiness here would give it no dispatcher at all — #607's
-        defect with a new spelling — so the question is `is not None`, which is the one
-        `Component`'s own validation asks."""
+        """`wanted` asks nothing about the handler now — `Component` refuses the pair apart,
+        so a component with none has no events either and the intersection is already `()`.
+
+        This case is what stops that check coming back. A handler written as an instance
+        with a falsy `__bool__` or an empty `__len__` is a callable `Component` accepts, and
+        any `if c.on_event:` reintroduced here would silently give it no dispatcher —
+        #607's defect with a new spelling. It went red for both spellings this branch
+        shipped before the sweep proved the second equivalent."""
         class _Falsy:
             def __bool__(self_):
                 return False
@@ -357,6 +375,20 @@ class ADispatcherTakesOnlyWhatItNeeds(unittest.TestCase):
         t = threading.Thread(target=lambda: (d.close(), done.set()), daemon=True)
         t.start()
         self.assertTrue(done.wait(5.0), "close() blocked draining a pane nobody reads")
+
+    def test_closing_a_path_that_was_never_opened_writes_nothing_to_the_pane(self):
+        """`close` guards on `_fd`, and without that guard a dispatcher that never opened
+        an input path would still write `\x1b[?1004l` into a pane that never asked for
+        reporting — a resize-only component's, or one whose pane is not a terminal. The
+        mode restore is harmless there; the write is not, because it is charter putting an
+        escape sequence into a rectangle a provider is drawing in."""
+        c, _seen = _component(events=("resize",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.assertFalse(d.reading)
+        d.close()
+        self.assertEqual(self.tty.sent(), b"",
+                         "close() spoke to a pane it had never opened")
 
     def test_close_is_idempotent(self):
         """Both callers are a `finally`, and one of them runs after a handler failure has
@@ -615,6 +647,40 @@ class AnEventReachesTheComponentThatOwnsThePane(unittest.TestCase):
                     self.assertFalse(d.poll(1.0))
                 self.assertTrue(d.reading, "a retryable read retired the input path")
                 self.assertIsNone(d.failure)
+
+    def test_a_descriptor_select_can_no_longer_ask_about_closes_the_path(self):
+        """`select` raises for a descriptor that has gone. Letting it escape would take the
+        exception out of `poll`, out of `_watch` and into `_run`'s catch, which paints
+        `panel stopped` and holds the pane — a refusal, for a pane that merely closed."""
+        c, _seen = _component(events=("focus",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        with mock.patch("charter.frame.events.select.select",
+                        side_effect=OSError(9, "Bad file descriptor")):
+            self.assertFalse(d.poll(0.1))
+        self.assertFalse(d.reading)
+
+    def test_the_other_spelling_of_end_of_input_is_the_same_answer(self):
+        """**"The other end is gone" has two spellings and this platform is not the one
+        that decides which.** `palette._reader`'s docstring records the measurement that
+        cost a red CI: closing a pty's far end answers `b""` on macOS and raises
+        `OSError: [Errno 5]` on Linux. The case below this one reaches the `b""` arm on a
+        macOS machine and would never reach the other, so a suite green twice over here
+        would still have been red on every Linux operator's machine.
+
+        Two survivors sat in `poll` and masked each other; this is the second of them.
+        """
+        c, _seen = _component(events=("focus",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        self.tty.deliver(b"\x1b[I")
+        with mock.patch("charter.frame.events.os.read",
+                        side_effect=OSError(5, "Input/output error")):
+            self.assertFalse(d.poll(1.0))
+        self.assertFalse(d.reading, "Linux's spelling of EOF left the path open")
+        self.assertIsNone(d.failure, "a closed pane is not a component's failure")
 
     def test_end_of_input_closes_the_path_and_does_not_end_the_panel(self):
         """The pane is still a rectangle this process can paint into. A panel that stopped
@@ -905,6 +971,38 @@ class ThePanelPaintsWhatTheEventChanged(unittest.TestCase):
              mock.patch("charter.frame.panel._rows", return_value=6):
             got = panel._component_text(object(), "acme.metrics", "f-1", evs=_Evs())
         self.assertNotIn("\x1b[2J", got)
+
+    def test_containing_after_the_width_arithmetic_silently_loses_the_reason(self):
+        """The sharp half of #472, and neither the escaping nor the width can show it —
+        which is exactly why this containment survived the sweep with two cases standing
+        over it.
+
+        `_fit` escapes every line on the way out, so "is the escape gone" is answered by
+        `_fit` whichever order the two run in. `_fit` also `tui.truncate`s every line to the
+        width, so "is any row too wide" can never fail either. What the ORDER decides is
+        where `_wrap` puts the line breaks, and getting that wrong DROPS TEXT. Measured, at
+        width 32, on `'stopped: ' + '\x1b[2J' * 3 + ' ENDMARK'`::
+
+            tui.width(raw) = 17      tui.width(contained) = 38
+            contain first  -> ('stopped: \\x1b[2J\\x1b[2J\\x1b[2J', 'ENDMARK')
+            contain second -> ('stopped: \\x1b[2J\\x1b[2J\\x1b[2J …',)
+
+        Contain second and `_wrap` sizes the escapes at nothing, packs the tail onto the
+        same row, and `_fit` then cuts what it cannot fit. `ENDMARK` is gone — and in a
+        real failure that tail is the exception's own message, the only part that says what
+        broke. `_wrap`'s own docstring makes the same argument about a word wider than the
+        pane: "the tail of a refusal is the half that says what to do about it".
+        """
+        class _Evs:
+            failure = "stopped: " + "\x1b[2J" * 3 + " ENDMARK"
+
+        with mock.patch("charter.frame.slots.content_width", return_value=32), \
+             mock.patch("charter.frame.slots.inset_rows", side_effect=lambda t, n: t), \
+             mock.patch("charter.frame.panel._rows", return_value=12):
+            got = panel._component_text(object(), "acme.metrics", "f-1", evs=_Evs())
+        self.assertNotIn("\x1b[2J", got)
+        self.assertIn("ENDMARK", got,
+                      "the tail was measured unescaped, packed onto one row, and cut")
 
     def test_a_component_still_taking_events_draws_its_own_rows(self):
         class _Evs:

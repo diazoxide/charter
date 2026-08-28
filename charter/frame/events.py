@@ -132,7 +132,6 @@ import select
 import termios
 import time
 
-from .. import contain
 from . import overlay, pane
 from .registry import _because
 
@@ -216,27 +215,27 @@ _CANNOT_SAY = (AttributeError, OSError, TypeError, ValueError, termios.error)
 def wanted(c) -> tuple[str, ...]:
     """The kinds charter will actually deliver to component *c*, in declared order.
 
-    The intersection of what it declared and what :data:`DELIVERED` says charter carries —
-    empty for a component with no handler, which `component.Component` already refuses to
-    build alongside a non-empty ``events``, and empty for one whose every declared kind is
-    a kind charter does not fire. That second emptiness is the one that matters: a
-    component declaring only ``click`` gets no dispatcher, so its pane's terminal is left
-    exactly as it was found.
+    The intersection of what it declared and what :data:`DELIVERED` says charter carries.
+    Empty for a component whose every declared kind is one charter does not fire, and that
+    emptiness is the one that matters: a component declaring only ``click`` gets no
+    dispatcher, so its pane's terminal is left exactly as it was found.
 
-    ``c.on_event`` rather than a ``getattr`` with a default: every `Component` carries the
-    field, so a default here would be a branch nothing can reach and no test can falsify —
-    which this project deletes rather than keeps (#568). What makes it unreachable is
-    itself pinned, by the case that asks a component declaring neither for its ``on_event``
-    and gets ``None``.
+    **It does not ask whether there is a handler, and the deleted check is why this
+    docstring is long.** Two versions of that guard shipped here — a ``getattr`` default,
+    then ``c.on_event is not None`` — and the sweep proved the second one equivalent on
+    `main`. Both were: `Component` refuses ``events`` without ``on_event`` and refuses
+    ``on_event`` without ``events``, so a component with no handler has no events either
+    and the intersection below is already ``()``. A branch that cannot change an outcome is
+    not documentation of an intent — it is a second, weaker answer to a question
+    `component.Component.__post_init__` has already answered (#568's argument, and the
+    sweep's own definition of a line that should not be there).
 
-    ``is not None`` rather than truthiness, which is the same question `Component`'s own
-    validation asks one module over. A callable object defining a falsy ``__bool__`` or an
-    empty ``__len__`` — a handler written as an instance of a class rather than as a
-    function — passes construction and would silently get no dispatcher here, which is
-    #607's defect with a new spelling.
+    What makes it unreachable is itself pinned, which is the condition for deleting rather
+    than keeping: `TheDeclarationAndTheHandlerAreOneThing` asks for the refusal in both
+    directions, so the day either half is relaxed, those cases go red here rather than this
+    function silently starting to matter.
     """
-    return tuple(k for k in c.events if k in DELIVERED) \
-        if c.on_event is not None else ()
+    return tuple(k for k in c.events if k in DELIVERED)
 
 
 class Dispatcher:
@@ -514,8 +513,14 @@ class Dispatcher:
         except KeyboardInterrupt:
             raise
         except BaseException as exc:
-            self._failure = (f"{contain.one_line(self._c.id)} stopped taking events — "
-                             f"{_because(exc)}")
+            # No `contain.one_line` on the id, and that is the sweep's verdict rather than
+            # an oversight: `Component.__post_init__` holds every id to `_ID_RE`
+            # (`[a-z0-9_.]`), so there is nothing here for it to contain and the call could
+            # not change an outcome. What the exception SAID is a different matter and
+            # `_because` contains it; and `panel._component_text` contains the whole line
+            # again before any width arithmetic touches it, which is the guard that has a
+            # consequence and a case behind it.
+            self._failure = f"{self._c.id} stopped taking events — {_because(exc)}"
             self.close()
             # True, so the pane repaints and says so on the very next tick rather than
             # whenever something else happens to move the frame's version.
