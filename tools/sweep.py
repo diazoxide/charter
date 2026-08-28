@@ -1246,6 +1246,28 @@ def _named(ids) -> str:
     return "; ".join(short[:3]) + (f" (+{len(short) - 3} more)" if len(short) > 3 else "")
 
 
+def run_dir(workdir: Path) -> Path:
+    """Where THIS run's sandboxes live — one directory per process.
+
+    :func:`workdir_for` gives one workdir per checkout, which is right for the trace cache
+    (content-addressed, so sharing it is the whole point) and wrong for the sandboxes. Two
+    sweeps of the same checkout — two agents on one box, or one person who forgot the first
+    run was still going — would otherwise apply mutations to each other's trees: each one
+    restoring a file the other was about to run against, and each one's verdicts about
+    bytes neither of them chose.
+
+    **Measured, on this file, by accident.** Two sweeps overlapped and 486 of 489 mutations
+    came back `unapplied` — the digest check refusing to produce a verdict from a tree it
+    did not recognise. That refusal is what made the collision visible at all; before it,
+    the same run would have printed a plausible table of pins and survivors. This is the
+    other half of that fix: the collision should not happen in the first place.
+
+    The cache stays shared. It is keyed by a hash of the tree, so two runs of one checkout
+    want exactly the same map and paying for it twice is pure loss.
+    """
+    return workdir / f"run-{os.getpid()}"
+
+
 class NotApplied(Exception):
     """The mutant tree is not a mutant. See :meth:`Sandbox.apply`."""
 
@@ -1580,7 +1602,7 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         return [], []
 
     log(f"  building {jobs} sandbox(es)…")
-    boxes = [Sandbox(root, workdir / f"w{i}", ref, dirty) for i in range(jobs)]
+    boxes = [Sandbox(root, run_dir(workdir) / f"w{i}", ref, dirty) for i in range(jobs)]
     for box in boxes:
         box.full_timeout = full_timeout
     free: list[Sandbox] = list(boxes)
@@ -2247,7 +2269,7 @@ def main(argv: list[str] | None = None) -> int:
     # The map is measured on a clean checkout of the ref, so that a mutation is the only
     # thing that ever differs from what was traced.
     log("  preparing the reference sandbox…")
-    ref_box = Sandbox(root, workdir / "ref", ref, dirty)
+    ref_box = Sandbox(root, run_dir(workdir) / "ref", ref, dirty)
     selection = load_map(ref_box.path, paths, cache_dir, args.jobs, args.refresh_map, log)
 
     baseline = None
@@ -2287,9 +2309,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(as_json(results))
     if not args.keep:
-        for child in workdir.glob("w*"):
-            shutil.rmtree(child, ignore_errors=True)
-        shutil.rmtree(workdir / "ref", ignore_errors=True)
+        # This run's sandboxes and no others. A `workdir.glob("w*")` here would delete a
+        # concurrent sweep's trees out from under it — the same collision `run_dir` exists
+        # to prevent, arriving at the end instead of the beginning.
+        shutil.rmtree(run_dir(workdir), ignore_errors=True)
     if not args.gate:
         return exit_code(results)
     gate = classify(results)

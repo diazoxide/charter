@@ -1906,6 +1906,25 @@ class AMutationThatNeverAppliedIsNotASurvivor(unittest.TestCase):
         self.assertIn("this edit did not happen", text)
         self.assertNotIn("Every mutation this diff offered goes red", text)
 
+    def test_two_sweeps_of_one_checkout_do_not_share_a_sandbox(self):
+        """The collision that produced the assertion's first real catch.
+
+        `workdir_for` gives one workdir per checkout, which is right for the trace cache
+        and wrong for the sandboxes: two sweeps of the same tree — two agents on one box,
+        or one person who forgot the first run was still going — would apply mutations to
+        each other's files. Measured on `tools/sweep.py` by accident: two overlapping runs
+        and 486 of 489 mutations came back `unapplied`, which is the digest check refusing
+        to answer about a tree it did not recognise. Before that check the same run would
+        have printed a plausible table of pins and survivors.
+        """
+        self.assertIn(str(os.getpid()), str(sweep.run_dir(Path("/w"))))
+        self.assertEqual(sweep.run_dir(Path("/w")).parent, Path("/w"))
+
+    def test_the_cache_is_still_shared_between_runs(self):
+        """Keyed by a hash of the tree, so two runs of one checkout want the same map and
+        paying for it twice is pure loss. Only the sandboxes are private."""
+        self.assertNotIn(str(os.getpid()), str(sweep.workdir_for(Path.cwd(), None)))
+
     def test_a_run_with_one_is_not_a_clean_exit(self):
         m = self._mutation()
         clean = [sweep.Result(m, "pinned", None, None, [])]
