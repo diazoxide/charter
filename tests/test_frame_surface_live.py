@@ -35,7 +35,7 @@ a refusal with no measurement behind it, on the one path where a refusal is invi
 from __future__ import annotations
 
 import os
-import re
+import pathlib
 import subprocess
 import unittest
 from unittest import mock
@@ -54,15 +54,30 @@ class TheSurfaceIsNotVersionGated(unittest.TestCase):
     has to delete this test and say which measurement it found.
     """
 
-    def test_neither_surface_builder_consults_the_tmux_version(self):
-        import inspect
-        for fn in (commands_frame._surface_argvs, commands_frame._resurface_argvs):
-            with self.subTest(fn=fn.__name__):
-                src = inspect.getsource(fn)
-                self.assertNotIn("version", src.split('"""')[-1],
-                                 f"{fn.__name__} grew a version gate — tmux 3.2 was "
-                                 f"measured identical to 3.7c, so a gate needs its own "
-                                 f"measurement")
+    def test_neither_surface_builder_needs_to_know_the_tmux_version(self):
+        """Asked as behaviour rather than as a grep of the source: with
+        `tmuxctl.version` raising, both builders still answer, because neither has any
+        reason to call it. A gate added later fails here on the exception."""
+        from charter.frame import tmuxctl
+        with mock.patch.object(tmuxctl, "version",
+                               side_effect=AssertionError("a version gate appeared — "
+                                                          "tmux 3.2 was measured "
+                                                          "identical to 3.7c, so a gate "
+                                                          "needs its own measurement")):
+            self.assertEqual(
+                len(commands_frame._surface_argvs(socket="s", pane_id="%3",
+                                                  chrome="dark")), 2)
+            self.assertEqual(
+                len(commands_frame._resurface_argvs(socket="s", pane_id="%3",
+                                                    chrome="off")), 2)
+
+    def test_the_version_control_can_actually_fire(self):
+        """The control for the test above: a builder that DID ask would fail there, so
+        this proves the patched `version` raises rather than being quietly unused."""
+        from charter.frame import tmuxctl
+        with mock.patch.object(tmuxctl, "version", side_effect=AssertionError("boom")):
+            with self.assertRaises(AssertionError):
+                tmuxctl.version()
 
     def test_the_floor_is_still_the_version_this_was_measured_against(self):
         """If the floor moves, the measurement above is about a version charter no
@@ -113,15 +128,30 @@ class TheRecordedSurfaceOverridesTheConfiguredOne(PersonaIso, unittest.TestCase)
         with mock.patch.dict(commands_frame.config.FRAME, {"chrome": ["dark"]}):
             self.assertEqual(commands_frame._current_chrome(self.FID), "off")
 
-    def test_an_unreadable_record_degrades_rather_than_raising(self):
-        """`_current_chrome` is called from `_split_panels`, which is on the launch
-        path: a truncated file must cost the surface, never the frame."""
+    def test_a_record_that_cannot_be_READ_degrades_rather_than_raising(self):
+        """`_current_chrome` is called from `_split_panels`, which is on the launch path:
+        a file charter cannot read must cost the surface, never the frame.
+
+        The READ is what fails here, not a stand-in for it. Patching `state.chrome` to
+        raise and then asserting that it raises is an assertion about the mock — the
+        version of this test that shipped first did exactly that and would have stayed
+        green with the `except OSError` deleted.
+        """
         state.record_chrome(self.FID, "dark")
-        with mock.patch.object(state, "chrome", side_effect=OSError("gone")):
-            with self.assertRaises(OSError):
-                state.chrome(self.FID)
-        # And the real reader, over a directory where the file cannot be read.
-        with mock.patch.dict(commands_frame.config.FRAME, {"chrome": "off"}):
+        real = pathlib.Path.read_text
+
+        def refuse(self_path, *a, **kw):
+            if self_path.name == "chrome":
+                raise OSError("unreadable")
+            return real(self_path, *a, **kw)
+
+        with mock.patch.object(pathlib.Path, "read_text", refuse):
+            self.assertIsNone(state.chrome(self.FID))
+            with mock.patch.dict(commands_frame.config.FRAME, {"chrome": "light"}):
+                self.assertEqual(commands_frame._current_chrome(self.FID), "light")
+        # And the control: with the read working, the record is what is used — so the
+        # assertion above is about the refusal and not about a fixture that never wrote.
+        with mock.patch.dict(commands_frame.config.FRAME, {"chrome": "light"}):
             self.assertEqual(commands_frame._current_chrome(self.FID), "dark")
 
 

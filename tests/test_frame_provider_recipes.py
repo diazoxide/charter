@@ -219,9 +219,8 @@ class NoColourReachesTheRecipesToo(unittest.TestCase):
         """Empty rather than ABSENT, and the difference is a provider's pane. A component
         writing `ctx.chrome["ok"] + text` would raise inside its own draw and lose its
         rectangle — to honour a request about colour."""
-        with mock.patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True), _tty():
-            with mock.patch.dict(os.environ, {}, clear=True), _tty():
-                live = set(chrome.recipes())
+        with mock.patch.dict(os.environ, {}, clear=True), _tty():
+            live = set(chrome.recipes())
         with mock.patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True), _tty():
             self.assertEqual(set(chrome.recipes()), live)
 
