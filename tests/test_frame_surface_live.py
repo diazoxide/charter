@@ -190,15 +190,24 @@ class TheTwoNewStateAccessorsRefuseRatherThanRaise(PersonaIso, unittest.TestCase
 
     def test_a_write_that_fails_is_a_surface_lost_and_not_an_exception(self):
         """`record_chrome` is called from `cmd_chrome`, which runs detached from a
-        palette row. A full disk there must cost the surface, not the command."""
-        real = pathlib.Path.write_text
+        palette row. A full disk there must cost the surface, not the command.
 
-        def refuse(self_path, *a, **kw):
-            if self_path.name == "chrome.tmp":
+        **Injected at `config.write_for`, not at `pathlib.Path.write_text`.** This case was
+        written against the latter, which pinned it to the writer's SPELLING rather than to
+        the must-not-raise property it is named for: routing `record_chrome` through the
+        state-file dispatch (#582) left the mock aimed at a call nobody makes, the write
+        succeeded, and the case went red having found nothing. `config.write_for` is what
+        `frame/state.py` depends on, so that is where a failing filesystem goes in — the
+        same repoint `test_frame_state` and `test_component_toggle_keys` needed.
+        """
+        real = state.config.write_for
+
+        def refuse(path, data):
+            if pathlib.Path(path).name == "chrome.tmp":
                 raise OSError("no space left on device")
-            return real(self_path, *a, **kw)
+            return real(path, data)
 
-        with mock.patch.object(pathlib.Path, "write_text", refuse):
+        with mock.patch.object(state.config, "write_for", refuse):
             state.record_chrome("fr-write-fails", "dark")
         # WHICH refusal: the write was attempted and refused, so nothing was recorded.
         self.assertIsNone(state.chrome("fr-write-fails"))

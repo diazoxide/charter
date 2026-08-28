@@ -109,6 +109,13 @@ this one was open, written the same way all the others were: a temp file at the 
 reported it, on the day it landed rather than on the day somebody remembered the list. It
 is routed here too.
 
+**And routing it moved a test, which is the other half worth knowing.** Three cases in the
+suite injected a failing filesystem by patching `pathlib.Path.write_text` — which pins a
+case to the writer's *spelling* rather than to the must-not-raise property it is named
+for. Once the writer goes through the dispatch, the mock is aimed at a call nobody makes,
+the write succeeds, and the case reddens having found nothing. All three inject at
+`config.write_for` now: what `frame/state.py` actually depends on.
+
 ## Two lines deleted, because the sweep found them and they were dead
 
 The deletion sweep reported three survivors on this diff, all pre-existing lines it
