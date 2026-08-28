@@ -615,6 +615,12 @@ gather grows.
 
 ## 4j. Many chats, many workspaces, many harnesses — settled 2026-08-26
 
+> **Superseded in three places by `docs/superpowers/specs/2026-08-28-phase5-workspace-and-chat-tabs.md`.**
+> The name is `{workspace}.{n}`, allocated, not `{workspace}-{hash}`; panels **follow the active
+> chat** rather than duplicating per chat; and the switch reasserts the layout rather than
+> leaving it to `select-window`. Each was changed by a measurement, quoted there. Everything
+> else below stands.
+
 The IDE holds **workspace tabs**, and under them **chat tabs**. Switching a workspace does not
 lose the chats open in it. Each chat picks its harness when it starts, so several harnesses run
 in parallel in one IDE.
@@ -804,8 +810,21 @@ naming, the harness-session record and tmux's own persistence already exist; wha
 holding several frames per workspace and the two tab bars, both of which are Phase 1 components
 and Phase 2 actions.
 
-**Exit test:** ten chats across three workspaces, switching between any two in one keystroke,
+**Specified in full, 2026-08-28:**
+`docs/superpowers/specs/2026-08-28-phase5-workspace-and-chat-tabs.md`, with the plan at
+`docs/superpowers/plans/2026-08-28-phase5-workspace-and-chat-tabs.md`. **That spec overrides §4j
+in three places**, each because a measurement on this machine said so: the name is allocated
+rather than hashed, panels follow the active chat rather than duplicating per chat, and the
+switch reasserts the layout rather than relying on a `window-resized` hook that does not exist
+at `tmuxctl.FLOOR`.
+
+**Exit test:** ten chats across three workspaces, switching between any two in **≤2 keystrokes**,
 nothing torn down, and the panel cost measured at 5 and 10 rather than assumed.
+
+**"One keystroke" was wrong and is corrected here.** A single dedicated key means `bind -n`,
+which is server-wide and takes that key from every harness in every window — the same reason
+`[frame] component` ships no default toggle key. Two keystrokes is the Phase 2 criterion and it
+is the right one.
 
 ### Phase 4 — the cross-repo change
 *The IDE's actual subject.*
