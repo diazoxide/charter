@@ -10,6 +10,10 @@ still passes has kept the property those rounds actually measured.
 from __future__ import annotations
 
 import ast
+import contextlib
+import dataclasses
+import hashlib
+import io
 import os
 import subprocess
 import sys
@@ -400,6 +404,291 @@ class TheConstantShape(unittest.TestCase):
 # ======================================================================================
 # Splicing — line numbers are the whole output of this tool
 # ======================================================================================
+
+class TheStringShape(unittest.TestCase):
+    """`retune-string` (#569): the value moved, every structural property held.
+
+    The spec declared this family a gap on the grounds that a string has no honest general
+    perturbation — "picking `1003` over `1000` for `MOUSE_ON` is fitting the answer key".
+    :func:`sweep.retune` is the answer: same length, same character classes, different
+    value, derived from the constant and from nothing else. Every case below asserts one
+    half of that — either that the value really moved, or that some structure really did
+    not.
+    """
+
+    def test_a_string_the_program_compares_is_retuned(self):
+        muts = _mutations("""
+            def f(answer):
+                if answer == "yes":
+                    return 1
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["'zft'"])
+
+    def test_the_mutant_is_the_same_length_and_the_same_character_classes(self):
+        """The whole justification for the operator. A perturbation that changed the
+        length, or turned a digit into a letter, would break f-string specs, regexes and
+        escape sequences — and a mutation that reddens the suite because the mutant no
+        longer *parses as its own kind of string* is a false pin."""
+        for shipped in ("\x1b[?1000h", "components", "{:<28}", "%s says", "a-b_c.d"):
+            moved = sweep.retune(shipped)
+            self.assertNotEqual(moved, shipped)
+            self.assertEqual(len(moved), len(shipped))
+            for a, b in zip(shipped, moved):
+                self.assertEqual((a.isdigit(), a.isupper(), a.islower(), a.isalnum()),
+                                 (b.isdigit(), b.isupper(), b.islower(), b.isalnum()),
+                                 f"{shipped!r} -> {moved!r} changed a character's class")
+
+    def test_the_terminal_escape_stays_a_terminal_escape(self):
+        """`MOUSE_ON` is the spec's own example of the string it could not mutate."""
+        self.assertEqual(sweep.retune("\x1b[?1000h"), "\x1b[?2111i")
+
+    def test_a_character_behind_a_backslash_is_left_alone(self):
+        """A raw `\\d` is one escape, not a backslash next to a letter. Shifting the `d`
+        makes `re.error: bad escape \\e`, which reddens the suite for a reason that has
+        nothing to do with the property — the definition of a false pin."""
+        self.assertEqual(sweep.retune(r"^Ran (\d+) tests?"), r"^Sbo (\d+) uftut?")
+
+    def test_a_string_with_nothing_to_move_offers_no_mutation(self):
+        muts = _mutations("""
+            def f(x):
+                return x.split("/")
+        """)
+        self.assertEqual(_by(muts, "retune-string"), [])
+
+    def test_a_docstring_is_prose_and_is_never_mutated(self):
+        muts = _mutations('''
+            MARK = "the mark"
+
+            def f():
+                """A docstring naming the mark, which is not a value anybody tests."""
+                return MARK
+        ''')
+        self.assertEqual(_afters(muts, "retune-string"), ["'uif nbsl'"])
+
+    def test_a_message_nobody_reads_back_is_not_a_read_position(self):
+        """The scoping half, and the honest one. A key, a pattern and a separator decide
+        what the program *does*; a log line decides what it *says*, and nothing in a suite
+        is obliged to assert it. Measured on `charter/`: mutating every string took the
+        tree from 7,006 mutations to 14,801 and spent the difference on prose."""
+        muts = _mutations("""
+            def f(log, d):
+                log("could not reach the vault")
+                return d["session"]
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["'tfttjpo'"])
+
+    def test_a_member_of_a_module_table_is_read_through_the_lookup_and_not_at_the_table(self):
+        """The value of a module-level `NAME = "…"` is a claim — `MOUSE_ON` and `_MARK` are
+        two of round two's five findings and both are scalars. Every string inside a
+        container assigned to an upper-case name is not: measured on `charter/`, walking
+        into containers takes the read positions from 2,826 to 4,065, and what those 1,239
+        extra mutations ask for is a test per member of every membership table in the tree.
+        Where a member genuinely decides something, the lookup that reads it is a read
+        position on its own."""
+        muts = _mutations("""
+            MARK = "seen"
+            NAMES = ("alpha", "beta")
+
+            def f(x):
+                return x in NAMES
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["'tffo'"])
+
+    def test_every_read_position_is_reached(self):
+        muts = _mutations("""
+            MARK = "alpha"
+
+            def f(d, s, name):
+                a = d["key"]
+                b = d.get("other")
+                c = {"third": 1}
+                e = s.startswith("pre")
+                g = " and ".join(name)
+                h = "%s!" % name
+                return a, b, c, e, g, h, MARK
+        """)
+        self.assertEqual(
+            sorted(_afters(muts, "retune-string")),
+            sorted(["'bmqib'", "'lfz'", "'puifs'", "'uijse'", "'qsf'", "' boe '",
+                    "'%t!'"]))
+
+    def test_the_width_literal_inside_an_fstring_is_reached(self):
+        """#508's defect exactly: `f"{name:<28}"`, a layout claim with nothing measuring
+        it, which had to be hand-checked because this operator did not exist. The segment's
+        span carries no quotes, so the splice is raw text and `span_is_sound` proves the
+        round-trip a different way — the bytes at the span ARE the characters of the value.
+        """
+        muts = _mutations("""
+            def f(name):
+                return f"{name:<28}"
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["<39"])
+
+    def test_an_fstring_segment_whose_source_is_not_its_value_is_refused(self):
+        """`{{` is two source characters and one value character, so a raw splice at that
+        span would replace bytes the mutation cannot describe. Refused rather than guessed
+        at — the same rule as every other unsound span."""
+        muts = _mutations("""
+            MARK = f"a{{b}}c{0:<28}"
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["<39"])
+
+    def test_a_bytes_constant_is_retuned_as_bytes(self):
+        muts = _mutations("""
+            def f(ch):
+                return ch == b"\\x03q"
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["b'\\x03r'"])
+
+
+class TheBoundaryShape(unittest.TestCase):
+    """`shift-boundary` (#569): `<` against `<=`, and nothing else moved.
+
+    The general half of the near-synonym family. Two comparisons that accept the same
+    values one number apart, so the mutant always runs and asks exactly one question — is
+    the EDGE pinned, or only the direction? `drop-if` cannot ask it: a test that never
+    approaches the edge answers "yes, the refusal exists" perfectly well.
+    """
+
+    def test_a_strict_comparison_is_offered_one_notch_wider(self):
+        muts = _mutations("""
+            def _window(sel, top):
+                if sel < top:
+                    return sel
+                return top
+        """)
+        self.assertEqual(_afters(muts, "shift-boundary"), ["(sel) <= (top)"])
+
+    def test_an_inclusive_comparison_is_offered_one_notch_narrower(self):
+        muts = _mutations("""
+            def f(n, cap):
+                return n <= cap
+        """)
+        self.assertEqual(_afters(muts, "shift-boundary"), ["(n) < (cap)"])
+
+    def test_a_chain_moves_one_link_and_respells_the_rest(self):
+        """`0 <= i < n` is ONE node. Moving one link means writing the whole chain back
+        out, and a link this tool could not spell would vanish from the mutant — an edit
+        that is not the edit the report describes."""
+        muts = _mutations("""
+            def f(i, n):
+                return 0 <= i < n
+        """)
+        self.assertEqual(sorted(_afters(muts, "shift-boundary")),
+                         ["(0) < (i) < (n)", "(0) <= (i) <= (n)"])
+
+    def test_a_link_that_is_not_a_boundary_is_carried_through_untouched(self):
+        muts = _mutations("""
+            def f(a, b, c):
+                return a < b == c
+        """)
+        self.assertEqual(_afters(muts, "shift-boundary"), ["(a) <= (b) == (c)"])
+
+    def test_every_comparison_operator_python_has_is_spelled(self):
+        """`CMP_TEXT` is subscripted directly, with no fallback, so an operator missing
+        from it would be a `KeyError` in the middle of a sweep. There is no runtime guard
+        for that — a guard nothing can reach is a line this tool would delete — so the
+        completeness lives here, where it fails on the day Python grows an eleventh
+        comparison rather than the day somebody's sweep crashes."""
+        self.assertEqual(set(ast.cmpop.__subclasses__()), set(sweep.CMP_TEXT))
+
+    def test_equality_is_not_a_boundary(self):
+        """`!=` is the negation of `==`, not a near-synonym of it, and inverting a whole
+        condition is a coarser question this table does not ask."""
+        muts = _mutations("""
+            def f(a):
+                return a == 3
+        """)
+        self.assertEqual(_by(muts, "shift-boundary"), [])
+
+
+class TheSynonymShape(unittest.TestCase):
+    """`swap-synonym` and `drop-normalise` (#569): one documented axis, moved.
+
+    Each pair in :data:`sweep.SYNONYMS` is two standard-library names that do the same job
+    and differ along exactly one axis, so the mutant is type-correct by construction and a
+    red means a test noticed the AXIS rather than a test noticing a crash. Nothing
+    charter-specific is in the table — the same discipline as `NARROW_TO`.
+    """
+
+    def test_a_case_fold_is_swapped_for_its_opposite(self):
+        muts = _mutations("""
+            def f(name):
+                return name.lower()
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"), ["name.upper"])
+
+    def test_an_anchor_is_swapped_end_for_end(self):
+        muts = _mutations("""
+            def f(name):
+                return name.startswith("x")
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"), ["name.endswith"])
+
+    def test_an_ordering_is_asked_about_by_dropping_it(self):
+        muts = _mutations("""
+            def f(xs):
+                return sorted(xs)
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"), ["list"])
+
+    def test_a_call_whose_swap_would_be_a_type_error_is_not_offered(self):
+        """`sorted(xs, key=f)` -> `list(xs, key=f)` raises `TypeError`, which reddens the
+        suite for a reason that has nothing to do with the ordering. That is a FALSE PIN,
+        and a false pin is the failure this whole file exists to prevent — so the operator
+        declines rather than scoring a point it did not earn."""
+        muts = _mutations("""
+            def f(xs, key):
+                return sorted(xs, key=key)
+        """)
+        self.assertEqual(_by(muts, "swap-synonym"), [])
+
+    def test_a_normalisation_is_dropped_to_its_receiver(self):
+        """#572's own shape: the map keys were `resolve()`d on both sides and the prefix
+        that chose them was not. A test whose paths carry no symlink cannot tell the
+        mutant from the shipped line, which is exactly what the sweep should say."""
+        muts = _mutations("""
+            def f(p):
+                return p.resolve()
+        """)
+        self.assertEqual(_afters(muts, "drop-normalise"), ["p"])
+
+    def test_a_normalisation_with_arguments_is_left_alone(self):
+        muts = _mutations("""
+            def f(p):
+                return p.resolve(strict=True)
+        """)
+        self.assertEqual(_by(muts, "drop-normalise"), [])
+
+    def test_every_pair_in_the_table_names_the_one_axis_it_moves(self):
+        """The table is the justification. A pair with no axis written down is a swap
+        somebody liked the look of, and that is how this becomes a general-purpose mutation
+        engine that reddens code for reasons nobody can read."""
+        for name, (other, axis) in sweep.SYNONYMS.items():
+            self.assertTrue(axis and isinstance(axis, str), name)
+            self.assertNotEqual(name, other)
+
+
+class TheNonDecimalConstantShape(unittest.TestCase):
+    """An integer written in base 8 or 16 was written that way because its digits matter."""
+
+    def test_a_permission_is_moved_by_one_and_stays_octal(self):
+        muts = _mutations("""
+            def f(p):
+                p.chmod(0o600)
+        """)
+        self.assertEqual(_afters(muts, "retune-constant"), ["0o601"])
+
+    def test_a_decimal_literal_in_the_same_position_is_not_retuned(self):
+        """Every `0`, `1` and `2` index in the tree would otherwise become a mutation. The
+        thresholds that matter are reached by `shift-boundary` instead, which asks the same
+        question of `x > 28` without asking it of `xs[0]`."""
+        muts = _mutations("""
+            def f(p):
+                p.chmod(384)
+        """)
+        self.assertEqual(_by(muts, "retune-constant"), [])
+
 
 class TheSplicePreservesEveryLineNumber(unittest.TestCase):
     def test_a_deleted_multi_line_statement_leaves_the_rest_where_it_was(self):
@@ -1447,6 +1736,650 @@ class ThereIsNoSuppressionList(unittest.TestCase):
         for forbidden in ("suppress", "ignore_list", "allowlist", "equivalent",
                           "nosweep", "skip_mutation", "exclusions"):
             self.assertNotIn(forbidden, names, f"a suppression hatch named {forbidden}")
+
+
+class _Refusing:
+    """A sandbox whose `apply` refuses, so `decide` can be asked what it does about it."""
+
+    def __init__(self, why="the mutant is byte-identical to the tree it replaces"):
+        self.why = why
+        self.subset_calls = 0
+        self.full_calls = 0
+
+    def clean_failures(self, modules):
+        return frozenset()
+
+    def apply(self, m):
+        raise sweep.NotApplied(self.why)
+
+    def restore(self):
+        pass
+
+    def subset(self, modules):        # pragma: no cover - never reached, and that is the point
+        self.subset_calls += 1
+        return sweep.Outcome(True, 9, "OK")
+
+    def full(self):                   # pragma: no cover - same
+        self.full_calls += 1
+        return sweep.Outcome(True, 9, "OK")
+
+
+class AMutationThatNeverAppliedIsNotASurvivor(unittest.TestCase):
+    """The fifth way a sweep lies (#586), closed by construction.
+
+    The edit does not match, so the "mutant" tree is the UNMUTATED tree, the suite passes,
+    and the guard is reported as a survivor. It is the only one of the five that errs
+    toward *more* work rather than less, and it is the one that ends adoption: somebody
+    writes a test for a line already covered, finds out, and stops believing the tool.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sweep-applied-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp,
+                                                            ignore_errors=True))
+        (self.tmp / "charter").mkdir()
+        (self.tmp / "charter" / "m.py").write_bytes(b"def f(x):\n    if x:\n        return 1\n")
+        self.box = sweep.Sandbox.__new__(sweep.Sandbox)
+        self.box.path = self.tmp
+        self.box._pristine = {}
+        self.box._clean_failures = {}
+
+    def _mutation(self, **over):
+        source = (self.tmp / "charter" / "m.py").read_bytes()
+        m = _mutations(source.decode())[0]
+        return dataclasses.replace(m, path="charter/m.py", **over)
+
+    def test_a_mutant_identical_to_the_tree_is_refused_rather_than_run(self):
+        pristine = (self.tmp / "charter" / "m.py").read_bytes()
+        m = self._mutation(source=pristine,
+                           origin=hashlib.sha256(pristine).hexdigest())
+        with self.assertRaises(sweep.NotApplied):
+            self.box.apply(m)
+
+    def test_a_sandbox_holding_a_different_file_is_refused(self):
+        """A mutation carries a digest of the file it was READ FROM. A sandbox at another
+        ref, or one an earlier restore did not undo, fails here rather than producing a
+        verdict about bytes nobody looked at."""
+        m = self._mutation(source=b"x = 1\n", origin="0" * 64)
+        with self.assertRaises(sweep.NotApplied) as caught:
+            self.box.apply(m)
+        self.assertIn("not the file the mutation was read from", str(caught.exception))
+
+    def test_the_mutation_that_does_apply_is_written_and_can_be_undone(self):
+        pristine = (self.tmp / "charter" / "m.py").read_bytes()
+        m = self._mutation(source=b"def f(x):\n    pass\n",
+                           origin=hashlib.sha256(pristine).hexdigest())
+        self.box.apply(m)
+        self.assertEqual((self.tmp / "charter" / "m.py").read_bytes(),
+                         b"def f(x):\n    pass\n")
+        self.box.restore()
+        self.assertEqual((self.tmp / "charter" / "m.py").read_bytes(), pristine)
+
+    def test_every_mutation_this_tool_offers_carries_the_digest_of_its_own_source(self):
+        source = b"def f(x):\n    if x:\n        return 1\n"
+        for m in sweep.mutations_for("charter/m.py", source, {1, 2, 3}):
+            self.assertEqual(m.origin, hashlib.sha256(source).hexdigest())
+
+    def test_decide_calls_it_unapplied_and_never_survived(self):
+        box = _Refusing()
+        verdict, subset, full = sweep.decide(box, _mutations("x = 1\n")[0] if False
+                                             else self._mutation(), ["tests.test_a"])
+        self.assertEqual(verdict, "unapplied")
+        self.assertIsNone(full)
+        self.assertFalse(subset.conclusive)
+        self.assertEqual(box.full_calls, 0)
+
+    def test_the_report_says_so_in_its_own_section(self):
+        m = self._mutation()
+        r = sweep.Result(m, "unapplied",
+                         sweep.Outcome(False, 0, "this edit did not happen",
+                                       conclusive=False), None, [])
+        text = sweep.report([r], self.tmp, "a" * 12, "b" * 12, None, 1.0)
+        self.assertIn("NOT APPLIED", text)
+        self.assertIn("this edit did not happen", text)
+        self.assertNotIn("Every mutation this diff offered goes red", text)
+
+    def test_a_run_with_one_is_not_a_clean_exit(self):
+        m = self._mutation()
+        clean = [sweep.Result(m, "pinned", None, None, [])]
+        self.assertEqual(sweep.exit_code(clean), 0)
+        self.assertEqual(sweep.exit_code(clean + [sweep.Result(m, "unapplied", None,
+                                                               None, [])]), 4)
+
+
+# ======================================================================================
+# Stage C — the gate
+# ======================================================================================
+
+def _result(verdict, path="charter/a.py", line=1, symbol="f", operator="drop-if",
+            before="if x:\n    return", evidence=None):
+    m = sweep.Mutation(path=path, line=line, end_line=line, operator=operator,
+                       question="is the refusal pinned?", before=before, after="",
+                       symbol=symbol)
+    return sweep.Result(m, verdict, None, sweep.Outcome(True, 10, "OK"), ["tests.test_a"],
+                        evidence)
+
+
+class TheGateSortsSurvivorsIntoWhatItMayActOn(unittest.TestCase):
+    """Three categories stage A already knows, kept apart because the responses differ.
+
+    Collapsing any two of them is how this gate gets switched off inside a week — most of
+    all the platform one, because a gate that fails a pull request for a clause the
+    runner's kernel cannot reach deserves to be disabled.
+    """
+
+    def test_a_lone_survivor_is_unpinned_and_actionable(self):
+        gate = sweep.classify([_result("survived")])
+        self.assertEqual(len(gate.unpinned), 1)
+        self.assertEqual(gate.masked, [])
+        self.assertEqual(len(gate.actionable), 1)
+
+    def test_two_survivors_in_one_function_are_a_masked_cluster(self):
+        """Two guards in sequence mask each other, so neither is safe to call equivalent
+        on its own. Still actionable — more so — but read together, which is why it is its
+        own bucket rather than a note on a row."""
+        gate = sweep.classify([_result("survived", line=1), _result("survived", line=9)])
+        self.assertEqual(gate.unpinned, [])
+        self.assertEqual(len(gate.masked), 2)
+        self.assertEqual(len(gate.actionable), 2)
+
+    def test_a_platform_survivor_is_deferred_and_never_actionable(self):
+        gate = sweep.classify([_result("survived", operator="narrow-except",
+                                       before="OSError")])
+        self.assertEqual(len(gate.platform), 1)
+        self.assertEqual(gate.actionable, [])
+
+    def test_two_platform_survivors_in_one_function_stay_platform(self):
+        """The platform question is asked first, and it has to be: a clause the kernel
+        never enters is unreachable whether or not a second one sits beside it, and
+        promoting the pair to a masked cluster would fail the gate on exactly the finding
+        it is not allowed to fail on."""
+        gate = sweep.classify([_result("survived", operator="narrow-except",
+                                       before="OSError", line=n) for n in (1, 9)])
+        self.assertEqual(len(gate.platform), 2)
+        self.assertEqual(gate.actionable, [])
+
+    def test_unresolved_and_unapplied_and_pinned_are_their_own_answers(self):
+        gate = sweep.classify([_result("unresolved"), _result("unapplied"),
+                               _result("pinned"), _result("pinned")])
+        self.assertEqual((len(gate.unresolved), len(gate.unapplied), gate.pinned),
+                         (1, 1, 2))
+        self.assertEqual(gate.actionable, [])
+
+
+class TheGateBlocksNothingUntilItIsToldTo(unittest.TestCase):
+    """The spec's staging argument, applied to the gate's own credibility.
+
+    "A gate whose baseline nobody has seen gets disabled the first time it is
+    inconvenient." So the first version of this job reports its numbers and blocks
+    nothing, and `--enforce` is the single flag that changes that.
+    """
+
+    def test_a_survivor_does_not_fail_a_reporting_run(self):
+        gate = sweep.classify([_result("survived")])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=False), 0)
+
+    def test_the_same_survivor_fails_an_enforcing_run(self):
+        gate = sweep.classify([_result("survived")])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=True), 1)
+
+    def test_a_platform_survivor_passes_even_when_enforcing(self):
+        gate = sweep.classify([_result("survived", operator="narrow-except",
+                                       before="OSError")])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=True), 0)
+
+    def test_an_unmeasured_mutation_is_its_own_exit_code_and_not_a_pass(self):
+        """A timeout is not a red and not a survivor. Under load this repository hits it
+        repeatedly, and "I could not look" must never render as "nothing to see"."""
+        gate = sweep.classify([_result("unresolved"), _result("pinned")])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=True), 3)
+
+    def test_a_mutation_that_never_applied_outranks_everything(self):
+        gate = sweep.classify([_result("unapplied"), _result("survived"),
+                               _result("unresolved")])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=True), 4)
+
+    def test_a_clean_branch_passes_either_way(self):
+        gate = sweep.classify([_result("pinned")])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=False), 0)
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=True), 0)
+
+
+class TheGateSaysWhatTheCoveringTestsAssert(unittest.TestCase):
+    """The field that made 82 survivors triageable rather than merely alarming.
+
+    `release.yml`'s `-z "$claimed"` refusal (#558) is why: deleting it left the run still
+    exiting 1, for a different reason. So the honest first question about a survivor is
+    "did my test look closely enough", and nobody can answer that from a line number.
+    """
+
+    def test_a_survivor_carries_the_assertions_that_were_supposed_to_hold_it(self):
+        ev = sweep.Evidence(["tests.test_a"],
+                            [("tests.test_a", "test_it_refuses",
+                              ["self.assertEqual(f(None), [])"])])
+        gate = sweep.classify([_result("survived", evidence=ev)])
+        text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("test_it_refuses", text)
+        self.assertIn("self.assertEqual(f(None), [])", text)
+
+    def test_a_symbol_no_covering_test_names_is_said_plainly(self):
+        ev = sweep.Evidence(["tests.test_a", "tests.test_b"], [])
+        gate = sweep.classify([_result("survived", evidence=ev)])
+        text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("not one names", text)
+
+    def test_a_file_nothing_executes_is_said_plainly_too(self):
+        gate = sweep.classify([_result("survived", evidence=sweep.Evidence([], []))])
+        text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("nothing measured executes this file", text)
+
+    def test_the_three_categories_are_headed_separately(self):
+        gate = sweep.classify([
+            _result("survived", path="charter/a.py"),
+            _result("survived", path="charter/b.py", line=1),
+            _result("survived", path="charter/b.py", line=9),
+            _result("survived", path="charter/c.py", operator="narrow-except",
+                    before="OSError"),
+            _result("unresolved", path="charter/d.py")])
+        text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
+        for heading in ("### Unpinned", "### Masked cluster",
+                        "### Platform-deferred", "### Unresolved"):
+            self.assertIn(heading, text)
+
+    def test_a_reporting_run_says_on_the_page_that_it_blocks_nothing(self):
+        gate = sweep.classify([_result("survived")])
+        self.assertIn("Reporting only",
+                      sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False))
+        self.assertNotIn("Reporting only",
+                         sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=True))
+
+    def test_a_run_with_an_unapplied_mutation_says_to_read_nothing_else(self):
+        gate = sweep.classify([_result("unapplied"), _result("survived")])
+        text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("until this is zero", text)
+
+    def test_a_clean_branch_says_so(self):
+        text = sweep.gate_summary(sweep.classify([_result("pinned")]),
+                                  "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("Nothing added here is a line the suite would not miss", text)
+
+
+class TheGateNeverChargesTheWholeTree(unittest.TestCase):
+    def test_gate_and_all_together_are_refused(self):
+        """Stage B is a fourteen-hour job and stage C is a pull-request check. Letting the
+        two be asked for at once is how the gate becomes the reason nobody runs either."""
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said), self.assertRaises(SystemExit):
+            sweep.main(["--gate", "--all"])
+        self.assertIn("never sweeps the whole tree", said.getvalue())
+
+
+# ======================================================================================
+# The CLI's own rules — extracted so they can be swept at all
+# ======================================================================================
+
+class ARuleInsideMainCannotBeSwept(unittest.TestCase):
+    """#572's structural lesson, applied to the rest of the CLI.
+
+    `workdir_for` had to come out of `main()` before the bug that made this tool unusable
+    on macOS could be pinned: a rule inside `main()` is not reachable from a test, so it
+    cannot be swept, so it is a guard the harness is structurally unable to hold itself to.
+    The self-sweep's "renderer + CLI, ~0 of 49" row is what that hazard looks like at scale.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sweep-cli-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp,
+                                                            ignore_errors=True))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                   GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=self.tmp, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        self.run = run
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        (self.tmp / "charter").mkdir()
+        (self.tmp / "charter" / "m.py").write_text("a = 1\n")
+        run("add", "-A")
+        run("commit", "-qm", "one")
+        self.first = sweep.git("rev-parse", "HEAD", cwd=self.tmp).strip()
+        run("checkout", "-q", "-b", "side")
+        (self.tmp / "charter" / "m.py").write_text("a = 1\nb = 2\n")
+        run("add", "-A")
+        run("commit", "-qm", "two")
+        self.side = sweep.git("rev-parse", "HEAD", cwd=self.tmp).strip()
+        run("checkout", "-q", "main")
+        (self.tmp / "charter" / "other.py").write_text("z = 9\n")
+        run("add", "-A")
+        run("commit", "-qm", "main moved on")
+        self.main_tip = sweep.git("rev-parse", "HEAD", cwd=self.tmp).strip()
+
+    def test_a_branch_is_charged_against_the_merge_base_and_not_the_tip(self):
+        """A branch is answerable for what IT added, never for what main gained while it
+        was open. Charging against the tip would hand every long-lived branch a diff full
+        of somebody else's lines."""
+        self.assertEqual(sweep.base_for(self.tmp, self.side, None), self.first)
+
+    def test_an_explicit_base_is_resolved_to_a_commit(self):
+        self.assertEqual(sweep.base_for(self.tmp, self.side, "main"), self.main_tip)
+
+    def test_uncommitted_work_is_carried_only_when_the_sweep_is_about_the_working_tree(self):
+        """`--ref HEAD` means "what I have here". Any other ref names a specific historical
+        tree, and pouring today's uncommitted files into it would sweep a tree that has
+        never existed."""
+        (self.tmp / "charter" / "dirty.py").write_text("q = 1\n")
+        self.assertIn("charter/dirty.py", sweep.dirty_for(self.tmp, ("charter",), "HEAD"))
+        self.assertEqual(sweep.dirty_for(self.tmp, ("charter",), self.first), {})
+
+    def test_the_full_suite_cap_is_taken_from_this_machines_own_baseline(self):
+        """Measured at a load average of 100: a five-minute suite ran past the fixed
+        forty-minute cap and two known-unpinned guards came back "pinned" on the strength
+        of a stopwatch. Six times the measured run, and never below the floor."""
+        self.assertEqual(sweep.timeout_for(1.0), sweep.FULL_TIMEOUT)
+        self.assertEqual(sweep.timeout_for(sweep.FULL_TIMEOUT), sweep.FULL_TIMEOUT * 6)
+
+    def test_the_exit_code_separates_a_survivor_from_a_mutation_nobody_measured(self):
+        m = sweep.Mutation("charter/a.py", 1, 1, "drop-if", "q?", "if x: pass", "", "f")
+        self.assertEqual(sweep.exit_code([sweep.Result(m, "pinned", None, None, [])]), 0)
+        self.assertEqual(sweep.exit_code([sweep.Result(m, "survived", None, None, [])]), 1)
+        self.assertEqual(sweep.exit_code([sweep.Result(m, "unresolved", None, None, [])]),
+                         3)
+
+
+# ======================================================================================
+# The operator table's own guards
+# ======================================================================================
+
+class TheOperatorTableHoldsItsOwnEdges(unittest.TestCase):
+    """The rows the self-sweep found unpinned in `_iter_operators` and its helpers.
+
+    "The operator table decides verdicts" — an unpinned line here does not mislead a
+    reviewer about one guard, it silently changes which questions the tool asks of every
+    branch that follows.
+    """
+
+    def test_a_statement_that_is_not_alone_in_its_block_is_deleted_and_not_passed(self):
+        """`_drop_statement` chooses between deleting and `pass`, and BOTH arms have to be
+        held: collapsing it to `"pass"` leaves a mutant that still refuses (a false pin),
+        and collapsing it to `""` is caught only by a fallback two functions away."""
+        muts = _mutations("""
+            def f(x):
+                if x:
+                    return 1
+                return 2
+        """)
+        self.assertEqual(_afters(muts, "drop-if"), [""])
+
+    def test_a_refusal_inside_an_else_block_is_found_through_the_orelse(self):
+        """`_body_of` looks in `body`, `orelse` AND `finalbody`. A version that knew only
+        `body` would call this the sole statement of its block and replace it with `pass`
+        — a mutant that still refuses, reported as a deletion."""
+        muts = _mutations("""
+            def f(x, y):
+                if x:
+                    y = 1
+                else:
+                    if y:
+                        return 3
+                    return 4
+        """)
+        self.assertEqual(_afters(muts, "drop-if"), [""])
+
+    def test_a_refusal_in_a_block_this_tool_cannot_name_is_still_offered(self):
+        """`_body_of` returns `None` for a block shape it does not know — a `match` case is
+        one — and the `or []` behind it is what stops that being a `TypeError` in the
+        middle of somebody's sweep. Without the fallback this file does not even mutate."""
+        muts = _mutations("""
+            def f(x, y):
+                match x:
+                    case 1:
+                        if y:
+                            return 3
+        """)
+        self.assertEqual(_afters(muts, "drop-if"), ["pass"])
+
+    def test_the_innermost_enclosing_function_is_the_one_reported(self):
+        """`_enclosing` picks the SMALLEST span containing the node, and the symbol is what
+        the selection map is keyed by. Reporting the outer name sends the mutation to the
+        modules that exercise the wrapper and not the ones that exercise the helper."""
+        muts = _mutations("""
+            def outer(x):
+                def inner(y):
+                    if y:
+                        return 1
+                return inner(x)
+        """)
+        self.assertEqual([m.symbol for m in _by(muts, "drop-if")], ["inner"])
+
+    def test_a_statement_at_module_scope_is_not_attributed_to_a_function(self):
+        muts = _mutations("""
+            def f(y):
+                return y
+
+            if f:
+                pass
+        """)
+        self.assertEqual([m.symbol for m in _by(muts, "drop-if")], ["<module>"])
+
+    def test_an_annotated_module_constant_is_retuned_like_any_other(self):
+        muts = _mutations("""
+            WIDTH: int = 28
+        """)
+        self.assertEqual(_afters(muts, "retune-constant"), ["29"])
+
+    def test_a_constant_built_with_anything_but_addition_offers_no_term_to_drop(self):
+        """`drop-term` asks "is every term pinned?", which only means something for a sum.
+        Dropping a factor of a product is a different and much larger question."""
+        muts = _mutations("""
+            SPAN = ROWS * COLS
+        """)
+        self.assertEqual(_by(muts, "drop-term"), [])
+
+    def test_a_get_with_no_default_and_no_fallback_is_left_alone(self):
+        """`d.get(k)` on its own is not a fallback this tool knows how to remove — the
+        two spellings it does know are `d.get(k) or ()` and `d.get(k, v)`. Mutating the
+        bare form would report a question the operator table never asked."""
+        muts = _mutations("""
+            def f(d, k):
+                d.get(k)
+                return 1
+        """)
+        self.assertEqual(_by(muts, "no-fallback"), [])
+
+    def test_an_empty_dict_is_an_empty_literal_like_the_other_three(self):
+        muts = _mutations("""
+            def f(a):
+                return a or {}
+        """)
+        self.assertEqual(_afters(muts, "no-fallback"), ["a"])
+
+    def test_a_file_that_does_not_parse_offers_nothing_rather_than_raising(self):
+        """A sweep runs over whatever the branch contains, including a file mid-edit."""
+        self.assertEqual(sweep.mutations_for("charter/x.py", b"def (:\n", {1}), [])
+
+    def test_a_mutation_whose_result_would_not_parse_is_dropped(self):
+        """`disable-branch` rewrites a test to `True`/`False`, and the parse check is what
+        stops a shape whose replacement is not a legal expression from being offered."""
+        muts = _mutations("""
+            def f(x):
+                if x:
+                    return 1
+                elif x > 2:
+                    return 2
+                else:
+                    return 3
+        """)
+        for m in muts:
+            ast.parse(m.source)
+
+    def test_an_elif_is_never_offered_for_deletion_because_its_span_is_not_a_statement(self):
+        """The `elif` keyword is part of the enclosing `if`'s source, so an `elif` node's
+        span does not re-parse into itself. `span_is_sound` refuses it and the branch is
+        asked about with `disable-branch` instead — which is the same question, spelled so
+        that the mutant is still a legal file."""
+        muts = _mutations("""
+            def f(x):
+                if x == 1:
+                    return 1
+                elif x == 2:
+                    return 2
+                else:
+                    return 3
+        """)
+        self.assertEqual([m.line for m in _by(muts, "drop-if")], [])
+        self.assertIn(4, [m.line for m in _by(muts, "disable-branch")])
+
+    def test_the_same_edit_offered_twice_is_reported_once(self):
+        """Several rows of the table recognise the same node, and a mutation listed twice
+        is a run paid for twice and a survivor a reviewer reads as two findings."""
+        muts = _mutations("""
+            def f(a, b):
+                if isinstance(a, str) and b:
+                    return 1
+        """)
+        keys = [(m.line, m.operator, m.after) for m in muts]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_a_replacement_identical_to_what_is_there_is_not_a_mutation(self):
+        muts = _mutations("""
+            def f(a):
+                try:
+                    return a
+                except ZeroDivisionError:
+                    return None
+        """)
+        self.assertEqual(_by(muts, "narrow-except"), [])
+
+    def test_a_splice_that_adds_lines_does_not_lose_the_ones_below_it(self):
+        """`max(0, lost)` in `_Spans.splice`: a replacement with MORE newlines than the
+        span it replaces has nothing to pad, and padding by a negative count would be a
+        `bytes * -1` — silently the empty string, and every line below renumbered."""
+        source = b"a = 1\nb = (2)\nc = 3\n"
+        sp = sweep._Spans(source)
+        tree = ast.parse(source)
+        node = tree.body[1].value
+        spliced = sp.splice(node, "(\n4\n)")
+        self.assertEqual(spliced.decode().splitlines()[-1], "c = 3")
+        self.assertEqual(ast.parse(spliced).body[-1].lineno, 5)
+
+    def test_two_mutations_that_add_lines_still_compose(self):
+        source = b"def f(a, b):\n    x = (a)\n    y = (b)\n    return x, y\n"
+        sp = sweep._Spans(source)
+        tree = ast.parse(source)
+        first, second = tree.body[0].body[0].value, tree.body[0].body[1].value
+        pair = (sweep.Mutation("m.py", 2, 2, "t", "q", "(a)", "(\na\n)", "f",
+                               span=sp.span(first)),
+                sweep.Mutation("m.py", 3, 3, "t", "q", "(b)", "(\nb\n)", "f",
+                               span=sp.span(second)))
+        out = sweep.compose(source, pair)
+        self.assertIsNotNone(out)
+        self.assertIn("return x, y", out.decode())
+
+    def test_a_composed_pair_that_would_not_parse_is_refused(self):
+        source = b"x = (1)\n"
+        sp = sweep._Spans(source)
+        node = ast.parse(source).body[0].value
+        pair = (sweep.Mutation("m.py", 1, 1, "t", "q", "(1)", "(", "f",
+                               span=sp.span(node)),
+                sweep.Mutation("m.py", 1, 1, "t", "q", "(1)", "(", "f", span=(0, 0)))
+        self.assertIsNone(sweep.compose(source, pair))
+
+    def test_a_test_module_that_does_not_parse_is_skipped_by_the_evidence_pass(self):
+        tmp = Path(tempfile.mkdtemp(prefix="sweep-ev-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        (tmp / "tests").mkdir()
+        (tmp / "tests" / "test_broken.py").write_text("def test_window(:\n")
+        m = sweep.Mutation("charter/a.py", 1, 1, "drop-if", "q", "if x: pass", "",
+                           "_window")
+        ev = sweep.evidence_for(tmp, m, ["tests.test_broken"])
+        self.assertEqual(ev.naming, [])
+
+    def test_a_shortened_line_is_marked_and_a_short_one_is_left_alone(self):
+        self.assertEqual(sweep._oneline("abc def"), "abc def")
+        self.assertTrue(sweep._oneline("x" * 200).endswith("…"))
+        self.assertEqual(len(sweep._oneline("x" * 200)), 96)
+
+
+class TheScopeReaderHoldsItsOwnEdges(unittest.TestCase):
+    """`git`, `_blob_at` and `added_lines` — the rows the self-sweep found unpinned."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sweep-scope-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp,
+                                                            ignore_errors=True))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                   GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=self.tmp, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        (self.tmp / "charter").mkdir()
+        (self.tmp / "charter" / "m.py").write_text("a = 1\n")
+        (self.tmp / "charter" / "gone.py").write_text("b = 2\n")
+        (self.tmp / "charter" / "notes.txt").write_text("hello\n")
+        run("add", "-A")
+        run("commit", "-qm", "one")
+        self.base = sweep.git("rev-parse", "HEAD", cwd=self.tmp).strip()
+        (self.tmp / "charter" / "gone.py").unlink()
+        (self.tmp / "charter" / "m.py").write_text("a = 1\nc = 3\n")
+        (self.tmp / "charter" / "notes.txt").write_text("hello\nagain\n")
+        run("add", "-A")
+        run("commit", "-qm", "two")
+        self.head = sweep.git("rev-parse", "HEAD", cwd=self.tmp).strip()
+
+    def test_a_failing_git_command_raises_with_what_git_said(self):
+        """The `check` half of `git()`. Without it a broken invocation returns empty
+        output, and a sweep quietly charges an empty diff — a green report for a question
+        never asked."""
+        with self.assertRaises(RuntimeError) as caught:
+            sweep.git("rev-parse", "--verify", "no/such/ref", cwd=self.tmp)
+        self.assertIn("no/such/ref", str(caught.exception))
+
+    def test_the_same_command_can_be_asked_without_raising(self):
+        self.assertEqual(
+            sweep.git("rev-parse", "--verify", "--quiet", "no/such/ref",
+                      cwd=self.tmp, check=False).strip(), "")
+
+    def test_a_blob_that_is_not_there_is_empty_bytes_and_not_a_crash(self):
+        self.assertEqual(sweep._blob_at(self.tmp, self.base, "charter/nope.py"), b"")
+        self.assertEqual(sweep._blob_at(self.tmp, self.base, "charter/m.py"), b"a = 1\n")
+
+    def test_a_deleted_file_is_not_charged_to_the_branch(self):
+        """A deletion's hunk header names `/dev/null` on the `+` side. Read as a path, it
+        would put the deleted file's line numbers into the scope and every mutation of it
+        would come back with no source at all."""
+        found = sweep.added_lines(self.tmp, self.base, self.head, ("charter",))
+        self.assertEqual(found, {"charter/m.py": {2}})
+
+    def test_a_file_that_is_not_python_is_not_charged_either(self):
+        found = sweep.added_lines(self.tmp, self.base, self.head, ("charter",))
+        self.assertNotIn("charter/notes.txt", found)
+
+    def test_a_path_that_is_not_in_the_tree_charges_nothing_rather_than_raising(self):
+        """`all_lines` has no `if base.exists()` — the sweep deleted it and the suite
+        stayed green, because `rglob` on a missing directory yields nothing anyway. §4:
+        an equivalent mutant and a dead line are one finding, so it went."""
+        self.assertEqual(sweep.all_lines(self.tmp, ("nowhere",)), {})
+        self.assertEqual(sweep.tree_hash(self.tmp, ("nowhere",)),
+                         sweep.tree_hash(self.tmp, ("nowhere",)))
+
+    def test_uncommitted_work_under_the_swept_paths_is_collected(self):
+        (self.tmp / "charter" / "fresh.py").write_text("d = 4\n")
+        (self.tmp / "charter" / "fresh.txt").write_text("not python\n")
+        dirty = sweep.dirty_files(self.tmp, ("charter",))
+        self.assertEqual(set(dirty), {"charter/fresh.py"})
 
 
 if __name__ == "__main__":      # pragma: no cover

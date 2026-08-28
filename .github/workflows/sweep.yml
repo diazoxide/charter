@@ -1,0 +1,73 @@
+name: deletion sweep
+on:
+  pull_request:
+  workflow_dispatch:      # so a branch can be re-swept without a noise commit
+
+# Read-only, declared rather than inherited. This job runs the repository's own code
+# against mutated copies of it, which is the last place to hold a writable token.
+permissions:
+  contents: read
+
+# Every `uses:` is pinned to a full commit SHA with its tag in a trailing comment, for the
+# reason `release.yml`'s header gives at length and `tests/test_workflows.py` enforces.
+# Dependabot moves these (`.github/dependabot.yml`).
+
+# A pull request that gets three pushes should pay for one sweep, not three. Twenty-odd
+# minutes of runner time per push is the whole reason this is affordable at all.
+concurrency:
+  group: sweep-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    name: Every guard this branch adds is a line a test goes red without
+    runs-on: ubuntu-latest
+    # Stage C of `docs/superpowers/specs/2026-08-27-deletion-sweep-harness.md`.
+    #
+    # **Scoped to the lines this branch ADDED**, never to the tree. The whole-tree number
+    # is stage B — roughly 5,672 mutations and fourteen hours — and it is not a
+    # pull-request check and never will be. Measured on real branches from this phase: 30
+    # to 52 mutations each, a 262 s unmutated baseline, and about 24 s a mutation, so a
+    # gate run is twenty-odd minutes.
+    #
+    # **It reports and blocks nothing.** `--enforce` is the flag that changes that and it
+    # is deliberately absent here. The spec's staging argument — a gate whose baseline
+    # nobody has seen gets disabled the first time it is inconvenient — applies to this
+    # job's own credibility too. Turn it on by adding `--enforce` to the step below, once
+    # the numbers on a few real branches have been read and believed.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, because the sweep charges a branch against its MERGE-BASE
+          # and a shallow clone has no such commit. It also clones this checkout into its
+          # sandboxes, so a graft point here becomes a broken sandbox there.
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Sweep the guards this branch adds
+        env:
+          # Through the environment and not interpolated into the script. A `${{ }}` inside
+          # `run:` is textual substitution before bash ever sees it, which is how a value
+          # somebody else controls becomes a command; the same rule `release.yml` follows.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # No --base on a manual dispatch: with no pull request there is no base sha, and
+          # the tool's own default (the merge-base with origin/main) is the right answer.
+          if [ -n "${BASE_SHA:-}" ]; then
+            set -- --base "$BASE_SHA"
+          else
+            set --
+          fi
+          python3 tools/sweep.py --gate --jobs 4 \
+            --json sweep-results.json \
+            --summary "$GITHUB_STEP_SUMMARY" "$@"
+      - name: Keep the result set, whatever the sweep said
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deletion-sweep
+          path: sweep-results.json
+          if-no-files-found: ignore
