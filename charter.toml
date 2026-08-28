@@ -65,6 +65,12 @@ chrome = "dark"
 # to a 116-column one with none. `FRAME_PANE_PAD_MAX` is 5, derived as the largest inset
 # the 22-column sidebar can afford.
 #
+# ORDER IS THE GEOMETRY (#488/#500), and it is the same rule the `slots` list above
+# carries: `repos` is split BEFORE `sidebar`, so its table gets the full window width and
+# draws from 95 columns up. Reversed, it is split off a harness the sidebar has already
+# narrowed and needs 118 columns before it is drawn at all. `test_frame_config` asserts
+# this plane's committed order against what the geometry wants — it caught the reversal.
+#
 # `key` toggles that one component live. `F2` (palette) and `F12` (escape hatch) are
 # refused by name — measured: a component could otherwise take `F12` and tmux would read
 # back one binding with the operator's silently gone.
@@ -82,16 +88,16 @@ pad = 1
 key = "F6"
 
 [[frame.component]]
-use = "sidebar"
-bg  = "brightblack"
-pad = 1
-key = "F7"
-
-[[frame.component]]
 use = "repos"
 bg  = "brightblack"
 pad = 2
 key = "F8"
+
+[[frame.component]]
+use = "sidebar"
+bg  = "brightblack"
+pad = 1
+key = "F7"
 
 [update]
 # Track main instead of the last release. `charter update` installs straight from git;
