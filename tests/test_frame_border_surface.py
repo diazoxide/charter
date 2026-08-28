@@ -43,11 +43,28 @@ _STYLES = ("pane-border-style", "pane-active-border-style")
 
 
 def _frame(*bgs, **rest) -> dict:
-    """A resolved `[frame]` mapping whose arrangement names one component per *bgs*
-    entry — `None` for a component that names no background of its own."""
+    """A `[frame]` mapping whose arrangement names one component per *bgs* entry — `None`
+    for a component that names no background of its own.
+
+    Built by hand, and only for `instance.border_bg`, which reads a placement's `bg` and
+    nothing else. Anything that goes near `frame/layout.py` needs :func:`_resolved`, whose
+    placements carry the `edge` and `size` a split is computed from.
+    """
     return {"components": [{"slot": f"s{i}", "use": f"s{i}",
                             **({} if bg is None else {"bg": bg})}
                            for i, bg in enumerate(bgs)], **rest}
+
+
+def _resolved(*bgs, **rest) -> dict:
+    """A frame `instance.frame_of` really produced, for the tests that drive a launch.
+
+    Resolved rather than assembled: what these then patch into `config.FRAME` is what a
+    real `charter.toml` would have produced, refusals included — the same trade
+    `tests/test_frame_pane_style.py`'s own `_arrangement` makes.
+    """
+    tables = [{"use": cid, **({} if bg is None else {"bg": bg})}
+              for cid, bg in zip(("identity", "attention", "repos", "sidebar"), bgs)]
+    return {**instance.frame_of({"frame": {"component": tables}}), **rest}
 
 
 class TheRuleTakesTheSurfaceTheComponentsAgreeOn(unittest.TestCase):
@@ -296,15 +313,8 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         return {a[-2]: a[-1] for a in issued
                 if "set-option" in a and "-w" in a and a[-2] in dict(commands_frame._CHROME)}
 
-    def _frame(self, **style) -> dict:
-        tables = [{"use": cid, **style.get(cid, {})}
-                  for cid in ("identity", "attention", "repos", "sidebar")]
-        return instance.frame_of({"frame": {"component": tables}, })
-
     def test_a_launch_draws_its_rules_in_the_colour_its_panels_agree_on(self):
-        frame = {**self._frame(**{c: {"bg": "brightblack"} for c in
-                                  ("identity", "attention", "repos", "sidebar")}),
-                 "chrome": "dark"}
+        frame = _resolved(*["brightblack"] * 4, chrome="dark")
         rules = self._rules(self._issued(frame, ["top", "bottom", "repos", "right"]))
         self.assertEqual(rules["pane-border-style"],
                          f"{commands_frame._CHROME_STYLE},bg=brightblack")
@@ -319,9 +329,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         derived from the *slots* argument would change every time a density level brought
         a panel back — and would be wrong for the panels already on screen. It is derived
         from `config.FRAME` instead, which is the same thing `cmd_chrome` reads."""
-        frame = {**self._frame(**{c: {"bg": "blue"} for c in
-                                  ("identity", "attention", "repos", "sidebar")}),
-                 "chrome": "dark"}
+        frame = _resolved(*["blue"] * 4, chrome="dark")
         whole = self._rules(self._issued(frame, ["top", "bottom", "repos", "right"]))
         one = self._rules(self._issued(frame, ["right"]))
         self.assertEqual(one, whole)
@@ -333,7 +341,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         into a frame the operator has since surfaced from the palette is bordered with the
         surface the frame IS rather than the one it launched with — the same resolver the
         pane's own background already goes through."""
-        frame = {**self._frame(), "chrome": "off"}
+        frame = _resolved(None, None, None, None, chrome="off")
         state.record_chrome("f-live", "dark")
         rules = self._rules(self._issued(frame, ["top"], fid="f-live"))
         self.assertEqual(rules["pane-border-style"],
@@ -353,17 +361,28 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
     FID = "fr-border"
 
     def _launch_value(self, frame, level):
+        """What `_split_panels` — the funnel both launch paths and every density change
+        come through — actually issues, with the frame's live word recorded rather than
+        the resolver stubbed out. A reconstruction of the expression would agree with the
+        live path by being written twice, which is the thing #610 is about."""
+        calls: list[list[str]] = []
+        state.record_chrome(self.FID, level)
+
+        def fake_run(_why, argv, **_kw):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout="%9\n", stderr="")
+
         with mock.patch.object(config, "FRAME", frame), \
-                mock.patch.object(commands_frame, "_current_chrome",
-                                  lambda _fid: level):
-            chrome = commands_frame._current_chrome(self.FID)
-            return {a[-2]: a[-1] for a in commands_frame._chrome_argvs(
-                socket="s", harness_pane="%1",
-                surface=instance.border_bg(config.FRAME, chrome))}
+                mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            commands_frame._split_panels("s", slots=["top"], fid=self.FID,
+                                         harness_pane="%1", env=None, pane_env=None)
+        return {a[-2]: a[-1] for a in calls
+                if "-w" in a and a[-2] in dict(commands_frame._CHROME)}
 
     def _live_value(self, frame, level):
         calls: list[list[str]] = []
-        state.record_panes(self.FID, panels={"s0": "%2"})
+        state.record_panes(self.FID, panels={"top": "%2"})
         state.record_harness_pane(self.FID, "%1")
         with mock.patch.object(config, "FRAME", frame), \
                 mock.patch.object(commands_frame.tmuxctl, "run",
@@ -376,7 +395,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
     def test_every_level_crossed_with_every_colour_lands_on_one_value(self):
         for level in instance.FRAME_CHROME:
             for word in (None, *instance.FRAME_PANE_BG):
-                frame = _frame(word, word)
+                frame = _resolved(word, word, word, word)
                 with self.subTest(level=level, bg=word):
                     self.assertEqual(self._launch_value(frame, level),
                                      self._live_value(frame, level))
@@ -384,13 +403,14 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
     def test_a_committed_colour_survives_the_level_that_used_to_erase_it(self):
         """`chrome: off` is a removal of the FRAME'S surface, never of a colour a
         component wrote. The rules stay the panels' colour, because the panels do."""
-        frame = _frame(*["brightblack"] * 4)
+        frame = _resolved(*["brightblack"] * 4)
         self.assertEqual(
             self._live_value(frame, "off")["pane-border-style"],
             f"{commands_frame._CHROME_STYLE},bg=brightblack")
 
     def test_off_on_a_plane_that_named_no_colour_puts_the_rules_back(self):
-        self.assertEqual(self._live_value({}, "off"), dict(commands_frame._CHROME))
+        self.assertEqual(self._live_value({"slots": ["top"]}, "off"),
+                         dict(commands_frame._CHROME))
 
     def test_a_frame_with_no_harness_pane_still_repaints_its_panes(self):
         """Skipped rather than refused: a frame launched by a charter that predates
