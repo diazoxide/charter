@@ -16,7 +16,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-from . import config, contain, gitpolicy, planegit, tui, util, workspace, worktree
+from . import change, config, contain, gitpolicy, planegit, tui, util, workspace, worktree
 from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory_reactive,
                        commit_push)
 
@@ -679,11 +679,21 @@ def _ws_meta_paths(name: str) -> list[str]:
     Filtered by existence deliberately: these go to git as literal paths, and `git rm
     --cached` on one that was never tracked fails the whole call — taking the manifest and
     memory down with a workspace that simply had no todos.
+
+    `changes/` is asked a sharper question than the others, because for it the existence
+    filter is not a safe proxy for the one being asked. `todos/` is born with its index and
+    is never empty afterwards; a `changes/` can be emptied by `charter change forget`, and
+    one holding nothing but the never-committed `changes/log/` is the same case with a
+    directory in the way. Both are "exists, nothing tracked", which is exactly the shape
+    that fails the whole call. `change.has_records` answers what this list means to ask.
     """
     wd = workspace.workspace_dir(name)
-    return [str(p.relative_to(config.ROOT))
-            for p in (wd / "workspace.json", wd / "workspace.md", wd / "memory",
-                      wd / "todos") if p.exists()]
+    rel = [str(p.relative_to(config.ROOT))
+           for p in (wd / "workspace.json", wd / "workspace.md", wd / "memory",
+                     wd / "todos") if p.exists()]
+    if change.has_records(name):
+        rel.append(str((wd / change.DIRNAME).relative_to(config.ROOT)))
+    return rel
 
 
 def _spawn_pushbg(root) -> None:

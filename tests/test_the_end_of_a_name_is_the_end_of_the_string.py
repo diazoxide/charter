@@ -190,6 +190,7 @@ def _owning_constant(base: ast.AST, here: str, aliases: dict[str, str]) -> str |
 ADMITTERS: dict[str, str] = {
     "persona._NAME_RE": "evil",
     "instance.WORKSPACE_NAME_RE": "Evil",
+    "instance.CHANGE_NAME_RE": "component-api-2",
     "docsrc._TOPIC": "guide",
     "plugincache._PLUGIN_ID_RE": "charter@charter-cp",
     "plugincache._MARKETPLACE_RE": "charter-cp",

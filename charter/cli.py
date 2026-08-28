@@ -9,6 +9,7 @@ import sys
 from . import (
     commands_update,
     commands,
+    commands_change,
     commands_frame,
     commands_harness,
     commands_persona,
@@ -360,6 +361,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_harness_parser(sub)
     _add_workspace_parser(sub)
     _add_worktree_parser(sub)
+    _add_change_parser(sub)
     _add_vault_parser(sub)
     _add_secret_parser(sub)
     _add_persona_parser(sub)
@@ -991,6 +993,72 @@ def _add_worktree_parser(sub) -> None:
                     help="Also delete the piece's branch.")
     rm.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
     rm.set_defaults(func=commands_worktree.cmd_worktree_remove)
+
+
+def _add_change_parser(sub) -> None:
+    """`charter change` — one intent, N repositories, as a per-workspace record.
+
+    Records only: nothing under this command reaches a network, and there is deliberately
+    **no expansion** anywhere in it — no glob, no pattern, no `--all-repos`, no "every repo
+    in the workspace". Membership is enumerated by hand, one literal repo name per
+    invocation, because in a LIVE workspace the record is committed and a record that could
+    grow itself is a committed file that names repositories nobody typed.
+    """
+    c = sub.add_parser("change",
+                       help="A change spanning several repos in one workspace: what it is "
+                            "for, which repos are in it, which must land first "
+                            "(workspaces/<ws>/changes/<slug>.json).")
+    csub = c.add_subparsers(dest="change_cmd", required=True)
+
+    cr = csub.add_parser("create", help="Create a change: a name and the reason for it.")
+    cr.add_argument("change", help="The change's slug — also its default branch name, and "
+                                   "the `Charter-Change:` trailer on every landing commit.")
+    # Required, and the handler refuses an empty one too. A change with no stated reason is
+    # unreadable six months later, which is the one job the record has that git cannot do.
+    cr.add_argument("--why", required=True,
+                    help="One line: what this work is for. Required.")
+    cr.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    cr.set_defaults(func=commands_change.cmd_change_create)
+
+    ad = csub.add_parser("add", help="Add one repo to the change, by literal name.")
+    ad.add_argument("change")
+    ad.add_argument("repo", help="A repo already cloned in this workspace. One name; there "
+                                 "is no pattern and no expansion.")
+    ad.add_argument("--branch", help="This member's branch (default: change/<slug>). Stored "
+                                     "in the record: git knows a branch exists, it cannot "
+                                     "know the branch is this change's.")
+    ad.add_argument("--needs", action="append", metavar="REPO",
+                    help="A member that must LAND before this one. Repeatable. Declared, "
+                         "because no amount of reading either repository reveals it.")
+    ad.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    ad.set_defaults(func=commands_change.cmd_change_add)
+
+    dr = csub.add_parser("drop", help="Take a repo out of the change (or record one that "
+                                      "was never in it), with the reason.")
+    dr.add_argument("change")
+    dr.add_argument("repo")
+    dr.add_argument("--why", required=True,
+                    help="One line: why this repo is out. Required — if members already "
+                         "landed, this is the only thing that makes the resulting partial "
+                         "world explicable.")
+    dr.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    dr.set_defaults(func=commands_change.cmd_change_drop)
+
+    ls = csub.add_parser("list", help="The workspace's changes, one row each.")
+    ls.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    ls.set_defaults(func=commands_change.cmd_change_list)
+
+    sh = csub.add_parser("show", help="One change whole: why, members, branches, blockers, "
+                                      "exclusions.")
+    sh.add_argument("change")
+    sh.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    sh.set_defaults(func=commands_change.cmd_change_show)
+
+    fg = csub.add_parser("forget", help="Delete the change record. Branches, requests and "
+                                        "the landing log are untouched.")
+    fg.add_argument("change")
+    fg.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    fg.set_defaults(func=commands_change.cmd_change_forget)
 
 
 def _add_vault_parser(sub) -> None:
