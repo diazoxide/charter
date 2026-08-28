@@ -2279,10 +2279,19 @@ def cmd_doctor(args) -> int:
         # had already passed — so a hang looked identical to a crash. Now the last line
         # printed names where it stopped.
         print("charter preflight:\n")
+        # The NAME column is stated BEFORE the run, not measured from it: this loop is
+        # written to draw each row as its check lands, so there is no completed table to
+        # size from — `doctor.name_width` asks the checks what they are called instead of
+        # a `:<16` guessing (#600). `Result.render` treats it as a floor, so a name the
+        # width did not know about pushes its own row rather than being cut out of the
+        # report. (`doctor._checks` is an eager list today, so nothing actually streams
+        # yet; sizing from the results would make that unfixable rather than merely
+        # unfixed — see `_FIXED_CHECK_NAMES`.)
+        name_w = doctor.name_width()
         results = []
         for r in doctor.iter_all():
             results.append(r)
-            print(r.render(), flush=True)
+            print(r.render(name_w), flush=True)
         print()
 
     failed = [r for r in results if r.status == doctor.FAIL]

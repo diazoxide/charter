@@ -722,7 +722,7 @@ def _add_frame_parsers(sub) -> None:
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-palette",
                                          "frame-probe", "frame-respawn", "frame-density",
                                          "frame-resize", "frame-gather", "frame-switch",
-                                         "frame-toggle"}
+                                         "frame-toggle", "frame-chrome"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -878,6 +878,23 @@ def _add_frame_parsers(sub) -> None:
     dn = sub.add_parser("frame-density")
     dn.add_argument("level")
     dn.set_defaults(func=commands_frame.cmd_density)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # ones above. Started DETACHED by a palette row, whose argv is exactly
+    # `util.self_relaunch_argv("frame-chrome", <level>)`. It repaints the RUNNING frame's
+    # panel panes — never charter.toml, for `frame-density`'s reason — and resolves which
+    # frame from `$CHARTER_SESSION_ID` when it fires rather than from a shared bind.
+    #
+    # Deliberately NOT `choices=` on the level, for `frame-density`'s argument and one
+    # more that is specific to this command: `instance.chrome_level` is the one gate on
+    # the closed set, and it is also the boundary that keeps an operator's string away
+    # from a tmux style value. A second copy of the set in argparse would be a second
+    # answer to that question, and the weaker one — argparse exits 2 from inside a
+    # detached child where nothing prints the reason, while `cmd_chrome` is a quiet no-op
+    # that leaves the frame exactly as it was.
+    cr = sub.add_parser("frame-chrome")
+    cr.add_argument("level")
+    cr.set_defaults(func=commands_frame.cmd_chrome)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
     # ones above. Fired by ONE COMPONENT's own `bind -n` — the `key` its

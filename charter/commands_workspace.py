@@ -16,7 +16,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-from . import config, contain, gitpolicy, planegit, util, workspace, worktree
+from . import config, contain, gitpolicy, planegit, tui, util, workspace, worktree
 from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory_reactive,
                        commit_push)
 
@@ -30,14 +30,40 @@ def cmd_workspace_list(args) -> int:
         return 0
     print(f"Active workspace: {active}  (via {workspace.source()})\n")
     live = workspace.live_workspaces()
-    fmt = "{}{:<22}{:<7}{:<7}{}"
-    print(fmt.format("  ", "WORKSPACE", "MODE", "CLONES", "REPOS"))
+    # `{:<22}` was a guess about a name the operator minted, and `{:<7}` twice over about
+    # values charter mints — `:<n` pads a short value and PUSHES a long one, so a workspace
+    # named past 22 sent its mode, clone count and repo list somewhere no other row's
+    # landed. `str.format` counts characters as well, which is the half no constant can
+    # fix: the stale marker appended here is ``" ⚠"``, two characters and three cells, so
+    # every flagged row was already drawn one column right of the rest (#508, #592, #600).
+    #
+    # The numeric column is measured from its values too, for the reason `tui.column`'s
+    # own docstring gives — sizing every column this way is what makes the table
+    # unpushable by ANY value, rather than by none of the values somebody thought of.
+    #
+    # Nothing here costs a subprocess: `clones` is a directory listing and `needs_reinit`
+    # reads a file, so unlike `status` (#597) there is no reason to draw before measuring.
+    heads = ("WORKSPACE", "MODE", "CLONES")
+    body = []
     for n in names:
         cl = workspace.clones(n)
-        repos = ", ".join(d.name for d in cl) if cl else "—"
-        mark = "* " if n == active else "  "
         stale = " ⚠" if workspace.needs_reinit(n) else ""
-        print(fmt.format(mark, n + stale, "live" if n in live else "local", str(len(cl)), repos))
+        body.append(("* " if n == active else "  ", n + stale,
+                     "live" if n in live else "local", str(len(cl)),
+                     ", ".join(d.name for d in cl) if cl else "—"))
+    widths = [tui.column(h, [row[i + 1] for row in body]) for i, h in enumerate(heads)]
+
+    def line(mark, cells, last: str) -> str:
+        return (mark + "".join(tui.pad(c, w) for c, w in zip(cells, widths))
+                + last).rstrip()
+
+    # The mark is an INSET, not a column: it is charter's own two-cell "you are here"
+    # marker rather than a value measured from anything, which is how `frame.slots` and
+    # `persona list` both spell theirs. One padder for the header and the rows, so the
+    # two cannot disagree about a width the way a second format string would.
+    print(line("  ", heads, "REPOS"))
+    for row in body:
+        print(line(row[0], row[1:4], row[4]))
     stale_names = [n for n in names if workspace.needs_reinit(n)]
     if stale_names:
         util.warn(f"⚠ {len(stale_names)} workspace(s) need reinit ({', '.join(stale_names)}) — "

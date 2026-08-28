@@ -187,6 +187,7 @@ the diff with your merge-base:
 python3 tools/sweep.py                  # this branch, against origin/main
 python3 tools/sweep.py --second-order 24 # survivors in one function, applied together
 python3 tools/sweep.py --all             # the standing debt across the tree, as a number
+python3 tools/sweep.py --gate            # exactly what CI runs on your pull request
 ```
 
 It deletes one guard at a time, runs only the test modules measured to execute that
@@ -195,8 +196,20 @@ A survivor is a line you can delete with the suite still green. There is no supp
 list, on purpose: if deleting a line genuinely changes nothing observable, delete the line
 — "equivalent mutant" and "dead code" are the same finding.
 
-It is not a CI gate yet. It is stdlib-only, it makes its own clones, and it never writes to
-your checkout.
+It is stdlib-only, it makes its own clones, and it never writes to your checkout.
+
+**CI runs it on every pull request** (`.github/workflows/sweep.yml`), scoped to the lines
+your branch added, and writes the result onto the run's summary page — the survivors, what
+the covering tests assert about each one, and the categories it keeps apart: *unpinned*, a
+*masked cluster* (two survivors in one function, which hide each other and have to be read
+together), *platform-deferred* (a catch the runner's kernel may never reach), *unresolved*
+(the run timed out, so there is no verdict) and *not applied* (a bug in the sweep, not a
+finding about your branch).
+
+**It blocks nothing yet, on purpose.** A gate whose numbers nobody has read gets switched
+off the first time it is inconvenient, so it reports first. Adding `--enforce` to that
+workflow's step is what makes it blocking, and that is a decision to take once the numbers
+on real branches have been looked at and believed.
 
 ## Architecture decisions
 

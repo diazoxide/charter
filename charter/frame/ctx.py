@@ -1,7 +1,9 @@
-"""What a component is handed when it draws: geometry, identity, and its declared slices.
+"""What a component is handed when it draws: geometry, identity, chrome, and its
+declared slices.
 
 **Constructed FROM ``needs``** (§4e). A component receives an object holding exactly what
-it declared plus the fixed geometry, and asking for anything else raises with the name of
+it declared plus what every component is served (:data:`ALWAYS`), and asking for
+anything else raises with the name of
 the thing to add to ``needs``. That is what makes the idle-cost property — one ``stat``
 per panel per tick, which `frame/panel.py` was built around — survive code charter did not
 write: today it is verified by a reviewer reading charter's own renderers, and a reviewer
@@ -34,6 +36,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .. import contain
+from . import chrome
 from .component import ComponentError, cells, names
 
 
@@ -63,10 +66,26 @@ SERVES = {
     "todos": _rows("todos"),
 }
 
-#: The keys every component gets whatever it declared: how much room it has, and which
-#: frame it is drawing in. Named once so :func:`build` and the tests that assert the
-#: attribute set exactly are reading the same list.
-GEOMETRY = ("width", "height", "fid")
+#: The keys every component gets whatever it declared: how much room it has, which frame
+#: it is drawing in, and how to look like it belongs there. Named once so :func:`build`
+#: and the tests that assert the attribute set exactly are reading the same list.
+#:
+#: **``chrome`` is served here rather than through :data:`SERVES`, and that is the whole
+#: of why this constant is no longer called ``GEOMETRY``.** Every name in `SERVES` is a
+#: slice cut out of the ONE SNAPSHOT — that is what the mapping's values are, functions of
+#: the snapshot — and the recipes are not in it. Serving them as a `SERVES` entry would
+#: mean a callable that takes the snapshot and ignores it, which is precisely the shape
+#: :class:`Ctx`'s own docstring records as the defect that let an action reach the plane's
+#: whole vault inventory off its ctx's class. So it is served unconditionally, with the
+#: geometry, and `SERVES` keeps meaning exactly one thing.
+#:
+#: Unconditional and not declarable, which `ctx`'s "absent, not disabled" doctrine would
+#: otherwise argue against: the doctrine is there to keep the IDLE COST visible — a slice
+#: nobody declared is a `gather.read` nobody pays for — and these are constant strings
+#: resolved without reading anything. There is no cost for a declaration to make visible,
+#: and a component forced to declare `chrome` before it could match charter's own weight
+#: would be a declaration that bought nobody anything.
+ALWAYS = ("width", "height", "fid", "chrome")
 
 
 @dataclass(frozen=True)
@@ -80,7 +99,7 @@ class Contract:
     #: name → how that name is cut out of the one snapshot.
     serves: Mapping[str, Any]
     #: The names served whatever was declared.
-    geometry: tuple[str, ...]
+    always: tuple[str, ...]
     #: What a refusal calls the thing holding this ctx.
     noun: str
     #: The field it declares what it is handed in.
@@ -120,7 +139,7 @@ class Ctx:
     """One repaint's worth of what one component may read.
 
     No public methods, deliberately. Everything reachable by name on this object is a
-    field that was declared or a piece of geometry, which is what lets a test assert the
+    field that was declared or one of :data:`ALWAYS`, which is what lets a test assert the
     attribute set *exactly* — and that assertion is the point: a future field is a
     widening of what a stranger's code may reach, and it should cost a test change and
     the conversation that goes with it.
@@ -161,7 +180,7 @@ class Ctx:
                 f"{c.noun}'s {c.declared} to be handed it")
         raise AttributeError(
             f"a {c.noun} ctx has no {shown} — charter serves "
-            f"{', '.join(c.geometry)} and the declared {c.declared} "
+            f"{', '.join(c.always)} and the declared {c.declared} "
             f"({', '.join(c.serves)})")
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -180,7 +199,7 @@ class Ctx:
             f"{contain.one_line(repr(name))} cannot be removed")
 
 
-declare(Ctx, Contract(serves=SERVES, geometry=GEOMETRY, noun="component",
+declare(Ctx, Contract(serves=SERVES, always=ALWAYS, noun="component",
                       declared="needs"))
 
 
@@ -208,6 +227,11 @@ def build(needs, *, width: int, height: int, fid: str, snapshot: Mapping) -> Ctx
         raise ComponentError(
             f"a snapshot must be one mapping of plane state, not "
             f"{contain.one_line(repr(snapshot))}")
-    fields = {"width": width, "height": height, "fid": fid}
+    fields = {"width": width, "height": height, "fid": fid,
+              # Resolved per pane rather than carried, because `colour_ok` is a question
+              # about THIS process's stdout and `NO_COLOR` is a question about the
+              # operator's environment right now — a mapping built once at import would
+              # answer both from whatever was true when charter was first imported.
+              "chrome": chrome.recipes()}
     fields.update({name: SERVES[name](snapshot) for name in served})
     return Ctx(fields)

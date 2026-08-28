@@ -94,6 +94,16 @@ changed.
 shell's environment whole, so trusting `$COLUMNS` there would lay a panel out at the outer
 terminal's width and wrap inside its own much narrower one.
 
+The pane a panel measures is the descriptor its process was **given**, taken once at start.
+A panel paints to `sys.stdout` and measures from that same descriptor, so a component's
+library that replaces that global — a logging handler, a progress bar, a framework's output
+capture — would otherwise have the panel painting into the library's log and laying the
+frame out for a rectangle nobody has, silently. And when the pane genuinely cannot be
+measured, the panel says so (`charter: pane size unknown`) rather than assuming 80x24: if
+your output is a file or a pipe there is no rectangle to be wrong about and the panel draws
+at that default as before, but a real terminal that will not report its size gets a
+sentence until it does.
+
 **The frame animates only while work is in flight.** Work that is still running puts a
 spinner and a count on the bottom row — `⠙ 2 running` — and the panel repaints often
 enough for it to turn. Only the bottom row moves; the other panels repaint when something
@@ -644,6 +654,26 @@ and charter still runs.
 `NO_COLOR` overrides it: no colour on your screen caused by charter means none, whichever
 process puts the bytes there.
 
+**You do not have to edit a file to change it.** `F2` lists `chrome: dark`,
+`chrome: light` and `chrome: off`, with the one you are on marked. Choosing one repaints
+the frame you are looking at immediately — tmux redraws from the option, so no pane moves
+and nothing is re-laid-out — and it does not touch `charter.toml`. The change lives in the
+frame's own state directory and is gone when the frame ends, so relaunch and whatever you
+configured is back. A pane the frame adds later (a density change, say) comes up in the
+surface the frame is *on*, not the one it launched with.
+
+`charter frame-chrome <off|dark|light>` is the same thing typed by hand from inside a
+frame. Choosing `off` **removes** the options rather than setting a third look: afterwards
+`tmux show -p -t <pane> -v window-style` answers nothing at all, which is what it answered
+before you ever asked.
+
+**It works on every tmux charter runs on.** The floor is tmux 3.2, and all of this was
+re-measured there against a build from source, not inherited from the 3.7c it was designed
+on: `window-style` is pane-scoped, it honours a colour and silently ignores `reverse`,
+`dim` and `bold`, and all sixteen palette names resolve — sixty-six of sixty-eight answers
+byte-identical to 3.7c, and the two that were not turned out to be the measuring harness.
+So there is no version gate on any of it.
+
 ### A colour and an inset for one pane
 
 `chrome` gives every panel the same background, which is the right default and the wrong
@@ -710,7 +740,6 @@ narrowest pane charter draws — the 22-column sidebar — can actually take and
 have room for a name. A bigger one would be a value that pane always drops, on one of
 the two panes you asked for this on. Anything else — a negative, a bigger number,
 `true`, `"2"` — takes the arrangement out of play the way an unknown `bg` does.
-
 ### Writing the arrangement out
 
 `slots` is shorthand. Each name in it places one of charter's built-in components on the
@@ -869,6 +898,42 @@ component API charter does not, two packages claim the same id, or its `render` 
 that costs **its own pane and nothing else**. The pane names the distribution and says what
 happened, and the rest of your frame draws around it.
 
+**What a component is handed, and what charter does not promise it.** Charter owns the
+surface and the border; your component owns every cell it writes. The surface is
+*underneath* — tmux paints the pane before your `render` is called — so a component that
+paints no background of its own gets charter's for free and matches. One that paints its
+own overrides its own cells and nothing else.
+
+So that a component can match the rest of the frame without charter drawing over it, `ctx`
+carries a read-only mapping of the frame's own recipes:
+
+```python
+def render(ctx):
+    c = ctx.chrome
+    return [f"{c['inset']}{c['heading']}metrics{c['reset']}{c['muted']} 12{c['reset']}",
+            f"{c['inset']}{c['ok']}✓{c['reset']} all green"]
+```
+
+`heading`, `muted`, `selected`, `ok`, `warn`, `bad`, `reset` and `inset`. Every one is
+either a plain attribute or one of the sixteen names your palette defines — never a colour
+charter picked — and `inset` is the literal left margin the rest of the frame starts at, so
+prepending it lines your rows up with charter's. Under `NO_COLOR`, or when the pane's
+output is not a terminal, every escape in the mapping is the empty string and `inset` is
+unchanged: the keys never disappear, so a component built on them does not break there.
+
+There is no `surface` or `focus` recipe, because there is nothing to hand over — those two
+are tmux pane options and no renderer can write one.
+
+**What charter does not promise is that your pane looks like its own.** A component that
+ignores the recipes and paints something else will not match, and charter will not make it:
+it does not overdraw your heading, and it does not take a row out of your rectangle to fit
+one of its own. What it does guarantee is what it already guaranteed — your paint stops at
+your rectangle, your failure costs your pane and not the session, and your output is
+contained before it reaches the terminal. A pane that clashes is a pane whose component
+chose to, and that is honest: it *is* different, and a frame where every pane looked the
+same regardless of who wrote it would hide the one thing worth knowing when a pane is
+wrong.
+
 You can run one by hand, which is what charter itself runs in the pane:
 
 ```
@@ -910,13 +975,16 @@ how to get back in (`tmux -L charter attach -t <frame-id>`) rather than leaving 
 remember the flags.
 
 ```
-charter · 6 to choose from
+charter · 9 to choose from
 > workspace: alpha — pick another
     persona: steward — pick another
     detach — leave the harness running
     density: minimal
     density: normal
   * density: full
+  * chrome: off
+    chrome: dark
+    chrome: light
 
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```

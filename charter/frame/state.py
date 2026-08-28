@@ -114,7 +114,17 @@ def bump(fid: str) -> None:
     more here than it would if a failure were still visible: ``os.replace`` only ever
     touches the target file by fully replacing it, never partially, so a write that
     cannot complete leaves the previous version exactly as a reader last saw it rather
-    than corrupting it silently. Does nothing for an *fid* :func:`frame_dir` refuses, and
+    than corrupting it silently.
+
+    **The temp file goes through `config.write_for`, and that is what settles the mode of
+    the destination too.** ``os.replace`` carries the SOURCE's mode onto the target, so
+    while this was `Path.write_text` it wrote a 0644 temp file and then moved 0644 onto
+    ``version`` — with nothing in the directory ever looking wrong. Ten writers in this
+    module share that shape (#582). ``os.replace`` itself needs no dispatch: a rename
+    cannot cross filesystems, so an atomic write into ``.charter/`` is written beside its
+    destination and is a state path by construction.
+
+    Does nothing for an *fid* :func:`frame_dir` refuses, and
     nothing for a write that fails after the directory exists (a full filesystem, say) —
     this runs from charter's hooks, where raising costs a session its turn, so every
     failure here is a no-op rather than an exception.
@@ -124,7 +134,7 @@ def bump(fid: str) -> None:
         return
     tmp = d / "version.tmp"
     try:
-        tmp.write_text(f"{time.time_ns()}\n")
+        config.write_for(tmp, f"{time.time_ns()}\n")
         os.replace(tmp, d / "version")
     except OSError:
         # The directory existing doesn't guarantee the write does too (a filesystem
@@ -171,7 +181,7 @@ def record_exit(fid: str, code: int) -> None:
         return
     tmp = d / "exit.tmp"
     try:
-        tmp.write_text(f"{int(code)}\n")
+        config.write_for(tmp, f"{int(code)}\n")
         os.replace(tmp, d / "exit")
     except OSError:
         return
@@ -240,7 +250,7 @@ def record_harness_pane(fid: str, pane: str) -> None:
         return
     tmp = d / "harness.tmp"
     try:
-        tmp.write_text(f"{pane}\n")
+        config.write_for(tmp, f"{pane}\n")
         os.replace(tmp, d / "harness")
     except OSError:
         return
@@ -296,7 +306,7 @@ def record_harness_session(fid: str, sid: str) -> bool:
         return False
     tmp = d / "session.tmp"
     try:
-        tmp.write_text(f"{sid}\n")
+        config.write_for(tmp, f"{sid}\n")
         os.replace(tmp, d / "session")
     except OSError:
         return False
@@ -345,7 +355,7 @@ def record_server(fid: str, server: str) -> None:
         return
     tmp = d / "server.tmp"
     try:
-        tmp.write_text(f"{server}\n")
+        config.write_for(tmp, f"{server}\n")
         os.replace(tmp, d / "server")
     except OSError:
         return
@@ -413,7 +423,7 @@ def record_workspace(fid: str, name: str) -> None:
         return
     tmp = d / "workspace.tmp"
     try:
-        tmp.write_text(f"{name}\n")
+        config.write_for(tmp, f"{name}\n")
         os.replace(tmp, d / "workspace")
     except OSError:
         return
@@ -523,7 +533,7 @@ def record_density(fid: str, level: str) -> None:
         return
     tmp = d / "density.tmp"
     try:
-        tmp.write_text(f"{level}\n")
+        config.write_for(tmp, f"{level}\n")
         os.replace(tmp, d / "density")
     except OSError:
         return
@@ -546,6 +556,61 @@ def density(fid: str) -> str | None:
         return None
     try:
         return (d / "density").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def record_chrome(fid: str, level: str) -> None:
+    """Write down the pane surface THIS RUNNING FRAME is on, overriding `[frame] chrome`.
+
+    :func:`record_density`'s twin, for :func:`density`'s reason and no other: charter.toml
+    is hand-maintained and committed, this directory is machine-written and `reap` deletes
+    it whole when the frame ends. A palette row that edited an operator's own file to
+    change what one running frame looks like would be a keypress with a commit in it.
+
+    **The surface is the one element a keypress can change without moving a pane**, which
+    is why this exists at all rather than riding on `record_density`. `window-style` is a
+    pane option and tmux repaints from it on the spot — measured on an attached client,
+    both tmux 3.7c and tmux 3.2: ``set-option -p window-style bg=black`` on a pane that
+    was already drawn put ``\x1b[40m`` on the client's wire with no `refresh-client` and
+    no re-layout. So `commands_frame.cmd_chrome` records here and sets an option, and
+    nothing splits.
+
+    Same must-not-raise, atomic-write shape as :func:`record_density`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "chrome.tmp"
+    try:
+        config.write_for(tmp, f"{level}\n")
+        os.replace(tmp, d / "chrome")
+    except OSError:
+        return
+
+
+def chrome(fid: str) -> str | None:
+    """The surface this frame was last set to by hand, or ``None`` for "never set".
+
+    ``None`` is the ordinary case: a frame starts at whatever `[frame] chrome` resolved to
+    — `off` unless the plane's own file says otherwise — and only a palette row writes
+    here. The caller falls back to the configured value; `commands_frame._current_chrome`
+    is the one place that does.
+
+    **The text is NOT validated here**, for :func:`density`'s reason exactly:
+    `instance.chrome_level` is the one gate on that closed set and it sits at the point of
+    use, so a truncated or hand-edited file degrades to the configured value in the same
+    way an unknown word in charter.toml does. A second half-copy of the enum in this
+    module is how the two come to disagree — and here the stakes are higher than a
+    density's, because the value on the other side of that gate is on its way to a tmux
+    style: `instance.chrome_options` maps a WORD to constants charter holds, so a word
+    nobody recognises yields no tmux command at all.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "chrome").read_text().strip() or None
     except (OSError, ValueError):
         return None
 
@@ -575,7 +640,7 @@ def record_hidden(fid: str, names) -> None:
         return
     tmp = d / "hidden.tmp"
     try:
-        tmp.write_text("".join(f"{n}\n" for n in names))
+        config.write_for(tmp, "".join(f"{n}\n" for n in names))
         os.replace(tmp, d / "hidden")
     except OSError:
         return
@@ -692,14 +757,25 @@ def record_identity(fid: str, values: dict[str, str]) -> None:
     by :func:`identity`. Same atomic-write, never-raise shape as :func:`record_server` —
     a frame whose identity could not be recorded degrades to "charter does not know",
     which :func:`identity` answers honestly rather than by guessing.
+
+    **The ``isinstance(k, str) and isinstance(v, str)`` filter that used to sit inside the
+    `json.dumps` is gone**, reported by the deletion sweep and unreachable: the only thing
+    that reaches *values* is `commands_frame._frame_identity_env`, which is
+    ``{name: env.get(name, "") for name in _FRAME_IDENTITY}`` — every key a string from a
+    module constant, every value a string or ``""``. A filter no caller can exercise is
+    not a defence; it is a line that makes the next reader believe there is one, and
+    `test_the_frames_identity_can_only_be_strings` pins the contract that makes it
+    unreachable. What a non-string would do if one ever arrived is unchanged in kind and
+    stated rather than filtered: `json.dumps` raises `TypeError`, the clause below catches
+    it, and the frame degrades to "charter does not know" — this function's declared
+    posture for every other failure it can have.
     """
     d = frame_dir(fid, create=True)
     if d is None:
         return
     tmp = d / "identity.tmp"
     try:
-        tmp.write_text(json.dumps({k: v for k, v in values.items()
-                                   if isinstance(k, str) and isinstance(v, str)}))
+        config.write_for(tmp, json.dumps(dict(values)))
         os.replace(tmp, d / "identity")
     except (OSError, TypeError, ValueError):
         return
@@ -757,7 +833,7 @@ def record_panes(fid: str, *, panels: dict[str, str]) -> None:
         return
     tmp = d / "panes.tmp"
     try:
-        tmp.write_text(json.dumps(dict(panels)))
+        config.write_for(tmp, json.dumps(dict(panels)))
         os.replace(tmp, d / "panes")
     except (OSError, TypeError, ValueError):
         return
@@ -877,7 +953,7 @@ def respawn_attempt(fid: str, slot: str) -> int | None:
         previous = 0
     n = previous + 1
     try:
-        f.write_text(f"{n}\n")
+        config.write_for(f, f"{n}\n")
     except OSError:
         return None
     return n

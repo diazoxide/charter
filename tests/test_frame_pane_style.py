@@ -756,12 +756,29 @@ class APadThePaneCannotAffordIsDroppedWhole(PersonaIso, unittest.TestCase):
                 plain = slots.render("right", "f-1")
         self.assertEqual(padded, plain)
 
-    def test_a_pane_with_no_columns_at_all_does_not_raise(self):
-        """`os.get_terminal_size` can report 0 for a pane being torn down, and `pad_of`
-        does arithmetic on it before anything else does."""
-        for cols in (0, 1, 2):
+    def test_a_pane_too_narrow_to_hold_anything_does_not_raise(self):
+        """A pane narrower than the pad itself: the arithmetic goes negative before the
+        comparison, and the answer has to be "no pad" rather than a traceback."""
+        for cols in (1, 2, 3, 4):
             with self.subTest(cols=cols):
                 self.assertEqual(self._pad_of("repos", cols=cols, pad=2), 0)
+
+    def test_a_pane_charter_cannot_measure_gets_the_stated_default_and_its_pad(self):
+        """**A zero is not a size (#606), and the pad does not second-guess that.**
+
+        `pane.size()` answers `None` for a stream that cannot be asked *and* for a tty that
+        answers with a zero, and `slots._width` turns that into `_DEFAULT_COLS` — one
+        stated fallback rather than a measurement nobody made. So a pad on such a pane is
+        afforded against 80, exactly as every other width decision on that pane is. Asked
+        here because the obvious reading is the other one: `pad_of` looks like it is doing
+        arithmetic on a real width, and on this pane it is not."""
+        with mock.patch.dict(config.FRAME, _arrangement(repos={"pad": 2})), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((0, 24))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            self.assertEqual(slots._width(), slots._DEFAULT_COLS)
+            self.assertEqual(slots.pad_of("repos"), 2)
+            self.assertEqual(slots.content_width("repos"), slots._DEFAULT_COLS - 4)
 
 
 class TheSizerAndTheRendererAgreeAboutThePad(PersonaIso, unittest.TestCase):

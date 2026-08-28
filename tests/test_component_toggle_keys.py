@@ -746,8 +746,18 @@ class WhatTheFrameIsNotDrawingRightNow(PersonaIso, unittest.TestCase):
     def test_a_state_directory_that_cannot_be_written_is_not_an_exception(self):
         """The other half of the same promise, one layer down: a full disk, a read-only
         state directory, an `os.replace` across a boundary. The keypress does nothing,
-        which is what every other writer in `frame/state.py` already does."""
-        with mock.patch("pathlib.Path.write_text", side_effect=OSError("no space")):
+        which is what every other writer in `frame/state.py` already does.
+
+        **Not `Path.write_text` any more, and the reason is the change that broke it.**
+        This used to patch `pathlib.Path.write_text`, which pinned the test to the WRITER'S
+        SPELLING rather than to the property it is named for: routing the writer through
+        `config.write_for` (#582) left the mock aimed at a call nobody makes, the write
+        succeeded, and the case went red having found nothing. `config.write_for` is what
+        `frame/state.py` actually depends on, so that is what a failing filesystem is
+        injected at — the same shape `test_frame_gather` uses for its unlink.
+        """
+        with mock.patch.object(state.config, "write_for",
+                               side_effect=OSError("no space")):
             state.record_hidden(self.fid, ["repos"])         # must not raise
         self.assertIsNone(state.hidden(self.fid))
 

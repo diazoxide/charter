@@ -27,7 +27,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, legacyenv, session, workspace
-from tests import _envguard
+from tests import _envguard, _tmuxsocket
 from tests._isolation import PersonaIso, child_plane_env
 
 
@@ -256,7 +256,7 @@ class WhatIsScrubbed(unittest.TestCase):
         it is what makes this case fail on the tree that had the hole.
         """
         planted = {"CHARTER_SESSION_ID": "ambient-sess", "CHARTER_WORKSPACE": "ambient-ws",
-                   "TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%9",
+                   "TMUX": _tmuxsocket.tmux_env(server_pid=1, session="0"), "TMUX_PANE": "%9",
                    "EDM_WORKSPACE": "legacy-ws"}
         probe = ("import json, os, tests;"
                  "from tests import _envguard;"

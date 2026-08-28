@@ -306,7 +306,7 @@ def save(fid: str, data: dict) -> None:
         return
     tmp = f.with_name(f.name + ".tmp")
     try:
-        tmp.write_text(json.dumps(data))
+        config.write_for(tmp, json.dumps(data))
         os.replace(tmp, f)
     except OSError:
         return

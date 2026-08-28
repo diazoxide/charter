@@ -22,15 +22,23 @@ which runs precisely when something has already gone wrong — painted a 400-col
 into a 24-column pane. :data:`_DEFAULT_COLS` is what it answers instead, beside
 :data:`_DEFAULT_ROWS`, which has always been a constant for exactly this reason. Both
 halves of a pane's size now come from the same place and neither comes from the shell.
+
+**And the pane is CLAIMED rather than looked up** (#606). Measuring "the descriptor this
+process is writing to" was written as `sys.stdout.fileno()`, which is a mutable global any
+library the process imports may replace: with Textual's `redirect_stdout` installed, a real
+150x10 pane measured 80x24 here and nothing raised. `frame/pane.py` is the one place that
+answers which rectangle this process was given, and both halves below take one reading of
+it — see that module for the property, and for why a size that cannot be taken is `None`
+rather than a plausible number.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 import time
 
 from .. import tui
+from . import pane
 
 #: The spinner's own frames, and how long each is held. Ten braille cells, each one
 #: column wide (`unicodedata.east_asian_width` is `N` for U+2800–U+28FF, so `tui.width`
@@ -183,21 +191,27 @@ _DEFAULT_COLS = 80
 def _width() -> int:
     """The pane's own width in columns — measured, never read out of the environment.
 
-    `os.get_terminal_size(sys.stdout.fileno())` asks the file descriptor this process is
-    actually writing to, which for a panel launched as a tmux pane command IS the pane —
-    not a pipe, not the launching terminal. Only when that raises (stdout redirected to
-    something with no tty behind it at all, e.g. a test, or a panel run for debugging with
-    its output piped to a file) does this answer :data:`_DEFAULT_COLS`, the way
-    :func:`_height` has always answered :data:`_DEFAULT_ROWS`. The measured value is
-    returned as reported, with no artificial floor clamped over it: a pane that really is
-    10 columns wide getting reported as 20 would be exactly the theorising this function
-    exists to avoid — it would tell every caller here there is room that the real pane does
-    not have.
+    `pane.size()` asks the descriptor this process CLAIMED, which for a panel launched as
+    a tmux pane command IS the pane — not a pipe, not the launching terminal, and (since
+    #606) not whatever a provider's library has since rebound `sys.stdout` to. Only when
+    that answers `None` — a pane charter has no usable measurement of, which `frame/pane.py`
+    defines and this function does not second-guess — does this fall through to
+    :data:`_DEFAULT_COLS`, the way :func:`_height` has always answered
+    :data:`_DEFAULT_ROWS`. The measured value is returned as reported, with no artificial
+    floor clamped over it: a pane that really is 10 columns wide getting reported as 20
+    would be exactly the theorising this function exists to avoid — it would tell every
+    caller here there is room that the real pane does not have.
+
+    **The fallback is this caller's stated default and nothing infers it was taken**, which
+    is the half #606 is about. `panel._unmeasured` is where a pane that could not be
+    measured stops being indistinguishable from a real 80x24 one, because that is the
+    caller with something to do about it; this is the half that has to hand a renderer a
+    number whatever happened. The same two-function split `commands_frame._measure_window`
+    (answers `None`, so `cmd_resize` can refuse) and `_window_size` (takes
+    `_FALLBACK_SIZE`, because `cmd_launch` must draw) already draw between them.
     """
-    try:
-        return os.get_terminal_size(sys.stdout.fileno()).columns
-    except OSError:
-        return _DEFAULT_COLS
+    measured = pane.size()
+    return _DEFAULT_COLS if measured is None else measured.columns
 
 
 #: Rows a renderer assumes when this pane's own tty cannot be measured at all — the same
@@ -218,11 +232,17 @@ def _height() -> int:
     prevent (its own docstring: thirteen clean repos shown and the dirty one hidden).
     So the budget is measured before anything is composed, and `panel._paint`'s clamp
     goes back to being the safety net it is elsewhere rather than the mechanism.
+
+    **The same descriptor and the same judgement as :func:`_width`.** Both halves ask
+    `pane.size()` rather than each running its own `os.get_terminal_size` with its own
+    fallback, so a pane charter could not measure can never come back 150 columns wide and
+    24 rows tall — which is what two independent asks of a moving `sys.stdout` could
+    produce, and did (#606). They are still two calls, one per question: a pane that is
+    resized between them answers honestly twice, and `_tick`'s SIGWINCH repaint is what
+    reconciles the frame.
     """
-    try:
-        return os.get_terminal_size(sys.stdout.fileno()).lines
-    except OSError:
-        return _DEFAULT_ROWS
+    measured = pane.size()
+    return _DEFAULT_ROWS if measured is None else measured.lines
 
 
 def _top(fid: str) -> str:

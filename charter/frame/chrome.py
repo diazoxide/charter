@@ -35,9 +35,10 @@ from __future__ import annotations
 
 import os
 import re
-import sys
+from types import MappingProxyType
 
 from .. import tui
+from . import pane
 
 #: Reverse video on, and everything off. `_OFF` is a FULL reset rather than SGR 27
 #: ("reverse off"): a row that left an attribute open — a provider's, or a charter row
@@ -139,15 +140,103 @@ def colour_ok() -> bool:
     *is* its pane, so it is always a tty in production. The one case it catches is the
     redirect `panel.py`'s own docstring documents — ``charter panel top --session x >
     /tmp/log`` — which before this wrote a clear-screen and full SGR into a file.
+
+    **Asked of the PANE, not of `sys.stdout`** (#606). Those were the same thing until a
+    provider's library rebound the global: Textual's `redirect_stdout` installs a
+    `_PrintCapture` that answers ``isatty() -> True`` from behind fd -1, so this said
+    "colour is fine" about a stream that is not a terminal and, more to the point, is not
+    the rectangle charter is painting. `frame/pane.py` holds the descriptor this process
+    was actually given and carries the "a stream that cannot say is not a terminal"
+    fallback this used to spell here — one answer, so the paint and the question about the
+    paint cannot be about two different streams.
     """
     if no_colour():
         return False
-    try:
-        return bool(sys.stdout.isatty())
-    except (AttributeError, ValueError):
-        # A closed or exotic stdout answers neither; a frame that cannot tell does not
-        # colour, which is the direction `NO_COLOR` already points.
-        return False
+    return pane.is_tty()
+
+
+def _role_values() -> dict[str, str]:
+    """The roles of §5 a RENDERER can write, and the SGR each one is. **The vocabulary.**
+
+    One source, not a list of names beside a table of values: two of those is how a role
+    comes to be documented and unserved, or served and undocumented, and the caller below
+    iterates whatever this returns.
+
+    **This is deliberately not the same list as §5's six.** Two of those — ``surface`` and
+    ``focus`` — are `window-style`/`window-active-style`, tmux pane options that no
+    renderer can emit and no provider can be handed. Serving them here as empty strings
+    would be a recipe that claims to hand over something charter does not have, which is
+    the same convincing empty `instance.FRAME_CHROME` refuses an ``auto`` value for. A
+    provider that wants the surface already has it: tmux painted the rectangle underneath
+    before the provider drew a cell.
+
+    **Every value is an attribute or one of the sixteen ANSI names — no cube index, no
+    24-bit triple.** That is `instance.FRAME_CHROME`'s rule reaching the one place a
+    stranger's code would otherwise have to guess it, and it is why these need no
+    `[frame] chrome` gate: bold, dim and reverse are statements relative to whatever the
+    operator's terminal already is, and ``green``/``yellow``/``red`` are slots in their
+    own palette rather than colours charter picked out of the 256.
+
+    Composed from `statusline.py`'s OWN constants rather than spelled here, for
+    `slots._sidebar_head`'s reason: a second copy of ``\033[1m`` in this module is how a
+    provider's heading and charter's own come to be two different weights. A
+    function-level import for that function's other reason — `statusline` is the largest
+    module charter has and a panel repaints on a clock.
+    """
+    from .. import statusline as sl
+    return {"heading": sl._BOLD, "muted": sl._DIM, "selected": _REVERSE,
+            "ok": sl._GREEN, "warn": sl._YELLOW, "bad": sl._RED, "reset": sl._R}
+
+
+def recipes() -> MappingProxyType:
+    """The role → string mapping a component is handed: `ctx.chrome`.
+
+    **What a provider gets so it can match without charter overdrawing it** (§7). Charter
+    owns the surface and the border; the provider owns every cell it writes. A component
+    that writes ``ctx.chrome["heading"]`` puts its label in the same weight charter's own
+    sidebar heading uses; one that does not looks different, which is honest, because it
+    *is* different — and a frame where every pane looked identical regardless of who wrote
+    it would hide the one thing an operator needs to know when a pane is wrong.
+
+    **A `MappingProxyType` of strings, no callable, reading nothing.** The same shape
+    `ctx.SERVES["gather"]` already hands over, and the reason is `ctx.Ctx`'s own: a
+    provider's module is ordinary Python, so what must not be reachable from this object
+    is anything that *does* something. A plain `dict` would be worse than merely mutable —
+    one snapshot is shared by every component in a repaint, so a component that edited it
+    would be editing what the next one is about to draw.
+
+    **`inset` is the one entry that is not SGR, and it is here on purpose.** §5.4 is a
+    COLUMN rather than an attribute — the value `slots.INSET` already holds — and a
+    provider that wants its rows to start where charter's do needs the string, not the
+    number. Served as the literal left edge (`slots._inset()`) so a provider prepends it
+    and lines up, rather than being told a count and left to spell the padding itself,
+    which is the per-call-site spelling §5.4 exists to end. It is NOT suppressed by
+    :func:`colour_ok` below: two spaces are not colour, and a frame that lost its inset
+    under ``NO_COLOR`` would be answering a question about colour with a change to layout.
+
+    **`chrome` — the WORD — changes none of these, and that is a measurement rather than
+    an omission.** §7 asks for the roles "resolved for this frame's `chrome` setting", and
+    when this was built there was nothing for that setting to resolve: `off`, `dark` and
+    `light` select a pane background, `window-style` honours colour and silently ignores
+    every attribute (measured again for this phase on tmux 3.7c AND on tmux 3.2 — `bold`,
+    `dim` and `reverse` each put no SGR at all on an attached client's wire), and no
+    renderer can write a pane option. So a `chrome` parameter here would be an argument
+    that cannot change an answer, which is the line this repo's own sweep deletes. What
+    IS resolved is :func:`colour_ok`, which is per pane and does change every value.
+
+    **Under `NO_COLOR`, or a stdout that is not a tty, every SGR role is the empty
+    string.** §3.2's rule is that charter emits no SGR from the frame at all, and a
+    provider handed live escapes there would emit them on charter's behalf — charter
+    having asked somebody else to paint again, which is the half of that promise this
+    spec was written about. Empty rather than absent: a provider that wrote
+    ``ctx.chrome["ok"] + text`` would otherwise raise inside its own draw and lose its
+    pane to honour a request about colour.
+    """
+    from . import slots
+    live = colour_ok()
+    out = {role: (sgr if live else "") for role, sgr in _role_values().items()}
+    out["inset"] = slots._inset()
+    return MappingProxyType(out)
 
 
 def plain(row: str) -> str:
