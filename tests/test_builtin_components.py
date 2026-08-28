@@ -7,7 +7,7 @@ edges beside the public one.
 
 **The refactor's success condition is that nothing changed**, and these tests are written
 to be able to say so rather than to assume it. The pane the `sidebar` composite draws is
-compared against its two parts composed; each component's render is compared against the
+compared against its three parts composed; each component's render is compared against the
 renderer the slot has always had; and `layout`'s five per-slot tables — which used to be
 five hand-written tuples — are compared against the literal geometry charter ships, not
 against the registry they are now read from. Reading both sides of an assertion out of the
@@ -38,8 +38,17 @@ def _row(name, *, branch="main", current=False, repo=None):
     return d
 
 
+def _change(slug, *, state="unknown", landed=0, total=2):
+    """A `gather`-cache-shaped change row — the fields `gather._change_rows` writes.
+
+    Only the four `slots._change_rows` actually draws are needed; the rest of the record
+    (`why`, `excluded`, `members`) is what `charter change show` reads, not the sidebar.
+    """
+    return {"change": slug, "state": state, "landed": landed, "total": total}
+
+
 class Declared(unittest.TestCase):
-    """What the six components say about themselves.
+    """What the seven components say about themselves.
 
     No plane needed: `builtins.build()` reads nothing and starts nothing, which is the
     property that lets `layout` ask it at import time.
@@ -48,28 +57,40 @@ class Declared(unittest.TestCase):
     def setUp(self) -> None:
         self.reg = builtins.build()
 
-    def test_the_registry_holds_the_six_charter_draws_in_split_order(self):
-        """Split order is registration order, and the two parts of the sidebar are
+    def test_the_registry_holds_the_seven_charter_draws_in_split_order(self):
+        """Split order is registration order, and the three parts of the sidebar are
         registered before the composite that draws them — the registry refuses a
-        composite built from parts it has not seen."""
+        composite built from parts it has not seen.
+
+        `changes` is the third of those parts, so it is registered with them and not with
+        the placed components above: it is a SECTION of the sidebar, not a pane. The
+        measurement is `frame/builtins.py`'s own — a placed component has to be in
+        `instance.FRAME_SLOTS`, and that list is pinned to agree with the shipped `slots`
+        and with `full`, so placing it would put a pane saying "no changes" on every
+        operator's frame for a feature most planes never use."""
         self.assertEqual([c.id for c in self.reg.all()],
                          ["identity", "attention", "repos", "personas", "todos",
-                          "sidebar"])
+                          "changes", "sidebar"])
 
     def test_only_the_four_placed_components_are_on_an_edge(self):
-        """`personas` and `todos` are registered and never split for: their parent draws
-        them inside its own pane, and a part that appeared on an edge too would be drawn
-        twice — once in its own pane and once inside the sidebar's."""
+        """`personas`, `todos` and `changes` are registered and never split for: their
+        parent draws them inside its own pane, and a part that appeared on an edge too
+        would be drawn twice — once in its own pane and once inside the sidebar's."""
         placed = {edge: [c.id for c in self.reg.on_edge(edge)]
                   for edge in component.EDGES}
         self.assertEqual(placed, {"top": ["identity"], "bottom": ["attention", "repos"],
                                   "left": [], "right": ["sidebar"]})
 
-    def test_the_sidebar_is_the_composite_of_personas_then_todos(self):
+    def test_the_sidebar_is_the_composite_of_personas_then_todos_then_changes(self):
         """In the order the pane stacks them, which is not split order — nothing splits
-        this pane at all (§4d)."""
+        this pane at all (§4d).
+
+        `changes` is LAST, and `slots._right`'s own comment is why: the order is a
+        priority, and each section reserves its blank row out of what the ones above it
+        left, so the section that overflows a short column is always the lowest-priority
+        one."""
         self.assertEqual([c.id for c in self.reg.children_of("sidebar")],
-                         ["personas", "todos"])
+                         ["personas", "todos", "changes"])
         self.assertEqual([c.id for c in self.reg.children_of("identity")], [])
 
     def test_each_component_declares_the_edge_and_size_the_frame_draws_it_at(self):
@@ -78,7 +99,11 @@ class Declared(unittest.TestCase):
         `right` is 22 columns and the two strips are one row each; the repo table is
         `Content()` because its height is the plane's repo count bounded by what the
         harness may not be charged (`layout.repos_rows`), and a cap written here would be
-        a second, weaker copy of that arithmetic."""
+        a second, weaker copy of that arithmetic.
+
+        `changes` is on `right` with a CAP, which is what says it is a section of the
+        sidebar rather than a pane: it is bounded like `todos` and for the same reason —
+        a column that is one list has no room to let a second one grow without end."""
         got = {c.id: (c.edge, c.size) for c in self.reg.all()}
         self.assertEqual(got, {
             "identity": ("top", component.Fixed(1)),
@@ -86,6 +111,7 @@ class Declared(unittest.TestCase):
             "repos": ("bottom", component.Content(None)),
             "personas": ("right", component.Fill()),
             "todos": ("right", component.Content(slots._MAX_TODO_LINES)),
+            "changes": ("right", component.Content(slots._MAX_CHANGE_LINES)),
             "sidebar": ("right", component.Fixed(22)),
         })
 
@@ -230,6 +256,12 @@ class Renders(PersonaIso):
             "worktrees": [],
             "todos": [{"title": "wire the registry"}, {"title": "measure the frame"}],
             "todo_count": 5,
+            # One change, so the sidebar's third section actually draws. An empty list
+            # here would leave every assertion about `changes` below satisfied by a
+            # section that returns no rows — which is the shape this suite keeps being
+            # bitten by, and doubly so here because "no rows when there are none" is the
+            # very property that made `changes` a section rather than a pane.
+            "changes": [_change("frame-registry", state="blocked", landed=1)],
         })
 
     def _ctx(self, c, *, width=200, height=20):
@@ -269,18 +301,30 @@ class Renders(PersonaIso):
             c = self.reg.get("identity")
             self.assertEqual(render(self._ctx(c)), ["a", "", "b"])
 
-    def test_the_sidebars_pane_is_exactly_its_two_parts(self):
+    def test_the_sidebars_pane_is_exactly_its_three_parts(self):
         """The composite draws the parts, it does not keep a second copy of them. This is
         the whole of the `slots.py` half of this task: `_right` was split into
         `persona_section` and `todo_section` and then composed back, so a pane that
-        differed from its parts would mean the split changed what the panel says."""
+        differed from its parts would mean the split changed what the panel says.
+
+        `changes_section` joined the composition as the third and lowest-priority part.
+        Each section's blank row comes OUT of what the sections above it left, which is
+        why the budget handed to each one here is the running total rather than the
+        pane's own height — a composition that added the rows on top would overflow the
+        column by exactly the number of sections in it."""
         w, h = self._pane(22, 20)
         with w, h:
             whole = slots.render("right", FID)
             personas = slots.persona_section(22, 20, terse=False)
             todos = slots.todo_section(FID, 22, 20 - len(personas) - 1, terse=False)
-        self.assertEqual(whole, "\n".join([*personas, "", *todos]))
+            changes = slots.changes_section(
+                FID, 22, 20 - len(personas) - len(todos) - 2)
+        self.assertEqual(whole,
+                         "\n".join([*personas, "", *todos, "", *changes]))
         self.assertTrue(todos, "fixture drew no todos — the composition is untested")
+        self.assertTrue(changes,
+                        "fixture drew no changes — the third part is untested, and an "
+                        "empty one composes identically to not being there at all")
 
     def test_a_terse_sidebar_spends_fewer_rows_on_todos_than_a_normal_one(self):
         """The density cap moved out of `_right` and into `todo_section` with this task,
@@ -345,10 +389,10 @@ class Renders(PersonaIso):
                                  f"{seen or 'nothing'}")
 
     def test_the_sidebars_own_parts_read_where_they_said_they_would(self):
-        """The same check for the two components that are never placed on an edge — they
+        """The same check for the three components that are never placed on an edge — they
         are drawn by their parent, so nothing else would ever exercise their declarations.
         """
-        for cid in ("personas", "todos"):
+        for cid in ("personas", "todos", "changes"):
             c = self.reg.get(cid)
             seen: list[str] = []
             real_read = gather.read

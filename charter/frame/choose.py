@@ -74,21 +74,36 @@ from typing import NamedTuple
 from .. import contain
 from . import overlay, switch
 
-#: The two nouns a picker offers. Values rather than an enum for the reason the rest of
+#: The three nouns a picker offers. Values rather than an enum for the reason the rest of
 #: this package uses strings — they appear in a test's failure message as themselves —
-#: and they are also what `charter frame-switch` already spells its flags with, so the one
-#: word travels from the row to the command without a table in between.
-WORKSPACE, PERSONA = "workspace", "persona"
+#: and the first two are also what `charter frame-switch` already spells its flags with,
+#: so the one word travels from the row to the command without a table in between.
+WORKSPACE, PERSONA, CHANGE = "workspace", "persona", "change"
 
-#: Both, in the order the palette offers them. Workspace first: it is the plane a frame is
-#: looking at, and a persona is who is looking.
-NOUNS = (WORKSPACE, PERSONA)
+#: All three, in the order the palette offers them. Workspace first: it is the plane a
+#: frame is looking at, a persona is who is looking, and a change is what they are in the
+#: middle of — which is the narrowest of the three and so goes last.
+NOUNS = (WORKSPACE, PERSONA, CHANGE)
 
 #: Which launch pin outranks a switch of each noun — the rung nothing charter writes can
 #: reach, because it is already in every panel pane's environment (`switch.py`'s module
 #: docstring). Named here because the row that opens a picker is the surface that reports
 #: it, and the reporting and the refusal must read the same variable.
+#:
+#: **``change`` is deliberately absent, and its absence is a fact rather than a gap.**
+#: There is no `$CHARTER_CHANGE`: a change is what one frame is looking at, not an
+#: identity a launch hands it, so nothing can pin one. Adding an entry that named a
+#: variable nothing sets would make `pin_reason` answer "" through a lookup rather than
+#: through a decision, and the reason a change doorway carries is a different one
+#: entirely — see :func:`pin_reason`.
 PIN = {WORKSPACE: "CHARTER_WORKSPACE", PERSONA: "CHARTER_PERSONA"}
+
+#: What a doorway says when this workspace has no changes at all. Its own sentence rather
+#: than a borrowed one, and it names the command that fixes it: a picker over nothing is
+#: an offer charter knows it cannot honour, and #512's rule is that an operator cannot ask
+#: about an option they cannot see.
+NO_CHANGES = ("no cross-repo change in this workspace — create one with "
+              "`charter change create <slug> --why \"…\"`")
 
 #: What marks the name the frame is on right now.
 #:
@@ -136,37 +151,63 @@ class Roster(NamedTuple):
         return None
 
 
-def names_of(noun: str) -> list[str]:
+def names_of(noun: str, fid: str = "") -> list[str]:
     """Every name *noun* offers, from `frame/switch.py`'s own listers.
 
     Asked there rather than re-derived, so the list a picker draws and the list a refusal
-    names ("no workspace 'x' — have: …") cannot disagree. Both are already held to
-    `workspace.valid_name`/`persona.valid_name` on the way out, which is #442's rule
-    applied where a directory name becomes a row.
+    names ("no workspace 'x' — have: …") cannot disagree. All three are already held to
+    `workspace.valid_name` / `persona.valid_name` / `instance.change_name_ok` on the way
+    out, which is #442's rule applied where a directory name becomes a row.
+
+    *fid* is required in practice for :data:`CHANGE` and ignored by the other two, because
+    changes are per WORKSPACE and which workspace is a question about the frame, not about
+    this process (#512). It defaults to `""` rather than being made positional-required so
+    that the two callers that predate it read unchanged; `switch.changes("")` resolves the
+    same "no frame, resolve locally" path every other frame surface takes for an empty id.
     """
-    return switch.workspaces() if noun == WORKSPACE else switch.personas()
+    if noun == WORKSPACE:
+        return switch.workspaces()
+    if noun == PERSONA:
+        return switch.personas()
+    return switch.changes(fid)
 
 
 def current(noun: str, fid: str) -> str:
     """The name frame *fid* is on right now — the row that gets :data:`MARK`.
 
-    `switch.current_persona` answers ``None`` for a plane with no persona at all, which is
-    an ordinary answer rather than a missing one; it becomes `""`, which matches no name
-    and therefore marks no row.
+    `switch.current_persona` and `switch.current_change` answer ``None`` for a plane with
+    no persona and a frame looking at no change, which are ordinary answers rather than
+    missing ones; both become `""`, which matches no name and therefore marks no row.
     """
     if noun == WORKSPACE:
         return switch.current_workspace(fid)
-    return switch.current_persona(fid) or ""
+    if noun == PERSONA:
+        return switch.current_persona(fid) or ""
+    return switch.current_change(fid) or ""
 
 
 def pin_reason(noun: str, fid: str) -> str:
-    """Why *fid* will not switch its *noun*, or `""` when it will.
+    """Why *fid* will not offer a picker for *noun*, or `""` when it will.
 
-    The same sentence `switch.to_workspace` refuses with, built from the same read
-    (`switch._pin`), so the row and the keypress cannot describe one frame two ways. `""`
-    exactly when the frame is not pinned, which is what makes "available" and "has no
-    reason" one decision here rather than two that can contradict each other on screen.
+    For a workspace and a persona that is the launch pin: the same sentence
+    `switch.to_workspace` refuses with, built from the same read (`switch._pin`), so the
+    row and the keypress cannot describe one frame two ways.
+
+    **For a change it is a different question with the same shape**, and that is why the
+    function is one rather than two. Nothing can pin a change (:data:`PIN` says why), so
+    the only thing standing between the doorway and a picker is having no changes at all —
+    a pane of no names is the offer charter knows it cannot honour, exactly as a pinned
+    frame's list of unswitchable ones is. `""` exactly when the picker would be useful,
+    which is what makes "available" and "has no reason" one decision here rather than two
+    that can contradict each other on screen.
+
+    **It costs a directory read for `change` and none for the other two**, and that is
+    affordable where it sits: `open_rows` runs once when the palette opens, never on a
+    repaint, and the read is `changes/`'s own listing — the same one the picker would make
+    a keystroke later.
     """
+    if noun == CHANGE:
+        return "" if names_of(CHANGE, fid) else NO_CHANGES
     pinned = switch._pin(fid, PIN[noun])
     if not pinned:
         return ""
@@ -187,7 +228,7 @@ def roster(noun: str, fid: str) -> Roster:
     on every row of a picker that cannot be reached while it is true is a line nothing
     could go red without.
     """
-    names = tuple(names_of(noun))
+    names = tuple(names_of(noun, fid))
     now = current(noun, fid)
     rows = tuple(overlay.Row(id=NAME_ID.format(noun, i),
                              title=f"{MARK[0] if n == now else MARK[1]}{n}")
@@ -276,4 +317,6 @@ def switch_to(noun: str, fid: str, name: str) -> switch.Outcome:
     """
     if noun == WORKSPACE:
         return switch.to_workspace(fid, name)
-    return switch.to_persona(fid, name)
+    if noun == PERSONA:
+        return switch.to_persona(fid, name)
+    return switch.to_change(fid, name)

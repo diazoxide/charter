@@ -1071,6 +1071,17 @@ def _add_change_parser(sub) -> None:
     fg.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
     fg.set_defaults(func=commands_change.cmd_change_forget)
 
+    # A revert is a NEW change, with the ordinary gates — not an undo button. There is
+    # deliberately no `--force`, no `--all` and nothing that deletes a branch: a
+    # force-push over three default branches leaves a world where the change happened,
+    # was undone, and no repository's history mentions either.
+    rv = csub.add_parser("revert",
+                         help="Derive a new change reverting what charter landed for this "
+                              "one — a branch per landed member, then the ordinary gates.")
+    rv.add_argument("change")
+    rv.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    rv.set_defaults(func=commands_change.cmd_change_revert)
+
 
 def _add_vault_parser(sub) -> None:
     v = sub.add_parser("vault", help="Manage secret vaults (provider + config + persona).")

@@ -3398,12 +3398,23 @@ def _single_credential_reason(cmd: str) -> str | None:
 # --------------------------------------------------------------------------- #
 # A4: RELEASE FLOOR — an unattended run may not publish (#299)                 #
 # --------------------------------------------------------------------------- #
-#: Forge CLI subcommand pairs that publish or land code. `gh pr merge` and `gh release
+#: CLI subcommand pairs that publish or land code. `gh pr merge` and `gh release
 #: create` are no kind of `git`, so `_GIT_WRITE_RE` never saw them and nothing else did
 #: either — they were unguarded in every mode.
+#:
+#: **`charter change land` is here, and so is the branch below that reaches it.** That
+#: command merges one member of a cross-repo change, which is the same act `gh pr merge`
+#: is: the project's floor already sits between *opening* a request and *merging* one —
+#: `gh pr create` is deliberately absent from this set — and a charter verb that merged
+#: would be a documented way around a floor charter itself wrote. Adding the tuple alone
+#: would have shipped a dead line, because the lookup used to live under
+#: `elif base in ("gh", "glab")`; the base check widened with the set, and
+#: `tests/test_release_floor.py` deletes the tuple on its own to prove the entry is what
+#: answers rather than the branch that reaches it.
 _PUBLISH_FORGE = {
     ("gh", "release", "create"), ("gh", "pr", "merge"),
     ("glab", "release", "create"), ("glab", "mr", "merge"),
+    ("charter", "change", "land"),
 }
 #: `git tag` flags that only READ or act locally. An autonomous run legitimately needs to
 #: know what the tags are, and deleting a local tag publishes nothing.
@@ -3437,6 +3448,14 @@ def _release_floor_reason(cmd: str, data: dict) -> str | None:
     tag ``release-1``, and tagging attended costs nothing. The asymmetry favours bluntness:
     a false stop costs one re-run, a false pass costs a version number that can never be
     reused.
+
+    **Charter's own `change land` is on this floor, and nothing else of charter's is.** A
+    cross-repo landing is N merges, each individually revertible, so it is not a release
+    and is not treated as one — the split is attended versus unattended, exactly as it
+    already is for `gh pr merge`. Attended, an agent may land one member, because that is
+    the merge the standing rule permits for a single repo; unattended it may not land at
+    all, because that is where this floor already sat. `charter change show`, `list` and
+    the rest read and are untouched.
     """
     if not _unattended(data):
         return None
@@ -3466,9 +3485,24 @@ def _release_floor_reason(cmd: str, data: dict) -> str | None:
                 if any(re.fullmatch(r"v?\d+\.\d+(?:\.\d+)?[\w.-]*", w)
                        for w in words[1:]):
                     return fix + "This pushes what looks like a version tag."
-        elif base in ("gh", "glab") and len(words) >= 2:
-            if (base, words[0], words[1]) in _PUBLISH_FORGE:
-                return fix + f"`{base} {words[0]} {words[1]}` publishes or lands code."
+        elif base in ("gh", "glab") or _is_charter(prog, args):
+            # **The reader had to widen with the set.** `_PUBLISH_FORGE` was consulted only
+            # for `gh`/`glab`, so `("charter", "change", "land")` would have been a tuple
+            # nothing could reach — a floor that never runs, in a phase whose thesis is
+            # that a guard nobody pins is a comment with a runtime cost.
+            #
+            # `_is_charter` rather than `base == "charter"`, so `edm change land` (the
+            # pre-rename binary) and `python3 -m charter change land` are the same command
+            # to this guard as they already are to the leak guard. Both spellings put
+            # charter's own NAME in `words` instead of in `prog`, and `-m` drops out with
+            # the other flags — so the pair sits one place further along and is put back on
+            # the same footing here rather than matched in one spelling and missed in the
+            # other.
+            name = base if base in ("gh", "glab") else _CHARTER_PROGS[0]
+            if words and words[0].lower() in _CHARTER_PROGS:
+                words = words[1:]
+            if len(words) >= 2 and (name, words[0], words[1]) in _PUBLISH_FORGE:
+                return fix + f"`{name} {words[0]} {words[1]}` publishes or lands code."
     return None
 
 

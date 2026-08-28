@@ -110,7 +110,68 @@ def _empty(workspace: str | None) -> dict:
         "worktrees": [],
         "todos": [],
         "todo_count": 0,
+        "changes": [],
     }
+
+
+def _change_rows(active: str) -> list[dict]:
+    """This workspace's changes, as rows a pane can draw — **file reads only**.
+
+    Two files per change and nothing else: the record (what the operator declared) and
+    the landing log (what charter declared it merged). No forge call, no git subprocess,
+    no `glstate`. That is the cost half of §4g's idle-tick property said at the source
+    rather than at the renderer: a five-member change is five forge reads, and a scan that
+    made them would put them on every plane-state bump.
+
+    **`glstate` is explicitly not reused**, and it is tempting because it already caches
+    forge state. It is wrong twice: it is keyed on each clone's *currently checked-out*
+    branch, which is frequently not the member's, and what it caches is `ci_status`, which
+    the change surface is forbidden to read — a single string that answers ``None`` for a
+    CLI failure, a timeout, an auth error and *"no check ever ran"* alike (#561).
+
+    **So every member charter has no landing declaration for is ``unknown``, and the
+    change is never greener than its worst member.** That is not a placeholder: `unknown`
+    is the only value meaning *charter did not look*, and what stands between a member and
+    its own landing — its request's state, its checks at its head sha — is a forge read
+    this scan does not make. A member charter observed is `landed` or `blocked`; every
+    other member says so.
+
+    Never raises, like every other field here: one unreadable record degrades to the rows
+    that could be read, and a workspace with no `changes/` at all yields ``[]`` — which is
+    the lazy-creation case, not an error.
+    """
+    from .. import change as change_mod
+
+    records, _refused = change_mod.all_for(active)
+    # The whole log is read ONCE and grouped, rather than once per change. `landings`
+    # parses every line of every host's file to answer about one slug, so asking it per
+    # record is the log read N times on a path that already runs on every plane-state bump.
+    # The rows below carry no line count and no per-change file, so nothing downstream can
+    # tell the difference — which is exactly why it would have gone unnoticed.
+    by_change: dict[str, set[str]] = {}
+    try:
+        for line in change_mod.landings(active):
+            by_change.setdefault(line["change"], set()).add(line["repo"])
+    except Exception:
+        by_change = {}
+    rows: list[dict] = []
+    for rec in records:
+        slug = rec["change"]
+        states = change_mod.member_states(rec, by_change.get(slug, set()))
+        done, total = change_mod.landed_count(states.values())
+        rows.append({
+            "change": slug,
+            "why": rec["why"],
+            "state": change_mod.worst(states.values()),
+            "landed": done,
+            "total": total,
+            "excluded": len(rec["excluded"]),
+            "members": [{"repo": m["repo"], "branch": m["branch"],
+                         "needs": list(m["needs"]),
+                         "state": states.get(m["repo"], "unknown")}
+                        for m in rec["members"]],
+        })
+    return rows
 
 
 def _entry(d: Path, branch: str, states: dict, gl: dict, cur_repo: str | None,
@@ -282,6 +343,16 @@ def scan(workspace: str | None = None, cwd: str | None = None) -> dict:
     except Exception:
         todo_items, todo_count = [], 0
 
+    # This workspace's changes. Carried in the ONE snapshot, under the one timestamp, for
+    # §4f's clock rule and not only its store rule: everything on screen has to be from
+    # the same moment by construction rather than by two caches happening to agree, and a
+    # design that answered only the store rule would be §4f half-read. The component draws
+    # this timestamp's AGE, which is what makes "read 4m ago" a fact rather than a hope.
+    try:
+        changes = _change_rows(active)
+    except Exception:
+        changes = []
+
     return {
         "gathered_at": time.time(),
         "workspace": active,
@@ -290,6 +361,7 @@ def scan(workspace: str | None = None, cwd: str | None = None) -> dict:
         "worktrees": worktrees,
         "todos": todo_items,
         "todo_count": todo_count,
+        "changes": changes,
     }
 
 

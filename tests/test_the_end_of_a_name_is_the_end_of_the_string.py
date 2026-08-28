@@ -204,6 +204,11 @@ ADMITTERS: dict[str, str] = {
     "instance._VERSION": "1.2.3",
     "forge.registry._HOST_RE": "git.example.com",
     "recall._REL_RE": "14d",
+    # A merge sha read out of `changes/log/<host>.jsonl` and handed to `git revert` and
+    # `git rev-list` as argv. An admitter in the sharpest sense: `.match` would have
+    # accepted `"e0c9d13\n"`, putting a newline into a git argv out of a file a hand edit
+    # or a half-written append can reach.
+    "commands_change._SHA_RE": "e0c9d13",
 }
 
 #: **Detectors** — "is this token one I must account for?". Over-matching makes the guard

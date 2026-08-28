@@ -61,6 +61,13 @@ Three stores, three jobs. Putting a thing in the wrong one is the common mistake
 | `memory/` | facts learned while working | constantly, one file per fact |
 | `workspace.json` | repos + branches | when you `snapshot` |
 
+Two more stores sit beside them with their own lifetimes: `todos/` (intent, which expires —
+[ADR 0004](adr/0004-intent-is-its-own-store.md)) and `changes/`, one file per cross-repo
+change: which repositories are in it, which branch in each, which must land before which,
+and which were considered and left out. A change's name outlives the work — it is in a merge
+commit's trailer in five repositories forever — which is why it is not a todo. See
+[changes.md](changes.md).
+
 **`workspace.md` is the charter** — what this task is for and what has been decided. Seed
 it with `create --vision "…"`; a `fork` inherits it. It answers "why does this workspace
 exist", so it should be short enough that a newcomer reads all of it.
@@ -80,9 +87,15 @@ The most consequential per-workspace choice, and it is one flag.
 
 - **LOCAL** (the default): everything above stays on disk. Nothing is committed. Nothing
   reaches anyone.
-- **LIVE** (`charter workspace live <name>`): `workspace.json`, `workspace.md`, `memory/`
-  and `todos/` are un-ignored, and a memory written to a LIVE workspace is committed and
-  pushed **immediately** — reactively, not on a later save.
+- **LIVE** (`charter workspace live <name>`): `workspace.json`, `workspace.md`, `memory/`,
+  `todos/` and `changes/` are un-ignored, and a memory written to a LIVE workspace is
+  committed and pushed **immediately** — reactively, not on a later save.
+
+`changes/log/` is un-ignored by neither switch and is committed **never**, exactly as
+`pieces/` is not. It is the landing declaration — *charter merged this commit, for this
+change* — per host, describing merges made from one disk; a portable file describing a
+local reality is the mismatch [ADR 0010](adr/0010-the-manifest-is-a-snapshot-not-an-inventory.md)
+dissects.
 
 `charter workspace live <name> --off` puts it back. `charter workspace save` is the manual
 counterpart for a LIVE workspace whose writes were deferred with `--no-sync`. Writing to a
