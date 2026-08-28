@@ -415,6 +415,17 @@ def drift(root: Path) -> list[str]:
 #: dropped here and gets the others, rather than a `KeyError` in a launcher or a
 #: pane split for a slot with no renderer. It drew repo rows recomposed for 22 columns;
 #: `repos` draws the same rows at the width the table was designed for.
+#: **`changes` is deliberately NOT here, and that is what keeps it free.** It is a
+#: component charter ships, registers and can draw (`frame/builtins.py`,
+#: `frame/slots.py:SLOTS`), and a plane places it with a `[[frame.component]]` table —
+#: which is also the only way any component gets a toggle key, built-in or not
+#: (:data:`FRAME_COMPONENT_FIELDS`: *"a component nobody asked to bind does not get a
+#: key"*). Naming it here would put it in the shipped `slots` default and in `full`,
+#: because those three must agree, and that is a pane on EVERY operator's frame saying
+#: "no changes in <ws>" for a feature most planes never use. `repos` saying "no clones"
+#: is a plane that is broken or new; a plane with no cross-repo change is the ordinary,
+#: permanent state. The picker is what stays free: `F2` then the `change` row, on every
+#: plane, with no config at all.
 FRAME_SLOTS = ("top", "bottom", "repos", "right")
 
 #: How much frame there is, as a PRESET over :data:`FRAME_SLOTS` — never a second

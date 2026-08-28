@@ -107,11 +107,45 @@ class TestCharterItself(GateCase):
         self.assertFalse(toolgate._is_dangerous("charter", ["persona", "list"]))
 
     def test_an_ordinary_charter_command_still_smooths(self):
-        """The carve-out is two subcommands, not the binary. A persona that declared
+        """The carve-out is three subcommands, not the binary. A persona that declared
         `charter` to run `charter persona list` keeps what it declared it for — otherwise
         this fix is a feature removal wearing a security label."""
         self.assertIsNotNone(self.gate("charter persona list"))
         self.assertIsNotNone(self.gate("charter workspace status"))
+
+    def test_charter_change_never_auto_approves(self):
+        """`charter change land` merges code into a repository, and a persona declaring
+        `tools: charter` must not have that pre-approved."""
+        self.assertIsNone(self.gate("charter change land component-api-2 --repo charter"))
+        self.assertIsNone(self.gate("edm change land component-api-2 --repo charter"))
+
+    def test_the_coarse_grain_is_deliberate_and_the_asymmetry_decides_it(self):
+        """It declines to auto-approve `charter change show` too, which is read-only. That
+        is the trade being made rather than an oversight: over-refusing costs ONE
+        permission prompt on a read-only command, under-refusing auto-approves a MERGE —
+        and because this gate never denies, the cost of the coarse grain is bounded at
+        that prompt while the other direction is not bounded at all.
+
+        Asserted rather than left implied, so that a later attempt to sharpen the rule to
+        the verb has to change a test that says why it is blunt."""
+        self.assertIsNone(self.gate("charter change show component-api-2"))
+        self.assertIsNone(self.gate("charter change list"))
+
+    def test_the_change_word_is_pinned_where_only_it_can_answer(self):
+        """One layer down, for `test_the_subcommand_scan_is_pinned_where_only_it_can_answer`'s
+        reason exactly: the gate calls above are also refused by other rules in some
+        spellings, so a mutant deleting `change` from `_DANGEROUS["charter"]` could leave
+        them green. Here nothing else answers."""
+        self.assertTrue(toolgate._is_dangerous("charter", ["change", "land", "c"]))
+        self.assertTrue(toolgate._is_dangerous("edm", ["change", "land", "c"]))
+        self.assertFalse(toolgate._is_dangerous("charter", ["workspace", "status"]))
+
+    def test_the_gate_still_never_denies(self):
+        """The bound on the whole trade. `decide` answers `(persona, binary)` or `None`,
+        and `None` is a normal prompt — never a refusal. If this stopped being true, "the
+        cost is bounded at a prompt" would stop being true with it."""
+        self.assertIn(self.gate("charter change land c --repo r"), (None,))
+        self.assertIsNotNone(self.gate("charter persona list"))
 
 
 class TestInterpretersAndWrappers(GateCase):

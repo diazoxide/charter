@@ -1838,6 +1838,10 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
     _BAD_SLOT_STDERR = (f"charter panel: unknown slot '{_BAD_SLOT}' "
                         f"(known: {', '.join(sorted(frame_slots.SLOTS))})")
 
+    #: How wide the one-row pane below is. Named because the reason's WRAPPED height is
+    #: derived from it, and a width written twice would let the two drift.
+    _PANE_COLS = 40
+
     #: A pane program that waits for a gate file, prints *stderr text* and exits 2 — the
     #: pre-#382 panel, reduced to the only two things about it that mattered. The gate
     #: is what makes `remain-on-exit` arm-able in time: `set -w` cannot be issued before
@@ -1850,7 +1854,7 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
     def _capture(self, target: str, *history: str) -> str:
         """What `capture-pane` reports for *target* — the VISIBLE screen by default,
         which is the whole point: it is what an operator sees without knowing to scroll
-        a one-row pane's history. Pass `"-S", "-3"` to look into that history instead."""
+        a one-row pane's history. Pass `"-S", "-<n>"` to look into that history instead."""
         return _tmux("capture-pane", "-p", *history, "-t", target).stdout
 
     def _dead(self, target: str) -> str:
@@ -2000,7 +2004,8 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         self.addCleanup(shutil.rmtree, gate_dir, True)
         gate = os.path.join(gate_dir, "die")
 
-        r = _tmux("new-session", "-d", "-s", "panel-oldshape", "-x", "40", "-y", "1",
+        r = _tmux("new-session", "-d", "-s", "panel-oldshape",
+                  "-x", str(self._PANE_COLS), "-y", "1",
                   "--", sys.executable, "-c", self._DYING_PROGRAM, gate,
                   self._BAD_SLOT_STDERR, env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -2021,7 +2026,15 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
                          "a pane that small no longer loses a newline-terminated write, "
                          "so `panel._hold` is solving a problem that no longer exists: "
                          f"{visible!r}")
-        with_history = self._capture("panel-oldshape", "-S", "-3")
+        # One row deeper than the reason's own wrapped height. `-3` today, exactly as it
+        # was written by hand — but DERIVED, because the reason names every key of
+        # `frame_slots.SLOTS` and therefore grows whenever charter ships a slot. Measured
+        # while `changes` was briefly a slot: the sentence went from two wrapped rows to
+        # three, this history window stopped reaching the row carrying the slot name, and
+        # the case went red for the LENGTH of a message rather than for the property it
+        # is named for. That is the failure this arithmetic removes.
+        depth = -(-len(self._BAD_SLOT_STDERR) // self._PANE_COLS) + 1
+        with_history = self._capture("panel-oldshape", "-S", f"-{depth}")
         self.assertIn(self._BAD_SLOT, with_history,
                       "the reason never reached the pane AT ALL — that is a different "
                       "failure from the one #382 fixes, and `_hold` would not cure it: "

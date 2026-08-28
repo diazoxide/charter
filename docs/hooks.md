@@ -157,16 +157,26 @@ rule while one who reads a bare refusal files an issue.
   expressible as a pattern and stays in the hook anyway, so it can explain itself — see
   [git-policy.md](git-policy.md) and ADR 0014.
 - **Release floor.** A run the harness reports as `bypassPermissions` may not create a tag,
-  push tags, or `gh release create` / `gh pr merge`. `bypassPermissions` means *stop asking
-  me*, not *stop knowing things*, and a published version number can never be reused.
+  push tags, `gh release create` / `gh pr merge`, or **`charter change land`**.
+  `bypassPermissions` means *stop asking me*, not *stop knowing things*, and a published
+  version number can never be reused.
+
+  `charter change land` is here because it merges one member of a cross-repo change into a
+  repository, which is the same act `gh pr merge` is — and the project's line already runs
+  between *opening* a request and *merging* one (`gh pr create` is deliberately not on this
+  list). The split is attended versus unattended: attended, an agent may land one member,
+  because that is the merge the standing rule already permits for a single repo. Every other
+  `charter change` verb — `show`, `list`, `create`, `add`, `drop`, `push`, `revert` — is
+  untouched in every mode. See [changes.md](changes.md) and
+  [ADR 0020](adr/0020-there-is-no-cross-repo-merge-loop.md).
 
 A seventh path is not a guard but an allowance: a program the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the
 **program**, so every argument rides along — which is why seven things are not smoothed
 whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`,
-`git clean`, …), **an argument that is itself a program**, interpreters whose argument is
-the real command (`bash -c`, `python3 -c`, `env`, `xargs`, `npx`, …), any command whose
-arguments **reach** a vault or charter's own state, any tool added to that line after the
+`charter change`, `git clean`, …), **an argument that is itself a program**, interpreters
+whose argument is the real command (`bash -c`, `python3 -c`, `env`, `xargs`, `npx`, …),
+any command whose arguments **reach** a vault or charter's own state, any tool added to that line after the
 session started — the gate answers within the set declared before this session could
 rewrite it, and `persona.md` is a file the model can write — any command carrying a
 character the shell would rewrite before the program sees it, and any command whose

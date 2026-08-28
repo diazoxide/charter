@@ -37,7 +37,7 @@ from __future__ import annotations
 import os
 import time
 
-from .. import tui
+from .. import contain, tui
 from . import pane
 
 #: The spinner's own frames, and how long each is held. Ten braille cells, each one
@@ -866,6 +866,16 @@ _NAME_MIN_W = 12
 #: that it does, not a replacement for it.
 _MAX_TODO_LINES = 8
 
+#: The most rows the sidebar's `changes` section may occupy — its heading, its rows and
+#: its `…(+N more)` line together.
+#:
+#: :data:`_MAX_TODO_LINES`' argument, one section over: the sidebar is the persona column
+#: first, so a list that ran to the bottom of a forty-row terminal would be taking the
+#: pane from what it is for. `charter change show <slug>` is where a whole change lives
+#: (§3.4 calls it the monorepo view); this is the frame's answer to *"what am I in the
+#: middle of"*, not a replacement for it.
+_MAX_CHANGE_LINES = 4
+
 #: The screen column every row's content starts in, everywhere in the frame — one
 #: constant, read, rather than a `"  "` spelled at each call site.
 #:
@@ -1436,6 +1446,14 @@ def _right(fid: str) -> str:
     rows = todo_section(fid, w, h - len(lines) - 1, terse=terse)
     if rows:
         lines.extend(["", *rows])
+    # The changes go LAST, and the order is a priority rather than a preference: the
+    # personas are what this column is for, the todos are what this workspace is being
+    # asked to do, and a change is the coarser "what am I in the middle of" that
+    # `charter change show` answers in full. Each section reserves its own blank row out
+    # of what is left, so the one that overflows is always the lowest-priority one.
+    changes = changes_section(fid, w, h - len(lines) - 1)
+    if changes:
+        lines.extend(["", *changes])
     return "\n".join(lines)
 
 
@@ -1768,6 +1786,145 @@ def _repos(fid: str) -> str:
     budget = min(_height() - 1, cap)
     return "\n".join([_sidebar_head("repos", len(repos), w),
                       *(_table_lines(data, w, budget) if budget > 0 else [])])
+
+
+#: How a member's derived state is spelled on a row. `change.MEMBER_STATES`' own words,
+#: upper-cased, held in one table so the pane and `charter change show` cannot come to
+#: disagree — and so that a state charter grows later is a `KeyError` here rather than a
+#: blank column.
+#:
+#: **`UNKNOWN` is a word and not a blank**, which is the whole of #561 on a surface. An
+#: empty cell reads as "fine, nothing to report"; `UNKNOWN` reads as *charter did not
+#: look*, which is what it means — a member's request state and its checks at its head sha
+#: are a forge read this pane does not make.
+_CHANGE_STATE_WORD = {"unknown": "UNKNOWN", "blocked": "BLOCKED", "landed": "landed"}
+
+#: How long the age of a reading is shown for before it is just "a while". Beyond an hour
+#: the number stops being the thing you act on — what you act on is that it is stale — so
+#: the row says so in a word instead of counting up for ever.
+_AGE_STALE = 3600
+
+
+def _age(then, now: float, *, short: bool = False) -> str:
+    """``just now`` / ``4m ago`` / ``stale`` for a snapshot taken at *then*.
+
+    *short* is the same three answers in the cells a 22-column sidebar has to spare —
+    ``now`` / ``4m`` / ``old``. One function with a flag rather than two formatters,
+    because the BOUNDS are the thing that must not drift: a surface that called anything
+    under a minute "now" while another called it "just now" at ninety seconds would be two
+    clocks wearing one name.
+
+    **The pane draws the age of what it is showing, and that is the cost half of §4g.** A
+    refresh is an action, not a tick; between two of them the rows on screen are as old as
+    the last one, and a surface that did not say so would be indistinguishable from one
+    that was live. `gathered_at` is `time.time()` at scan, so this is a subtraction and
+    reads no clock the snapshot did not already carry.
+
+    A missing or unreadable timestamp answers ``?`` rather than ``just now``: a cache
+    written by an older charter has none, and dating it to the present is exactly the
+    confident wrong answer ADR 0009 forbids.
+    """
+    try:
+        age = now - float(then)
+    except (TypeError, ValueError):
+        return "?"
+    if age < 0 or age >= _AGE_STALE:
+        return "old" if short else "stale"
+    if age < 60:
+        return "now" if short else "just now"
+    return f"{int(age // 60)}m" + ("" if short else " ago")
+
+
+def _change_rows(rows: list, width: int, budget: int, age: str,
+                 chosen: str | None = None) -> list[str]:
+    """The `changes` section of the sidebar: a heading, then one row per change.
+
+    **Nothing at all when this workspace has no changes**, and that is `_todo_rows`' own
+    rule and its argument: a heading over an empty space in a 22-column column is
+    furniture within a day, and then a real change appearing in it draws no more attention
+    than the emptiness did. It is also what makes this section free on the planes that
+    never use it — which is the whole reason the change surface is a section here rather
+    than a pane of its own (`frame/builtins.py` records the measurement).
+
+    **The aggregate goes on the HEADING and the counts on the rows.** Twenty-two columns
+    cannot carry a slug, a fraction and a state word on one line, and the aggregate is the
+    thing you glance for — `change.worst` over every change's own worst member, so it can
+    never be greener than the worst member of the worst change.
+
+    **The change the picker chose carries the mark and does NOT move to the top.** A list
+    whose rows reorder with state is a list nobody learns (`builtin_actions._register_density`
+    settles the same question for its own rows), and the mark costs two cells that are the
+    same two cells whichever row has it.
+
+    The `…(+N more)` line is RESERVED out of the budget rather than appended and trimmed,
+    which is `_table_lines`' rule: "there is more here than fits" outranks "here is an
+    arbitrary one of them".
+    """
+    from .. import change as change_mod, statusline as sl
+    from . import choose
+
+    if not rows or budget <= 0:
+        return []
+    state = _CHANGE_STATE_WORD.get(
+        change_mod.worst([r.get("state") for r in rows]), "UNKNOWN")
+    head = tui.truncate(
+        f"{sl._DIM}{sl._HEAD_PAD}{sl._R}{sl._BOLD}changes{sl._R}"
+        f"{sl._DIM} {len(rows)} {state} {age}{sl._R}", width)
+    room = budget - 1
+    if room <= 0:
+        return [head]
+    shown = rows if len(rows) <= room else rows[: max(room - 1, 0)]
+    out = [head]
+    # The count column is fixed, so the NAME is what gives way — a fraction cut in half
+    # says nothing, while a clipped slug is still the slug you recognise.
+    counts = [f"{int(r.get('landed') or 0)}/{int(r.get('total') or 0)}" for r in shown]
+    cw = tui.column("", counts, gap=0)
+    mw = tui.width(choose.MARK[0])
+    for r, count in zip(shown, counts):
+        # The mark is `frame/choose.py`'s, not a second one: it is what the picker's own
+        # rows carry for "the one you are on", and two spellings of that would be two
+        # answers on one screen. Both entries are the same width by construction, so the
+        # mark moving does not move the names beside it.
+        mark = choose.MARK[0] if r.get("change") == chosen else choose.MARK[1]
+        name = contain.one_line(r.get("change") or "")
+        room_for_name = max(width - cw - mw - 1, 1)
+        out.append(tui.truncate(
+            f"{sl._DIM}{mark}{sl._R}"
+            f"{tui.pad(tui.truncate(name, room_for_name), room_for_name)} "
+            f"{sl._DIM}{count}{sl._R}", width))
+    if len(shown) < len(rows):
+        out.append(tui.truncate(
+            f"{sl._DIM}…(+{len(rows) - len(shown)} more){sl._R}", width))
+    return out
+
+
+def changes_section(fid: str, width: int, budget: int) -> list[str]:
+    """This workspace's cross-repo changes, in at most *budget* rows — the `changes` part
+    of the sidebar composite.
+
+    `todo_section`'s shape and its rules. **The cache is opened only when there is a row
+    to draw it into**: the budget is checked before `gather.read` is reached, because a
+    pane with no room must not open a file it is about to discard.
+
+    **The workspace is the FRAME's, handed in, never one the panel resolved for itself**
+    (#512/#526). `gather.read` falls through to `gather.scan` on a cold cache, and `scan`
+    with no workspace argument resolves in the PANEL process — which lands on the declared
+    default, and a populated list of another plane's changes reads as an answer.
+
+    **No subprocess, on any path.** Everything drawn here is in the one snapshot
+    `gather.scan` wrote — the records and the landing declarations, both file reads. A
+    repaint that asked the forge would put five reads on every plane-state bump, which is
+    §4g's idle-tick property spent on a pane nobody was looking at.
+    """
+    from . import gather
+    budget = min(budget, _MAX_CHANGE_LINES)
+    if budget <= 0:
+        return []
+    from . import state as st
+    data = gather.read(fid, workspace=_frame_workspace(fid))
+    return _change_rows(data.get("changes") or [], width, budget,
+                        _age(data.get("gathered_at"), time.time(), short=True),
+                        st.frame_change(fid))
 
 
 #: Every slot charter can draw. `panel.run` refuses a name that is not in here rather

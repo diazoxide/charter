@@ -379,6 +379,9 @@ copy wins, is compared to nothing, and drifts unwatched in both directions.
   constrain.
 - [docs/forges.md](docs/forges.md) — what GitLab and GitHub each need, self-hosted hosts,
   and the rule for a repo name that collides across forges.
+- [docs/changes.md](docs/changes.md) — one change spanning several repos: what the record
+  holds, why it holds no state, what charter refuses to do with it, and how a revert is a
+  new change rather than an undo button.
 
 ## Contributing
 

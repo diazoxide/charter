@@ -232,6 +232,70 @@ def to_persona(fid: str, name: str) -> Outcome:
     return Outcome(True, f"persona → {shown}")
 
 
+def changes(fid: str) -> list[str]:
+    """Every cross-repo change frame *fid*'s workspace holds, name-checked on the way out.
+
+    :func:`workspaces`' reasoning, one noun over, and the check matters as much: a slug
+    goes on to a `changes/<slug>.json` join and onto a palette row, which is the position
+    #442 already cost this project once. `change.all_for` has read every one of these
+    through `change.read`, which asks `instance.change_name_ok` — so this is the same
+    floor asked where the list is built rather than a second rule.
+
+    **Keyed on the FRAME's workspace, not this process's** (#512). A palette is a
+    `run-shell` child of a tmux server shared between frames, and resolving locally would
+    list another plane's changes on this frame's screen. `state.workspace_for` is the one
+    rule every frame surface asks.
+
+    A record charter could not read contributes no row and takes nothing down with it —
+    `change.all_for` reports those separately, and `doctor` is where they are named.
+    """
+    from .. import change as change_mod
+    try:
+        records, _refused = change_mod.all_for(state.workspace_for(fid))
+    except Exception:
+        return []
+    return sorted(r["change"] for r in records)
+
+
+def current_change(fid: str) -> str | None:
+    """The change this frame is looking at, or ``None``.
+
+    `state.frame_change` and nothing else — there is no environment pin for a change and
+    no committed default, so unlike a workspace or a persona this has exactly one rung.
+    That is stated rather than left implicit because `choose.pin_reason` branches on it:
+    a change picker can never be refused by a launch pin, and the reason its doorway
+    carries is a different one.
+    """
+    return state.frame_change(fid)
+
+
+def to_change(fid: str, name: str) -> Outcome:
+    """Point frame *fid* at change *name*, or say why it did not.
+
+    **This moves what the frame is LOOKING at, not what it is.** A workspace switch moves
+    the plane every panel reads and a persona switch moves who is reading; this moves one
+    panel's subject. So there is no `set_active`, no lock, no identity to rewrite and no
+    gather refresh — the change rows are already in the snapshot every panel shares, and
+    re-gathering to choose which of them to draw would be a second reading of a plane
+    that has not moved.
+
+    Two refusals, and each is a thing the operator can act on: a slug that cannot name a
+    change (`instance.change_name_ok`, the one rule), and a change this workspace does not
+    have. An unknown name is a question, never an implicit create — `to_workspace`'s rule,
+    and the existing names go in the message for its reason.
+    """
+    from .. import instance
+    shown = contain.one_line(name)
+    if not instance.change_name_ok(name):
+        return Outcome(False, f"'{shown}' cannot name a change")
+    known = changes(fid)
+    if name not in known:
+        return Outcome(False, f"no change '{shown}' — have: {_some(known)}")
+    state.record_change(fid, name)
+    state.bump(fid)
+    return Outcome(True, f"change → {shown}")
+
+
 def current_workspace(fid: str) -> str:
     """What the frame is drawing right now — `state.workspace_for`, named here so the
     palette and the switcher cannot come to disagree about which name gets the mark."""

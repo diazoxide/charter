@@ -64,6 +64,7 @@ SERVES = {
     "gather": lambda snap: MappingProxyType(snap),
     "repos": _rows("repos"),
     "todos": _rows("todos"),
+    "changes": _rows("changes"),
 }
 
 #: The keys every component gets whatever it declared: how much room it has, which frame

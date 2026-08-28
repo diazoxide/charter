@@ -615,6 +615,52 @@ def chrome(fid: str) -> str | None:
         return None
 
 
+def record_change(fid: str, slug: str) -> None:
+    """Write down which cross-repo change THIS RUNNING FRAME is looking at.
+
+    :func:`record_density`'s twin, for its reason exactly: this is a keypress's answer for
+    one running frame, and `reap` deletes the directory whole when the frame ends. There
+    is no committed setting behind it and there deliberately is not one — which change you
+    are in the middle of is a fact about a session, not an arrangement somebody would
+    commit, and `[frame]` gaining a key for it would be a config value that is stale by
+    lunchtime.
+
+    Same must-not-raise, atomic-write shape as :func:`record_density`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "change.tmp"
+    try:
+        config.write_for(tmp, f"{slug}\n")
+        os.replace(tmp, d / "change")
+    except OSError:
+        return
+
+
+def frame_change(fid: str) -> str | None:
+    """The change this frame is looking at, or ``None`` for "none chosen".
+
+    ``None`` is the ordinary case and is not a failure: a frame comes up looking at no
+    change in particular, and the `changes` panel then lists them all — which is the
+    honest answer to *"what am I in the middle of"* when nobody has said.
+
+    **The text is NOT validated here**, for :func:`density`'s reason: `instance` owns the
+    one rule for what a change may be called (`change_name_ok`, asked by
+    `change.path_for`), and it sits at the point of use so a hand-edited or truncated file
+    degrades exactly the way a slug charter cannot resolve does. A second half-copy of
+    that rule in this module is how the two come to disagree, and this value is on its way
+    to a `changes/<slug>.json` join.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "change").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def record_hidden(fid: str, names) -> None:
     """Write down which components THIS RUNNING FRAME is not drawing.
 

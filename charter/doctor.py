@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import inventory, tui, util
+from . import contain, inventory, tui, util
 from .forge.gitlab import GitLabForge
 
 OK, WARN, FAIL = "ok", "warn", "fail"
@@ -1331,6 +1331,118 @@ def check_workspace_clones() -> Result:
                         "— never a live query, this runs at SessionStart."))
 
 
+#: The optional prompt before every cross-repo landing, named by :func:`check_changes` and
+#: **never written by charter**.
+#:
+#: **`--local` is load-bearing in that line, not a convenience.** `charter guard ask`
+#: writes the plane's *committed* `.claude/settings.json` by default; `--local` writes the
+#: gitignored `.claude/settings.local.json` instead. Consent that travels in a commit
+#: enrols a whole team on one person's click, which is exactly why ADR 0003 put reporting
+#: consent in user-level config and out of `charter.toml`. A team that genuinely wants the
+#: prompt for everybody drops the flag — a decision, made once, visible in a diff.
+#:
+#: **Charter names it and does not run it** (ADR 0017): both answers are legitimate, and a
+#: tool that settles a legitimate choice by writing a line while nobody is looking has made
+#: the decision for the operator. Because Claude Code matches on the full command string,
+#: the prompt it writes shows *which change and which repo*.
+#:
+#: There is deliberately no second consent gate behind it either. A prompt the agent
+#: satisfies by running one more command is theatre, and an operator who is prompted
+#: constantly rubber-stamps within a day — which the security assessment already named as
+#: worse than no gate. The floor that matters is `hooks._release_floor_reason`, which
+#: denies an unattended landing outright.
+LANDING_PROMPT = "charter guard ask --local 'charter change land *'"
+
+
+def check_changes() -> Result:
+    """Cross-repo changes whose records and git disagree — ADR 0013's rule 2.
+
+    *"A divergence charter can see, charter names."* Five of them, all in
+    `commands_change.divergences` and `commands_change.stray_branches`: a member landed
+    outside charter (so there is no `Charter-Change` trailer and no merge sha, and
+    `charter change revert` cannot reach it), a declared landing the default branch no
+    longer contains, a declared landing on a commit carrying no trailer, a member that
+    landed while a blocker had not, and a member's branch name sitting in a clone that is
+    a member of no change.
+
+    **FAIL, not WARN**, and that is the whole of ADR 0013: *"WARN is not a surface. A
+    divergence worth naming under rule 2 is worth FAIL."* `cmd_doctor` exits non-zero only
+    on FAIL, and that exit code is the only thing that makes the SessionStart wrapper
+    print — a partial cross-repo landing nobody is told about is the state this entire
+    surface exists to prevent.
+
+    **Every workspace, not just the active one** — `check_workspace_clones`' own finding
+    (#156): a change is a per-workspace store, and the one that is half-landed is rarely
+    the one you are standing in.
+
+    **Read from what is already on this disk; never fetched.** This runs from SessionStart
+    and must not reach the network. The honest consequence, and it belongs in the output
+    rather than only here: the check can **under**-report — a merge somebody else pushed is
+    invisible until something fetches — but it can never invent a divergence. That is the
+    acceptable direction of failure and the same discipline ADR 0009 sets for error text.
+
+    The OK row names :data:`LANDING_PROMPT`, which is the one place charter tells an
+    operator that the prompt exists. It is on the OK row rather than in a hint because a
+    `hint` renders only when the status is not OK, and a plane whose changes are all clean
+    is exactly the plane where the question *"do I want a prompt before each landing?"* is
+    worth asking.
+    """
+    from . import change as _change
+    from . import commands_change as _cc
+    from . import config as _config
+    from . import workspace as _workspace
+
+    name = "changes"
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail="no control plane found")
+
+    found: list[str] = []
+    unreadable: list[str] = []
+    total = 0
+    try:
+        for ws in _workspace.list_workspaces():
+            records, refused = _change.all_for(ws)
+            total += len(records)
+            for slug, complaint in refused:
+                unreadable.append(f"{ws}/{contain.readable(slug)}: {complaint}")
+            for rec in records:
+                for line in _cc.divergences(ws, rec):
+                    found.append(f"{ws}/{rec['change']}: {line}")
+            for line in _cc.stray_branches(ws):
+                found.append(f"{ws}: {line}")
+    except (util.ProcTimeout, OSError, ValueError) as e:
+        # Narrow, per `check_memory_indexes`: a broad catch here once swallowed a NameError
+        # and reported OK, and a check that silently does nothing is worse than no check.
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+
+    # A record that did not parse is its own answer and is NOT folded in with the
+    # divergences: "charter cannot read this file" and "git disagrees with this file" send
+    # the reader to two different places, and one count covering both would send them to
+    # neither. It is still a FAIL — a change nobody can read is a change nobody can land.
+    if unreadable:
+        shown = "; ".join(unreadable[:3])
+        if len(unreadable) > 3:
+            shown += f" (+{len(unreadable) - 3} more)"
+        return Result(name, FAIL, detail=f"unreadable record(s): {shown}",
+                      hint="Fix the file the message names — the key set is closed at both "
+                           "ends, so an unknown or missing key is named rather than "
+                           "ignored. `charter change list` prints the same complaint.")
+    if found:
+        shown = "; ".join(found[:3])
+        if len(found) > 3:
+            shown += f" (+{len(found) - 3} more)"
+        return Result(name, FAIL, detail=shown,
+                      hint="Charter cannot stop a browser and does not pretend to — this "
+                           "is the half that makes the guard honest. Read from what is "
+                           "already fetched, so it can under-report and never invent. "
+                           "`charter change show <slug>` is the whole picture.")
+    if not total:
+        return Result(name, OK, detail="none")
+    return Result(name, OK,
+                  detail=f"{total} change(s), none divergent · optional prompt before "
+                         f"each landing: {LANDING_PROMPT}")
+
+
 def check_inventory() -> Result:
     """Can this plane clone anything?
 
@@ -2329,7 +2441,7 @@ def _checks():
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
                 check_plane_root(), check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
-                check_workspace_clones(),
+                check_workspace_clones(), check_changes(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(), check_persona_grant(),
@@ -2368,7 +2480,7 @@ _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
     "git auth", "charter.toml", "schema", "plane root", "harness", "frame",
-    "plane-root guard", "guard seen", "nested plane", "workspace clones",
+    "plane-root guard", "guard seen", "nested plane", "workspace clones", "changes",
     "inventory", "vaults", "vault registry", "version lock", "memory indexes",
     "personas", "persona grant", "front door", "news", "ask rules", "shadowed docs",
     "credential paths", "mcp", "plugin", "plugin files",
