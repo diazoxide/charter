@@ -349,6 +349,28 @@ class OneWalkOverTheArrangement(unittest.TestCase):
                 self.assertEqual(instance.component_style(f, name),
                                  {"bg": None, "pad": 0})
 
+    def test_the_shorthand_forms_place_components_with_no_style_at_all(self):
+        """**`_placement`'s own defaults, reached rather than restated.**
+
+        `_built_in_placement` used to spell out `bg=None, pad=0` beside `_placement`'s
+        identical defaults, and the hand-check found what that costs: mutating
+        `_placement`'s `pad` default to `1` changed nothing anywhere, because every call
+        arriving through that function passed a `0` of its own. Two defaults for one thing,
+        the second hiding the first.
+
+        `frame_components` is the path that reaches them — `slots`, `density` and the
+        shipped default all place built-ins with no style argument at all — so this is
+        where "a plane that never wrote per-pane style has none" is asked.
+        """
+        for cfg in ({}, {"frame": {"slots": ["top", "right"]}},
+                    {"frame": {"density": "minimal"}}):
+            with self.subTest(cfg=cfg):
+                placed = instance.frame_components(cfg)
+                self.assertTrue(placed)
+                for p in placed:
+                    self.assertIsNone(p["bg"])
+                    self.assertEqual(p["pad"], 0)
+
     def test_a_plane_spelled_with_slots_has_no_per_pane_style(self):
         """Per-pane style is written in `[[frame.component]]`; a plane that has not
         written one gets exactly the frame it had."""
@@ -483,6 +505,79 @@ class ThePaneWearsItsOwnColourAndTheFrameWearsTheRest(unittest.TestCase):
             self.assertEqual(
                 len(commands_frame._surface_argvs(socket="s", pane_id="%3", chrome="off",
                                                   bg="blue")), 2)
+
+
+class TheLauncherActuallyAsksForEachPanesColour(PersonaIso, unittest.TestCase):
+    """**The wiring, which every `_surface_argvs` test above takes as given.**
+
+    The hand-check found this gap by replacing `_split_panels`' one resolving line with
+    `bg = None` and watching the whole suite stay green: `_surface_argvs` was exercised
+    with a `bg` handed to it, and nothing asked whether production ever hands it one. A
+    per-pane colour that is never resolved is a feature that does nothing on a real frame
+    and a test file that says it works.
+
+    So this drives the real funnel — `_split_panels`, which both launch paths and every
+    density change come through — and reads back the argv it issued for each pane.
+    """
+
+    def _issued(self, frame: dict, slots: list[str]) -> list[list[str]]:
+        """Every tmux argv `_split_panels` issues for *slots*, with tmux itself faked.
+
+        Only `tmuxctl.run` is replaced. `layout.panel_argvs` and `_surface_argvs` are the
+        production functions, so what is recorded is what charter would really have run.
+        """
+        seen: list[list[str]] = []
+        panes = iter(f"%{n}" for n in range(10, 99))
+
+        def fake_run(_why, argv, **_kw):
+            seen.append(list(argv))
+            out = next(panes) if "split-window" in argv else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=out + "\n", stderr="")
+
+        with mock.patch.dict(config.FRAME, frame), \
+             mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            commands_frame._split_panels("sock", slots=slots, fid="f-1",
+                                         harness_pane="%1", env=None, pane_env=None)
+        return seen
+
+    def _styles(self, issued: list[list[str]]) -> dict[str, list[str]]:
+        """`{pane id: [style values]}` out of the recorded `set-option -p` calls."""
+        out: dict[str, list[str]] = {}
+        for argv in issued:
+            if "set-option" in argv and "-p" in argv:
+                out.setdefault(argv[argv.index("-t") + 1], []).append(argv[-1])
+        return out
+
+    def test_each_pane_is_styled_with_its_own_components_colour(self):
+        frame = _arrangement(repos={"bg": "blue"}, sidebar={"bg": "brightblack"})
+        issued = self._issued(frame, ["repos", "right"])
+        styles = list(self._styles(issued).values())
+        self.assertEqual(styles, [["bg=blue", "bg=brightblue"],
+                                  ["bg=brightblack", "bg=black"]])
+
+    def test_a_pane_whose_component_named_no_colour_gets_the_frames_chrome(self):
+        """The other half of the `or`, driven through the funnel rather than the helper."""
+        frame = dict(_arrangement(repos={"bg": "blue"}), chrome="dark")
+        styles = self._styles(self._issued(frame, ["repos", "right"]))
+        self.assertEqual(list(styles.values()),
+                         [["bg=blue", "bg=brightblue"], ["bg=black", "bg=brightblack"]])
+
+    def test_the_harness_pane_is_never_a_target(self):
+        """ADR 0018, asked of the funnel: `-p` never names the harness. Its window options
+        (`set-option -w`) are a different scope and are supposed to name it."""
+        frame = _arrangement(repos={"bg": "blue"}, sidebar={"bg": "red"})
+        for argv in self._issued(frame, ["repos", "right"]):
+            if "set-option" in argv and "-p" in argv:
+                with self.subTest(argv=argv):
+                    self.assertNotIn("%1", argv)
+
+    def test_a_plane_with_no_per_pane_colour_issues_exactly_what_it_did_before(self):
+        """The control that this whole mechanism is inert until somebody writes a `bg`."""
+        bare = instance.frame_of({"frame": {"chrome": "dark"}})
+        styles = self._styles(self._issued(bare, ["repos", "right"]))
+        for values in styles.values():
+            self.assertEqual(values, ["bg=black", "bg=brightblack"])
 
 
 class ThePadComesOutOfTheBudget(PersonaIso, unittest.TestCase):

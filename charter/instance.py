@@ -1171,13 +1171,22 @@ def _placement(cid: str, *, edge: str, size, visible: bool = True,
             "size": size, "visible": visible, "key": key, "bg": bg, "pad": pad}
 
 
-def _built_in_placement(reg, cid: str, *, visible: bool = True,
-                        key: str | None = None, bg: str | None = None,
-                        pad: int = 0) -> dict:
-    """:func:`_placement` for one of charter's own, in the rectangle it declares."""
+def _built_in_placement(reg, cid: str, **style) -> dict:
+    """:func:`_placement` for one of charter's own, in the rectangle it declares.
+
+    **It forwards *style* and restates none of it, which is a defect fixed rather than a
+    style choice.** This used to spell out ``visible=True, key=None, bg=None, pad=0`` —
+    the same four defaults :func:`_placement` already declares — and the hand-check found
+    what that costs: mutating `_placement`'s ``pad`` default from ``0`` to ``1`` changed
+    nothing anywhere, because every call arriving through here passed a ``0`` of its own.
+    Two defaults for one thing, and the second hides the first (`#547`'s shape, and the
+    masking shape the sweep is written to catch).
+
+    So the rectangle — ``edge`` and ``size``, which is all this function is FOR — is what
+    it supplies, and everything else is the caller's or :func:`_placement`'s.
+    """
     c = reg.get(cid)
-    return _placement(cid, edge=c.edge, size=c.size, visible=visible, key=key,
-                      bg=bg, pad=pad)
+    return _placement(cid, edge=c.edge, size=c.size, **style)
 
 
 def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None:
