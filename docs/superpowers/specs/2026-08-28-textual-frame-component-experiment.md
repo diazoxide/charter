@@ -645,17 +645,22 @@ before its trap runs (#590).
 
 ## Suite
 
-The full charter suite, unchanged, in two environments:
+The full charter suite, on the **committed** tree — §1f is why that distinction is stated —
+in two environments:
 
 | | |
 |---|---|
-| Python 3.14.4 (Homebrew), inherited environment | **6975 tests, OK**, 506.8 s |
-| Python 3.12.13 (Homebrew), with every `CHARTER_*`, `CLAUDE_*`, `ANTHROPIC_*` and `TMUX*` variable unset (16 of them present, 0 after; the child process saw none) | **6975 tests, OK**, 468.7 s |
+| Python 3.14.4 (Homebrew), inherited environment | **6975 tests, OK**, 362.6 s |
+| Python 3.12.13 (Homebrew), with every `CHARTER_*`, `CLAUDE_*`, `ANTHROPIC_*` and `TMUX*` variable unset (16 of them present, 0 after; the child process saw none) | **6975 tests, OK**, 380.0 s |
 
 `tests/test_packaging.py::test_runtime_has_zero_dependencies` passes in both, and both runs
 were of the **unmodified** `charter/` and `tests/` — `git status` for those paths is empty on
 this branch. The provider's own 14 tests pass on 3.14 (editable) and on 3.12 (from the built
 wheel).
+
+CI is green at this branch's head, asked of the sha rather than of the pull request (#561):
+`gh api repos/diazoxide/charter/commits/<HEAD>/check-runs` reports `test (3.11)`,
+`test (3.12)`, `test (3.13)` and `test (3.14)` all **success**.
 
 **CI validates none of the Textual half, and it should not be read as if it did.**
 `.github/workflows/test.yml` runs `python -m unittest discover -s tests -v` on 3.11-3.14 and
