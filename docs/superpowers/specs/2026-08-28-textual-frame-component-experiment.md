@@ -187,6 +187,18 @@ and the failure appeared on the first CI run after `git commit`. The local suite
 on the committed tree afterwards; the counts at the end are from those runs. This is the one
 place in the experiment where CI caught something a hand-run could not.
 
+**And two places the directory travels anyway, neither of which costs the property that
+matters.** Charter's marketplace entry is `"source": "./"`, so the whole repository is copied
+into every plugin user's cache — `tests/` and `docs/` already, and now `providers/` too; the
+classification above is what keeps its *content* out of the freshness hash, so an edit to it
+is not reported as a stale plugin. And hatchling's default sdist is the whole repository, so
+`providers/` is 22 of the sdist's 985 entries, beside `tests/`' 356 and `docs/`' 183. Neither
+reaches the wheel (`packages = ["charter"]`; `unzip -l … | grep -c providers` is 0), so
+`pip install charter-cp` installs nothing of it and `dependencies = []` is untouched in
+every direction. If this were ever more than an experiment, the sdist is where somebody
+should decide whether 22 files of third-party-provider source belong in charter's release
+artifact.
+
 ### 1g. The contract is a Python class, so every provider hard-depends on charter
 
 `Providers._one` finishes with `isinstance(obj, self.kind)` where `kind` is
@@ -616,10 +628,14 @@ Three things to look at:
 ```sh
 uv venv --python 3.14 .venv
 uv pip install --python .venv/bin/python -e . -e providers/charter-textual-repos
-.venv/bin/python -m pytest providers/charter-textual-repos     # 14 passed
+uv pip install --python .venv/bin/python pytest
+.venv/bin/python -m pytest -q providers/charter-textual-repos     # 14 passed
 
-cd providers/charter-textual-repos/measure
-VENV=/abs/path/.venv WT=/abs/path/to/worktree bash m1_startup.sh    # and m2…m9
+M=providers/charter-textual-repos/measure
+VENV="$PWD/.venv" WT="$PWD" bash $M/m1_startup.sh                  # and m2 … m8
+VENV="$PWD/.venv" WT="$PWD" bash $M/m7_shot.sh esc                 # the capture in §9
+.venv/bin/python $M/m9_cost.py                                     # no tmux needed
+.venv/bin/python $M/m10_thread_takeover.py                         # writes /tmp/m10_*.json
 ```
 
 Each script owns one tmux socket named `charter-textualexp-<pid>` and kills the server
