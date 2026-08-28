@@ -7,8 +7,8 @@ security: true
 0.53.x settled the mode of the files under `.charter/`: they are written through
 `config.write_for` / `open_for` / `touch_for`, which settle the mode on the descriptor
 before any content lands ([#505](https://github.com/diazoxide/charter/issues/505)).
-Sixteen writers were still outside that. Three were known and listed; thirteen were
-invisible, and the second half of this entry is why.
+Eighteen writers were still outside that. Three were known and listed; the other fifteen
+were invisible, and the second half of this entry is why.
 
 ## The three that were listed
 
@@ -35,15 +35,15 @@ to set. All three go through `config.write_for` now, and the ratchet is empty an
 file half of the scan reads exactly like the directory half, because they are one property
 asked about two kinds of inode.
 
-## The thirteen nobody could see
+## The fifteen nobody could see
 
-`charter/frame/state.py` writes ten files — `version`, `exit`, `harness`, `session`,
-`server`, `workspace`, `density`, `hidden`, `identity`, `panes` — plus a respawn counter,
-`gather` writes its cache, and `commands_frame` writes the frame's `tmux.conf` twice. Every
-one of them was `Path.write_text`, at the umask.
+`charter/frame/state.py` writes eleven files — `version`, `exit`, `harness`, `session`,
+`server`, `workspace`, `density`, `chrome`, `hidden`, `identity`, `panes` — plus a respawn
+counter, `gather` writes its cache, and `commands_frame` writes the frame's `tmux.conf`
+twice. Every one of them was `Path.write_text`, at the umask.
 
 **A temp file plus `os.replace` is not a way out of that; it is why it stayed quiet.**
-`os.replace` carries the *source's* mode onto the destination, so ten of these wrote a 0644
+`os.replace` carries the *source's* mode onto the destination, so eleven of these wrote a 0644
 temp file and then moved 0644 onto the real one, with nothing in the directory ever looking
 wrong. Frame state carries the workspace name, the harness, the tmux server socket, the
 session id and the pane layout; the `tmux.conf` carries the session id, the hotkey and the
@@ -93,13 +93,45 @@ So the question the scan asks is no longer *does this return mention a state pat
 
 Measured against the package: **two** functions gained, `frame.state.frame_dir` and
 `frame.gather._cache_file`; none lost; zero false positives on either half. With the
-writers put back as they were, the scan names all thirteen.
+writers put back as they were, the scan names every one of them.
 
 The named half also asks the **cross-module** question now. It used to know only the
 state-path helpers defined in its own file, which is why `gather.save` stayed invisible
 even once `frame_dir` was seen — its path comes from `gather._cache_file`, whose state-ness
 comes from `frame.state.frame_dir` one import away. Both halves are handed the same
 package-wide answer.
+
+## The scan earned its keep before this even landed
+
+`record_chrome` — the frame's pane-surface override — arrived from another branch while
+this one was open, written the same way all the others were: a temp file at the umask, an
+`os.replace` carrying that mode onto the destination. Merging the two branches is what
+reported it, on the day it landed rather than on the day somebody remembered the list. It
+is routed here too.
+
+## Two lines deleted, because the sweep found them and they were dead
+
+The deletion sweep reported three survivors on this diff, all pre-existing lines it
+touched:
+
+* **`persona.set_active`'s `(name or "")`**, twice. All three callers hand it a non-empty
+  string — two required argparse positionals, and `frame.switch.to_persona`, which runs
+  `valid_name` and checks the roster first — so nothing in the package could reach the
+  fallback. Deleted: a call that should not happen is now a `TypeError` naming the
+  argument rather than a pointer quietly written to mean "nobody", which is what
+  `clear_active` is for.
+* **`record_identity`'s `isinstance(k, str) and isinstance(v, str)`**. The only thing that
+  reaches it is `_frame_identity_env`, which is `{name: env.get(name, "") for name in
+  _FRAME_IDENTITY}` — every key a string from a module constant, every value a string or
+  `""`. A filter no caller can exercise is not a defence; it is a line that makes the next
+  reader believe there is one. Deleted, with the residual stated instead: a non-string
+  would make `json.dumps` raise, the writer catches it, and the frame has **no** identity
+  file rather than half of one. Half a frame's plane handed back as though it were all of
+  it is the worse answer.
+
+What made each unreachable is now pinned, which is the half a deletion needs: `valid_name`
+refuses an empty name, `to_persona` refuses before it writes anything, and
+`_frame_identity_env`'s output is asserted to be strings for every declared name.
 
 Nothing to adopt. Existing files are tightened the next time charter writes them; a file
 charter never writes again keeps the mode it has, so a plane that has been running a while

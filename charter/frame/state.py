@@ -583,7 +583,7 @@ def record_chrome(fid: str, level: str) -> None:
         return
     tmp = d / "chrome.tmp"
     try:
-        tmp.write_text(f"{level}\n")
+        config.write_for(tmp, f"{level}\n")
         os.replace(tmp, d / "chrome")
     except OSError:
         return
@@ -757,15 +757,25 @@ def record_identity(fid: str, values: dict[str, str]) -> None:
     by :func:`identity`. Same atomic-write, never-raise shape as :func:`record_server` —
     a frame whose identity could not be recorded degrades to "charter does not know",
     which :func:`identity` answers honestly rather than by guessing.
+
+    **The ``isinstance(k, str) and isinstance(v, str)`` filter that used to sit inside the
+    `json.dumps` is gone**, reported by the deletion sweep and unreachable: the only thing
+    that reaches *values* is `commands_frame._frame_identity_env`, which is
+    ``{name: env.get(name, "") for name in _FRAME_IDENTITY}`` — every key a string from a
+    module constant, every value a string or ``""``. A filter no caller can exercise is
+    not a defence; it is a line that makes the next reader believe there is one, and
+    `test_the_frames_identity_can_only_be_strings` pins the contract that makes it
+    unreachable. What a non-string would do if one ever arrived is unchanged in kind and
+    stated rather than filtered: `json.dumps` raises `TypeError`, the clause below catches
+    it, and the frame degrades to "charter does not know" — this function's declared
+    posture for every other failure it can have.
     """
     d = frame_dir(fid, create=True)
     if d is None:
         return
     tmp = d / "identity.tmp"
     try:
-        config.write_for(tmp, json.dumps(
-            {k: v for k, v in values.items()
-             if isinstance(k, str) and isinstance(v, str)}))
+        config.write_for(tmp, json.dumps(dict(values)))
         os.replace(tmp, d / "identity")
     except (OSError, TypeError, ValueError):
         return

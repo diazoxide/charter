@@ -94,9 +94,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from charter import config
+from charter.frame import state
 
 from tests import _statedirscan as scan
 from tests._isolation import PersonaIso
@@ -577,9 +579,11 @@ class TheFramesOwnStateIsChartersToChooseToo(PersonaIso):
         """Every recorder in `frame.state`, plus `gather`'s cache — the writers by name.
 
         Listed rather than discovered, and the honest reason is that there is no property
-        to discover them by: they are eleven functions with eleven signatures. What keeps
-        the list from rotting is the scan, which reports a twelfth on the day it is written
-        without going through `config`.
+        to discover them by: they are twelve functions with twelve signatures. What keeps
+        the list from rotting is the scan, and it has already earned that: `record_chrome`
+        arrived from another branch (#604) while this one was open, writing at the umask
+        like the rest of them, and merging the two is what reported it — on the day it
+        landed rather than on the day somebody remembered this list.
         """
         from charter.frame import gather, state
         state.bump(self.FID)
@@ -589,6 +593,7 @@ class TheFramesOwnStateIsChartersToChooseToo(PersonaIso):
         state.record_server(self.FID, "charter")
         state.record_workspace(self.FID, "alpha")
         state.record_density(self.FID, "full")
+        state.record_chrome(self.FID, "off")
         state.record_hidden(self.FID, ("todos",))
         state.record_identity(self.FID, {"CHARTER_SESSION_ID": self.FID})
         state.record_panes(self.FID, panels={"top": "%1"})
@@ -597,7 +602,7 @@ class TheFramesOwnStateIsChartersToChooseToo(PersonaIso):
         files = sorted(p for p in (Path(config.STATE_DIR) / "frame").rglob("*")
                        if p.is_file())
         self.assertGreaterEqual(
-            len(files), 12,
+            len(files), 13,
             f"only {len(files)} file(s) under `.charter/frame/` — the recorders this case "
             f"names stopped writing, so it is measuring nothing: {files}")
         return files
@@ -654,6 +659,97 @@ class TheFramesOwnStateIsChartersToChooseToo(PersonaIso):
         self.assertEqual(list((Path(config.STATE_DIR) / "frame" / self.FID).glob("*.tmp")),
                          [], "a temp file was left behind, so the replace did not happen "
                              "and this case measured the temp file instead")
+
+
+class WhatMakesTheDeletedGuardsUnreachable(PersonaIso):
+    """Two lines the deletion sweep reported as survivors, deleted — and the contracts
+    that make them unreachable, pinned here so the deletion stays honest.
+
+    The rule this repo states and follows: there is no suppression list, and "equivalent
+    mutant" and "dead code" are the same finding. What that rule needs on the other side
+    is this — a line is only safe to delete once the thing that made it unreachable is
+    itself held by something. Otherwise the next change to a caller re-opens a path that
+    no longer has a guard on it, and nothing says so.
+    """
+
+    def test_a_persona_pointer_is_only_ever_written_for_a_real_name(self) -> None:
+        """`set_active`'s ``(name or "")`` is gone, so this is what stands in for it.
+
+        Three callers, and each one is why the fallback could not be reached:
+        `cmd_persona_use` and `cmd_persona_create` pass a required argparse positional,
+        and `frame.switch.to_persona` has run `valid_name` and checked the roster before
+        it calls. `valid_name` is the one of the three this suite can hold directly.
+        """
+        from charter import persona as p
+        self.assertFalse(p.valid_name(""), "an empty name is not a persona name, which "
+                                           "is what lets `set_active` add to it")
+        self.assertFalse(p.valid_name(None))
+
+    def test_the_switcher_refuses_an_unnamed_persona_before_it_writes_anything(self) -> None:
+        """The caller that is not an argparse positional, asked directly: `to_persona`
+        must come back refused rather than reach `set_active` at all."""
+        from charter.frame import switch
+        wrote: list = []
+        with mock.patch.object(switch, "personas", return_value={"steward"}), \
+             mock.patch("charter.persona.set_active",
+                        side_effect=lambda *a, **k: wrote.append(a)):
+            outcome = switch.to_persona("f-1", "")
+        self.assertFalse(outcome.ok, outcome)
+        self.assertEqual(wrote, [], "an unnamed persona reached the pointer writer")
+
+    def test_set_active_says_so_loudly_rather_than_writing_a_pointer_meaning_nobody(
+            self) -> None:
+        """What the deletion buys. `clear_active` is how a selection is dropped — it
+        UNLINKS the three pointers — so a `set_active(None)` writing an empty pointer was
+        a second, quieter spelling of the same idea that nothing asked for. Now it is a
+        `TypeError` naming the argument, the same trade #597 made when it subscripted a
+        field its filter guarantees instead of defaulting it."""
+        from charter import persona as p
+        with self.assertRaises(TypeError):
+            p.set_active(None)
+
+    def test_the_frames_identity_can_only_be_strings(self) -> None:
+        """`record_identity`'s ``isinstance`` filter is gone, and this is the contract that
+        made it unreachable: `_frame_identity_env` builds its dict from a module constant
+        of names and `env.get(name, "")`, so every key and every value is a `str` —
+        including for a name the environment does not carry, which comes back ``""``
+        rather than `None`.
+        """
+        from charter import commands_frame as cf
+        built = cf._frame_identity_env({"CHARTER_ROOT": "/plane"})
+        self.assertTrue(built, "fixture: `_FRAME_IDENTITY` is empty, so this holds nothing")
+        self.assertEqual(sorted(built), sorted(cf._FRAME_IDENTITY),
+                         "every declared name is emitted, present or not — the property "
+                         "`_frame_identity_env` exists for")
+        for k, v in built.items():
+            with self.subTest(name=k):
+                self.assertIsInstance(k, str)
+                self.assertIsInstance(v, str)
+
+    def test_an_identity_that_cannot_be_serialised_leaves_charter_saying_it_does_not_know(
+            self) -> None:
+        """The residual, stated rather than filtered. With the filter gone a non-string
+        makes `json.dumps` raise `TypeError`, which the writer catches — so the frame has
+        no identity file rather than a partial one, and `identity()` answers honestly.
+
+        That is this function's declared posture for every other failure it can have, and
+        it is asserted rather than described so that a future `except` narrowing cannot
+        turn it into a traceback out of a `run-shell` child.
+
+        **The dict is MIXED on purpose**, and that is what makes this a case rather than a
+        restatement: an all-bad dict serialises to ``{}`` under the old filter too, so the
+        two spellings agree about it and the assertion could not fail. With one good value
+        beside the bad one the filter would have written a PARTIAL identity — half a
+        frame's plane, which `identity()` would then hand back as though it were the whole
+        answer — and the deletion writes nothing at all. "Charter does not know" is a
+        better answer than half of one, and that is the difference being pinned.
+        """
+        state.record_identity("f-ident",
+                              {"CHARTER_ROOT": "/plane", "CHARTER_WORKSPACE": object()})
+        self.assertEqual(
+            state.identity("f-ident"), {},
+            "a partial identity was written — half this frame's plane, handed back as "
+            "though it were all of it")
 
 
 class ThePrivateWalkItself(PersonaIso):
