@@ -130,7 +130,7 @@ def render(ctx) -> list[str]:
 
     What a guard here could NOT do is catch the case that actually matters. Measured: a
     crash inside Textual's own message pump never reaches this frame at all. Textual
-    catches it, prints a Rich traceback to ``sys.__stderr__`` — 19,358 bytes of it —
+    catches it, prints a 2,520-byte Rich traceback with locals to ``sys.__stderr__``,
     and `run()` returns **normally**, so `Registry.draw` sees a successful render and
     `panel._write` clears the pane over the traceback within one tick. The two lines
     below are all the operator is left with, and they cannot say why.

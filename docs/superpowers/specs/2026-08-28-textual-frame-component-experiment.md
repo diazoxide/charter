@@ -297,8 +297,9 @@ So `Registry.draw` sees a successful render, charter's "failed to draw" never ap
  1200ms | textual.live: app exited after 1s (clicks 0, scroll 0, keys 0)
 ```
 
-Confirmed out of tmux with stderr redirected: 19,358 bytes of Rich traceback ending
-`RuntimeError: injected fault inside Textual's message pump`, written to stderr, while
+Confirmed out of tmux with stderr redirected: the app writes 19,358 bytes to **stderr**
+(Textual's driver is `self._file = sys.__stderr__`), the last 2,520 of them a Rich traceback
+with locals ending `RuntimeError: injected fault inside Textual's message pump` — while
 stdout carries the two lines charter painted over it. **A crash inside a framework's own
 loop is indistinguishable, from charter's side, from a clean quit.**
 
