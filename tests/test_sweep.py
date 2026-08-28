@@ -2196,12 +2196,49 @@ class TheGateSaysWhichOfThreeThingsItFound(unittest.TestCase):
         text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False)
         self.assertIn("## Deletion sweep — 2 survivors", text)
 
+    def test_the_page_says_how_long_it_took_or_that_it_did_not_measure_that(self):
+        """`elapsed is None`, found unpinned by the sweep on the branch that added it.
+
+        A merge adds up several machines' results in about a second, and printing that
+        second as the sweep's wall clock would understate a forty-minute run by two orders
+        of magnitude, on the one line a reader skims. So the merged page says where its
+        number came from instead — and the *measured* page has to actually carry the
+        minutes, or "says so instead" is the only thing either page ever says.
+        """
+        gate = sweep.classify([_result("pinned")])
+        measured = sweep.gate_summary(gate, "a" * 40, "b" * 40, 1234.0, enforce=False)
+        merged = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, enforce=False)
+        self.assertIn("20.6 min on ", measured)
+        self.assertNotIn("merged from its shards", measured)
+        self.assertIn("merged from its shards on ", merged)
+
     def test_a_page_missing_a_shard_refuses_to_call_the_branch_clean(self):
         gate = sweep.classify([_result("pinned")])
         text = sweep.gate_summary(gate, "a" * 40, "b" * 40, 60.0, enforce=False,
                                   missing=2, shards=3)
         self.assertIn("did not report", text)
         self.assertNotIn("Nothing added here is a line the suite would not miss", text)
+
+    def test_the_table_carries_the_missing_shards_as_a_row_with_a_count_in_it(self):
+        """`[59]` and `[60]` from the self-sweep, and both are one mistake.
+
+        The test above looks for "did not report" *anywhere on the page* — and the section
+        further down carries that phrase in its heading, so deleting the table row
+        outright left the suite green, and so did collapsing the cell that holds the
+        count. A row is a number; assert the number, in both of the shapes it has.
+        """
+        gate = sweep.classify([_result("pinned")])
+        counted = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                     missing=2, shards=3)
+        self.assertIn("| **did not report** | 2 of 3 |", counted)
+        # One shard, and it was the one that vanished — the ordinary shape for a small
+        # diff, and the edge `shards >= 1` actually turns on.
+        lone = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                  missing=1, shards=1)
+        self.assertIn("| **did not report** | 1 of 1 |", lone)
+        unsized = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                     missing=1, shards=0)
+        self.assertIn("| **did not report** | ? |", unsized)
 
     def test_a_page_with_every_shard_in_still_says_the_branch_is_clean(self):
         text = sweep.gate_summary(sweep.classify([_result("pinned")]),
