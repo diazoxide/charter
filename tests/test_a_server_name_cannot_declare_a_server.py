@@ -504,7 +504,7 @@ class TestARefusalSentenceIsOneLine(unittest.TestCase):
     an untrusted value, so the value gets one line and no more.
 
     This is the surface the whole #453 audit is reported ON. Every message in `contain` is
-    formatted through `_sentence` for the same reason `mcp_servers` holds the name bound
+    formatted through `contain.path_sentence` for the same reason `mcp_servers` holds the name bound
     for all its consumers: twelve `.format` calls are twelve chances to forget the
     thirteenth.
     """

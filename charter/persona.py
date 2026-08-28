@@ -115,7 +115,7 @@ def reference_refusal(ref: str) -> str | None:
         return contain.refusal(ref)
     if not valid_name(ref):
         # `contain.readable`, for the reason the branch above goes through
-        # `contain._sentence`: this sentence NAMES the offender, so the offender must not
+        # `contain.path_sentence`: this sentence NAMES the offender, so the offender must not
         # be able to write a second line of it. Newly load-bearing as of #577 — while `$`
         # admitted a trailing newline this branch was unreachable for the one character
         # that could, and the raw `.format` was safe by accident (#453, #498).

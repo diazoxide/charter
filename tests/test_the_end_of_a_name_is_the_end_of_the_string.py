@@ -567,7 +567,7 @@ class TestTheRefusalsThisFixMadeReachable(unittest.TestCase):
 
     `persona.reference_refusal` is fixed in this change: it is the sentence #577 quotes
     `mcpseen.label` about, `contain` was already imported, and the branch three lines above
-    it already went through `contain._sentence`.
+    it already went through `contain.path_sentence`.
 
     **The version refusals are NOT fixed here, and that is recorded rather than hidden.**
     `instance.NOT_A_VERSION` and `browser.NOT_A_VERSION` are `.format`-ed at six sites
