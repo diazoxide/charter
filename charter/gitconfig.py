@@ -20,9 +20,12 @@ Verified end to end against git 2.50.1, not derived:
 path that runs inside every PreToolUse hook, where the common case currently exits on a
 string comparison. So charter reads the file: one walk up to the repository (a handful of
 ``stat`` calls, and none at all when the invocation names its own ``--git-dir``) and one
-read of a file that is under a kilobyte in every repository anybody has. Measured on this
-repository, warm: see ``tests/test_a_repository_can_name_its_own_work_tree.py``, which
-states the number rather than leaving it to be re-measured.
+read of a file that is under a kilobyte in every repository anybody has. Measured warm, on
+the machine this was written on: 13 µs with no repository above the cwd, 35 µs at a
+repository root with no such key, 47 µs two directories down inside one, and 65 µs where
+the key is there. ``tests/test_a_repository_can_name_its_own_work_tree.py`` holds a ceiling
+and — more usefully — asserts that no process is started to answer this, which is the
+regression a wall-clock ceiling on a fast machine would not notice.
 
 **What is deliberately NOT read**, because each one is a cost without a matching risk:
 

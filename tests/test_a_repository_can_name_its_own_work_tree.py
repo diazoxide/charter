@@ -218,9 +218,10 @@ class WhatItCostsAndWhatItRefusesToCost(GitConfigCase):
     def test_and_it_stays_in_the_microseconds(self):
         """A ceiling with two orders of magnitude of headroom, which is what makes it a
         regression detector rather than a flaky timer. Measured on the machine this was
-        written on: 14 µs with no repository above the cwd, 41 µs for a repository with no
-        such key — the ordinary case — and 76 µs with the key present. The ceiling is 2 ms,
-        so a loaded CI runner has room and a subprocess does not.
+        written on: 13 µs with no repository above the cwd, 35 µs at a repository root
+        with no such key, 47 µs two directories down inside one, and 65 µs with the key
+        present. The ceiling is 2 ms, so a loaded CI runner has room and a subprocess does
+        not.
         """
         self.write(f"[core]\n\tworktree = {self.elsewhere}\n")
         start = time.perf_counter()

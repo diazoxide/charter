@@ -35,11 +35,11 @@ flipped to a denial in the same file.
 on a string comparison. `git rev-parse --show-toplevel` answers the question exactly and
 costs a subprocess — some ten milliseconds inside a hook that runs on every Bash call — so
 charter reads the file instead: a walk up to the repository, and one read of a file that is
-under a kilobyte in every repository anybody has. Measured: **14 µs** where there is no
-repository above the cwd, **41 µs** for a repository with no such key (the ordinary case),
-**76 µs** where the key is there. `charter/gitconfig.py` owns the read and the number, and a
-test asserts no process is started to answer it — a wall-clock ceiling on a fast machine
-would not notice a later simplification onto `git rev-parse`.
+under a kilobyte in every repository anybody has. Measured: **13 µs** with no repository
+above the cwd, **35 µs** at a repository root with no such key, **47 µs** two directories
+down inside one, **65 µs** where the key is there. `charter/gitconfig.py` owns the read and
+the numbers, and a test asserts no process is started to answer it — a wall-clock ceiling on
+a fast machine would not notice a later simplification onto `git rev-parse`.
 
 **git itself is the oracle for the reader.** Charter parses the config rather than asking
 git, so the thing that can go wrong is charter's reader disagreeing with git's. Every value

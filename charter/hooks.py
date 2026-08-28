@@ -2423,11 +2423,12 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     HEAD is that worktree's and not the root's.
 
     **And what it costs**, since one line of it now reads the disk. The `core.worktree`
-    lookup is a walk up to the repository plus one read of a sub-kilobyte file: 14 µs where
-    there is no repository above the cwd, 41 µs for a repository with no such key — the
-    ordinary case — and 76 µs where the key is there. That is the price #497 declined to pay
-    inside a PR about something else, paid here on purpose, next to a `_plane_root_git` walk
-    that already `shlex`es the command and `realpath`s every subject this returns.
+    lookup is a walk up to the repository plus one read of a sub-kilobyte file: 13 µs with no
+    repository above the cwd, 35 µs at a repository root with no such key, 47 µs two
+    directories down inside one, and 65 µs where the key is there. That is the price #497
+    declined to pay inside a PR about something else, paid here on purpose, next to a
+    `_plane_root_git` walk that already `shlex`es the command and `realpath`s every subject
+    this returns.
     """
     here = Path(cwd or ".")
     git_dir = work_tree = None
@@ -2519,10 +2520,10 @@ def _git_target(cwd: str, pre: list[str], env: list[str] = ()) -> list[Path]:
     # **This is the one place in this function that touches the disk**, and it is what
     # #497 declined to add rather than widen into: a walk up to the repository and one
     # read of its config, on the PreToolUse path whose common case is a string comparison.
-    # Measured — 14 µs where there is no repository above the cwd, 41 µs for a repository
-    # with no such key (the ordinary case), 76 µs where the key is there — against a
-    # `_plane_root_git` walk that already runs `shlex` over the command and `realpath`s
-    # every subject. `charter.gitconfig` owns the read, the bound on it, and the list of
+    # Measured — 13 µs with no repository above the cwd, 35 µs at a repository root with
+    # no such key, 47 µs two directories down inside one, 65 µs where the key is there —
+    # against a `_plane_root_git` walk that already runs `shlex` over the command and
+    # `realpath`s every subject. `gitconfig` owns the read, the bound on it, and the list of
     # config routes it deliberately does not follow.
     from . import gitconfig
     named = _at(git_dir) if git_dir is not None else None
