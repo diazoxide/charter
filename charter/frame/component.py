@@ -88,6 +88,16 @@ EDGES = ("top", "bottom", "left", "right")
 #: The rule that follows, and the one thing this constant is asking of you: **degrade to
 #: "never fires", never to "fires wrongly".** A component that treats a missing ``blur``
 #: as "still focused" is correct; one that infers focus from elapsed time is not.
+#:
+#: **Which of these charter actually delivers is `frame/events.py`'s `DELIVERED`, and it
+#: is three of the six** (#607). ``focus``, ``blur`` and ``resize`` fire; ``key``,
+#: ``click`` and ``scroll`` are decoded and routed nowhere, because the harness owns the
+#: keyboard and because tmux routes a pointer by POSITION without focusing the pane it
+#: lands in — so a click would be a second focus, disagreeing with the keyboard's. Both
+#: lists are needed and neither can be the other: this one is what a provider may DECLARE
+#: and is closed by the spec, that one is what charter can carry this release. Declaring a
+#: kind charter does not deliver is not an error and does not become one — it is the
+#: paragraph above, live.
 EVENT_KINDS = ("key", "click", "scroll", "focus", "blur", "resize")
 
 #: The slices of the plane snapshot a component may declare in ``needs`` — and therefore
@@ -271,6 +281,27 @@ class Component:
     render: Callable[[Any], list[str]]
     needs: tuple[str, ...] = ()
     events: tuple[str, ...] = ()
+    #: What receives an event of a declared kind — one `frame.events.Event`, answering
+    #: truthy for "repaint me" (§4f, #607). ``None`` for a component that declares no
+    #: events, and refused alongside a non-empty ``events`` below.
+    #:
+    #: **It is handed no ``ctx``, and that is the contract rather than an omission.** A
+    #: component reads the plane at the repaint that follows, out of the one snapshot §4f
+    #: gives it; a handler that could read a second one would be the second timestamp that
+    #: doctrine exists to prevent. So a handler notes what happened and `render` draws it.
+    #:
+    #: **Nothing it returns reaches the pane.** The rows on screen are ``render``'s, which
+    #: `registry.Registry.draw` escapes, measures and clips; the return value here is read
+    #: for its truth and nothing else. That is why the containment order #472 is about
+    #: needs no second guard on this path — there is no path.
+    #:
+    #: This field was ADDED to a shipped contract without moving :data:`API_VERSION`, and
+    #: the reason is what that constant is for: it asks "can charter honour what this
+    #: provider declared", and a component built before this field existed declares nothing
+    #: charter cannot still honour. A bump would refuse every installed provider at once to
+    #: fix a class of provider — one that declared ``events`` — whose events had never
+    #: fired in the first place.
+    on_event: Callable[[Any], Any] | None = None
     #: The leaf ids this component draws inside its own pane, in the order it draws
     #: them, or ``()`` for a leaf. Charter never splits a pane (§4d), so this is how N
     #: things share one — and it is ids rather than components because the rules that
@@ -319,3 +350,27 @@ class Component:
             self, "events",
             names("events", f"component {self.id}", self.events, EVENT_KINDS))
         object.__setattr__(self, "children", tuple(self.children))
+        # After the normalisation above, so both refusals below quote the tuple charter
+        # will actually dispatch against rather than whatever shape arrived.
+        if self.on_event is not None and not callable(self.on_event):
+            raise ComponentError(
+                f"component {self.id}: on_event must be callable, not "
+                f"{contain.one_line(repr(self.on_event))}")
+        # **The pair is refused in BOTH directions, and that is this issue's whole shape.**
+        # `events` was validated here and read by nothing for two phases (#607), so a
+        # provider could declare `scroll`, pass every check, and receive nothing ever. A
+        # declaration with no handler is that defect written by the provider instead of by
+        # charter; a handler with no declaration is a callable charter would never call.
+        # Both are refused at construction, where the message names a fixable thing —
+        # which is the argument this module's docstring makes for checking anything here.
+        if self.events and self.on_event is None:
+            raise ComponentError(
+                f"component {self.id}: declares events "
+                f"{', '.join(self.events)} and supplies no on_event to receive them — "
+                f"give it one, or drop the declaration. A kind declared with nothing "
+                f"behind it is indistinguishable from one charter never fires")
+        if self.on_event is not None and not self.events:
+            raise ComponentError(
+                f"component {self.id}: supplies on_event and declares no events, so "
+                f"nothing would ever reach it — name what it handles in events "
+                f"({', '.join(EVENT_KINDS)})")

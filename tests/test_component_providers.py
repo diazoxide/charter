@@ -63,7 +63,8 @@ _CHARTERS = object()
 
 def _source(*, cid: str = CID, api: object = _CHARTERS,
             render: str = "lambda ctx: ['ok']", head: str = "",
-            needs: tuple[str, ...] = ()) -> str:
+            needs: tuple[str, ...] = (), events: tuple[str, ...] = (),
+            on_event: str = "None") -> str:
     """A provider module: a version, a factory, and a record of whether it ran.
 
     ``built`` is what makes "refused before the provider built anything" an assertion
@@ -75,6 +76,11 @@ def _source(*, cid: str = CID, api: object = _CHARTERS,
     on each side of that branch. A knob here rather than a second module fixture beside
     this one, for the reason `_SitePackages.install` already gives: two fixtures for one
     idea drift, and the drift is invisible from either side.
+
+    *events* and *on_event* are the same knob for §4f's other declaration (#607), and they
+    move together because `component.Component` refuses them apart. *on_event* is SOURCE
+    text, like *render*, so a case can install a handler that keeps state across events —
+    which is the only way to watch a `focus` change what the next `render` draws.
     """
     api = component.API_VERSION if api is _CHARTERS else api
     return textwrap.dedent(f"""\
@@ -89,7 +95,8 @@ def _source(*, cid: str = CID, api: object = _CHARTERS,
             built = True
             return component.Component(
                 id={cid!r}, title="Metrics", edge="right",
-                size=component.Fixed(12), needs={needs!r}, events=(),
+                size=component.Fixed(12), needs={needs!r}, events={events!r},
+                on_event={on_event},
                 render={render})
         """)
 
