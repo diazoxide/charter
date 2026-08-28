@@ -353,7 +353,10 @@ def _one_line(value, where: str) -> str:
     site still calls :func:`contain.one_line`, because this cannot see what a *future*
     reader's terminal does with U+2028 and that function can.
     """
-    if not isinstance(value, str) or not value.strip():
+    # `not value or value.isspace()` rather than `not value.strip()`: inside a truthiness
+    # test `strip`, `lstrip` and `rstrip` give the same answer, so that spelling is three
+    # interchangeable lines and no test can say which one is meant.
+    if not isinstance(value, str) or not value or value.isspace():
         raise RecordError(f"{where}: expected a non-empty string, got {contain.readable(value)}")
     if contain.one_line(value, limit=TEXT_LIMIT) != value:
         raise RecordError(

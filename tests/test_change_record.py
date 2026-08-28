@@ -675,6 +675,73 @@ class TestEveryRefusalIsOneLineWhateverItNames(ChangeIso):
                 self.assertNotIn(self.ESC, msg)
 
 
+class TestTheRecordsOwnEdges(ChangeIso):
+    """The half of each guard that is not the refusal itself: which order names come back
+    in, what a value that is not a string does to a sentence, and what an absent argument
+    does to a derivation. Each of these was a line the deletion sweep could remove in
+    silence."""
+
+    ESC = "\x1b"
+
+    def test_unknown_keys_are_named_in_a_settled_order(self):
+        """Dict order is the order of the FILE, so without sorting the same defect reads
+        differently depending on how somebody typed it."""
+        self.put("component-api-2", json.dumps(
+            {"zeta": 1, "alpha": 1, **json.loads(json.dumps(GOOD))}))
+        with self.assertRaises(change.RecordError) as cm:
+            change.read("ws", "component-api-2")
+        msg = str(cm.exception)
+        self.assertLess(msg.index("alpha"), msg.index("zeta"))
+
+    def test_a_value_that_is_not_a_string_is_still_readable_in_the_refusal(self):
+        """The branch that says "expected a non-empty string" is a printing site too, and
+        the interesting failure there is #498's rather than #453's: `str()` of a list
+        escapes a newline for you, so no row is forged — and it hands the invisibles
+        straight through, so `['\u3164']` reads as `['']` and names nothing anybody can go
+        and fix. `contain.readable` is the function that can say which value it was."""
+        rec = json.loads(json.dumps(GOOD))
+        rec["why"] = ["\u3164\u3164"]
+        with self.assertRaises(change.RecordError) as cm:
+            change.validate(rec, "component-api-2")
+        self.assertIn("3164", str(cm.exception))
+
+    def test_a_branch_that_is_not_a_string_is_still_readable_in_the_refusal(self):
+        for branch in (["\u3164"], {"\u3164": 1}, 3164):
+            with self.subTest(branch=branch):
+                msg = change.branch_refusal(branch)
+                self.assertEqual(len(msg.splitlines()), 1, msg)
+                self.assertIn("3164", msg)
+
+    def test_a_repo_made_only_of_invisibles_is_still_named(self):
+        """#498 exactly: U+3164 HANGUL FILLER is `Lo`, so `contain.one_line` returns it
+        unchanged and correct — it forges no row — and a refusal built on that alone names
+        no repository at all. `contain.readable` is the function that can say which one."""
+        rec = json.loads(json.dumps(GOOD))
+        rec["members"] = [{"repo": "\u3164\u3164/x", "branch": "b", "needs": []}]
+        rec["excluded"] = []
+        with self.assertRaises(change.RecordError) as cm:
+            change.validate(rec, "component-api-2")
+        self.assertIn("3164", str(cm.exception))
+
+    def test_blocked_members_treats_no_landing_map_as_nothing_landed(self):
+        """`None` is what a caller with no reading yet has, and `set(None)` raises."""
+        rec = json.loads(json.dumps(GOOD))
+        self.assertEqual(change.blocked_members(rec, None), {"charter-metrics": ["charter"]})
+
+    def test_the_name_rule_is_the_whole_containment(self):
+        """`change_name_ok` carries no separate `segment_ok` call, so this is what says the
+        containment property is still there — asked of the function rather than of the
+        line that used to answer it."""
+        from charter import instance
+        for bad in ("..", ".", "a/b", "a\\b", "x\x00y", ".hidden", "-b", "", "/abs",
+                    "a\nb", "C:x", None, 3, ["a"]):
+            with self.subTest(name=bad):
+                self.assertFalse(instance.change_name_ok(bad))
+        for good in ("component-api-2", "a", "A.b_c-d", "0"):
+            with self.subTest(name=good):
+                self.assertTrue(instance.change_name_ok(good))
+
+
 def _args(**kw):
     from types import SimpleNamespace
     kw.setdefault("workspace", "ws")

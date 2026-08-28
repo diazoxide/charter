@@ -712,6 +712,213 @@ class TestALongValueIsClippedWhereTheRowIs(ChangeCommands):
         self.assertTrue(row.endswith("…"))
 
 
+class TestTheCommandSurfacesOwnEdges(ChangeCommands):
+    """What each command does at the edge of a guard rather than in the middle of it: an
+    absent value, a fallback nobody exercises, a plural, a success line. Every case here
+    was a line the deletion sweep could delete in silence."""
+
+    ESC = "\x1b"
+    HOSTILE = "api\n  charter  branch main  landed"
+
+    def test_the_refusal_exit_code_is_two_and_that_is_the_contract(self):
+        """The NUMBER, not the name. A caller branches on it — `commands_worktree` spends
+        its own 2 the same way — and 1 is what every other failure returns, so a change of
+        value here is a change of interface even though every test that uses the constant
+        keeps passing."""
+        self.assertEqual(commands_change.REFUSED, 2)
+
+    def test_the_banner_says_the_workspace_came_from_the_flag(self):
+        """The banner is how an agent knows which plane it is acting on. `-w` is the
+        loudest of the rungs and it has to be the one reported."""
+        self.create()
+        _, _, err = self.call(commands_change.cmd_change_show, change="component-api-2")
+        self.assertIn("workspace: ws", err)
+        self.assertIn("--workspace", err)
+
+    def test_an_absent_why_is_refused_rather_than_crashing(self):
+        code, _, err = self.call(commands_change.cmd_change_create,
+                                 change="component-api-2", why=None)
+        self.assertEqual(code, 1)
+        self.assertIn("--why", err)
+
+    def test_dropping_from_a_change_that_does_not_exist_is_refused(self):
+        code, _, err = self.call(commands_change.cmd_change_drop,
+                                 change="never-created", repo="charter", why="out")
+        self.assertEqual(code, commands_change.REFUSED)
+        self.assertIn("no change", err)
+
+    def test_one_blocker_reads_as_one_and_two_read_as_two(self):
+        self.create()
+        for repo in ("charter", "charter-metrics", ".github"):
+            self.call(commands_change.cmd_change_add, change="component-api-2", repo=repo)
+        rec = change.read("ws", "component-api-2")
+        rec["members"][1]["needs"] = ["charter"]
+        change.write("ws", "component-api-2", rec)
+        _, _, err = self.call(commands_change.cmd_change_drop, change="component-api-2",
+                              repo="charter", why="out")
+        self.assertIn("still needs it", err)
+        rec = change.read("ws", "component-api-2")
+        rec["members"][2]["needs"] = ["charter"]
+        change.write("ws", "component-api-2", rec)
+        _, _, err = self.call(commands_change.cmd_change_drop, change="component-api-2",
+                              repo="charter", why="out")
+        self.assertIn("still need it", err)
+        self.assertNotIn("still needs it", err)
+
+    def test_a_dropped_member_does_not_read_as_never_a_member(self):
+        """The two sentences say different things about the record, and the one that is
+        wrong sends a reader looking for a member that was there all along."""
+        self.create()
+        self.call(commands_change.cmd_change_add, change="component-api-2", repo="charter")
+        _, _, err = self.call(commands_change.cmd_change_drop, change="component-api-2",
+                              repo="charter", why="out")
+        self.assertNotIn("never a member", err)
+        self.assertIn("member(s) left", err)
+
+    def test_a_change_with_exclusions_says_how_many_in_both_commands(self):
+        self.create()
+        self.call(commands_change.cmd_change_drop, change="component-api-2",
+                  repo="charter-slack", why="no components")
+        _, show, _ = self.call(commands_change.cmd_change_show, change="component-api-2")
+        _, listing, _ = self.call(commands_change.cmd_change_list)
+        self.assertIn("1 excluded", show)
+        self.assertIn("1 excluded", listing)
+
+    def test_a_change_with_no_exclusions_counts_none_in_the_listing(self):
+        self.create()
+        _, listing, _ = self.call(commands_change.cmd_change_list)
+        self.assertNotIn("excluded", listing)
+
+    def test_a_record_file_whose_NAME_forges_a_row_is_named_safely_in_the_listing(self):
+        """The refused half of the listing takes its slug from the FILESYSTEM, so it has
+        been through nothing at all — and a file named with a line break is a file somebody
+        can create. Compared against the same refusal over an ordinary name, so the count
+        of tips and banners is not what is being measured."""
+        self.create()
+        d = change.changes_dir("ws")
+        (d / "benign.json").write_text("{")
+        _, _, one = self.call(commands_change.cmd_change_list)
+        (d / "benign.json").unlink()
+        (d / "hos\ntile.json").write_text("{")
+        _, _, two = self.call(commands_change.cmd_change_list)
+        self.assertGreaterEqual(len(one.strip().splitlines()), 2)
+        self.assertEqual(len(two.strip().splitlines()), len(one.strip().splitlines()))
+
+    def test_a_hostile_member_name_is_named_on_the_success_line_too(self):
+        """A repo name is `segment_ok`, which admits a line break — and this is the line
+        charter prints when it *accepts* the member, which is the one nobody thinks of."""
+        self.clone(self.HOSTILE)
+        self.create()
+        _, _, benign = self.call(commands_change.cmd_change_add,
+                                 change="component-api-2", repo="charter")
+        _, _, hostile = self.call(commands_change.cmd_change_add,
+                                  change="component-api-2", repo=self.HOSTILE)
+        self.assertGreaterEqual(len(benign.strip().splitlines()), 2)
+        self.assertEqual(len(hostile.strip().splitlines()),
+                         len(benign.strip().splitlines()))
+
+    def test_a_hostile_name_is_named_on_the_exclusion_success_line_too(self):
+        self.create()
+        _, _, benign = self.call(commands_change.cmd_change_drop,
+                                 change="component-api-2", repo="gone", why="out")
+        _, _, hostile = self.call(commands_change.cmd_change_drop,
+                                  change="component-api-2", repo=self.HOSTILE, why="out")
+        self.assertGreaterEqual(len(benign.strip().splitlines()), 2)
+        self.assertEqual(len(hostile.strip().splitlines()),
+                         len(benign.strip().splitlines()))
+
+    def test_the_lifted_exclusion_warning_cannot_be_as_long_as_the_reason(self):
+        long = "w" * (change.TEXT_LIMIT - 1)
+        self.create()
+        self.call(commands_change.cmd_change_drop, change="component-api-2",
+                  repo="charter", why=long)
+        _, _, err = self.call(commands_change.cmd_change_add,
+                              change="component-api-2", repo="charter")
+        for line in err.splitlines():
+            self.assertLess(len(line), change.TEXT_LIMIT, line[:80])
+
+    def test_the_blocker_refusal_does_not_grow_for_a_hostile_member(self):
+        """The refusal names the repo being dropped, and that name comes from argv — so
+        this is the drop gate's own printing site, distinct from the blockers it lists."""
+        d = change.changes_dir("ws")
+        d.mkdir(parents=True, exist_ok=True)
+        for slug, blocked in (("benign", "api"), ("hostile", self.HOSTILE)):
+            (d / f"{slug}.json").write_text(json.dumps({
+                "change": slug, "why": "w", "created": "t", "by": "t",
+                "members": [{"repo": blocked, "branch": "b", "needs": []},
+                            {"repo": "web", "branch": "b", "needs": [blocked]}],
+                "excluded": []}))
+        counts = []
+        for slug, repo in (("benign", "api"), ("hostile", self.HOSTILE)):
+            _, _, err = self.call(commands_change.cmd_change_drop, change=slug,
+                                  repo=repo, why="out")
+            counts.append(len(err.strip().splitlines()))
+        self.assertGreaterEqual(counts[0], 3)
+        self.assertEqual(counts[1], counts[0])
+
+    def test_a_member_name_is_shown_rather_than_silently_shortened(self):
+        """`tui.sanitize` REMOVES a character with no glyph, so a raw cell renders
+        `a<U+2028>b` as `ab` — a row naming a repository that is not the one in the record
+        (#498). `contain.one_line` escapes it instead, and the escape has to survive the
+        column's own truncation, which is why the width is computed from the escaped cell —
+        measuring the raw one gives a column 21 wide for a cell that needs 27, and the
+        escape is exactly what falls off the end."""
+        d = change.changes_dir("ws")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "hostile.json").write_text(json.dumps({
+            "change": "hostile", "why": "w", "created": "t", "by": "t",
+            "members": [{"repo": "b" * 20 + "\u2028a", "branch": "x", "needs": []},
+                        {"repo": "s", "branch": "y",
+                         "needs": ["b" * 20 + "\u2028a"]}],
+            "excluded": []}))
+        code, out, _ = self.call(commands_change.cmd_change_show, change="hostile")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("\\u2028"), 2)   # the member row AND its `needs` cell
+
+    def test_a_very_long_slug_is_clipped_on_both_rows(self):
+        """`change_name_ok` puts no ceiling on a slug's length — the filesystem does, at a
+        good deal more than a row."""
+        slug = "s" * 200
+        d = change.changes_dir("ws")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{slug}.json").write_text(json.dumps(
+            {"change": slug, "why": "w", "created": "t", "by": "t",
+             "members": [], "excluded": []}))
+        _, show, _ = self.call(commands_change.cmd_change_show, change=slug)
+        _, listing, _ = self.call(commands_change.cmd_change_list)
+        for out in (show, listing):
+            self.assertTrue(out.strip())
+            for line in out.splitlines():
+                self.assertLess(len(line), 200, line[:60])
+
+
+class TestTheAuthorsOwnEdges(ChangeCommands):
+    """`by` comes out of `git config` — a file on this machine charter did not write — and
+    lands in a record a LIVE workspace commits and every `show` prints back."""
+
+    ESC = "\x1b"
+
+    def _author_with(self, stdout) -> str:
+        from unittest import mock
+        with mock.patch.object(commands_change.util, "run",
+                               return_value=SimpleNamespace(stdout=stdout)):
+            return commands_change._author()
+
+    def test_surrounding_whitespace_is_trimmed_from_both_ends(self):
+        self.assertEqual(self._author_with("  Real Name  \n"), "Real Name")
+
+    def test_a_name_carrying_an_escape_is_contained(self):
+        self.assertNotIn(self.ESC, self._author_with(f"Real{self.ESC}[2KName\n"))
+
+    def test_no_stdout_at_all_is_not_a_crash(self):
+        self.assertTrue(self._author_with(None))
+
+    def test_the_fallback_is_the_shell_the_operator_is_in(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"USER": "operator-name"}, clear=True):
+            self.assertEqual(self._author_with(""), "operator-name")
+
+
 class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
     """§6.1 rule 2. Every member in a record was typed by somebody, and in a LIVE workspace
     the record is committed — so it is reviewable in a diff. A surface that could expand a

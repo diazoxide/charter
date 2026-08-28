@@ -286,7 +286,7 @@ def cmd_change_forget(args) -> int:
     # committed link at the record's own name — which is the `None` below.
     removed = change.forget(ws, slug)
     if removed is None:
-        util.err(f"could not delete the record for {contain.readable(slug)}.")
+        util.err(f"could not delete the record for '{slug}'.")
         return 1
     util.ok(f"change '{slug}' forgotten — the record is gone; branches, requests and the "
             "landing log are untouched.")

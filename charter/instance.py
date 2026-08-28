@@ -123,12 +123,18 @@ CHANGE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def change_name_ok(name) -> bool:
-    """Can *name* name a cross-repo change? Asked in :func:`workspace_name_ok`'s two
-    halves, for its reasons: containment first (:func:`contain.segment_ok` — could this
-    string name one entry in a directory at all), then the alphabet, which is the right
-    rule here because charter mints these names itself."""
-    return (isinstance(name, str) and contain.segment_ok(name)
-            and CHANGE_NAME_RE.fullmatch(name) is not None)
+    """Can *name* name a cross-repo change?
+
+    One rule and not two, which is where this differs from :func:`workspace_name_ok` next
+    door. That one asks :func:`contain.segment_ok` first and says why: it is the half that
+    still holds if the alphabet is ever widened. Here the alphabet *is* the containment —
+    :data:`CHANGE_NAME_RE` admits no separator, no leading dot, no NUL and nothing
+    absolute — so a `segment_ok` call in front of it is an answer the regex has already
+    given, and a line no test can go red without. The property it stood for is pinned
+    directly instead, on this function, against `..`, `a/b`, `a\\b`, a NUL and a leading
+    dot.
+    """
+    return isinstance(name, str) and CHANGE_NAME_RE.fullmatch(name) is not None
 
 
 def default_workspace_of(cfg: dict, fallback: str) -> str:
