@@ -902,21 +902,36 @@ def scan_package_writes() -> dict[str, list[tuple[int, str]]]:
     return _scan(write_violations, handed_write_violations)
 
 
-def _scan(named, handed) -> dict[str, list[tuple[int, str]]]:
+def _scan(named, handed, mods=None, sources=None) -> dict[str, list[tuple[int, str]]]:
     """One sweep of the package: the *named* half per module, then the *handed* half.
 
     Named and handed are one answer because they are one property — a writer that can run
     on a path under ``.charter/`` without going through `config`.
+
+    *mods* and *sources* default to the real package and its files on disk. They are
+    parameters because the **wiring below is itself a thing that can break silently**: a
+    hand mutation that stopped handing the named half the package-wide answer left every
+    accuracy case green, because those call `write_violations` directly with the arguments
+    spelled out and the package happens to be clean either way. A sweep whose two halves
+    have quietly stopped agreeing reports ``{}`` exactly as a clean package does. See
+    `TheScanFollowsAPathAndNotItsContents.test_the_sweep_wires_the_package_answer_into_the
+    _named_half`.
+
+    *sources* is the TEXT each module was parsed from, kept beside the tree rather than
+    re-derived from it: the line numbers in the report have to be the ones in the file a
+    reader is about to open, and ``ast.unparse`` renumbers everything.
     """
     names = state_attribute_names()
-    mods = load_package()
+    mods = load_package() if mods is None else mods
+    if sources is None:
+        sources = {m: p.read_text() for m, (p, _t) in mods.items()}
     # The package-wide answer, computed once and handed to BOTH halves. The named half
     # used to get only its own module's, so a helper one import away was invisible to it
     # while the handed half saw straight through the same call (#582).
     package_funcs = package_state_functions(mods, names)
     found: dict[str, list[tuple[int, str]]] = {}
     for module, (path, tree) in mods.items():
-        hits = named(path.read_text(), names, module=module,
+        hits = named(sources[module], names, module=module,
                      aliases=_aliases(tree, module), package_funcs=package_funcs)
         if hits:
             found[str(path.relative_to(PACKAGE.parent))] = hits

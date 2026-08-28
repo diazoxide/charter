@@ -1803,6 +1803,62 @@ class TheScanFollowsAPathAndNotItsContents(unittest.TestCase):
             aliases=scan._aliases(tree, "frame.gather"), package_funcs=pkg)
         self.assertEqual([ln for ln, _ in hits], [9])
 
+    def test_the_sweep_wires_the_package_answer_into_the_named_half(self):
+        """The wiring, not the pieces — and it is here because nothing else could see it.
+
+        Every case above calls `write_violations` directly with *module*, *aliases* and
+        *package_funcs* spelled out, so all of them stay green if `_scan` stops passing
+        them; and the package is clean, so the sweep answers ``{}`` either way. A hand
+        mutation that dropped those three arguments from `_scan` survived the whole file.
+
+        A sweep whose halves have quietly stopped agreeing reports exactly what a clean
+        package reports, which is the failure this file exists to make impossible. So the
+        sweep is run against a package built for the purpose, with a writer only the
+        cross-module answer can reach: `gather.save`'s path comes from `_cache_file`, and
+        `_cache_file`'s state-ness comes from `frame_dir` in another module.
+        """
+        sources = {
+            "frame.state": ("from .. import config, contain\n\n"
+                            "def frame_dir(fid):\n"
+                            "    d = contain.child(config.STATE_DIR / 'frame', fid)\n"
+                            "    return d\n"),
+            "frame.gather": ("from . import state\n\n"
+                             "def _cache_file(fid):\n"
+                             "    d = state.frame_dir(fid)\n"
+                             "    return None if d is None else d / 'cache.json'\n\n"
+                             "def save(fid):\n"
+                             "    f = _cache_file(fid)\n"
+                             "    f.write_text('{}')\n")}
+        mods = scan.modules_from(sources)
+        found = scan._scan(scan.write_violations, scan.handed_write_violations,
+                           mods=mods, sources=sources)
+        self.assertEqual(
+            found, {"charter/frame/gather.py": [(9, "f")]},
+            "the sweep did not report a writer whose path is state-derived one module "
+            "away — the named half is not being handed the package-wide answer, and a "
+            "sweep in that state reports a clean package for a package that is not")
+
+    def test_the_sweep_reports_the_line_numbers_of_the_file_it_read(self):
+        """Why *sources* is carried beside the tree rather than derived from it.
+
+        The report is read by a person about to open the file, so a line number has to be
+        the one in that file. `ast.unparse` renumbers everything — comments and blank
+        lines are gone — so a sweep that re-derived its text from the tree would name
+        lines that exist and are the wrong ones, which is worse than naming none.
+        """
+        src = ("from .. import config\n"
+               "\n"
+               "# a comment, which `ast.unparse` would not keep\n"
+               "\n"
+               "\n"
+               "def save():\n"
+               "    (config.STATE_DIR / 'x').write_text('y')\n")
+        mods = scan.modules_from({"m": src})
+        self.assertEqual(
+            scan._scan(scan.write_violations, scan.handed_write_violations,
+                       mods=mods, sources={"m": src}),
+            {"charter/m.py": [(7, "config.STATE_DIR / 'x'")]})
+
     def test_without_the_package_answer_it_falls_back_to_what_it_always_saw(self) -> None:
         """The default is "nothing known", so a caller asking about one string in
         isolation — every accuracy case above — gets exactly the old behaviour."""
