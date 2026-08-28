@@ -181,6 +181,38 @@ class CharterDeliversThreeOfTheSixAndSaysWhich(unittest.TestCase):
         self.assertEqual(events.wanted(c), ())
 
 
+class TheWithdrawalUndoesExactlyWhatTheRequestAsked(unittest.TestCase):
+    """The two mode constants are a PAIR, and the cases that watch them being written can
+    only ever compare a constant to itself.
+
+    `FOCUS_ON`'s value is pinned for real by `tests/test_frame_focus_reaches_a_component.py`
+    — a wrong private-mode number there means tmux sends nothing and the whole integration
+    class goes red. `FOCUS_OFF` has no such witness: nothing observes a pane after charter
+    has stopped reading it. So what is asked here is the RELATIONSHIP, which is where the
+    realistic defect lives — a typo in one number of one of the two.
+
+    It is not cosmetic. A `FOCUS_OFF` that withdrew a different mode would leave tmux
+    reporting focus at a pane nobody is reading after a handler failure retired it, filling
+    that pty's input buffer for the life of the frame.
+    """
+
+    def test_off_is_on_with_the_low_letter(self):
+        self.assertTrue(events.FOCUS_ON.endswith("h"))
+        self.assertEqual(events.FOCUS_OFF, events.FOCUS_ON[:-1] + "l")
+
+    def test_it_is_a_private_mode_set_and_not_something_else(self):
+        self.assertTrue(events.FOCUS_ON.startswith("\x1b[?"))
+
+    def test_it_is_the_pair_the_overlay_does_not_already_own(self):
+        """`overlay.MOUSE_ON` is the same shape for the pointer. Asking that these are not
+        it keeps a copy-paste from arming mouse reporting on every panel that wanted to
+        know whether it was focused — which would take the operator's text selection
+        without `[frame] mouse` ever being set."""
+        self.assertNotIn(events.FOCUS_ON, overlay.MOUSE_ON)
+        self.assertNotIn("1000", events.FOCUS_ON)
+        self.assertNotIn("1006", events.FOCUS_ON)
+
+
 class TheDecoderNamesFocusAndBlur(unittest.TestCase):
     """The two sequences `overlay.decode` used to consume and drop."""
 
