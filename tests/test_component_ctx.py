@@ -53,17 +53,26 @@ class OnlyWhatWasDeclared(unittest.TestCase):
         with self.assertRaises(AttributeError):
             c.todos             # not declared -> not present
 
-    def test_the_attribute_set_is_exactly_the_declaration_plus_the_geometry(self):
+    def test_the_attribute_set_is_exactly_the_declaration_plus_what_is_always_served(self):
         """Both halves of "exactly": the instance's own fields, and everything a
-        component could reach by name on the object."""
+        component could reach by name on the object.
+
+        **This assertion changed when `chrome` was added, and it was supposed to.**
+        `ctx.Ctx`'s own docstring says a future field is a widening of what a stranger's
+        code may reach and should cost a test change and the conversation that goes with
+        it. The conversation is §7 of the frame's visual-design spec; this line is the
+        cost. Read as a list rather than a name: `ALWAYS` is spelled out here on purpose,
+        so that a name quietly added to that tuple fails this test instead of being
+        carried into it.
+        """
         c = _ctx_for(needs=("repos", "todos"))
-        expected = {"width", "height", "fid", "repos", "todos"}
+        expected = {"width", "height", "fid", "chrome", "repos", "todos"}
         self.assertEqual(set(vars(c)), expected)
         self.assertEqual({n for n in dir(c) if not n.startswith("_")}, expected)
 
-    def test_declaring_nothing_leaves_the_geometry_and_nothing_else(self):
+    def test_declaring_nothing_leaves_what_is_always_served_and_nothing_else(self):
         c = _ctx_for(needs=())
-        self.assertEqual(set(vars(c)), {"width", "height", "fid"})
+        self.assertEqual(set(vars(c)), {"width", "height", "fid", "chrome"})
 
     def test_the_refusal_names_the_slice_and_where_to_declare_it(self):
         c = _ctx_for(needs=("gather",))
@@ -90,7 +99,8 @@ class OnlyWhatWasDeclared(unittest.TestCase):
         wide = ctx.build(("gather", "repos"), width=80, height=10, fid="f1",
                          snapshot=snap)
         narrow = ctx.build(("todos",), width=80, height=10, fid="f1", snapshot=snap)
-        self.assertEqual(set(vars(narrow)), {"width", "height", "fid", "todos"})
+        self.assertEqual(set(vars(narrow)),
+                         {"width", "height", "fid", "chrome", "todos"})
         self.assertIn("gather", vars(wide))
 
 

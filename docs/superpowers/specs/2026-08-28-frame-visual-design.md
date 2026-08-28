@@ -742,14 +742,34 @@ for the default, because the default sets nothing.
 
 Stated rather than reasoned about, per this project's rule.
 
-- **tmux 3.1c and 3.2.** Only 3.7c is on this machine now
-  (`/opt/homebrew/Cellar/tmux/3.7c/bin/tmux`, and nothing else on `$PATH` or under
-  `/usr/local`). The 3.1c and 3.2 binaries `2026-08-26-tmux-input-findings.md` used are gone.
-  **Everything in §1, §3.1, §4 and §6 was measured on 3.7c only.** `window-style` is old
-  enough to predate `tmuxctl.FLOOR` (3.2), but *pane-scoped* `set -p` of it, and tmux's
-  colour downsampling at each tier, were not run below 3.7c. Phase 3 must run them on 3.2
-  before shipping, the way `tmuxctl`'s four version floors were confirmed by running 3.1c
-  and 3.2.
+- ~~**tmux 3.1c and 3.2.**~~ **ANSWERED in Phase 3.5 — the floor behaves identically, and
+  nothing is gated.** tmux 3.2 was built from source on this machine (`./configure &&
+  make`) and the whole of §1 and §4 was re-run against it, one style per server, with the
+  SGR lifted out of an attached client's wire rather than read out of forty bytes of
+  context. Sixty-six of sixty-eight answers were byte-identical to 3.7c; the two that were
+  not (`window-style bold`, and one pane's context window) were the measuring harness's own
+  batching — tmux emits an SGR only when the style CHANGES, so four panes that downsample
+  to the same colour produce one escape and three silences, which reads as "three styles
+  tmux ignored" and is nothing of the sort. Re-run one pane per server they matched too.
+
+  | measured at `tmuxctl.FLOOR` (3.2) | answer | 3.7c |
+  |---|---|---|
+  | `set -p window-style` pane-scoped? | yes — sibling panel, harness pane and `show -w` all `''` | same |
+  | honours colour only? | yes — `reverse`/`dim`/`bold` each put **no SGR at all** on the wire; `bg=colour236,dim` put `ESC[48;5;236m` and nothing else | same |
+  | do the 16 ANSI names resolve? | yes, all 16 — `bg=black`→`ESC[40m` … `bg=white`→`ESC[47m`, `bg=brightblack`→`ESC[100m` … `bg=brightwhite`→`ESC[107m` | same |
+  | active/inactive split | active pane `ESC[100m`, inactive `ESC[40m`, harness `ESC(B ESC[m` | same |
+  | style value format-expanded | stored verbatim: `bg=#{?#{==:1,1},colour196,colour46}` | same |
+  | `#(...)` in a style | refused by the parser: `invalid style:` | same |
+  | a refused `set-option` | rc 1, `invalid style: bg=notacolour`, previous value intact — reported, not fatal | same |
+  | survives `respawn-pane`, `resize-window` | yes | same |
+  | downsample per client | 256 → `ESC[48;5;236m`; 8-colour `xterm` → `ESC[40m`; `vt100` → `ESC[7m` | same |
+  | `set -p -u` removes it | rc 0, reads back `''`; unsetting one never set is also rc 0 | same |
+  | live `set -p` on an attached pane | repaints by itself — `ESC[40m` on the wire with no `refresh-client` | same |
+
+  **So `chrome` is not gated at a version**, and the absence of a gate is asserted rather
+  than left implicit (`tests/test_frame_surface_live.py`). The spec's contingency — "if 3.2
+  differs, `chrome` is gated at the version that works, the way `display-popup` is gated at
+  3.3" — did not come due.
 - **What the sixteen ANSI names actually resolve to in the operator's terminal.** The claim
   that 0–15 track the operator's chosen palette while 16–255 are a fixed cube is the basis
   for §3.2's "named slots, never indices", and it is a documented property of terminal
@@ -919,30 +939,30 @@ a test, and the phase does not exit without it.
 
 *The one thing that cannot be made theme-safe, behind one word.*
 
-- [ ] **3.1** `[frame] chrome` in `instance.FRAME_FIELDS`, TOML key `chrome`, a closed enum
+- [x] **3.1** `[frame] chrome` in `instance.FRAME_FIELDS`, TOML key `chrome`, a closed enum
       `off` / `dark` / `light`, default `off`. Validated at the config boundary the way
       `density_level` and `toggle_key` are, `isinstance` first — `tomllib` can hand it a list
       or a table and `config.FRAME` resolves on `charter --version`.
-- [ ] **3.2** The style pair applied pane-scoped from `_split_panels`, beside `_chrome_argvs`
+- [x] **3.2** The style pair applied pane-scoped from `_split_panels`, beside `_chrome_argvs`
       — the one funnel, both servers, at launch and at a density change, **never on a
       repaint**.
-- [ ] **3.3** The harness pane is never styled. Test it by reading it back:
+- [x] **3.3** The harness pane is never styled. Test it by reading it back:
       `show -p -t <harness> -v window-style` must answer `''`, and the client wire must carry
       no colour before the harness's content. This is ADR 0018's boundary; assert it rather
       than intend it.
-- [ ] **3.4** **No operator string reaches tmux.** The enum maps to style constants charter
+- [x] **3.4** **No operator string reaches tmux.** The enum maps to style constants charter
       holds. Mutation: let the config value through as a style; confirm RED, and confirm the
       test names *which* refusal fired.
-- [ ] **3.5** Run §1/§4's measurements again on **tmux 3.2** (`tmuxctl.FLOOR`) — pane-scoped
+- [x] **3.5** Run §1/§4's measurements again on **tmux 3.2** (`tmuxctl.FLOOR`) — pane-scoped
       `set -p window-style`, the active/inactive split, and the per-client downsample. §9 says
       they were run on 3.7c only. If 3.2 differs, `chrome` is gated at the version that works
       and says so, the way `display-popup` is gated at 3.3 (§4k).
-- [ ] **3.6** The palette carries `chrome: dark` / `chrome: light` / `chrome: off` as three
+- [x] **3.6** The palette carries `chrome: dark` / `chrome: light` / `chrome: off` as three
       rows, so the operator who upgrades into a look they dislike is one keystroke from
       fixing it rather than one documentation search.
-- [ ] **3.7** `docs/frame.md:200-209`'s "the one place charter overrides a preference of
+- [x] **3.7** `docs/frame.md:200-209`'s "the one place charter overrides a preference of
       yours" becomes true again — it is no longer the only one when `chrome` is set.
-- [ ] **3.8** News entry, full suite, two environments, sweep.
+- [x] **3.8** News entry, full suite, two environments, sweep.
 
 **Exit criteria.** With `chrome = "dark"`, charter's panel panes carry a background and the
 harness pane provably does not — read back from tmux, not from charter's own intent. With
@@ -957,21 +977,21 @@ recorded, whichever way it goes.
 
 *So a provider can match without charter overdrawing it.*
 
-- [ ] **4.1** `ctx` gains the roles of §5 as a read-only mapping of SGR strings, resolved for
+- [x] **4.1** `ctx` gains the roles of §5 as a read-only mapping of SGR strings, resolved for
       this frame's `chrome` and this pane's state. A `MappingProxyType`, no callable, reads
       nothing — the shape `SERVES["gather"]` already returns.
-- [ ] **4.2** The exact-attribute-set test on `Ctx` is updated, deliberately and visibly —
+- [x] **4.2** The exact-attribute-set test on `Ctx` is updated, deliberately and visibly —
       `ctx.Ctx`'s docstring says a widening should cost a test change and the conversation
       that goes with it. §7 is the conversation; the test change is the cost.
-- [ ] **4.3** A provider that ignores the recipes still cannot reach past its rectangle.
+- [x] **4.3** A provider that ignores the recipes still cannot reach past its rectangle.
       Assert it: a provider whose rows carry a background and no reset colours its own pane
       and no other, and its next repaint is clean (Phase 1.5).
-- [ ] **4.4** `docs/frame.md`'s provider section says what a provider gets and what charter
+- [x] **4.4** `docs/frame.md`'s provider section says what a provider gets and what charter
       does not promise: the surface is charter's, the cells are the provider's, and a pane
       that clashes is a pane whose provider chose to.
-- [ ] **4.5** Mutations: hand a provider a mutable recipes dict; let a foreign row skip
+- [x] **4.5** Mutations: hand a provider a mutable recipes dict; let a foreign row skip
       `_fit`. Each RED.
-- [ ] **4.6** Full suite, two environments, sweep.
+- [x] **4.6** Full suite, two environments, sweep.
 
 **Exit criteria.** A provider's component drawn with the recipes is indistinguishable from a
 built-in at the same size. One drawn without them is visibly different and harms nothing

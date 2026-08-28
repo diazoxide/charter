@@ -234,7 +234,8 @@ def _rows(fid: str, *, density: str = "normal"):
     """The palette's whole catalogue for *fid*, built exactly the way `_draw_palette`
     builds it — the two picker rows, then the action rows, neither from a hand-written
     list."""
-    reg = builtin_actions.build(fid, current_density=density)
+    reg = builtin_actions.build(fid, current_density=density,
+                               current_chrome="off")
     return (choose.open_rows(fid)
             + palette.rows(reg.offers(fid=fid, snapshot={})))
 
