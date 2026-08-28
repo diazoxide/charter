@@ -42,6 +42,57 @@ slots = ["top", "bottom", "repos", "right"]
 # like. Three words: `off`, `dark`, `light`.
 chrome = "dark"
 
+# The arrangement, written out. `[[frame.component]]` supersedes `slots` above when it is
+# usable, and each table keeps its component's SHIPPED rectangle — omitting `edge`/`size`
+# is what asks for the default rather than overriding it. An arrangement is refused WHOLE
+# (#535): one value charter cannot read drops all four tables back to `slots`, because a
+# frame with one panel silently missing reads as a plane with no clones.
+#
+# `bg` is a WORD, never a style string — a tmux style value is format-expanded, so the
+# word is only ever a key into `FRAME_PANE_BG` and the value handed to tmux is charter's
+# own constant. Seventeen words: `default`, the eight ANSI names, their eight `bright`
+# forms. Sixteen names and not 256 is a decision: a committed `bg` is read on a machine
+# whose theme its author never saw, so it resolves against the OPERATOR's palette.
+#
+# Every pane charter draws is `brightblack` and the harness pane is left alone, which is
+# the whole look: charter's chrome is grey, the work area is the terminal's own. The pair
+# inverts on focus (`brightblack` active is `black`), so the focused panel is the one that
+# differs from its neighbours rather than the one that lights up.
+#
+# `pad` is horizontal only and comes OUT of the content budget, not on top of it: a
+# renderer composes narrower rather than composing wide and being pushed off its own edge.
+# Pinned as an equality — a 120-column `repos` at `pad = 2` composes byte-identical rows
+# to a 116-column one with none. `FRAME_PANE_PAD_MAX` is 5, derived as the largest inset
+# the 22-column sidebar can afford.
+#
+# `key` toggles that one component live. `F2` (palette) and `F12` (escape hatch) are
+# refused by name — measured: a component could otherwise take `F12` and tmux would read
+# back one binding with the operator's silently gone.
+
+[[frame.component]]
+use = "identity"
+bg  = "brightblack"
+pad = 1
+key = "F5"
+
+[[frame.component]]
+use = "attention"
+bg  = "brightblack"
+pad = 1
+key = "F6"
+
+[[frame.component]]
+use = "sidebar"
+bg  = "brightblack"
+pad = 1
+key = "F7"
+
+[[frame.component]]
+use = "repos"
+bg  = "brightblack"
+pad = 2
+key = "F8"
+
 [update]
 # Track main instead of the last release. `charter update` installs straight from git;
 # nothing is published, and PEP 610 gives `charter --version` the exact commit.
