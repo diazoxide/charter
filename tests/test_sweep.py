@@ -2537,6 +2537,23 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
         self.assertEqual(here, there)
         self.assertIn("self.assertEqual(f(None), [])", there)
 
+    def test_the_outcome_of_a_mutation_that_never_applied_survives_the_trip(self):
+        """`[31/43]` from the sharded self-sweep, in the half no earlier run reached.
+
+        `results_from_json`'s `outcome()` collapsed to `None` and every page still
+        matched — because the one place a subset's detail is printed is the not-applied
+        section, and the round-trip fixture had no not-applied result in it. A shard
+        reporting "the edit never landed" is the case where the merge has to say WHY, and
+        it was the case nothing round-tripped.
+        """
+        r = _result("unapplied", path="charter/a.py")
+        r.subset = sweep.Outcome(False, 0, "the tree did not match the mutation's origin")
+        back = sweep.results_from_json(sweep.as_json([r]))
+        self.assertEqual(back[0].subset, r.subset)
+        self.assertEqual(back[0].full, r.full)
+        page = sweep.gate_summary(sweep.classify(back), "a" * 40, "b" * 40, None, False)
+        self.assertIn("the tree did not match the mutation's origin", page)
+
     def test_a_survivors_own_platform_is_recomputed_and_not_read_from_the_file(self):
         """The shard that measured it and the machine that merges it are two computers.
         Trusting the shard's answer would let one platform's verdict be reported as

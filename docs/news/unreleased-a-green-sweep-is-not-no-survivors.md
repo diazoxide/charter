@@ -91,7 +91,7 @@ kind of pass.
 
 ## The sweep swept the gate that reports it
 
-127 mutations, against a change whose whole subject is the sweep. It found six lines of
+127 mutations, against a change whose whole subject is the sweep. It found seven lines of
 its own that no test went red without.
 
 **The unsharded path had stopped being tested.** Forcing `if shard is not None` to
@@ -130,7 +130,14 @@ heading below carries the same words, so deleting the table row outright left it
 and so did collapsing the cell that holds "2 of 3". A row is a number; the number is
 asserted now, in each of the three shapes it takes.
 
-All six are pinned now. A seventh survivor is not a finding about this code at all: it is a
+**And the outcomes a shard reports did not survive the trip through the file.** The
+merge rebuilds each result from JSON, and the helper that rebuilds a run's outcome could
+be collapsed to "there was none" with every page still matching — because the one place a
+subset's detail is printed is the *not-applied* section, and nothing round-tripped a
+not-applied result. That is the case where a shard says "the edit never landed" and the
+merge has to be able to say why.
+
+All seven are pinned now. An eighth survivor is not a finding about this code at all: it is a
 string inside a *type annotation*, which `from __future__ import annotations` means the
 interpreter never evaluates, so no test can ever go red without it. That is a blind spot
 in the string operator's scoping rather than a guard, and it is filed as one (#632)
