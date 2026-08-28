@@ -1978,7 +1978,7 @@ def _summary_rows(results: list[Result]) -> list[str]:
     different reason, so the honest first question about a survivor is "did my test look
     closely enough" — which nobody can answer from a line number alone.
     """
-    out: list[str] = []
+    out: list[str] = [""]
     for r in sorted(results, key=lambda r: (r.mutation.path, r.mutation.line)):
         m = r.mutation
         out.append(f"- **`{m.path}:{m.line}`** in `{m.symbol}` — _{m.question}_")
