@@ -26,7 +26,7 @@ exited 0 with an empty stderr (#503). :data:`_KNOWN_FIELDS` closes the key half,
 its `Entry` altogether and no per-entry check can be asked about it.
 
 And the report saying so is charter's own output, so every span in it is contained as the
-sentence is assembled (:func:`_report`) rather than at the spans somebody was thinking
+sentence is assembled (`contain.sentence`) rather than at the spans somebody was thinking
 about: the ordering VALUE was contained and the committed FILENAME beside it was not, so a
 filename holding a newline forged an extra line of charter's report (#502).
 
@@ -376,48 +376,6 @@ def marker(e: Entry) -> str:
     return "security: " if e.security else ""
 
 
-def _report(template: str, **fields) -> str:
-    """One line of charter's own report, with **every** field in it bounded to one line.
-
-    *template* is a literal in this module — charter's own sentence, with ``{}`` slots.
-    Everything substituted into it comes out of a committed file and goes through
-    :func:`contain.one_line`; a sequence is contained element by element and then joined
-    with charter's own comma, so the separator cannot come from the data either.
-
-    **Why the containment is here and not at the slots.** A news entry is a committed file
-    and so is its NAME: whoever writes the commit chooses both, and both land in a line a
-    release engineer reads out of CI. `entry_errors` contained the ordering *value* and
-    interpolated the *filename* three inches away raw, so an entry named
-    ``0.60.0-a\\nEVIL: charter says nothing is wrong.md`` printed two lines where charter
-    emitted one, the second being the attacker's sentence in charter's own voice (#502).
-    The value was contained because the value was what that commit was about — not because
-    the filename half had been judged safe.
-
-    Wrapping each span individually would have fixed the four call sites #502 named and
-    left the door open at the shape it predicted: a THIRD untrusted span turning up in one
-    of these sentences. There were three of those already. The ``{version}`` in the
-    duplicate-`lead:` message is frontmatter; the ``{check}`` in a probe's reason is
-    frontmatter; the pair of filenames in `stamp`'s SUCCESS line is the same pair its
-    refusals carry, on the path that runs at every release. So the message is contained as
-    it is ASSEMBLED, and a field added to one of these templates tomorrow is contained by
-    having been passed here — which is a property a reviewer can check by reading the call
-    site, rather than one they have to remember.
-
-    What this does not reach is a call site that builds its sentence with an f-string
-    instead of calling this. Nothing in the language stops that, so
-    `tests/test_a_news_entry_cannot_forge_a_report_line.py` plants a newline in every field
-    a news entry owns and asserts each of these reports is still the number of lines
-    charter meant to write.
-    """
-    shown = {}
-    for key, value in fields.items():
-        if isinstance(value, (list, tuple)):
-            shown[key] = ", ".join(contain.one_line(v) for v in value)
-        else:
-            shown[key] = contain.one_line(value)
-    return template.format(**shown)
-
-
 #: An ordering field whose value charter could not read, quoted back to its author.
 _BAD_VALUE = ("{name}: `{field}: {raw}` is not a value charter reads — a news ordering "
               "field is `true` or `false`. Left unread, this entry sorts as though it "
@@ -487,28 +445,29 @@ def entry_errors(entries: list[Entry]) -> list[str]:
 
     Callers rather than this function decide the consequence: `charter news --for`, which
     IS the release workflow's publish gate, refuses; the range view warns and prints on.
-    Every sentence is assembled through :func:`_report`, so a committed filename in one
-    cannot write a second line into the report it appears in (#502).
+    Every sentence is assembled through `contain.sentence`, so a committed filename in
+    one cannot write a second line into the report it appears in (#502).
     """
     out: list[str] = []
     for e in sorted(entries, key=lambda e: e.path.name):
         for field, raw in e.bad:
             template = _EMPTY_VALUE if raw == "" else _BAD_VALUE
-            out.append(_report(template, name=e.path.name, field=field, raw=raw))
+            out.append(contain.sentence(template, name=e.path.name, field=field, raw=raw))
         for key in e.unknown:
             known = next((f for f in _KNOWN_FIELDS if f == key.casefold()), None)
             if known is not None:
-                out.append(_report(_MISCASED_KEY, name=e.path.name, key=key, known=known))
+                out.append(contain.sentence(_MISCASED_KEY, name=e.path.name,
+                                            key=key, known=known))
             else:
-                out.append(_report(_UNKNOWN_KEY, name=e.path.name, key=key))
+                out.append(contain.sentence(_UNKNOWN_KEY, name=e.path.name, key=key))
     leads: dict[str, list[Entry]] = {}
     for e in entries:
         if e.lead:
             leads.setdefault(e.version, []).append(e)
     for version, claimants in sorted(leads.items()):
         if len(claimants) > 1:
-            out.append(_report(_TWO_LEADS, version=version, count=len(claimants),
-                               names=sorted(c.path.name for c in claimants)))
+            out.append(contain.sentence(_TWO_LEADS, version=version, count=len(claimants),
+                                        names=sorted(c.path.name for c in claimants)))
     return out
 
 
@@ -552,16 +511,17 @@ def _not_an_entry(p: Path) -> str:
     try:
         text = p.read_text()
     except (OSError, UnicodeDecodeError) as exc:
-        return _report(_UNREADABLE_FILE, name=p.name, error=f"{type(exc).__name__}: {exc}")
+        return contain.sentence(_UNREADABLE_FILE, name=p.name,
+                                error=f"{type(exc).__name__}: {exc}")
     meta, _body = persona.parse(text)
     if not meta:
-        return _report(_NO_FRONTMATTER, name=p.name)
+        return contain.sentence(_NO_FRONTMATTER, name=p.name)
     miscased = next((k for k in meta if k != "version" and k.casefold() == "version"), None)
     if miscased is not None:
-        return _report(_MISCASED_VERSION, name=p.name, key=miscased)
+        return contain.sentence(_MISCASED_VERSION, name=p.name, key=miscased)
     if not (meta.get("version") or "").strip():
-        return _report(_NO_VERSION, name=p.name)
-    return _report(_NOT_AN_ENTRY, name=p.name)
+        return contain.sentence(_NO_VERSION, name=p.name)
+    return contain.sentence(_NOT_AN_ENTRY, name=p.name)
 
 
 def unreadable() -> list[str]:
@@ -1063,13 +1023,13 @@ def probe(entry: Entry) -> tuple[str, str]:
     code = _dispatch(entry.check)
     if code is None:
         why = _IN_FLIGHT if in_flight else (_refused or _NOT_RUN)
-        # Through `_report` rather than `.format` directly: `check:` is frontmatter, this
-        # sentence is printed as a line of `charter news --pending`'s own report, and the
-        # five templates above are the third untrusted span #502 predicted would turn up in
-        # one of these messages. `_tokens` refuses `\n` as shell syntax and never sees
-        # U+2028 or an ANSI escape, and in any case a guard that decides whether a probe
-        # RUNS is not a guard on what the report PRINTS.
-        return UNKNOWN, _report(why, check=entry.check)
+        # Through `contain.sentence` rather than `.format` directly: `check:` is
+        # frontmatter, this sentence is printed as a line of `charter news --pending`'s
+        # own report, and the five templates above are the third untrusted span #502
+        # predicted would turn up in one of these messages. `_tokens` refuses `\n` as
+        # shell syntax and never sees U+2028 or an ANSI escape, and in any case a guard
+        # that decides whether a probe RUNS is not a guard on what the report PRINTS.
+        return UNKNOWN, contain.sentence(why, check=entry.check)
     return (ADOPTED if code == 0 else PENDING), ""
 
 
@@ -1142,7 +1102,7 @@ def _restamp(text: str, version: str) -> str | None:
     return "".join(out) if found else None
 
 
-#: Why a stamp was refused, one sentence each. Through :func:`_report` for the reason
+#: Why a stamp was refused, one sentence each. Through `contain.sentence` for the reason
 #: `entry_errors`' sentences are: these name FILES, a filename is chosen by whoever wrote
 #: the commit, and this text is read out of a release engineer's terminal at the one moment
 #: nobody re-derives it (#502). `{version}` is argv rather than a committed file and is
@@ -1167,7 +1127,7 @@ def stamp(version: str) -> tuple[list[tuple[Path, Path]], list[str]]:
     leaves every entry staged, which fails loudly at the next catch.
     """
     if not _is_version(version):
-        return [], [_report(_NOT_A_VERSION, version=version)]
+        return [], [contain.sentence(_NOT_A_VERSION, version=version)]
     d = checkout_dir()
     if d is None:
         return [], ["news entries are stamped in the repo, and this is not a charter "
@@ -1179,11 +1139,11 @@ def stamp(version: str) -> tuple[list[tuple[Path, Path]], list[str]]:
         slug = src.stem.split("-", 1)[1]
         dst = d / f"{version}-{slug}.md"
         if dst.exists():
-            blocked.append(_report(_NAME_TAKEN, src=src.name, dst=dst.name))
+            blocked.append(contain.sentence(_NAME_TAKEN, src=src.name, dst=dst.name))
             continue
         text = _restamp(src.read_text(), version)
         if text is None:
-            blocked.append(_report(_NOTHING_TO_STAMP, src=src.name))
+            blocked.append(contain.sentence(_NOTHING_TO_STAMP, src=src.name))
             continue
         plan.append((src, dst, text))
     if blocked:

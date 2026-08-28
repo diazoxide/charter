@@ -669,5 +669,47 @@ class FixedNameWritesAreContained(WriteFixtures):
         self.assertEqual("task", (config.WORKSPACES_DIR / ".default").read_text().strip())
 
 
+class TheEmptyPathIsRefusedRatherThanCreated(WriteFixtures):
+    """`_path_refusal`'s first branch, which the module's own comment records and no test
+    held (found by `tools/sweep.py`, which could delete the branch with the suite green).
+
+    ENOENT on a write means *about to be created*, and the empty path never can be. Without
+    the branch the write side answers "nothing to object to" and hands its caller an
+    unhandled `OSError` one line later — a refusal turned back into a crash, which is the
+    bug #348 shipped and fixed.
+
+    **The cwd is inside a data root here, and that is the whole fixture.** `Path("")` is
+    `Path(".")`, so `write_refusal` asks `dir_refusal` about the current directory first —
+    and from anywhere outside the plane that check refuses on its own and masks the branch
+    entirely. A test written from the suite's own directory passes whether the branch is
+    there or not, which is what "check whether a second line hides the consequence" means
+    in practice.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        config.PERSONAS_DIR.mkdir(parents=True, exist_ok=True)
+        here = os.getcwd()
+        os.chdir(config.PERSONAS_DIR)
+        self.addCleanup(os.chdir, here)
+
+    def test_the_directory_check_above_it_would_have_allowed_this(self):
+        """Non-vacuity: if the cwd stopped being plane data, the assertions below would
+        pass on the strength of `dir_refusal` and prove nothing about the branch."""
+        self.assertIsNone(contain.dir_refusal(Path("").parent, "write"))
+
+    def test_a_write_to_the_empty_path_is_refused(self):
+        said = contain.write_refusal("")
+        self.assertIsNotNone(said, "the empty path answered 'nothing to object to'")
+        self.assertIn("cannot be examined", said)
+
+    def test_and_the_raising_form_raises_rather_than_handing_back_a_path(self):
+        with self.assertRaises(contain.Refused):
+            contain.writable("")
+
+    def test_the_read_side_refuses_it_too(self):
+        self.assertIsNotNone(contain.file_refusal(""))
+
+
 if __name__ == "__main__":
     unittest.main()

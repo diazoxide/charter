@@ -62,6 +62,19 @@ and break a plane that legitimately links a persona directory. Resolving keeps t
 working, and #342's reason for staying lexical was never that symlinks are acceptable —
 only that doing half of this while claiming all of it would be worse than filing it.
 
+**One assembler for report lines, because two of them drifted.** :func:`sentence` and its
+path-budget twin :func:`path_sentence` are where a line of charter's own output gets its
+untrusted spans contained, and they are here rather than in each module that reports.
+`news` grew a private copy of exactly this (#573) rather than import the one here, which
+was private and carried the wrong budget for a frontmatter value — and, proximately,
+because #498 was open on this module at the time. Within one version the two disagreed
+about the budget and about what to do with a field holding several things — the second
+drift invisible from either side, since neither copy could see the other. That is the
+argument this module's own opening paragraph makes about `valid_name`, turned on this
+module. A third reporting surface —
+`commands_persona`'s tables, `frame/registry`'s entry-point errors, `mcpseen` — now picks
+one of two written-down budgets instead of inventing a third (#576).
+
 **No refusal function here raises.** These checks sit under `doctor`, the status line and
 SessionStart, where the rule is that a hook may cost a session its briefing and never its
 turn. The single exception is :func:`writable`, which exists to raise and says so: a write
@@ -142,7 +155,7 @@ def child(base, name: str) -> Path | None:
 
 def refusal(name: str) -> str:
     """The one sentence every site uses to say why *name* was refused."""
-    return _sentence(NOT_A_SEGMENT, name=name)
+    return path_sentence(NOT_A_SEGMENT, name=name)
 
 
 # --------------------------------------------------------------------------- #
@@ -328,20 +341,98 @@ def readable(value, limit: int = DISPLAY_LIMIT) -> str:
 PATH_DISPLAY_LIMIT = 1024
 
 
-def _sentence(template: str, **fields) -> str:
-    """One refusal sentence, with every field bounded to one line.
+#: What :func:`sentence` writes BETWEEN the elements of a field holding several things.
+#:
+#: Charter's own separator, for the same reason the template is charter's own text: a line
+#: naming several committed things is a line with structure, and a separator taken from one
+#: of the things would let that thing restructure the line. Written once, so two report
+#: surfaces cannot separate their lists differently.
+SEQUENCE_SEPARATOR = ", "
 
-    A refusal is a report line **about** a value charter would not accept, and that value is
-    exactly the thing that must not be able to write a second line into the report. It is
-    also, on every path through this module, a value out of a committed file or a filesystem
-    somebody else's commit created.
+
+def _slots(fields: dict, limit: int) -> dict:
+    """Every field bounded to one line, ready to be substituted into a template.
+
+    The **budget** is the caller's, and it is the only thing :func:`sentence` and
+    :func:`path_sentence` differ by. Everything else — that a field is contained at all,
+    and that a field holding several things is contained element by element rather than
+    after the join — is the same question wherever a report line is assembled, so it is
+    answered here and cannot be answered twice.
+
+    **Containing the elements and not the join, because the join is the sentence.** A
+    sentence that names a list exists to name every entry in it; clipping the joined string
+    drops the last entries and leaves a line that reads as though those entries were never
+    there. Per element, a long entry is clipped and its neighbours still arrive.
+
+    **"Several things" is a property, not a type.** The test is *is this one string, or is
+    it something that can be iterated* — not a list of the container classes somebody
+    happened to pass. ``(list, tuple)`` is a spelling: a caller handing a `set`, a
+    `frozenset`, a `dict_keys` or a generator to a sentence naming several files falls off
+    the end of it and gets Python's own `repr` of the container printed into charter's
+    prose, brackets and quotes and all. `str` and `bytes` are iterable and are one thing,
+    which is why they are named as the exception rather than the containers being named as
+    the rule.
+    """
+    shown = {}
+    for key, value in fields.items():
+        if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
+            shown[key] = one_line(value, limit=limit)
+        else:
+            shown[key] = SEQUENCE_SEPARATOR.join(one_line(v, limit=limit) for v in value)
+    return shown
+
+
+def sentence(template: str, **fields) -> str:
+    """One line of charter's own report, with **every** field in it bounded to one line.
+
+    *template* is a literal in charter's own source — charter's sentence, with ``{}`` slots.
+    Everything substituted into it is treated as a value out of a committed file or off a
+    filesystem somebody else's commit created, and goes through :func:`one_line`.
+
+    **The containment is at the assembly, not at the slots.** A report line is charter's
+    own output and the fields in it are not; a newline in one of them writes a second line
+    that looks exactly as much like charter's output as the first. `news.entry_errors`
+    contained the ordering *value* and interpolated the committed *filename* three inches
+    away raw, so an entry named ``0.60.0-a\\nEVIL: charter says nothing is wrong.md``
+    printed two lines where charter emitted one, the second being the author's sentence in
+    charter's voice (#502). The value was contained because the value was what that commit
+    was about — not because the filename had been judged safe.
+
+    Wrapping each span individually fixes the spans somebody enumerated and leaves the door
+    open at the shape #502 predicted: a further untrusted span turning up in one of these
+    sentences. A field added to a template tomorrow is contained by having been passed
+    here, which is a property a reviewer checks by reading the call site rather than one
+    they have to remember.
+
+    **Two functions rather than one with a ``limit=`` keyword, and the reason is this
+    signature.** ``**fields`` makes the template's slot names and this function's own
+    parameter names one namespace, so a template that ever grows a ``{limit}`` slot would
+    have its value silently eaten as the budget and then raise ``KeyError`` out of
+    `str.format` — inside the module whose rule is that nothing here raises. The budget is
+    named by which function you call instead, so no slot name can collide with it, and the
+    two budgets charter has are written down where each other can see them.
+
+    What this does not reach is a call site that builds its sentence with an f-string
+    instead of calling this. Nothing in the language stops that, so
+    `tests/test_a_news_entry_cannot_forge_a_report_line.py` plants a line break in every
+    field a news entry owns and asserts each report is still the number of lines charter
+    meant to write.
+    """
+    return template.format(**_slots(fields, DISPLAY_LIMIT))
+
+
+def path_sentence(template: str, **fields) -> str:
+    """:func:`sentence` at :data:`PATH_DISPLAY_LIMIT` — a sentence that names a PATH.
+
+    The refusals in this module name resolved paths, and a plane's paths are legitimately
+    long: at :data:`DISPLAY_LIMIT` the reader gets a clipped path they cannot act on, which
+    is the one thing a refusal exists to give them. Everything else is :func:`sentence`.
 
     Formatted here rather than at the twelve `.format` calls it replaces, because twelve is
     how many places the thirteenth gets forgotten in — the same argument that put the name
     bound inside `persona.mcp_servers` instead of at each of its consumers (#453).
     """
-    return template.format(
-        **{k: one_line(v, limit=PATH_DISPLAY_LIMIT) for k, v in fields.items()})
+    return template.format(**_slots(fields, PATH_DISPLAY_LIMIT))
 
 
 def json_line(obj, *, sort_keys: bool = False) -> str:
@@ -502,12 +593,16 @@ def within_data(path) -> bool:
 
 
 def _not_plane_data(path, verb: str = "read") -> str:
-    roots = ", ".join(sorted(Path(r).name for r in data_roots()))
+    # The names go in as a SEQUENCE, not as a string this function joined: joining first
+    # and containing second bounds the whole list at one budget, so the last root drops out
+    # of a sentence whose job is to say which directories are the plane's. The join is
+    # `path_sentence`'s (:data:`SEQUENCE_SEPARATOR`), and the rendering is unchanged.
+    roots = sorted(Path(r).name for r in data_roots())
     try:
         target = os.path.realpath(path)
     except (OSError, ValueError):
         target = path            # unresolvable — say what was asked for, never raise here
-    return _sentence(NOT_PLANE_DATA, name=path, target=target, roots=roots, verb=verb)
+    return path_sentence(NOT_PLANE_DATA, name=path, target=target, roots=roots, verb=verb)
 
 
 #: Said once, like the two above. Names the resolved target because that is the whole
@@ -564,7 +659,7 @@ def plane_adjacent_refusal(root, declared) -> str | None:
         target = os.path.realpath(p)
     except (OSError, ValueError):
         target = str(p)
-    return _sentence(NOT_PLANE_ADJACENT, name=declared, target=target, root=root)
+    return path_sentence(NOT_PLANE_ADJACENT, name=declared, target=target, root=root)
 
 
 def dir_refusal(directory, verb: str = "read") -> str | None:
@@ -677,20 +772,20 @@ def _path_refusal(path, *, missing_ok: bool, verb: str) -> str | None:
         # the empty path never can. Without this the write side answered "nothing to
         # object to" for it and handed the caller an unhandled `OSError` one line later —
         # a refusal turned back into a crash, which is the bug #348 shipped and fixed.
-        return _sentence(UNREADABLE, name=path, error="empty path")
+        return path_sentence(UNREADABLE, name=path, error="empty path")
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         if missing_ok:
             return None       # about to be created — there is nothing there to object to
-        return _sentence(UNREADABLE, name=path, error="No such file or directory")
+        return path_sentence(UNREADABLE, name=path, error="No such file or directory")
     except OSError as e:
-        return _sentence(UNREADABLE, name=path, error=e.strerror or e)
+        return path_sentence(UNREADABLE, name=path, error=e.strerror or e)
     except ValueError as e:
         # `os.lstat` raises ValueError, NOT OSError, on a path holding a NUL — the one
         # input shaped to get past a check (`segment_ok` refuses it for the same reason).
         # "Nothing here raises" is this module's promise; catching only OSError broke it.
-        return _sentence(UNREADABLE, name=path, error=e)
+        return path_sentence(UNREADABLE, name=path, error=e)
     if stat.S_ISLNK(st.st_mode):
         # Asked BEFORE `os.stat`, and that order is load-bearing on the write side: a
         # dangling link has no target to stat, so a containment check placed after the
@@ -704,14 +799,14 @@ def _path_refusal(path, *, missing_ok: bool, verb: str) -> str | None:
         except FileNotFoundError:
             if missing_ok:
                 return None   # a contained link naming a file charter is about to create
-            return _sentence(UNREADABLE, name=path, error="No such file or directory")
+            return path_sentence(UNREADABLE, name=path, error="No such file or directory")
         except OSError as e:
-            return _sentence(UNREADABLE, name=path, error=e.strerror or e)
+            return path_sentence(UNREADABLE, name=path, error=e.strerror or e)
         except ValueError as e:
-            return _sentence(UNREADABLE, name=path, error=e)
+            return path_sentence(UNREADABLE, name=path, error=e)
     if not stat.S_ISREG(st.st_mode):
         kind = next((k for test, k in _KINDS if test(st.st_mode)), "not a file")
-        return _sentence(NOT_A_FILE, name=path, kind=kind, verb=verb)
+        return path_sentence(NOT_A_FILE, name=path, kind=kind, verb=verb)
     if st.st_size > MAX_BYTES:
-        return _sentence(TOO_LARGE, name=path, size=st.st_size, cap=MAX_BYTES)
+        return path_sentence(TOO_LARGE, name=path, size=st.st_size, cap=MAX_BYTES)
     return None

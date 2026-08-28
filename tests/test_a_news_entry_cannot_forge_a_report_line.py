@@ -18,7 +18,7 @@ not judged safe, it was not judged.
 **So the property is not "the filename is contained".** It is *every untrusted span in a
 report line is contained, including the ones nobody was thinking about* — and the way to
 have that is to contain the sentence as it is ASSEMBLED rather than at the spans somebody
-enumerated. `news._report` does that, and this module is what says so about spans that
+enumerated. `contain.sentence` does that, and this module is what says so about spans that
 were not enumerated: the `{version}` in the duplicate-`lead:` message is frontmatter, the
 `{check}` in a probe's reason is frontmatter, a slug is a filename with its prefix cut off,
 and the two filenames in `news stamp`'s SUCCESS line are the same pair its refusal carries.
@@ -44,7 +44,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, news
+from charter import commands, contain, news
 
 _V = "0.60.0"
 
@@ -458,7 +458,7 @@ class TheGuardIsAtTheAssemblyNotAtTheSpans(unittest.TestCase):
     """
 
     def test_every_field_handed_to_report_is_contained(self):
-        said = news._report("{a} {b}", a=f"x{_LF}y", b=f"p{_LINE_SEP}q")
+        said = contain.sentence("{a} {b}", a=f"x{_LF}y", b=f"p{_LINE_SEP}q")
         self.assertEqual(len(said.splitlines()), 1, said)
 
     def test_a_sequence_is_contained_element_by_element(self):
@@ -472,16 +472,16 @@ class TheGuardIsAtTheAssemblyNotAtTheSpans(unittest.TestCase):
         repr, with the brackets and quotes of a data structure, in a sentence a person
         reads.
         """
-        said = news._report("{names}", names=[f"a{_LF}b", f"c{_LF}d"])
+        said = contain.sentence("{names}", names=[f"a{_LF}b", f"c{_LF}d"])
         self.assertEqual(said, "a\\x0ab, c\\x0ad")
 
     def test_a_sequence_is_joined_by_charter_and_not_by_python(self):
-        said = news._report("{names}", names=["one.md", "two.md"])
+        said = contain.sentence("{names}", names=["one.md", "two.md"])
         self.assertEqual(said, "one.md, two.md")
 
     def test_the_templates_are_charters_own_text(self):
         """`str.format` reads the TEMPLATE for `{}` slots and never the values, so a
         committed value holding braces is data. Asserted rather than assumed, because it
         is the reason this helper can take a template at all."""
-        said = news._report("{a}", a="{b} {0} {}")
+        said = contain.sentence("{a}", a="{b} {0} {}")
         self.assertEqual(said, "{b} {0} {}")

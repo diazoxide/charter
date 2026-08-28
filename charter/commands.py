@@ -2589,7 +2589,7 @@ def cmd_news(args) -> int:
                 # silence would be read as "nothing to adopt" — the shape ADR 0013 and
                 # `doctor`'s not-checked hint both exist to refuse.
                 # The slug is the committed filename with its version prefix cut off, and
-                # `why` already carries the entry's `check:` contained (`news._report`).
+                # `why` already carries the entry's `check:` contained (`contain.sentence`).
                 util.warn(f"{contain.one_line(e.slug)}: {why}")
                 unchecked += 1
         if not shown:
