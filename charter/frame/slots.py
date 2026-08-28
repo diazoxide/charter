@@ -804,9 +804,19 @@ def repos_rows_wanted(fid: str, *, pane_cols: int) -> int:
     and never runs a git sweep. See its own docstring. It is asked SECOND, after the
     width test that can answer zero, so a narrow frame does not pay for a count it is
     about to discard.
+
+    **The component's own pad comes off *pane_cols* first, and #500 is why it is here
+    rather than nowhere.** `_repos` composes at :func:`content_width`, so a padded pane's
+    table is planned for `pane_cols - 2 * pad`; asking `_table_cap` for the unpadded width
+    would size this pane from a number the renderer never sees, which is exactly the
+    sizer-and-renderer disagreement #500 shipped twice. In the band between
+    `statusline._LEFT_W` and `_LEFT_W + 2 * pad` that difference is the whole answer: the
+    unpadded question says "a table fits, give it eight rows" and the pane then draws one
+    line saying it is too narrow. :func:`pad_for` is the same function `pad_of` is, asked
+    with the launcher's width instead of a pane it cannot measure.
     """
     from . import gather
-    cap = _table_cap(fid, pane_cols)
+    cap = _table_cap(fid, pane_cols - 2 * pad_for("repos", pane_cols))
     if cap <= 0:
         return 0
     rows = gather.row_count(fid)
@@ -876,6 +886,27 @@ def _inset(marker: str = "") -> str:
 _PAD_MIN_CONTENT = _NAME_MIN_W
 
 
+def pad_for(name, cols: int) -> int:
+    """The pad *name* asks for, afforded against a pane of *cols* columns.
+
+    **The width is passed in for :func:`_table_cap`'s own reason**, and it is the same
+    reason twice: the RENDERER has a pane to measure (:func:`pad_of`, below) and the
+    LAUNCHER has only a window it has not split yet (`repos_rows_wanted`, which runs in a
+    different process on a different terminal and would measure the operator's shell if it
+    measured anything). One function, two widths, so the pane the launcher sizes and the
+    pane the renderer draws into cannot come to disagree about how many cells the pad took.
+    A second copy of this arithmetic on the launcher's side is exactly the shape #500
+    shipped when the sizer answered from the window's width and the renderer from the
+    pane's.
+
+    See :func:`pad_of` for the argument about where the cells come from and why an
+    unaffordable pad is dropped whole rather than clamped.
+    """
+    from .. import config, instance
+    pad = instance.component_style(config.FRAME, name)["pad"]
+    return pad if cols - 2 * pad >= _PAD_MIN_CONTENT else 0
+
+
 def pad_of(name) -> int:
     """Cells of horizontal inset this pane draws, each side — the pad *name* can AFFORD.
 
@@ -906,19 +937,38 @@ def pad_of(name) -> int:
     `statusline._LEFT_W` and says so; a pad that pushes a 97-column pane under that line
     gets the refusal, and the operator's own ``pad`` is what put it there. Teaching this
     function each renderer's minimum would be a second copy of `layout._table_min_cols()`
-    drifting from the first (#547). :func:`_too_narrow_lines` is told the pad instead, so
-    the number it quotes is the width the PANE needs rather than the width the table needs
-    — the operator reads a number they can act on, and widening by it works.
+    drifting from the first (#547). Two things carry that instead, and both are the
+    existing number asked with the pad in it rather than a new one:
+    :func:`repos_rows_wanted` sizes the pane from the width the RENDERER will see, so a
+    frame does not open a tall pane for a table that will refuse; and
+    :func:`_too_narrow_lines` quotes the width the PANE needs, so the operator reads a
+    number they can act on and widening by it works.
+
+    `layout.visible_slots` is deliberately left alone, and the consequence is bounded and
+    stated: between `_table_min_cols()` and `_table_min_cols() + 2 * pad` the launcher
+    still splits a `repos` pane, and what the operator gets there is a one-row pane saying
+    how many columns it needs. That is a pane that says what is wrong, which is what
+    `_too_narrow_lines` exists to be; the alternative — a slot silently absent — is the
+    "no clones" lie #515 removed.
 
     Read at call time through `config.FRAME`, never cached, exactly as :func:`verbosity`
     reads the density: a panel repaints on a version bump and a relaunch is what changes
     this. `instance.component_style` is the one walk over the arrangement, shared with the
     launcher (`commands_frame._split_panels`), so the pane that gets a colour and the pane
     that gets an inset cannot come to disagree about which component they are.
+
+    **What a repaint pays for this, measured rather than waved at.** Per paint, a padded
+    pane costs one `component_style` walk inside :func:`content_width` (which measures the
+    tty exactly as often as it did before) and, on `render`'s way out,
+    one more walk plus one more `TIOCGWINSZ`. On this machine: `component_style` is
+    **1.22µs** for the last of four placements (`right`, the worst case) and 0.27µs for
+    the first, and `os.get_terminal_size` on a real pty is **1.27µs**. Call it 3µs against
+    the **4 816µs** one `render("right")` already costs — the number `ANIMATED`'s own
+    comment records, and the budget it exists to protect. **0.06%.** Nothing here is on
+    the idle path at all: a panel at rest is one `stat` (`state.version`) and paints
+    nothing, and this runs only when something is being painted.
     """
-    from .. import config, instance
-    pad = instance.component_style(config.FRAME, name)["pad"]
-    return pad if _width() - 2 * pad >= _PAD_MIN_CONTENT else 0
+    return pad_for(name, _width())
 
 
 def content_width(name) -> int:
@@ -932,11 +982,18 @@ def content_width(name) -> int:
     needs the rectangle (`panel._hold`, painting a failure into a pane whose renderer is
     the thing that failed) still gets the rectangle.
 
-    Never negative for a pad the pane can afford — :func:`pad_of` has already dropped one
+    Never negative for a pad the pane can afford — :func:`pad_for` has already dropped one
     it cannot — and `tui.truncate` answers ``""`` for a non-positive width regardless, so
     the arithmetic here needs no second guard of its own.
+
+    The pane is measured ONCE and handed to both halves, rather than `_width() - 2 *
+    pad_of(name)`: that spelling asks the tty twice per call and, worse, asks it twice at
+    two different moments — a `SIGWINCH` landing between them would compose a row from one
+    width and inset it by a pad afforded against another. `panel._watch` repaints on
+    exactly that signal.
     """
-    return _width() - 2 * pad_of(name)
+    cols = _width()
+    return cols - 2 * pad_for(name, cols)
 
 
 def inset_rows(text: str, name: str) -> str:

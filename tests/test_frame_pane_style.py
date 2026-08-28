@@ -537,6 +537,67 @@ class APadThePaneCannotAffordIsDroppedWhole(PersonaIso, unittest.TestCase):
                 self.assertEqual(self._pad_of("repos", cols=cols, pad=2), 0)
 
 
+class TheSizerAndTheRendererAgreeAboutThePad(PersonaIso, unittest.TestCase):
+    """#500's defect said with a pad in it: the launcher must size the `repos` pane from
+    the width the RENDERER will see.
+
+    `_repos` composes at `content_width`, so a padded pane's table is planned for
+    `pane_cols - 2 * pad`. A sizer asking `_table_cap` for the unpadded width answers "a
+    table fits, give it eight rows" in exactly the band where the renderer then draws one
+    line saying it is too narrow — a tall pane with a complaint in it. That is the shape
+    #500 shipped twice, once from the window's width and once from the pane's.
+    """
+
+    def setUp(self):
+        super().setUp()
+        gather.save("f-1", {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+                            "repos": [{"name": "demo", "branch": "main", "dirty": False,
+                                       "tracked_dirty": False, "ahead": 0, "behind": 0,
+                                       "ci": None, "change": None, "sigil": "●",
+                                       "current": True, "worktree_count": 0}],
+                            "worktrees": [], "todos": [], "todo_count": 0})
+
+    def test_the_sizer_asks_for_no_rows_where_the_renderer_would_refuse(self):
+        """The band: a pane exactly at `_LEFT_W` with `pad = 2` leaves 91 cells, which is
+        under the table's floor. The sizer must answer 0 there, not eight rows."""
+        with mock.patch.dict(config.FRAME, _arrangement(repos={"pad": 2})):
+            self.assertEqual(
+                slots.repos_rows_wanted("f-1", pane_cols=statusline._LEFT_W), 0)
+
+    def test_without_a_pad_the_same_pane_is_sized_as_it_always_was(self):
+        """The control: the band is the pad's, not a change to what an unpadded frame
+        does at that width."""
+        with mock.patch.dict(config.FRAME, _arrangement()):
+            self.assertGreater(
+                slots.repos_rows_wanted("f-1", pane_cols=statusline._LEFT_W), 0)
+
+    def test_the_sizer_and_the_renderer_answer_the_same_question(self):
+        """Asked across the whole band rather than at one point: for every width either
+        side of the table's floor, "the sizer wanted rows" and "the renderer drew a table"
+        must be the same boolean. A second copy of the pad arithmetic on either side shows
+        up here as a width where they disagree."""
+        frame = _arrangement(repos={"pad": 3})
+        lo, hi = statusline._LEFT_W - 2, statusline._LEFT_W + 8
+        for cols in range(lo, hi):
+            with self.subTest(cols=cols), mock.patch.dict(config.FRAME, frame):
+                sized = slots.repos_rows_wanted("f-1", pane_cols=cols) > 0
+                with _pane(cols):
+                    drew = "too narrow" not in tui.strip_ansi(
+                        slots.render("repos", "f-1"))
+                self.assertEqual(sized, drew,
+                                 f"sizer says {sized}, renderer says {drew}")
+
+    def test_pad_for_is_the_function_pad_of_is(self):
+        """One function, two widths — not two functions that must be kept in step. The
+        renderer measures its pane; the launcher is handed a width for a pane that does
+        not exist yet and could only measure the operator's own shell."""
+        with mock.patch.dict(config.FRAME, _arrangement(repos={"pad": 3})):
+            for cols in (14, 17, 18, 40, 200):
+                with self.subTest(cols=cols), _pane(cols):
+                    self.assertEqual(slots.pad_of("repos"),
+                                     slots.pad_for("repos", cols))
+
+
 class TheTooNarrowLineQuotesWhatThePaneNeeds(PersonaIso, unittest.TestCase):
     """`repos` refuses to draw a cut table below `statusline._LEFT_W` and says so. With a
     pad in play the number it says has to be the width the PANE needs, not the table's.
