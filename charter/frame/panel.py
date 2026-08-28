@@ -13,7 +13,7 @@ would put a hang inside the hook path that calls `state.bump` — a cost this fe
 never impose on the agent turn that triggers a redraw.
 
 **Width is `slots.py`'s job, not this module's.** `slots.render` already measures the
-pane's own tty (`os.get_terminal_size(sys.stdout.fileno())`) rather than trusting
+pane's own tty (`pane.size()`, the descriptor `run` claims below) rather than trusting
 `$COLUMNS` — which a panel process, started as a tmux pane command, inherits WHOLE from
 the launching shell (measured: a 22-column pane whose launcher had exported
 `COLUMNS=200` saw `COLUMNS='200'` in its own environment). See `charter/frame/slots.py`'s
@@ -72,6 +72,15 @@ whole pane and `Pane is dead (status 2)` is provably all that is left. It cost a
 argv by hand outside tmux. A pane whose process is still ALIVE keeps what it painted
 (measured the same way), so `_hold` paints the reason and then simply does not return.
 
+**And the pane is a fact of this process, not a reading of `sys.stdout`** (#606). Painting
+and measuring are the same descriptor here — a panel's pane IS its stdout — so the moment a
+provider's library rebinds that global (Textual's `redirect_stdout`, `rich`, `click`,
+`tqdm`, a logging handler installed at import) this module painted into the library's log
+and `slots` measured fd -1: a correct first paint, then blank on every repaint, and a frame
+laid out 80x24 in a 150x10 pane, with nothing raised and nothing logged. :func:`run` claims
+the pane before `builtins.build()` can import a stranger's module, and everything below
+paints and measures through that claim; `frame/pane.py` carries the argument.
+
 A panel that is held is also a panel tmux never sees die, so the respawn hook
 `commands_frame._panel_died_hook_argv` installs never fires for it — deliberately: the
 two mechanisms divide at exactly the line between a failure charter's own Python can
@@ -97,7 +106,7 @@ import sys
 import time
 
 from .. import contain, tui
-from . import chrome, slots, state
+from . import chrome, pane, slots, state
 
 #: How often the version file is checked when nothing else has woken this panel. A
 #: `stat` at this rate is indistinguishable from zero cost (see `state.version`'s own
@@ -173,10 +182,61 @@ def _write(text: str) -> None:
 
 
 def _out(payload: str) -> None:
-    """The write itself — one statement, so the two branches above cannot come to
-    disagree about flushing."""
-    sys.stdout.write(payload)
-    sys.stdout.flush()
+    """The write itself — one place, so the two branches above cannot come to disagree
+    about flushing.
+
+    Into the pane this process CLAIMED (`frame/pane.py`), never into whatever `sys.stdout`
+    is bound to at the instant of the write. Those are the same object until a provider's
+    library replaces the global, and then they are the operator's rectangle and a
+    framework's in-memory log — measured (#605): a correct first paint, then every repaint
+    landing somewhere nobody can see, with the pane keeping the first frame forever and
+    nothing raised to say so.
+    """
+    out = pane.stream()
+    out.write(payload)
+    out.flush()
+
+
+#: What a pane charter cannot measure is told, instead of a frame laid out from a number
+#: nobody took. Short on purpose: the one width that would make truncating it honest is the
+#: width this message exists because charter does not have, so a message that wraps a
+#: narrow pane is the smaller of the two wrongs — and `slots._DEFAULT_COLS` truncation
+#: here would be the fabrication itself, applied to the sentence reporting it.
+_UNMEASURED = " charter: pane size unknown"
+
+
+def _unmeasured() -> str | None:
+    """:data:`_UNMEASURED` for a pane charter cannot measure, ``None`` for one it can —
+    and ``None`` for a process that has no pane at all.
+
+    **This is where an 80x24 fallback stops being indistinguishable from a real 80x24
+    pane** (#606). `slots._width`/`_height` must answer a renderer with a number whatever
+    happened, so they take :data:`slots._DEFAULT_COLS`/`_DEFAULT_ROWS` and say nothing;
+    this is the caller with something to do about it, and it draws the difference the way
+    `commands_frame._measure_window` lets `cmd_resize` refuse while `_window_size` lets
+    `cmd_launch` proceed. Laying a frame out from a guess in a rectangle that is very
+    probably not that shape is the same destructive move as laying it out from a stale
+    measurement, with less excuse — #501 refused the stale one.
+
+    **The two halves of "cannot measure" are not the same case, and the tty is what tells
+    them apart** — which is the property, where "does `os.get_terminal_size` raise" is the
+    spelling. A pane that is not a terminal is not a pane: it is `charter panel top
+    --session x > /tmp/log`, run by hand for debugging, and a test. That case has always
+    laid out at the stated default and must keep doing so, because there is no rectangle
+    for the frame to be wrong about. A pane that IS a terminal and will not report a size
+    is a real rectangle of unknown shape — a `_PrintCapture` behind fd -1, a pty created
+    without a window size (`os.openpty`, some CI shells, a terminal attached before its
+    size is negotiated). That one gets a sentence.
+
+    **Painted per tick and never held.** A pty gets its size from a `TIOCSWINSZ` that
+    arrives moments later, and the `SIGWINCH` that follows is already a repaint reason
+    (`_tick`), so the next pass measures and draws the frame. Reaching for `_hold` here —
+    the module's other answer to "this panel cannot run" — would be permanent by
+    construction, and would wedge the pane for the one failure that routinely fixes itself.
+    """
+    if not pane.is_tty() or pane.size() is not None:
+        return None
+    return _UNMEASURED
 
 
 def _paint(slot: str, fid: str) -> None:
@@ -186,8 +246,12 @@ def _paint(slot: str, fid: str) -> None:
     COUNT to the pane's HEIGHT is what this function adds on top, because `render`'s
     contract (one string) carries no notion of height at all — see the module
     docstring's "Height is this module's job" section.
+
+    A pane that could not be measured is told so instead (:func:`_unmeasured`), and
+    `slots.render` is not called at all: every line of it would be clamped to a width this
+    pane has not agreed to.
     """
-    _write(slots.render(slot, fid))
+    _write(_unmeasured() or slots.render(slot, fid))
 
 
 def _component_painter(reg, cid: str):
@@ -203,9 +267,14 @@ def _component_painter(reg, cid: str):
     with, and what this draws was decided once, when `run` resolved that name. Taking the
     argument and not reading it keeps one signature for both painters rather than a second
     shape for `_tick` to know about.
+
+    An unmeasurable pane is reported here exactly as :func:`_paint` reports one, and for a
+    reason stronger than symmetry: `ctx.build` hands a component a `width` and a `height`
+    it is entitled to draw to the edge of, so a guess passed through this door is a guess a
+    stranger's code has already been told is a measurement.
     """
     def paint(_name: str, fid: str) -> None:
-        _write(_component_text(reg, cid, fid))
+        _write(_unmeasured() or _component_text(reg, cid, fid))
     return paint
 
 
@@ -462,9 +531,37 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None) -> int:
 
 
 def run(slot: str, fid: str, *, once: bool = False) -> int:
-    """Run one panel: refuse a name nothing can draw, then paint on every version bump or
-    resize until killed (`once=True` — never passed by `charter panel` itself, only by
-    tests — paints exactly once and returns).
+    """Run one panel, on the pane this process was given.
+
+    **The claim is the first thing that happens and it is the whole of #606.** Everything
+    below paints and measures through `frame/pane.py`, and what that module answers is
+    decided here, once — above :func:`_run`'s `builtins.build()`, which is where
+    `registry.Registry.place` runs `importlib.import_module` on a provider's module and so
+    the first instant anything a stranger wrote can execute in this process. A library that
+    rebinds `sys.stdout` after that (Textual's `redirect_stdout`, `rich`, `click`, `tqdm`,
+    a logging handler installed at import) moves the global and does not move the pane.
+
+    Restored in a `finally` rather than left set, for `_watch`'s reason one question over:
+    `run(once=True)` is called in-process by tests, not only as a subprocess's whole life,
+    and a claim outliving its panel would leave the next caller in that process measuring a
+    rectangle that stopped existing — the same leak `_install_sigwinch` hands back a
+    handler to avoid. A HELD panel never reaches it, which is correct: `_hold` does not
+    return because the pane it painted into is still that process's pane.
+    """
+    held = pane.claim()
+    try:
+        return _run(slot, fid, once=once)
+    finally:
+        pane.release(held)
+
+
+def _run(slot: str, fid: str, *, once: bool = False) -> int:
+    """Refuse a name nothing can draw, then paint on every version bump or resize until
+    killed (`once=True` — never passed by `charter panel` itself, only by tests — paints
+    exactly once and returns).
+
+    Split out of :func:`run` so the pane claimed there is released by that function's own
+    `finally`, whichever of the several ways below this one returns.
 
     **`slot` is a component NAME, and this is the link Phase 1 could not build.** A panel
     process builds no registry and knows no providers, so `charter panel acme.metrics` was

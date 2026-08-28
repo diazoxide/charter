@@ -94,6 +94,16 @@ changed.
 shell's environment whole, so trusting `$COLUMNS` there would lay a panel out at the outer
 terminal's width and wrap inside its own much narrower one.
 
+The pane a panel measures is the descriptor its process was **given**, taken once at start.
+A panel paints to `sys.stdout` and measures from that same descriptor, so a component's
+library that replaces that global — a logging handler, a progress bar, a framework's output
+capture — would otherwise have the panel painting into the library's log and laying the
+frame out for a rectangle nobody has, silently. And when the pane genuinely cannot be
+measured, the panel says so (`charter: pane size unknown`) rather than assuming 80x24: if
+your output is a file or a pipe there is no rectangle to be wrong about and the panel draws
+at that default as before, but a real terminal that will not report its size gets a
+sentence until it does.
+
 **The frame animates only while work is in flight.** Work that is still running puts a
 spinner and a count on the bottom row — `⠙ 2 running` — and the panel repaints often
 enough for it to turn. Only the bottom row moves; the other panels repaint when something

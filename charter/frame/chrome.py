@@ -35,10 +35,10 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 from types import MappingProxyType
 
 from .. import tui
+from . import pane
 
 #: Reverse video on, and everything off. `_OFF` is a FULL reset rather than SGR 27
 #: ("reverse off"): a row that left an attribute open — a provider's, or a charter row
@@ -140,15 +140,19 @@ def colour_ok() -> bool:
     *is* its pane, so it is always a tty in production. The one case it catches is the
     redirect `panel.py`'s own docstring documents — ``charter panel top --session x >
     /tmp/log`` — which before this wrote a clear-screen and full SGR into a file.
+
+    **Asked of the PANE, not of `sys.stdout`** (#606). Those were the same thing until a
+    provider's library rebound the global: Textual's `redirect_stdout` installs a
+    `_PrintCapture` that answers ``isatty() -> True`` from behind fd -1, so this said
+    "colour is fine" about a stream that is not a terminal and, more to the point, is not
+    the rectangle charter is painting. `frame/pane.py` holds the descriptor this process
+    was actually given and carries the "a stream that cannot say is not a terminal"
+    fallback this used to spell here — one answer, so the paint and the question about the
+    paint cannot be about two different streams.
     """
     if no_colour():
         return False
-    try:
-        return bool(sys.stdout.isatty())
-    except (AttributeError, ValueError):
-        # A closed or exotic stdout answers neither; a frame that cannot tell does not
-        # colour, which is the direction `NO_COLOR` already points.
-        return False
+    return pane.is_tty()
 
 
 def _role_values() -> dict[str, str]:
