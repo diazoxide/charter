@@ -2219,6 +2219,27 @@ class TheGateSaysWhichOfThreeThingsItFound(unittest.TestCase):
         self.assertIn("did not report", text)
         self.assertNotIn("Nothing added here is a line the suite would not miss", text)
 
+    def test_the_table_carries_the_missing_shards_as_a_row_with_a_count_in_it(self):
+        """`[59]` and `[60]` from the self-sweep, and both are one mistake.
+
+        The test above looks for "did not report" *anywhere on the page* — and the section
+        further down carries that phrase in its heading, so deleting the table row
+        outright left the suite green, and so did collapsing the cell that holds the
+        count. A row is a number; assert the number, in both of the shapes it has.
+        """
+        gate = sweep.classify([_result("pinned")])
+        counted = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                     missing=2, shards=3)
+        self.assertIn("| **did not report** | 2 of 3 |", counted)
+        # One shard, and it was the one that vanished — the ordinary shape for a small
+        # diff, and the edge `shards >= 1` actually turns on.
+        lone = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                  missing=1, shards=1)
+        self.assertIn("| **did not report** | 1 of 1 |", lone)
+        unsized = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                     missing=1, shards=0)
+        self.assertIn("| **did not report** | ? |", unsized)
+
     def test_a_page_with_every_shard_in_still_says_the_branch_is_clean(self):
         text = sweep.gate_summary(sweep.classify([_result("pinned")]),
                                   "a" * 40, "b" * 40, 60.0, enforce=False)

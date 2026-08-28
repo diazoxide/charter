@@ -91,7 +91,7 @@ kind of pass.
 
 ## The sweep swept the gate that reports it
 
-127 mutations, against a change whose whole subject is the sweep. It found five lines of
+127 mutations, against a change whose whole subject is the sweep. It found six lines of
 its own that no test went red without.
 
 **The unsharded path had stopped being tested.** Forcing `if shard is not None` to
@@ -124,7 +124,13 @@ instead, because a merge takes a second and printing that second would understat
 forty-minute run by two orders of magnitude. Nothing asserted the minutes, so collapsing
 the whole thing to "merged from its shards" left the suite green and every page saying it.
 
-All five are pinned now. A sixth survivor is not a finding about this code at all: it is a
+**And the row that counts the missing shards was asserted by a phrase that appears
+twice.** The test looked for "did not report" anywhere on the page — and the section
+heading below carries the same words, so deleting the table row outright left it green,
+and so did collapsing the cell that holds "2 of 3". A row is a number; the number is
+asserted now, in each of the three shapes it takes.
+
+All six are pinned now. A seventh survivor is not a finding about this code at all: it is a
 string inside a *type annotation*, which `from __future__ import annotations` means the
 interpreter never evaluates, so no test can ever go red without it. That is a blind spot
 in the string operator's scoping rather than a guard, and it is filed as one (#632)
