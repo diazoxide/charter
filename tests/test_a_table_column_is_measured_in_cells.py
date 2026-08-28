@@ -684,6 +684,16 @@ class WorktreeListCase(TableCase):
         self.rows.append({"piece": piece, "branch": branch if branch is not None else piece,
                           "path": f"/w/{piece}", "prunable": False})
 
+    def claim(self, piece: str, *, repo: str | None = None) -> None:
+        """Record a real claim so the WHO column holds something.
+
+        Unclaimed rows render `pieces.claimant(None)` — the string `unknown` — on every
+        row, which is a column that cannot tell "drawn" from "dropped": with every row
+        identical, removing the cell entirely leaves the rows still agreeing with each
+        other. A claimed piece puts a value on the row that only that row has.
+        """
+        pieces.record(self.WS, "claimed", repo or self.REPO, piece, reason="SO-SAID")
+
     def listing(self) -> list[str]:
         return self.run_cmd(commands_worktree.cmd_worktree_list,
                             SimpleNamespace(workspace=self.WS, repo=None))
@@ -741,6 +751,27 @@ class TestWorktreeListColumnsLineUp(WorktreeListCase):
         self.worktree_row("slice")
         self.worktree_row(COMBINING)
         self.assert_aligned(self.listing(), self.TAIL)
+
+    def test_the_claimant_is_on_the_row_and_not_merely_between_two_that_line_up(self):
+        """The column the alignment probe cannot see, because dropping it keeps the rows
+        agreeing with each other.
+
+        Measured by a hand mutation: sizing four columns as three drops WHO out of every
+        row — `zip(row, widths)` simply stops early — and the tail's offset stays
+        identical on every row, so every alignment case stayed green. What catches it is
+        asking whether the claimant is readable off the row it belongs to (#589's probe,
+        one column over).
+        """
+        self.worktree_row("slice")
+        self.worktree_row("other")
+        self.claim("slice")
+        rows = self.listing()
+        who = pieces.claimant(pieces.claims(self.WS).get((self.REPO, "slice")))
+        self.assertNotEqual(who, "unknown",
+                            "fixture: the claim did not land, so WHO is the same string "
+                            "on every row and this case cannot fail")
+        self.assert_readable(rows, who)
+        self.assert_aligned(rows, self.TAIL)
 
     def test_an_ascii_listing_is_the_control(self):
         """Every value inside every constant, so this row is drawn identically with the
@@ -882,6 +913,27 @@ class TestVaultListColumnsLineUp(VaultListCase):
         moment one value passed its constant."""
         self.add("the-shared-team-credentials-vault")
         self.assert_heads(self.listing(), "STATUS", self.TAIL)
+
+    def test_the_widest_value_in_a_column_is_still_followed_by_a_separator(self):
+        """What the gap buys, pinned by what it buys rather than by its number.
+
+        `_GAP`'s VALUE is deliberately invisible: the rule under the header is drawn from
+        ``w - _GAP`` and the column is sized with ``gap=_GAP``, so moving it moves both
+        sides together and every offset stays consistent — measured by a hand mutation
+        that raised it to 3 with the whole file green. A gap of ZERO is not invisible:
+        the widest value in a column then runs straight into the next cell, and a reader
+        has nothing telling them where one column ends. Same measurement `worktree
+        history`'s timestamp column carries (#592).
+        """
+        self.add("the-shared-team-credentials-vault")
+        rows = self.listing()
+        widest = "the-shared-team-credentials-vault"
+        row = next(r for r in rows if widest in tui.strip_ansi(r))
+        after = tui.strip_ansi(row)[tui.strip_ansi(row).index(widest) + len(widest):]
+        self.assertGreaterEqual(
+            len(after) - len(after.lstrip(" ")), 1,
+            f"the widest value in the VAULT column touches the next one, so nothing on "
+            f"this row says where the column ends:\n{row}")
 
     def test_every_vault_and_persona_is_still_readable_off_its_row(self):
         long_vault = "the-shared-team-credentials-vault"
@@ -1079,15 +1131,49 @@ class TestDoctorSizesItsNameColumnFromTheChecks(TableCase):
         self.assertEqual(doctor.check_names(), [r.name for r in doctor.run_all()])
 
     def test_the_forge_pair_comes_from_the_plane_rather_than_from_the_list(self):
-        """A GitHub-only plane sizes for `gh`/`gh auth`. Hardcoding either would make the
-        column right on one kind of plane and wrong on the other — FINDING I3's shape,
-        which `declared_or_default_forges` exists to have settled once."""
+        """A GitHub-only plane sizes for `gh`/`gh auth`, and this plane is made one.
+
+        **The obvious version of this case agrees with the default and tests nothing.**
+        `declared_or_default_forges` falls back to GitLab when a plane declares none, so
+        asserting "whatever it resolved is in the list" passes against a hardcoded
+        ``glab`` — measured by a hand mutation that did exactly that, with the case green.
+        #588's shape: a fixture the machine would have chosen anyway.
+
+        So the plane declares GitHub, which is the value charter would never pick on its
+        own, and the pair asserted is the one that declaration produces.
+        """
+        (Path(config.ROOT) / "charter.toml").write_text(
+            'schema = 1\n\n[[forge]]\nkind = "github"\nhost = "github.com"\n'
+            'group = "acme"\n')
         clis = [f.cli for f in doctor.declared_or_default_forges()]
-        self.assertTrue(clis, "fixture: no forge resolved, so there is nothing to check")
-        for cli in clis:
-            with self.subTest(cli=cli):
-                self.assertIn(cli, doctor.check_names())
-                self.assertIn(f"{cli} auth", doctor.check_names())
+        self.assertEqual(clis, ["gh"],
+                         "fixture: the plane's own `[[forge]]` did not reach "
+                         "`declared_or_default`, so this case is about the default again")
+        names = doctor.check_names()
+        self.assertIn("gh", names)
+        self.assertIn("gh auth", names)
+        self.assertNotIn("glab", names)
+        self.assertNotIn("glab auth", names)
+
+    def test_the_name_column_is_measured_in_cells_and_not_in_characters(self):
+        """`name_width` asks `tui.column`, which measures cells — and every check name is
+        ASCII, so `len` and `tui.width` agree about all of them and the unit is
+        unobservable on the real list. Measured: a hand mutation to `max(len(...)) + 2`
+        left the whole file green.
+
+        A check name is a literal in `doctor.py` today, so this states one that is not,
+        rather than pretending doctor has a CJK check. What is under test is the
+        function's contract — the same unit every other table in this package is measured
+        in — not the roster it happens to be asked about.
+        """
+        wide = "\u65e5\u672c\u8a9e\u30c1\u30a7\u30c3\u30af"      # 7 characters, 14 cells
+        self.assert_a_cell_and_a_character_disagree(wide)
+        with mock.patch.object(doctor, "_FIXED_CHECK_NAMES", ("git", wide)):
+            self.assertEqual(doctor.name_width(), tui.column("", ["git", wide]))
+            self.assertGreater(doctor.name_width(), len(wide) + 2,
+                               "the NAME column was sized by characters, so a name that "
+                               "is 7 characters and 14 cells would be drawn 7 columns "
+                               "wide of every other row")
 
     def test_the_detail_column_starts_in_the_same_cell_on_every_row(self):
         """The property, on the two names that sit exactly ON the old constant beside one

@@ -40,10 +40,10 @@ TESTS_DIR = Path(__file__).resolve().parent
 #: is the very call `_tmuxreap` documents making the other way.
 BAKED = re.compile(r"/(?:private/)?tmp/tmux-\d")
 
-#: The two files allowed to contain the pattern: the one that defines what a baked path
-#: looks like (this one) and nothing else. `_tmuxsocket` builds the path from
-#: `os.getuid()` and so does not match at all — which is the point, and is asserted below
-#: rather than assumed.
+#: The one file allowed to contain the pattern: this one, which has to spell a baked path
+#: in order to define what one is. `_tmuxsocket` is deliberately NOT on this list — it
+#: builds its path from `os.getuid()` and so does not match at all, which is the point,
+#: and is asserted below rather than assumed.
 ALLOWED = {Path(__file__).name}
 
 
@@ -93,6 +93,23 @@ class NoTestSpellsAUid(unittest.TestCase):
 class TheHelperAsksTheMachine(unittest.TestCase):
     def test_the_uid_is_this_process_and_not_a_number(self):
         self.assertIn(f"tmux-{os.getuid()}", _tmuxsocket.socket_path())
+
+    def test_the_uid_is_asked_rather_than_agreed_with(self):
+        """The case above passes on the ONE machine where it proves nothing: put `502`
+        back into the helper and it still holds, because 502 is this developer's uid —
+        which is the whole of #601, reappearing inside the test written to close it
+        (measured by a hand mutation, green).
+
+        Asked instead of compared: the answer has to MOVE when the uid does. `os.getuid`
+        is patched to a number no machine running this has, so a helper that spells any
+        uid at all — 502, or the one this process happens to own — fails here.
+        """
+        with mock.patch("os.getuid", return_value=424242):
+            got = _tmuxsocket.socket_path()
+        self.assertIn("tmux-424242", got, got)
+        self.assertNotIn(f"tmux-{os.getuid()}", got,
+                         "the helper answered for this process rather than for the uid "
+                         "it was asked about, so it is not asking at all")
 
     def test_tmux_tmpdir_wins_when_it_is_set(self):
         """tmux reads ``$TMUX_TMPDIR`` first, so a machine that sets it puts its sockets
