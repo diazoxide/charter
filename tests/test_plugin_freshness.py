@@ -621,8 +621,20 @@ class DoctorReportsFreshnessOnBothChannels(PersonaIso):
         typed = hint.split("Run:", 1)[1].strip()          # the literal a reader copies
         self.assertEqual(typed, "charter update")
 
+        # `channel.running_inside` and not `doctor._is_charter_checkout`: the refusal is
+        # about the charter this process is RUNNING, not about the directory it was typed
+        # in (#537). What this test is about — that the command `doctor` names still does
+        # the plugin half from here — is unchanged.
+        #
+        # `HAS_CONTROL_PLANE` travels with `UPDATE` because in production it cannot not:
+        # both come off the same `charter.toml`, so a plane that declares a channel is by
+        # construction a plane. `channel.update_is_dev` reads the first to decide whether
+        # there is anybody to ask, and patching one without the other builds a state no
+        # plane can be in.
+        from charter import channel as _channel
         with mock.patch.object(config, "UPDATE", {"channel": "dev"}), \
-                mock.patch.object(doctor, "_is_charter_checkout", return_value=True), \
+                mock.patch.object(config, "HAS_CONTROL_PLANE", True), \
+                mock.patch.object(_channel, "running_inside", return_value=True), \
                 mock.patch.object(plugincache, "available", return_value=True), \
                 mock.patch.object(commands_update, "_sync_dev") as installed, \
                 mock.patch.object(commands_update, "_refresh_plugin") as refreshed:

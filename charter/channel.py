@@ -14,6 +14,23 @@ says dev and its build is still the PyPI wheel, right up until ``charter update`
 Every caller here wants exactly one of the two, and conflating them is how a status line
 would claim a dev build that nobody installed.
 
+**A third question, and it is about the running install too.** *Where did this charter load
+FROM* — :func:`package_dir`, :func:`running_inside` — is what ``charter update`` has to ask
+before it declines to install over "the tree you are editing". It used to ask instead
+whether the DIRECTORY IT WAS TYPED IN is a charter clone, which is a fact about the cwd and
+not about the operator's charter: standing in the clone with a ``uv tool`` install on
+``PATH``, ``charter --version`` said ``main @ e17801c`` while the clone's ``HEAD`` said
+``97163fb`` — two commits that could not disagree if the claim were true — and the CLI was
+left stale with nothing saying so (#537). ``charter.__file__`` answers it directly, so it
+is asked here rather than inferred from somewhere adjacent.
+
+:func:`update_is_dev` is the one function that joins the plane's answer to the build's, and
+it is separate from :func:`is_dev` for the reason the two are separate at all. Outside a
+plane there is no ``[update] channel`` to read, and reading the absence as *stable* is the
+same defect facing the other way: ``charter update`` in ``/tmp`` targeted the release
+channel and then failed a version comparison against a dev build. With no plane to ask, the
+running build is the only thing that has an answer — and it is a direct one.
+
 **Dev builds are never published.** PyPI forbids local version identifiers, so a real dev
 release would have to burn ``0.52.0.dev1``, ``.dev2``, … permanently, at a rate of hundreds
 a month and irreversibly; and running the release workflow on every push to ``main`` would
@@ -28,6 +45,7 @@ line's render path, which renders every turn.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from . import __version__
 
@@ -69,6 +87,41 @@ def channel() -> str:
 def is_dev() -> bool:
     """True when this plane asked for the dev channel. About the PLANE, not the build."""
     return channel() == "dev"
+
+
+def package_dir() -> Path:
+    """The directory the charter running this process was imported from.
+
+    ``charter/__file__``, resolved — the one thing that answers "which charter is this"
+    without asking anything adjacent. A ``uv tool`` install answers with
+    ``~/.local/share/uv/tools/charter-cp/lib/python3.13/site-packages/charter``, a
+    ``python3 -m charter`` from a clone answers with that clone's ``charter/``, and an
+    editable install answers with the tree it points at — which is the case that makes
+    ``shutil.which("charter")`` the wrong instrument here even though it is the obvious
+    one: an editable install's console script lives in a venv's ``bin/`` while the code it
+    runs is the checkout, so `which` reports the half that is safe to replace.
+    """
+    return Path(__file__).resolve().parent
+
+
+def running_inside(root) -> bool:
+    """True when the charter this process is running lives at or under *root*.
+
+    The question ``charter update`` needs before it declines to install: **would an install
+    land on the tree somebody is editing?** Not *is the directory I was typed in a charter
+    clone* — those come apart in the ordinary case, because a maintainer has a clone AND
+    the ``uv tool`` install the dev channel documents, and `git pull` in one does not move
+    the other (#537).
+
+    Never raises: an unresolvable *root* is simply not the tree this charter came from, and
+    the caller of this is a command that must still be able to say something.
+    """
+    try:
+        here = package_dir()
+        base = Path(root).resolve()
+    except (OSError, ValueError):
+        return False
+    return here == base or base in here.parents
 
 
 def direct_url() -> dict | None:
@@ -153,6 +206,49 @@ def installed_commit() -> str | None:
     info = _vcs_info()
     commit = (info or {}).get("commit_id")
     return commit.strip() or None if isinstance(commit, str) else None
+
+
+def is_dev_build() -> bool:
+    """True when the charter this process runs was installed from a **git ref**.
+
+    About the BUILD, and the exact question :func:`build_label` answers with ``+dev``: PEP
+    610 writes ``direct_url.json`` for an install resolved from a direct URL and writes
+    nothing for one resolved from an index, so its absence is the positive statement *this
+    came from PyPI*. Deliberately not "does the version string contain ``+dev``" — that
+    string is produced from this, and reading it back would be charter asking charter what
+    charter just said.
+
+    Compare :func:`is_dev`, which is about the PLANE. A plane that has just opted in is
+    ``is_dev()`` and not ``is_dev_build()``; a build installed from git under a plane that
+    never asked is the reverse, and `charter update` has to move it back.
+    """
+    return _vcs_info() is not None
+
+
+def update_is_dev() -> bool:
+    """Whether **this run** of ``charter update`` installs from git.
+
+    The plane's answer where there is a plane to ask, and the running build's where there
+    is not. Both halves are the same rule — *ask the thing the question is about* — and the
+    second half is the one that was missing: with no ``charter.toml`` anywhere above the
+    cwd there is no ``[update] channel``, and reading that absence as ``stable`` is a
+    statement about the filesystem rather than about anything the operator chose. It cost
+    an operator on the dev channel a real update: ``cd /tmp && charter update`` resolved the
+    release channel, found the published version equal to the number a dev build reports,
+    installed nothing, and then failed its own verification because ``charter --version``
+    ended in a commit rather than in that number (#537).
+
+    **A plane that exists and says nothing is not the same as no plane.** Silence in a
+    committed ``charter.toml`` is a choice — the default is stable and a plane keeps it —
+    so this branches on `config.HAS_CONTROL_PLANE` rather than on whether the channel key
+    was found. That is also what keeps the answer stable for every plane that has one: this
+    returns exactly :func:`is_dev` wherever a plane exists, so nothing about a configured
+    plane's behaviour moves.
+    """
+    from . import config
+    if getattr(config, "HAS_CONTROL_PLANE", False):
+        return is_dev()
+    return is_dev_build()
 
 
 def installed_ref() -> str | None:
