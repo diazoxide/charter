@@ -155,6 +155,73 @@ class TheRecordedSurfaceOverridesTheConfiguredOne(PersonaIso, unittest.TestCase)
             self.assertEqual(commands_frame._current_chrome(self.FID), "dark")
 
 
+class TheTwoNewStateAccessorsRefuseRatherThanRaise(PersonaIso, unittest.TestCase):
+    """The four guards the deletion sweep found unpinned in `record_chrome` / `chrome`.
+
+    All four are live and none of them had a test: the sweep deleted each in turn and the
+    whole 7037-test suite stayed green. They are not decoration — `$CHARTER_SESSION_ID`
+    reaches both functions without ever passing through `state.frame_id`'s minting
+    (`cmd_chrome` reads the variable directly), so a hostile or oversized id arrives here
+    as an ordinary argument, and `frame_dir` answers `None` for it. Without the guards
+    that is a `TypeError` from `None / "chrome"` — raised out of a command that runs
+    detached from a palette row, where nothing would ever print it.
+
+    **Each test names WHICH refusal fired**, per the deletion sweep: two guards in
+    sequence mask each other, and "it did not raise" is satisfied by both.
+    """
+
+    #: A frame id `contain.child` refuses outright, so `frame_dir` answers `None` — the
+    #: exact input `$CHARTER_SESSION_ID` can carry.
+    HOSTILE = "../../../etc"
+
+    def test_recording_against_an_unusable_frame_id_writes_nothing(self):
+        state.record_chrome(self.HOSTILE, "dark")
+        # WHICH refusal: `frame_dir` answered None, so nothing was written anywhere —
+        # asserted as the absence of a readable value rather than as "no exception".
+        self.assertIsNone(state.chrome(self.HOSTILE))
+
+    def test_reading_an_unusable_frame_id_answers_none_rather_than_raising(self):
+        self.assertIsNone(state.chrome(self.HOSTILE))
+        with mock.patch.dict(commands_frame.config.FRAME, {"chrome": "dark"}):
+            self.assertEqual(commands_frame._current_chrome(self.HOSTILE), "dark",
+                             "the read raised instead of degrading, so a frame launched "
+                             "with a hostile $CHARTER_SESSION_ID takes the launch down "
+                             "rather than losing its surface")
+
+    def test_a_write_that_fails_is_a_surface_lost_and_not_an_exception(self):
+        """`record_chrome` is called from `cmd_chrome`, which runs detached from a
+        palette row. A full disk there must cost the surface, not the command."""
+        real = pathlib.Path.write_text
+
+        def refuse(self_path, *a, **kw):
+            if self_path.name == "chrome.tmp":
+                raise OSError("no space left on device")
+            return real(self_path, *a, **kw)
+
+        with mock.patch.object(pathlib.Path, "write_text", refuse):
+            state.record_chrome("fr-write-fails", "dark")
+        # WHICH refusal: the write was attempted and refused, so nothing was recorded.
+        self.assertIsNone(state.chrome("fr-write-fails"))
+        # And the control — with the write working, the same call DOES record, so the
+        # assertion above is about the refusal and not about a fixture that never wrote.
+        state.record_chrome("fr-write-fails", "dark")
+        self.assertEqual(state.chrome("fr-write-fails"), "dark")
+
+    def test_an_empty_recorded_file_is_never_set_rather_than_a_word(self):
+        """`None` and `""` are different answers to "has this frame been set by hand",
+        and this function's docstring promises the first. Nothing downstream can tell
+        them apart today — `chrome_level("")` is `None` either way — so the promise is
+        the reason the line is here, and a promise nothing checks is what the sweep
+        exists to find."""
+        state.record_chrome("fr-empty", "")
+        self.assertIsNone(state.chrome("fr-empty"))
+        state.record_chrome("fr-empty", "   ")
+        self.assertIsNone(state.chrome("fr-empty"))
+        # The control: a real word is not flattened by the same line.
+        state.record_chrome("fr-empty", "light")
+        self.assertEqual(state.chrome("fr-empty"), "light")
+
+
 class TurningTheSurfaceOffIsARemovalAndNotAStyle(unittest.TestCase):
     """`_resurface_argvs` — the argv, before any tmux runs it.
 
