@@ -1039,15 +1039,36 @@ def set_active(name: str, session_id: str | None = None,
     selected for, rather than letting :func:`charter.session` read them out of the
     environment — see :func:`_pointer_files` for the case that needs it. Ordinary callers
     (`charter persona use`) leave both unset and get exactly today's behaviour.
+
+    **``name`` is a name, and the ``(name or "")`` that used to stand in front of both
+    writes is gone.** The deletion sweep reported it twice as a survivor and it was right:
+    all three callers hand this a non-empty string — `cmd_persona_use` and
+    `cmd_persona_create` pass a required argparse positional, and `frame.switch.to_persona`
+    has already run `valid_name` and checked the roster before it gets here — so nothing
+    in the package could reach the fallback and no test could tell the two spellings apart.
+    Deleting it is the same finding as an equivalent mutant, and it makes a call that
+    should not happen fail loudly (a `TypeError` naming the argument) rather than quietly
+    writing a pointer that means "nobody", which is what `clear_active` is for.
+
+    **All three pointers go through `config.write_for`, which settles the mode on the
+    descriptor before any content lands.** These were the three writers #505 routed the
+    rest of the package's state through and left out — not because they are different, but
+    because two other branches were live in this file at the time. `Path.write_text`
+    creates at ``0o777 & ~umask``, so on a plane whose ``.charter/`` predates charter (0755,
+    and charter will not chmod a directory it did not create — #331) these came out 0644,
+    and under ``umask 000`` **0666**. The read side leaks little — a persona name is also
+    the name of a committed directory under ``personas/`` — but the write side is the sharp
+    half: ``.charter/sessions/`` and ``.charter/terminals/`` decide which charter a session
+    runs as, and a world-writable pointer is one another account gets to set (#581).
     """
     config.private_mkdir(config.STATE_DIR)
     sf, tf = _pointer_files(session_id, terminal_id)
     for f in (sf, tf):
         if f is not None:
             config.private_mkdir(f.parent)
-            f.write_text((name or "") + "\n")
+            config.write_for(f, name + "\n")
     if sf is None and tf is None:
-        config.ACTIVE_PERSONA_FILE.write_text((name or "") + "\n")
+        config.write_for(config.ACTIVE_PERSONA_FILE, name + "\n")
     try:
         from . import trace
         trace.record("persona-use", persona=name)
