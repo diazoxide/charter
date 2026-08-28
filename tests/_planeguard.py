@@ -421,7 +421,87 @@ class BackgroundCharterChild(BaseException):
     """A test forked a detached charter the test itself will never wait for."""
 
 
+class RealForgeReach(BaseException):
+    """A test spawned the CLI that holds the operator's forge token."""
+
+
 _VAULT_CLIS: frozenset[str] = frozenset()
+_FORGE_CLIS: frozenset[str] = frozenset()
+#: Their union, built once at install. Read on every spawn in the suite, so it is a
+#: constant rather than a set built per `Popen`.
+_GUARDED_CLIS: frozenset[str] = frozenset()
+
+
+def _forge_clis() -> frozenset[str]:
+    """The CLI names charter shells out to in order to reach a code-hosting forge.
+
+    **Asked of production's own table**, exactly as :func:`_credential_clis` asks
+    `reference._RESOLVERS`: `registry.KINDS` maps a forge kind to its backend class and each
+    class spells its binary in ``cli``, so a forge added there is guarded on the commit that
+    adds it rather than on the commit somebody remembers this list exists.
+
+    The reason is :func:`_credential_clis`' reason one host out. ``gh`` and ``glab`` hold a
+    real token for the operator's real account: a test that reaches one reads somebody's
+    private repositories at best, and since Phase 4 charter OPENS and MERGES pull requests
+    through them. It is also a flake — CI has no forge credentials — and a hang, since both
+    CLIs can park on a device-flow prompt that `subprocess.communicate` will wait out.
+    """
+    from charter.forge import registry
+    return frozenset(cls.cli for cls in registry.KINDS.values() if getattr(cls, "cli", ""))
+
+
+def _reaches_repository_data(argv: list[str]) -> bool:
+    """Would this forge-CLI argv read or write somebody's repositories?
+
+    A rule with a **two-item allowance**, not an open-ended list of what is forbidden, so
+    anything charter has never heard of is refused rather than waved through.
+
+    Allowed, and only these:
+
+    * **Flags only** — ``gh --version``, ``--help``. Prints about itself and stops: no host
+      contacted, no token read, nothing to prompt for.
+    * **``auth status``** — reads the stored credential and asks the host who it belongs to.
+      Not a repository read, and it cannot prompt.
+
+    Everything else is refused, ``auth login`` and ``auth token`` included: the first opens
+    a browser and waits, the second prints the token onto stdout.
+
+    **Both allowances are measurements, not exemptions.** With a flat refusal, twenty-six
+    tests here went red on `doctor.check_forge_cli` running ``gh --version``, and twenty-
+    three on `doctor.check_forge_auth` running ``gh auth status --hostname github.com`` —
+    identically on two Python versions. The first is a local probe and refusing it would
+    have been the guard being wrong about its own subject.
+
+    **The second is a residual and is written down as one.** Twenty-three test modules run
+    `doctor.run_all()`, so this suite really does validate the developer's own forge token
+    against github.com, twenty-three times, on every run. That predates this guard, it is
+    not a repository read, and closing it means stubbing the preflight in twenty-three
+    modules — its own change, with its own diff, not a line smuggled into a forge feature.
+    What this guard buys today is the part that matters most: every ``api``, ``pr``, ``mr``,
+    ``repo`` and ``release`` call is refused, and those are the ones that read private code
+    and merge pull requests.
+    """
+    bare = [a for a in argv[1:] if not a.startswith("-")]
+    if not bare:
+        return False
+    return bare[:2] != ["auth", "status"]
+
+
+def _explain_forge(parts: list[str], name: str) -> str:
+    return (
+        f"REFUSED: spawning `{name}` — the CLI holding the operator's forge token\n"
+        f"{_current_test()} is about to run `{' '.join(parts)}`. That is not a fake: it "
+        f"authenticates as whoever is signed in on this machine, against whatever host the "
+        f"argv names. Charter now opens and MERGES pull requests through these binaries, so "
+        f"a test that reaches one can write to somebody's repository.\n"
+        f"  It is also a flake and a hang: CI has no forge credentials, and both CLIs can "
+        f"park on a device-flow prompt the suite will wait out.\n"
+        f"  The way out is what every forge test here already does: patch `util.run` in the "
+        f"backend module under test — `charter.forge.github.util.run` or "
+        f"`charter.forge.gitlab.util.run` — and answer with a recorded reply. See "
+        f"`tests/test_forge_checks_at.py` for the read side, `tests/test_forge_writes.py` "
+        f"for the write side, and `tests/test_change_push.py` for a command that drives a "
+        f"whole forge through one stand-in object.")
 
 
 def _credential_clis() -> frozenset[str]:
@@ -484,8 +564,11 @@ def _explain_vault(parts: list[str], name: str) -> str:
         f"credential store is not a unit test.")
 
 
-def _reaches_a_credential_cli(args, opts: dict) -> tuple[list[str], str] | None:
-    """``(argv, CLI name)`` when *args* would run one of :func:`_credential_clis`.
+def _reaches_a_credential_cli(args, opts: dict, wanted=None) -> tuple[list[str], str] | None:
+    """``(argv, CLI name)`` when *args* would run one of :func:`_credential_clis` — or, when
+    *wanted* is given, one of THOSE names. The parameter is what lets the forge guard beside
+    this one be the same matcher rather than a second one that can drift out of agreement
+    about what "running `gh`" means.
 
     Deliberately narrower than :func:`_charter_argv`, and the asymmetry is the point.
     That function has to chase every spelling because charter re-spawns ITSELF and the
@@ -531,7 +614,7 @@ def _reaches_a_credential_cli(args, opts: dict) -> tuple[list[str], str] | None:
         # no program left to name. Reached on every such spawn, not a hypothetical.
         return None
     for name in _program_names(argv[0], opts.get("cwd"), opts.get("env")):
-        if name in _VAULT_CLIS:
+        if name in (_VAULT_CLIS if wanted is None else wanted):
             return parts, name
     return None
 
@@ -1244,11 +1327,13 @@ def _guard_spawns() -> None:
     a call to one of them that is not the two known non-charter uses. The day a charter
     spawn is written that way, that case turns red and this docstring is what it points at.
     """
-    global _SPAWN_GUARDED, _VAULT_CLIS
+    global _SPAWN_GUARDED, _VAULT_CLIS, _FORGE_CLIS, _GUARDED_CLIS
     if _SPAWN_GUARDED:
         return
     _SPAWN_GUARDED = True
     _VAULT_CLIS = _credential_clis()
+    _FORGE_CLIS = _forge_clis()
+    _GUARDED_CLIS = _VAULT_CLIS | _FORGE_CLIS
     original = subprocess.Popen.__init__
 
     def __init__(self, args=None, *rest, **kw):
@@ -1257,9 +1342,23 @@ def _guard_spawns() -> None:
         # Before the plane question, and unconditional where that one waits on
         # `_REAL_ROOT`: a real `op` reads the operator's 1Password vault whatever plane
         # the child would resolve, and on a machine with no plane at all.
-        reached = _reaches_a_credential_cli(args, opts)
+        # ONE matcher call for both tripwires, and the single call is the point rather
+        # than a tidy-up. This runs inside `Popen.__init__`, so it is paid by every spawn
+        # in the suite, and `_program_names` resolves the program against `$PATH` — asking
+        # twice doubles a `shutil.which` on every subprocess a test starts. The tmux-driven
+        # frame tests notice: they are timing-sensitive by nature, and a guard is not
+        # allowed to become a reason they flake.
+        reached = _reaches_a_credential_cli(args, opts, _GUARDED_CLIS)
         if reached is not None:
-            raise RealVaultReach(_explain_vault(*reached))
+            if reached[1] in _VAULT_CLIS:
+                raise RealVaultReach(_explain_vault(*reached))
+            # Same shape, same reason, one host out: `gh` and `glab` carry the operator's
+            # forge token, and charter now writes through them. Also before the plane
+            # question, for `_explain_vault`'s reason — a real `gh` reaches somebody's
+            # repositories whatever plane the child would resolve, and on a machine with
+            # no plane at all.
+            if _reaches_repository_data(reached[0]):
+                raise RealForgeReach(_explain_forge(*reached))
         parts = _charter_argv(args, opts)
         if parts is not None:
             if _REAL_ROOT:

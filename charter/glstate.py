@@ -14,7 +14,6 @@ import json
 import os
 import subprocess
 import time
-import urllib.parse
 from pathlib import Path
 
 from . import config, util
@@ -348,7 +347,13 @@ def _branch(d: Path) -> str:
 
 
 def _remote_path(d: Path):
-    """path_with_namespace from the clone's origin remote (ssh or https)."""
+    """path_with_namespace from the clone's origin remote (ssh or https).
+
+    The parse itself is `registry.namespace_of` — ONE parser, because the change surface
+    asks the same question of the same remotes, and a remote shape that confuses one must
+    not quietly answer differently for the other. The subprocess stays here: this side runs
+    on the refresh path with its own 3s budget."""
+    from .forge import registry
     try:
         url = subprocess.run(
             ["git", "-C", str(d), "remote", "get-url", "origin"],
@@ -356,12 +361,4 @@ def _remote_path(d: Path):
         ).stdout.strip()
     except Exception:
         return None
-    if not url:
-        return None
-    if url.endswith(".git"):
-        url = url[:-4]
-    if "://" in url:
-        return urllib.parse.urlparse(url).path.lstrip("/") or None
-    if ":" in url:  # scp-like: git@host:group/sub/repo
-        return url.split(":", 1)[1] or None
-    return None
+    return registry.namespace_of(url)

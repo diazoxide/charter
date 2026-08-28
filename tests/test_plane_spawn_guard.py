@@ -1114,5 +1114,115 @@ class TheOperatorsCredentialStoreIsNeverReached(unittest.TestCase):
             self._run([str(self.dir / "op"), "item", "list"])
 
 
+class TheOperatorsForgeTokenIsNeverReached(unittest.TestCase):
+    """`RealForgeReach` — the credential-store tripwire, one host out.
+
+    `gh` and `glab` hold a real token for the operator's real account, and since the
+    cross-repo change surface charter OPENS and MERGES pull requests through them. A test
+    that reaches one reads somebody's private repositories at best and writes to one at
+    worst; it is also a flake, because CI has no forge credentials, and a hang, because both
+    CLIs can park on a device-flow prompt.
+
+    Same control as the class above: the refusal is made to happen for real, and a marker
+    file that stays absent is the evidence that nothing ran — "the child never started" and
+    "the child started and could not write" look identical without it.
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="forgeguard-"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.marker = self.dir / "the-cli-ran"
+        for name in ("gh", "glab", "git"):
+            p = self.dir / name
+            p.write_text(f"#!/bin/sh\necho {name} >> {self.marker}\n")
+            p.chmod(0o755)
+
+    def test_the_names_come_from_the_registry_not_from_a_list_here(self):
+        """`_credential_clis` asks `reference._RESOLVERS`; this asks `registry.KINDS`, so a
+        forge added there is guarded on the commit that adds it."""
+        from charter.forge import registry
+        self.assertEqual(_planeguard._forge_clis(),
+                         frozenset({cls.cli for cls in registry.KINDS.values()}))
+        self.assertEqual(_planeguard._forge_clis(), frozenset({"gh", "glab"}))
+
+    def test_running_gh_is_refused(self):
+        with self.assertRaises(_planeguard.RealForgeReach) as caught:
+            subprocess.run([str(self.dir / "gh"), "api", "repos/acme/api/pulls"])
+        self.assertFalse(self.marker.exists(), "refused, and yet it ran")
+        self.assertIn("REFUSED", str(caught.exception))
+
+    def test_running_glab_is_refused(self):
+        with self.assertRaises(_planeguard.RealForgeReach):
+            subprocess.run([str(self.dir / "glab"), "api", "projects/1/merge_requests"])
+        self.assertFalse(self.marker.exists())
+
+    def test_a_bare_name_on_the_path_is_refused_too(self):
+        """How the backends actually spell it: `[self.cli, "api", …]`, letting `$PATH`
+        resolve it — so a guard that only recognised full paths would miss every real call."""
+        with self.assertRaises(_planeguard.RealForgeReach):
+            subprocess.run(["gh", "api", "repos/acme/api/pulls"],
+                           env={**os.environ, "PATH": f"{self.dir}:{os.environ['PATH']}"})
+        self.assertFalse(self.marker.exists())
+
+    def test_the_refusal_names_the_way_out(self):
+        """A tripwire that only says no costs the next person an afternoon."""
+        with self.assertRaises(_planeguard.RealForgeReach) as caught:
+            subprocess.run([str(self.dir / "gh"), "pr", "merge", "601"])
+        text = str(caught.exception)
+        self.assertIn("util.run", text)
+        self.assertIn("test_forge_checks_at", text)
+
+    def test_a_flags_only_invocation_is_allowed_because_it_reaches_no_forge(self):
+        """`doctor.check_forge_cli` runs `gh --version` to report which CLI is installed:
+        a local probe that contacts no host, reads no token and cannot prompt. A flat
+        refusal reddened twenty-six tests in this suite, every one of them that, and
+        refusing it would have been the guard being wrong about its own subject."""
+        subprocess.run([str(self.dir / "gh"), "--version"])
+        self.assertTrue(self.marker.exists())
+
+    def test_auth_status_is_allowed_and_the_reason_is_a_measurement(self):
+        """`doctor.check_forge_auth` runs `gh auth status --hostname github.com`, and
+        twenty-three test modules reach it through `doctor.run_all()` — identically on two
+        Python versions. It reads no repository and cannot prompt. The residual is real and
+        is named in `_reaches_repository_data`; closing it is its own change."""
+        subprocess.run([str(self.dir / "gh"), "auth", "status", "--hostname", "github.com"])
+        self.assertTrue(self.marker.exists())
+
+    def test_but_auth_login_and_auth_token_are_still_refused(self):
+        """The allowance is `auth status`, not `auth`. `login` opens a browser and waits;
+        `token` prints the credential onto stdout."""
+        for sub in (["auth", "login"], ["auth", "token"], ["auth", "refresh"]):
+            with self.subTest(sub=sub):
+                with self.assertRaises(_planeguard.RealForgeReach):
+                    subprocess.run([str(self.dir / "gh"), *sub])
+        self.assertFalse(self.marker.exists())
+
+    def test_the_calls_the_change_surface_makes_are_all_refused(self):
+        """The half that matters most: every way charter's own change surface touches a
+        forge goes through `api`, and merging goes through `pr`/`mr`."""
+        for sub in (["api", "repos/acme/api/pulls"], ["pr", "merge", "601"],
+                    ["mr", "merge", "14"], ["repo", "clone", "acme/api"],
+                    ["release", "create", "v1"]):
+            with self.subTest(sub=sub):
+                with self.assertRaises(_planeguard.RealForgeReach):
+                    subprocess.run([str(self.dir / "gh"), *sub])
+        self.assertFalse(self.marker.exists())
+
+    def test_a_subcommand_charter_has_never_heard_of_still_counts(self):
+        """The rule is "does this argv name a subcommand", not a list of the ones charter
+        happens to use — so a name nobody here recognises is refused rather than waved
+        through, which is the direction a guard should be wrong in."""
+        with self.assertRaises(_planeguard.RealForgeReach):
+            subprocess.run([str(self.dir / "gh"), "codespace", "ssh"])
+        self.assertFalse(self.marker.exists())
+
+    def test_git_is_not_guarded(self):
+        """The boundary. Charter's whole design is that git talks to a forge over HTTPS with
+        the forge CLI's token, and tests here really do run git against local repositories —
+        so guarding `git` would refuse the thing the suite is built on."""
+        subprocess.run([str(self.dir / "git"), "status"])
+        self.assertTrue(self.marker.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
