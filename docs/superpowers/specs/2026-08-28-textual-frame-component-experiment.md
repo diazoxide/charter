@@ -69,7 +69,7 @@ entry points and the same two panes (`m7_shot.sh` under `venv312`, 14 provider t
 ## 1. Did the `Component` contract fit?
 
 **The declaration half fits. The rendering half fits one of the two shapes. The input half
-does not exist.** Six places it chafed, each named.
+does not exist.** Seven places it chafed, each named.
 
 ### 1a. `render(ctx) -> list[str]` is a *renderer* contract, and a widget framework is not a renderer
 
@@ -161,7 +161,33 @@ are reachable only on a frame nobody has arranged, i.e. from `Registry.place` wi
 rectangle. charter's own `repos` is `Content()` and its height is what the plane's repos
 need; a provider's table of the same data is a fixed rectangle or nothing.
 
-### 1f. The contract is a Python class, so every provider hard-depends on charter
+### 1f. A provider directory inside charter's repo costs exactly one line, and CI is what says so
+
+Committing `providers/` failed `test_plugin_freshness.
+TheHashCoversWhatThePluginLoads.test_every_top_level_directory_is_classified_one_way_or_the_other`
+on 3.11 and 3.13:
+
+```
+AssertionError: Items in the first set but not the second:
+'providers' : new top-level directory ['providers']: does a Claude Code plugin LOAD it?
+Add it to plugincache.PLUGIN_SURFACE, or to _NOT_PLUGIN_SURFACE in this file.
+```
+
+That is the check doing exactly its job — its own docstring says "add `mcp/` or `commands/`
+to charter tomorrow and this fails on the PR that commits it, until somebody decides which
+it is". The decision is made in `_NOT_PLUGIN_SURFACE`: a provider is a separate
+distribution, nothing under it is importable from charter, none of it ships in the wheel,
+and it must never become plugin surface, because a provider declares dependencies charter
+does not have and that is the whole property `test_runtime_has_zero_dependencies` protects.
+
+**Worth recording is how it was found, not that it happened.** The classification reads the
+**git index**, deliberately (#529, so an untracked `.charter/` or `.venv/` cannot reach it).
+Every local full-suite run before the commit therefore passed — `providers/` was untracked —
+and the failure appeared on the first CI run after `git commit`. The local suite was re-run
+on the committed tree afterwards; the counts at the end are from those runs. This is the one
+place in the experiment where CI caught something a hand-run could not.
+
+### 1g. The contract is a Python class, so every provider hard-depends on charter
 
 `Providers._one` finishes with `isinstance(obj, self.kind)` where `kind` is
 `charter.frame.component.Component`. A provider cannot express a component without importing

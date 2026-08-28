@@ -88,8 +88,19 @@ def tracked_top_level_directories(repo: Path = REPO) -> set[str]:
 #: `tools/` is developer tooling — `tools/sweep.py` runs the deletion sweep over a branch.
 #: No plugin loads it, `pyproject.toml` names `charter` as the only package so no wheel
 #: ships it, and an edit to it is not a stale plugin.
+#:
+#: `providers/` holds SEPARATE distributions, each with its own `pyproject.toml` and its own
+#: dependencies — the `charter.components` entry-point seam, exercised from inside this repo
+#: (`providers/charter-textual-repos`, the Textual experiment). It is the same three
+#: arguments `tools/` gets and one more that matters more here: nothing under it is
+#: importable from charter, charter's `pyproject.toml` names `charter` as the only wheel
+#: package so none of it ships, no plugin loads it — and it must NEVER become plugin
+#: surface, because a provider declares dependencies charter does not have and
+#: `test_runtime_has_zero_dependencies` is the property that would quietly stop meaning
+#: anything if a third-party package could travel inside charter's own plugin cache.
 _NOT_PLUGIN_SURFACE = {
     ".github", ".claude", "charter", "docs", "tests", "personas", "workspaces", "tools",
+    "providers",
 }
 
 PLUGIN = {
