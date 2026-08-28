@@ -477,6 +477,86 @@ READERS = frozenset({
 })
 
 
+def defers_annotations(tree: ast.AST) -> bool:
+    """Does this module carry ``from __future__ import annotations``?
+
+    PEP 563. With it, **every** annotation in the file — a function's `returns`, an
+    argument's, an `AnnAssign`'s — is stored as source text and never evaluated. Without
+    it every one of them is an ordinary expression, evaluated where it is written.
+
+    A `__future__` import is only legal at the top of a module, so `tree.body` is the
+    whole search and a walk would only be able to find an illegal one.
+    """
+    return any(
+        isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__"
+        and any(alias.name == "annotations" for alias in stmt.names)
+        for stmt in getattr(tree, "body", []))
+
+
+def unevaluated(tree: ast.AST) -> set[int]:
+    """The ids of every node the interpreter never evaluates: #632's property.
+
+    **A position whose value is never evaluated at runtime is not a read position.** That
+    is the whole rule, and it is the general form of the defect rather than the one line
+    that found it. `sweep(...) -> tuple[list[Result], list["Pair"]]` reported `"Pair"` as
+    a survivor on #630's own gate, and it is a survivor **no test can ever kill** — under
+    PEP 563 that annotation is the string `"tuple[list[Result], list['Pair']]"` and
+    nothing reads it. `tools/sweep.py` carries four of these on its own, and any branch
+    that adds a function forward-referencing a class defined below it grows another.
+
+    An unkillable survivor is not a finding, it is the false positive the spec (#565)
+    names as the thing that gets a gate switched off. **Under `--enforce` it is worse than
+    noise: it is a blocked branch whose author has no move to make.** They cannot write the
+    test, because there is no test to write; they cannot suppress it, because #370 refuses
+    a suppression list on principle — a config key charter could read is a config key a
+    committed file could flip. A gate that blocks with no remedy available is a gate
+    somebody turns off, and they are right to. So the operator must not offer this at all.
+
+    **Only under the future import**, which is the version of the rule with no judgement
+    in it — and the version where "no remedy" is actually true. Without PEP 563 an
+    annotation is an evaluated expression, and what happens to a string inside one depends
+    on what evaluates it: `typing.List["Pair"]` compiles the text into a `ForwardRef` right
+    there at import, while `list["Pair"]` stores it. So there the string is live, a test
+    that exercises whatever resolves the hint can go red without it, and the author of a
+    blocked branch has the ordinary move available. "Never evaluated" is provable for the
+    deferred case and an argument for the other, and this predicate claims only the half it
+    can prove.
+
+    The one thing that *does* re-evaluate a deferred annotation is a program that asks it
+    to — `typing.get_type_hints`, or a library that calls it. Measured on this tree:
+    there are none, in `charter/`, `tools/` or `tests/`. If one arrives, the cost of this
+    rule is a question not asked rather than a guard wrongly certified, which is the
+    direction this file errs in everywhere else.
+
+    **The one sibling shape this deliberately does not cover, named so it is not
+    rediscovered:** the body of `if typing.TYPE_CHECKING:` never runs either, so a read
+    position inside one would be unkillable in exactly the same way. It is not here for
+    two reasons. Measured on `charter/`, `tools/` and `tests/`: **zero** occurrences, and
+    this file's rule is that a widening carries a measurement. And `TYPE_CHECKING` is a
+    NAME, which a module may rebind or import under an alias, so an `ast` pass can only
+    guess at it — where `from __future__ import annotations` is a statement the language
+    defines. The proof is what makes the rule above have no judgement in it. If such a
+    block ever appears in this tree, it belongs in this function and nowhere else.
+    """
+    if not defers_annotations(tree):
+        return set()
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        annotation = None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            annotation = node.returns
+        elif isinstance(node, (ast.arg, ast.AnnAssign)):
+            annotation = node.annotation
+        if annotation is None:
+            continue
+        # The annotation only. An `AnnAssign`'s VALUE is evaluated exactly as any other
+        # assignment's is, so `SLOT: dict[str, "Pair"] = {"left": …}` loses the `"Pair"`
+        # and keeps the `"left"`.
+        for part in ast.walk(annotation):
+            out.add(id(part))
+    return out
+
+
 def read_positions(tree: ast.AST) -> set[int]:
     """The ids of the string constants whose **value the program reads**.
 
@@ -499,11 +579,30 @@ def read_positions(tree: ast.AST) -> set[int]:
 
     Every position below is a property of Python, not of this project. Nothing here was
     chosen because a finding happened to have that shape.
+
+    **The one subtraction, and the same measurement behind it (#632):** a position the
+    interpreter never evaluates is not a read position, however read-shaped it looks. A
+    forward reference in an annotation is a `Subscript` slice, which is right for
+    `d["components"]` and wrong for `list["Pair"]` — see :func:`unevaluated`.
+
+    **Measured over the swept paths, `charter/` and `tools/`:** 15 string constants sit
+    inside a deferred annotation. Three of them were read positions, and the subtraction
+    takes the read positions from 3,492 to 3,489 and the mutation count from 10,412 to
+    10,409. That is a small number and it is the honest one — the other twelve are whole
+    annotations (`x: "Path"`), which were never `Subscript` slices and were never offered.
+    All three are in this file, and `charter/` has none today.
+
+    So the case for it is not the volume, it is the KIND: each of the three was a
+    survivor that no test could ever have killed, and one of those in a report teaches
+    the reader to skim the rest. It costs nothing to remove and it is one predicate that
+    stops every future signature forward-referencing a class below it from growing one.
     """
     out: set[int] = set()
+    inert = unevaluated(tree)
 
     def take(node: ast.AST | None) -> None:
-        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)) \
+                and id(node) not in inert:
             out.add(id(node))
 
     for node in ast.walk(tree):
@@ -2636,6 +2735,22 @@ def expected_shards(text: str | None) -> int:
     return n if n > 0 else 0
 
 
+def default_jobs() -> int:
+    """How many sandboxes a run uses when nobody says: half the machine, never none.
+
+    Out of `main()`'s argument list for #572's reason, which is the same one `base_for`
+    and `timeout_for` are out here for: a rule written inside `main()` is not reachable
+    from a test, so it cannot be swept, so it is a guard this harness is unable to hold
+    itself to. The self-sweep found this exact line unpinned in both directions.
+
+    Half, because a sandbox runs the suite and the suite starts real tmux servers, so the
+    machine is doing about two things per job. Never zero, which is what the floor is for:
+    `os.cpu_count()` is 1 on a small runner and `1 // 2` is a sweep that measures nothing
+    while reporting that it ran.
+    """
+    return max(1, (os.cpu_count() or 4) // 2)
+
+
 def exit_code(results: list[Result]) -> int:
     """What a plain (non-gate) run exits with.
 
@@ -2664,7 +2779,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="Directory to sweep, repeatable (default: charter).")
     p.add_argument("--all", action="store_true",
                    help="Charge the whole tree instead of the diff — a number, not a gate.")
-    p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 2),
+    p.add_argument("--jobs", type=int, default=default_jobs(),
                    help="Sandboxes to run at once.")
     p.add_argument("--workdir", default=None, help="Where sandboxes and the cache live.")
     p.add_argument("--refresh-map", action="store_true", help="Re-trace the selection map.")
