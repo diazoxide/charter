@@ -456,6 +456,21 @@ def _branch_exists(clone: Path, branch: str) -> bool:
 TRAILER = "Charter-Change"
 
 
+def _local_branches(clone: Path) -> set[str]:
+    """Every local branch in *clone*, as a set. Empty for anything charter could not ask.
+
+    `for-each-ref` rather than a `rev-parse` per name: the caller is asking about N
+    branches at once, and the difference is one child process against N of them on a path
+    that runs at SessionStart. It also carries no untrusted argument at all — `refs/heads/`
+    is a literal and the comparison happens in Python — which is a stronger answer to the
+    argv question than spelling a committed value carefully.
+    """
+    got = _git(clone, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+    if got.returncode != 0:
+        return set()
+    return {ln.strip() for ln in (got.stdout or "").splitlines() if ln.strip()}
+
+
 def _trailer_names(clone: Path, sha: str, slug: str) -> bool:
     """Does the commit *sha* carry ``Charter-Change: <slug>``?
 
@@ -601,8 +616,15 @@ def stray_branches(ws: str) -> list[str]:
     for clone in sorted(workspace.clones(ws)):
         if clone.name in members:
             continue
+        # ONE git call per clone, not one per (clone, branch). This runs from doctor,
+        # which runs from SessionStart under a budget — a plane with ten clones and five
+        # changes would otherwise pay fifty `rev-parse`s to answer a question one listing
+        # answers. It also takes the untrusted value out of the argv entirely: the only
+        # argument here is the literal `refs/heads/`, and the branch names are compared in
+        # Python.
+        here = _local_branches(clone)
         for branch, slug in sorted(wanted.items()):
-            if _branch_exists(clone, branch):
+            if branch in here:
                 out.append(
                     f"{contain.readable(clone.name)}: has branch "
                     f"{contain.readable(branch)}, which change "

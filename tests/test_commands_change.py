@@ -1032,8 +1032,8 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
     #: what "no network" means for a module that spawns git. And not one of them is
     #: destructive: no `push --force`, no `branch -D`, no `reset`, no `clean`. §3.7's
     #: refusals are the argv never being CONSTRUCTED, and this is where that is checked.
-    GIT_VERBS = {"config", "merge-base", "rev-parse", "show", "rev-list", "status",
-                 "switch", "revert"}
+    GIT_VERBS = {"config", "for-each-ref", "merge-base", "rev-parse", "show", "rev-list",
+                 "status", "switch", "revert"}
 
     def test_the_git_subcommands_it_can_reach_are_listed_in_full(self):
         """Read statically off every `_git(clone, "<verb>", …)` call site.
