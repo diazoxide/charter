@@ -473,11 +473,28 @@ class CharterOwnConfigIsUnchanged(unittest.TestCase):
         self.assertEqual(instance.frame_of(self.cfg)["slots"],
                          ["top", "bottom", "repos", "right"])
 
-    def test_it_declares_no_arrangement_so_nothing_extra_is_placed(self):
-        """`slots` is the shorthand this plane is written in, so there are no
-        `[[frame.component]]` tables and `layout` has no per-plane rectangle to read."""
-        self.assertIsNone(instance.component_tables(self.cfg.get("frame")))
-        self.assertEqual(instance.frame_of(self.cfg)["components"], [])
+    def test_the_arrangement_it_declares_resolves_to_the_frame_it_always_drew(self):
+        """This plane writes its arrangement out, and the tables must still answer the
+        shipped rectangle for every component.
+
+        It used to write `slots` and declare no tables, and this case asserted exactly
+        that. The vocabulary changed when the plane took `bg`/`pad`/`key`, which `slots`
+        cannot express — so the case now asserts the thing that was always the point:
+        **a new vocabulary has to keep answering in the old one.** The frame is
+        unchanged, and the three cases either side of this one are what say so.
+
+        The order is asserted here too, because the list is the SPLIT order and therefore
+        the geometry (#488/#500): `repos` before `right` draws the table at the full
+        window width from 95 columns up; reversed, it is split off a harness the sidebar
+        has already narrowed and needs 118. That reversal is exactly what this class
+        caught when the tables were first written."""
+        got = instance.component_tables(self.cfg.get("frame"))
+        self.assertIsNotNone(got, "this plane declares its arrangement")
+        self.assertEqual([c["slot"] for c in got], ["top", "bottom", "repos", "right"])
+        for c in got:
+            with self.subTest(use=c["use"]):
+                self.assertEqual(c["edge"], layout.SLOT_EDGE[c["slot"]])
+                self.assertEqual(c["visible"], True)
 
     def test_every_placement_is_the_built_in_it_always_was(self):
         got = instance.frame_components(self.cfg)
