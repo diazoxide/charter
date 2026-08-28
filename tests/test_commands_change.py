@@ -145,13 +145,22 @@ class TestTheContainmentProperty(ChangeCommands):
 
     def test_a_traversing_member_never_resolves_even_when_the_target_exists(self):
         """The refusal is about the string. Asking the filesystem would make a traversal
-        succeed exactly when the attacker's target happens to exist."""
+        succeed exactly when the attacker's target happens to exist — and here it does: the
+        target below is a real clone, one `..` above the workspace.
+
+        **Which refusal fires is the assertion, not that one did.** The record boundary in
+        `change.py` refuses this name too, so an exit-code test stays green with
+        `contain.child` deleted from the resolver — and the deleted version has already
+        `lstat`ed a path of somebody else's choosing outside the workspace by then, and
+        reports a malformed record rather than a member that does not resolve."""
         self.create()
         outside = self.tmp / "outside"
         (outside / ".git").mkdir(parents=True)
-        code, _, _ = self.call(commands_change.cmd_change_add,
-                              change="component-api-2", repo="../../outside")
+        code, _, err = self.call(commands_change.cmd_change_add,
+                                 change="component-api-2", repo="../../outside")
         self.assertEqual(code, commands_change.REFUSED)
+        self.assertIn("no clone in workspace", err)
+        self.assertNotIn("is not a name", err)      # not the boundary one layer down
         self.assertIsNone(change.member(change.read("ws", "component-api-2"), "../../outside"))
 
     def test_a_member_that_is_a_symlink_out_of_the_workspace_is_refused(self):
@@ -294,9 +303,16 @@ class TestDrop(ChangeCommands):
         self.call(commands_change.cmd_change_add, change="component-api-2",
                  repo="charter-metrics", needs=["charter"])
         code, _, err = self.call(commands_change.cmd_change_drop, change="component-api-2",
-                                repo="charter", why="out")
+                                 repo="charter", why="out")
         self.assertEqual(code, commands_change.REFUSED)
+        self.assertIn("cannot be dropped", err)
         self.assertIn("charter-metrics", err)
+        self.assertIn("to land first", err)
+        # And not the record boundary's own sentence, which refuses the same write for a
+        # different reason ("needs 'charter', which is not a member") and would leave an
+        # exit-code test green over this gate's deletion — while telling the operator their
+        # record is malformed rather than which member is still waiting on this one.
+        self.assertNotIn("not a member of this change", err)
         self.assertIsNotNone(change.member(change.read("ws", "component-api-2"), "charter"))
 
     def test_dropping_the_same_repo_twice_is_refused(self):
