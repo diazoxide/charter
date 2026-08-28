@@ -164,16 +164,71 @@ def _run_density(fid: str, level: str):
     return f"density → {level}"
 
 
-def build(fid: str, *, current_density: str) -> actions.ActionRegistry:
+def _register_chrome(reg: actions.ActionRegistry, *, current: str) -> None:
+    """One row per pane surface, with the one in effect marked rather than dropped.
+
+    **The whole reason `[frame] chrome` can ship defaulting to `off`.** The spec's §4
+    argues the default from an asymmetry — a light-terminal operator upgrading into a
+    default `dark` gets a worse frame having done nothing — and the cost of that argument
+    is a dark-terminal operator who wants the fill. These three rows are what they pay
+    instead: one keystroke, in the palette they already open, rather than finding a
+    config key in a document.
+
+    Marked and not filtered, for `_register_density`'s reason exactly: choosing the
+    surface you are already on repaints to the same frame, which is harmless, and a list
+    whose rows move around depending on state is a list nobody learns.
+
+    **`_laid_out` is NOT the availability question here**, and that is not an oversight.
+    A density row re-lays-out and therefore needs a harness pane to split against; a
+    surface is a pane option on panes that already exist, so what it needs is the pane
+    MAP. A frame whose harness pane record was lost can still be resurfaced, and a row
+    that refused it would be refusing on somebody else's precondition — the shape #512
+    is. `state.panes` is the record `cmd_chrome` actually reads, so the row asks about
+    that one.
+    """
+    from .. import instance
+    for level in instance.FRAME_CHROME:
+        on = MARK[0] if level == current else MARK[1]
+        reg.register(action.Action(
+            id=f"chrome.{level}", title=f"{on}chrome: {level}",
+            run=(lambda ctx, lv=level: _run_chrome(ctx.fid, lv)),
+            available=lambda ctx: bool(state.panes(ctx.fid)),
+            reason_unavailable=lambda ctx: NO_PANES))
+
+
+#: What a frame with no recorded panel panes is told instead of nothing happening. Its own
+#: sentence rather than `NO_LAYOUT`'s: the two refusals are about different records, and a
+#: row that borrowed the other's words would send an operator to relaunch over a frame
+#: whose panels simply all failed to draw.
+NO_PANES = ("charter has no record of this frame's panel panes, so it has nothing to "
+            "resurface — relaunch the frame")
+
+
+def _run_chrome(fid: str, level: str):
+    _spawn(util.self_relaunch_argv("frame-chrome", level), fid=fid)
+    return f"chrome → {level}"
+
+
+def build(fid: str, *, current_density: str,
+          current_chrome: str) -> actions.ActionRegistry:
     """Charter's own actions, plus every action an installed provider supplies.
 
     A fresh registry per call, for `builtins.build`'s reason: this is a snapshot of a
     plane that moves, and the marks, the names and the availability are all resolved
     against the moment the palette opened.
 
-    Charter's own are registered FIRST, so `frame.detach` and the densities are at the top
-    of a palette that has not been typed into, and a provider cannot push them down the
-    list by installing something alphabetically earlier.
+    Charter's own are registered FIRST, so `frame.detach`, the densities and the surfaces
+    are at the top of a palette that has not been typed into, and a provider cannot push
+    them down the list by installing something alphabetically earlier.
+
+    **Both marks are ARGUMENTS and neither is read here**, which is the same rule stated
+    twice rather than a repetition: `current_density` and `current_chrome` are resolved by
+    `commands_frame._current_density` and `_current_chrome`, the same two functions the
+    panels and the tmux options read, so the mark beside a row and the state the frame is
+    actually in cannot come from two different readings. Required keyword arguments, both
+    of them: a default here would let a caller that forgot one draw a palette marking
+    `off` on a frame that is surfaced, and be right about it in every test that did not
+    set one.
 
     **A provider's failure costs its own row and never the palette** — that is
     `ActionRegistry.add`'s contract and the whole reason a failed provider finally has
@@ -193,6 +248,7 @@ def build(fid: str, *, current_density: str) -> actions.ActionRegistry:
     reg = actions.ActionRegistry()
     _register_detach(reg)
     _register_density(reg, current=current_density)
+    _register_chrome(reg, current=current_chrome)
     for aid in reg.providers.ids():
         reg.add(aid)
     return reg

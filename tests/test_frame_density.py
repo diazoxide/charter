@@ -1108,8 +1108,9 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         """Nothing is re-recorded for this to be true: `_current_density` is read when the
         palette opens, so the mark follows the frame's own record by construction."""
         self._run("full")
-        reg = builtin_actions.build(self.fid,
-                                    current_density=commands_frame._current_density(self.fid))
+        reg = builtin_actions.build(
+            self.fid, current_density=commands_frame._current_density(self.fid),
+            current_chrome=commands_frame._current_chrome(self.fid))
         titles = [a.title for a in reg.all() if a.id.startswith("density.")]
         on = builtin_actions.MARK[0]
         self.assertIn(f"{on}density: full", titles)
@@ -1278,7 +1279,8 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         operator's own prefix key named in place of the thing charter cannot do."""
         state.record_server(self.fid, OPERATOR_SOCKET)
         self._run("full")
-        reg = builtin_actions.build(self.fid, current_density="full")
+        reg = builtin_actions.build(self.fid, current_density="full",
+                                    current_chrome="off")
         offer = [o for o in reg.offers(fid=self.fid, snapshot={})
                  if o.id == "frame.detach"][0]
         self.assertFalse(offer.available)
@@ -1287,7 +1289,8 @@ class LiveOverride(PersonaIso, unittest.TestCase):
     def test_detaching_is_available_on_charters_own_server(self):
         """The other direction, so the row above cannot pass by never being available."""
         self._run("full")
-        reg = builtin_actions.build(self.fid, current_density="full")
+        reg = builtin_actions.build(self.fid, current_density="full",
+                                    current_chrome="off")
         offer = [o for o in reg.offers(fid=self.fid, snapshot={})
                  if o.id == "frame.detach"][0]
         self.assertTrue(offer.available)

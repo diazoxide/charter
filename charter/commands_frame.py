@@ -1671,6 +1671,47 @@ def _surface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
             for name, value in instance.chrome_options(chrome)]
 
 
+def _resurface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
+    """:func:`_surface_argvs` for a pane that is ALREADY DRAWN — with the unsets.
+
+    **The difference is `off`, and it is not a detail.** On a launch, `off` is free:
+    nothing is set, so `_surface_argvs` correctly issues no command. On a running frame
+    the same word has to mean *remove what is there*, or the palette row that says
+    ``chrome: off`` leaves the operator looking at the surface they just turned off — a
+    keypress that reports success and changes nothing, which is the shape this spec's own
+    §4 refuses an ``auto`` value for.
+
+    So: every option the new word does NOT set is unset, and every option it does set is
+    set. Which options exist comes from `instance.chrome_option_names`, derived from the
+    table rather than spelled here, so a third option added to `FRAME_CHROME` is unset by
+    this function on the day it is added instead of surviving an `off` nobody re-read.
+
+    `set-option -p -u` is the removal, and it is measured rather than assumed on both
+    tmux 3.7c and tmux 3.2 (`tmuxctl.FLOOR`): rc 0, `show -p` reads back `''` afterwards,
+    and unsetting an option that was never set is rc 0 as well — so this needs no "was it
+    set" round trip, which would be a subprocess per pane per keypress to answer a
+    question the unset already answers.
+
+    **Never the harness pane**, exactly as `_surface_argvs` is never handed one: the
+    caller (`cmd_chrome`) iterates `state.panes`, which is the PANEL map, and the harness
+    pane lives in a different record entirely (`state.harness_pane`). ADR 0018's boundary
+    holds here by the same construction.
+
+    **`NO_COLOR` wants NOTHING SET, which on this path means the unsets and not silence.**
+    `_surface_argvs` answers `[]` there because a launch under `NO_COLOR` has nothing to
+    remove. A frame surfaced before `NO_COLOR` was exported has, and answering `[]` here
+    would honour the letter of the promise while leaving charter's colour on the screen —
+    which is the half of that promise this spec was written about. Asked through
+    `chrome.no_colour` so there is one reading of the variable (#547).
+    """
+    want = dict(() if chrome_mod.no_colour() else instance.chrome_options(chrome))
+    argvs = [tmuxctl.server_argv(socket, "set-option", "-p", "-u", "-t", pane_id, name)
+             for name in instance.chrome_option_names() if name not in want]
+    argvs += [tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id, name, value)
+              for name, value in want.items()]
+    return argvs
+
+
 def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`set-option -w`: keep dead panes in CHARTER'S OWN WINDOW, and in no other.
 
@@ -2151,12 +2192,16 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     # each successfully-created pane belongs to (for its size and its resize-pane flag),
     # and `panel_argvs` returns exactly one command per slot, in the same order (see its
     # own docstring).
-    # The word, resolved once for the whole batch: `config.FRAME` is a plane's own file
-    # and cannot change between two splits, and `instance.chrome_options` is what turns
-    # it into styles — so a value charter does not know produces no commands at all,
-    # which is `off`. `.get` rather than `[...]`: a frame relaunched by a charter that
-    # predates this key has a resolved config without it.
-    chrome = config.FRAME.get("chrome")
+    # The word, resolved once for the whole batch, through `_current_chrome` rather than
+    # off `config.FRAME` — which is the difference a live `charter frame-chrome` makes.
+    # The configured value says what a frame STARTS at; a frame the operator has since
+    # surfaced from the palette carries its own record, and a pane split into it by a
+    # later density change has to be born into the surface the frame IS rather than the
+    # one it launched with. One resolver, so the palette's mark and this pane's option
+    # cannot disagree. `instance.chrome_options` is still what turns the word into
+    # styles, so a value charter does not know produces no commands at all, which is
+    # `off`.
+    chrome = _current_chrome(fid)
     panes: dict[str, str] = {}
     for slot, cmd in zip(slots, panel_cmds):
         # Reported by `tmuxctl.run` but not fatal: one decorative panel failing to draw
@@ -2996,6 +3041,28 @@ def _current_density(fid: str) -> str:
             or "normal")
 
 
+def _current_chrome(fid: str) -> str:
+    """The pane surface *fid* is on right now: its own recorded override, else the
+    configured default, else ``off``.
+
+    :func:`_current_density`'s twin and read the same way — one function, so the palette's
+    mark, a newly split pane's surface and a live `frame-chrome` keypress cannot come to
+    three different conclusions about which word this frame is on. `_split_panels` used to
+    read `config.FRAME.get("chrome")` directly, which was right while nothing could change
+    it and became a pane born bare into a frame the operator had surfaced.
+
+    `instance.chrome_level` gates BOTH sources rather than only the file: a word charter
+    does not recognise is `off` wherever it came from, which is the same rule
+    `instance.frame_of` already applies to the committed file and the reason a hostile
+    `charter.toml` cannot reach a tmux style through here either. `.get` on the config,
+    never ``[...]``: a frame relaunched by a charter that predates this key has a resolved
+    config without it.
+    """
+    return (instance.chrome_level(state.chrome(fid))
+            or instance.chrome_level(config.FRAME.get("chrome"))
+            or "off")
+
+
 def _pane_identity_env(env: dict[str, str], v: tuple[int, int]) -> dict[str, str] | None:
     """What a newly split panel pane must be TOLD, or ``None`` when tmux cannot be told.
 
@@ -3737,6 +3804,76 @@ def _visible_now(fid: str, frame: dict) -> list[str]:
     return [n for n in instance.frame_arrangement(frame) if n not in hidden]
 
 
+def cmd_chrome(args) -> int:
+    """`charter frame-chrome <off|dark|light>` — resurface THIS frame's panes, live.
+
+    Started by a palette row (`frame/builtin_actions.py`), and typeable by hand from
+    inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
+    `cmd_density`, `cmd_toggle`, `cmd_palette` and `cmd_respawn` resolve theirs, since one
+    bind text is shared by every frame on `SOCKET`.
+
+    **Nothing splits, and that is the whole difference from `cmd_density`.** The surface
+    is a pane option and tmux repaints from it on the spot — measured on an attached
+    client, on tmux 3.7c and on tmux 3.2 (`tmuxctl.FLOOR`) alike: `set-option -p
+    window-style bg=black` on a pane that had already been drawn put ``\x1b[40m`` on that
+    client's wire with no `refresh-client` and no re-layout, 507 and 523 bytes
+    respectively. So this records the word and sets two options per pane. There is no
+    version gate because there is nothing to gate: the floor behaves identically.
+
+    **charter.toml is not touched**, for `cmd_density`'s reason word for word: the
+    committed file says what a frame STARTS at, this changes what one running frame IS,
+    and the override goes in the frame's own state directory (`state.record_chrome`),
+    which `state.reap` deletes entire when the frame ends. Relaunch and the configured
+    look is back. That is also what makes the palette row honest for the operator this
+    spec's §4 named — the one who upgrades into a look they dislike is one keystroke from
+    changing it and never has to find a config key.
+
+    **The word never reaches tmux, and `off` is a REMOVAL rather than a style.** A tmux
+    style value is format-expanded at draw time (§4), so the config surface is a closed
+    enum and `instance.chrome_options` maps it to constants charter holds. `off` maps to
+    no styles at all — which on a LAUNCH means "set nothing" and here has to mean "unset
+    what is set", or an operator who chose `off` would keep looking at the surface they
+    just turned off. `_unsurface_argvs` is that half, and it is the reason this function
+    cannot simply reuse `_surface_argvs`.
+
+    **Always 0, and every refusal is a quiet no-op**, for `cmd_respawn`'s reason: this
+    normally runs detached from a palette row, where the only screen left to report on is
+    the agent's own — the one rectangle ADR 0018 says charter never draws in.
+
+    Refusals, in order:
+
+    * no `$CHARTER_SESSION_ID` — not fired from inside a frame at all;
+    * a *level* outside `instance.FRAME_CHROME` — a closed set of three words charter
+      wrote itself, so this can only be a hand-typed argument;
+    * a frame with no recorded pane map — nothing to resurface. Unlike `cmd_density` this
+      needs no harness pane and no tmux version: it splits nothing, so `_relayout_target`'s
+      refusals are not this function's.
+
+    The word is recorded BEFORE the panes are touched, so a frame whose options fail
+    halfway still splits its NEXT pane into the surface the operator asked for
+    (`_split_panels` reads `_current_chrome`).
+    """
+    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    level = instance.chrome_level(getattr(args, "level", None))
+    if not fid or level is None:
+        return 0
+    panes = state.panes(fid)
+    if not panes:
+        return 0
+    state.record_chrome(fid, level)
+    socket = state.frame_server(fid) or SOCKET
+    for pane_id in panes.values():
+        # `_PANE_ID_RE` is #475's rule applied to a value that arrived off DISK and is
+        # about to be a tmux argv — the same check `_relayout_target` makes of the harness
+        # pane, made here of each panel's. A frame whose map was truncated or hand-edited
+        # skips that pane rather than handing tmux whatever the file said.
+        if not _PANE_ID_RE.fullmatch(pane_id):
+            continue
+        for argv in _resurface_argvs(socket=socket, pane_id=pane_id, chrome=level):
+            tmuxctl.run("painting a panel's surface", argv)
+    return 0
+
+
 def cmd_toggle(args) -> int:
     """`charter frame-toggle <component>` — show or hide ONE component, live.
 
@@ -3937,7 +4074,8 @@ def _draw_palette(args) -> int:
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     socket = state.frame_server(fid) or SOCKET
     harness = state.harness_pane(fid) or ""
-    reg = builtin_actions.build(fid, current_density=_current_density(fid))
+    reg = builtin_actions.build(fid, current_density=_current_density(fid),
+                                current_chrome=_current_chrome(fid))
     snapshot = gather.cached(fid) or {}
     client = getattr(args, "client", "")
     opened: list[choose.Roster] = []

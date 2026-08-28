@@ -484,7 +484,8 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
 
     def _offers(self):
-        reg = builtin_actions.build(self.FID, current_density="normal")
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off")
         return {o.id: o for o in reg.offers(fid=self.FID, snapshot={})}
 
     def test_charters_own_rows_are_offered_before_any_providers(self):
@@ -540,7 +541,8 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
 
     def test_the_detach_row_starts_a_detached_client_command_on_the_frames_own_server(self):
         started = []
-        reg = builtin_actions.build(self.FID, current_density="normal")
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off")
         with mock.patch.object(builtin_actions, "_spawn",
                                side_effect=lambda argv, *, fid: started.append(argv)):
             reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
@@ -559,7 +561,8 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         """
         state.record_server(self.FID, "")
         started = []
-        reg = builtin_actions.build(self.FID, current_density="normal")
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off")
         with mock.patch.object(builtin_actions, "_spawn",
                                side_effect=lambda argv, *, fid: started.append(argv)):
             reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
@@ -577,7 +580,8 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
             def __init__(self, argv, **kw):
                 opened.append(kw)
 
-        reg = builtin_actions.build(self.FID, current_density="normal")
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off")
         with mock.patch.object(builtin_actions.subprocess, "Popen", _Popen):
             for a in reg.all():
                 a.run(SimpleNamespace(fid=self.FID))

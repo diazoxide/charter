@@ -2036,7 +2036,8 @@ class Launch(PersonaIso, unittest.TestCase):
         recorded server, so it has to look at a still-running frame."""
         fake = _FakeTmux(still_live=True)
         _launch(fake)
-        reg = builtin_actions.build(fake.fid, current_density="normal")
+        reg = builtin_actions.build(fake.fid, current_density="normal",
+                                    current_chrome="off")
         offer = [o for o in reg.offers(fid=fake.fid, snapshot={})
                  if o.id == "frame.detach"]
         self.assertEqual(len(offer), 1)
@@ -2056,7 +2057,8 @@ class Launch(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(still_live=True)
         _launch(fake)
         reg = builtin_actions.build(fake.fid,
-                                    current_density=config.FRAME["density"])
+                                    current_density=config.FRAME["density"],
+                                    current_chrome="off")
         started = []
         with mock.patch.object(builtin_actions, "_spawn",
                                side_effect=lambda argv, *, fid: started.append(argv)):
