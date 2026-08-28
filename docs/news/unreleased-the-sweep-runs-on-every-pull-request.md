@@ -11,15 +11,18 @@ in the diff, which is why it kept being *reported* rather than *run*.
 `tools/sweep.py` made that mechanical in August. **Now CI runs it**, on every pull request,
 scoped to the lines the branch added.
 
-```
-Deletion sweep — 2 actionable survivor(s)
+The summary it writes onto the run has one row per outcome — the shape, not a run:
 
-| outcome            |  n | what it means                                        |
-| pinned             | 34 | a test goes red without the line                     |
-| unpinned           |  1 | a guard with no test behind it                       |
-| masked cluster     |  0 | two or more in one function; none is safe alone      |
-| platform-deferred  |  1 | may be unreachable on linux; never fails this gate   |
-| unresolved         |  0 | no verdict — timed out, not measured                 |
+```
+Deletion sweep — N actionable survivor(s)
+
+| outcome            | what it means                                        |
+| pinned             | a test goes red without the line                     |
+| unpinned           | a guard with no test behind it                       |
+| masked cluster     | two or more in one function; none is safe alone      |
+| platform-deferred  | may be unreachable here; never fails this gate       |
+| unresolved         | no verdict — timed out, not measured                 |
+| not applied        | the edit never reached the tree — a bug in the sweep |
 ```
 
 **It blocks nothing yet, and that is the design.** A gate whose numbers nobody has read

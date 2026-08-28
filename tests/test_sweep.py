@@ -1774,6 +1774,18 @@ class ASurvivorIsASurvivorOnTHISPlatform(unittest.TestCase):
                             Path("."), "a", "b", None, 1.0)
         self.assertNotIn("    PLATFORM:", text)
 
+    def test_a_clause_naming_two_os_level_types_names_one_of_them_the_same_way_twice(self):
+        """`sorted(...)[0]` and not `next(iter(...))`: a set's iteration order is not the
+        set's, so an unsorted pick would name `OSError` on one run and `TimeoutError` on
+        the next for the same clause — and a caveat that changes between runs is one nobody
+        can act on or diff. Found by the sweep on this file: `swap-synonym` turned the
+        `sorted` into a `list` and every case still passed."""
+        m = sweep.Mutation("charter/a.py", 1, 1, "narrow-except", "q?",
+                           "(TimeoutError, OSError, PermissionError)", "ZeroDivisionError",
+                           "f")
+        self.assertEqual(sweep.platform_caveat(m), "OSError")
+        self.assertEqual(sweep.platform_caveat(m), sweep.platform_caveat(m))
+
     def test_the_report_says_which_platform_it_measured_on(self):
         text = sweep.report([], Path("."), "a", "b", None, 1.0)
         self.assertIn(sys.platform, text)
