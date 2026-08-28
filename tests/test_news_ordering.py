@@ -384,6 +384,28 @@ class TheReleaseGateRefusesAContradiction(NewsDir):
         self.assertIn("z-important", err)
         self.assertIn("a-ordinary", err)
 
+    def test_the_claimants_are_named_in_a_stable_order(self):
+        """`sorted`, doing work — found by `tools/sweep.py`, which could delete it with the
+        suite green because the row above asserts only that both names appear.
+
+        **Asked of `entry_errors` directly, and that is the point.** Through `cmd_news` the
+        entries arrive already in name order, so the sentence comes out alphabetical whether
+        this sort is there or not — the first version of this test asserted the right thing
+        and was masked by a sort three functions upstream. Handed the claimants in the other
+        order, the sentence a release engineer reads out of CI names the same two files
+        either way round unless this sort holds, and two runs of one tree print two
+        different refusals.
+        """
+        entries = [self.entry("z-important"), self.entry("a-ordinary")]
+        said = news.entry_errors(entries)
+        self.assertEqual(len(said), 1, said)
+        self.assertLess(said[0].index("a-ordinary"), said[0].index("z-important"), said[0])
+
+    def entry(self, slug: str) -> news.Entry:
+        """A claimant, named by its file the way a real entry is."""
+        return news.Entry(version=_V, slug=slug, headline="h", check="", adopt="",
+                          body="", path=Path(f"{_V}-{slug}.md"), lead=True)
+
     def test_and_publishes_no_partial_body_while_refusing(self):
         """The announce job redirects this stdout into the notes file. A refusal that
         still printed the entries would put un-ordered notes on the Release anyway."""
