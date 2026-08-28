@@ -1702,7 +1702,7 @@ def _surface_argvs(*, socket: str, pane_id: str, chrome, bg=None) -> list[list[s
                                 or instance.chrome_options(chrome))]
 
 
-def _resurface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
+def _resurface_argvs(*, socket: str, pane_id: str, chrome, bg=None) -> list[list[str]]:
     """:func:`_surface_argvs` for a pane that is ALREADY DRAWN — with the unsets.
 
     **The difference is `off`, and it is not a detail.** On a launch, `off` is free:
@@ -1723,6 +1723,24 @@ def _resurface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
     set" round trip, which would be a subprocess per pane per keypress to answer a
     question the unset already answers.
 
+    ***bg* is this pane's own colour and it wins here exactly as it wins at launch**, and
+    that agreement is the whole reason it is a parameter rather than something this
+    function looks up. `_surface_argvs` resolves `pane_bg_options(bg) or
+    chrome_options(chrome)`; if this path resolved only the frame-wide word, the two would
+    be two answers to one question — a pane painted one way when the frame launched and
+    another way the moment somebody pressed a palette row (#547's shape, on a surface the
+    operator can see).
+
+    What that costs if it is missed is specific: a component with `bg = "brightblack"`
+    would be repainted in the frame-wide colour by `chrome: light`, and **erased** by
+    `chrome: off` — the unsets below remove exactly the two options a per-pane colour is
+    made of — with nothing to bring it back until the frame is relaunched. A committed
+    value silently undone by a keystroke.
+
+    So a pane whose component named a colour has that colour SET here and nothing unset;
+    a pane whose component named none takes the frame's word, including `off`'s removal.
+    `NO_COLOR` still beats both, and on this path it means the unsets rather than silence.
+
     **Never the harness pane**, exactly as `_surface_argvs` is never handed one: the
     caller (`cmd_chrome`) iterates `state.panes`, which is the PANEL map, and the harness
     pane lives in a different record entirely (`state.harness_pane`). ADR 0018's boundary
@@ -1735,7 +1753,8 @@ def _resurface_argvs(*, socket: str, pane_id: str, chrome) -> list[list[str]]:
     which is the half of that promise this spec was written about. Asked through
     `chrome.no_colour` so there is one reading of the variable (#547).
     """
-    want = dict(() if chrome_mod.no_colour() else instance.chrome_options(chrome))
+    want = dict(() if chrome_mod.no_colour()
+                else (instance.pane_bg_options(bg) or instance.chrome_options(chrome)))
     argvs = [tmuxctl.server_argv(socket, "set-option", "-p", "-u", "-t", pane_id, name)
              for name in instance.chrome_option_names() if name not in want]
     argvs += [tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id, name, value)
@@ -3907,14 +3926,22 @@ def cmd_chrome(args) -> int:
         return 0
     state.record_chrome(fid, level)
     socket = state.frame_server(fid) or SOCKET
-    for pane_id in panes.values():
+    for slot, pane_id in panes.items():
         # `_PANE_ID_RE` is #475's rule applied to a value that arrived off DISK and is
         # about to be a tmux argv — the same check `_relayout_target` makes of the harness
         # pane, made here of each panel's. A frame whose map was truncated or hand-edited
         # skips that pane rather than handing tmux whatever the file said.
         if not _PANE_ID_RE.fullmatch(pane_id):
             continue
-        for argv in _resurface_argvs(socket=socket, pane_id=pane_id, chrome=level):
+        # `.items()` rather than `.values()`, because the SLOT is what says whether this
+        # pane has a colour of its own — the same one walk `_split_panels` makes at launch
+        # (`instance.component_style`). Without it this loop would repaint a component's
+        # own `bg` with the frame-wide word, and `off` would unset it outright: a colour
+        # written in charter.toml disappearing on a keystroke with nothing to bring it
+        # back until relaunch.
+        bg = instance.component_style(config.FRAME, slot)["bg"]
+        for argv in _resurface_argvs(socket=socket, pane_id=pane_id, chrome=level,
+                                     bg=bg):
             tmuxctl.run("painting a panel's surface", argv)
     return 0
 

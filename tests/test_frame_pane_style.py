@@ -1119,5 +1119,121 @@ class TheDocumentedExampleIsRunThroughCharter(unittest.TestCase):
         self.assertIn(f"`0` to `{instance.FRAME_PANE_PAD_MAX}`", md)
 
 
+
+class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCase):
+    """#604 landed `charter frame-chrome <level>` — the palette repaints a running frame's
+    surface — while this branch was in flight. The two meet on the same two pane options,
+    and the meeting had a defect in it.
+
+    `_resurface_argvs` resolved only the frame-wide word. So a component with
+    `bg = "brightblack"` was repainted in the frame's colour by `chrome: light`, and
+    **erased** by `chrome: off` — whose whole job is to unset exactly the two options a
+    per-pane colour is made of — with nothing to bring it back until relaunch. A value
+    written in a committed file, silently undone by a keystroke.
+
+    The property, and the reason this is not just "add a parameter": **the launch path and
+    the live path must answer the same question the same way.** Two answers is #547's
+    shape, here on a surface the operator is looking at.
+    """
+
+    #: `-u` sits BEFORE `-t`, so a helper that sliced from `-t` would hide exactly the
+    #: flag that distinguishes a removal from a setting — and every "did it unset?"
+    #: assertion below would then be asking about a list it had already thrown away.
+    #: Whole argvs are kept and `_tail` is only for reading a failure message.
+    def _live(self, *, chrome: str, bg=None) -> list[list[str]]:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            return commands_frame._resurface_argvs(socket="s", pane_id="%3",
+                                                   chrome=chrome, bg=bg)
+
+    def _launch(self, *, chrome: str, bg=None) -> list[list[str]]:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            return commands_frame._surface_argvs(socket="s", pane_id="%3",
+                                                 chrome=chrome, bg=bg)
+
+    @staticmethod
+    def _tail(argvs: list[list[str]]) -> list[list[str]]:
+        return [a[a.index("-t") + 1:] for a in argvs]
+
+    def test_a_components_colour_survives_every_chrome_level(self):
+        for level in sorted(instance.FRAME_CHROME):
+            with self.subTest(chrome=level):
+                self.assertEqual(self._tail(self._live(chrome=level, bg="brightblack")),
+                                 [["%3", "window-style", "bg=brightblack"],
+                                  ["%3", "window-active-style", "bg=black"]])
+
+    def test_chrome_off_does_not_unset_a_colour_the_component_asked_for(self):
+        """The sharpest case: `off`'s job is to REMOVE the two options, and those are
+        exactly the two a per-pane colour is made of."""
+        argvs = self._live(chrome="off", bg="blue")
+        self.assertFalse([a for a in argvs if "-u" in a],
+                         "the pane's own colour was unset by `chrome: off`")
+
+    def test_a_pane_with_no_colour_of_its_own_still_gets_the_unsets(self):
+        """The control — without it a `_resurface_argvs` that never unset anything would
+        pass the test above, and `chrome: off` would be a keypress that changes nothing."""
+        argvs = commands_frame._resurface_argvs(socket="s", pane_id="%3", chrome="off")
+        self.assertEqual(len(argvs), len(instance.chrome_option_names()))
+        for a in argvs:
+            self.assertIn("-u", a)
+
+    def test_the_live_path_and_the_launch_path_agree_about_every_pane(self):
+        """The property both functions have to keep, asked across the whole cross-product
+        rather than at one point. Where the launch path sets something, the live path must
+        set the same thing; it may only add REMOVALS, which is the one thing it is for."""
+        for level in sorted(instance.FRAME_CHROME):
+            for bg in (None, "blue", "brightblack", "default"):
+                with self.subTest(chrome=level, bg=bg):
+                    launch = self._launch(chrome=level, bg=bg)
+                    live = [a for a in self._live(chrome=level, bg=bg) if "-u" not in a]
+                    self.assertEqual(live, launch)
+                    # And the removals only ever name options nothing is setting.
+                    for a in self._live(chrome=level, bg=bg):
+                        if "-u" in a:
+                            self.assertNotIn(a[-1], [x[-2] for x in launch])
+
+    def test_no_color_still_beats_both(self):
+        with mock.patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True):
+            argvs = commands_frame._resurface_argvs(socket="s", pane_id="%3",
+                                                    chrome="dark", bg="blue")
+        self.assertTrue(argvs, "NO_COLOR on a running frame means the unsets, not silence")
+        for a in argvs:
+            self.assertIn("-u", a)
+
+    def test_the_command_itself_asks_each_pane_for_its_own_colour(self):
+        """**The wiring, not the helper** — and this is the second time the hand-check has
+        had to say so on this branch. `_resurface_argvs` is exercised above with a `bg`
+        handed to it; nothing there asks whether `cmd_chrome` ever hands it one. Replacing
+        that one lookup with `bg = None` left every assertion above green, exactly as the
+        same shape did for `_split_panels`.
+
+        So this drives `charter frame-chrome off` for real, against a recorded pane map,
+        and reads back what each pane was told: the sidebar keeps the colour its component
+        asked for, and the pane that asked for nothing gets the removals `off` means.
+        """
+        from charter.frame import state
+        ran: list[list[str]] = []
+        with mock.patch.object(
+                commands_frame.tmuxctl, "run",
+                side_effect=lambda _w, argv, **kw: ran.append(argv) or
+                subprocess.CompletedProcess(argv, 0, "", "")):
+            state.record_panes("fr-pane-style", panels={"repos": "%1", "right": "%2"})
+            with mock.patch.dict(config.FRAME,
+                                 _arrangement(sidebar={"bg": "brightblack"})), \
+                 mock.patch.dict(os.environ,
+                                 {"CHARTER_SESSION_ID": "fr-pane-style"}, clear=True):
+                self.assertEqual(
+                    commands_frame.cmd_chrome(type("A", (), {"level": "off"})()), 0)
+        told: dict[str, list[list[str]]] = {}
+        for a in ran:
+            told.setdefault(a[a.index("-t") + 1], []).append(a)
+        self.assertEqual(sorted(told), ["%1", "%2"])
+        # `right` is the sidebar: its own colour, SET, and nothing unset.
+        self.assertEqual([a[-2:] for a in told["%2"]],
+                         [["window-style", "bg=brightblack"],
+                          ["window-active-style", "bg=black"]])
+        # `repos` named no colour: `off` means remove, which is what it must still do.
+        self.assertTrue(all("-u" in a for a in told["%1"]), told["%1"])
+
+
 if __name__ == "__main__":                        # pragma: no cover
     unittest.main()
