@@ -798,6 +798,73 @@ class ThePrivateWalkItself(PersonaIso):
             config.private_mkdir(root / "a" / "b", parents=False)
         self.assertFalse(root.exists())
 
+
+class TheClaimIsAMkdirThatCanFail(PersonaIso):
+    """`config.claim_private_dir` — `private_mkdir` with its idempotence removed.
+
+    `frame.state.new_chat_id` claims a chat's ordinal with it, so the `FileExistsError`
+    `private_mkdir` swallows on a directory (#331) is the whole answer here: the `mkdir`
+    IS the mutual exclusion, and two allocators racing one workspace cannot both be told
+    they won."""
+
+    def test_it_creates_the_directory_at_charters_own_mode(self) -> None:
+        for um in UMASKS:
+            with self.subTest(umask=oct(um)):
+                old = os.umask(um)
+                self.addCleanup(os.umask, old)
+                d = Path(self.tmp) / f"claim-{um:03o}"
+                config.claim_private_dir(d)
+                self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o700,
+                                 f"the umask decided the mode at {oct(um)}")
+
+    def test_there_is_no_window_in_which_it_is_looser_than_it_ends_up(self) -> None:
+        """`os.mkdir`'s own *mode* argument, and it is not redundant with the `chmod`.
+
+        The chmod is what NAMES 0700 (mkdir's mode is masked by the umask, so a process
+        under a permissive one is not guaranteed the bits it asked for), and the mkdir
+        mode is what keeps the directory from existing at a wider mode for the moment
+        between the two calls. Only one of those is observable after the fact, so the
+        chmod is held back here to observe the other: with it gone, what `mkdir` asked
+        for is what the directory has, and under `umask 0` that must still be 0700 rather
+        than 0777."""
+        old = os.umask(0)
+        self.addCleanup(os.umask, old)
+        d = Path(self.tmp) / "no-window"
+        with mock.patch.object(config.os, "chmod") as chmod:
+            config.claim_private_dir(d)
+        self.assertTrue(chmod.called, "the chmod was not the thing held back")
+        self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o700,
+                         "the directory existed at a wider mode between `mkdir` and the "
+                         "`chmod` that was going to fix it")
+
+    def test_a_chmod_it_cannot_do_still_leaves_the_claim_won(self) -> None:
+        """The claim succeeded — the directory is this caller's and nobody else's — and
+        reporting that as a failure would send an allocator on to `n+1` for a name it
+        already holds, leaking one directory per launch. Same posture as `_mkdir_0700`'s
+        own `except OSError: pass`."""
+        d = Path(self.tmp) / "chmod-refused"
+        with mock.patch.object(config.os, "chmod",
+                               side_effect=OSError(1, "Operation not permitted")):
+            config.claim_private_dir(d)      # must not raise
+        self.assertTrue(d.is_dir())
+
+    def test_a_name_already_taken_raises_rather_than_being_adopted(self) -> None:
+        """The difference from `private_mkdir`, and the whole reason this exists."""
+        d = Path(self.tmp) / "taken"
+        config.claim_private_dir(d)
+        with self.assertRaises(FileExistsError):
+            config.claim_private_dir(d)
+        config.private_mkdir(d)              # the control: this one is idempotent
+
+    def test_it_does_not_build_the_path_above_it(self) -> None:
+        """An allocator that could bring the frame root into being on the way past would
+        resurrect a directory `reap` had just deleted — the hazard `frame.state`'s own
+        `respawn_attempt` passes `parents=False` for."""
+        root = Path(self.tmp) / "claim-noparents"
+        with self.assertRaises(FileNotFoundError):
+            config.claim_private_dir(root / "a" / "b")
+        self.assertFalse(root.exists())
+
     def test_a_file_in_the_way_is_still_an_error(self) -> None:
         """``mkdir(exist_ok=True)`` raises when the path exists and is not a directory, and
         every caller here writes into the path afterwards. Swallowing it would turn a

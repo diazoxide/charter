@@ -478,7 +478,8 @@ class TheBindReachesTmuxConfigText(unittest.TestCase):
     def test_a_key_binds_the_toggle_for_its_own_component(self):
         text = self._text({"repos": "F7"})
         self.assertIn("bind -n F7 run-shell "
-                      "'\"$CHARTER_PY\" -m charter frame-toggle repos'", text)
+                      "'\"$CHARTER_PY\" -m charter frame-toggle repos "
+                      "--chat \"#{@charter_chat}\"'", text)
 
     def test_every_declared_toggle_gets_its_own_line_in_split_order(self):
         text = self._text({"top": "F5", "bottom": "F6", "repos": "F7"})

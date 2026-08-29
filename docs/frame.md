@@ -201,8 +201,22 @@ whose program exits is destroyed along with its hook. Charter sets that one opti
 always did.
 
 Charter never touches `~/.tmux.conf` — the frame's settings go into a private server of
-charter's own (`tmux -L charter`), one server shared by every frame on the machine, with
-each frame a session on it.
+charter's own (`tmux -L charter`), one server shared by every frame on the machine. On it,
+a **workspace is a session** and a **chat is a window** in that session: `charter claude`
+in a workspace that already has one open adds a second chat beside it rather than starting
+a second session, and the two run side by side with their own harnesses, their own personas
+and their own tool ceilings. A chat's id is `<workspace>.<n>` — allocated, so two of them
+can never land on the same state — and it is what `$CHARTER_SESSION_ID` holds inside that
+chat.
+
+One chat's harness dying ends **that chat's window** and nothing else; the other chats in
+the workspace keep running. When the last chat's window goes, so does the session, which is
+what returns `charter claude` to your shell.
+
+The cost of one session, said plainly: a tmux session has one current window, so two
+terminals attached to the same workspace look at the same chat. Opening a second chat from
+a second terminal moves both. That is what "one workspace, several chats" means — the
+chats are independent, the *view* is the session's.
 
 ## Inside a tmux you already have
 
@@ -1038,8 +1052,9 @@ frame can do, drawn by charter in a pane of its own. Type to narrow it, arrow ke
 Enter to run, Escape to leave. It exists only on charter's own server; inside a tmux you
 already have, charter binds no key at all (see above). However you detach — the palette's
 own row, or tmux's own prefix key — charter notices the session is still running and prints
-how to get back in (`tmux -L charter attach -t <frame-id>`) rather than leaving you to
-remember the flags.
+how to get back in (`tmux -L charter attach -t <workspace>`) rather than leaving you to
+remember the flags. The workspace is the session; tmux puts you back on whichever of its
+chats was last in front of you.
 
 ```
 charter · 9 to choose from

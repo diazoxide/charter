@@ -703,9 +703,9 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
 
 
 def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
-                 harness_argv: list[str],
+                 harness_argv: list[str], chat: str | None = None,
                  env: dict[str, str] | None = None) -> list[str]:
-    """The `new-session` command that starts the frame's tmux server, harness inside it.
+    """The `new-session` that starts the workspace's tmux session, first chat inside it.
 
     Detached (`-d`): this is launched from a script with no tty to hand tmux, not typed
     interactively, and without `-d` tmux would attach and the call would never return.
@@ -740,11 +740,64 @@ def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
     ``None`` means "carry nothing", which is what a tmux below
     `tmuxctl.SESSION_ENV_FLOOR` gets: `-e` is not a flag `new-session` degrades on, it is
     one it refuses, and refusing takes the whole launch with it.
+
+    *chat* names the window, the way :func:`chat_window_argv` and :func:`window_argv`
+    name theirs — so the first chat of a workspace is legible in `tmux list-windows`
+    beside its siblings instead of showing whatever `automatic-rename` made of the
+    harness's process name. It is a READOUT and nothing reads liveness from it: measured
+    on tmux 3.7c and on 3.2, `-n` does pin the name (it turns that window's
+    `automatic-rename` off) and `allow-rename on` still lets the pane's own output take
+    it back, which is why `commands_frame._CHAT_OPTION` exists. ``None`` for a caller
+    with no chat to name, which is the only reason it is optional.
     """
-    return _tmux(socket, "-f", conf, "new-session", "-d", "-s", session,
+    named = ("-n", chat) if chat else ()
+    return _tmux(socket, "-f", conf, "new-session", "-d", "-s", session, *named,
                 "-x", str(cols), "-y", str(rows), "-P", "-F", "#{pane_id}",
                 *_env_argv(env),
                 "--", *harness_argv)
+
+
+def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
+                     harness_argv: list[str],
+                     env: dict[str, str] | None = None) -> list[str]:
+    """The `new-window` that adds a CHAT to a workspace's session on charter's own server.
+
+    :func:`session_argv`'s sibling, for the launch that finds the workspace's session
+    already running. The session is the workspace; a chat is one window in it; the
+    harness runs in that window's first pane. Everything the two calls have in common is
+    common on purpose — the reported pane id, the `-e` overlay, the harness after `--` —
+    so a launcher does not have to know which of them started its frame.
+
+    Detached (`-d`), like :func:`window_argv` and for the same reason: a client already
+    attached to this session must not be dragged to a half-built window. The launcher
+    `select-window`s once the frame has actually been drawn.
+
+    **`-a`, and it is not decoration.** `-t <session>` resolves to that session's CURRENT
+    window, and `new-window` reads a resolved window target as the INDEX to create at — so
+    without it tmux answers `create window failed: index 0 in use` for the second chat of
+    a workspace and no chat is ever added. Measured against tmux 3.7c and tmux 3.2, which
+    is also how :func:`window_argv` came to carry it.
+
+    ``-P -F '#{pane_id}'`` and NOT the window id, deliberately: `session_argv` reports the
+    pane alone, every caller downstream scopes itself to the pane (`split-window`,
+    `set-hook -p`, `set-option -w -t <pane>`, `kill-window -t <pane>` — measured on tmux
+    3.7c and 3.2 to resolve to that pane's own window), and a second reported field would
+    be a second shape for `cmd_launch` to branch on for nothing.
+
+    *env* rides on `-e` through :func:`_env_argv`, and **this is the whole mechanism that
+    makes identity per chat.** Measured on tmux 3.7c and on tmux 3.2, one session with a
+    session-wide ``set-environment CHARTER_SESSION_ID session-wide`` under it: a window
+    created with ``-e CHARTER_SESSION_ID=chat-A -e CHARTER_HARNESS=codex`` reported
+    ``chat-A codex`` from inside its own pane on both versions. `-e` on a window is
+    available at `tmuxctl.PANE_ENV_FLOOR` (3.0), below the floor charter warns at, so
+    unlike `new-session -e` there is no version below which this has to be withheld.
+
+    *cwd* is `-c` for :func:`respawn_argv`'s reason: a new window's start directory would
+    otherwise be the SESSION's, which is wherever the launcher that created the workspace
+    happened to be — and the panels split off this pane inherit its directory in turn.
+    """
+    return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", chat, "-c", cwd,
+                 "-P", "-F", "#{pane_id}", *_env_argv(env), "--", *harness_argv)
 
 
 #: Every environment variable name charter will ever put on a tmux command line, and the

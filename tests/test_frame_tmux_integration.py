@@ -1388,6 +1388,11 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
     def _a_death_the_hook_saw(self, dies_by: str, status_path: str):
         """One trial of "a pane dies, charter's write hook records its status".
 
+        *status_path* must be spelled ``<root>/<chat>/exit``: the write hook builds it
+        from ``$CHARTER_FRAME_EXIT`` (the frame root, carried by `set-environment`) and
+        ``#{@charter_chat}`` (the chat, read off this window's own option), so this helper
+        splits it back into the two halves and delivers each the way production does.
+
         Returns the status file's CONTENT, or ``None`` when tmux never ran this pane's
         `pane-died` array at all — the tmux 3.4 window :data:`_HOOK_TRIALS` describes,
         which is a trial that measured nothing rather than a result. The probe hook that
@@ -1401,8 +1406,15 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         still fires, so this says so rather than skipping.
         """
         session, pane, gate = self._new_pane(dies_by)
+        # The variable carries the frame ROOT and the hook appends this window's own
+        # chat, so the caller's *status_path* is `<root>/<chat>/exit` and BOTH halves are
+        # exercised: a hostile root through `set-environment`, and the chat through a
+        # tmux format expanded in the dying pane's own context.
+        root, chat = os.path.split(os.path.dirname(status_path))
         self.assertEqual(_run(commands_frame._exit_path_env_argv(
-            socket=SOCKET, session=session, status_path=status_path)).returncode, 0)
+            socket=SOCKET, session=session, frame_root=root)).returncode, 0)
+        self.assertEqual(_run(commands_frame._chat_option_argv(
+            socket=SOCKET, harness_pane=pane, chat=chat)).returncode, 0)
         self.assertEqual(_run(commands_frame._pane_died_write_hook_argv(
             socket=SOCKET, harness_pane=pane)).returncode, 0)
         self._arm_array_probe(pane)
@@ -1439,8 +1451,11 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         self.addCleanup(shutil.rmtree, tmp, True)
         canary = os.path.join(tmp, "canary")
         hostile_dir = os.path.join(tmp, "it's a $(touch " + canary + ") dir")
-        os.makedirs(hostile_dir, exist_ok=True)
-        status_path = os.path.join(hostile_dir, "exit")
+        # `<hostile root>/<chat>/exit`: the root is what `set-environment` carries and the
+        # chat is what the hook's own `#{@charter_chat}` expands to, so the injection
+        # attempt is still in the half that travels out of band.
+        os.makedirs(os.path.join(hostile_dir, "hostile.1"), exist_ok=True)
+        status_path = os.path.join(hostile_dir, "hostile.1", "exit")
 
         for _ in range(self._HOOK_TRIALS):
             content, _pane = self._a_death_the_hook_saw("exit 42", status_path)
@@ -1483,8 +1498,11 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
 
         for attempt in range(self._HOOK_TRIALS):
             # A fresh path per trial, so a file left by an earlier trial can never be
-            # what a later one reads back.
-            status_path = os.path.join(tmp, f"exit-{attempt}")
+            # what a later one reads back. `<root>/<chat>/exit` is the shape the write
+            # hook produces now — the root out of band, the chat expanded from the
+            # window's own `@charter_chat`.
+            status_path = os.path.join(tmp, f"sig.{attempt}", "exit")
+            os.makedirs(os.path.dirname(status_path), exist_ok=True)
             content, pane = self._a_death_the_hook_saw("kill -9 $$", status_path)
             if content is None:
                 continue   # tmux never ran the array — see `_HOOK_TRIALS`
@@ -1724,9 +1742,9 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         # Both calls, in the order `cmd_launch` would issue them across two launches:
         # the OLDER frame's own id first, seeded before the newer one ever existed.
         self.assertEqual(_run(commands_frame._session_id_env_argv(
-            socket=SOCKET, session="sid-one")).returncode, 0)
+            socket=SOCKET, session="sid-one", chat="sid-one")).returncode, 0)
         self.assertEqual(_run(commands_frame._session_id_env_argv(
-            socket=SOCKET, session="sid-two")).returncode, 0)
+            socket=SOCKET, session="sid-two", chat="sid-two")).returncode, 0)
 
         _tmux("run-shell", "-t", "sid-one",
              f"env | grep CHARTER_SESSION_ID > {first_out} 2>&1 || echo NONE > {first_out}")
@@ -3718,7 +3736,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
             worker = threading.Thread(target=_run_launch, daemon=True)
             worker.start()
             self.assertTrue(self._wait_until(
-                lambda: "demo-" in self._srv("list-windows", "-a", "-F",
+                lambda: "demo." in self._srv("list-windows", "-a", "-F",
                                          "#{window_name}").stdout),
                 "the frame's own window never appeared in the operator's server")
             fid, harness_pane = self._the_frames_own_window()
@@ -3746,7 +3764,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
             self.assertEqual(before, _snapshot())
             self.assertIn(name,
                           self._srv("list-sessions", "-F", "#{session_name}").stdout.split())
-            self.assertNotIn("demo-", self._srv("list-windows", "-a", "-F",
+            self.assertNotIn("demo.", self._srv("list-windows", "-a", "-F",
                                             "#{window_name}").stdout,
                              "the frame's window was left behind")
             self.assertFalse(decoy.exists(),
@@ -3803,15 +3821,15 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
     def _the_frames_own_window(self) -> tuple[str, str]:
         """The frame id and harness pane of the window a launch just opened here.
 
-        The window's NAME is the frame id (`layout.window_argv` is given `fid`), and with
+        The window's NAME is the chat id (`layout.window_argv` is given `fid`), and with
         `[frame] slots` empty the frame's window holds exactly the harness pane — so
         `#{pane_id}` for that window is it. Read off tmux rather than guessed, because the
-        launcher mints `<workspace>-<its own pid>` on a worker thread and this test never
-        sees the value.
+        launcher ALLOCATES `demo.<n>` on a worker thread against whatever this plane's
+        frame root already holds, and this test never sees the value.
         """
         rows = [line.split() for line in self._srv(
             "list-windows", "-a", "-F", "#{window_name} #{pane_id}").stdout.splitlines()
-            if line.startswith("demo-")]
+            if line.startswith("demo.")]
         self.assertEqual(len(rows), 1, f"expected exactly one frame window, got {rows!r}")
         return rows[0][0], rows[0][1]
 
@@ -4697,6 +4715,310 @@ class FocusEventsIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase
             _tmux("show-options", "-t", "focus-two", "mouse").stdout.strip(), "",
             "the control failed: even `mouse`, which conf_text relies on being "
             "session-scoped, reached the sibling here — this probe measures nothing")
+
+
+class ChatsAreWindowsOnOneWorkspaceSession(_TmuxServerFixture, PersonaIso):
+    """Phase 5 Stage 5a, against a real server: a workspace is a SESSION and a chat is a
+    WINDOW in it.
+
+    Every claim here is one a mock cannot make. Whether `new-window -n` pins a name and
+    whether a pane can take it back; whether a window user option survives that; whether
+    a pane-scoped `pane-died[1] kill-window` leaves its siblings alone and still ends the
+    session when it is the last window; and whether a per-window `-e` really beats a
+    session-wide `set-environment` in the pane's own environment.
+
+    **Re-run against tmux 3.2 — `tmuxctl.FLOOR` — as well as 3.7c**, by putting a 3.2
+    built from the release tarball first on `$PATH` and running this module: every
+    assertion below passed identically on both, so nothing here carries a version gate.
+    The two versions' answers are quoted in the tests that turn on them.
+    """
+
+    #: The workspace these chats belong to — the tmux SESSION's name, and the part of each
+    #: chat id before the dot. A literal, so a test cannot be satisfied by whatever
+    #: `state.workspace_prefix` happens to do with it.
+    WS = "wsdemo"
+
+    def _chat(self, chat: str, *, first: bool, dies_by: str = "exit 0") -> tuple[str, str]:
+        """Open *chat* on this class's server and return its pane id and gate.
+
+        The FIRST chat of a workspace starts the session (`layout.session_argv`); every
+        later one joins it (`layout.chat_window_argv`). Both are the production builders,
+        never a hand-retyped command, so this measures the argv charter really sends.
+        """
+        gate = os.path.join(self._gate_dir, f"gate-{chat}")
+        argv = _gate_argv(gate, dies_by)
+        if first:
+            conf = os.path.join(self._gate_dir, f"{chat}.conf")
+            Path(conf).write_text(commands_frame._PLACEHOLDER_CONF)
+            cmd = layout.session_argv(session=self.WS, conf=conf, chat=chat,
+                                      socket=self.SOCKET_NAME, cols=80, rows=24,
+                                      harness_argv=argv,
+                                      env={"CHARTER_SESSION_ID": chat})
+        else:
+            cmd = layout.chat_window_argv(socket=self.SOCKET_NAME, session=self.WS,
+                                          chat=chat, cwd=self._gate_dir,
+                                          harness_argv=argv,
+                                          env={"CHARTER_SESSION_ID": chat})
+        r = _run(cmd)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pane = r.stdout.strip()
+        self.assertTrue(pane.startswith("%"), f"tmux reported no pane id: {r.stdout!r}")
+        self.addCleanup(_kill_pid, self._pane_pid_on(pane))
+        named = commands_frame._chat_option_argv(socket=self.SOCKET_NAME,
+                                                 harness_pane=pane, chat=chat)
+        self.assertIsNotNone(named, f"charter refused to name the chat {chat!r}")
+        self.assertEqual(_run(named).returncode, 0)
+        # `state.reap` only ever removes a directory whose server it can match, so the
+        # marker is what makes the reaping tests below about liveness rather than about
+        # the migration case.
+        state.record_server(chat, self.SOCKET_NAME)
+        state.record_harness_pane(chat, pane)
+        state.bump(chat)
+        return pane, gate
+
+    def _window_names(self) -> list[str]:
+        return self._srv("list-windows", "-a", "-F",
+                         "#{window_name}").stdout.split()
+
+    def _pane_pid_on(self, target: str) -> str:
+        return self._srv("display-message", "-p", "-t", target,
+                         "#{pane_pid}").stdout.strip()
+
+    def _wait_until(self, predicate, timeout=_DEADLINE) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_two_chats_in_one_workspace_are_two_windows_on_one_session(self):
+        """The shape, end to end. One session named for the workspace, one window per
+        chat, and each window answering for its own chat through `@charter_chat`."""
+        self._chat("wsdemo.1", first=True)
+        self._chat("wsdemo.2", first=False)
+        # A window that is NOT a chat, on the same server — the operator's own, or one
+        # tmux made for a reason charter had nothing to do with. It carries no
+        # `@charter_chat`, so `list-windows -F` prints an EMPTY line for it, and an empty
+        # string in the live set is a name `state.reap` would compare every directory
+        # against.
+        stray = self._srv("new-window", "-d", "-t", self.WS, "-P", "-F", "#{pane_id}",
+                          "sleep", "600")
+        self.assertEqual(stray.returncode, 0, stray.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(stray.stdout.strip()))
+
+        self.assertEqual(self._srv("list-sessions", "-F", "#{session_name}").stdout.split(),
+                         [self.WS])
+        names = self._window_names()
+        self.assertIn("wsdemo.1", names)
+        self.assertIn("wsdemo.2", names)
+        self.assertEqual(commands_frame._live_chats(self.SOCKET_NAME),
+                         {"wsdemo.1", "wsdemo.2"})
+
+    def test_reap_keeps_both_chats_while_their_windows_exist_and_no_launcher_does(self):
+        """The bounding rule, with the pid rule deliberately unable to help: a chat id
+        carries no launcher pid, so the liveness list is the only thing keeping these
+        directories. Both are kept while their windows are there; kill one window and
+        exactly that one is removed."""
+        self._chat("wsdemo.1", first=True)
+        pane_two, _ = self._chat("wsdemo.2", first=False)
+        for chat in ("wsdemo.1", "wsdemo.2"):
+            self.assertIsNone(state._launcher_pid(chat),
+                              "a chat id must carry no pid, or this test is measuring "
+                              "the rule it exists to replace")
+
+        live = commands_frame._live_chats(self.SOCKET_NAME)
+        self.assertEqual(state.reap(live, server=self.SOCKET_NAME), [])
+        self.assertTrue(state.frame_dir("wsdemo.1").exists())
+        self.assertTrue(state.frame_dir("wsdemo.2").exists())
+
+        self.assertEqual(self._srv("kill-window", "-t", pane_two).returncode, 0)
+        live = commands_frame._live_chats(self.SOCKET_NAME)
+        self.assertEqual(live, {"wsdemo.1"})
+        self.assertEqual(state.reap(live, server=self.SOCKET_NAME), ["wsdemo.2"])
+        self.assertTrue(state.frame_dir("wsdemo.1").exists())
+
+    def test_a_pane_can_take_its_windows_name_and_not_its_chat(self):
+        """**The measurement that decides where liveness is read from.**
+
+        `new-window -n` pins the name — it turns that window's `automatic-rename` off —
+        but with `allow-rename on` the pane's own output takes it anyway. Measured here,
+        and identically on tmux 3.7c and tmux 3.2: after the pane writes
+        `\033kPWNED\033\\`, `#{window_name}` is `PWNED` while `#{@charter_chat}` is
+        untouched. `automatic-rename` is ON by default too, so a window charter did not
+        name follows whatever runs in it.
+
+        A liveness list read from `#{window_name}` therefore loses this chat, and
+        `state.reap` — the only bound on `.charter/frame/` — deletes the state of a chat
+        that is still running. `_live_chats` reads the option, and this test is what says
+        the two are not the same fact.
+        """
+        pane, _ = self._chat("wsdemo.1", first=True)
+        window = self._srv("display-message", "-p", "-t", pane,
+                           "#{window_id}").stdout.strip()
+        self.assertEqual(self._srv("show", "-w", "-t", window,
+                                   "automatic-rename").stdout.strip(),
+                         "automatic-rename off",
+                         "`-n` no longer pins a window's name on this tmux")
+        self.assertEqual(self._srv("set", "-w", "-t", window,
+                                   "allow-rename", "on").returncode, 0)
+        self.assertEqual(self._srv("respawn-window", "-k", "-t", window,
+                                   "sh -c 'printf \"\\033kPWNED\\033\\\\\"; "
+                                   "sleep 600'").returncode, 0)
+        renamed = self._wait_until(lambda: "PWNED" in self._window_names())
+        self.assertTrue(renamed,
+                        "the pane did not manage to rename its window — this tmux may "
+                        "have stopped honouring `allow-rename`, in which case the risk "
+                        "this test measures is gone and the claim should be re-argued")
+        self.addCleanup(_kill_pid, self._pane_pid_on(window))
+
+        self.assertNotIn("wsdemo.1", self._window_names())
+        self.assertEqual(commands_frame._live_chats(self.SOCKET_NAME), {"wsdemo.1"},
+                         "the chat's identity went with its name — reaping would now "
+                         "delete a running chat's state")
+
+    def _arm_the_production_pair(self, pane: str) -> None:
+        """Both `pane-died` hooks, in `cmd_launch`'s own order and from its own builders.
+
+        **No `_arm_array_probe` beside them, and that is not an oversight.**
+        :data:`_PROBE_INDEX` is `1`, which is exactly where the teardown hook lands, so a
+        probe here would REPLACE the thing under test and the test would be measuring its
+        own probe. The window disappearing is this pair's own evidence, and a trial where
+        it does not is classified by `_the_array_never_ran` on the pane itself.
+        """
+        self.assertEqual(_run(commands_frame._pane_died_write_hook_argv(
+            socket=self.SOCKET_NAME, harness_pane=pane)).returncode, 0)
+        self.assertEqual(_run(commands_frame._pane_died_teardown_hook_argv(
+            socket=self.SOCKET_NAME, harness_pane=pane)).returncode, 0)
+
+    def test_one_chats_harness_dying_leaves_every_other_chat_running(self):
+        """`pane-died[1]` runs `kill-window`, and this is what that buys.
+
+        Two chats, one workspace, real hooks armed exactly as `cmd_launch` arms them.
+        The first chat's harness dies; its window goes and NOTHING else does — the
+        sibling's window is still listed, its pane is not dead, and the session is still
+        there. With `kill-session` in that hook (which is what shipped while a frame WAS a
+        session) the sibling's harness goes down mid-turn for a death that was not its
+        own. Measured identically on tmux 3.7c and tmux 3.2.
+
+        Retried like every death-dependent test here, and for #487's reason rather than
+        for flakiness: a death tmux never ran the array for measured nothing."""
+        self._require_pane_died_fires()
+        for attempt in range(self._HOOK_TRIALS):
+            dying, live = f"wsdemo.{attempt}1", f"wsdemo.{attempt}2"
+            one, gate = self._chat(dying, first=(attempt == 0), dies_by="exit 9")
+            two, _ = self._chat(live, first=False)
+            self._arm_the_production_pair(one)
+            self._release(gate)
+            if not self._wait_until(lambda: dying not in self._window_names()):
+                self._the_array_never_ran(
+                    one, "the dying chat's window is still there")
+                continue
+            self.assertIn(live, self._window_names(),
+                          "a sibling chat's window went down with the one that died")
+            self.assertEqual(self._srv("display-message", "-p", "-t", two,
+                                       "#{pane_dead}").stdout.strip(), "0",
+                             "the sibling chat's harness was killed")
+            # `assertIn`, not equality: `_require_pane_died_fires` leaves its own probe
+            # session on this server, and it is not what this test is about.
+            self.assertIn(
+                self.WS,
+                self._srv("list-sessions", "-F", "#{session_name}").stdout.split(),
+                "the workspace's session went down with one of its chats")
+            return
+        self.skipTest("every trial was a death tmux never ran the array for")
+
+    def test_the_last_chats_teardown_still_ends_the_session(self):
+        """The half that keeps the single-chat case unchanged: killing a session's LAST
+        window destroys the session, so `cmd_launch`'s `attach` returns exactly as it did
+        when the teardown said `kill-session`. Measured on tmux 3.7c and tmux 3.2."""
+        self._require_pane_died_fires()
+        for attempt in range(self._HOOK_TRIALS):
+            chat = f"wsdemo.{attempt}"
+            pane, gate = self._chat(chat, first=True, dies_by="exit 3")
+            self._arm_the_production_pair(pane)
+            self._release(gate)
+            if self._wait_until(lambda: self.WS not in self._srv(
+                    "list-sessions", "-F", "#{session_name}").stdout.split()):
+                return
+            self._the_array_never_ran(
+                pane, "the workspace's session outlived its last chat, so a launcher's "
+                      "`attach` would never return")
+        self.skipTest("every trial was a death tmux never ran the array for")
+
+    def test_each_chat_reports_its_own_identity_over_a_session_wide_one(self):
+        """Task 3's whole mechanism, measured. A per-window `-e` beats a session-wide
+        `set-environment` inside the pane — `chat-A claude-code` and `chat-B codex` on
+        tmux 3.7c and on tmux 3.2 alike, under a session that says `session-wide`.
+
+        This is what makes `.charter/sessions/<chat id>.persona`, `.workspace`, `.tools`
+        and `.gate` per chat with no new code: `session.current()` reads
+        `$CHARTER_SESSION_ID`, and every process in a chat's pane gets the chat's own.
+        """
+        out = os.path.join(self._gate_dir, "identity")
+        os.makedirs(out, exist_ok=True)
+        conf = os.path.join(self._gate_dir, "identity.conf")
+        Path(conf).write_text(commands_frame._PLACEHOLDER_CONF)
+        first = _run(layout.session_argv(
+            session=self.WS, conf=conf, socket=self.SOCKET_NAME, cols=80, rows=24,
+            harness_argv=["sleep", "600"],
+            env={"CHARTER_SESSION_ID": "wsdemo.1", "CHARTER_HARNESS": "claude-code"}))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(first.stdout.strip()))
+        # The session says something else entirely, and says it BEFORE the windows are
+        # created — which is the order `cmd_launch` uses and the order that makes the
+        # override a real one rather than a last-writer-wins accident.
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=self.SOCKET_NAME, session=self.WS,
+            chat="session-wide")).returncode, 0)
+
+        for chat, harness in (("wsdemo.2", "codex"), ("wsdemo.3", "opencode")):
+            cmd = layout.chat_window_argv(
+                socket=self.SOCKET_NAME, session=self.WS, chat=chat,
+                cwd=self._gate_dir,
+                # ONE write, then an atomic rename: two appends make the file non-empty
+                # after the first, and `_await_text` stops at non-empty — measured, that
+                # read back `wsdemo.3` with the harness line still in flight.
+                harness_argv=["/bin/sh", "-c",
+                              f'printf "%s\n%s\n" "$CHARTER_SESSION_ID" '
+                              f'"$CHARTER_HARNESS" > {out}/{chat}.part && '
+                              f"mv {out}/{chat}.part {out}/{chat}; sleep 600"],
+                env={"CHARTER_SESSION_ID": chat, "CHARTER_HARNESS": harness})
+            r = _run(cmd)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.addCleanup(_kill_pid, self._pane_pid_on(r.stdout.strip()))
+
+        for chat, harness in (("wsdemo.2", "codex"), ("wsdemo.3", "opencode")):
+            with self.subTest(chat=chat):
+                self.assertEqual(_await_text(os.path.join(out, chat)),
+                                 f"{chat}\n{harness}",
+                                 "a chat's pane read the session's identity instead of "
+                                 "its own")
+
+    def test_the_session_wide_value_is_what_a_run_shell_child_reads(self):
+        """The other side of the same measurement, and the reason `conf_text`'s binds
+        carry `#{@charter_chat}` rather than trusting the variable.
+
+        A bind's action is a `run-shell`, and a `run-shell` child reads the SESSION's
+        environment — never the window's `-e`. Measured on tmux 3.7c and on tmux 3.2: the
+        pane above reports its own chat, and this reports `session-wide`. So the variable
+        cannot tell two chats of one workspace apart, and the window option is what does.
+        """
+        conf = os.path.join(self._gate_dir, "runshell.conf")
+        Path(conf).write_text(commands_frame._PLACEHOLDER_CONF)
+        first = _run(layout.session_argv(
+            session=self.WS, conf=conf, socket=self.SOCKET_NAME, cols=80, rows=24,
+            harness_argv=["sleep", "600"], env={"CHARTER_SESSION_ID": "wsdemo.1"}))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(first.stdout.strip()))
+        self.assertEqual(_run(commands_frame._session_id_env_argv(
+            socket=self.SOCKET_NAME, session=self.WS,
+            chat="session-wide")).returncode, 0)
+        seen = os.path.join(self._gate_dir, "runshell-saw")
+        self.assertEqual(self._srv(
+            "run-shell", "-b", "-t", self.WS,
+            f"printenv CHARTER_SESSION_ID > {seen}").returncode, 0)
+        self.assertEqual(_await_text(seen), "session-wide")
 
 
 if __name__ == "__main__":

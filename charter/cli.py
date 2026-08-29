@@ -804,6 +804,14 @@ def _add_frame_parsers(sub) -> None:
     pal = sub.add_parser("frame-palette")
     pal.add_argument("client", nargs="?", default="")
     pal.add_argument("--pane", action="store_true")
+    # Which CHAT the key was pressed in, expanded by tmux out of the presser's own
+    # window's `@charter_chat` (`commands_frame.conf_text`). A value rather than a
+    # positional, and OPTIONAL rather than required, for `frame-respawn --frame`'s reason
+    # exactly: a bind installed by a charter that predates the option is still sitting in
+    # a running server's key table across the upgrade, and it fires this command with no
+    # `--chat` at all. Empty falls back to `$CHARTER_SESSION_ID`, which is what that frame
+    # always resolved through — see `commands_frame._pressers_chat`.
+    pal.add_argument("--chat", dest="chat", default="")
     pal.set_defaults(func=commands_frame.cmd_palette)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
@@ -912,6 +920,9 @@ def _add_frame_parsers(sub) -> None:
     # its own frame's arrangement does not contain — one gate, where the arrangement is.
     tg = sub.add_parser("frame-toggle")
     tg.add_argument("component")
+    # Which chat the key was pressed in — `frame-palette --chat`'s twin, same source
+    # (`#{@charter_chat}` in this component's own `bind -n`), same reason it is optional.
+    tg.add_argument("--chat", dest="chat", default="")
     tg.set_defaults(func=commands_frame.cmd_toggle)
 
     # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-palette` above:

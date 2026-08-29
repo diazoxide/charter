@@ -18,9 +18,11 @@ below — the private server, `-f` versus `source-file`, both `pane-died` hooks,
 install race they close — describe the FIRST path only; the second has no hooks at all,
 for a reason `_launch_in_operator_tmux` gives.
 
-**Every frame on charter's own server shares one tmux server (`SOCKET`), told apart by
-session name (the frame id), not one server per frame.** That single choice is what makes the rest of this module
-non-obvious, and it is why the session-scoped/hook-installing config reaches tmux through
+**Every frame on charter's own server shares one tmux server (`SOCKET`), and a WORKSPACE
+is a session on it while a CHAT is one window in that session.** A frame used to BE the
+session, named by the frame id; it is now the window, named by the chat id, with the
+session named after the workspace the chats belong to. That single choice is what makes the
+rest of this module non-obvious, and it is why the session-scoped/hook-installing config reaches tmux through
 `source-file`/direct `set-hook`/`set-environment` commands rather than through the `-f`
 flag `layout.session_argv` also carries. Measured against tmux 3.7c: `-f` is read only at
 the moment a client's connection actually STARTS the server — a later `new-session -f`
@@ -30,14 +32,14 @@ own config applied at all if it relied on `-f` alone. `source-file` and direct c
 both re-apply against whatever server already answers on the socket, so they work
 identically for the first frame and the fifty-first (verified by hand against tmux 3.7c: a
 hook installed this way for a SECOND session on an already-running server fires correctly,
-and its `kill-session` tears down only that session, leaving a sibling frame untouched).
+and its teardown tears down only its own window, leaving a sibling chat untouched).
 
 **A second, narrower race survives even that fix.** `new-session` starts the harness
 running immediately; the hooks that would record its exit code and end the session are
 not installed until separate `set-hook` calls a few milliseconds later (measured
 8.2-10.5ms). A harness that dies inside that window is never caught by them — hooks do
 not fire retroactively for an event that already happened — and this is worse than
-`state.exit_code` merely reading back `None`: with nothing left to run `kill-session`, an
+`state.exit_code` merely reading back `None`: with nothing left to run the teardown, an
 `attach` against that session BLOCKS FOREVER (verified by hand against a real tmux 3.7c,
 via a Python `pty` driving the real launcher end to end — `remain-on-exit`, armed for
 exactly this reason, is legitimately keeping the dead pane's session alive; nothing else
@@ -47,7 +49,7 @@ not sufficient on its own. What actually closes the race is asking tmux directly
 `display-message -p -t <harness_pane> '#{pane_dead}:#{pane_dead_status}'`, IMMEDIATELY
 after the hooks are installed and BEFORE ever calling `attach`: if the pane is already
 dead at that point, this launcher finishes the hooks' own job itself (records the code,
-runs `kill-session`) and skips `attach` entirely, rather than block on a session that
+runs the teardown) and skips `attach` entirely, rather than block on a session that
 will never end on its own. The same query runs again as a fallback after `attach` DOES
 return, for whatever gap the eager check could not have seen yet.
 
@@ -68,10 +70,23 @@ nothing left for any path, however hostile, to corrupt (verified against tmux 3.
 a path containing a space, a literal `'`, and a `$(...)` injection attempt: the exact
 byte string reaches the file and nothing embedded in it runs).
 
+**One session now holds several chats, so that variable names the frame ROOT and the hook
+appends the chat.** It used to name one frame's own `exit` file, which was correct while a
+session held exactly one frame and is a wrong exit code the moment it holds two: a
+`set-environment` is session-scoped, so the second chat's launch would repoint it and the
+first chat's death would write its status into the second chat's file. The chat comes from
+the `@charter_chat` WINDOW option through a tmux format, `#{@charter_chat}`, expanded in
+the dying pane's own context — measured on tmux 3.7c and on tmux 3.2, a real `pane-died`
+hook wrote `42` to `$CHARTER_FRAME_EXIT/<chat>/exit` on both. The hook action stays a
+constant string, which is the property that paragraph is about: the operator-controlled
+half (the plane root) still travels out of band, and the half that is interpolated is a
+chat id in `_FRAME_ID_RE`'s closed alphabet, which holds no quote, `$`, backtick or space
+for the nested parse to trip over.
+
 **Teardown is its own hook, `pane-died[1]`, entirely separate from the write hook
-(`pane-died[0]`).** `kill-session` alone, a constant string with no interpolated data at
+(`pane-died[0]`).** `kill-window` alone, a constant string with no interpolated data at
 all. Verified by hand: even with the write hook's own action deliberately mangled, the
-teardown hook — sharing no text with it — still fired and ended the session correctly.
+teardown hook — sharing no text with it — still fired and ended the frame correctly.
 Belt and braces over the constant-action fix above: it means a *future* bug in the write
 hook's own construction can degrade to "the wrong exit code was recorded" and never
 regress all the way back to "the session never ends."
@@ -86,7 +101,7 @@ did before either hook existed. See `_pane_died_teardown_hook_argv`'s own docstr
 
 **A command that dies before the frame is drawn is reported AFTER the fact, never
 refused before it (#384).** The eager `#{pane_dead}` check above is exactly what makes
-that death total: it catches the dead pane, runs `kill-session`, and because `code is
+that death total: it catches the dead pane, runs `kill-window`, and because `code is
 not None` from that moment the entire attach branch — panels, `select-pane`, `attach` —
 is skipped, so there is no pane, no attach, and nothing drawn. Measured under a pty
 against a real tmux 3.7c: **zero bytes**, both for `charter frame -- nosuchthing` and
@@ -100,7 +115,7 @@ the wrong question of text that is not even one word; over the second it is a pr
 where a real answer arrives for free a few milliseconds later (a binary that resolves
 can still exit 127 for its own reasons, or carry a broken shebang). So nothing is
 refused, and `early_death_message` builds the report out of what tmux actually did —
-quoting the pane (`_pane_last_words`, read BEFORE `kill-session` destroys it) when the
+quoting the pane (`_pane_last_words`, read BEFORE `kill-window` destroys it) when the
 shell already said what was wrong, and answering for itself when a failed `execvp` left
 the pane empty and a bare exit 1.
 
@@ -172,10 +187,31 @@ _FALLBACK_SIZE = (80, 24)
 #: launcher's fallback query) has a pane left to learn anything from.
 _PLACEHOLDER_CONF = "set -g remain-on-exit on\n"
 
-#: The session-scoped environment variable the write hook's shell reads the exit-status
-#: path back from — see the module docstring's "constant string" section for why the
-#: path is delivered this way instead of being embedded in the hook's own action text.
+#: The session-scoped environment variable the write hook's shell reads the frame ROOT
+#: back from — see the module docstring's "constant string" section for why the path is
+#: delivered this way instead of being embedded in the hook's own action text, and
+#: `_exit_path_env_argv` for why it is the root rather than one chat's file.
 _EXIT_PATH_ENV = "CHARTER_FRAME_EXIT"
+
+#: The WINDOW option that says which chat a window is drawing — the identity, where the
+#: window's NAME is only a label.
+#:
+#: **A window name is not an identity, and that is measured rather than argued.** On tmux
+#: 3.7c and on tmux 3.2 alike: `new-window -n api.3` does pin the name (it turns that
+#: window's `automatic-rename` off), but with `allow-rename on` the pane's own output —
+#: `printf '\033kPWNED\033\\'` — renamed the window to `PWNED` on both versions while
+#: this option was untouched. `automatic-rename` is also ON by default, so any window
+#: charter did NOT name follows whatever runs in it. A liveness list read from
+#: `#{window_name}` therefore loses a chat the moment something renames its window, and
+#: `state.reap` — the only thing bounding `.charter/frame/` — would delete a running
+#: chat's state. So `_live_chats` reads this, and every lookup asks the window what chat
+#: it is rather than parsing a name.
+#:
+#: `@`-prefixed because that is tmux's own namespace for options it does not define, and
+#: `@charter_hatch` (`frame/overlay.py`) is the same mechanism one surface over — which
+#: is also why `F12` is per chat with no new code: one chat per window means one hatch
+#: per window.
+_CHAT_OPTION = "@charter_chat"
 
 #: The second value carried the same out-of-band way, for the same reason: the
 #: interpreter the hotkey bind runs charter with. Owned by `tmuxctl` so every module
@@ -556,7 +592,22 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     `mouse`/`history-limit`, just reached through a binding instead of a session-scoped
     `set`.
 
-    `"#{client_name}"` is a SECOND thing this same bind carries, for a DIFFERENT
+    **`"#{@charter_chat}"` is what makes that resolution per CHAT, and it is not
+    decoration over the variable — it is the only thing that works.** A session holds
+    several chats now, and `set-environment` has no window scope, so
+    `$CHARTER_SESSION_ID` can only ever name one of them. Measured on tmux 3.7c and on
+    tmux 3.2, one session carrying `set-environment CHARTER_SESSION_ID session-wide` with
+    a window created `-e CHARTER_SESSION_ID=chat-A` in it: the window's own PANE reported
+    `chat-A` and a `run-shell` fired against that session reported `session-wide`. This
+    bind's action IS a `run-shell`, so the variable would hand every chat's keypress the
+    same frame. The window option does not: like `#{client_name}` beside it, it is
+    expanded in the context of whoever's keypress is firing the bind, so `F2` in chat two
+    opens chat two's palette. `cmd_palette` falls back to `$CHARTER_SESSION_ID` when the
+    option is empty, which is what a frame launched by an older charter — its window
+    carrying no such option, its bind text replaced by this one the moment a newer frame
+    launches on the shared server — still resolves through.
+
+    `"#{client_name}"` is a THIRD thing this same bind carries, for a DIFFERENT
     reason: which of possibly several clients attached to one frame should be TOLD when
     an action refuses. Format expansion resolves `#{client_name}` in the context of
     whoever's keypress is firing the bind — verified by hand with two real ptys attached
@@ -685,7 +736,8 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
         "set -g remain-on-exit on",
         "set -g focus-events on",
         f"bind -n {hotkey} run-shell "
-        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette \"#{{client_name}}\"'",
+        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette \"#{{client_name}}\" "
+        f"--chat \"#{{{_CHAT_OPTION}}}\"'",
         f"bind -n {tmuxctl.WHEEL_KEY} if-shell -F -t = '#{{mouse_any_flag}}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
         f"bind -n {tmuxctl.CLICK_KEY} if-shell -F -t = '#{{{_PANEL_OPTION}}}'"
@@ -697,7 +749,8 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
         if instance.toggle_key(key) is None:
             continue
         lines.append(f"bind -n {key} run-shell "
-                     f"'\"${_CHARTER_PY_ENV}\" -m charter frame-toggle {name}'")
+                     f"'\"${_CHARTER_PY_ENV}\" -m charter frame-toggle {name} "
+                     f"--chat \"#{{{_CHAT_OPTION}}}\"'")
     # The escape hatch stays the LAST line, which is this file's own invariant and not
     # this loop's convenience: `frame/overlay.py`'s `hatch_bind` is the one bind that has
     # to keep working when charter's code does not, and it uses `run-shell -C`, which
@@ -763,20 +816,27 @@ def _charter_pythonsafepath_env_argv(*, socket: str, session: str) -> list[str]:
                                _PYTHONSAFEPATH_ENV, "1")
 
 
-def _exit_path_env_argv(*, socket: str, session: str, status_path: str) -> list[str]:
-    """`set-environment`: carries *status_path* to the write hook's shell out of band.
+def _exit_path_env_argv(*, socket: str, session: str, frame_root: str) -> list[str]:
+    """`set-environment`: carries the frame ROOT to the write hook's shell out of band.
 
     One argv value, no shell parsing at all on this side — the whole point (see the
     module docstring). `run-shell`'s own spawned shell later reads it back from its
     inherited environment via `$CHARTER_FRAME_EXIT`, verified by hand to work for a
     SESSION-scoped `set-environment` (no `-g`) reaching a hook fired for a pane in that
     session.
+
+    **The root, not one chat's file, and a session holding two chats is why.** This is a
+    SESSION-scoped variable and a session is now a workspace, so a value naming one
+    chat's `exit` file is a value the next chat's launch repoints — after which the first
+    chat's death writes its status into the second chat's file and that chat's launcher
+    reports a number that was never its own. The hook appends the chat itself, from the
+    window option `_chat_option_argv` writes; see `_pane_died_write_hook_argv`.
     """
     return tmuxctl.server_argv(socket, "set-environment", "-t", session, _EXIT_PATH_ENV,
-                               status_path)
+                               frame_root)
 
 
-def _session_id_env_argv(*, socket: str, session: str) -> list[str]:
+def _session_id_env_argv(*, socket: str, session: str, chat: str) -> list[str]:
     """`set-environment`: makes *session* resolvable from its own `run-shell` calls.
 
     `cmd_palette` (the hotkey bind's own action) and every action it starts read
@@ -796,13 +856,53 @@ def _session_id_env_argv(*, socket: str, session: str) -> list[str]:
     unfixed, every frame after the first would open the FIRST frame's own palette and
     run its actions against the wrong session's state.
 
-    The value IS the session's own name (`state.frame_id`'s own restricted alphabet —
-    see its docstring — so there is nothing here for this call's own text to sanitise),
-    which is why this hands the session right back to itself rather than taking a
-    separate value the way `_exit_path_env_argv` takes `status_path`.
+    **The value is the CHAT's id, and the session's name is the workspace.** Those used to
+    be one string; they are two now, and this variable means the frame rather than the
+    session it is drawn in, so it takes *chat* explicitly. `state.new_chat_id` mints it in
+    the same restricted alphabet `state.frame_id` used, so there is still nothing here for
+    this call's own text to sanitise.
+
+    **It is a FALLBACK under tabs, not the mechanism, and that is measured.** A session
+    can only hold one value of it, so with two chats it names whichever launch set it
+    last. What makes a keypress reach the RIGHT chat is `conf_text`'s bind carrying
+    `#{@charter_chat}`, expanded in the presser's own window. This is still set because a
+    `run-shell` child reads the SESSION's environment and nothing else: measured on tmux
+    3.7c and on 3.2, a window created with `-e CHARTER_SESSION_ID=chat-A` gave `chat-A` to
+    its own pane and `session-wide` to a `run-shell` fired against that session. So a
+    chat's harness gets its id from `-e` (`layout.chat_window_argv`), a keypress gets it
+    from the bind, and this is what answers for everything else that asks the session.
     """
     return tmuxctl.server_argv(socket, "set-environment", "-t", session,
-                               "CHARTER_SESSION_ID", session)
+                               "CHARTER_SESSION_ID", chat)
+
+
+def _chat_option_argv(*, socket: str, harness_pane: str, chat: str) -> list[str] | None:
+    """`set-option -w`: write which chat this window is drawing. ``None`` to refuse.
+
+    Task-critical and one line, because it is what every later lookup asks instead of
+    parsing a name (see :data:`_CHAT_OPTION` for the measurement that makes a name
+    unusable for it). `state.reap` reads it back through `_live_chats`, the `pane-died`
+    write hook expands it as `#{@charter_chat}` to find the chat's own `exit` file, and
+    `conf_text`'s binds carry it so a keypress reaches the presser's own chat.
+
+    **Window-scoped, targeting the harness PANE** — the idiom
+    `_panel_remain_on_exit_argv` and `overlay.arm_hatch_argv` already use, and for the
+    same reason: `-w -t <a pane id>` resolves to that pane's window, which is charter's
+    own on either server (measured again here on tmux 3.7c and 3.2 — the option set that
+    way reads back through `list-windows -a -F '#{@charter_chat}'`). Never `-g`, which
+    would hand every window on charter's shared private server one chat's id.
+
+    ``None`` rather than a raise for `overlay.arm_hatch_argv`'s reason — this is called
+    from inside a launch — and the check is `_FRAME_ID_RE`, the same alphabet a frame id
+    already travels to tmux under. It is asked HERE rather than trusted from
+    `state.new_chat_id` because the value goes on to be expanded by tmux inside a hook
+    action and inside a key bind, and a value that reaches two re-parsing grammars is
+    checked where it enters them, not where it was minted.
+    """
+    if not _FRAME_ID_RE.fullmatch(chat or ""):
+        return None
+    return tmuxctl.server_argv(socket, "set-option", "-w", "-t", harness_pane,
+                               _CHAT_OPTION, chat)
 
 
 def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
@@ -826,18 +926,52 @@ def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
     substitutes for UNSET, not empty) closes that at the point of writing, so the file
     this hook produces is always a parseable integer — `_UNKNOWN_DEATH_CODE` on a signal
     death, the real status otherwise. Verified against tmux 3.7c for both.
+
+    **The path is the frame root plus this window's own chat**, `$CHARTER_FRAME_EXIT` from
+    the session and `#{@charter_chat}` from the window, and both halves are load-bearing.
+    A session holds several chats, so the session-scoped variable cannot name one chat's
+    file without the next launch repointing it (see `_exit_path_env_argv`); and the chat
+    cannot travel in the variable for the same reason. `#{@charter_chat}` is expanded by
+    tmux in the context of the pane the hook fired for — measured against tmux 3.7c AND
+    tmux 3.2, a real `pane-died` on a window carrying `@charter_chat hooky.7`, with the
+    exit path set to a directory: both wrote `42` to `<dir>/hooky.7/exit`.
+
+    **This action is still a CONSTANT string** — the property the module docstring calls
+    the whole fix. The two things it names are resolved by tmux and by the shell at fire
+    time, not interpolated here, so a plane root with an apostrophe in it still cannot
+    corrupt the stored text. The chat id that IS interpolated by tmux is `_FRAME_ID_RE`'s
+    closed alphabet (`_chat_option_argv` refuses anything else on the way in), so it holds
+    no quote, `$`, backtick, space or `#` for either parser to trip over.
     """
     action = ('run-shell "v=#{pane_dead_status}; echo '
              f'\\"\\${{v:-{_UNKNOWN_DEATH_CODE}}}\\" > '
-             f'\\"\\${_EXIT_PATH_ENV}\\""')
+             f'\\"\\${_EXIT_PATH_ENV}/#{{{_CHAT_OPTION}}}/exit\\""')
     return tmuxctl.server_argv(socket, "set-hook", "-p", "-t", harness_pane, "pane-died",
                                action)
 
 
 def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
-    """`pane-died[1]`: ends the session. Nothing else — see the module docstring's
+    """`pane-died[1]`: ends the CHAT's window. Nothing else — see the module docstring's
     "Teardown is its own hook" section for why this is never combined with the write
     hook above.
+
+    **`kill-window`, never `kill-session`, and this is the single most dangerous line in
+    the move to chats.** A session used to be one frame, so ending it ended exactly the
+    frame whose harness had died. A session is a WORKSPACE now and a chat is one window
+    in it, so the old spelling would take every other chat in that workspace down with the
+    one that died — including chats mid-turn, in another agent's terminal, for a death
+    that had nothing to do with them.
+
+    Measured on tmux 3.7c and on tmux 3.2, one session, a pane-scoped `pane-died[1]
+    kill-window` on a harness that exits 9: the dying chat's window is gone, every sibling
+    window is still listed, and the session is still listed. And the single-chat case is
+    unchanged where it matters — killing a session's last window destroys the session
+    (measured on both), so `attach` returns exactly as it did.
+
+    The hook is PANE-scoped (`-p -t <harness pane>`), and `kill-window` with no `-t` acts
+    on the target the hook fired for, which is that pane's own window. The same
+    pane-resolves-to-its-window rule is what `_remain_on_exit_argv` and
+    `overlay.arm_hatch_argv` already rely on for `-w -t <pane>`.
 
     **Must be installed AFTER `_pane_died_write_hook_argv`, never before — this is not
     a style preference, it is the entire fix.** Verified by hand against tmux 3.7c: an
@@ -854,7 +988,7 @@ def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str
     behaviour against a real server.
     """
     return tmuxctl.server_argv(socket, "set-hook", "-p", "-t", harness_pane,
-                               "pane-died[1]", "kill-session")
+                               "pane-died[1]", "kill-window")
 
 
 #: How many times one slot's panel may be brought back before charter stops trying, per
@@ -1277,16 +1411,71 @@ def _live_windows(socket: str) -> set[str] | None:
     return {line.strip() for line in out.stdout.splitlines() if line.strip()}
 
 
+def _live_chats(socket: str) -> set[str] | None:
+    """Every chat id *socket*'s server reports through the `@charter_chat` window option,
+    or ``None`` when it did not answer at all.
+
+    The liveness list for a CHAT, and the one `state.reap` has to be given for one: a
+    chat's id carries no launcher pid (`state.new_chat_id`), so this list is the only
+    thing keeping its directory, and a chat missing from it is a chat whose state is
+    deleted.
+
+    **The OPTION, not `#{window_name}`, and the difference is a running chat's state.**
+    `_live_windows` reads the name because that is what the guest path has always named a
+    frame's window; a name is not an identity. Measured on tmux 3.7c and on tmux 3.2:
+    `new-window -n api.3` pins the name and turns `automatic-rename` off for that window,
+    but with `allow-rename on` the pane's own `printf '\\033kPWNED\\033\\\\'` renamed it
+    to `PWNED` on both versions while `@charter_chat` stayed `api.3`. A liveness list read
+    from the name loses that chat, and `reap` — the only bound on `.charter/frame/` —
+    removes the state of a chat that is running.
+
+    **``None`` rather than an empty set for a non-zero return, and here it costs more
+    than it does anywhere else in this module.** `_live_windows` keeps the two apart
+    because `$TMUX` can outlive its server; this keeps them apart because a chat's
+    directory has NOTHING ELSE keeping it. An old frame that vanished from a failed
+    `list-sessions` is still held by the pid in its name (#383); a chat has no pid, so a
+    server that answers "no windows" because it was wedged rather than because it is
+    empty would take every live chat's state with it — the version file its panels poll
+    and the exit code its launcher has not read yet. Both callers refuse to reap on that
+    answer. A LIVE server with no chats on it is a different fact and answers with an
+    empty set, which reaps exactly as it should.
+
+    A window with no such option prints an empty line, which the comprehension drops.
+
+    **Stripped once, tested once.** `_live_sessions` and `_live_windows` both spell
+    ``{line.strip() for line in … if line.strip()}``, and the second call is an
+    EQUIVALENT MUTANT: ``s.strip()`` and ``s.lstrip()`` are truthy for exactly the same
+    strings, so no test can tell the guard from its own mutation. Stripping into a name
+    and asking whether the NAME is empty says the same thing once, and both halves are
+    then pinnable — `tests/test_frame_launcher.TheChatListIsParsedLineByLine` pins them.
+    """
+    out = tmuxctl.run("listing the chats already running",
+                      tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
+                                          f"#{{{_CHAT_OPTION}}}"),
+                      timeout=5, report=False)
+    if out.returncode != 0:
+        return None
+    names = (line.strip() for line in out.stdout.splitlines())
+    return {name for name in names if name}
+
+
 def _frame_is_live(socket: str, fid: str) -> bool:
     """Is the frame *fid* still running on *socket*? One question, one place — #408.
 
-    A frame is a SESSION on charter's own private server and a WINDOW in the operator's,
-    so "is it still there" is two different queries and `tmuxctl.is_operator_socket` is
-    the same single discriminator that already turns a server into `-L` or `-S`.
+    A frame is a WINDOW on either server now — one of a workspace session's chats on
+    charter's own, one of the operator's own windows in theirs — and `@charter_chat` is
+    what it answers to on both, so `_live_chats` is asked either way.
+    `tmuxctl.is_operator_socket` is the same single discriminator that already turns a
+    server into `-L` or `-S`, and it still decides what the SECOND question is:
     `cmd_respawn` asked `_live_sessions(SOCKET)` unconditionally, which on the operator's
     server is a question about a server that is not theirs: it answers "no such session"
     for a frame that is on screen, so a panel that died there could never have been
     brought back even once the hook reached charter.
+
+    The second question is the old shape's, and both are asked because both can answer:
+    a frame launched by a charter that predates chats is still a session named by its id
+    on charter's server and a window named by its id in the operator's, and neither of
+    those carries `@charter_chat`.
 
     ``False`` for a server that did not answer at all (`_live_windows`'s ``None``), and
     that direction is deliberate: the only caller is about to RESPAWN something, and
@@ -1295,8 +1484,10 @@ def _frame_is_live(socket: str, fid: str) -> bool:
     """
     if tmuxctl.is_operator_socket(socket):
         live = _live_windows(socket)
-        return live is not None and fid in live
-    return fid in _live_sessions(socket)
+        if live is None:
+            return False
+        return fid in live or fid in (_live_chats(socket) or set())
+    return fid in _live_sessions(socket) or fid in (_live_chats(socket) or set())
 
 
 def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
@@ -2051,8 +2242,9 @@ def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
                                "remain-on-exit", "on")
 
 
-def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, ws: str,
-                             argv: list[str], h, v: tuple[int, int]) -> int | None:
+def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
+                             argv: list[str], h, v: tuple[int, int],
+                             picked: bool) -> int | None:
     """Build the frame as a WINDOW in the tmux the operator is already in.
 
     The same layout as the private-server path — harness in the middle, charter's panels
@@ -2134,17 +2326,37 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, ws: str,
     live_before = _live_windows(socket)
     if live_before is None:
         return None
-    state.reap(live_before, server=socket)
+    # Both lists, and the same refusal `_reap_this_server` makes: a chat's directory is
+    # kept by `@charter_chat` alone (no launcher pid abstains in its favour), so a server
+    # that answered for the window NAMES and would not answer for the chats is one
+    # charter cannot reap on.
+    chats_before = _live_chats(socket)
+    if chats_before is not None:
+        state.reap(live_before | chats_before, server=socket)
 
+    # AFTER the reap, never before it: allocation claims a directory by creating it
+    # (`state.new_chat_id`), and a `reap` that ran afterwards would see a directory with
+    # no window of its own yet and delete it out from under this very launch. The same
+    # ordering, for the same reason, as the private-server path's.
+    fid = state.new_chat_id(ws)
+    if fid is None:
+        util.err(f"charter frame: could not open a chat in workspace {ws!r} — its state "
+                 f"directory could not be created")
+        return 1
+    _pin_workspace(ws, fid, picked)
     fdir = state.frame_dir(fid, create=True)
     if fdir is None:
         util.err(f"charter frame: could not create state for frame {fid!r}")
         return 1
-    # The same recycled-pid adoption #383 fixed on the private-server path, and nothing
-    # about it is private-server-specific: `fid` is `<workspace>-<launcher pid>` on
-    # either server, `reap` keeps a directory for as long as that pid is live, and on a
-    # launch it is live because it is ours — so an earlier launcher for this workspace
-    # that landed on the same pid leaves its whole directory here to be adopted.
+    # The recycled-pid adoption #383 fixed, kept as belt and braces on both paths now
+    # that it cannot happen. A frame id WAS `<workspace>-<launcher pid>`, `reap` keeps
+    # such a directory while that pid is live, and on a launch it was live because it was
+    # ours — so an earlier launcher for this workspace that landed on the same pid left
+    # its whole directory to be adopted. `state.new_chat_id` claims its ordinal with a
+    # `mkdir` that FAILS when the name is taken, so a launch cannot land on an occupied
+    # directory at all. These four calls therefore have nothing to clear today; they are
+    # kept because Stage 5c reopens a COLD chat into its own existing directory, which is
+    # the case they are actually for (`state.clear_shape`, #413).
     #
     # `gather.json` is the one that costs something on this path: `gather.read` has no
     # freshness check by design (a panel's hot path) and a panel repaints only on a
@@ -2192,6 +2404,12 @@ def _launch_in_operator_tmux(socket: str, session: str, *, fid: str, ws: str,
     # (ADR 0019, `state.record_harness_pane`). Recorded before the harness is started, so
     # the very first status line it spawns can already answer.
     state.record_harness_pane(fid, harness_pane)
+    # What every later lookup asks instead of parsing this window's name — the liveness
+    # list `_reap_this_server` reads, and the same option `@charter_hatch` already uses.
+    # A window name is not an identity; see `_CHAT_OPTION`.
+    named = _chat_option_argv(socket=socket, harness_pane=harness_pane, chat=fid)
+    if named is not None:
+        tmuxctl.run("naming the chat on its window", named)
 
     def _close_window() -> None:
         tmuxctl.run("closing the frame's window",
@@ -2287,10 +2505,17 @@ def _reap_this_server(socket: str) -> None:
     would delete a sibling frame's version file and recorded exit code over a question
     charter could not get an answer to. Not reaping costs a directory until the next
     launch; reaping on no information costs a running frame its state.
+
+    The chat ids are unioned in for `_live_chats`' own reason, and it matters MORE here
+    than on charter's own server rather than less: this is somebody else's tmux, where
+    `allow-rename on` is an ordinary thing to have in a `.tmux.conf`, and a frame whose
+    window the harness has renamed is a frame this function would otherwise reap while
+    the operator was looking at it.
     """
     live = _live_windows(socket)
-    if live is not None:
-        state.reap(live, server=socket)
+    chats = _live_chats(socket)
+    if live is not None and chats is not None:
+        state.reap(live | chats, server=socket)
 
 
 def _measure_window(socket: str, harness_pane: str) -> tuple[int, int] | None:
@@ -2944,6 +3169,52 @@ def _choose_workspace(args) -> tuple[str, int | None, bool]:
     return got.name, None, True
 
 
+def _pin_workspace(ws: str, fid: str, picked: bool) -> None:
+    """Write the workspace pointer for a chat the operator PICKED — and say it locked.
+
+    Lifted out of `cmd_launch` rather than copied, because both launch paths now allocate
+    their own chat id after their own reap (`state.new_chat_id` claims a directory, and a
+    reap that ran afterwards would delete it), so the pointer can only be written once the
+    id exists — which is inside each path rather than above both of them.
+
+    **Only when the operator actually picked.** A launch that resolved silently writes no
+    pointer today and must keep writing none — starting to would move every framed
+    session's workspace on a path nobody asked anything on.
+
+    *fid* is the chat, so the per-session pointer lands under the CHAT's id: inside a frame
+    the frame IS the charter session (ADR 0019), which is what makes the choice reach the
+    panels and the agent's own shell alike (`state.workspace_for` rung 1) — and what makes
+    two chats in one workspace able to hold two different pointers. `set_active` also
+    writes the pointer for the LAUNCHER's terminal, and that is the half that answers
+    #518's "must not answer a prompt every launch": the next launch from this terminal
+    finds `workspace.chosen` already answered and never asks.
+
+    `force=True` is kept, and its reason has narrowed rather than gone. It was for the
+    recycled pid: an earlier launcher for this workspace landing on this process's pid
+    minted the same id and could have left a lock under it. An allocated id cannot be a
+    previous frame's, so that case is closed by `new_chat_id` — but a lock can still be
+    standing under this id from a chat that ran, was reaped, and had its ordinal allocated
+    again, and being refused by a dead frame's lock on a name the operator just typed is
+    not a refusal worth having.
+
+    **Picking IS the confirmation that locks, and #518 asks that this be decided and
+    SAID.** `set_active`'s contract is that confirming a workspace locks the session to it,
+    and the picker is a confirmation — the alternative would be a launch that writes the
+    pointer and leaves the lock off, which is a third behaviour for `charter workspace use`
+    to disagree with. What makes it liveable is that the frame has its own way out: `F2 →
+    workspace` overrides the lock and says so (`frame/switch.py`), so the operator is not
+    sent back to the shell for a choice they just made at a prompt. Printed here rather
+    than in the picker, because it describes what the LAUNCH did with the answer, not what
+    the answer was.
+    """
+    if not picked:
+        return
+    workspace.set_active(ws, session_id=fid, force=True)
+    util.info(f"Workspace '{contain.one_line(ws)}' — 🔒 locked for this frame's "
+              f"session. F2 → workspace changes it; `charter workspace unlock` "
+              f"releases it.")
+
+
 def cmd_launch(args) -> int:
     """One launcher, shared by every registered harness and by `charter frame --`."""
     if getattr(args, "probe", False):
@@ -3015,39 +3286,6 @@ def cmd_launch(args) -> int:
     ws, rc, picked = _choose_workspace(args)
     if rc is not None:
         return rc
-    fid = state.frame_id(ws, os.getpid())
-    if picked:
-        # **Only when the operator actually picked.** A launch that resolved silently
-        # writes no pointer today and must keep writing none — starting to would move
-        # every framed session's workspace on a path nobody asked anything on.
-        #
-        # `session_id=fid`, so the per-session pointer lands under the FRAME's id: inside
-        # a frame the frame IS the charter session (ADR 0019), which is what makes the
-        # choice reach the panels and the agent's own shell alike (`state.workspace_for`
-        # rung 1). `set_active` also writes the pointer for the LAUNCHER's terminal, and
-        # that is the half that answers #518's "must not answer a prompt every launch":
-        # the next launch from this terminal finds `workspace.chosen` already answered
-        # and never asks.
-        #
-        # `force=True` because `fid` is minted from the workspace and this process's pid,
-        # so an earlier launcher with the same pid and the same workspace can have left a
-        # lock under this very id (`cmd_launch` reaps exactly that case a few lines down).
-        # Being refused by a dead frame's lock, on a name the operator just typed, is not
-        # a refusal worth having.
-        workspace.set_active(ws, session_id=fid, force=True)
-        # **Picking IS the confirmation that locks, and #518 asks that this be decided and
-        # SAID.** `set_active`'s contract is that confirming a workspace locks the session
-        # to it, and the picker is a confirmation — the alternative would be a launch that
-        # writes the pointer and leaves the lock off, which is a third behaviour for
-        # `charter workspace use` to disagree with. What makes it liveable is that the
-        # frame has its own way out: `F2 → workspace` overrides the lock and says so
-        # (`frame/switch.py`), so the operator is not sent back to the shell for a choice
-        # they just made at a prompt. Printed here rather than in the picker, because it
-        # describes what the LAUNCH did with the answer, not what the answer was.
-        util.info(f"Workspace '{contain.one_line(ws)}' — 🔒 locked for this frame's "
-                  f"session. F2 → workspace changes it; `charter workspace unlock` "
-                  f"releases it.")
-
     # Inside a tmux the operator already has, the frame is a WINDOW in THEIR server —
     # same layout, no second tmux, no second prefix key (ADR 0018 and the design spec
     # both settle this; `docs/frame.md` describes what it costs). Read from `$TMUX`,
@@ -3058,8 +3296,8 @@ def cmd_launch(args) -> int:
     # exactly that, and the private-server path below is the right one after all.
     inside = tmuxctl.operator_server()
     if inside is not None:
-        rc = _launch_in_operator_tmux(inside[0], inside[1], fid=fid, ws=ws, argv=argv,
-                                      h=h, v=v)
+        rc = _launch_in_operator_tmux(inside[0], inside[1], ws=ws, argv=argv,
+                                      h=h, v=v, picked=picked)
         if rc is not None:
             return rc
 
@@ -3070,8 +3308,21 @@ def cmd_launch(args) -> int:
     # also narrows (though does not close) the same race for a sibling frame's `exit`
     # file: less time between "session gone" and "directory removed" for a sibling's own
     # launcher to lose the read.
-    live_before = _live_sessions(SOCKET)
-    if live_before:
+    live_sessions = _live_sessions(SOCKET)
+    # Both, and neither is redundant: a CHAT's directory is kept only by the chat id its
+    # window carries (`_live_chats` — a chat's id holds no launcher pid for `reap`'s
+    # second rule to abstain in its favour), and a frame launched by a charter that
+    # predates chats is still a SESSION named by its id and is kept only by that list.
+    live_chats = _live_chats(SOCKET)
+    # A server that listed SESSIONS and then would not list its windows is a server
+    # charter cannot tell the live chats of, and reaping on that answer deletes the state
+    # of chats that are running — the version file their panels poll and the exit code
+    # their own launcher has not read yet. Not reaping costs a directory until the next
+    # launch. An EMPTY session list is the opposite fact and reaps as it always did: the
+    # server is not running, so nothing recorded against it is live.
+    can_reap = live_chats is not None or not live_sessions
+    live_before = live_sessions | (live_chats or set())
+    if live_sessions:
         # Arm `remain-on-exit` by construction here, not by coincidence. The placeholder
         # `-f` config above only takes effect if THIS `new-session` call is what starts
         # the tmux server — but a server on `SOCKET` may already be running for a reason
@@ -3085,7 +3336,28 @@ def cmd_launch(args) -> int:
         # first-frame-ever case.
         tmuxctl.run("arming remain-on-exit ahead of an already-running server",
                     tmuxctl.server_argv(SOCKET, "set", "-g", "remain-on-exit", "on"))
-    state.reap(live_before, server=SOCKET)
+    if can_reap:
+        state.reap(live_before, server=SOCKET)
+
+    # AFTER the reap, for the reason the paragraph above gives about the directory: the
+    # allocation IS a `mkdir`, so an id claimed before the reap would be a directory the
+    # reap then deleted, with this launch already holding the name.
+    #
+    # **Allocated, not computed.** `state.frame_id`'s `{workspace}-{pid}` could collide
+    # with a previous launcher's on a recycled pid, which is what `clear_exit` /
+    # `clear_shape` / `clear_respawn` below exist to survive; a claimed ordinal cannot,
+    # because `mkdir` is the exclusion. Those calls stay because Stage 5c reopens a COLD
+    # chat into its own existing directory, which is the case they are actually for.
+    fid = state.new_chat_id(ws)
+    if fid is None:
+        util.err(f"charter frame: could not open a chat in workspace {ws!r} — its state "
+                 f"directory could not be created")
+        return 1
+    _pin_workspace(ws, fid, picked)
+    # The tmux SESSION is the workspace, and the chat is one window in it. `new_chat_id`
+    # spells the id out of the same `workspace_prefix`, so the session's name is exactly
+    # the part of the chat id before the dot and the two can always be matched up by eye.
+    session = state.workspace_prefix(ws)
 
     fdir = state.frame_dir(fid, create=True)
     if fdir is None:
@@ -3094,13 +3366,16 @@ def cmd_launch(args) -> int:
         # ENAMETOOLONG) must not be treated as a Path here just because it usually is one.
         util.err(f"charter frame: could not create state for frame {fid!r}")
         return 1
-    # The pid this launch was handed may have belonged to an earlier launcher for the
-    # same workspace, which mints the SAME `fid` — and since #383 `reap` keeps that
-    # earlier directory for as long as the pid in its name is live, which right now it
-    # is, because it is ours. Everything recorded under this id therefore predates this
-    # frame, and a launch beginning is the one moment that can be certain of it.
+    # Belt and braces, and no longer the guard it was. The pid this launch was handed
+    # could belong to an earlier launcher for the same workspace, which minted the SAME
+    # `<workspace>-<pid>` id — and since #383 `reap` keeps that earlier directory while
+    # the pid in its name is live, which on a launch it is, because it is ours. An
+    # ALLOCATED id cannot be a previous frame's: `state.new_chat_id` claims by `mkdir`
+    # and a taken ordinal is skipped, so nothing is under this id to clear. Kept because
+    # Stage 5c's reopen relaunches into a cold chat's OWN directory, which is where these
+    # four become live again — `state.clear_shape` most of all (#413).
     #
-    # Three things, because three readers inherit. `state.exit_code(fid)` below would
+    # Three things, because three readers inherited. `state.exit_code(fid)` below would
     # read a dead frame's `exit` back as this launch's own return value. `gather.read(fid)`
     # (no freshness check, by design — it is a panel's hot path) would serve a dead
     # frame's scan to every panel until the session's first hook bump. And
@@ -3147,7 +3422,10 @@ def cmd_launch(args) -> int:
     state.record_identity(fid, _frame_identity_env(env))
 
     conf_path = fdir / "tmux.conf"
-    status_path = fdir / "exit"
+    # The frame ROOT, not this chat's own `exit` file: the variable is session-scoped and
+    # a session holds several chats now, so the hook appends `#{@charter_chat}` itself.
+    # See `_exit_path_env_argv` and `_pane_died_write_hook_argv`.
+    frame_root = fdir.parent
     # `config.write_for`, not `Path.write_text`: this file is under `.charter/frame/<fid>/`
     # and `write_text` creates at `0o777 & ~umask` — 0644 by default, 0666 under `umask
     # 000`. The frame's tmux config carries the session id, the hotkey and the toggles, and
@@ -3167,27 +3445,67 @@ def cmd_launch(args) -> int:
     #
     # Withheld below `SESSION_ENV_FLOOR`, where `-e` is a parse error rather than a
     # missing feature and would take the whole launch down with it.
-    session_cmd = layout.session_argv(
-        session=fid, conf=str(conf_path), socket=SOCKET, cols=cols, rows=rows,
-        harness_argv=argv,
-        env=_frame_identity_env(env) if v >= tmuxctl.SESSION_ENV_FLOOR else None)
-    proc = tmuxctl.run("starting the frame", session_cmd, env=env)
+    #
+    # **The workspace's session, or one more window in it.** A chat is a window, so the
+    # second chat of a workspace does not start a second session: it joins the one the
+    # first chat's launch created, which is what makes switching between them
+    # `select-window` rather than a reattach, and what makes a workspace something several
+    # harnesses can be open in at once. `new-window` carries the identical `-e` overlay
+    # for the identical reason, and needs no version gate for it — window `-e` is
+    # available at `tmuxctl.PANE_ENV_FLOOR` (3.0), below the floor, where `new-session -e`
+    # is a parse error below `SESSION_ENV_FLOOR` (3.2).
+    #
+    # **The one residual, stated rather than guarded.** `live_sessions` also holds the
+    # sessions of frames an OLDER charter launched, which are named `<workspace>-<pid>` —
+    # so a workspace named, say, `api-4242` would join a still-running old frame for
+    # workspace `api` whose launcher pid happened to be 4242, and that frame's own
+    # teardown hook (`kill-session`, installed before this change) would take the new chat
+    # down with it. It needs a workspace deliberately named like a frame id AND that exact
+    # frame still live across the upgrade, and it stops being reachable at all once the
+    # last pre-chat frame on the machine has ended. Telling the two apart would mean
+    # asking tmux a second question on every launch to buy a case that expires on its own.
+    if session in live_sessions:
+        start_cmd = layout.chat_window_argv(
+            socket=SOCKET, session=session, chat=fid, cwd=os.getcwd(),
+            harness_argv=argv, env=_frame_identity_env(env))
+        started_what = "adding a chat to the workspace"
+    else:
+        start_cmd = layout.session_argv(
+            session=session, conf=str(conf_path), socket=SOCKET, cols=cols, rows=rows,
+            harness_argv=argv, chat=fid,
+            env=_frame_identity_env(env) if v >= tmuxctl.SESSION_ENV_FLOOR else None)
+        started_what = "starting the frame"
+    proc = tmuxctl.run(started_what, start_cmd, env=env)
     if proc.returncode != 0:
         return 1
     harness_pane = proc.stdout.strip()
     if not harness_pane:
-        util.err("charter frame: tmux started the session but did not report a pane id "
+        util.err("charter frame: tmux started the frame but did not report a pane id "
                  "— cannot scope the exit-code hook to it")
         return 1
     # See the identical call on the operator's-tmux path: this is what lets a status line
     # tell "I am this frame's harness" from "I inherited this frame's id", which below
     # `SESSION_ENV_FLOOR` a second frame on this shared server genuinely does.
     state.record_harness_pane(fid, harness_pane)
+    # And what every later lookup asks instead of parsing the window's name: `reap`'s
+    # liveness list (`_live_chats`), the write hook's `#{@charter_chat}`, and the binds
+    # `conf_text` writes. Armed before either hook, so the hook that names it cannot fire
+    # against a window that has not been told yet.
+    named = _chat_option_argv(socket=SOCKET, harness_pane=harness_pane, chat=fid)
+    if named is None:
+        util.warn(f"charter frame: {fid!r} is not a shape tmux can carry as a window "
+                  "option — this chat's state may be reaped while it is still running")
+    else:
+        chat_set = tmuxctl.run("naming the chat on its window", named, env=env)
+        if chat_set.returncode != 0:
+            util.warn("charter frame: continuing without it — this chat's state may be "
+                      "reaped while it is still running, and its exit code may not be "
+                      "recorded")
 
     frame = config.FRAME
     config.write_for(conf_path,
                      conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
-                               history_limit=frame["history_limit"], session=fid,
+                               history_limit=frame["history_limit"], session=session,
                                toggles=instance.frame_toggles(frame)))
     src = tmuxctl.run("loading the frame's config",
                       tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
@@ -3198,7 +3516,8 @@ def cmd_launch(args) -> int:
 
     env_set = tmuxctl.run(
         "carrying the exit-status path",
-        _exit_path_env_argv(socket=SOCKET, session=fid, status_path=str(status_path)),
+        _exit_path_env_argv(socket=SOCKET, session=session,
+                            frame_root=str(frame_root)),
         env=env)
     if env_set.returncode != 0:
         util.warn("charter frame: continuing without it — the exit code may not be "
@@ -3211,7 +3530,8 @@ def cmd_launch(args) -> int:
     # `SOCKET` would silently resolve the FIRST frame's id instead of its own (see
     # `_session_id_env_argv`'s own docstring for what was verified by hand).
     sid_set = tmuxctl.run("carrying the frame id to its own palette",
-                          _session_id_env_argv(socket=SOCKET, session=fid), env=env)
+                          _session_id_env_argv(socket=SOCKET, session=session, chat=fid),
+                          env=env)
     if sid_set.returncode != 0:
         util.warn("charter frame: continuing without it — the palette may not find "
                   "this frame's own actions")
@@ -3221,7 +3541,7 @@ def cmd_launch(args) -> int:
     # on the tmux server's own `$PATH`, and `run-shell` reports the resulting 127 by
     # printing it INTO THE HARNESS PANE — see `conf_text`'s own docstring.
     py_set = tmuxctl.run("carrying charter's own interpreter to the palette",
-                         _charter_py_env_argv(socket=SOCKET, session=fid), env=env)
+                         _charter_py_env_argv(socket=SOCKET, session=session), env=env)
     if py_set.returncode != 0:
         util.warn("charter frame: continuing without it — the palette may not open "
                   "on this frame")
@@ -3247,7 +3567,8 @@ def cmd_launch(args) -> int:
     # the hotkey template above has no room for a per-invocation flag — see
     # `_charter_pythonsafepath_env_argv`'s own docstring.
     safepath_set = tmuxctl.run("carrying PYTHONSAFEPATH to the palette",
-                               _charter_pythonsafepath_env_argv(socket=SOCKET, session=fid),
+                               _charter_pythonsafepath_env_argv(socket=SOCKET,
+                                                               session=session),
                                env=env)
     if safepath_set.returncode != 0:
         util.warn("charter frame: continuing without it — the palette may import "
@@ -3267,7 +3588,7 @@ def cmd_launch(args) -> int:
                   "recorded for this frame")
 
     teardown_hook = tmuxctl.run(
-        "installing the session-teardown hook",
+        "installing the chat-teardown hook",
         _pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=harness_pane), env=env)
 
     # Closes the install race directly, rather than merely working around its symptom. A
@@ -3288,7 +3609,7 @@ def cmd_launch(args) -> int:
             # The one path on which NOTHING is ever drawn (#384): no panels, no
             # `select-pane`, no `attach` — the whole `if code is None:` block below is
             # skipped from here on — so this is the only chance the operator has of
-            # learning anything at all. Read the pane BEFORE `kill-session` destroys it;
+            # learning anything at all. Read the pane BEFORE `kill-window` destroys it;
             # afterwards there is nothing left to read.
             #
             # Only for a FAILURE. A command that finished cleanly before the frame came
@@ -3297,8 +3618,15 @@ def cmd_launch(args) -> int:
             # inventing output on the wrong stream. Its exit code is the whole message.
             util.err(early_death_message(argv, code,
                                          _pane_last_words(SOCKET, harness_pane)))
-        tmuxctl.run("ending the frame after an early death",
-                    tmuxctl.server_argv(SOCKET, "kill-session", "-t", fid), env=env)
+        # `kill-window` targeting the harness PANE, never `kill-session` on the workspace:
+        # this chat's window is what is over, and the workspace may hold other chats whose
+        # harnesses are mid-turn. Measured on tmux 3.7c and on tmux 3.2 that `kill-window
+        # -t <pane id>` resolves to that pane's own window, and that killing a session's
+        # LAST window destroys the session — so the ordinary one-chat case ends exactly as
+        # it did.
+        tmuxctl.run("ending the chat after an early death",
+                    tmuxctl.server_argv(SOCKET, "kill-window", "-t", harness_pane),
+                    env=env)
 
     attach = None
     attach_cmd = None
@@ -3312,11 +3640,11 @@ def cmd_launch(args) -> int:
             # harness keeps running (it was already started, detached); the operator can
             # still attach manually and accept that risk themselves.
             refused_to_attach = True
-            util.err("charter frame: refusing to attach — the session-teardown hook "
+            util.err("charter frame: refusing to attach — the chat-teardown hook "
                      "failed to install, so a crash later would block `attach` forever "
                      "with nothing to end the session. The harness is still running, "
                      f"detached; reattach manually if you must: "
-                     f"tmux -L {SOCKET} attach -t {fid}")
+                     f"tmux -L {SOCKET} attach -t {session}")
         else:
             # `pane_env` on this path too, since #411: a panel splits off a server that
             # may have been started by ANOTHER launcher, so `$CHARTER_WORKSPACE` and
@@ -3329,6 +3657,16 @@ def cmd_launch(args) -> int:
                 sizes=_launch_sizes(fid, slots, window_cols=cols,
                                     window_rows=rows))
             _arm_panel_respawn(SOCKET, fid=fid, panes=panes, env=env)
+
+            # The chat this launch just built is the one the operator asked for, so it
+            # is the one their client lands on. `new-window` created it detached (`-d`),
+            # for `layout.chat_window_argv`'s reason — a client already in this workspace
+            # must not be dragged onto a half-built window — and this is where that is
+            # paid back. A no-op for the launch that created the session, whose only
+            # window is already current.
+            tmuxctl.run("selecting the chat",
+                        tmuxctl.server_argv(SOCKET, "select-window", "-t", harness_pane),
+                        env=env)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —
@@ -3344,7 +3682,7 @@ def cmd_launch(args) -> int:
             # `tmuxctl.interact`, not `tmuxctl.run`: no capture and no timeout — this
             # IS the operator's own terminal for as long as the harness runs, not an
             # admin command whose output (or lifetime) charter should own.
-            attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", fid)
+            attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", session)
             attach = tmuxctl.interact(attach_cmd, env=env)
 
             code = state.exit_code(fid)
@@ -3355,8 +3693,11 @@ def cmd_launch(args) -> int:
                 # never actually reached the server despite reporting success).
                 code = _query_pane_dead_status(SOCKET, harness_pane)
 
-    live_after = _live_sessions(SOCKET)
-    state.reap(live_after, server=SOCKET)
+    after_sessions = _live_sessions(SOCKET)
+    after_chats = _live_chats(SOCKET)
+    live_after = after_sessions | (after_chats or set())
+    if after_chats is not None or not after_sessions:
+        state.reap(live_after, server=SOCKET)
     if code is not None:
         return code
     if refused_to_attach:
@@ -3366,12 +3707,14 @@ def cmd_launch(args) -> int:
         # quiet success an operator's own deliberate detach is allowed to be.
         return 1
     if fid in live_after:
-        # Detach, not completion — the session tmux still lists is this frame's own.
+        # Detach, not completion — the chat tmux still lists is this launch's own.
         # Silence here is exactly what the spec calls out: "an agent surviving a closed
         # lid is a feature, and returning silently to a shell with it still running is
-        # not."
+        # not." The reattach line names the WORKSPACE, because that is the session; the
+        # chat is a window inside it, and tmux puts the client back on whichever window
+        # was last current.
         util.info(f"charter frame: detached — the harness is still running.\n"
-                 f"  reattach with: tmux -L {SOCKET} attach -t {fid}")
+                 f"  reattach with: tmux -L {SOCKET} attach -t {session}")
         return 0
     if attach is not None and attach.returncode != 0:
         # Nothing was recorded, tmux is not still tracking this session, AND `attach`
@@ -3445,7 +3788,10 @@ def _relayout_pane_env(fid: str, v: tuple[int, int]) -> dict[str, str] | None:
     **`os.environ` here is not this frame's identity, and that is #411 arriving on the one
     command added since.** `cmd_density` normally runs as a `subprocess.run` child of
     `cmd_action`, which is a `run-shell` child of the tmux server. Only
-    `CHARTER_SESSION_ID` is session-scoped (`_session_id_env_argv`); `CHARTER_ROOT`,
+    `CHARTER_SESSION_ID` is session-scoped (`_session_id_env_argv`) — and under chats it
+    names ONE of the workspace's chats rather than the presser's own, which is why a
+    keypress carries `#{@charter_chat}` instead (`conf_text`, `_pressers_chat`) and why
+    *fid* arrives here as an argument rather than being read back; `CHARTER_ROOT`,
     `CHARTER_WORKSPACE`, `CHARTER_HARNESS` and `CHARTER_PERSONA` all reach that child from
     the SERVER's environment, and charter's private server is shared between every frame
     on the machine. Measured against tmux 3.7c, the second frame's `run-shell` reported
@@ -4269,9 +4615,10 @@ def cmd_toggle(args) -> int:
     """`charter frame-toggle <component>` — show or hide ONE component, live.
 
     Fired by that component's own `bind -n` (`conf_text`), and typeable by hand from
-    inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
-    `cmd_density`, `cmd_palette` and `cmd_respawn` resolve theirs, since one bind text is
-    shared by every frame on `SOCKET`.
+    inside a frame. The chat is resolved by :func:`_pressers_chat` — the `--chat` the bind
+    carries out of the presser's own window, falling back to `$CHARTER_SESSION_ID` —
+    because one bind text is shared by every frame on `SOCKET` and a session now holds
+    several chats.
 
     **charter.toml is not touched**, and every word of `cmd_density`'s argument for that
     applies unchanged: `[[frame.component]]`'s `visible` says what a frame STARTS at, this
@@ -4310,7 +4657,7 @@ def cmd_toggle(args) -> int:
     is a comment with a runtime cost. `test_outside_a_frame_it_does_nothing` pins the
     property that survives it, and names the line that carries it.
     """
-    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    fid = _pressers_chat(args)
     name = getattr(args, "component", None)
     frame = config.FRAME
     arrangement = instance.frame_arrangement(frame)
@@ -4347,6 +4694,40 @@ def cmd_toggle(args) -> int:
 #: action still inside one after two seconds has broken the contract — at which point the
 #: palette closes anyway rather than holding a pane open on a hung action, which is the
 #: escape hatch's own argument applied one layer up.
+def _pressers_chat(args) -> str:
+    """Which chat the keypress that started this process was fired in.
+
+    **One bind text is shared by every frame on `SOCKET`, and a session now holds several
+    chats, so neither half of this is optional.** `--chat` is `#{@charter_chat}` expanded
+    by tmux in the presser's own window (`conf_text`), which is the only source that can
+    tell two chats of one session apart: measured on tmux 3.7c and on 3.2, a `run-shell`
+    child — which every bind's action is — reads the SESSION's `set-environment` and never
+    the window's `-e`, so `$CHARTER_SESSION_ID` hands every chat in a workspace the same
+    id.
+
+    `$CHARTER_SESSION_ID` stays as the fallback, and it is a real one rather than
+    politeness. A frame launched by a charter that predates the option has no
+    `@charter_chat` on its window — and its bind text is REPLACED by this one the moment a
+    newer frame launches on the shared server, since a key table is server-wide — so that
+    frame's `F2` starts arriving here with an empty `--chat` and has to resolve the way it
+    always did. It is also what a hand-typed `charter frame-toggle repos` inside a frame
+    resolves through.
+
+    A value the option could not have held is not one: `_FRAME_ID_RE` is the alphabet a
+    frame id travels to tmux under, and this is the far end of the same trip, so a
+    `--chat` outside it falls back rather than being carried into a state path. Empty is
+    the ordinary case of that (a window with no such option expands to nothing).
+    """
+    chat = (getattr(args, "chat", None) or "").strip()
+    # `fullmatch` alone, with no `chat and` in front of it: `_FRAME_ID_RE` is `+`, so it
+    # already refuses the empty string, and a truthiness test would be a second guard no
+    # mutation could turn red — the shape `state.frame_workspace` names for `valid_name`
+    # and the one the deletion sweep found here.
+    if _FRAME_ID_RE.fullmatch(chat):
+        return chat
+    return os.environ.get("CHARTER_SESSION_ID", "")
+
+
 _ACTION_START_GRACE = 2.0
 
 
@@ -4423,8 +4804,14 @@ def _open_palette(args) -> int:
     A tmux charter cannot get a version out of is a quiet no-op rather than a traceback in
     the harness pane: `_relayout_pane_env` needs the version to decide whether `-e` can be
     parsed at all, and there is nothing to open a palette against either way.
+
+    The chat comes from :func:`_pressers_chat`, so `F2` in chat two opens chat two's
+    palette rather than whichever chat's id the session variable happens to hold. The
+    pane this carves is then told that id explicitly (`_relayout_pane_env`), which is what
+    makes every row the palette runs — `frame-density`, `frame-chrome`, `frame-switch` —
+    act on the chat the key was pressed in.
     """
-    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    fid = _pressers_chat(args)
     harness = state.harness_pane(fid) or ""
     socket = state.frame_server(fid) or SOCKET
     v = tmuxctl.version()
