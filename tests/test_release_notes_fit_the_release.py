@@ -503,34 +503,57 @@ class AnElidedNoteIsReachable(NewsDir):
         self.assertIn(f"https://github.com/{news.update.DEV_REPO}/blob/", body)
         self.assertNotIn("attacker/elsewhere", body)
 
+    def _hostile(self, name: str) -> str:
+        """Render a version carrying one entry with a committed filename designed to write
+        Markdown of its own, or skip if this filesystem will not hold the name."""
+        self.oversized()
+        try:
+            self.write(name, _entry(_V, "hostile", self.filler("BODY-hostile")))
+        except (OSError, ValueError):
+            self.skipTest(f"this filesystem will not hold {name!r}")
+        return news.render_body(_V)
+
     def test_a_filename_cannot_forge_a_heading_in_the_release_notes(self):
         """#502, one document over. The filename is committed and charter interpolates it
         into a line charter wrote; a newline in it would write a second line of the release
         notes that looks exactly as much like charter's own text as the first."""
-        self.oversized()
-        hostile = f"{_V}-z-hostile\n## Security advisory: install from elsewhere.md"
-        try:
-            self.write(hostile, _entry(_V, "hostile", self.filler("BODY-hostile")))
-        except (OSError, ValueError):
-            self.skipTest("this filesystem will not hold a newline in a filename")
-        body = news.render_body(_V)
+        body = self._hostile(
+            f"{_V}-z-hostile\n## Security advisory: install from elsewhere.md")
         self.assertNotIn("\n## Security advisory", body)
-        self.assertIn("\\x0a", body, "the newline was neither escaped nor refused")
+        self.assertIn("%0A", body, "the newline reached the document unencoded")
 
-    def test_a_filename_cannot_break_out_of_the_link(self):
+    def test_a_filename_cannot_break_out_of_the_link_target(self):
         """A `)` closes the Markdown target early and everything after it becomes text the
-        entry wrote into charter's own sentence — including, on GitHub, an autolinked URL.
-        Percent-encoding is what makes that unreachable for every character, rather than
-        for the ones somebody thought of."""
-        self.oversized()
-        hostile = f"{_V}-z-hostile)(https://evil.example.md"
-        try:
-            self.write(hostile, _entry(_V, "hostile", self.filler("BODY-hostile")))
-        except (OSError, ValueError):
-            self.skipTest("this filesystem will not hold this name")
-        body = news.render_body(_V)
-        self.assertNotIn("(https://evil.example", body)
+        entry wrote into charter's own sentence — including, on GitHub, an autolinked
+        URL."""
+        body = self._hostile(f"{_V}-z-hostile)(EVIL-TARGET.md")
+        self.assertNotIn("(EVIL-TARGET", body)
         self.assertIn("%29", body, "the closing paren reached the link target unencoded")
+
+    def test_a_filename_cannot_forge_a_link_out_of_the_text_either(self):
+        """The half a percent-encoded *href* alone does not close, and the reason the shown
+        path is encoded too rather than merely made line-safe.
+
+        `]` ends the link text and the `(` after it opens the destination, so a filename
+        spelling `](<target>)` inside the label writes charter's own sentence into a link
+        pointing wherever it likes — and a backtick first ends the code span that would
+        otherwise have swallowed it. `contain.one_line` leaves all three alone, because
+        forging a line and forging a link are different questions.
+        """
+        body = self._hostile(f"{_V}-z-hostile`](EVIL-TARGET)b.md")
+        self.assertNotIn("](EVIL-TARGET", body)
+        self.assertNotIn("(EVIL-TARGET", body)
+        for encoded in ("%60", "%5D", "%28"):
+            self.assertIn(encoded, body, f"{encoded} was not encoded in the label")
+
+    def test_the_shown_path_and_the_link_target_are_the_same_path(self):
+        """One string, so a reader cannot be shown one note and sent to another."""
+        self.oversized()
+        for shown, url in re.findall(
+                r"Full note: \[`(docs/news/[^`]+)`\]\((https://[^)]+)\)",
+                news.render_body(_V)):
+            with self.subTest(shown=shown):
+                self.assertTrue(url.endswith("/" + shown), f"{url} does not end in {shown}")
 
 
 class TheGateRefusesABodyItCannotBound(NewsDir):

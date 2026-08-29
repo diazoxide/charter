@@ -651,14 +651,24 @@ def _part(e: Entry) -> str:
 def _entry_file(e: Entry) -> str:
     """*e*'s path in the repository — the name a reader with a checkout or a wheel opens.
 
-    The filename is the committed one (`_read` takes the slug from it), so it crosses into
-    a document with structure and is contained on the way, for #502's reason one surface
-    over: a name holding a newline would forge a heading in the release notes, which is the
-    one document nobody re-derives. The body beside it is deliberately *not* contained — an
-    entry's body IS Markdown its author wrote — but this line is charter's own sentence and
-    the filename is a field in it.
+    The filename is a committed value crossing into a document with structure, which is
+    #502 one surface over: a name holding a newline would forge a heading in the release
+    notes, and a name holding ``](https://…)`` would forge a *link* in charter's own
+    sentence, reading exactly as much like charter's text as the sentence around it. The
+    body beside it is deliberately not treated this way — an entry's body IS Markdown its
+    author wrote — but this line is charter's, and the filename is a field in it.
+
+    **Percent-encoding rather than :func:`contain.one_line`**, and the two differ in ways
+    that both matter here. `one_line` answers "can this forge a line of a report?", which
+    is not the question a Markdown document asks: it leaves ``]``, ``(`` and a backtick
+    untouched, and it clips at 160 characters — and a clipped path is one the reader cannot
+    act on. ``quote`` escapes every one of them, for every character, and never clips.
+
+    It is also the *same* string :func:`_entry_url` puts after the host, so the path a
+    reader is shown and the path the link goes to cannot come out different. Real entry
+    filenames are ``[0-9a-z.-]`` and pass through unchanged.
     """
-    return f"docs/news/{contain.one_line(e.path.name)}"
+    return f"docs/news/{urllib.parse.quote(e.path.name)}"
 
 
 def _entry_url(e: Entry) -> str:
@@ -673,14 +683,9 @@ def _entry_url(e: Entry) -> str:
     `report.upstream_repo` is the other spelling of "charter's repo" in this codebase and it
     is overridable from the environment, which is exactly what a value interpolated into a
     *published* release body must not be.
-
-    ``quote`` rather than containment for the href: a clipped URL is a broken link, and the
-    property needed here is that no filename can close the ``](…)`` early and start writing
-    its own Markdown after it. Percent-encoding gives that exactly, for every character.
     """
     ref = update.DEV_BRANCH if e.version == UNRELEASED else f"v{e.version}"
-    return (f"https://github.com/{update.DEV_REPO}/blob/{ref}/docs/news/"
-            f"{urllib.parse.quote(e.path.name)}")
+    return f"https://github.com/{update.DEV_REPO}/blob/{ref}/{_entry_file(e)}"
 
 
 def _brief(e: Entry) -> str:
