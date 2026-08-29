@@ -50,6 +50,13 @@ command.
   stdout — `os.get_terminal_size()` answers what a pipe answers, so a render is the same
   width in your window as it is in CI. A test that wants a size states one with
   `mock.patch("os.get_terminal_size", …)`.
+  `tests/_gitguard.py` is the fifth, for the one config file charter never writes and every
+  `git` it spawns reads: **your own `~/.gitconfig`.** `$GIT_CONFIG_GLOBAL` points at a file
+  this repository writes, so a fixture repo commits as the suite, on `main`, and — the part
+  that matters — **unsigned**. Inheriting `commit.gpgsign = true` with a hardware or
+  1Password signer behind it does not fail a test, it *hangs* it, and no runner can ever
+  see that. A test that builds a child environment by hand carries
+  `tests._gitguard.environment()` into it, or is refused by name at the spawn.
 - **The suite spends nothing it was not asked to.** `tests/_planeguard.py` also refuses a
   charter child started with `start_new_session=True` — charter's own shape for a
   background refresh that outlives the process that started it. Those fire in tests and
@@ -60,7 +67,12 @@ command.
   `tests._isolation.no_background_refresh(self)`; if it is *about* the child, call
   `tests._planeguard.allow_background_children(self)`. A test that starts a real tmux
   server names its socket with `tests._tmuxreap.name("<slug>")`, so the next run can reap
-  it when this one is killed before its cleanup runs.
+  it when this one is killed before its cleanup runs. **Nor does it spend a credential.**
+  `doctor`'s preflight asks a forge whether your token is still good, and eighteen modules
+  reach that line — 28 authenticated round trips to github.com and gitlab.com per run, and
+  the sweep gate spends that again per mutation. `tests/_forgeprobe.py` answers the probe
+  with a recorded reply, and `tests._planeguard.RealForgeReach` refuses every other `gh` or
+  `glab` invocation: a forge test drives `charter.util.run` with a recorded reply instead.
 - **Comments explain *why*.** The codebase leans hard on this: a comment that restates the
   code earns nothing, one that records the failure a line prevents is worth several
   paragraphs of docs. Read a few modules before writing your first one.
@@ -148,18 +160,22 @@ outside the test — git config, `$PATH`, locale, the default shell, an env var,
 filesystem's case sensitivity — is either set explicitly by the test or is a bug waiting
 for someone else's machine.
 
-For git specifically, pin it on the invocation rather than trusting the environment:
+**For git specifically, that is now done for you** — and the fifth entry above is the
+reason it had to be. Thirty-one modules ran `git commit`, 1,384 children in one green run,
+each protected by hand in one of three different spellings or not at all; the module that
+remembers none of them does not fail, it hangs. `tests/_gitguard.py` points
+`$GIT_CONFIG_GLOBAL` at a file this repository writes — `init.defaultBranch = main`,
+signing off, no global hooks path, none of your filter drivers — before any test module is
+collected, and `tests._planeguard.AmbientGitConfig` refuses a git child that steps outside
+it. So a plain `subprocess.run(["git", "commit", …])` in a fixture repo is now correct on
+every machine, and the per-invocation `-c commit.gpgsign=false` several modules still carry
+is belt and braces rather than the only thing standing between the suite and a biometric
+prompt.
 
-```python
-_PINS = ["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
-         "-c", "tag.gpgsign=false"]
-subprocess.run(["git", *_PINS, "-C", str(cwd), *args], ...)
-```
-
-Signing belongs in that list even when the test has nothing to do with signing: a developer
-with a signing helper configured gets a fixture commit that stops to ask for a passphrase,
-and a suite with nobody at the keyboard hangs rather than fails. That is the same failure
-`docs/git-policy.md` exists to prevent in charter itself.
+Signing was always the one worth the paranoia: a developer with a signing helper configured
+gets a fixture commit that stops to ask for a passphrase, and a suite with nobody at the
+keyboard hangs rather than fails. That is the same failure `docs/git-policy.md` exists to
+prevent in charter itself.
 
 ### Reproducing the runner before you push
 
@@ -169,6 +185,9 @@ You can hand git a config the way the runner has it, without touching your own:
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.defaultBranch GIT_CONFIG_VALUE_0=master \
   python3 -m unittest discover -s tests
 ```
+
+`GIT_CONFIG_COUNT` is applied as if by `git -c`, so it still wins over the suite's own
+`$GIT_CONFIG_GLOBAL` redirect — the recipe means what it says.
 
 If a change touches git behaviour, run the suite that way once. It is cheaper than a red
 `main`, and it is how the last one was diagnosed.

@@ -133,7 +133,54 @@ because reading somebody's credential store is wrong on a machine with no contro
 all. Which CLIs count is asked of `reference._RESOLVERS` — production's own scheme table —
 so a provider added there is covered on the commit that adds it.
 
-**The fifth, and the other half of the measurement above:
+**The fifth is the fourth one host out: :class:`RealForgeReach`.** ``gh`` and ``glab`` hold
+a real token for the operator's real account, so a test that reaches one enumerates and
+reads somebody's private repositories as whoever is signed in on this machine — and the
+cross-repo change surface will open and merge pull requests through the same two binaries,
+which is the direction the blast radius is heading rather than where it already is. It is
+also a flake (CI has no forge credentials) and a hang (both CLIs can park on a device-flow
+prompt that `subprocess.communicate` will wait out). Which CLIs count is asked of
+`registry.KINDS` — production's own forge table — exactly as the vault tripwire asks
+`reference._RESOLVERS`.
+
+**The rule is a one-item allowance rather than a list of what is forbidden**, so a
+subcommand charter has never heard of is refused rather than waved through: an argv that
+names no subcommand at all is allowed, and everything else is refused. ``gh --version`` is
+`doctor.check_forge_cli` reporting which CLI is installed — a local probe that contacts no
+host, reads no token and cannot prompt — and a flat refusal reddened twenty-six tests here,
+every one of them that.
+
+``auth status`` is refused with the rest, and the ORDER that happened in is the point.
+When the tripwire arrived it allowed ``auth status``, because refusing it would have
+reddened the eighteen modules that reach `doctor.run_all()`: measured in-process at 28
+forge-auth children per run, 20 ``glab`` and 8 ``gh``, so the suite really did validate the
+operator's own token against a real forge on every run, and a sweep spent that again per
+mutation (#638). That residual was written down rather than hidden, and it is now closed at
+the other end: `tests._forgeprobe` answers the probe with a recorded reply and nothing
+reaches a real forge CLI to be refused. A guard that permits what nothing does any more is
+a guard that will quietly re-permit it, which is why the allowance came out on the same
+commit the reach did.
+
+**The sixth is the same shape on the program this suite spawns more than any other:
+:class:`AmbientGitConfig`.** 9,735 `git` children in one green run, and every one of them
+read the operator's own ``~/.gitconfig``. That is the plane guard's argument about
+`charter.toml` moved one file over — what a test asserts should not depend on whose machine
+it ran on — but it arrived as something worse than a wrong answer. A fixture repository
+inherits ``commit.gpgsign = true``, and with 1Password's ``op-ssh-sign`` as
+``gpg.ssh.program`` `git commit` parks on a biometric prompt: measured at 60 seconds and a
+failed commit with stdin closed, indefinite with a terminal attached (#641). No pass, no
+fail, no verdict. CI has no signing config and never will, so this is invisible in the one
+place everybody looks — #545's shape exactly.
+
+31 modules run ``git commit``, 1,384 children per run, and they were protected by hand in
+three different spellings or not at all: ``-c commit.gpgsign=false`` on the argv (1,068), a
+repo-local ``git config`` in the fixture's ``setUp`` (208, all one module), and
+``GIT_CONFIG_GLOBAL=/dev/null`` in a hand-built environment. `tests._gitguard` replaces all
+three with one redirect installed before any module is collected, and this refuses the
+spawn that would step outside it — because a default a new module can walk past is not a
+property of the suite, and the 32nd module is the one that will.
+
+**The seventh, and the other half of the measurement above:
 :class:`BackgroundCharterChild`.** #527 answered WHICH plane a spawned charter lands on;
 it did not answer HOW MANY a unit test forks. Counted in-process on one green run at
 b3dbd54 — by wrapping `Popen.__init__` before this package is imported, because a
@@ -417,11 +464,117 @@ class RealVaultReach(BaseException):
     """A test spawned the CLI that reads the developer's own credential store."""
 
 
+class RealForgeReach(BaseException):
+    """A test spawned the CLI that holds the operator's forge token."""
+
+
+class AmbientGitConfig(BaseException):
+    """A test spawned a git that would read the operator's own ``~/.gitconfig``."""
+
+
 class BackgroundCharterChild(BaseException):
     """A test forked a detached charter the test itself will never wait for."""
 
 
 _VAULT_CLIS: frozenset[str] = frozenset()
+_FORGE_CLIS: frozenset[str] = frozenset()
+
+
+def _forge_clis() -> frozenset[str]:
+    """The CLI names charter shells out to in order to reach a code-hosting forge.
+
+    **Asked of production's own table**, exactly as :func:`_credential_clis` asks
+    `reference._RESOLVERS`: `registry.KINDS` maps a forge kind to its backend class and
+    each class spells its binary in ``cli``, so a forge added there is guarded on the
+    commit that adds it rather than on the commit somebody remembers this list exists.
+
+    `tests._forgeprobe` asks this too, so the tripwire and the fixture that answers the one
+    allowed probe cannot drift apart about what "a forge CLI" means.
+    """
+    from charter.forge import registry
+    return frozenset(cls.cli for cls in registry.KINDS.values())
+
+
+def _names_a_subcommand(argv: list[str]) -> bool:
+    """Would this forge-CLI *argv* do anything but describe the CLI itself?
+
+    The whole rule, and it is an allowance rather than a denial list: a command line with
+    no bare word after the program — ``gh --version``, ``glab --help`` — prints about
+    itself and stops, and anything else is refused. Charter's own reach is ``api``, ``pr``,
+    ``mr``, ``repo``, ``release`` and ``auth``; a reader that listed those would wave
+    through the next one somebody writes, which is the wrong direction for a guard to be
+    wrong in.
+    """
+    return any(not a.startswith("-") for a in argv[1:])
+
+
+def _explain_forge(parts: list[str], name: str) -> str:
+    return (
+        f"REFUSED: spawning `{name}` — the CLI holding the operator's forge token\n"
+        f"{_current_test()} is about to run `{' '.join(parts)}`. That is not a fake: it "
+        f"authenticates as whoever is signed in on this machine, against whatever host the "
+        f"argv names — enumerating and reading somebody's private repositories, and soon "
+        f"opening and merging pull requests in them.\n"
+        f"  It is also a flake and a hang: CI has no forge credentials, and both CLIs can "
+        f"park on a device-flow prompt the suite will wait out.\n"
+        f"  `auth status` is refused too, and was not always: it reached a real forge 28 "
+        f"times per run from `doctor.run_all()` until `tests/_forgeprobe.py` began "
+        f"answering it (#638). If you are here because a preflight stopped working, that "
+        f"is the file to read — not this one.\n"
+        f"  The way out is what every forge test here already does: patch `util.run` in the "
+        f"backend module under test — `charter.forge.github.util.run` or "
+        f"`charter.forge.gitlab.util.run` — and answer with a recorded reply. See "
+        f"`tests/test_forge_github.py` for the read side and `tests/test_forge_gitlab.py` "
+        f"for a command driven entirely through recorded replies.")
+
+
+#: The one program whose configuration is the operator's rather than this repository's.
+#: A frozenset because :func:`_reaches_a_credential_cli` takes one, which is what routes
+#: ``git`` through the same program-name resolution as ``op`` and ``gh`` — a path, a
+#: symlink or a wrapper cannot walk past a basename compare here either.
+_GIT: frozenset[str] = frozenset({"git"})
+
+
+def _reads_the_operators_git_config(opts: dict) -> bool:
+    """Would this child read ``~/.gitconfig`` and ``/etc/gitconfig``?
+
+    The question is answered from the environment the CHILD will get — its own ``env=``
+    when it has one, this process's otherwise, which is how `Popen` resolves it — because
+    that is the only thing that decides which files git opens.
+
+    Two conditions, and both are the redirect `tests._gitguard` installs: the global file
+    is pointed somewhere else, and the system file is off in one of git's two spellings for
+    it. Presence rather than equality, deliberately: four modules here already spell this
+    for themselves as ``GIT_CONFIG_GLOBAL=/dev/null``, and a rule that insisted on the
+    suite's own path would refuse a test for being MORE hermetic than it asks.
+    """
+    env = opts.get("env")
+    env = os.environ if env is None else env
+    if "GIT_CONFIG_GLOBAL" not in env:
+        return True
+    return "GIT_CONFIG_SYSTEM" not in env and "GIT_CONFIG_NOSYSTEM" not in env
+
+
+def _explain_git_config(parts: list[str], name: str) -> str:
+    from . import _gitguard
+    return (
+        f"REFUSED: spawning `{name}` with the operator's own git config in force\n"
+        f"{_current_test()} is about to run `{' '.join(parts)}` in a child whose "
+        f"environment does not redirect ``~/.gitconfig``, so this git reads whatever the "
+        f"machine running the suite happens to declare — and the answer decides what the "
+        f"test asserts.\n"
+        f"  It is also a HANG, which is how it was found (#641). A fixture repository "
+        f"inherits ``commit.gpgsign = true``, and with 1Password's ``op-ssh-sign`` behind "
+        f"it `git commit` parks on a biometric prompt: measured at 60s and a failed commit "
+        f"with stdin closed, indefinite with a terminal attached. CI has no signing config, "
+        f"so it can never see this — only a developer can, and only as a suite that never "
+        f"returns.\n"
+        f"  The way out is to stop building the environment by hand: `Popen(..., env=None)` "
+        f"inherits this process's, which `tests/_gitguard.py` has already redirected, and "
+        f"`{{**os.environ, ...}}` carries it too — which is what `charter.util.run` and "
+        f"`util.child_env` both do. A child that really must state its whole environment "
+        f"adds `tests._gitguard.environment()` to it, or points "
+        f"{sorted(_gitguard.NAMES)} somewhere of its own.")
 
 
 def _credential_clis() -> frozenset[str]:
@@ -484,8 +637,11 @@ def _explain_vault(parts: list[str], name: str) -> str:
         f"credential store is not a unit test.")
 
 
-def _reaches_a_credential_cli(args, opts: dict) -> tuple[list[str], str] | None:
-    """``(argv, CLI name)`` when *args* would run one of :func:`_credential_clis`.
+def _reaches_a_credential_cli(args, opts: dict, wanted=None) -> tuple[list[str], str] | None:
+    """``(argv, CLI name)`` when *args* would run one of :func:`_credential_clis` — or, when
+    *wanted* is given, one of THOSE names. The parameter is what lets the forge tripwire
+    beside this one be the same matcher rather than a second one that can drift out of
+    agreement about what "running `gh`" means.
 
     Deliberately narrower than :func:`_charter_argv`, and the asymmetry is the point.
     That function has to chase every spelling because charter re-spawns ITSELF and the
@@ -531,7 +687,7 @@ def _reaches_a_credential_cli(args, opts: dict) -> tuple[list[str], str] | None:
         # no program left to name. Reached on every such spawn, not a hypothetical.
         return None
     for name in _program_names(argv[0], opts.get("cwd"), opts.get("env")):
-        if name in _VAULT_CLIS:
+        if name in (_VAULT_CLIS if wanted is None else wanted):
             return parts, name
     return None
 
@@ -1244,11 +1400,12 @@ def _guard_spawns() -> None:
     a call to one of them that is not the two known non-charter uses. The day a charter
     spawn is written that way, that case turns red and this docstring is what it points at.
     """
-    global _SPAWN_GUARDED, _VAULT_CLIS
+    global _SPAWN_GUARDED, _VAULT_CLIS, _FORGE_CLIS
     if _SPAWN_GUARDED:
         return
     _SPAWN_GUARDED = True
     _VAULT_CLIS = _credential_clis()
+    _FORGE_CLIS = _forge_clis()
     original = subprocess.Popen.__init__
 
     def __init__(self, args=None, *rest, **kw):
@@ -1260,6 +1417,21 @@ def _guard_spawns() -> None:
         reached = _reaches_a_credential_cli(args, opts)
         if reached is not None:
             raise RealVaultReach(_explain_vault(*reached))
+        # Same shape, same reason, one host out: `gh` and `glab` carry the operator's forge
+        # token, and charter writes through them. Also before the plane question, for
+        # `_explain_vault`'s reason — a real `gh` reaches somebody's repositories whatever
+        # plane the child would resolve, and on a machine with no plane at all. The argv is
+        # unwrapped again rather than read off `parts`, so `env gh --version` is judged on
+        # `gh --version` and not on the wrapper's own words.
+        reached = _reaches_a_credential_cli(args, opts, _FORGE_CLIS)
+        if reached is not None and _names_a_subcommand(_launcher_argv(reached[0])[0]):
+            raise RealForgeReach(_explain_forge(*reached))
+        # And the third program whose behaviour is the operator's rather than this
+        # repository's. Same matcher again, for the same reason: "is this git" is one
+        # question, and a second reader of it would drift.
+        reached = _reaches_a_credential_cli(args, opts, _GIT)
+        if reached is not None and _reads_the_operators_git_config(opts):
+            raise AmbientGitConfig(_explain_git_config(*reached))
         parts = _charter_argv(args, opts)
         if parts is not None:
             if _REAL_ROOT:
