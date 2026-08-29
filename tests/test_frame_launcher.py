@@ -1669,10 +1669,18 @@ def _is_chrome(cmd: list[str]) -> bool:
 
 def _chrome_values(calls: list[list[str]]) -> dict[str, str]:
     """`{option: value}` for every chrome setting in *calls* — last write wins, exactly
-    as tmux itself resolves them."""
+    as tmux itself resolves them.
+
+    A `-u` is skipped, and that is not a convenience: a removal names an option and
+    carries no value at all, so its last argument is the option NAME and folding it in
+    here would file a `pane-border-style` under the key `%7`. `_harness_rule_argvs` issues
+    two of them on the launch path whenever the frame has no surface for the rules round
+    the harness, and what they mean — that the option is not set — is asserted where a
+    removal is the subject.
+    """
     out: dict[str, str] = {}
     for cmd in calls:
-        if _is_chrome(cmd):
+        if _is_chrome(cmd) and "-u" not in cmd:
             out[cmd[-2]] = cmd[-1]
     return out
 
@@ -4851,24 +4859,35 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertEqual(_launch_inside(fake), 0)
         self.assertEqual(_chrome_values(fake.calls), dict(commands_frame._CHROME))
 
-    def test_the_chrome_here_is_window_scoped_and_reaches_no_window_of_theirs(self):
-        """The boundary, stated where it costs something. Every option in `_CHROME` is a
-        WINDOW option, so `-g` would restyle every window the operator has open — and a
-        pane-scoped `-p` would style nothing at all, because a border belongs to the
-        window rather than to a pane. `-w -t <the harness pane>` resolves to charter's
-        own window and no other (measured on 3.7c; see `_chrome_argvs`)."""
+    def test_the_chrome_here_reaches_charters_own_window_and_no_other(self):
+        """The boundary, stated where it costs something — and it is the TARGET rather
+        than the scope letter that states it.
+
+        `-g` would restyle every window the operator has open, and nothing here is ever
+        global. What charter writes instead is two shapes, both of them reaching charter's
+        own window and nothing else of theirs: `-w -t <the harness pane>`, which resolves
+        to the window that pane is in (`_chrome_argvs`, the frame's rules), and
+        `-p -t <the harness pane>`, which above `tmuxctl.PANE_BORDER_FLOOR` reaches that
+        one pane and no other (`_harness_rule_argvs`, the rules around it). The pane in
+        question is one charter created for this launch, so the narrower of the two is
+        narrower than the boundary rather than a hole in it — the same reach
+        `_surface_argvs` and the panel mark already have on this server.
+        """
         fake = _FakeOperatorTmux(exit_code=0)
         _launch_inside(fake)
         chrome = [c for c in fake.calls if _is_chrome(c)]
         self.assertTrue(chrome, "no chrome was set at all, so this test measured nothing")
+        scopes = set()
         for cmd in chrome:
             self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET], cmd)
-            self.assertEqual(cmd[cmd.index("set-option") + 1], "-w", cmd)
+            scope = cmd[cmd.index("set-option") + 1]
+            self.assertIn(scope, ("-w", "-p"), cmd)
+            scopes.add(scope)
             self.assertEqual(cmd[cmd.index("-t") + 1], "%7",
-                             "the window was named through a pane that is not the "
-                             f"harness's: {cmd}")
+                             "a border option was written against a pane that is not "
+                             f"the harness's: {cmd}")
             self.assertNotIn("-g", cmd, cmd)
-            self.assertNotIn("-p", cmd, cmd)
+        self.assertIn("-w", scopes, "the frame's own rules were never set window-scoped")
 
     def test_nothing_of_the_operators_is_written(self):
         """Their config untouched, in the spec's own words. Every one of these would

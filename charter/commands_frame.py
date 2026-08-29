@@ -1982,22 +1982,28 @@ def _pane_borders_wanted(v: tuple[int, int] | None) -> bool:
 
 
 def _pane_border_pairs(*, chrome, bg, pane_borders: bool) -> tuple[tuple[str, str], ...]:
-    """This pane's own edges, in this pane's own surface — or nothing at all.
+    """This PANEL pane's own edges, in this panel's own surface — or nothing at all.
 
-    **The #631 fix in one expression, and the gate that keeps it off the floor.** A
-    window-wide border surface (`instance.border_bg`, which is what #628 shipped) reaches
-    every rule in the frame including the three around the HARNESS, so a plane whose four
-    panels were all grey came out with a grey box drawn round the operator's own session.
-    A pane-scoped one cannot: `_surface_argvs` is only ever handed a PANEL pane, so the
-    harness keeps the window's bare `_CHROME_STYLE` and the rules tmux resolves against it
-    stay the terminal's own.
+    **A panel's edges are its own colour, which is the half of #631 that stands.** A
+    window-wide border surface (`instance.border_bg`, which is what #628 shipped) is one
+    value for every rule in the frame, so an arrangement whose components name different
+    backgrounds got rules in a colour some of its panels were not. Above
+    `tmuxctl.PANE_BORDER_FLOOR` a panel carries its own instead, so every rule cell a panel
+    owns matches the panel it belongs to.
 
-    Rendered, charter's real four-panel shape at 100x24 on tmux 3.7c, every panel
-    `bg = "brightblack"`, read through a nested client — the harness's three edges, and the
-    rule between two panels::
+    **The harness's edges are a different question and are answered separately**
+    (`_harness_rule_argvs`). #631 answered it by leaving them unset, which is where the
+    frame's surface stopped: tmux resolves every border cell around the harness against the
+    harness's own options, so the horizontal rule under the identity bar came out dark for
+    the cells over the harness and surfaced for the cells over the sidebar. Rendered,
+    charter's real four-panel shape at 100x24 on tmux 3.7c, every panel
+    `bg = "brightblack"`, read through a nested client::
 
-        window-wide (#628)  harness top ESC[100m   right ESC[100m   panel|panel ESC[100m
-        per pane    (#631)  harness top ESC[49m    right ESC[49m    panel|panel ESC[100m
+        window-wide (#628)  harness top ESC[100m         right ESC[100m  panel|panel ESC[100m
+        per pane    (#631)  harness top ESC[49m          right ESC[49m   panel|panel ESC[100m
+        with the rules      harness top ESC[100m         right ESC[100m  panel|panel ESC[100m
+                            ^ and its INTERIOR still ESC[49m: `window-style` is not one of
+                              these two names, so nothing here or there can reach it.
 
     *pane_borders* is `tmuxctl.PANE_BORDER_FLOOR` already answered by the caller, which is
     where the tmux version is known. Below it these two names are WINDOW options wearing a
@@ -2012,6 +2018,102 @@ def _pane_border_pairs(*, chrome, bg, pane_borders: bool) -> tuple[tuple[str, st
     """
     return (instance.pane_border_options(bg, chrome, _CHROME_STYLE)
             if pane_borders else ())
+
+
+def _harness_rule_argvs(*, socket: str, harness_pane: str, surface: str | None,
+                        pane_borders: bool) -> list[list[str]]:
+    """`set-option -p`: the rules AROUND the harness pane, in the frame's own surface —
+    and never, at any value, anything that reaches INSIDE it.
+
+    **The seam #631 left, and the boundary that survives closing it.** A border cell is not
+    in either pane it separates, and above `tmuxctl.PANE_BORDER_FLOOR` tmux resolves each of
+    them against exactly one: `screen_redraw_check_cell` walks the window's panes in order
+    and takes the first whose border box contains the cell, and the harness is the first
+    pane charter's window has. So all three of the harness's edges — its top, its right and
+    its bottom — are drawn from the harness's own two options, and #631 leaving them unset
+    put the terminal's own background on a rule that runs on past the harness's corner over
+    a panel that IS surfaced. Measured on 3.7c through a nested client, four panels all
+    `bg = "brightblack"`, at 100x24::
+
+        #631        row 1: cols 0-77 ESC[49m  cols 78-99 ESC[100m   <- one rule, two colours
+        with this   row 1: cols 0-99 ESC[100m                       <- one rule, one colour
+
+    That is #514's own defect — a rule that changes colour where it passes a corner — and
+    the operator has reported it off a screenshot three times.
+
+    **Both options, and #514's own four-focus-state measurement re-run for this pane.** The
+    harness is a pane that can be ACTIVE, and tmux draws a border cell from
+    `pane-active-border-style` when it touches the active pane — so a harness whose two
+    differed would put the defect back on the very rules this closes. They cannot differ:
+    `instance.rule_options` builds both from one value. Measured on 3.7c through a nested
+    client with the rules armed, cycling harness → each of the three panels → harness, every
+    rule cell came back `ESC[100m` in all five readings and the frame did not move when
+    focus did.
+
+    **This names the harness, and what that costs is one option name.** #631's construction
+    was that nothing needed to: `_surface_argvs` is only ever handed a panel, so the harness
+    was protected by never being an argument. That construction protected two things at
+    once, and only one of them was ever the report. The one that matters is the harness's
+    INTERIOR — `window-style` and `window-active-style`, the rectangle ADR 0018 says charter
+    "never decides what a cursor or a colour means inside" — and it is still protected by
+    construction here: this function's option names come from
+    `instance.PANE_BORDER_OPTIONS`, which does not contain either of them, and
+    `_surface_argvs`, which does set them, is still only ever handed a panel. The other
+    thing #631 protected was the harness's border cells, which were never inside anything:
+    charter has drawn their foreground, their dim attribute, their line weight, their
+    indicators and their border-status since #514 (`_CHROME`, set window-wide on this very
+    pane). Withholding only their BACKGROUND is half a cell, and the half it left behind is
+    the seam.
+
+    ***surface* is `instance.agreed_border_bg`, and `None` is a real answer** rather than a
+    missing one: an arrangement whose panels wear more than one colour has no colour all
+    three of the harness's neighbours share, so any value would be a cell matching neither
+    pane beside it. There the rules stay bare, which is still one of the two panes they
+    touch.
+
+    **The unset is why this is one function and not a launch/live pair, and the cost of
+    that is measured rather than waved at.** `_surface_argvs` and `_resurface_argvs` are
+    split because on a LAUNCH `off` is free: the panes they write are ones `split-window`
+    just created, so there is nothing on them to remove. The harness pane is not one of
+    those on either path that reaches here — `_split_panels` runs again on every density
+    change, and `cmd_chrome` runs on a frame that has been surfaced for hours — so "no
+    surface" has to mean *remove what is there* on both, or `chrome: off` is a keypress that
+    reports success and leaves the operator looking at the surface they turned off.
+
+    `set-option -p -u` on an option that was never set is rc 0 (measured on 3.7c and at
+    `tmuxctl.FLOOR`, `_resurface_argvs`' own measurement), so the launch path can pay the
+    removal instead of a second function. What it pays is two commands at a measured 6.0ms
+    each on this machine — 12ms, on the launches where the frame has no surface at all,
+    against the roughly fifteen tmux calls a launch already makes and the 22.2ms
+    `_chrome_argvs` alone costs. A pair would save that and buy back the failure this whole
+    area has already paid for twice (#547, #610): two functions answering one question, with
+    the launch and the keypress free to answer it differently. It would also be WRONG on the
+    density path, where a `charter.toml` re-read between launch and keypress can take the
+    surface away and only the removal would notice.
+
+    *pane_borders* is `tmuxctl.PANE_BORDER_FLOOR`, and the gate is on the unset exactly as
+    it is on the set. Below the line these two names are window options wearing a pane's
+    clothes: `set -p` is rc 0 and writes the WINDOW, so a `-u` here would remove charter's
+    own #514 pin for every rule in the frame — silently, with nothing for `tmuxctl.run` to
+    report. Nothing at all is emitted there and `_chrome_argvs` carries the frame-wide
+    answer instead, which already reaches these same cells.
+
+    **`NO_COLOR` refuses the surface and keeps the rules**, `_chrome_argvs`' split word for
+    word: `_CHROME_STYLE` is an attribute over the terminal's own foreground and is not what
+    that variable is about, a background is exactly what it is about, and here refusing it
+    means the unsets rather than silence — a frame surfaced before `NO_COLOR` was exported
+    has a value on this pane to remove. Asked through `chrome.no_colour` so there is one
+    reading of the variable (#547).
+    """
+    if not pane_borders:
+        return []
+    pairs = instance.rule_options(None if chrome_mod.no_colour() else surface,
+                                  _CHROME_STYLE)
+    if not pairs:
+        return [tmuxctl.server_argv(socket, "set-option", "-p", "-u", "-t", harness_pane,
+                                    name) for name in instance.PANE_BORDER_OPTIONS]
+    return [tmuxctl.server_argv(socket, "set-option", "-p", "-t", harness_pane, name, value)
+            for name, value in pairs]
 
 
 def _surface_argvs(*, socket: str, pane_id: str, chrome, bg=None,
@@ -2739,16 +2841,28 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     # `config.FRAME`, which is the same thing `cmd_chrome` reads on the live path — the
     # agreement #610 is about, made by construction rather than by two call sites matching.
     # Above `tmuxctl.PANE_BORDER_FLOOR` the rules are each pane's own (`_pane_border_pairs`,
-    # set beside that pane's surface below) and the WINDOW's stay bare — which is the whole
-    # of #631: a frame-wide border surface reaches the three rules around the harness, and
-    # a plane whose panels were all grey drew a grey box around the operator's own session.
-    # Below the floor those two options have no pane scope at all, so the frame-wide answer
-    # is the only one that can be given and it is given here. One or the other, never both.
+    # set beside that pane's surface below) and the WINDOW's stay bare — which is #631: a
+    # frame-wide border surface is one value for every rule, so a panel whose colour is not
+    # the frame's got rules in a colour it does not wear. Below the floor those two options
+    # have no pane scope at all, so the frame-wide answer is the only one that can be given
+    # and it is given here. One or the other, never both.
     pane_borders = _pane_borders_wanted(v)
     for argv in _chrome_argvs(
             socket=socket, harness_pane=harness_pane,
             surface=None if pane_borders else instance.border_bg(config.FRAME, chrome)):
         tmuxctl.run("styling the frame's own rules", argv, env=env)
+    # And the three rules AROUND the harness, which above the floor are the harness's own
+    # cells and are therefore the one part of the frame the loop above no longer reaches
+    # (`_harness_rule_argvs`). Left unset by #631 they were the terminal's own background
+    # while the panel on the far side of the very same rule was surfaced, so one horizontal
+    # rule came out in two colours — reported off a screenshot three times. Its INTERIOR is
+    # untouched at every version and every level: `window-style` is not one of the two
+    # option names that function can emit. Reported but not fatal, like the rules above.
+    for argv in _harness_rule_argvs(
+            socket=socket, harness_pane=harness_pane, pane_borders=pane_borders,
+            surface=instance.agreed_border_bg(config.FRAME, chrome)):
+        tmuxctl.run("styling the rules around the pane charter does not paint", argv,
+                    env=env)
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
                                     harness_pane=harness_pane, env=pane_env,
                                     sizes=sizes)
@@ -4608,6 +4722,18 @@ def cmd_chrome(args) -> int:
                 surface=None if pane_borders
                 else instance.border_bg(config.FRAME, level)):
             tmuxctl.run("styling the frame's own rules", argv)
+        # And the harness's OWN three edges, which above the floor no window option
+        # reaches any more (`_harness_rule_argvs`). Here `-t <harness>` is the pane
+        # itself rather than a window selector — the two border options only, never the
+        # two that would paint inside it. `off` and a plane whose panels stopped agreeing
+        # both arrive as no surface, and on this path that is the UNSET: a level change
+        # that repainted the panels and left yesterday's colour on the rules around the
+        # operator's own session is the same half-applied frame the loop above exists to
+        # prevent.
+        for argv in _harness_rule_argvs(
+                socket=socket, harness_pane=harness, pane_borders=pane_borders,
+                surface=instance.agreed_border_bg(config.FRAME, level)):
+            tmuxctl.run("styling the rules around the pane charter does not paint", argv)
     return 0
 
 

@@ -262,13 +262,14 @@ the sentence above:
   `pane-border-lines`, `pane-border-indicators` and `pane-border-status` — so every rule in
   the frame is one colour and the frame looks the same in your tmux as in charter's own.
   With `[frame] chrome` left at its default this is the only place charter overrides a
-  preference of yours rather than deferring to it; setting `chrome` adds a second, on
-  charter's own panel panes and never on the pane your harness runs in — and it also puts
-  that colour BEHIND the frame's rules, because the cell between two panes is in neither
-  of them and would otherwise stay your terminal's own background: a one-cell seam running
-  between panels that are all the same colour. The rules take the colour the frame's
-  components agree on, and the frame-wide `chrome` colour when they name different ones.
-  Still window-scoped, still both border styles set to one value. The reason for
+  preference of yours rather than deferring to it; setting `chrome` adds a second — a
+  background on charter's own panel panes, and never on the pane your harness runs in — and
+  it also puts that colour BEHIND the frame's rules, because the cell between two panes is
+  in neither of them and would otherwise stay your terminal's own background: a one-cell
+  seam running between panels that are all the same colour. On tmux 3.7 and newer each
+  panel's rules are its own colour and the three round your harness pane take the colour
+  your components agree on; below that they are window-scoped and take one colour for the
+  whole frame. Both border styles are always set to one value. The reason for
   the borders is that two of those options make one rule differ from its neighbour:
   the active-pane colour and the arrow indicators mark some borders and not others, and
   `pane-border-status top` writes your hostname into every rule and takes a row the
@@ -778,17 +779,27 @@ is in neither rectangle — so a frame whose panels were all `brightblack` came 
 boxes with your terminal's own black running between them, which reads as seams rather than
 as an application. Charter puts a background behind the rules as well.
 
-**Each panel's edges are its own**, so the rule between two panels is their shared colour
-and the rules around **your harness pane are left alone** — charter does not draw a box
-around the one rectangle it does not own. That needs tmux **3.7 or newer**, where
-`pane-border-style` is a per-pane option.
+**Each panel's edges are its own**, so the rule between two panels is their shared colour.
+That needs tmux **3.7 or newer**, where `pane-border-style` is a per-pane option.
 
-On tmux 3.2 to 3.6 it is a window option only, so there is one rule colour for the whole
-frame: the one your components **agree** on when they all resolve to the same background,
-and the frame-wide `chrome` colour when they do not. That closes the seam and costs a rule
-of charter's colour on the three sides of your harness — the lesser of two imperfect
-renderings, and the reason the per-pane version exists. A plane that sets no `bg` at all is
-unchanged either way: every pane is the frame-wide colour, so the rules are too.
+**The three rules that run round your harness pane are painted too**, and they take the
+surface your components **agree** on — nothing at all where they name different backgrounds,
+because those three rules have a different panel on the far side of each of them and no one
+colour would match all three. tmux draws each border cell from exactly one pane's options
+and your harness's pane is the one those three are drawn from, so leaving them out does not
+give your session dark edges: it gives the horizontal rule that runs under the top bar two
+colours, dark as far as your pane's corner and surfaced the rest of the way. Charter draws
+the foreground, weight and indicators of those same three rules anyway; the background is
+the same cell.
+
+**Inside** your harness pane is untouched at every level — a pane's interior is
+`window-style`, which charter sets on its own panels and on no other pane, so your session
+keeps your terminal's own background whatever `chrome` says.
+
+On tmux 3.2 to 3.6 `pane-border-style` is a window option only, so there is one rule colour
+for the whole frame: the one your components agree on, and the frame-wide `chrome` colour
+when they do not. A plane that sets no `bg` at all is unchanged either way: every pane is
+the frame-wide colour, so the rules are too.
 
 A pane's two edge colours are always identical, and that is deliberate: tmux draws the
 border of the active pane from a second option, and letting the two differ is exactly the
