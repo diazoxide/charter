@@ -73,6 +73,11 @@ from .registry import Registry
 #:
 #: Only PLACED components are here. `personas` and `todos` share the sidebar's pane and
 #: were never slots, so there is nothing for them to be spelled as.
+#: ``changes`` is absent for the same reason ``personas`` and ``todos`` are: this table is
+#: PLACED components, and charter does not place it. A plane that wants it writes a
+#: `[[frame.component]]` table, and travels under its own id — which is the path a
+#: provider's component already takes, and `instance.FRAME_SLOTS` says why it is the right
+#: one here too.
 SLOT_OF = {
     "identity": "top",
     "attention": "bottom",
@@ -171,6 +176,16 @@ def _todos(ctx) -> list[str]:
                               terse=slots.verbosity(ctx.fid) == "terse")
 
 
+def _changes(ctx) -> list[str]:
+    """The sidebar's cross-repo change rows — nothing at all when there are none.
+
+    No `terse`: the section is already one heading and at most three rows, and a density
+    that made it shorter would be making a list that is usually empty shorter still.
+    """
+    from . import slots
+    return slots.changes_section(ctx.fid, ctx.width, ctx.height)
+
+
 def build() -> Registry:
     """A registry holding charter's six built-in components, in split order.
 
@@ -210,8 +225,42 @@ def build() -> Registry:
     reg.register(Component(
         id="todos", title="todos", edge="right", size=Content(cap=slots._MAX_TODO_LINES),
         needs=("gather",), render=_todos))
+    # **A PART of the sidebar and not a pane of its own, and that was measured twice.**
+    #
+    # First: the frame's sizing supports exactly ONE variable-height pane, by
+    # construction. `layout.slot_sizes` answers every member of `VARIABLE_ROW_SLOTS` with
+    # `layout.repos_rows`, and `commands_frame._reassert_sizes` leaves that set unasserted
+    # so tmux's `resize-pane -y` — which moves exactly one boundary — has one remainder to
+    # give the rows to. Registered as a placed `Content()` this was handed the REPO
+    # TABLE's height: six rows, for six repos, on a plane with one change.
+    #
+    # Second, and decisive: a placed component has to be in `instance.FRAME_SLOTS`, and
+    # `FRAME_SLOTS`, `FRAME_DEFAULTS["slots"]` and `FRAME_DENSITY["full"]` are pinned to
+    # agree — so placing it puts a pane on EVERY operator's frame, saying "no changes in
+    # <ws>", for a feature most planes never use. `repos` saying "no clones" is a plane
+    # that is broken or new; a plane with no cross-repo change is the ordinary, permanent
+    # state.
+    #
+    # As a section it costs those planes NOTHING: `slots.changes_section` returns no rows
+    # at all when there are none, exactly as the todos do, and `_right` only spends a
+    # blank row on a section that has something in it.
+    #
+    # It declares BOTH slices, and both are real reads rather than one being decoration:
+    # `changes` is the rows, and `gather` is `gathered_at` — the snapshot's single
+    # timestamp, whose AGE the heading draws because a refresh is an action and not a tick
+    # (§4g). A surface that showed a state without its age would be indistinguishable from
+    # a live one.
+    reg.register(Component(
+        id="changes", title="changes", edge="right",
+        size=Content(cap=slots._MAX_CHANGE_LINES),
+        needs=("gather", "changes"), render=_changes))
+    # The composite declares the UNION of what its parts read, and `changes` joining the
+    # sidebar is what put `changes` on this line. `_panel("right")` draws all three
+    # sections through `slots._right`, so a composite declaring less than its parts read
+    # would be a cost the frame's budget does not describe — which is the one thing the
+    # declaration is for.
     reg.register(Component(
         id="sidebar", title="sidebar", edge="right", size=Fixed(22),
-        needs=("gather",), render=_panel("right"),
-        children=("personas", "todos")))
+        needs=("gather", "changes"), render=_panel("right"),
+        children=("personas", "todos", "changes")))
     return reg

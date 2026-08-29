@@ -50,6 +50,8 @@ merge request is a **request**. Neither name is renamed; both are shipped.
 from __future__ import annotations
 
 import json
+import re
+import socket
 from pathlib import Path
 
 from . import config, contain, instance, workspace
@@ -98,6 +100,206 @@ TEXT_LIMIT = contain.PATH_DISPLAY_LIMIT
 #: required by the same rule that requires the change's own: the exclusion is the only
 #: artifact that makes a permanently partial world explicable six months later.
 EXCLUSION_KEYS = ("repo", "why", "at")
+
+#: Every key one landing-log line carries. Closed, like :data:`KEYS` and for the same
+#: reason — but this is a *log*, so a line that does not fit is skipped rather than raised
+#: over (:func:`landings`): an append-only file collects half-written lines from killed
+#: processes, and one of those must not take a report down.
+#:
+#: ``merge`` is the sha of the commit charter created, ``head`` the member's branch tip it
+#: was created from. Both, because they answer different questions: ``merge`` is what
+#: ``revert`` reverts and what git is asked to still contain, ``head`` is what the check
+#: gate had read when it let the landing through.
+LOG_FIELDS = ("ts", "change", "repo", "number", "merge", "head")
+
+#: What charter can say about ONE member from **files alone** — the record and the landing
+#: log — in PRECEDENCE order, worst first. :func:`worst` reads this tuple's order and
+#: nothing else, so the two cannot disagree.
+#:
+#: **``unknown`` is first, and that is the whole of #561 one level out.** It is the only
+#: value meaning *charter did not look*, and a value that means "I did not look" must never
+#: be outranked by one that means "I looked and it was fine". Everything the forge would
+#: add — a request's state, and the five check states §3.5 closes — is worse than
+#: ``landed`` and no better than ``unknown``, so a member charter has not observed stays
+#: ``unknown`` and the change stays ``unknown`` with it.
+#:
+#: There are deliberately only three. ``blocked`` is the ordering sense of §3.2 and nothing
+#: but ``needs`` produces it; ``landed`` is a declaration charter itself wrote, joined
+#: against git by whoever is reading; everything else is *charter has not asked the forge*,
+#: which is one answer and not a family of them. Inventing ``not_ready``, ``failed`` or
+#: ``rejected`` here — before there is a read that can produce one — would be a vocabulary
+#: whose values nothing can ever set, which is §4i's convincing empty in a constant.
+MEMBER_STATES = ("unknown", "blocked", "landed")
+
+
+def _host() -> str:
+    """Short, filename-safe hostname — ``pieces._host``'s rule, for its reason.
+
+    Spelled again rather than imported: this module is read by the frame's gather, and
+    importing `pieces` there to learn a hostname would pull `persona` and `session` onto a
+    path whose whole budget is file reads.
+    """
+    raw = (socket.gethostname() or "unknown").split(".")[0]
+    return re.sub(r"[^A-Za-z0-9_-]", "", raw)[:32] or "unknown"
+
+
+def log_path(ws: str) -> Path:
+    """``workspaces/<ws>/changes/log/<host>.jsonl`` — this machine's declarations.
+
+    Per host, exactly as ``pieces/<host>.jsonl`` is, and never committed for the same
+    reason: it describes merges made from one disk, and a portable file describing a local
+    reality is the mismatch ADR 0010 dissects.
+    """
+    return log_dir(ws) / f"{_host()}.jsonl"
+
+
+def record_landing(ws: str, slug: str, repo: str, *, number, merge: str, head: str,
+                   ts: str) -> Path | None:
+    """Append one past-tense line: *charter merged this commit, for this change*.
+
+    **The declaration git cannot make**, and the only reason the log exists. Git can say a
+    sha is on a branch; it cannot say charter put it there for this change, and the forge
+    cannot see a revert. Landing is the two joined at read time — the forge reports the
+    request merged and git still contains this sha — so nothing on disk holds a ``landed``
+    flag anything could disagree with.
+
+    Best-effort, returning ``None`` rather than raising, which is ``pieces.record``'s
+    contract and its argument: the merge has already happened, the caller cannot un-merge
+    it in response to a full disk, and a command whose real work succeeded must not fail
+    over its bookkeeping. The caller writes this only **after** reading the merge back —
+    a declaration of something that did not happen is worse than none.
+
+    ``O_APPEND`` with no lock, through `config.open_for` so the mode is charter's rather
+    than the umask's wherever this path resolves to.
+    """
+    line = {"ts": ts, "change": slug, "repo": repo, "number": number,
+            "merge": merge, "head": head}
+    p = log_path(ws)
+    if contain.write_refusal(p):
+        return None      # a committed link at this fixed name — see contain.write_refusal
+    try:
+        config.mkdir_for(p.parent)
+        with config.open_for(p, "a") as f:
+            f.write(json.dumps(line, sort_keys=True) + "\n")
+        return p
+    except OSError:
+        return None
+
+
+def landings(ws: str, slug: str | None = None) -> list[dict]:
+    """Every landing this plane declared, oldest first — optionally for one change.
+
+    A malformed line is **skipped**, never raised over: this feeds a report and a frame
+    pane, and a half-written line from a process that was killed mid-append is exactly
+    what an append-only log collects. A line carrying a key charter does not read is
+    skipped too — the closed-set rule of :func:`_closed`, in the shape a log can afford,
+    because refusing the whole file would let one bad line hide every good one.
+    """
+    d = log_dir(ws)
+    if contain.dir_refusal(d):
+        return []
+    try:
+        files = sorted(d.glob("*.jsonl"))
+    except OSError:
+        # Listing an unreadable directory raises on Linux and yields nothing on macOS —
+        # `pieces.events` records a suite that went red on CI over exactly this line.
+        return []
+    out: list[dict] = []
+    for f in files:
+        try:
+            text = f.read_text()
+        except OSError:
+            continue
+        for raw in text.splitlines():
+            try:
+                obj = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or sorted(obj) != sorted(LOG_FIELDS):
+                continue
+            if not isinstance(obj["change"], str) or not isinstance(obj["repo"], str):
+                continue
+            if slug is not None and obj["change"] != slug:
+                continue
+            out.append(obj)
+    return sorted(out, key=lambda e: str(e.get("ts") or ""))
+
+
+def declared_landings(ws: str, slug: str) -> dict[str, dict]:
+    """``{repo: the LAST line declaring that repo landed for *slug*}``.
+
+    The last rather than the first: a member reverted and landed again has two lines, and
+    the one that describes the world now is the newer. Nothing is deleted to make that
+    true — the earlier line is still a true statement about the past, and deleting history
+    to tidy a lookup is how a store starts lying.
+    """
+    out: dict[str, dict] = {}
+    for line in landings(ws, slug):
+        out[line["repo"]] = line
+    return out
+
+
+def member_states(rec: dict, landed) -> dict[str, str]:
+    """``{repo: its state}`` for every member — derived, stored nowhere.
+
+    *landed* is what the caller believes has landed. Three answers and no more, for
+    :data:`MEMBER_STATES`' reason: a member charter has a landing declaration for is
+    ``landed``, one waiting on a blocker that has not landed is ``blocked``, and every
+    other member is ``unknown`` — because what stands between it and its own landing is a
+    request state and a check state, and charter has not asked the forge.
+
+    **``landed`` outranks ``blocked``, and that is not the precedence order inverted.**
+    Precedence answers *which member decides the change's colour*; this answers *what is
+    true of this member*, and a member that has already gone in is not waiting for
+    anybody. §3.2's out-of-order landing — a member that landed while a blocker had not —
+    is exactly the pair this makes visible, and it is named by
+    `commands_change.out_of_order` rather than hidden inside a single word here.
+    """
+    have = set(landed or ())
+    blocked = blocked_members(rec, have)
+    out: dict[str, str] = {}
+    for m in rec["members"]:
+        repo = m["repo"]
+        if repo in have:
+            out[repo] = "landed"
+        elif repo in blocked:
+            out[repo] = "blocked"
+        else:
+            out[repo] = "unknown"
+    return out
+
+
+def worst(states) -> str:
+    """The worst of *states*, by :data:`MEMBER_STATES`' order. ``unknown`` for none at all.
+
+    **A change is never reported greener than its worst member** (§3.3, §3.5), and this is
+    the one function that decides it, so no surface can arrive at a different answer by
+    aggregating differently. A change with no members is ``unknown`` and not ``landed``:
+    an empty maximum is the classic way a report comes out green, and "everything has
+    landed" over nothing at all is the confidently-wrong output ADR 0009 forbids.
+
+    A state this module does not recognise **reads as ``unknown``** rather than being
+    ranked on its own — the asymmetry of §3.5's own table, where anything charter does not
+    recognise is ``UNKNOWN`` and never ``PASSED``. It is folded rather than returned,
+    because the answer travels to a report row and a word charter cannot explain is worse
+    on a row than the word that says charter cannot explain it.
+    """
+    order = {s: i for i, s in enumerate(MEMBER_STATES)}
+    seen = [s if s in order else MEMBER_STATES[0] for s in states]
+    if not seen:
+        return MEMBER_STATES[0]
+    return min(seen, key=lambda s: order[s])
+
+
+def landed_count(states) -> tuple[int, int]:
+    """``(how many members have landed, how many there are)`` — §3.3's ``3 of 5``.
+
+    A pair rather than a fraction or a percentage, deliberately: §3.3 refuses a
+    percentage and a bar because both invite a single word for the change as a whole, and
+    a member can hide behind a single word.
+    """
+    seen = list(states)
+    return sum(1 for s in seen if s == "landed"), len(seen)
 
 
 def changes_dir(ws: str) -> Path:

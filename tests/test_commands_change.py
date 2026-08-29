@@ -987,24 +987,120 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
                                            "--match", "--every"), f"change {name} {opt}")
 
     def test_no_forge_module_and_no_network_module_is_imported(self):
-        """Records only. The forge half is a later phase, and keeping the record surface
-        separable from it is what makes "what did the operator declare" answerable without
-        asking anybody's API."""
+        """No forge. `revert` and the divergence report run **git in a clone the operator
+        already has**, which is a local read of this disk — but nothing here asks anybody's
+        API, and keeping the two separable is what makes "what did the operator declare,
+        and what does this disk say happened" answerable without a token.
+
+        `subprocess` stays on the list even though this module now spawns: everything goes
+        through `util.run`, which is where the timeout, the credential-helper neutering and
+        the stdin discipline live. A direct `subprocess` call would be a second answer to
+        "how does charter run git".
+        """
         for name in ("forge", "gitpolicy", "planegit", "glstate", "report", "inventory",
                      "socket", "urllib", "http", "ssl", "subprocess"):
             self.assertNotIn(name, self._imports())
 
-    def test_the_only_child_process_this_module_can_start_is_a_local_config_read(self):
+    def test_every_child_process_this_module_can_start_is_git(self):
         """`util.run` is a general subprocess runner, so "no network" is a claim about the
-        argv rather than about the import. Every command this module can hand it is listed
-        here, in full: one read of `git config`, which touches no remote."""
-        spawned = []
+        ARGV rather than about the import — and the first element of every argv this module
+        builds is the literal `git`.
+
+        Two shapes, because the module has two: `_author` hands `util.run` a whole literal
+        list, and every other call goes through `_git`, which is the single place the
+        `["git", "-C", str(clone), …]` prefix is built. That funnel is what makes the
+        question answerable at all: a call site that assembled its own argv would be a
+        second program this test could not see.
+        """
+        progs = []
         for node in ast.walk(self._tree()):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr in ("run", "Popen", "call", "check_output",
                                            "check_call", "system", "popen")):
-                spawned.append(ast.literal_eval(node.args[0]) if node.args else None)
-        self.assertEqual(spawned, [["git", "config", "user.name"]])
+                continue
+            self.assertTrue(node.args, "a spawn with no argv at all")
+            argv = node.args[0]
+            self.assertIsInstance(argv, ast.List, "an argv that is not a list literal")
+            self.assertTrue(argv.elts, "an empty argv")
+            head = argv.elts[0]
+            self.assertIsInstance(head, ast.Constant, "a program that is not a literal")
+            progs.append(head.value)
+        self.assertEqual(progs, ["git", "git"])
+
+    #: Every git subcommand `charter/commands_change.py` can reach, in full. Not one of
+    #: them touches a remote — no `fetch`, no `pull`, no `push`, no `ls-remote` — which is
+    #: what "no network" means for a module that spawns git. And not one of them is
+    #: destructive: no `push --force`, no `branch -D`, no `reset`, no `clean`. §3.7's
+    #: refusals are the argv never being CONSTRUCTED, and this is where that is checked.
+    GIT_VERBS = {"config", "for-each-ref", "merge-base", "rev-parse", "show", "rev-list",
+                 "status", "switch", "revert"}
+
+    def test_the_git_subcommands_it_can_reach_are_listed_in_full(self):
+        """Read statically off every `_git(clone, "<verb>", …)` call site.
+
+        **The verb is a literal at every call site, deliberately.** `_seed_revert` spreads
+        its optional `-m 1` into the call rather than building a whole argv, so that this
+        test can read the verb rather than give up on it — a dynamic argv is a subcommand
+        nobody is checking.
+        """
+        verbs = []
+        for node in ast.walk(self._tree()):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "_git"):
+                self.assertGreaterEqual(len(node.args), 2, "a _git call with no verb")
+                verb = node.args[1]
+                self.assertIsInstance(verb, ast.Constant,
+                                      "a git subcommand that is not a literal")
+                verbs.append(verb.value)
+        self.assertTrue(verbs, "no _git call found — this test proves nothing")
+        self.assertEqual(sorted(set(verbs)), sorted(self.GIT_VERBS - {"config"}))
+
+    def test_every_git_call_is_bounded_by_a_timeout(self):
+        """A clone on a stalled network mount makes git hang, and a command the operator is
+        waiting on must fail rather than sit there — `doctor.CHECK_TIMEOUT`'s reason, one
+        command out. Asked of the FUNNEL, because that is where the property lives: `_git`
+        is the single place the timeout is applied, so a call site that reached `util.run`
+        directly would be the one that could forget.
+
+        **The NUMBER is not pinned and cannot honestly be**: no observable behaviour of any
+        test changes between 20 seconds and 21, and a test asserting the constant's value
+        against itself would be the tautology this suite keeps finding. What is pinned is
+        that there IS one, and that it is the module's own constant rather than a literal
+        somebody typed twice.
+        """
+        seen = []
+        real = commands_change.util.run
+
+        def spy(cmd, *a, **kw):
+            seen.append(kw.get("timeout"))
+            return real(cmd, *a, **kw)
+
+        commands_change.util.run = spy
+        try:
+            commands_change._git(Path("."), "rev-parse", "--verify", "--quiet", "HEAD")
+        finally:
+            commands_change.util.run = real
+        self.assertEqual(seen, [commands_change.GIT_TIMEOUT])
+        self.assertIsNotNone(commands_change.GIT_TIMEOUT)
+
+    def test_no_destructive_or_remote_git_flag_appears_anywhere_in_the_module(self):
+        """The refusals of §3.7, as an absence in the source rather than a guard.
+
+        A force-push, a branch deletion and a hard reset are not things this module
+        declines to do — they are argv it never builds, and there is no flag that turns
+        them on. Read over every string constant in the module, so a future call site
+        cannot introduce one without this going red.
+
+        Weaker than the behavioural half on its own and it is not on its own:
+        `tests/test_change_revert.py` records every git invocation a real revert makes.
+        This is the half that also covers the paths that test does not happen to walk.
+        """
+        banned = ("--force", "-f", "--force-with-lease", "--delete", "-D", "--hard",
+                  "reset", "clean", "push", "fetch", "pull", "ls-remote")
+        for node in ast.walk(self._tree()):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                self.assertNotIn(node.value, banned,
+                                 f"{node.value!r} is a destructive or remote git argument")
 
 
 if __name__ == "__main__":

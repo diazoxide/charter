@@ -150,8 +150,19 @@ _DANGEROUS = {
     # untouched, so a plane that declares `tools: charter` keeps what it declared it
     # for. `edm` is charter's pre-rename name, kept for the reason `hooks._CHARTER_PROGS`
     # keeps it: one extra string against a silent gap on a machine still running it.
-    "charter": {"secret", "vault"},
-    "edm": {"secret", "vault"},
+    #
+    # `change` joins them because `charter change land` merges code into a repository,
+    # and a persona declaring `tools: charter` must not have that auto-approved. **The
+    # grain is coarse on purpose and the asymmetry is what decides it**: this also
+    # declines to auto-approve `charter change show`, which costs one permission prompt
+    # on a read-only command, while the other direction auto-approves a merge. This gate
+    # never denies — the worst it can do is fall back to the prompt the operator would
+    # have had anyway — so the cost of over-refusing is bounded at that prompt, and the
+    # cost of under-refusing is not bounded at all. A finer rule keyed on the verb would
+    # have to read `land` out of an argv the shell has already had its way with, which is
+    # the reading `_is_dangerous`' own docstring records going wrong for `git clean`.
+    "charter": {"secret", "vault", "change"},
+    "edm": {"secret", "vault", "change"},
 }
 
 #: Binaries whose ARGUMENT is a program charter cannot resolve to a file. Declaring one

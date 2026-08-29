@@ -67,6 +67,39 @@ class GuardAcrossTheProcessBoundary(unittest.TestCase):
         self.assertEqual(spec["permissionDecision"], "deny")
         self.assertTrue(spec.get("permissionDecisionReason"), "a denial must say why")
 
+    def test_an_unattended_cross_repo_landing_denies_through_the_real_entrypoint(self):
+        """The release floor's newest entry, across the boundary Claude Code uses.
+
+        Asked here as well as in `tests/test_release_floor.py` because the two answer
+        different questions: that one asks whether `_release_floor_reason` recognises the
+        command, this one asks whether the recognition survives the entrypoint — argv
+        handling between `__main__` and the logic is what shipped `secret exec` broken for
+        seven releases with correct, tested logic behind it.
+
+        And because the property is a NEGATIVE about an unattended run, which is the one
+        kind of claim that cannot be checked by watching it work: an agent under
+        `bypassPermissions` is exactly the caller nobody is watching."""
+        p = _hook("pretooluse", {"tool_name": "Bash",
+                                 "permission_mode": "bypassPermissions",
+                                 "tool_input": {
+                                     "command": "charter change land c --repo r"}})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        spec = json.loads(p.stdout)["hookSpecificOutput"]
+        self.assertEqual(spec["permissionDecision"], "deny")
+        self.assertIn("charter change land", spec["permissionDecisionReason"])
+
+    def test_reading_a_change_unattended_still_produces_no_decision(self):
+        """The negative control for the row above, over the same boundary. Without it the
+        assertion is satisfied by a floor that denied every `charter change` there is —
+        which would be a feature removal wearing a security label."""
+        p = _hook("pretooluse", {"tool_name": "Bash",
+                                 "permission_mode": "bypassPermissions",
+                                 "tool_input": {"command": "charter change show c"}})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        decision = (json.loads(p.stdout or "{}").get("hookSpecificOutput", {})
+                    .get("permissionDecision")) if p.stdout.strip() else None
+        self.assertIsNone(decision, p.stdout)
+
     def test_an_ordinary_command_produces_no_decision(self):
         """Negative control. Without it the suite passes just as well if the guard
         denied everything — which would be a catastrophic pass."""

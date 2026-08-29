@@ -138,7 +138,12 @@ EVENT_KINDS = ("key", "click", "scroll", "focus", "blur", "resize")
 #: pass its own tests against an empty fixture, and be indistinguishable from a plane
 #: that genuinely has no personas. `ctx.SERVES` is asked against this tuple by a test, so
 #: the two cannot drift apart in either direction.
-NEEDS = ("gather", "repos", "todos")
+#:
+#: ``changes`` joined in the same commit that taught `gather.scan` to carry it, which is
+#: that rule kept rather than restated: the cross-repo changes this workspace holds, each
+#: with its members and the state charter derived for them from files alone. ``personas``
+#: is still absent for the same reason it always was — nothing serves it.
+NEEDS = ("gather", "repos", "todos", "changes")
 
 #: What a refusal tells a provider author to write instead. One sentence, held in one
 #: place, because it is repeated into every id refusal and a second spelling of it would
